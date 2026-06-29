@@ -100,6 +100,19 @@ def meetings_list(
         )
 
 
+@tdoc_app.command("sync")
+def tdoc_sync(
+    ftp_url: str = typer.Option(..., help="Meeting FTP URL or relative FTP directory path"),
+    meeting: str | None = typer.Option(None, help="Optional meeting identifier to associate with imported TDocs"),
+) -> None:
+    """Fetch TDocs from a meeting FTP directory and store them."""
+
+    create_schema()
+    service = TDocService(SQLAlchemyTDocRepository())
+    count = service.sync_from_meeting_ftp(ftp_url=ftp_url, meeting=meeting)
+    typer.echo(f"TDoc sync complete: {count} records stored")
+
+
 @tdoc_app.command("add")
 def tdoc_add(
     tdoc_id: str = typer.Option(..., help="TDoc ID"),

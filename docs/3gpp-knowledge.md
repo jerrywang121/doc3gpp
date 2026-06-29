@@ -16,10 +16,16 @@ https://www.3gpp.org/dynareport?code=Meetings-{TSG}.htm
 
 Where `{TSG}` is the TSG short name, such as `R5` for RAN5.
 
+Plenary TSGs use the same convention, for example:
+
+- `RP` for RAN Plenary
+- `CP` for CT Plenary
+- `SP` for SA Plenary
+
 Example:
 
 ```text
-https://www.3gpp.org/dynareport?code=Meetings-R5.htm
+https://www.3gpp.org/dynareport?code=Meetings-RP.htm
 ```
 
 ### CLI URL construction
@@ -118,6 +124,34 @@ Typical TDoc source candidates include:
 
 These sources are noted in `docs/implementation-status.md` and are not yet fully implemented.
 
+## Meeting FTP directory structure
+
+From a meeting `ftp_url`, the following directory layout is common:
+
+1. `Agenda/`
+   - Stores meeting agenda documents.
+   - There may be multiple versions as the agenda is updated before and during the meeting.
+
+2. `Docs/` or `Tdocs/` (older meetings)
+   - Stores all TDoc ZIP files for the meeting.
+   - TDoc ZIP files are named as `{tdoc_id}.zip`.
+   - A metadata spreadsheet named `TDoc_List_Meeting_xxx.xlsx` lists all TDocs and their status.
+   - ZIP files are immutable; once uploaded they are never changed.
+   - Any update to a TDoc is stored as a revision file in `Inbox/` with the pattern `{tdoc_id}r#.zip`, where `#` is the reversion number.
+   - A revision TDoc eventually becomes the new official TDoc, with new TDoc IDs and is uploaded to `Docs/` or `Tdocs/`.
+   - The TDoc list XLSX is updated over time to capture new TDocs and statuses such as revised, agreed, withdrawn, etc.
+
+3. `Report/`
+   - Stores meeting minutes and reports.
+   - Draft and Final versions may be present.
+
+4. `Inbox/`
+   - If present, stores temporary documents during the meeting.
+   - This often includes intermediate revision TDocs, new draft TDocs, liaison statements (LSs), and discussion papers created during the meeting.
+
+5. `LSin/` and `LSout/`
+   - Store incoming and outgoing liaison statements, respectively.
+
 ## Naming Conventions
 
 ### TSG short names
@@ -150,14 +184,21 @@ The report page URL is constructed by uppercasing the given short name.
 A TDoc ID generally follows the pattern:
 
 ```text
-<TSG>-<sequence>
+{TSG}-{YY}{####}
 ```
+
+Where:
+
+- `{TSG}` is the TSG short name, such as `C6`, `R5`, or `RP`.
+- `{YY}` is the two-digit year of the associated meeting, e.g. `26` for 2026.
+- `{####}` is a four-digit sequence number allocated by that TSG during the year, starting from `0001`.
 
 Example:
 
 ```text
-R3-000001
-R1-123456
+R5-260001
+C6-260045
+RP-260123
 ```
 
 ### 3GPP document path conventions

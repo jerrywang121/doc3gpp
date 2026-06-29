@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import io
+
+from openpyxl import Workbook
+from typer.testing import CliRunner
+
+from doc3gpp.cli import app
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+
+def _make_tdoc_xlsx_bytes() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["TDoc", "Title"])
+    sheet.append(["R5s260001", "Example TDoc"])
+
+    output = io.BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
@@ -33,3 +50,70 @@ def test_tdoc_service_save_and_list(sqlite_env) -> None:
     ids = {r.tdoc_id for r in rows}
 
     assert ids == {"R2-000010", "R2-000011"}
+
+
+def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
+    create_schema()
+    service = TDocService(SQLAlchemyTDocRepository())
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self) -> "DummyClient":
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback) -> None:
+            return None
+
+        def get_text(self, url: str) -> str:
+            return '<a href="TDoc_List_Meeting_sample.xlsx">list</a>'
+
+        def get_bytes(self, url: str) -> bytes:
+            return _make_tdoc_xlsx_bytes()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("doc3gpp.scraping.ftp_source.ScraperClient", DummyClient)
+
+    count = service.sync_from_meeting_ftp(
+        ftp_url="tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/",
+        meeting="R5#74",
+    )
+    assert count == 1
+
+    rows = SQLAlchemyTDocRepository().list(limit=10)
+    assert len(rows) == 1
+    assert rows[0].tdoc_id == "R5s260001"
+    assert rows[0].title == "Example TDoc"
+    assert rows[0].meeting == "R5#74"
+
+
+def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+
+    def fake_sync_from_meeting_ftp(self, ftp_url: str, meeting: str | None = None) -> int:
+        assert ftp_url == "tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/"
+        assert meeting == "R5#74"
+        return 1
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.sync_from_meeting_ftp",
+        fake_sync_from_meeting_ftp,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc",
+            "sync",
+            "--ftp-url",
+            "tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/",
+            "--meeting",
+            "R5#74",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "TDoc sync complete: 1 records stored" in result.stdout

@@ -22,6 +22,11 @@ class ScraperClient:
         response.raise_for_status()
         return response.text
 
+    def get_bytes(self, url: str) -> bytes:
+        response = self._client.get(url)
+        response.raise_for_status()
+        return response.content
+
     def close(self) -> None:
         self._client.close()
 

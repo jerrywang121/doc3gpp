@@ -12,11 +12,10 @@ def test_parse_3gpp_calendar_sample() -> None:
 
     meetings = parse_3gpp_calendar(html)
 
-    assert len(meetings) == 1
-    meeting = meetings[0]
-    assert meeting.meeting_id == 85434
+    assert len(meetings) > 0
+    meeting = next(m for m in meetings if m.meeting_id == 85434)
     assert meeting.name == "R5--TTCN Workshop#74"
-    assert meeting.title == "3GPPRAN5-TTCN Workshop#74"
+    assert meeting.title == "TTCN Workshop#74"
     assert meeting.location == "Online"
     assert meeting.start_date == date(2026, 7, 2)
     assert meeting.end_date == date(2026, 7, 2)

@@ -71,9 +71,52 @@ Options:
 - --tsg: only list meetings for the given TSG short name.
   - default: none
 
-Output format:
+Additional options:
 
-- meeting_id, name, start_date, end_date, ftp_url, updated_at
+- --name: SQL LIKE pattern to filter meeting `name` (supports `%` and `_`).
+- --name: SQL LIKE pattern to filter meeting `name` (supports `%` and `_`).
+- --location: SQL LIKE pattern to filter meeting `location` (supports `%` and `_`).
+- --year: filter meetings by the year of the `start_date`.
+- --fields: comma-separated list of fields to include in output, or `all`.
+
+Default output fields:
+
+- `meeting_id`, `name`, `location`, `start_date`, `end_date`, `start_doc`, `end_doc`
+
+Note: by default `title`, `updated_at`, and `ftp_url` are excluded to keep
+the listing compact; use `--fields all` to include every available column.
+
+Examples:
+
+- List recent R5 meetings (default fields):
+
+```bash
+doc3gpp meetings list --tsg r5
+```
+
+- Match names containing "TTCN" using SQL LIKE (% wildcard):
+
+```bash
+doc3gpp meetings list --name '%TTCN%'
+```
+
+- List meetings starting in 2026:
+
+```bash
+doc3gpp meetings list --year 2026
+```
+
+- Output only the meeting id and name columns:
+
+```bash
+doc3gpp meetings list --fields meeting_id,name
+```
+
+- Output every available field (including `ftp_url`, `title`, `updated_at`):
+
+```bash
+doc3gpp meetings list --fields all
+```
 
 ## tdoc Commands
 

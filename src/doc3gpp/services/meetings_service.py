@@ -37,14 +37,21 @@ class MeetingService:
         logger.debug("Filtered meetings to %s within year window", len(meetings))
         return self._repository.upsert_many(meetings)
 
-    def list_recent(self, limit: int = 50, tsg: str | None = None) -> list[Meeting]:
-        """Return recent meetings from storage, optionally filtered by TSG."""
-        meetings = self._repository.list(limit=limit)
-        if tsg is None:
-            return meetings
+    def list_recent(
+        self,
+        limit: int = 50,
+        tsg: str | None = None,
+        name_like: str | None = None,
+        location_like: str | None = None,
+        year: int | None = None,
+    ) -> list[Meeting]:
+        """Return recent meetings from storage, optionally filtered.
 
-        normalized_tsg = tsg.upper()
-        return [m for m in meetings if m.name.upper().startswith(normalized_tsg)]
+        Filters are passed down to the repository for efficient SQL execution.
+        """
+        return self._repository.list(
+            limit=limit, tsg=tsg, name_like=name_like, location_like=location_like, year=year
+        )
 
     def get_by_id(self, meeting_id: int) -> Meeting | None:
         """Return a stored meeting record by its numeric meeting ID."""

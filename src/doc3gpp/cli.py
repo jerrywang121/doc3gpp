@@ -99,30 +99,80 @@ def _fmt_dt(value: datetime | None) -> str:
 def meetings_list(
     limit: int = typer.Option(20, min=1, max=500),
     tsg: str | None = typer.Option(None, help="Only list meetings for the given TSG short name"),
+    name: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting name (supports % and _)") ,
+    location: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting location (supports % and _)") ,
+    year: int | None = typer.Option(None, help="Filter meetings by start_date year"),
+    fields: str | None = typer.Option(
+        None,
+        help="Comma-separated list of fields to include (or 'all' for all fields).",
+    ),
 ) -> None:
-    """List recent meetings from database."""
+    """List recent meetings from database.
 
-    logger.info("Listing %s recent meetings for tsg=%s", limit, tsg)
+    The command supports additional filters and field selection:
+    - `--tsg`: optional TSG short name to restrict results (matches name prefix)
+    - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`)
+    - `--year`: filter by the start_date year
+    - `--fields`: comma-separated list of fields to include in output, or `all`
+
+    By default the output includes all fields except `title`, `updated_at`, and
+    `ftp_url` to keep the listing compact.
+    """
+    logger.info("Listing %s recent meetings for tsg=%s name=%s location=%s year=%s", limit, tsg, name, location, year)
     service = MeetingService(SQLAlchemyMeetingRepository())
-    records = service.list_recent(limit=limit, tsg=tsg)
+    records = service.list_recent(limit=limit, tsg=tsg, name_like=name, location_like=location, year=year)
     if not records:
         typer.echo("No meetings found")
         return
 
+    allowed_fields = [
+        "meeting_id",
+        "name",
+        "title",
+        "location",
+        "start_date",
+        "end_date",
+        "ftp_url",
+        "start_doc",
+        "end_doc",
+        "updated_at",
+    ]
+
+    # Default: all fields except title, updated_at and ftp_url
+    default_fields = [f for f in allowed_fields if f not in ("title", "updated_at", "ftp_url")]
+
+    if fields:
+        requested = [f.strip() for f in fields.split(",") if f.strip()]
+        if "all" in [f.lower() for f in requested]:
+            out_fields = allowed_fields
+        else:
+            invalid = [f for f in requested if f not in allowed_fields]
+            if invalid:
+                valid_list = ", ".join(allowed_fields)
+                raise typer.BadParameter(
+                    f"Unknown field(s): {', '.join(invalid)}. Valid fields: {valid_list}"
+                )
+            out_fields = requested
+    else:
+        out_fields = default_fields
+
     for item in records:
         assert isinstance(item, Meeting)
-        typer.echo(
-            "\t".join(
-                [
-                    str(item.meeting_id),
-                    item.name,
-                    item.start_date.isoformat(),
-                    item.end_date.isoformat(),
-                    item.ftp_url or "-",
-                    _fmt_dt(item.updated_at),
-                ]
-            )
-        )
+        vals: list[str] = []
+        for f in out_fields:
+            v = getattr(item, f, None)
+            if v is None:
+                vals.append("-")
+                continue
+
+            if f in ("start_date", "end_date"):
+                vals.append(v.isoformat())
+            elif f == "updated_at":
+                vals.append(_fmt_dt(v))
+            else:
+                vals.append(str(v))
+
+        typer.echo("\t".join(vals))
 
 
 @tdoc_app.command("sync")

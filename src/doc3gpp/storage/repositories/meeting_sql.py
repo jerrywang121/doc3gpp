@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, extract
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.storage.db.models import MeetingORM
@@ -38,10 +38,38 @@ class SQLAlchemyMeetingRepository:
             session.commit()
         return len(meetings)
 
-    def list(self, limit: int = 50) -> list[Meeting]:
-        """List the most recent meeting records, ordered by start date."""
+    def list(
+        self,
+        limit: int = 50,
+        tsg: str | None = None,
+        name_like: str | None = None,
+        location_like: str | None = None,
+        year: int | None = None,
+    ) -> list[Meeting]:
+        """List the most recent meeting records, ordered by start date.
+
+        Optional filters:
+        - `tsg`: filter meetings whose `name` starts with this value (case-insensitive)
+        - `name_like`: SQL LIKE pattern to apply to the `name` column
+        - `year`: integer year to match the `start_date`
+        """
         with self._session_factory() as session:
-            stmt = select(MeetingORM).order_by(MeetingORM.start_date.desc()).limit(limit)
+            stmt = select(MeetingORM)
+
+            if tsg:
+                # match names that start with the TSG short name (case-insensitive)
+                stmt = stmt.where(MeetingORM.name.ilike(f"{tsg}%"))
+
+            if name_like:
+                stmt = stmt.where(MeetingORM.name.like(name_like))
+
+            if location_like:
+                stmt = stmt.where(MeetingORM.location.like(location_like))
+
+            if year is not None:
+                stmt = stmt.where(extract("year", MeetingORM.start_date) == year)
+
+            stmt = stmt.order_by(MeetingORM.start_date.desc()).limit(limit)
             rows = session.scalars(stmt).all()
 
         return [

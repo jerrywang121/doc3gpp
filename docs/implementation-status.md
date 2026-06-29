@@ -35,19 +35,19 @@ This document tracks what is implemented today versus planned next work.
 
 ### Services
 
-- CalendarService sync and list.
+- MeetingService sync and list.
 - TDocService save and list.
 
 ### CLI
 
 - db check, db init.
-- calendar sync, calendar list.
+- meetings sync, meetings list.
 - tdoc add, tdoc list.
 
 ### Tests
 
 - Unit: settings defaults, calendar parser fixture.
-- Integration: sqlite connectivity, calendar service persistence.
+- Integration: sqlite connectivity, meeting service persistence.
 - Optional integration: mysql connectivity via DOC3GPP_TEST_MYSQL_URL.
 - Pytest markers are defined for profile-based execution:
   - online

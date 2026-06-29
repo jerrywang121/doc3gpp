@@ -8,7 +8,7 @@ from sqlalchemy import text
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
-from doc3gpp.services.calendar_service import CalendarService
+from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
@@ -17,13 +17,17 @@ from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
-calendar_app = typer.Typer(help="calendar commands")
+meetings_app = typer.Typer(help="meetings commands")
 tdoc_app = typer.Typer(help="tdoc commands")
 app.add_typer(db_app, name="db")
-app.add_typer(calendar_app, name="calendar")
+app.add_typer(meetings_app, name="meetings")
 app.add_typer(tdoc_app, name="tdoc")
 
-DEFAULT_CALENDAR_URL = "https://www.3gpp.org/dynareport?code=Meetings-R5.htm"
+DEFAULT_TSG = "r5"
+
+
+def _build_meetings_url(tsg: str) -> str:
+    return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.htm"
 
 
 @db_app.command("check")
@@ -46,18 +50,19 @@ def db_init() -> None:
     typer.echo("Database schema initialized")
 
 
-@calendar_app.command("sync")
-def calendar_sync(
-    url: str = typer.Option(DEFAULT_CALENDAR_URL, help="3GPP calendar URL"),
+@meetings_app.command("sync")
+def meetings_sync(
+    tsg: str = typer.Option(DEFAULT_TSG, help="TSG short name for 3GPP meetings report"),
     closed_years: int = typer.Option(2, min=0, max=20, help="Years of closed meetings to keep"),
     future_years: int = typer.Option(1, min=0, max=10, help="Years of future meetings to keep"),
 ) -> None:
-    """Fetch and store meetings calendar from 3GPP site."""
+    """Fetch and store meetings from 3GPP site."""
 
     create_schema()
-    service = CalendarService(SQLAlchemyMeetingRepository())
-    count = service.sync(url, max_year_closed=closed_years, max_year_future=future_years)
-    typer.echo(f"Calendar sync complete: {count} meeting rows stored")
+    service = MeetingService(SQLAlchemyMeetingRepository())
+    meetings_url = _build_meetings_url(tsg)
+    count = service.sync(meetings_url, max_year_closed=closed_years, max_year_future=future_years)
+    typer.echo(f"Meetings sync complete: {count} meeting rows stored")
 
 
 def _fmt_dt(value: datetime | None) -> str:
@@ -66,11 +71,11 @@ def _fmt_dt(value: datetime | None) -> str:
     return value.isoformat(sep=" ", timespec="seconds")
 
 
-@calendar_app.command("list")
-def calendar_list(limit: int = typer.Option(20, min=1, max=500)) -> None:
+@meetings_app.command("list")
+def meetings_list(limit: int = typer.Option(20, min=1, max=500)) -> None:
     """List recent meetings from database."""
 
-    service = CalendarService(SQLAlchemyMeetingRepository())
+    service = MeetingService(SQLAlchemyMeetingRepository())
     records = service.list_recent(limit=limit)
     if not records:
         typer.echo("No meetings found")

@@ -8,19 +8,19 @@ from doc3gpp.repository.protocols import MeetingRepository
 from doc3gpp.scraping.calendar_source import fetch_calendar
 
 
-class CalendarService:
-    """Sync and query 3GPP meeting calendar records."""
+class MeetingService:
+    """Sync and query 3GPP meeting records."""
 
     def __init__(self, repository: MeetingRepository) -> None:
         self._repository = repository
 
     def sync(
         self,
-        calendar_url: str,
+        meetings_url: str,
         max_year_closed: int = 2,
         max_year_future: int = 1,
     ) -> int:
-        meetings = fetch_calendar(calendar_url)
+        meetings = fetch_calendar(meetings_url)
         meetings = self._filter_by_year_window(meetings, max_year_closed, max_year_future)
         return self._repository.upsert_many(meetings)
 

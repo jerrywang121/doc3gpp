@@ -46,7 +46,7 @@ def test_cli_tdoc_add_and_list(sqlite_env) -> None:
     assert "R3-000001\tIntro\tRAN3#100\thttps://example.test/r3-1" in list_res.stdout
 
 
-def test_cli_calendar_sync_and_list(sqlite_env, monkeypatch) -> None:
+def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
     runner = CliRunner()
     fixture = Path("tests/fixtures/sample_pages/meetings_r5_sample.html")
     html = fixture.read_text(encoding="utf-8")
@@ -56,18 +56,18 @@ def test_cli_calendar_sync_and_list(sqlite_env, monkeypatch) -> None:
 
         return parse_3gpp_calendar(html)
 
-    import doc3gpp.services.calendar_service as calendar_service_module
+    import doc3gpp.services.meetings_service as meetings_service_module
 
-    monkeypatch.setattr(calendar_service_module, "fetch_calendar", fake_fetch_calendar)
+    monkeypatch.setattr(meetings_service_module, "fetch_calendar", fake_fetch_calendar)
 
     assert runner.invoke(app, ["db", "init"]).exit_code == 0
     sync_res = runner.invoke(
         app,
         [
-            "calendar",
+            "meetings",
             "sync",
-            "--url",
-            "https://example.invalid",
+            "--tsg",
+            "r5",
             "--closed-years",
             "10",
             "--future-years",
@@ -75,8 +75,8 @@ def test_cli_calendar_sync_and_list(sqlite_env, monkeypatch) -> None:
         ],
     )
     assert sync_res.exit_code == 0
-    assert "Calendar sync complete: 1 meeting rows stored" in sync_res.stdout
+    assert "Meetings sync complete: 1 meeting rows stored" in sync_res.stdout
 
-    list_res = runner.invoke(app, ["calendar", "list", "--limit", "5"])
+    list_res = runner.invoke(app, ["meetings", "list", "--limit", "5"])
     assert list_res.exit_code == 0
     assert "85434\tR5--TTCN Workshop#74\t2026-07-02\t2026-07-02" in list_res.stdout

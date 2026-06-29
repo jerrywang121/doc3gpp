@@ -32,18 +32,18 @@ Behavior:
 - Calls create_schema.
 - Creates currently defined ORM tables if they do not exist.
 
-## calendar Commands
+## meetings Commands
 
-### doc3gpp calendar sync
+### doc3gpp meetings sync
 
 Purpose:
 
-- Scrape and persist meeting calendar entries from 3gpp DynaReport.
+- Scrape and persist meeting records from 3gpp DynaReport.
 
 Options:
 
-- --url: calendar page URL.
-  - default: https://www.3gpp.org/dynareport?code=Meetings-R5.htm
+- --tsg: TSG short name.
+  - default: r5
 - --closed-years: number of historical years to keep.
   - default: 2
 - --future-years: number of future years to keep.
@@ -51,13 +51,14 @@ Options:
 
 Behavior:
 
+- Builds the 3GPP meetings report URL from the TSG short name.
 - Fetches HTML page.
 - Parses meeting rows.
 - Filters by date window.
 - Upserts records into meetings table.
 - Prints inserted/updated row count.
 
-### doc3gpp calendar list
+### doc3gpp meetings list
 
 Purpose:
 
@@ -103,8 +104,8 @@ Options:
 ```bash
 doc3gpp db init
 doc3gpp db check
-doc3gpp calendar sync --url "https://www.3gpp.org/dynareport?code=Meetings-R5.htm"
-doc3gpp calendar list --limit 20
+doc3gpp meetings sync --tsg r5
+doc3gpp meetings list --limit 20
 doc3gpp tdoc add --tdoc-id R1-000001 --title "Example"
 doc3gpp tdoc list --limit 10
 ```

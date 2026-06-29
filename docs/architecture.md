@@ -28,17 +28,17 @@ Current scope includes:
 	- module: src/doc3gpp/repository/protocols.py.
 - services:
 	- orchestration and sync use-cases.
-	- modules: src/doc3gpp/services/calendar_service.py, src/doc3gpp/services/tdoc_service.py.
+	- modules: src/doc3gpp/services/meetings_service.py, src/doc3gpp/services/tdoc_service.py.
 - storage:
 	- SQLAlchemy ORM models, session factory, backend-specific engine options, concrete repositories.
 	- modules: src/doc3gpp/storage/db/models.py, src/doc3gpp/storage/db/session.py, src/doc3gpp/storage/backends/*.py, src/doc3gpp/storage/repositories/*.py.
 
 ## Runtime Data Flow
 
-Calendar sync flow:
+Meetings sync flow:
 
-1. CLI command calls CalendarService.sync.
-2. CalendarService uses scraping.calendar_source.fetch_calendar.
+1. CLI command calls MeetingService.sync.
+2. MeetingService uses scraping.calendar_source.fetch_calendar.
 3. fetch_calendar loads HTML via ScraperClient.
 4. parsers.calendar_parser.parse_3gpp_calendar converts HTML rows into Meeting domain objects.
 5. SQLAlchemyMeetingRepository.upsert_many persists meetings into meetings table.

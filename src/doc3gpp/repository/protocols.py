@@ -17,7 +17,7 @@ class TDocRepository(Protocol):
 
 
 class MeetingRepository(Protocol):
-    """Storage operations used by calendar sync service."""
+    """Storage operations used by meetings sync service."""
 
     def upsert_many(self, meetings: list[Meeting]) -> int:
         ...

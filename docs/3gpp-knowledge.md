@@ -138,18 +138,26 @@ From a meeting `ftp_url`, the following directory layout is common:
    - A metadata spreadsheet named `TDoc_List_Meeting_xxx.xlsx` lists all TDocs and their status.
    - ZIP files are immutable; once uploaded they are never changed.
    - Any update to a TDoc is stored as a revision file in `Inbox/` with the pattern `{tdoc_id}r#.zip`, where `#` is the reversion number.
+   - (R5 TTCN Workshop meetings only) the `Docs/` only exists for meeting on and after 2016. There are multiple `TDoc_List_Meeting_TTCN Workshop{#xx}.xlsx` files, where the `#{xx}` represents the meeting number, often with two digits. Moreover, the TDoc revision files named `{tdoc_id}r#.zip` are also stored under the same `Docs/` directory rather than `Inbox/`.
    - A revision TDoc eventually becomes the new official TDoc, with new TDoc IDs and is uploaded to `Docs/` or `Tdocs/`.
    - The TDoc list XLSX is updated over time to capture new TDocs and statuses such as revised, agreed, withdrawn, etc.
 
-3. `Report/`
+3. `Review/` (R5 TTCN email meetings only)
+   - Present in R5 TTCN email meetings with an extra review folder under the meeting FTP tree.
+   - Stores TTCN CR review documents associated with a base `{tdoc_id}`.
+   - Review files are named `{tdoc_id}_MCC160Comments.zip`.
+   - Updated review revisions are named `{tdoc_id}_MCC160Comments_r#.zip`, where `#` is the revision number.
+   - The folder can also contain supporting draft prose CR documents for the same TTCN CR, typically named `{tdoc_id}_xxxxx.zip`.
+
+4. `Report/`
    - Stores meeting minutes and reports.
    - Draft and Final versions may be present.
 
-4. `Inbox/`
+5. `Inbox/`
    - If present, stores temporary documents during the meeting.
    - This often includes intermediate revision TDocs, new draft TDocs, liaison statements (LSs), and discussion papers created during the meeting.
 
-5. `LSin/` and `LSout/`
+6. `LSin/` and `LSout/`
    - Store incoming and outgoing liaison statements, respectively.
 
 ## Naming Conventions
@@ -193,10 +201,17 @@ Where:
 - `{YY}` is the two-digit year of the associated meeting, e.g. `26` for 2026.
 - `{####}` is a four-digit sequence number allocated by that TSG during the year, starting from `0001`.
 
+Some R5 TTCN-related meetings use a special naming convention:
+
+- `R5s{YY}{####}` for R5 TTCN email meetings, where TDocs are TTCN CRs for updating the TTCN test scripts codebase maintained by RAN5.
+- `R5w{YY}{####}` for R5 TTCN workshop meetings, where TDocs are CRs for TTCN models updates.
+
 Example:
 
 ```text
 R5-260001
+R5s260123
+R5w260045
 C6-260045
 RP-260123
 ```

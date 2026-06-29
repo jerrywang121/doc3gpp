@@ -38,8 +38,11 @@ def _extract_hrefs(html: str) -> list[str]:
     return [a["href"] for a in soup.find_all("a", href=True)]
 
 
-def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting: str | None = None) -> list[TDoc]:
-    """Discover a meeting TDoc list XLSX from the FTP path and parse its rows."""
+def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting_id: int | None = None) -> list[TDoc]:
+    """Discover a meeting TDoc list XLSX from the FTP path and parse its rows.
+
+    `meeting_id` is an optional integer referring to `meetings.meeting_id`.
+    """
     base_url = _normalize_ftp_path(ftp_url)
     if not base_url.endswith("/"):
         base_url += "/"
@@ -67,11 +70,25 @@ def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting: str | None = None) -> li
             records = read_tdoc_sheet(xlsx_bytes)
             logger.info("Parsed %s TDoc rows from %s", len(records), file_url)
             return [
-                TDoc(
+                    TDoc(
                     tdoc_id=row["tdoc"],
                     title=row.get("title", ""),
-                    meeting=meeting,
+                    meeting_id=meeting_id,
                     url=file_url,
+                    source=row.get("source", ""),
+                    type=row.get("type", ""),
+                    status=row.get("status", ""),
+                    reservation_date=row.get("reservation_date", ""),
+                    uploaded_date=row.get("uploaded_date", ""),
+                    cr_cat=row.get("cr_cat", ""),
+                        cr_pack=row.get("cr_pack", ""),
+                    is_revision_of=row.get("is_revision_of", ""),
+                    revised_to=row.get("revised_to", ""),
+                    release=row.get("release", ""),
+                    spec=row.get("spec", ""),
+                    version=row.get("version", ""),
+                    related_wis=row.get("related_wis", ""),
+                    cr_num=row.get("cr_num", ""),
                 )
                 for row in records
             ]

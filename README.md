@@ -64,6 +64,8 @@ doc3gpp meetings list --limit 20
 doc3gpp tdoc sync --meeting-id 85434
 doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
 doc3gpp tdoc list --limit 10
+# Filtered list examples
+doc3gpp tdoc list --tsg R5 --year 26 --meeting "%RAN3%"
 ```
 
 ## Testing

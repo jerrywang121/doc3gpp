@@ -15,7 +15,7 @@ def test_calendar_service_persists_to_sqlite(tmp_path, monkeypatch) -> None:
     get_settings.cache_clear()
     get_engine.cache_clear()
 
-    fixture = Path("tests/fixtures/sample_pages/meetings_r5_sample.html")
+    fixture = Path("tests/fixtures/sample_pages/3GPP-meeting-R5.html")
     html = fixture.read_text(encoding="utf-8")
 
     def fake_fetch_calendar(_: str):

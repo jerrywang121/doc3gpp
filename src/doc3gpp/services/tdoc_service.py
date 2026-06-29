@@ -21,13 +21,30 @@ class TDocService:
         logger.debug("Saving TDoc %s", tdoc.tdoc_id)
         self._repository.upsert(tdoc)
 
-    def list_recent(self, limit: int = 20) -> list[TDoc]:
-        logger.debug("Listing %s recent TDocs", limit)
-        return self._repository.list(limit=limit)
+    def list_recent(
+        self,
+        limit: int = 20,
+        tsg: str | None = None,
+        meeting_like: str | None = None,
+        year: int | None = None,
+    ) -> list[TDoc]:
+        logger.debug(
+            "Listing %s recent TDocs with filters tsg=%s meeting_like=%s year=%s",
+            limit,
+            tsg,
+            meeting_like,
+            year,
+        )
+        return self._repository.list(
+            limit=limit,
+            tsg=tsg,
+            meeting_like=meeting_like,
+            year=year,
+        )
 
-    def sync_from_meeting_ftp(self, ftp_url: str, meeting: str | None = None) -> int:
-        logger.info("Syncing TDocs from FTP %s for meeting %s", ftp_url, meeting)
-        tdocs = fetch_tdocs_from_meeting_ftp(ftp_url=ftp_url, meeting=meeting)
+    def sync_from_meeting_ftp(self, ftp_url: str, meeting_id: int | None = None) -> int:
+        logger.info("Syncing TDocs from FTP %s for meeting_id %s", ftp_url, meeting_id)
+        tdocs = fetch_tdocs_from_meeting_ftp(ftp_url=ftp_url, meeting_id=meeting_id)
         for tdoc in tdocs:
             self._repository.upsert(tdoc)
         logger.info("Stored %s TDoc records", len(tdocs))

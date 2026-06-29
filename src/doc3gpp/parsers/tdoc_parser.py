@@ -67,6 +67,19 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, str]]:
     mapping = {
         "title": pick_col(header_map, ["Title"]),
         "source": pick_col(header_map, ["Source"]),
+        "type": pick_col(header_map, ["Type"]),
+        "status": pick_col(header_map, ["Status", "TDoc Status"]),
+        "reservation_date": pick_col(header_map, ["Reservation Date", "Reservation date"]),
+        "uploaded_date": pick_col(header_map, ["Uploaded Date", "Uploaded"]),
+        "cr_cat": pick_col(header_map, ["CR Cat", "CR category", "Cat"]),
+        "is_revision_of": pick_col(header_map, ["Is revision of"]),
+        "revised_to": pick_col(header_map, ["Revised to"]),
+        "release": pick_col(header_map, ["Release"]),
+        "spec": pick_col(header_map, ["Spec"]),
+        "version": pick_col(header_map, ["Version"]),
+        "related_wis": pick_col(header_map, ["Related WIs", "Work item code"]),
+        "cr_num": pick_col(header_map, ["CR"]),
+        "cr_pack": pick_col(header_map, ["TSG CR Pack", "TSG CR pack", "CR Pack"]),
     }
 
     result: List[Dict[str, str]] = []

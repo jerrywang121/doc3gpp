@@ -152,6 +152,9 @@ Options:
 
 - --limit: number of rows.
   - default: 20
+- --tsg: filter TDoc IDs by TSG prefix (e.g. R5).
+- --year: filter TDocs by the two-digit year code embedded in the TDoc ID.
+- --meeting: SQL LIKE pattern to filter meeting name; supports % and _.
 
 ## Examples
 

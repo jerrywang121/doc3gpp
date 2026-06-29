@@ -13,8 +13,14 @@ class TDocRepository(Protocol):
         """Insert or update a TDoc record in storage."""
         ...
 
-    def list(self, limit: int = 20) -> list[TDoc]:
-        """Return a list of recent TDoc records."""
+    def list(
+        self,
+        limit: int = 20,
+        tsg: str | None = None,
+        meeting_like: str | None = None,
+        year: int | None = None,
+    ) -> list[TDoc]:
+        """Return a list of recent TDoc records with optional filters."""
         ...
 
 

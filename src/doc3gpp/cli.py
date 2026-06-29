@@ -218,24 +218,38 @@ def tdoc_sync(
 
     count = service.sync_from_meeting_ftp(
         ftp_url=meeting_record.ftp_url,
-        meeting=meeting_record.name,
+        meeting_id=meeting_record.meeting_id,
     )
     typer.echo(f"TDoc sync complete: {count} records stored")
 
 
 @tdoc_app.command("list")
-def tdoc_list(limit: int = typer.Option(20, min=1, max=500)) -> None:
+def tdoc_list(
+    limit: int = typer.Option(20, min=1, max=500),
+    tsg: str | None = typer.Option(None, help="TSG prefix to filter TDoc IDs (e.g. R5)."),
+    year: int | None = typer.Option(None, help="Two-digit year code within the TDoc identifier."),
+    meeting: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter meeting name; supports % and _."
+    ),
+) -> None:
     """List recent stored TDocs."""
 
-    logger.info("Listing %s recent TDocs", limit)
+    logger.info(
+        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s",
+        limit,
+        tsg,
+        year,
+        meeting,
+    )
     service = TDocService(SQLAlchemyTDocRepository())
-    records = service.list_recent(limit=limit)
+    records = service.list_recent(limit=limit, tsg=tsg, meeting_like=meeting, year=year)
     if not records:
         typer.echo("No TDocs found")
         return
 
     for item in records:
-        typer.echo(f"{item.tdoc_id}\t{item.title}\t{item.meeting or '-'}\t{item.url or '-'}")
+        typer.echo(f"{item.tdoc_id}\t{item.title}\t{item.meeting_name or '-'}\t{item.url or '-'}")
 
 
 def main() -> None:

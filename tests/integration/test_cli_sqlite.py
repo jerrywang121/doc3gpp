@@ -21,7 +21,7 @@ def test_cli_db_init_and_check(sqlite_env) -> None:
 
 def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
     runner = CliRunner()
-    fixture = Path("tests/fixtures/sample_pages/meetings_r5_sample.html")
+    fixture = Path("tests/fixtures/sample_pages/3GPP-meeting-R5.html")
     html = fixture.read_text(encoding="utf-8")
 
     def fake_fetch_calendar(_: str):

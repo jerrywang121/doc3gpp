@@ -16,5 +16,23 @@ class TDoc:
 
     tdoc_id: str
     title: str
-    meeting: str | None = None
+    meeting_id: int | None = None
+    # Convenience: human-readable meeting name populated when listing (not persisted on tdocs table)
+    meeting_name: str | None = None
     url: str | None = None
+    # Additional metadata extracted from TDoc list XLSX
+    source: str | None = None
+    type: str | None = None
+    status: str | None = None
+    reservation_date: str | None = None
+    uploaded_date: str | None = None
+    cr_cat: str | None = None
+    is_revision_of: str | None = None
+    revised_to: str | None = None
+    release: str | None = None
+    spec: str | None = None
+    version: str | None = None
+    related_wis: str | None = None
+    cr_num: str | None = None
+    # TSG CR Pack value from XLSX (nullable)
+    cr_pack: str | None = None

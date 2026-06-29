@@ -16,7 +16,7 @@ def test_file_cache_path_for_normalizes_key(tmp_path) -> None:
 def test_export_tdocs_csv_writes_rows(tmp_path) -> None:
     out = Path(tmp_path) / "tdocs.csv"
     records = [
-        TDoc(tdoc_id="R1-000001", title="Title 1", meeting="RAN1#100", url="https://example.test/1"),
+        TDoc(tdoc_id="R1-000001", title="Title 1", meeting_name="RAN1#100", url="https://example.test/1"),
         TDoc(tdoc_id="R1-000002", title="Title 2"),
     ]
 

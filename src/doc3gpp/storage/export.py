@@ -13,4 +13,4 @@ def export_tdocs_csv(path: Path, records: list[TDoc]) -> None:
         writer = csv.writer(handle)
         writer.writerow(["tdoc_id", "title", "meeting", "url"])
         for item in records:
-            writer.writerow([item.tdoc_id, item.title, item.meeting or "", item.url or ""])
+            writer.writerow([item.tdoc_id, item.title, item.meeting_name or "", item.url or ""])

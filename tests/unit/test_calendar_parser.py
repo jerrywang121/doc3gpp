@@ -7,7 +7,7 @@ from doc3gpp.parsers.calendar_parser import parse_3gpp_calendar
 
 
 def test_parse_3gpp_calendar_sample() -> None:
-    fixture_path = Path("tests/fixtures/sample_pages/meetings_r5_sample.html")
+    fixture_path = Path("tests/fixtures/sample_pages/3GPP-meeting-R5.html")
     html = fixture_path.read_text(encoding="utf-8")
 
     meetings = parse_3gpp_calendar(html)

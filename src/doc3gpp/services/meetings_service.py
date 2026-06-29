@@ -24,8 +24,13 @@ class MeetingService:
         meetings = self._filter_by_year_window(meetings, max_year_closed, max_year_future)
         return self._repository.upsert_many(meetings)
 
-    def list_recent(self, limit: int = 50) -> list[Meeting]:
-        return self._repository.list(limit=limit)
+    def list_recent(self, limit: int = 50, tsg: str | None = None) -> list[Meeting]:
+        meetings = self._repository.list(limit=limit)
+        if tsg is None:
+            return meetings
+
+        normalized_tsg = tsg.upper()
+        return [m for m in meetings if m.name.upper().startswith(normalized_tsg)]
 
     @staticmethod
     def _filter_by_year_window(

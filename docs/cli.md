@@ -68,6 +68,8 @@ Options:
 
 - --limit: number of rows.
   - default: 20
+- --tsg: only list meetings for the given TSG short name.
+  - default: none
 
 Output format:
 

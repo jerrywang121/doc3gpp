@@ -80,3 +80,7 @@ def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
     list_res = runner.invoke(app, ["meetings", "list", "--limit", "5"])
     assert list_res.exit_code == 0
     assert "85434\tR5--TTCN Workshop#74\t2026-07-02\t2026-07-02" in list_res.stdout
+
+    filtered_res = runner.invoke(app, ["meetings", "list", "--limit", "5", "--tsg", "r5"])
+    assert filtered_res.exit_code == 0
+    assert "85434\tR5--TTCN Workshop#74\t2026-07-02\t2026-07-02" in filtered_res.stdout

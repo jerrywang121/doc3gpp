@@ -72,11 +72,14 @@ def _fmt_dt(value: datetime | None) -> str:
 
 
 @meetings_app.command("list")
-def meetings_list(limit: int = typer.Option(20, min=1, max=500)) -> None:
+def meetings_list(
+    limit: int = typer.Option(20, min=1, max=500),
+    tsg: str | None = typer.Option(None, help="Only list meetings for the given TSG short name"),
+) -> None:
     """List recent meetings from database."""
 
     service = MeetingService(SQLAlchemyMeetingRepository())
-    records = service.list_recent(limit=limit)
+    records = service.list_recent(limit=limit, tsg=tsg)
     if not records:
         typer.echo("No meetings found")
         return

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     db_echo: bool = Field(default=False, validation_alias="DOC3GPP_DB_ECHO")
     db_pool_size: int = Field(default=5, validation_alias="DOC3GPP_DB_POOL_SIZE")
     db_auto_migrate: bool = Field(default=True, validation_alias="DOC3GPP_DB_AUTO_MIGRATE")
+    log_level: str = Field(default="INFO", validation_alias="DOC3GPP_LOG_LEVEL")
     http_verify: bool = Field(default=False, validation_alias="DOC3GPP_HTTP_VERIFY")
 
     model_config = SettingsConfigDict(

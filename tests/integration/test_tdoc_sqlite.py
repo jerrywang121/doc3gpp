@@ -6,9 +6,11 @@ from openpyxl import Workbook
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
+from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 
@@ -104,13 +106,28 @@ def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
         fake_sync_from_meeting_ftp,
     )
 
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    meeting = Meeting(
+        meeting_id=85434,
+        name="R5--TTCN Workshop#74",
+        title="3GPPRAN5-TTCN Workshop#74",
+        location="Online",
+        start_date=date(2026, 7, 2),
+        end_date=date(2026, 7, 2),
+        ftp_url="tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/",
+    )
+    # Use raw session insert via repository to keep test compatible with current repo API.
+    meeting_repo.upsert_many([meeting])
+
     result = runner.invoke(
         app,
         [
             "tdoc",
             "sync",
-            "--ftp-url",
-            "tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/",
+            "--meeting-id",
+            "85434",
             "--meeting",
             "R5#74",
         ],

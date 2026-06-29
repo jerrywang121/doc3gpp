@@ -13,6 +13,7 @@ Current scope includes:
 
 - settings:
 	- schema and loading for environment-driven config.
+	- log level configuration via `DOC3GPP_LOG_LEVEL`.
 	- modules: src/doc3gpp/settings/schema.py, src/doc3gpp/settings/loader.py.
 - scraping:
 	- HTTP retrieval from 3gpp.org.
@@ -49,6 +50,13 @@ TDoc add/list flow:
 2. TDocService delegates to SQLAlchemyTDocRepository.
 3. Repository persists/reads rows in tdocs table.
 
+Meeting-based TDoc sync flow:
+
+1. `doc3gpp tdoc sync --meeting-id` loads meeting metadata from storage.
+2. The meeting's stored FTP URL is used to discover the TDoc list XLSX file.
+3. `fetch_tdocs_from_meeting_ftp` parses the XLSX file and returns TDoc records.
+4. TDocService persists the discovered TDocs.
+
 ## Database Schema (Current)
 
 Current tables defined in src/doc3gpp/storage/db/models.py:
@@ -81,10 +89,11 @@ Implemented command groups in src/doc3gpp/cli.py:
 - db:
 	- check
 	- init
-- calendar:
+- meetings:
 	- sync
 	- list
 - tdoc:
+	- sync
 	- add
 	- list
 

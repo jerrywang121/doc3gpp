@@ -32,6 +32,7 @@ Configuration is read from environment variables and `.env`.
 - `DOC3GPP_DB_ECHO`
 - `DOC3GPP_DB_POOL_SIZE`
 - `DOC3GPP_DB_AUTO_MIGRATE`
+- `DOC3GPP_LOG_LEVEL`
 
 Examples:
 
@@ -60,6 +61,7 @@ doc3gpp db init
 doc3gpp db check
 doc3gpp meetings sync --tsg r5
 doc3gpp meetings list --limit 20
+doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
 doc3gpp tdoc add --tdoc-id R1-000001 --title "Example TDoc" --meeting "RAN1#100" --url "https://www.3gpp.org"
 doc3gpp tdoc list --limit 10
 ```

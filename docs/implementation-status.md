@@ -37,12 +37,14 @@ This document tracks what is implemented today versus planned next work.
 
 - MeetingService sync and list.
 - TDocService save and list.
+- Meeting-based TDoc sync now resolves FTP URL from stored meeting records.
 
 ### CLI
 
 - db check, db init.
 - meetings sync, meetings list.
-- tdoc add, tdoc list.
+- tdoc sync, tdoc add, tdoc list.
+- Logging is configured via `DOC3GPP_LOG_LEVEL` and available at runtime for debugging.
 
 ### Tests
 

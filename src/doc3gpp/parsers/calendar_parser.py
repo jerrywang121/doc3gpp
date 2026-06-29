@@ -12,7 +12,13 @@ _DATE_PATTERN = "%Y-%m-%d"
 
 
 def parse_3gpp_calendar(html: str) -> list[Meeting]:
-    """Parse meeting calendar rows from 3GPP DynaReport HTML."""
+    """Parse meeting calendar rows from 3GPP DynaReport HTML.
+
+    The 3GPP meeting calendar page contains a table of meetings with
+    columns for name, title, location, start/end dates and FTP document links.
+    This parser extracts only valid meeting rows and converts them into
+    Meeting dataclass instances.
+    """
 
     soup = BeautifulSoup(html, "lxml")
     table = soup.find("table", {"class": "meetings"})
@@ -72,6 +78,7 @@ def parse_3gpp_calendar(html: str) -> list[Meeting]:
 
 
 def _first_href(cell) -> str | None:
+    """Return the first href value from an anchor element in a table cell."""
     link = cell.find("a")
     if link and link.has_attr("href"):
         return str(link["href"])
@@ -79,6 +86,7 @@ def _first_href(cell) -> str | None:
 
 
 def _extract_meeting_id(href: str | None) -> int | None:
+    """Extract the numeric meeting ID from a 3GPP meeting href."""
     if not href:
         return None
     match = re.search(r"MtgId=(\d+)", href)
@@ -88,6 +96,7 @@ def _extract_meeting_id(href: str | None) -> int | None:
 
 
 def _extract_ftp_path(href: str | None) -> str | None:
+    """Extract the FTP path from a document link href."""
     if not href:
         return None
     match = re.search(r"[\\/]+ftp[\\/]+(.+)", href, flags=re.IGNORECASE)
@@ -99,6 +108,7 @@ def _extract_ftp_path(href: str | None) -> str | None:
 
 
 def _parse_date(text: str) -> date:
+    """Normalize a date string and convert it to a date object."""
     normalized = text.strip()
     normalized = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]", "-", normalized)
     return date.fromisoformat(normalized)

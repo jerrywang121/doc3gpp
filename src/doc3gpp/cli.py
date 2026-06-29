@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import logging
 import typer
 from sqlalchemy import text
 
@@ -23,7 +24,27 @@ app.add_typer(db_app, name="db")
 app.add_typer(meetings_app, name="meetings")
 app.add_typer(tdoc_app, name="tdoc")
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_TSG = "r5"
+
+
+def _configure_logging() -> None:
+    settings = get_settings()
+    level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(level)
+    logger.debug("Logging configured at %s", logging.getLevelName(level))
+
+
+@app.callback(invoke_without_command=True)
+def main_callback(ctx: typer.Context) -> None:
+    _configure_logging()
+    if ctx.invoked_subcommand is None:
+        typer.echo(app.get_help(ctx))
 
 
 def _build_meetings_url(tsg: str) -> str:
@@ -34,6 +55,7 @@ def _build_meetings_url(tsg: str) -> str:
 def db_check() -> None:
     """Validate database connectivity for configured backend."""
 
+    logger.info("Checking database connectivity")
     engine = get_engine()
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
@@ -46,6 +68,7 @@ def db_check() -> None:
 def db_init() -> None:
     """Create schema for current backend."""
 
+    logger.info("Initializing database schema")
     create_schema()
     typer.echo("Database schema initialized")
 
@@ -58,6 +81,7 @@ def meetings_sync(
 ) -> None:
     """Fetch and store meetings from 3GPP site."""
 
+    logger.info("Starting meetings sync for TSG %s", tsg)
     create_schema()
     service = MeetingService(SQLAlchemyMeetingRepository())
     meetings_url = _build_meetings_url(tsg)
@@ -78,6 +102,7 @@ def meetings_list(
 ) -> None:
     """List recent meetings from database."""
 
+    logger.info("Listing %s recent meetings for tsg=%s", limit, tsg)
     service = MeetingService(SQLAlchemyMeetingRepository())
     records = service.list_recent(limit=limit, tsg=tsg)
     if not records:
@@ -102,14 +127,31 @@ def meetings_list(
 
 @tdoc_app.command("sync")
 def tdoc_sync(
-    ftp_url: str = typer.Option(..., help="Meeting FTP URL or relative FTP directory path"),
+    meeting_id: int = typer.Option(
+        ..., help="Meeting ID from the meetings database to resolve the FTP URL"
+    ),
     meeting: str | None = typer.Option(None, help="Optional meeting identifier to associate with imported TDocs"),
 ) -> None:
-    """Fetch TDocs from a meeting FTP directory and store them."""
+    """Fetch TDocs from a stored meeting record and store them."""
 
+    logger.info("Starting TDoc sync for meeting ID %s", meeting_id)
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())
-    count = service.sync_from_meeting_ftp(ftp_url=ftp_url, meeting=meeting)
+    meeting_service = MeetingService(SQLAlchemyMeetingRepository())
+    meeting_record = meeting_service.get_by_id(meeting_id)
+    if meeting_record is None:
+        logger.error("Meeting not found for ID %s", meeting_id)
+        raise typer.BadParameter(f"Meeting not found with id {meeting_id}")
+    if not meeting_record.ftp_url:
+        logger.error("Meeting %s does not have an FTP URL stored", meeting_id)
+        raise typer.BadParameter(
+            f"Meeting {meeting_id} does not have an FTP URL stored"
+        )
+
+    count = service.sync_from_meeting_ftp(
+        ftp_url=meeting_record.ftp_url,
+        meeting=meeting or meeting_record.name,
+    )
     typer.echo(f"TDoc sync complete: {count} records stored")
 
 
@@ -122,6 +164,7 @@ def tdoc_add(
 ) -> None:
     """Insert or update one TDoc."""
 
+    logger.info("Saving TDoc %s for meeting %s", tdoc_id, meeting)
     service = TDocService(SQLAlchemyTDocRepository())
     service.save(TDoc(tdoc_id=tdoc_id, title=title, meeting=meeting, url=url))
     typer.echo(f"Saved {tdoc_id}")
@@ -131,6 +174,7 @@ def tdoc_add(
 def tdoc_list(limit: int = typer.Option(20, min=1, max=500)) -> None:
     """List recent stored TDocs."""
 
+    logger.info("Listing %s recent TDocs", limit)
     service = TDocService(SQLAlchemyTDocRepository())
     records = service.list_recent(limit=limit)
     if not records:

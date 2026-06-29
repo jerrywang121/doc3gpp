@@ -77,6 +77,24 @@ Output format:
 
 ## tdoc Commands
 
+### doc3gpp tdoc sync
+
+Purpose:
+
+- Discover and persist TDoc records by looking up a stored meeting's FTP path.
+
+Options:
+
+- --meeting-id: required meeting ID from the meetings database.
+- --meeting: optional meeting identifier to associate with imported TDocs.
+
+Behavior:
+
+- Loads the meeting record from storage.
+- Resolves the stored FTP URL from that meeting.
+- Discovers the matching `TDoc_List_Meeting_*.xlsx` file on 3GPP FTP.
+- Parses and persists TDoc rows.
+
 ### doc3gpp tdoc add
 
 Purpose:
@@ -108,6 +126,7 @@ doc3gpp db init
 doc3gpp db check
 doc3gpp meetings sync --tsg r5
 doc3gpp meetings list --limit 20
+doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
 doc3gpp tdoc add --tdoc-id R1-000001 --title "Example"
 doc3gpp tdoc list --limit 10
 ```

@@ -8,12 +8,19 @@ from doc3gpp.storage.db.session import get_session_factory
 
 
 class SQLAlchemyTDocRepository:
-    """SQLAlchemy-backed implementation of TDocRepository."""
+    """SQLAlchemy-backed implementation of TDocRepository.
+
+    This repository stores TDoc metadata observed in meeting FTP directories.
+    """
 
     def __init__(self) -> None:
         self._session_factory = get_session_factory()
 
     def upsert(self, tdoc: TDoc) -> None:
+        """Save or update a TDoc record in the database.
+
+        Existing records are updated by TDoc ID, while new records are inserted.
+        """
         with self._session_factory() as session:
             existing = session.scalar(select(TDocORM).where(TDocORM.tdoc_id == tdoc.tdoc_id))
             if existing:
@@ -32,6 +39,7 @@ class SQLAlchemyTDocRepository:
             session.commit()
 
     def list(self, limit: int = 20) -> list[TDoc]:
+        """Return recent TDoc records ordered by creation timestamp."""
         with self._session_factory() as session:
             stmt = select(TDocORM).order_by(TDocORM.created_at.desc()).limit(limit)
             rows = session.scalars(stmt).all()

@@ -98,7 +98,7 @@ def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
 
     def fake_sync_from_meeting_ftp(self, ftp_url: str, meeting: str | None = None) -> int:
         assert ftp_url == "tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/"
-        assert meeting == "R5#74"
+        assert meeting == "R5--TTCN Workshop#74"
         return 1
 
     monkeypatch.setattr(
@@ -126,11 +126,69 @@ def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
         [
             "tdoc",
             "sync",
-            "--meeting-id",
-            "85434",
             "--meeting",
-            "R5#74",
+            "R5--TTCN Workshop#74",
         ],
     )
     assert result.exit_code == 0
     assert "TDoc sync complete: 1 records stored" in result.stdout
+
+
+def test_cli_tdoc_sync_from_meeting_id(monkeypatch, sqlite_env) -> None:
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+
+    def fake_sync_from_meeting_ftp(self, ftp_url: str, meeting: str | None = None) -> int:
+        assert ftp_url == "tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/"
+        assert meeting == "R5--TTCN Workshop#74"
+        return 1
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.sync_from_meeting_ftp",
+        fake_sync_from_meeting_ftp,
+    )
+
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    meeting = Meeting(
+        meeting_id=85434,
+        name="R5--TTCN Workshop#74",
+        title="3GPPRAN5-TTCN Workshop#74",
+        location="Online",
+        start_date=date(2026, 7, 2),
+        end_date=date(2026, 7, 2),
+        ftp_url="tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/",
+    )
+    meeting_repo.upsert_many([meeting])
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc",
+            "sync",
+            "--meeting-id",
+            "85434",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "TDoc sync complete: 1 records stored" in result.stdout
+
+
+def test_cli_tdoc_sync_meeting_args_are_exclusive(sqlite_env) -> None:
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc",
+            "sync",
+            "--meeting-id",
+            "85434",
+            "--meeting",
+            "R5--TTCN Workshop#74",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Specify exactly one of --meeting-id or --meeting." in result.stderr

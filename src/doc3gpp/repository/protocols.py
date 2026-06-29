@@ -32,3 +32,7 @@ class MeetingRepository(Protocol):
     def get_by_id(self, meeting_id: int) -> Meeting | None:
         """Return a meeting record by its numeric ID."""
         ...
+
+    def get_by_name(self, meeting_name: str) -> Meeting | None:
+        """Return a meeting record by its exact meeting name."""
+        ...

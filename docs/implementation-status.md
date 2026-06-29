@@ -43,7 +43,7 @@ This document tracks what is implemented today versus planned next work.
 
 - db check, db init.
 - meetings sync, meetings list.
-- tdoc sync, tdoc add, tdoc list.
+- tdoc sync, tdoc list.
 - Logging is configured via `DOC3GPP_LOG_LEVEL` and available at runtime for debugging.
 
 ### Tests

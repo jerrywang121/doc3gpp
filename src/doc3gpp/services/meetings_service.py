@@ -58,6 +58,11 @@ class MeetingService:
         logger.debug("Retrieving meeting by id %s", meeting_id)
         return self._repository.get_by_id(meeting_id)
 
+    def get_by_name(self, meeting_name: str) -> Meeting | None:
+        """Return a stored meeting record by its exact meeting name."""
+        logger.debug("Retrieving meeting by name %s", meeting_name)
+        return self._repository.get_by_name(meeting_name)
+
     @staticmethod
     def _filter_by_year_window(
         meetings: list[Meeting], max_year_closed: int, max_year_future: int

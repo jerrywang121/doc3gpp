@@ -8,7 +8,6 @@ from sqlalchemy import text
 
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.tdoc import TDoc
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
@@ -177,47 +176,51 @@ def meetings_list(
 
 @tdoc_app.command("sync")
 def tdoc_sync(
-    meeting_id: int = typer.Option(
-        ..., help="Meeting ID from the meetings database to resolve the FTP URL"
+    meeting_id: int | None = typer.Option(
+        None, help="Meeting ID from the meetings database to resolve the FTP URL"
     ),
-    meeting: str | None = typer.Option(None, help="Optional meeting identifier to associate with imported TDocs"),
+    meeting: str | None = typer.Option(
+        None,
+        help="Meeting name from the meetings database to resolve the FTP URL",
+    ),
 ) -> None:
     """Fetch TDocs from a stored meeting record and store them."""
 
-    logger.info("Starting TDoc sync for meeting ID %s", meeting_id)
+    if (meeting_id is None) == (meeting is None):
+        raise typer.BadParameter("Specify exactly one of --meeting-id or --meeting.")
+
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())
     meeting_service = MeetingService(SQLAlchemyMeetingRepository())
-    meeting_record = meeting_service.get_by_id(meeting_id)
+
+    if meeting_id is not None:
+        logger.info("Starting TDoc sync for meeting ID %s", meeting_id)
+        meeting_record = meeting_service.get_by_id(meeting_id)
+    else:
+        logger.info("Starting TDoc sync for meeting name %s", meeting)
+        meeting_record = meeting_service.get_by_name(meeting)
+
     if meeting_record is None:
-        logger.error("Meeting not found for ID %s", meeting_id)
-        raise typer.BadParameter(f"Meeting not found with id {meeting_id}")
+        if meeting_id is not None:
+            logger.error("Meeting not found for ID %s", meeting_id)
+            raise typer.BadParameter(f"Meeting not found with id {meeting_id}")
+        logger.error("Meeting not found for name %s", meeting)
+        raise typer.BadParameter(f"Meeting not found with name {meeting}")
+
     if not meeting_record.ftp_url:
-        logger.error("Meeting %s does not have an FTP URL stored", meeting_id)
+        logger.error(
+            "Meeting %s does not have an FTP URL stored",
+            meeting_id if meeting_id is not None else meeting,
+        )
         raise typer.BadParameter(
-            f"Meeting {meeting_id} does not have an FTP URL stored"
+            f"Meeting {meeting_id if meeting_id is not None else meeting} does not have an FTP URL stored"
         )
 
     count = service.sync_from_meeting_ftp(
         ftp_url=meeting_record.ftp_url,
-        meeting=meeting or meeting_record.name,
+        meeting=meeting_record.name,
     )
     typer.echo(f"TDoc sync complete: {count} records stored")
-
-
-@tdoc_app.command("add")
-def tdoc_add(
-    tdoc_id: str = typer.Option(..., help="TDoc ID"),
-    title: str = typer.Option(..., help="TDoc title"),
-    meeting: str | None = typer.Option(None, help="Meeting identifier"),
-    url: str | None = typer.Option(None, help="Document URL"),
-) -> None:
-    """Insert or update one TDoc."""
-
-    logger.info("Saving TDoc %s for meeting %s", tdoc_id, meeting)
-    service = TDocService(SQLAlchemyTDocRepository())
-    service.save(TDoc(tdoc_id=tdoc_id, title=title, meeting=meeting, url=url))
-    typer.echo(f"Saved {tdoc_id}")
 
 
 @tdoc_app.command("list")

@@ -19,33 +19,6 @@ def test_cli_db_init_and_check(sqlite_env) -> None:
     assert "Database connection OK:" in check_res.stdout
 
 
-def test_cli_tdoc_add_and_list(sqlite_env) -> None:
-    runner = CliRunner()
-
-    assert runner.invoke(app, ["db", "init"]).exit_code == 0
-    add_res = runner.invoke(
-        app,
-        [
-            "tdoc",
-            "add",
-            "--tdoc-id",
-            "R3-000001",
-            "--title",
-            "Intro",
-            "--meeting",
-            "RAN3#100",
-            "--url",
-            "https://example.test/r3-1",
-        ],
-    )
-    assert add_res.exit_code == 0
-    assert "Saved R3-000001" in add_res.stdout
-
-    list_res = runner.invoke(app, ["tdoc", "list", "--limit", "10"])
-    assert list_res.exit_code == 0
-    assert "R3-000001\tIntro\tRAN3#100\thttps://example.test/r3-1" in list_res.stdout
-
-
 def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
     runner = CliRunner()
     fixture = Path("tests/fixtures/sample_pages/meetings_r5_sample.html")

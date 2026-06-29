@@ -128,8 +128,12 @@ Purpose:
 
 Options:
 
-- --meeting-id: required meeting ID from the meetings database.
-- --meeting: optional meeting identifier to associate with imported TDocs.
+- --meeting-id: numeric meeting ID from the meetings database.
+- --meeting: exact meeting name from the meetings database.
+
+Notes:
+
+- Exactly one of `--meeting-id` or `--meeting` must be provided.
 
 Behavior:
 
@@ -137,19 +141,6 @@ Behavior:
 - Resolves the stored FTP URL from that meeting.
 - Discovers the matching `TDoc_List_Meeting_*.xlsx` file on 3GPP FTP.
 - Parses and persists TDoc rows.
-
-### doc3gpp tdoc add
-
-Purpose:
-
-- Insert or update one tdoc record.
-
-Options:
-
-- --tdoc-id
-- --title
-- --meeting (optional)
-- --url (optional)
 
 ### doc3gpp tdoc list
 
@@ -170,6 +161,5 @@ doc3gpp db check
 doc3gpp meetings sync --tsg r5
 doc3gpp meetings list --limit 20
 doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
-doc3gpp tdoc add --tdoc-id R1-000001 --title "Example"
 doc3gpp tdoc list --limit 10
 ```

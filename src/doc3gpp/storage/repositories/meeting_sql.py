@@ -107,3 +107,24 @@ class SQLAlchemyMeetingRepository:
                 end_doc=row.end_doc,
                 updated_at=row.updated_at,
             )
+
+    def get_by_name(self, meeting_name: str) -> Meeting | None:
+        """Retrieve a single meeting by its exact name."""
+        with self._session_factory() as session:
+            stmt = select(MeetingORM).where(MeetingORM.name == meeting_name)
+            row = session.scalar(stmt)
+            if row is None:
+                return None
+
+            return Meeting(
+                meeting_id=row.meeting_id,
+                name=row.name,
+                title=row.title,
+                location=row.location,
+                start_date=row.start_date,
+                end_date=row.end_date,
+                ftp_url=row.ftp_url,
+                start_doc=row.start_doc,
+                end_doc=row.end_doc,
+                updated_at=row.updated_at,
+            )

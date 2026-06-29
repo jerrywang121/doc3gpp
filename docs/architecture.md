@@ -44,7 +44,7 @@ Meetings sync flow:
 4. parsers.calendar_parser.parse_3gpp_calendar converts HTML rows into Meeting domain objects.
 5. SQLAlchemyMeetingRepository.upsert_many persists meetings into meetings table.
 
-TDoc add/list flow:
+TDoc list flow:
 
 1. CLI command calls TDocService.
 2. TDocService delegates to SQLAlchemyTDocRepository.

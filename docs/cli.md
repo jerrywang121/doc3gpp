@@ -146,15 +146,59 @@ Behavior:
 
 Purpose:
 
-- List recent tdoc records.
+- List recent stored TDoc records with optional filters.
 
 Options:
 
-- --limit: number of rows.
+- --limit: maximum number of rows.
   - default: 20
-- --tsg: filter TDoc IDs by TSG prefix (e.g. R5).
-- --year: filter TDocs by the two-digit year code embedded in the TDoc ID.
-- --meeting: SQL LIKE pattern to filter meeting name; supports % and _.
+- --tsg: filter TDoc IDs by TSG prefix (e.g. R5, S2).
+- --year: filter by the two-digit year code embedded in the TDoc identifier.
+- --meeting: SQL LIKE pattern to filter by meeting name (supports % and _).
+- --source: SQL LIKE pattern to filter by TDoc source/contributor.
+- --spec: SQL LIKE pattern to filter by technical specification.
+- --wi: SQL LIKE pattern to filter by related work items.
+- --title: SQL LIKE pattern to filter by TDoc title.
+- --cat: SQL LIKE pattern to filter by CR category.
+- --status: SQL LIKE pattern to filter by TDoc status.
+- --type: SQL LIKE pattern to filter by TDoc type.
+- --fields: comma-separated list of fields to include in output, or `all`.
+
+Default output fields:
+
+- `tdoc_id`, `meeting_name`, `title`, `source`, `type`, `status`, `cr_cat`, `spec`, `version`, `related_wis`
+
+Examples:
+
+- List TDocs from Qualcomm:
+
+```bash
+doc3gpp tdoc list --source "Qualcomm%"
+```
+
+- Find TDocs related to Spec 38.331:
+
+```bash
+doc3gpp tdoc list --spec "38.331%"
+```
+
+- Filter by Work Item containing "NR_ext":
+
+```bash
+doc3gpp tdoc list --wi "%NR_ext%"
+```
+
+- Find TDocs with "RedCap" in the title:
+
+```bash
+doc3gpp tdoc list --title "%RedCap%"
+```
+
+- Output only ID, title and status:
+
+```bash
+doc3gpp tdoc list --fields tdoc_id,title,status
+```
 
 ## Examples
 

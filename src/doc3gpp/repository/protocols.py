@@ -19,6 +19,13 @@ class TDocRepository(Protocol):
         tsg: str | None = None,
         meeting_like: str | None = None,
         year: int | None = None,
+        source_like: str | None = None,
+        spec_like: str | None = None,
+        wi_like: str | None = None,
+        title_like: str | None = None,
+        cat_like: str | None = None,
+        status_like: str | None = None,
+        type_like: str | None = None,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters."""
         ...

@@ -48,9 +48,20 @@ def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting_id: int | None = None) ->
         base_url += "/"
 
     logger.debug("Normalized FTP base path: %s", base_url)
+    # Avoid duplicating known terminal subfolders if the provided ftp_url
+    # already contains them (e.g. .../docs/ or .../tdoc/). Compute a
+    # base root without a terminal docs/tdoc segment and try that plus
+    # common subfolders.
+    base_root = base_url
+    for suffix in ("docs/", "tdoc/"):
+        if base_root.lower().endswith(suffix):
+            base_root = base_root[: -len(suffix)]
+            if not base_root.endswith("/"):
+                base_root += "/"
+
     with ScraperClient() as client:
         for subfolder in ["", "docs/", "tdoc/"]:
-            directory_url = urljoin("https://www.3gpp.org/ftp/", base_url + subfolder)
+            directory_url = urljoin("https://www.3gpp.org/ftp/", base_root + subfolder)
             logger.debug("Trying FTP directory URL: %s", directory_url)
             try:
                 html = client.get_text(directory_url)

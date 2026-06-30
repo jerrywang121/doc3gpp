@@ -240,6 +240,34 @@ def tdoc_list(
         None,
         help="SQL LIKE pattern to filter meeting name; supports % and _."
     ),
+    source: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter TDoc source (e.g. 'Qualcomm%', '%Huawei%')."
+    ),
+    spec: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter by technical specification (e.g. '38.331%')."
+    ),
+    wi: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter by related work items."
+    ),
+    title: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter by TDoc title."
+    ),
+    cat: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter by CR category."
+    ),
+    status: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter by TDoc status."
+    ),
+    type: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter by TDoc type."
+    ),
     fields: str | None = typer.Option(
         None,
         help="Comma-separated list of fields to include in output, or 'all' for all fields.",
@@ -251,9 +279,17 @@ def tdoc_list(
     - `--tsg`: filter by TSG prefix (e.g. R5, S2)
     - `--year`: filter by the two-digit year code in the TDoc ID (e.g. 26)
     - `--meeting`: SQL LIKE pattern to filter by meeting name
+    - `--source`: SQL LIKE pattern to filter by source/contributor
+    - `--spec`: SQL LIKE pattern to filter by technical specification
+    - `--wi`: SQL LIKE pattern to filter by related work items
+    - `--title`: SQL LIKE pattern to filter by TDoc title
+    - `--cat`: SQL LIKE pattern to filter by CR category
+    - `--status`: SQL LIKE pattern to filter by TDoc status
+    - `--type`: SQL LIKE pattern to filter by TDoc type
     - `--fields`: comma-separated list of fields to include, or 'all'
 
-    By default, the output includes: tdoc_id, title, meeting_name, url.
+    By default, the output includes: tdoc_id, meeting_name, title, source, type,
+    status, cr_cat, spec, version, related_wis.
 
     Available fields for selection:
     tdoc_id, title, meeting_id, meeting_name, url, source, type, status,
@@ -262,7 +298,18 @@ def tdoc_list(
     """
 
     allowed_fields = [f.name for f in dataclass_fields(TDoc)]
-    default_fields = ["tdoc_id", "title", "meeting_name", "url"]
+    default_fields = [
+        "tdoc_id",
+        "meeting_name",
+        "title",
+        "source",
+        "type",
+        "status",
+        "cr_cat",
+        "spec",
+        "version",
+        "related_wis",
+    ]
 
     if fields:
         requested = [f.strip() for f in fields.split(",") if f.strip()]
@@ -280,15 +327,34 @@ def tdoc_list(
         out_fields = default_fields
 
     logger.info(
-        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s",
+        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
         limit,
         tsg,
         year,
         meeting,
+        source,
+        spec,
+        wi,
+        title,
+        cat,
+        status,
+        type,
     )
 
     service = TDocService(SQLAlchemyTDocRepository())
-    records = service.list_recent(limit=limit, tsg=tsg, meeting_like=meeting, year=year)
+    records = service.list_recent(
+        limit=limit,
+        tsg=tsg,
+        meeting_like=meeting,
+        year=year,
+        source_like=source,
+        spec_like=spec,
+        wi_like=wi,
+        title_like=title,
+        cat_like=cat,
+        status_like=status,
+        type_like=type,
+    )
     if not records:
         typer.echo("No TDocs found")
         return

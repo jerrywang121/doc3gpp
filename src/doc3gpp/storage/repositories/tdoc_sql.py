@@ -72,6 +72,13 @@ class SQLAlchemyTDocRepository:
         tsg: str | None = None,
         meeting_like: str | None = None,
         year: int | None = None,
+        source_like: str | None = None,
+        spec_like: str | None = None,
+        wi_like: str | None = None,
+        title_like: str | None = None,
+        cat_like: str | None = None,
+        status_like: str | None = None,
+        type_like: str | None = None,
     ) -> list[TDoc]:
         """Return recent TDoc records ordered by creation timestamp.
 
@@ -79,6 +86,13 @@ class SQLAlchemyTDocRepository:
         - `tsg`: filter TDoc IDs that start with the given TSG prefix.
         - `meeting_like`: SQL LIKE pattern to apply to the meeting name.
         - `year`: two-digit year embedded in the TDoc identifier.
+        - `source_like`: SQL LIKE pattern to apply to the document source field.
+        - `spec_like`: SQL LIKE pattern to filter by technical specification (spec field).
+        - `wi_like`: SQL LIKE pattern to filter by related work items (related_wis field).
+        - `title_like`: SQL LIKE pattern to filter by document title.
+        - `cat_like`: SQL LIKE pattern to filter by CR category.
+        - `status_like`: SQL LIKE pattern to filter by document status.
+        - `type_like`: SQL LIKE pattern to filter by document type.
         """
         with self._session_factory() as session:
             stmt = select(TDocORM)
@@ -94,6 +108,27 @@ class SQLAlchemyTDocRepository:
 
             if year is not None:
                 stmt = stmt.where(func.substr(TDocORM.tdoc_id, 4, 2) == f"{year:02d}")
+
+            if source_like:
+                stmt = stmt.where(TDocORM.source.like(source_like))
+
+            if spec_like:
+                stmt = stmt.where(TDocORM.spec.like(spec_like))
+
+            if wi_like:
+                stmt = stmt.where(TDocORM.related_wis.like(wi_like))
+
+            if title_like:
+                stmt = stmt.where(TDocORM.title.like(title_like))
+
+            if cat_like:
+                stmt = stmt.where(TDocORM.cr_cat.like(cat_like))
+
+            if status_like:
+                stmt = stmt.where(TDocORM.status.like(status_like))
+
+            if type_like:
+                stmt = stmt.where(TDocORM.type.like(type_like))
 
             stmt = stmt.order_by(TDocORM.created_at.desc()).limit(limit)
             rows = session.scalars(stmt).all()

@@ -27,19 +27,40 @@ class TDocService:
         tsg: str | None = None,
         meeting_like: str | None = None,
         year: int | None = None,
+        source_like: str | None = None,
+        spec_like: str | None = None,
+        wi_like: str | None = None,
+        title_like: str | None = None,
+        cat_like: str | None = None,
+        status_like: str | None = None,
+        type_like: str | None = None,
     ) -> list[TDoc]:
         logger.debug(
-            "Listing %s recent TDocs with filters tsg=%s meeting_like=%s year=%s",
+            "Listing %s recent TDocs with filters tsg=%s meeting_like=%s year=%s source_like=%s spec_like=%s wi_like=%s title_like=%s cat_like=%s status_like=%s type_like=%s",
             limit,
             tsg,
             meeting_like,
             year,
+            source_like,
+            spec_like,
+            wi_like,
+            title_like,
+            cat_like,
+            status_like,
+            type_like,
         )
         return self._repository.list(
             limit=limit,
             tsg=tsg,
             meeting_like=meeting_like,
             year=year,
+            source_like=source_like,
+            spec_like=spec_like,
+            wi_like=wi_like,
+            title_like=title_like,
+            cat_like=cat_like,
+            status_like=status_like,
+            type_like=type_like,
         )
 
     def sync_from_meeting_ftp(self, ftp_url: str, meeting_id: int | None = None) -> int:

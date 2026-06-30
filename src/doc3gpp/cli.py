@@ -120,13 +120,6 @@ def meetings_list(
     By default the output includes all fields except `title`, `updated_at`, and
     `ftp_url` to keep the listing compact.
     """
-    logger.info("Listing %s recent meetings for tsg=%s name=%s location=%s year=%s", limit, tsg, name, location, year)
-    service = MeetingService(SQLAlchemyMeetingRepository())
-    records = service.list_recent(limit=limit, tsg=tsg, name_like=name, location_like=location, year=year)
-    if not records:
-        typer.echo("No meetings found")
-        return
-
     allowed_fields = [
         "meeting_id",
         "name",
@@ -157,6 +150,13 @@ def meetings_list(
             out_fields = requested
     else:
         out_fields = default_fields
+
+    logger.info("Listing %s recent meetings for tsg=%s name=%s location=%s year=%s", limit, tsg, name, location, year)
+    service = MeetingService(SQLAlchemyMeetingRepository())
+    records = service.list_recent(limit=limit, tsg=tsg, name_like=name, location_like=location, year=year)
+    if not records:
+        typer.echo("No meetings found")
+        return
 
     for item in records:
         assert isinstance(item, Meeting)
@@ -242,14 +242,6 @@ def tdoc_list(
 ) -> None:
     """List recent stored TDocs."""
 
-    logger.info(
-        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s",
-        limit,
-        tsg,
-        year,
-        meeting,
-    )
-
     allowed_fields = list(TDocORM.__table__.columns.keys())
     default_fields = ["tdoc_id", "title", "meeting_name", "url"]
 
@@ -267,6 +259,14 @@ def tdoc_list(
             out_fields = requested
     else:
         out_fields = default_fields
+
+    logger.info(
+        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s",
+        limit,
+        tsg,
+        year,
+        meeting,
+    )
 
     service = TDocService(SQLAlchemyTDocRepository())
     records = service.list_recent(limit=limit, tsg=tsg, meeting_like=meeting, year=year)

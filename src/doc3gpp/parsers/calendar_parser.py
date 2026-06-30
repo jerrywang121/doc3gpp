@@ -26,7 +26,7 @@ def parse_3gpp_calendar(html: str) -> list[Meeting]:
         return []
 
     body = table.find("tbody") or table
-    meetings: list[Meeting] = []
+    meetings_map: dict[int, Meeting] = {}
 
     for row in body.find_all("tr"):
         cells = row.find_all("td")
@@ -60,21 +60,19 @@ def parse_3gpp_calendar(html: str) -> list[Meeting]:
                 start_doc = parts[0] if parts[0] != "-" else None
                 end_doc = parts[1] if parts[1] != "-" else None
 
-        meetings.append(
-            Meeting(
-                meeting_id=meeting_id,
-                name=name,
-                title=title,
-                location=location,
-                start_date=start_date,
-                end_date=end_date,
-                ftp_url=ftp_url,
-                start_doc=start_doc,
-                end_doc=end_doc,
-            )
+        meetings_map[meeting_id] = Meeting(
+            meeting_id=meeting_id,
+            name=name,
+            title=title,
+            location=location,
+            start_date=start_date,
+            end_date=end_date,
+            ftp_url=ftp_url,
+            start_doc=start_doc,
+            end_doc=end_doc,
         )
 
-    return meetings
+    return list(meetings_map.values())
 
 
 def _first_href(cell) -> str | None:

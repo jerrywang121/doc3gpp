@@ -9,10 +9,11 @@ def test_cli_passes_combined_filters(monkeypatch):
 
     captured = {}
 
-    def fake_list_recent(self, limit=20, tsg=None, name_like=None, year=None):
+    def fake_list_recent(self, limit=20, tsg=None, name_like=None, location_like=None, year=None):
         captured['limit'] = limit
         captured['tsg'] = tsg
         captured['name_like'] = name_like
+        captured['location_like'] = location_like
         captured['year'] = year
         return []
 

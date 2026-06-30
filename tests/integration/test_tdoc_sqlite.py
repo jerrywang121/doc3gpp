@@ -25,16 +25,39 @@ def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
     create_schema()
     repo = SQLAlchemyTDocRepository()
 
-    repo.upsert(TDoc(tdoc_id="R1-000001", title="First", meeting_id=100, url="https://x/1"))
+    repo.upsert(
+        TDoc(
+            tdoc_id="R1-000001",
+            title="First",
+            meeting_id=100,
+            url="https://x/1",
+            source="Qualcomm",
+            type="CR",
+            status="Agreed",
+            cr_pack="RP-000123",
+        )
+    )
     repo.upsert(TDoc(tdoc_id="R1-000002", title="Second"))
-    repo.upsert(TDoc(tdoc_id="R1-000001", title="First updated", meeting_id=100, url="https://x/1a"))
+    repo.upsert(
+        TDoc(
+            tdoc_id="R1-000001",
+            title="First updated",
+            meeting_id=100,
+            url="https://x/1a",
+            source="Ericsson",
+            cr_pack="RP-000124",
+        )
+    )
 
     rows = repo.list(limit=10)
 
     assert len(rows) == 2
     by_id = {r.tdoc_id: r for r in rows}
     assert by_id["R1-000001"].title == "First updated"
+    assert by_id["R1-000001"].source == "Ericsson"
+    assert by_id["R1-000001"].cr_pack == "RP-000124"
     assert by_id["R1-000002"].title == "Second"
+    assert by_id["R1-000002"].source is None
 
 
 def test_tdoc_service_save_and_list(sqlite_env) -> None:

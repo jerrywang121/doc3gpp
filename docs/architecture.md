@@ -62,7 +62,7 @@ Meeting-based TDoc sync flow:
 Current tables defined in src/doc3gpp/storage/db/models.py:
 
 - tdocs:
-	- id, tdoc_id, title, meeting, url, created_at.
+	- id, tdoc_id, title, meeting_id, url, source, type, status, reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to, release, spec, version, related_wis, cr_num, cr_pack, created_at.
 - meetings:
 	- meeting_id, name, title, location, start_date, end_date, ftp_url, start_doc, end_doc, updated_at.
 

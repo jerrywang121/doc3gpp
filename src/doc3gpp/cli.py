@@ -114,11 +114,16 @@ def meetings_list(
     The command supports additional filters and field selection:
     - `--tsg`: optional TSG short name to restrict results (matches name prefix)
     - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`)
+    - `--location`: SQL LIKE pattern to filter `location` (supports `%` and `_`)
     - `--year`: filter by the start_date year
     - `--fields`: comma-separated list of fields to include in output, or `all`
 
-    By default the output includes all fields except `title`, `updated_at`, and
+    By default, the output includes all fields except `title`, `updated_at`, and
     `ftp_url` to keep the listing compact.
+
+    Available fields for selection:
+    meeting_id, name, title, location, start_date, end_date, ftp_url,
+    start_doc, end_doc, updated_at
     """
     allowed_fields = [
         "meeting_id",
@@ -240,7 +245,21 @@ def tdoc_list(
         help="Comma-separated list of fields to include in output, or 'all' for all fields.",
     ),
 ) -> None:
-    """List recent stored TDocs."""
+    """List recent stored TDocs.
+
+    The command supports filtering and field selection:
+    - `--tsg`: filter by TSG prefix (e.g. R5, S2)
+    - `--year`: filter by the two-digit year code in the TDoc ID (e.g. 26)
+    - `--meeting`: SQL LIKE pattern to filter by meeting name
+    - `--fields`: comma-separated list of fields to include, or 'all'
+
+    By default, the output includes: tdoc_id, title, meeting_name, url.
+
+    Available fields for selection:
+    tdoc_id, title, meeting_id, meeting_name, url, source, type, status,
+    reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to,
+    release, spec, version, related_wis, cr_num, cr_pack
+    """
 
     allowed_fields = [f.name for f in dataclass_fields(TDoc)]
     default_fields = ["tdoc_id", "title", "meeting_name", "url"]

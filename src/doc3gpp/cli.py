@@ -242,7 +242,7 @@ def tdoc_list(
 ) -> None:
     """List recent stored TDocs."""
 
-    allowed_fields = list(TDocORM.__table__.columns.keys())
+    allowed_fields = [f.name for f in dataclass_fields(TDoc)]
     default_fields = ["tdoc_id", "title", "meeting_name", "url"]
 
     if fields:

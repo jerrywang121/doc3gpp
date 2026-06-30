@@ -261,3 +261,72 @@ def test_cli_tdoc_sync_meeting_args_are_exclusive(sqlite_env) -> None:
     )
     assert result.exit_code != 0
     assert "Specify exactly one of --meeting-id or --meeting." in result.stderr
+
+
+def test_tdoc_repository_full_schema(sqlite_env) -> None:
+    create_schema()
+    repo = SQLAlchemyTDocRepository()
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    # Create a meeting to link to
+    meeting_repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=123,
+                name="RAN5#123",
+                title="Meeting 123",
+                location="Virtual",
+                start_date=date(2026, 6, 1),
+                end_date=date(2026, 6, 5),
+            )
+        ]
+    )
+
+    tdoc = TDoc(
+        tdoc_id="R5-260001",
+        title="Full Schema Test",
+        meeting_id=123,
+        url="https://example.com/tdoc",
+        source="Company A",
+        type="CR",
+        status="Agreed",
+        reservation_date="2026-06-01",
+        uploaded_date="2026-06-02",
+        cr_cat="F",
+        is_revision_of="R5-259999",
+        revised_to="R5-260001rev1",
+        release="Rel-18",
+        spec="38.521-1",
+        version="18.1.0",
+        related_wis="NR_new_feat",
+        cr_num="1234",
+        cr_pack="RP-260123",
+    )
+
+    repo.upsert(tdoc)
+
+    # Retrieve and verify
+    rows = repo.list(limit=1, tsg="R5")
+    assert len(rows) == 1
+    stored = rows[0]
+
+    assert stored.tdoc_id == tdoc.tdoc_id
+    assert stored.title == tdoc.title
+    assert stored.meeting_id == tdoc.meeting_id
+    assert stored.meeting_name == "RAN5#123"
+    assert stored.url == tdoc.url
+    assert stored.source == tdoc.source
+    assert stored.type == tdoc.type
+    assert stored.status == tdoc.status
+    assert stored.reservation_date == tdoc.reservation_date
+    assert stored.uploaded_date == tdoc.uploaded_date
+    assert stored.cr_cat == tdoc.cr_cat
+    assert stored.is_revision_of == tdoc.is_revision_of
+    assert stored.revised_to == tdoc.revised_to
+    assert stored.release == tdoc.release
+    assert stored.spec == tdoc.spec
+    assert stored.version == tdoc.version
+    assert stored.related_wis == tdoc.related_wis
+    assert stored.cr_num == tdoc.cr_num
+    assert stored.cr_pack == tdoc.cr_pack

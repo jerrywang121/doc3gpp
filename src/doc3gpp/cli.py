@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import fields as dataclass_fields
 from datetime import datetime
 
 import logging
@@ -8,9 +9,11 @@ from sqlalchemy import text
 
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.models.tdoc import TDoc
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.db.models import TDocORM
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
@@ -232,6 +235,10 @@ def tdoc_list(
         None,
         help="SQL LIKE pattern to filter meeting name; supports % and _."
     ),
+    fields: str | None = typer.Option(
+        None,
+        help="Comma-separated list of fields to include in output, or 'all' for all fields.",
+    ),
 ) -> None:
     """List recent stored TDocs."""
 
@@ -242,6 +249,25 @@ def tdoc_list(
         year,
         meeting,
     )
+
+    allowed_fields = list(TDocORM.__table__.columns.keys())
+    default_fields = ["tdoc_id", "title", "meeting_name", "url"]
+
+    if fields:
+        requested = [f.strip() for f in fields.split(",") if f.strip()]
+        if "all" in [f.lower() for f in requested]:
+            out_fields = allowed_fields
+        else:
+            invalid = [f for f in requested if f not in allowed_fields]
+            if invalid:
+                valid_list = ", ".join(allowed_fields)
+                raise typer.BadParameter(
+                    f"Unknown field(s): {', '.join(invalid)}. Valid fields: {valid_list}"
+                )
+            out_fields = requested
+    else:
+        out_fields = default_fields
+
     service = TDocService(SQLAlchemyTDocRepository())
     records = service.list_recent(limit=limit, tsg=tsg, meeting_like=meeting, year=year)
     if not records:
@@ -249,7 +275,16 @@ def tdoc_list(
         return
 
     for item in records:
-        typer.echo(f"{item.tdoc_id}\t{item.title}\t{item.meeting_name or '-'}\t{item.url or '-'}")
+        vals: list[str] = []
+        for f in out_fields:
+            v = getattr(item, f, None)
+            if v is None:
+                vals.append("-")
+                continue
+
+            vals.append(str(v))
+
+        typer.echo("\t".join(vals))
 
 
 def main() -> None:

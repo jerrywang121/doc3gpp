@@ -24,6 +24,22 @@ def _make_tdoc_xlsx_bytes() -> bytes:
 def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
     create_schema()
     repo = SQLAlchemyTDocRepository()
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    # meeting_id is an FK; satisfy it before inserting dependent TDoc rows.
+    meeting_repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=100,
+                name="RAN1#100",
+                title="RAN1 meeting 100",
+                location="Online",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 1, 2),
+            ),
+        ]
+    )
 
     repo.upsert(
         TDoc(
@@ -63,6 +79,21 @@ def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
 def test_tdoc_service_save_and_list(sqlite_env) -> None:
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+    # meeting_id is an FK; satisfy it before inserting dependent TDoc rows.
+    meeting_repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=130,
+                name="RAN2#130",
+                title="RAN2 meeting 130",
+                location="Online",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 1, 2),
+            ),
+        ]
+    )
 
     service.save(TDoc(tdoc_id="R2-000010", title="Agenda"))
     service.save(TDoc(tdoc_id="R2-000011", title="CR pack", meeting_id=130))
@@ -76,6 +107,21 @@ def test_tdoc_service_save_and_list(sqlite_env) -> None:
 def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+    # TDocs carry meeting_id=1; seed the referenced row so FK enforcement passes.
+    meeting_repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=1,
+                name="RAN5#1",
+                title="RAN5 meeting 1",
+                location="Online",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 1, 2),
+            ),
+        ]
+    )
 
     class DummyClient:
         def __init__(self, *args, **kwargs):

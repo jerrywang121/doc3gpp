@@ -54,3 +54,21 @@ class MeetingORM(Base):
     start_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
     end_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TsgORM(Base):
+    """Persisted 3GPP Technical Specification Group (TSG) reference record.
+
+    Holds the canonical list of TSGs (RAN WG1..5, RAN AH1, SA WG1..6, CT WG1..6)
+    along with their short codes, descriptions, and 3GPP group URLs. Used to
+    validate user-supplied TSG identifiers (for example ``--tsg``) and to
+    surface reference metadata to the CLI.
+    """
+
+    __tablename__ = "tsgs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tsg_name: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    short_name: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)

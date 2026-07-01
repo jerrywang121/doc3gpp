@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+from sqlalchemy import func, select
+
+from doc3gpp.models.tsg import Tsg
+from doc3gpp.storage.db.models import TsgORM
+from doc3gpp.storage.db.session import get_session_factory
+
+
+class SQLAlchemyTsgRepository:
+    """SQLAlchemy-backed implementation of :class:`TsgRepository`.
+
+    Maps :class:`Tsg` dataclass objects to the ``TsgORM`` SQLAlchemy model and
+    implements the persistence operations used by the TSG service layer.
+    """
+
+    def __init__(self) -> None:
+        self._session_factory = get_session_factory()
+
+    def upsert_many(self, tsgs: list[Tsg]) -> int:
+        """Insert or update multiple TSG records keyed by ``tsg_name``.
+
+        Existing records (matched by ``tsg_name``, case-insensitive) are updated
+        in place so callers can use this method to refresh descriptions or URLs.
+        """
+        with self._session_factory() as session:
+            for item in tsgs:
+                stmt = select(TsgORM).where(
+                    func.lower(TsgORM.tsg_name) == item.tsg_name.lower()
+                )
+                existing = session.scalar(stmt)
+                if existing is not None:
+                    existing.tsg_name = item.tsg_name
+                    existing.short_name = item.short_name
+                    existing.description = item.description
+                    existing.url = item.url
+                else:
+                    session.add(
+                        TsgORM(
+                            tsg_name=item.tsg_name,
+                            short_name=item.short_name,
+                            description=item.description,
+                            url=item.url,
+                        )
+                    )
+            session.commit()
+        return len(tsgs)
+
+    def list_all(self) -> list[Tsg]:
+        """Return all TSG records ordered by ``tsg_name``."""
+        with self._session_factory() as session:
+            stmt = select(TsgORM).order_by(TsgORM.tsg_name)
+            rows = session.scalars(stmt).all()
+        return [
+            Tsg(
+                tsg_name=row.tsg_name,
+                short_name=row.short_name,
+                description=row.description,
+                url=row.url,
+            )
+            for row in rows
+        ]
+
+    def get_by_short_name(self, short_name: str) -> Tsg | None:
+        """Return a TSG by its short name, matching case-insensitively."""
+        with self._session_factory() as session:
+            stmt = select(TsgORM).where(
+                func.lower(TsgORM.short_name) == short_name.lower()
+            )
+            row = session.scalar(stmt)
+            if row is None:
+                return None
+            return Tsg(
+                tsg_name=row.tsg_name,
+                short_name=row.short_name,
+                description=row.description,
+                url=row.url,
+            )
+
+    def get_by_tsg_name(self, tsg_name: str) -> Tsg | None:
+        """Return a TSG by its full ``tsg_name``, matching case-insensitively."""
+        with self._session_factory() as session:
+            stmt = select(TsgORM).where(func.lower(TsgORM.tsg_name) == tsg_name.lower())
+            row = session.scalar(stmt)
+            if row is None:
+                return None
+            return Tsg(
+                tsg_name=row.tsg_name,
+                short_name=row.short_name,
+                description=row.description,
+                url=row.url,
+            )
+
+    def count(self) -> int:
+        """Return the number of stored TSG records."""
+        with self._session_factory() as session:
+            stmt = select(func.count()).select_from(TsgORM)
+            return int(session.scalar(stmt) or 0)

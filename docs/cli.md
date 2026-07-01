@@ -43,12 +43,14 @@ Behavior:
 
 Purpose:
 
-- Initialize schema for current backend.
+- Initialize schema for current backend and seed the TSG reference table.
 
 Behavior:
 
 - Calls create_schema.
 - Creates currently defined ORM tables if they do not exist.
+- Seeds the `tsgs` table with the canonical 3GPP TSG list (16 rows). Existing
+  rows are refreshed in place, so re-running this command is safe.
 
 ## meetings Commands
 
@@ -62,6 +64,10 @@ Options:
 
 - --tsg: TSG short name.
   - default: r5
+  - validated against the `tsgs` reference table; unknown values raise an
+    error listing the known short names and pointing to `doc3gpp tsg list`.
+  - if the `tsgs` table is empty (fresh install), it is auto-seeded before
+    validation runs.
 - --closed-years: number of historical years to keep.
   - default: 2
 - --future-years: number of future years to keep.
@@ -218,11 +224,90 @@ doc3gpp tdoc list --title "%RedCap%"
 doc3gpp tdoc list --fields tdoc_id,title,status
 ```
 
+## tsg Commands
+
+The `tsg` sub-app exposes the canonical 3GPP TSG reference table. The table
+is created and seeded automatically by `doc3gpp db init`, and the canonical
+short names (R1..R5, RT, S1..S6, C1, C3, C4, C6) are used to validate the
+`--tsg` option on `doc3gpp meetings sync`.
+
+### doc3gpp tsg list
+
+Purpose:
+
+- List TSG reference records.
+
+Options:
+
+- --fields: comma-separated list of fields, or `all`.
+  - default: `tsg_name,short_name,description`
+
+Default output fields:
+
+- `tsg_name`, `short_name`, `description`
+
+Use `--fields all` to also include `url`.
+
+Examples:
+
+```bash
+# Default compact listing
+doc3gpp tsg list
+
+# Include the URL column
+doc3gpp tsg list --fields all
+
+# Only the short codes and full names
+doc3gpp tsg list --fields short_name,tsg_name
+```
+
+### doc3gpp tsg show
+
+Purpose:
+
+- Show a single TSG record by its short name or full `tsg_name`.
+
+Options:
+
+- --tsg: short name (e.g. `R5`) or full tsg_name (e.g. `RAN WG5`). Required.
+  - matching is case-insensitive on both forms.
+
+Behavior:
+
+- Looks up by short name first, then by `tsg_name`.
+- On miss, raises a `BadParameter` listing the known short names.
+
+Examples:
+
+```bash
+doc3gpp tsg show --tsg r5
+doc3gpp tsg show --tsg "RAN AH1"
+```
+
+### doc3gpp tsg seed
+
+Purpose:
+
+- Insert or refresh the canonical 3GPP TSG reference list.
+
+Behavior:
+
+- Creates the schema (idempotent).
+- Upserts the 16 canonical rows; existing rows are updated in place rather
+  than duplicated. URLs are composed from the project URL pattern.
+
+Examples:
+
+```bash
+doc3gpp tsg seed
+```
+
 ## Examples
 
 ```bash
 doc3gpp db init
 doc3gpp db check
+doc3gpp tsg list
 doc3gpp meetings sync --tsg r5
 doc3gpp meetings list --limit 20
 doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"

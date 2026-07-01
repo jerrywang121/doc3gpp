@@ -37,13 +37,16 @@ This document tracks what is implemented today versus planned next work.
 
 - MeetingService sync and list.
 - TDocService save and list.
+- TsgService seed/list/validate for the 3GPP TSG reference table.
 - Meeting-based TDoc sync now resolves FTP URL from stored meeting records.
 
 ### CLI
 
-- db check, db init.
-- meetings sync, meetings list.
+- db check, db init (also seeds the `tsgs` reference table).
+- meetings sync (validates `--tsg` against the reference table).
+- meetings list.
 - tdoc sync, tdoc list.
+- tsg list, tsg show, tsg seed.
 - Logging is configured via `DOC3GPP_LOG_LEVEL` and available at runtime for debugging.
 
 ### Tests

@@ -24,10 +24,16 @@ def _normalize_ftp_path(path: str) -> str:
 
 
 def _find_tdoc_list_filename(hrefs: list[str]) -> str | None:
-    """Select a TDoc list XLSX filename from directory listing links."""
+    """Select a TDoc list XLSX filename from directory listing links.
+
+    Hrefs from the 3GPP FTP directory listing are full URLs (e.g.
+    ``https://www.3gpp.org/ftp/.../TDoc_List_Meeting_*.xlsx``). Match by the
+    basename rather than requiring the href to start with the bare filename.
+    """
     for href in hrefs:
         lower = href.lower()
-        if lower.startswith("tdoc_list_meeting_") and lower.endswith(".xlsx"):
+        basename = lower.rsplit("/", 1)[-1]
+        if basename.startswith("tdoc_list_meeting_") and basename.endswith(".xlsx"):
             return href
     return None
 

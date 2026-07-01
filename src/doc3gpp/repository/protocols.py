@@ -5,6 +5,7 @@ from typing import Protocol
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tsg import Tsg
+from doc3gpp.models.wi import Wi
 
 
 class TDocRepository(Protocol):
@@ -73,4 +74,33 @@ class TsgRepository(Protocol):
 
     def count(self) -> int:
         """Return the number of stored TSG records."""
+        ...
+
+
+class WiRepository(Protocol):
+    """Storage operations used by the WI service layer."""
+
+    def upsert_many(self, wis: list[Wi]) -> int:
+        """Insert or update multiple WI records keyed by ``(wi_id, tsg_short)``.
+
+        Existing rows (matched by the composite key) are refreshed in place so
+        callers can use this method to re-sync a TSG without producing
+        duplicates. Returns the number of input rows that were written.
+        """
+        ...
+
+    def list(
+        self,
+        limit: int = 20,
+        tsg: str | None = None,
+        name_like: str | None = None,
+        acronym_like: str | None = None,
+        release_like: str | None = None,
+    ) -> list[Wi]:
+        """Return a list of stored WI records matching the filters.
+
+        - ``tsg``: restrict to a single TSG short name (case-insensitive).
+        - ``name_like``, ``acronym_like``, ``release_like``: SQL ``LIKE``
+          patterns applied to the corresponding text columns.
+        """
         ...

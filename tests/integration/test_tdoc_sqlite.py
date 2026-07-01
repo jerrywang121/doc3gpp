@@ -235,6 +235,8 @@ def test_cli_tdoc_list_filters(sqlite_env) -> None:
             "26",
             "--limit",
             "10",
+            "--fields",
+            "tdoc_id,title,meeting_name,url",
         ],
     )
 

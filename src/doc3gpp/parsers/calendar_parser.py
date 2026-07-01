@@ -38,14 +38,14 @@ def parse_3gpp_calendar(html: str) -> list[Meeting]:
         if meeting_id is None:
             continue
 
-        name = cells[0].get_text(strip=True)
-        title = cells[1].get_text(strip=True)
+        name = _normalize_text(cells[0].get_text())
+        title = _normalize_text(cells[1].get_text())
         if title.upper().endswith("CANCELLED"):
             continue
 
-        location = cells[2].get_text(strip=True)
-        start_date = _parse_date(cells[3].get_text(strip=True))
-        end_date = _parse_date(cells[4].get_text(strip=True))
+        location = _normalize_text(cells[2].get_text())
+        start_date = _parse_date(_normalize_text(cells[3].get_text()))
+        end_date = _parse_date(_normalize_text(cells[4].get_text()))
 
         ftp_url = _extract_ftp_path(_first_href(cells[5]))
         if ftp_url is None and len(cells) > 8:
@@ -53,7 +53,7 @@ def parse_3gpp_calendar(html: str) -> list[Meeting]:
 
         start_doc = None
         end_doc = None
-        doc_text = cells[5].get_text(" ", strip=True).replace("full document list", "").strip()
+        doc_text = _normalize_text(cells[5].get_text(" ")).replace("full document list", "").strip()
         if doc_text:
             parts = [p.strip() for p in doc_text.split(" - ", maxsplit=1)]
             if len(parts) == 2:
@@ -110,3 +110,8 @@ def _parse_date(text: str) -> date:
     normalized = text.strip()
     normalized = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]", "-", normalized)
     return date.fromisoformat(normalized)
+
+
+def _normalize_text(text: str) -> str:
+    """Collapse internal whitespace runs (including newlines/tabs) into a single space."""
+    return re.sub(r"\s+", " ", text).strip()

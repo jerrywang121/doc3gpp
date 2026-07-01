@@ -10,21 +10,25 @@ from sqlalchemy import text
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_service import TDocService
+from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.models import TDocORM
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 
 app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
 meetings_app = typer.Typer(help="meetings commands")
 tdoc_app = typer.Typer(help="tdoc commands")
+tsg_app = typer.Typer(help="tsg reference data commands")
 app.add_typer(db_app, name="db")
 app.add_typer(meetings_app, name="meetings")
 app.add_typer(tdoc_app, name="tdoc")
+app.add_typer(tsg_app, name="tsg")
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,28 @@ def _build_meetings_url(tsg: str) -> str:
     return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.htm"
 
 
+def _ensure_tsg_ready(repo: SQLAlchemyTsgRepository) -> TsgService:
+    # Auto-seed so fresh installs do not require a separate `db init` step.
+    service = TsgService(repo)
+    if repo.count() == 0:
+        logger.info("TSG reference table is empty; seeding default TSG list")
+        service.seed_defaults()
+    return service
+
+
+def _validate_tsg_short_name(tsg: str, service: TsgService) -> str:
+    """Return the canonical short name or raise typer.BadParameter."""
+    canonical = tsg.upper()
+    if not service.is_known_short_name(canonical):
+        known = service.known_short_names()
+        known_list = ", ".join(known) if known else "(no TSGs registered)"
+        raise typer.BadParameter(
+            f"Unknown TSG short name '{tsg}'. Known short names: {known_list}. "
+            f"Run 'doc3gpp tsg list' for the full reference."
+        )
+    return canonical
+
+
 @db_app.command("check")
 def db_check() -> None:
     """Validate database connectivity for configured backend."""
@@ -68,11 +94,18 @@ def db_check() -> None:
 
 @db_app.command("init")
 def db_init() -> None:
-    """Create schema for current backend."""
+    """Create schema for current backend and seed the TSG reference table.
+
+    Re-running this command is safe: the TSG seed is upsert-based, so existing
+    rows are refreshed in place rather than duplicated.
+    """
 
     logger.info("Initializing database schema")
     create_schema()
-    typer.echo("Database schema initialized")
+    tsg_service = TsgService(SQLAlchemyTsgRepository())
+    seeded = tsg_service.seed_defaults()
+    logger.info("Seeded %s TSG reference records", seeded)
+    typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
 
 
 @meetings_app.command("sync")
@@ -81,10 +114,17 @@ def meetings_sync(
     closed_years: int = typer.Option(2, min=0, max=20, help="Years of closed meetings to keep"),
     future_years: int = typer.Option(1, min=0, max=10, help="Years of future meetings to keep"),
 ) -> None:
-    """Fetch and store meetings from 3GPP site."""
+    """Fetch and store meetings from 3GPP site.
 
+    The ``--tsg`` value is validated against the ``tsgs`` reference table
+    (see ``doc3gpp tsg list``). On a fresh database the reference table is
+    auto-seeded with the canonical 3GPP TSG list, so this command is safe to
+    run without an explicit ``db init`` first.
+    """
     logger.info("Starting meetings sync for TSG %s", tsg)
     create_schema()
+    tsg_service = _ensure_tsg_ready(SQLAlchemyTsgRepository())
+    tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = MeetingService(SQLAlchemyMeetingRepository())
     meetings_url = _build_meetings_url(tsg)
     count = service.sync(meetings_url, max_year_closed=closed_years, max_year_future=future_years)
@@ -370,6 +410,92 @@ def tdoc_list(
             vals.append(str(v))
 
         typer.echo("\t".join(vals))
+
+
+@tsg_app.command("list")
+def tsg_list(
+    fields: str | None = typer.Option(
+        None,
+        help="Comma-separated list of fields to include (or 'all' for all fields).",
+    ),
+) -> None:
+    """List TSG reference records from the database.
+
+    The command supports field selection:
+    - ``--fields``: comma-separated list of fields to include in output, or ``all``.
+
+    By default, the output includes ``tsg_name``, ``short_name``, and
+    ``description`` to keep the listing compact. Use ``--fields all`` to
+    include ``url`` as well.
+    """
+    allowed_fields = [f.name for f in dataclass_fields(Tsg)]
+    default_fields = ["tsg_name", "short_name", "description"]
+
+    if fields:
+        requested = [f.strip() for f in fields.split(",") if f.strip()]
+        if "all" in [f.lower() for f in requested]:
+            out_fields = allowed_fields
+        else:
+            invalid = [f for f in requested if f not in allowed_fields]
+            if invalid:
+                valid_list = ", ".join(allowed_fields)
+                raise typer.BadParameter(
+                    f"Unknown field(s): {', '.join(invalid)}. Valid fields: {valid_list}"
+                )
+            out_fields = requested
+    else:
+        out_fields = default_fields
+
+    logger.info("Listing TSG reference records (fields=%s)", out_fields)
+    service = TsgService(SQLAlchemyTsgRepository())
+    records = service.list_all()
+    if not records:
+        typer.echo("No TSG records found. Run 'doc3gpp db init' to seed defaults.")
+        return
+
+    for item in records:
+        assert isinstance(item, Tsg)
+        vals = [str(getattr(item, f) or "-") for f in out_fields]
+        typer.echo("\t".join(vals))
+
+
+@tsg_app.command("show")
+def tsg_show(
+    tsg: str = typer.Option(
+        ...,
+        "--tsg",
+        help="TSG short name (e.g. R5) or full tsg_name (e.g. 'RAN WG5').",
+    ),
+) -> None:
+    """Show a single TSG record by short name or full tsg_name."""
+    service = TsgService(SQLAlchemyTsgRepository())
+
+    record = service.get_by_short_name(tsg) or service.get_by_tsg_name(tsg)
+    if record is None:
+        known = service.known_short_names()
+        known_list = ", ".join(known) if known else "(no TSGs registered)"
+        raise typer.BadParameter(
+            f"Unknown TSG '{tsg}'. Known short names: {known_list}."
+        )
+
+    typer.echo(f"tsg_name:    {record.tsg_name}")
+    typer.echo(f"short_name:  {record.short_name}")
+    typer.echo(f"description: {record.description}")
+    typer.echo(f"url:         {record.url or '-'}")
+
+
+@tsg_app.command("seed")
+def tsg_seed() -> None:
+    """Insert or refresh the canonical 3GPP TSG reference list.
+
+    Safe to run repeatedly: existing rows are updated in place rather than
+    duplicated. Run this if a fresh database is missing TSG reference data
+    or if the canonical descriptions/URLs need refreshing.
+    """
+    create_schema()
+    service = TsgService(SQLAlchemyTsgRepository())
+    seeded = service.seed_defaults()
+    typer.echo(f"Seeded {seeded} TSG reference records")
 
 
 def main() -> None:

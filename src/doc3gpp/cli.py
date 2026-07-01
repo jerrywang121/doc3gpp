@@ -103,7 +103,7 @@ def meetings_list(
     tsg: str | None = typer.Option(None, help="Only list meetings for the given TSG short name"),
     name: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting name (supports % and _)") ,
     location: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting location (supports % and _)") ,
-    year: int | None = typer.Option(None, help="Filter meetings by start_date year"),
+    year: int | None = typer.Option(None, help="Filter meetings by end_date year"),
     fields: str | None = typer.Option(
         None,
         help="Comma-separated list of fields to include (or 'all' for all fields).",
@@ -115,7 +115,7 @@ def meetings_list(
     - `--tsg`: optional TSG short name to restrict results (matches name prefix)
     - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`)
     - `--location`: SQL LIKE pattern to filter `location` (supports `%` and `_`)
-    - `--year`: filter by the start_date year
+    - `--year`: filter by the end_date year
     - `--fields`: comma-separated list of fields to include in output, or `all`
 
     By default, the output includes all fields except `title`, `updated_at`, and

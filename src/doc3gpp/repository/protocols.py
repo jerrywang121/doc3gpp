@@ -4,6 +4,7 @@ from typing import Protocol
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tsg import Tsg
 
 
 class TDocRepository(Protocol):
@@ -48,4 +49,28 @@ class MeetingRepository(Protocol):
 
     def get_by_name(self, meeting_name: str) -> Meeting | None:
         """Return a meeting record by its exact meeting name."""
+        ...
+
+
+class TsgRepository(Protocol):
+    """Storage operations for 3GPP TSG reference records."""
+
+    def upsert_many(self, tsgs: list[Tsg]) -> int:
+        """Insert or update multiple TSG records keyed by ``tsg_name``."""
+        ...
+
+    def list_all(self) -> list[Tsg]:
+        """Return all TSG records, ordered by ``tsg_name``."""
+        ...
+
+    def get_by_short_name(self, short_name: str) -> Tsg | None:
+        """Return a TSG record by its short name (case-insensitive)."""
+        ...
+
+    def get_by_tsg_name(self, tsg_name: str) -> Tsg | None:
+        """Return a TSG record by its full ``tsg_name`` (case-insensitive)."""
+        ...
+
+    def count(self) -> int:
+        """Return the number of stored TSG records."""
         ...

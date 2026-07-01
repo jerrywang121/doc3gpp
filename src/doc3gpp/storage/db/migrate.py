@@ -3,6 +3,7 @@ from __future__ import annotations
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import MeetingORM  # noqa: F401 - ensures model metadata is loaded
 from doc3gpp.storage.db.models import TDocORM  # noqa: F401 - ensures model metadata is loaded
+from doc3gpp.storage.db.models import TsgORM  # noqa: F401 - ensures model metadata is loaded
 from doc3gpp.storage.db.session import get_engine
 
 

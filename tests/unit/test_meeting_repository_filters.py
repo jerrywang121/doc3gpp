@@ -38,6 +38,17 @@ def insert_rows(session):
             start_date=date(2026, 7, 2),
             end_date=date(2026, 7, 2),
         ),
+        # TTCN email meeting: starts Dec 2025 and runs through Dec 2026.
+        # The TDoc numbering on its FTP server uses the end_date year (2026),
+        # so the --year filter must key off end_date.year to match those TDocs.
+        MeetingORM(
+            meeting_id=4,
+            name="RAN5-TTCN-WS#75",
+            title="TTCN email meeting",
+            location="Online",
+            start_date=date(2025, 12, 1),
+            end_date=date(2026, 12, 1),
+        ),
     ]
 
     session.add_all(rows)
@@ -61,11 +72,15 @@ def test_list_filters_by_tsg_and_year_and_like():
     r5 = repo.list(limit=10, tsg="r5")
     assert len(r5) == 2
 
-    # year filter
+    # year filter (end_date year): TTCN row ends Dec 2026, so it joins the 2026 bucket
     y2026 = repo.list(limit=10, year=2026)
-    assert {m.meeting_id for m in y2026} == {2, 3}
+    assert {m.meeting_id for m in y2026} == {2, 3, 4}
 
-    # name_like filter (SQL LIKE, match Workshop)
+    # TTCN row starts in 2025 but must NOT match year=2025 because its end_date is 2026
+    y2025 = repo.list(limit=10, year=2025)
+    assert {m.meeting_id for m in y2025} == {1}
+
+    # name_like filter (SQL LIKE, match Workshop); TTCN row name has no "Workshop" substring
     w = repo.list(limit=10, name_like="%Workshop%")
     assert len(w) == 1
     assert w[0].meeting_id == 3

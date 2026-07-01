@@ -14,6 +14,8 @@ from sqlalchemy import text
 from doc3gpp.config import Settings, get_settings as config_get_settings
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tsg import Tsg
+from doc3gpp.services.tsg_service import TsgService, build_tsg_url
 from doc3gpp.settings.loader import get_settings as loader_get_settings
 from doc3gpp.settings.schema import Settings as SettingsModel
 from doc3gpp.storage.backends import configure_sqlite_engine
@@ -23,6 +25,7 @@ from doc3gpp.storage.db.session import get_engine, get_session_factory
 from doc3gpp.storage.export import export_tdocs_csv
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 
 
 def test_sdk_imports() -> None:
@@ -30,6 +33,7 @@ def test_sdk_imports() -> None:
     # Models
     assert Meeting.__name__ == "Meeting"
     assert TDoc.__name__ == "TDoc"
+    assert Tsg.__name__ == "Tsg"
 
     # Settings — both paths
     assert SettingsModel is Settings
@@ -46,6 +50,11 @@ def test_sdk_imports() -> None:
     # Repositories
     assert SQLAlchemyMeetingRepository.__name__ == "SQLAlchemyMeetingRepository"
     assert SQLAlchemyTDocRepository.__name__ == "SQLAlchemyTDocRepository"
+    assert SQLAlchemyTsgRepository.__name__ == "SQLAlchemyTsgRepository"
+
+    # TSG helpers
+    assert callable(build_tsg_url)
+    assert TsgService.__name__ == "TsgService"
 
     # Cache
     assert FileCache.__name__ == "FileCache"
@@ -112,6 +121,23 @@ def test_sdk_model_construction() -> None:
     assert not hasattr(m, "__dict__")
     assert not hasattr(t2, "__dict__")
 
+    # Tsg — minimum required fields
+    t3 = Tsg(tsg_name="RAN WG1", short_name="R1", description="Layer 1")
+    assert t3.tsg_name == "RAN WG1"
+    assert t3.url is None
+
+    # Tsg — all optional fields populated
+    t4 = Tsg(
+        tsg_name="SA WG3",
+        short_name="S3",
+        description="Security and Privacy",
+        url="https://www.3gpp.org/3gpp-groups/service-system-aspects-sa/sa-wg3",
+    )
+    assert t4.url == "https://www.3gpp.org/3gpp-groups/service-system-aspects-sa/sa-wg3"
+
+    # Tsg slots
+    assert not hasattr(t4, "__dict__")
+
 
 def test_sdk_config_chain(tmp_path, monkeypatch) -> None:
     """Config re-export resolves to the same settings instance."""
@@ -151,6 +177,41 @@ def test_sdk_backend_engine_kwargs() -> None:
         db_echo=True,
     )
     assert sqlite_file_kwargs["echo"] is True
+
+
+def test_sdk_tsg_seed_and_list(sqlite_env) -> None:
+    """The TSG service seeds and queries the ``tsgs`` table end-to-end."""
+    create_schema()
+    service = TsgService(SQLAlchemyTsgRepository())
+    seeded = service.seed_defaults()
+    assert seeded == 16
+
+    all_rows = service.list_all()
+    assert len(all_rows) == 16
+
+    # Case-insensitive lookup for both short name and tsg_name
+    r5 = service.get_by_short_name("r5")
+    assert r5 is not None
+    assert r5.tsg_name == "RAN WG5"
+    assert r5.url == "https://www.3gpp.org/3gpp-groups/radio-access-networks-ran/ran-wg5"
+
+    rt = service.get_by_tsg_name("ran ah1")
+    assert rt is not None
+    assert rt.short_name == "RT"
+
+    # Validation helper
+    assert service.is_known_short_name("S2")
+    assert not service.is_known_short_name("r99")
+
+    # Re-seeding is idempotent (no row duplication)
+    service.seed_defaults()
+    assert len(service.list_all()) == 16
+
+    # URL builder composes the project URL pattern
+    assert (
+        build_tsg_url("CT WG4")
+        == "https://www.3gpp.org/3gpp-groups/core-network-terminals-ct/ct-wg4"
+    )
 
 
 def test_sdk_full_round_trip(sqlite_env) -> None:

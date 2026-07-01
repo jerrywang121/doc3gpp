@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import date
 from datetime import datetime
 
-from sqlalchemy import Date, DateTime, Integer, String, Text, func, ForeignKey
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from doc3gpp.storage.db.base import Base
@@ -72,3 +81,29 @@ class TsgORM(Base):
     short_name: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class WiORM(Base):
+    """Persisted 3GPP Work Item (WI) record scraped from DynaReport.
+
+    Rows are unique on the ``(wi_id, tsg_short)`` composite because the same
+    numeric work-item identifier can appear under multiple owning TSGs on the
+    upstream pages. ``tsg_short`` is a foreign key into ``tsgs.short_name`` so
+    every WI row can be joined back to its responsible group.
+    """
+
+    __tablename__ = "wis"
+    __table_args__ = (UniqueConstraint("wi_id", "tsg_short", name="uq_wis_wi_id_tsg_short"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    wi_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    acronym: Mapped[str] = mapped_column(String(256), nullable=False)
+    release: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    tsg_short: Mapped[str] = mapped_column(
+        String(16),
+        ForeignKey("tsgs.short_name"),
+        nullable=False,
+        index=True,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

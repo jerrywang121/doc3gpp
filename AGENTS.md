@@ -25,13 +25,13 @@ Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (7): db, meetings, tdoc, tsg
+│   ├── cli.py            # Typer commands (7): db, meetings, tdoc, tsg, wi
 │   ├── config.py         # re-export shim (legacy)
-│   ├── models/           # Meeting, TDoc, Tsg dataclasses
+│   ├── models/           # Meeting, TDoc, Tsg, Wi dataclasses
 │   ├── parsers/          # HTML/Excel → domain objects (no network)
 │   ├── repository/       # Protocol contracts (abstract)
 │   ├── scraping/         # HTTP/FTP transport (no parsing)
-│   ├── services/         # orchestration: MeetingService, TDocService, TsgService
+│   ├── services/         # orchestration: MeetingService, TDocService, TsgService, WiService
 │   ├── settings/         # pydantic-settings (env-driven, @lru_cache)
 │   └── storage/          # persistence umbrella
 │       ├── backends/     # engine kwargs per dialect
@@ -39,8 +39,8 @@ doc3gpp/
 │       │   └── migrations/   # placeholder for future Alembic
 │       └── repositories/ # SQLAlchemy impls of Protocols
 ├── tests/
-│   ├── unit/             # 19 files (mock external calls)
-│   ├── integration/      # 8 files (sqlite + online + mysql)
+│   ├── unit/             # 23 files (mock external calls)
+│   ├── integration/      # 9 files (sqlite + online + mysql)
 │   └── fixtures/         # sample HTML + XLSX
 ├── docs/                 # architecture, CLI ref, implementation status
 └── scripts/              # test_sqlite.sh, dev_run.sh
@@ -65,20 +65,26 @@ doc3gpp/
 | `Meeting` | dataclass | `models/meeting.py` | Domain model for meetings |
 | `TDoc` | dataclass | `models/tdoc.py` | Domain model for TDocs |
 | `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records |
+| `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to tsg_short, updated_at) |
 | `MeetingRepository` | Protocol | `repository/protocols.py` | Contract for meeting storage |
 | `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage |
 | `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage |
+| `WiRepository` | Protocol | `repository/protocols.py` | Contract for WI storage; upsert keyed by `(wi_id, tsg_short)` |
 | `MeetingService` | class | `services/meetings_service.py` | Meeting sync + list orchestration |
 | `TDocService` | class | `services/tdoc_service.py` | TDoc sync + list orchestration |
 | `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; also exposes `build_tsg_url` URL pattern |
+| `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters |
 | `ScraperClient` | class | `scraping/client.py` | HTTP transport with httpx |
 | `fetch_calendar` | function | `scraping/calendar_source.py` | Fetch DynaReport HTML |
 | `fetch_tdocs_from_meeting_ftp` | function | `scraping/ftp_source.py` | Discover + fetch TDoc XLSX from FTP |
+| `fetch_wis` | function | `scraping/wi_source.py` | Fetch DynaReport WI list HTML for a TSG |
 | `parse_3gpp_calendar` | function | `parsers/calendar_parser.py` | HTML→Meeting list |
+| `parse_3gpp_wis` | function | `parsers/wi_parser.py` | HTML→Wi list (extracts wi_id, acronym, release, name) |
 | `read_tdoc_sheet` | function | `parsers/tdoc_parser.py` | XLSX→TDoc list |
 | `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of MeetingRepository |
 | `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of TDocRepository |
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of TsgRepository |
+| `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of WiRepository |
 | `get_engine` | function | `storage/db/session.py` | Cached engine factory |
 | `create_schema` | function | `storage/db/migrate.py` | Base.metadata.create_all |
 | `get_settings` | function | `settings/loader.py` | Cached settings loader |
@@ -113,11 +119,11 @@ python -m pytest -m mysql
 
 | Layer | Path | Rule |
 |---|---|---|
-| `models/` | `Meeting`, `TDoc` | pass between layers; **never leak ORM attributes** |
+| `models/` | `Meeting`, `TDoc`, `Wi` | pass between layers; **never leak ORM attributes** |
 | `repository/` | `protocols.py` | abstract repo contracts only |
-| `services/` | `meetings_service.py`, `tdoc_service.py` | orchestration; injected with a repo impl |
-| `scraping/` | `client.py`, `calendar_source.py`, `ftp_source.py` | network/HTTP only — **no HTML parsing** |
-| `parsers/` | `calendar_parser.py`, `html_parsers.py`, `tdoc_parser.py`, `normalizers.py` | HTML/Excel → domain only — **no network** |
+| `services/` | `meetings_service.py`, `tdoc_service.py`, `wi_service.py` | orchestration; injected with a repo impl |
+| `scraping/` | `client.py`, `calendar_source.py`, `ftp_source.py`, `wi_source.py` | network/HTTP only — **no HTML parsing** |
+| `parsers/` | `calendar_parser.py`, `html_parsers.py`, `tdoc_parser.py`, `normalizers.py`, `wi_parser.py` | HTML/Excel → domain only — **no network** |
 | `storage/` | `db/`, `backends/`, `repositories/` | persistence only — **no business logic** |
 | `settings/` | `schema.py`, `loader.py` | env-driven config |
 | `cli.py` | Typer commands | thin: build service, call it, format output |
@@ -125,6 +131,7 @@ python -m pytest -m mysql
 Flow:
 - `doc3gpp meetings sync` → `MeetingService.sync` → fetch DynaReport HTML → `parse_3gpp_calendar` → `SQLAlchemyMeetingRepository.upsert_many`
 - `doc3gpp tdoc sync --meeting-id <id>` resolves stored `Meeting.ftp_url` from DB, fetches `TDoc_List_Meeting_*.xlsx` from FTP. **No meeting row → no TDoc sync.**
+- `doc3gpp wi sync --tsg <short>` → `WiService.sync` → `fetch_wis` → `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many`. The `wis.tsg_short` column is a foreign key into `tsgs.short_name`, so the `tsgs` table is auto-seeded and `--tsg` is validated against it.
 - `doc3gpp db init` calls `create_schema()` and then `TsgService.seed_defaults()` to populate the `tsgs` reference table.
 - `doc3gpp meetings sync --tsg <short>` validates `<short>` against the `tsgs` table (auto-seeded if empty); an unknown value raises `typer.BadParameter` listing the known short names.
 - `doc3gpp tsg list` and `doc3gpp tsg show` read from the `tsgs` table via `SQLAlchemyTsgRepository`. `doc3gpp tsg seed` upserts the canonical 16 rows.

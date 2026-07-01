@@ -97,6 +97,9 @@ doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
 doc3gpp tdoc list --limit 10
 # Filtered list examples
 doc3gpp tdoc list --tsg R5 --year 26 --meeting "%RAN3%"
+doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
+doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
+doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
 ```
 
 ## Testing

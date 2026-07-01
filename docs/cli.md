@@ -302,6 +302,87 @@ Examples:
 doc3gpp tsg seed
 ```
 
+## wi Commands
+
+The `wi` sub-app exposes the 3GPP Work Item (WI) reference table. WI rows
+are scraped from the per-TSG DynaReport page at
+`https://www.3gpp.org/dynareport?code=TSG-WG--<tsg>--wis.htm` and stored
+with their owning TSG short name as a foreign key into the `tsgs` table.
+
+### doc3gpp wi sync
+
+Purpose:
+
+- Fetch and store the active WIs for a single TSG from 3gpp.org.
+
+Options:
+
+- --tsg: TSG short name (e.g. `R5`).
+  - default: `r5`
+  - validated against the `tsgs` reference table; unknown values raise an
+    error listing the known short names and pointing to `doc3gpp tsg list`.
+  - if the `tsgs` table is empty (fresh install), it is auto-seeded before
+    validation runs.
+
+Behavior:
+
+- Composes the DynaReport URL from the uppercased TSG short name.
+- Fetches the HTML body via `ScraperClient`.
+- Parses the `dsp-tsgwgxwis` table into `Wi` records
+  (`wi_id`, `acronym`, `release`, `name`).
+- Upserts into the `wis` table keyed by `(wi_id, tsg_short)`. Existing
+  rows for the same composite key are refreshed in place, so re-running
+  this command updates acronym, release, name and `updated_at` without
+  duplicating rows.
+- Prints the count of rows written for the TSG.
+
+Examples:
+
+```bash
+# Sync WIs for RAN WG5 (default TSG).
+doc3gpp wi sync --tsg r5
+
+# Sync WIs for SA WG2.
+doc3gpp wi sync --tsg S2
+```
+
+### doc3gpp wi list
+
+Purpose:
+
+- List stored WI records with optional SQL `LIKE` filters.
+
+Options:
+
+- --limit: number of rows to return.
+  - default: 20
+  - range: 1..500
+- --tsg: only list WIs belonging to the given TSG short name.
+  - case-insensitive; normalised to the canonical uppercase form.
+  - default: none (results span all TSGs).
+- --name: SQL `LIKE` pattern to filter the WI title (supports `%` and `_`).
+- --acronym: SQL `LIKE` pattern to filter the WI acronym
+  (supports `%` and `_`).
+- --release: SQL `LIKE` pattern to filter the release marker
+  (supports `%` and `_`).
+
+Default output fields (tab-separated):
+
+- `wi_id`, `acronym`, `release`, `name`
+
+Examples:
+
+```bash
+# 10 most recent WIs across all TSGs.
+doc3gpp wi list --limit 10
+
+# All Rel-19 WIs for RAN WG5.
+doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
+
+# WIs whose acronym contains "UEConTest".
+doc3gpp wi list --acronym "%UEConTest%" --limit 50
+```
+
 ## Examples
 
 ```bash
@@ -312,4 +393,7 @@ doc3gpp meetings sync --tsg r5
 doc3gpp meetings list --limit 20
 doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
 doc3gpp tdoc list --limit 10
+doc3gpp wi sync --tsg r5
+doc3gpp wi list --limit 10
+doc3gpp wi list --tsg r5 --release "Rel-19" --limit 100
 ```

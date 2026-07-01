@@ -11,24 +11,29 @@ from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tsg import Tsg
+from doc3gpp.models.wi import Wi
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.services.tsg_service import TsgService
+from doc3gpp.services.wi_service import WiService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
+from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
 
 app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
 meetings_app = typer.Typer(help="meetings commands")
 tdoc_app = typer.Typer(help="tdoc commands")
 tsg_app = typer.Typer(help="tsg reference data commands")
+wi_app = typer.Typer(help="wi commands")
 app.add_typer(db_app, name="db")
 app.add_typer(meetings_app, name="meetings")
 app.add_typer(tdoc_app, name="tdoc")
 app.add_typer(tsg_app, name="tsg")
+app.add_typer(wi_app, name="wi")
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +501,94 @@ def tsg_seed() -> None:
     service = TsgService(SQLAlchemyTsgRepository())
     seeded = service.seed_defaults()
     typer.echo(f"Seeded {seeded} TSG reference records")
+
+
+@wi_app.command("sync")
+def wi_sync(
+    tsg: str = typer.Option(
+        DEFAULT_TSG,
+        "--tsg",
+        help="TSG short name (e.g. R5) for the WI DynaReport page to sync.",
+    ),
+) -> None:
+    """Fetch and store the active WIs for one TSG from 3gpp.org.
+
+    The ``--tsg`` value is validated against the ``tsgs`` reference table
+    (see ``doc3gpp tsg list``). On a fresh database the reference table is
+    auto-seeded so this command is safe to run without an explicit
+    ``db init`` first. Existing rows for the same ``(wi_id, tsg_short)``
+    pair are updated in place, so re-running this command refreshes the
+    acronym, release, name and ``updated_at`` fields without duplication.
+    """
+    logger.info("Starting WI sync for TSG %s", tsg)
+    create_schema()
+    tsg_service = _ensure_tsg_ready(SQLAlchemyTsgRepository())
+    canonical_tsg = _validate_tsg_short_name(tsg, tsg_service)
+    service = WiService(SQLAlchemyWiRepository())
+    count = service.sync(canonical_tsg)
+    typer.echo(f"WI sync complete: {count} WI rows stored for {canonical_tsg}")
+
+
+@wi_app.command("list")
+def wi_list(
+    limit: int = typer.Option(20, min=1, max=500),
+    tsg: str | None = typer.Option(
+        None,
+        "--tsg",
+        help="Only list WIs belonging to the given TSG short name.",
+    ),
+    name: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter WI name (supports % and _).",
+    ),
+    acronym: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter WI acronym (supports % and _).",
+    ),
+    release: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter WI release marker (supports % and _).",
+    ),
+) -> None:
+    """List stored WIs matching the filters (default output: wi_id, acronym, release, name).
+
+    The command exposes four optional SQL ``LIKE`` filters:
+
+    - ``--tsg``: restrict results to a single TSG short name (case-insensitive).
+    - ``--name``: SQL ``LIKE`` pattern to filter the WI title.
+    - ``--acronym``: SQL ``LIKE`` pattern to filter the WI acronym.
+    - ``--release``: SQL ``LIKE`` pattern to filter the release marker
+      (e.g. ``Rel-19``).
+
+    By default the output prints four columns: ``wi_id``, ``acronym``,
+    ``release`` and ``name``. Each value is rendered as a plain string,
+    ``-`` when the underlying field is missing.
+    """
+    logger.info(
+        "Listing %s recent WIs with filters tsg=%s name=%s acronym=%s release=%s",
+        limit,
+        tsg,
+        name,
+        acronym,
+        release,
+    )
+    service = WiService(SQLAlchemyWiRepository())
+    records = service.list_recent(
+        limit=limit,
+        tsg=tsg,
+        name_like=name,
+        acronym_like=acronym,
+        release_like=release,
+    )
+    if not records:
+        typer.echo("No WIs found")
+        return
+
+    default_fields = ["wi_id", "acronym", "release", "name"]
+    for item in records:
+        assert isinstance(item, Wi)
+        vals = [str(getattr(item, f) or "-") for f in default_fields]
+        typer.echo("\t".join(vals))
 
 
 def main() -> None:

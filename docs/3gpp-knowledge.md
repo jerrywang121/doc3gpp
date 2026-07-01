@@ -124,6 +124,92 @@ Typical TDoc source candidates include:
 
 These sources are noted in `docs/implementation-status.md` and are not yet fully implemented.
 
+## Work Item (WI) Source URLs
+
+### WIs report URL
+
+Active Work Items per TSG are fetched from the 3GPP DynaReport WI pages.
+
+Pattern:
+
+```text
+https://www.3gpp.org/dynareport?code=TSG-WG--{TSG}--wis.htm
+```
+
+Where `{TSG}` is the TSG short name, such as `R5` for RAN5.
+
+The page lists only those active (i.e. not yet completed) WIs where the named
+TSG is the **sole responsible group**. WIs for which the group holds joint
+responsibility — particularly hierarchically higher WIs that comprise WIs from
+several groups — are intentionally not shown on this page.
+
+Example:
+
+```text
+https://www.3gpp.org/dynareport?code=TSG-WG--R5--wis.htm
+```
+
+### CLI URL construction
+
+The CLI constructs the WI URL from the `--tsg` value using the rule:
+
+```python
+f"https://www.3gpp.org/dynareport?code=TSG-WG--{tsg.upper()}--wis.htm"
+```
+
+That means `--tsg r5`, `--tsg R5`, and `--tsg R5` all map to the same page.
+
+## Extracted WI Fields
+
+WI rows are parsed from the HTML table on the WI report page. The data lives
+in a single `<table>` carrying the `dsp-tsgwgxwis` CSS class; each data row
+has three `<td>` cells.
+
+The current implementation extracts these fields into the `Wi` domain model:
+
+- `wi_id` (int)
+  - The canonical numeric WI identifier from the 3GPP portal, extracted
+    from the row anchor's `workitemId=` URL parameter.
+  - Example: `1031076` from
+    `https://portal.3gpp.org/desktopmodules/WorkItem/WorkItemDetails.aspx?workitemId=1031076`.
+
+- `acronym` (str)
+  - The WI acronym shown in the second table cell.
+  - Example: `LTE_TN_NR_NTN_mob-Core`.
+
+- `release` (str)
+  - The release marker shown in the third table cell.
+  - Example: `Rel-19`.
+
+- `name` (str)
+  - The full WI title shown in the first table cell (anchor text).
+  - Example: `Building Block: Core part: Inter-RAT mode mobility support
+    from E-UTRAN TN to NR NTN`.
+
+- `tsg_short` (str)
+  - The owning TSG short name, uppercased and stored on every row as a
+    foreign key into `tsgs.short_name`. The `tsgs` table is auto-seeded
+    on first sync so this FK is always satisfiable.
+
+- `updated_at` (datetime | None)
+  - Set by the persistence layer (`SQLAlchemyWiRepository.upsert_many`)
+    to the current UTC timestamp on every insert or update.
+
+### Parsing rules
+
+The WI parser implementation is in `src/doc3gpp/parsers/wi_parser.py`.
+
+Important behavior:
+
+- It locates the table by CSS class `dsp-tsgwgxwis` and returns an empty
+  list when the table is missing (e.g. on pages with no active WIs).
+- It skips rows with fewer than three `<td>` cells.
+- It skips rows whose first cell has no `<a>` element or whose anchor has
+  no `workitemId=` query parameter.
+- It collapses internal whitespace (newlines, tabs) in the WI title and
+  acronym to a single space.
+- It uppercases the supplied `tsg_short` before stamping it onto each row.
+
 ## Meeting FTP directory structure
 
 From a meeting `ftp_url`, the following directory layout is common:
@@ -224,6 +310,7 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 
 - `src/doc3gpp/cli.py`
   - Builds the meeting URL from `--tsg`.
+  - Exposes the `wi` Typer group (`wi sync`, `wi list`).
 
 - `src/doc3gpp/services/meetings_service.py`
   - Syncs meeting rows and filters by date range.
@@ -239,6 +326,26 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 
 - `src/doc3gpp/models/tdoc.py`
   - TDoc domain fields.
+
+- `src/doc3gpp/scraping/wi_source.py`
+  - Builds the per-TSG DynaReport URL and fetches the raw WI page HTML
+    via `ScraperClient`.
+
+- `src/doc3gpp/parsers/wi_parser.py`
+  - Parses the `dsp-tsgwgxwis` table and extracts WI rows into `Wi`
+    dataclasses.
+
+- `src/doc3gpp/services/wi_service.py`
+  - Orchestrates WI sync (fetch + parse + upsert) and exposes the
+    SQL-`LIKE`-filtered list query used by the CLI and SDK.
+
+- `src/doc3gpp/storage/repositories/wi_sql.py`
+  - SQLAlchemy implementation that upserts into `wis` keyed by
+    `(wi_id, tsg_short)` and lists rows with `LIKE` filters.
+
+- `src/doc3gpp/models/wi.py`
+  - WI domain fields (`wi_id`, `acronym`, `release`, `name`,
+    `tsg_short`, `updated_at`).
 
 ## Extracted field summary
 
@@ -262,8 +369,20 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 - `meeting`
 - `url`
 
+### WIs
+
+- `wi_id`
+- `acronym`
+- `release`
+- `name`
+- `tsg_short`
+- `updated_at`
+
 ## Notes
 
 - The current implementation focuses on meeting report scraping.
 - TDoc extraction is supported via manual CLI insertion and planned future automation.
+- Work Item extraction is fully automated: each TSG's `WI DynaReport` page
+  is fetched on demand by `doc3gpp wi sync --tsg <short>` and persisted
+  to the `wis` table with `(wi_id, tsg_short)` as the upsert key.
 - The meeting URL is derived from the TSG short name and not entered as a full URL.

@@ -33,11 +33,11 @@ def _find_meeting(meetings, year: int, has_ttcns: bool = True, workshop: bool | 
     return None
 
 
-def test_online_fetch_tdoc_list_r5_ttcn_workshop_2026() -> None:
+def test_online_fetch_tdoc_list_r5_ttcn_workshop_2025() -> None:
     meetings = _fetch_live_or_skip()
-    m = _find_meeting(meetings, 2026, has_ttcns=True, workshop=True)
+    m = _find_meeting(meetings, 2025, has_ttcns=True, workshop=True)
     if m is None:
-        pytest.skip("No R5 TTCN workshop meeting in 2026 with FTP url found")
+        pytest.skip("No R5 TTCN workshop meeting in 2025 with FTP url found")
 
     tdocs = fetch_tdocs_from_meeting_ftp(m.ftp_url, meeting_id=m.meeting_id)
     if not tdocs:
@@ -45,11 +45,11 @@ def test_online_fetch_tdoc_list_r5_ttcn_workshop_2026() -> None:
     assert any(td.tdoc_id.lower().startswith("r5w") or td.tdoc_id.lower().startswith("r5-") for td in tdocs)
 
 
-def test_online_fetch_tdoc_list_r5_ttcn_email_2026() -> None:
+def test_online_fetch_tdoc_list_r5_ttcn_email_2025() -> None:
     meetings = _fetch_live_or_skip()
-    m = _find_meeting(meetings, 2026, has_ttcns=True, workshop=False)
+    m = _find_meeting(meetings, 2025, has_ttcns=True, workshop=False)
     if m is None:
-        pytest.skip("No R5 TTCN email meeting in 2026 with FTP url found")
+        pytest.skip("No R5 TTCN email meeting in 2025 with FTP url found")
 
     tdocs = fetch_tdocs_from_meeting_ftp(m.ftp_url, meeting_id=m.meeting_id)
     if not tdocs:

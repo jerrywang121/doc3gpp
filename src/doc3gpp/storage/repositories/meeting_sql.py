@@ -51,7 +51,7 @@ class SQLAlchemyMeetingRepository:
         Optional filters:
         - `tsg`: filter meetings whose `name` starts with this value (case-insensitive)
         - `name_like`: SQL LIKE pattern to apply to the `name` column
-        - `year`: integer year to match the `start_date`
+        - `year`: integer year to match the `end_date`
         """
         with self._session_factory() as session:
             stmt = select(MeetingORM)
@@ -67,7 +67,7 @@ class SQLAlchemyMeetingRepository:
                 stmt = stmt.where(MeetingORM.location.like(location_like))
 
             if year is not None:
-                stmt = stmt.where(extract("year", MeetingORM.start_date) == year)
+                stmt = stmt.where(extract("year", MeetingORM.end_date) == year)
 
             stmt = stmt.order_by(MeetingORM.start_date.desc()).limit(limit)
             rows = session.scalars(stmt).all()

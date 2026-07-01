@@ -94,7 +94,7 @@ Additional options:
 - --name: SQL LIKE pattern to filter meeting `name` (supports `%` and `_`).
 - --name: SQL LIKE pattern to filter meeting `name` (supports `%` and `_`).
 - --location: SQL LIKE pattern to filter meeting `location` (supports `%` and `_`).
-- --year: filter meetings by the year of the `start_date`.
+- --year: filter meetings by the year of the `end_date`.
 - --fields: comma-separated list of fields to include in output, or `all`.
 
 Default output fields:
@@ -118,7 +118,7 @@ doc3gpp meetings list --tsg r5
 doc3gpp meetings list --name '%TTCN%'
 ```
 
-- List meetings starting in 2026:
+- List meetings ending in 2026:
 
 ```bash
 doc3gpp meetings list --year 2026

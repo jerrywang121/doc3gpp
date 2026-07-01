@@ -2,6 +2,24 @@
 
 This document describes the currently implemented command surface in src/doc3gpp/cli.py.
 
+## Installation
+
+The CLI requires the `[cli]` extra on top of the core SDK:
+
+```bash
+# via pip
+pip install "doc3gpp[cli]"
+
+# via pipx (isolated environment)
+pipx install "doc3gpp[cli]"
+
+# development (editable install)
+pip install -e ".[dev]"
+```
+
+> **Note:** `pip install doc3gpp` (without `[cli]`) installs the SDK only —
+> the `doc3gpp` CLI command will not be available.
+
 ## Command Entry
 
 - Command: doc3gpp

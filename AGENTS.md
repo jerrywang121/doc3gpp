@@ -15,8 +15,9 @@ doc3gpp db init
 doc3gpp db check
 ```
 
-Build system: **hatchling**. Stack: Python 3.10+, SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, Typer, httpx, BeautifulSoup4 + lxml, openpyxl, alembic (installed but not wired).
-Extras: `pip install -e ".[mysql]"` (pymysql), `.[postgres]` (psycopg[binary]).
+Build system: **hatchling**. Stack: Python 3.10+, SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, httpx, BeautifulSoup4 + lxml, openpyxl, alembic (installed but not wired).
+Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres]` (psycopg[binary]).
+`pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"` or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 `references-external/` is gitignored local scratch — never commit changes there.
 
 ## STRUCTURE

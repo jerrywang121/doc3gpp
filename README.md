@@ -2,18 +2,37 @@
 
 Extract 3GPP TDoc information by scraping 3gpp.org.
 
-This project is scaffolded as both a Python library and a CLI, with configurable SQL backends.
 Default storage uses local SQLite, while MySQL and PostgreSQL are available via configuration.
 
-## Features
+## Installation
 
-- Library-first package layout (`src/` based).
-- CLI entrypoint: `doc3gpp`.
-- Database backend selection from config.
-- Default local SQLite database.
-- Optional MySQL and PostgreSQL support.
+### SDK (library)
 
-## Quick Start
+```bash
+pip install doc3gpp
+```
+
+Use the SDK to access 3GPP data programmatically:
+
+```python
+from doc3gpp.settings import get_settings
+from doc3gpp.services.meetings_service import MeetingService
+from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+
+service = MeetingService(SQLAlchemyMeetingRepository())
+meetings = service.list_recent(limit=10)
+```
+
+### CLI (command-line tool)
+
+```bash
+pip install "doc3gpp[cli]"
+pipx install "doc3gpp[cli]"
+```
+
+The `[cli]` extra adds the `doc3gpp` CLI command with Typer-based subcommands.
+
+### Development
 
 ```bash
 python -m venv .venv
@@ -22,6 +41,15 @@ pip install -e ".[dev]"
 cp .env.example .env
 doc3gpp db init
 doc3gpp db check
+```
+
+The `[dev]` extra includes both `[cli]` and test/lint tooling.
+
+### Database Backends
+
+```bash
+pip install "doc3gpp[mysql]"     # MySQL (pymysql)
+pip install "doc3gpp[postgres]"  # PostgreSQL (psycopg)
 ```
 
 ## Database Configuration

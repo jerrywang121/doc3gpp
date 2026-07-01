@@ -22,14 +22,14 @@ Current scope includes:
 	- HTML parsing and normalization.
 	- modules: src/doc3gpp/parsers/calendar_parser.py, src/doc3gpp/parsers/html_parsers.py, src/doc3gpp/parsers/normalizers.py.
 - models:
-	- domain models for meeting and tdoc records.
-	- modules: src/doc3gpp/models/meeting.py, src/doc3gpp/models/tdoc.py.
+	- domain models for meeting, tdoc, and tsg records.
+	- modules: src/doc3gpp/models/meeting.py, src/doc3gpp/models/tdoc.py, src/doc3gpp/models/tsg.py.
 - repository:
 	- protocol interfaces used by services.
 	- module: src/doc3gpp/repository/protocols.py.
 - services:
 	- orchestration and sync use-cases.
-	- modules: src/doc3gpp/services/meetings_service.py, src/doc3gpp/services/tdoc_service.py.
+	- modules: src/doc3gpp/services/meetings_service.py, src/doc3gpp/services/tdoc_service.py, src/doc3gpp/services/tsg_service.py.
 - storage:
 	- SQLAlchemy ORM models, session factory, backend-specific engine options, concrete repositories.
 	- modules: src/doc3gpp/storage/db/models.py, src/doc3gpp/storage/db/session.py, src/doc3gpp/storage/backends/*.py, src/doc3gpp/storage/repositories/*.py.
@@ -65,6 +65,9 @@ Current tables defined in src/doc3gpp/storage/db/models.py:
 	- id, tdoc_id, title, meeting_id, url, source, type, status, reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to, release, spec, version, related_wis, cr_num, cr_pack, created_at.
 - meetings:
 	- meeting_id, name, title, location, start_date, end_date, ftp_url, start_doc, end_doc, updated_at.
+- tsgs:
+	- id, tsg_name (unique), short_name (unique), description, url.
+	- canonical 3GPP TSG list, seeded on `db init`; used to validate `--tsg` in `meetings sync`.
 
 Schema creation currently uses Base.metadata.create_all through src/doc3gpp/storage/db/migrate.py.
 
@@ -88,7 +91,7 @@ Implemented command groups in src/doc3gpp/cli.py:
 
 - db:
 	- check
-	- init
+	- init (also seeds the `tsgs` reference table)
 - meetings:
 	- sync
 	- list
@@ -96,6 +99,10 @@ Implemented command groups in src/doc3gpp/cli.py:
 	- sync
 	- add
 	- list
+- tsg:
+	- list
+	- show
+	- seed
 
 ## Testing Layout
 

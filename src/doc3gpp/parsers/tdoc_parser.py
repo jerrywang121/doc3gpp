@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from datetime import date, datetime
 from typing import Dict, Iterable, List, Optional
 
 from openpyxl import load_workbook
@@ -34,24 +35,69 @@ def normalize_header(value: object) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-def to_text(value: object) -> str:
-    """Convert a cell value to a trimmed string for display or comparison."""
+def to_text(value: object) -> Optional[str]:
+    """Convert a cell value to trimmed text, returning ``None`` for empty/missing.
+
+    Distinguishes "missing" (cell was ``None``) from "empty" (cell was ``""``
+    or whitespace) — both surface as ``None`` here so callers don't have to
+    repeat the falsy check and ORM nullable columns stay correctly typed.
+    """
     if value is None:
-        return ""
-    return str(value).strip()
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _parse_date_cell(value: object) -> date | None:
+    """Parse an XLSX cell value as a ``date``.
+
+    Handles ``datetime``/``date`` instances directly and ISO-style strings
+    (``YYYY-MM-DD`` or ``YYYY/MM/DD``). Unparseable values return ``None``
+    rather than raising so a single bad cell can't abort an entire sync.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = to_text(value)
+    if text is None:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def pick_col(header_map: Dict[str, int], candidates: Iterable[str]) -> Optional[int]:
-    """Find the first matching column index for a set of header candidates."""
-    for candidate in candidates:
-        candidate_norm = normalize_header(candidate)
+    """Find the first matching column index for a set of header candidates.
+
+    Exact (case-insensitive) matches are preferred; substring matches are used
+    as a fallback only when no exact match exists. This avoids ``"Type"``
+    matching ``"Type of CR"`` when both columns are present in the sheet.
+    """
+    candidates_norm = [normalize_header(c) for c in candidates]
+    # First pass: prefer exact (case-insensitive) header matches.
+    for candidate in candidates_norm:
+        if candidate and candidate in header_map:
+            return header_map[candidate]
+    # Second pass: fall back to substring containment (header contains candidate).
+    for candidate in candidates_norm:
+        if not candidate:
+            continue
         for header, col in header_map.items():
-            if header == candidate_norm or candidate_norm in header:
+            if candidate in header:
                 return col
     return None
 
 
-def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, Optional[str]]]:
+_DATE_FIELDS = frozenset({"reservation_date", "uploaded_date"})
+
+
+def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
     logger.debug("Reading TDoc XLSX bytes (%s bytes)", len(xlsx_bytes))
     workbook = load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
     if workbook is None or not workbook.sheetnames:
@@ -95,9 +141,10 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, Optional[str]]]:
         "cr_pack": pick_col(header_map, ["TSG CR Pack", "TSG CR pack", "CR Pack"]),
     }
 
-    result: List[Dict[str, Optional[str]]] = []
+    result: List[Dict[str, object]] = []
+    skipped_rows = 0
     for row_index, row in enumerate(rows, start=1):
-        raw_tdoc = to_text(row[col_tdoc]) if col_tdoc < len(row) else ""
+        raw_tdoc = to_text(row[col_tdoc]) if col_tdoc < len(row) else None
         if not raw_tdoc:
             logger.debug("Skipping empty row %s", row_index)
             continue
@@ -105,17 +152,27 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, Optional[str]]]:
         match = CR_ID_RE.search(raw_tdoc)
         if not match:
             logger.debug("Skipping non-TDoc row %s: %s", row_index, raw_tdoc)
+            skipped_rows += 1
             continue
 
-        record: Dict[str, Optional[str]] = {"tdoc": match.group(0)}
+        record: Dict[str, object] = {"tdoc": match.group(0)}
         for key, col in mapping.items():
             if col is not None and col < len(row):
-                value = to_text(row[col])
-                # Empty cells map to ``None`` so optional ORM columns stay nullable.
-                record[key] = value if value else None
+                cell_value = row[col]
+                if key in _DATE_FIELDS:
+                    record[key] = _parse_date_cell(cell_value)
+                else:
+                    record[key] = to_text(cell_value)
             else:
                 record[key] = None
         result.append(record)
 
+    if skipped_rows:
+        logger.warning(
+            "Skipped %s row(s) with unrecognized TDoc identifier pattern %r; "
+            "consider widening CR_ID_RE if upstream conventions have changed.",
+            skipped_rows,
+            CR_ID_RE.pattern,
+        )
     logger.info("Parsed %s TDoc records from XLSX", len(result))
     return result

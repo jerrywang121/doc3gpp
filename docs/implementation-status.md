@@ -25,20 +25,28 @@ This document tracks what is implemented today versus planned next work.
 
 ### Scraping and Parsing
 
-- ScraperClient for HTTP retrieval.
+- ScraperClient for HTTP retrieval, with retry/backoff for transient errors.
 - Calendar source adapter for DynaReport.
 - Calendar parser:
   - meeting id extraction from MtgId link.
   - ftp path extraction from docs/files links.
   - doc range extraction start_doc/end_doc.
   - cancelled meeting filtering.
+- TDoc parser:
+  - exact-match header detection (rejects title-only rows).
+  - retry-and-fallback lookup of TDoc list XLSX across `docs/` and `tdoc/` subfolders.
+  - reservation/uploaded date parsing into `date` objects.
+  - WARNING emitted when rows are skipped because the TDoc ID regex misses.
 
 ### Services
 
 - MeetingService sync and list.
 - TDocService save and list.
+- TDocSyncCoordinator: cross-service orchestration for `tdoc sync`.
 - TsgService seed/list/validate for the 3GPP TSG reference table.
 - Meeting-based TDoc sync now resolves FTP URL from stored meeting records.
+- Service composition via `services.factory.build_*` helpers (CLI depends on
+  Protocol-typed services, not on concrete SQLAlchemy repositories).
 
 ### CLI
 
@@ -65,7 +73,6 @@ This document tracks what is implemented today versus planned next work.
 ### TDoc Extraction Pipeline
 
 - Download and parse meeting tdoc list from GenerateDocumentList.aspx.
-- Fallback lookup of tdoc_list files in ftp subfolders.
 - Persist expanded tdoc metadata columns from legacy implementation.
 
 ### Additional Data Sources
@@ -79,7 +86,6 @@ This document tracks what is implemented today versus planned next work.
 
 ### Operational Hardening
 
-- Retry/backoff policy in HTTP client.
 - Optional throttling and robots policy enforcement.
 - Structured sync logs and metrics.
 

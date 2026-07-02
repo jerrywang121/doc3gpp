@@ -179,7 +179,9 @@ def test_tsg_seed_calls_service(monkeypatch) -> None:
             return len(tsgs)
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
-    monkeypatch.setattr("doc3gpp.cli.SQLAlchemyTsgRepository", lambda: _FakeRepo())
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_FakeRepo())
+    )
 
     result = runner.invoke(app, ["tsg", "seed"])
     assert result.exit_code == 0

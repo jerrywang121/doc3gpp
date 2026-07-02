@@ -168,6 +168,14 @@ class TsgService:
         """Return all stored TSG records ordered by ``tsg_name``."""
         return self._repository.list_all()
 
+    def count(self) -> int:
+        """Return the number of stored TSG records.
+
+        Used by the CLI to decide whether to auto-seed on a fresh install
+        without paying for a full ``list_all()`` round-trip.
+        """
+        return self._repository.count()
+
     def get_by_short_name(self, short_name: str) -> Tsg | None:
         """Return a stored TSG by its short name (case-insensitive)."""
         return self._repository.get_by_short_name(short_name)

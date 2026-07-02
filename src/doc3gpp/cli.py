@@ -12,16 +12,20 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
-from doc3gpp.services.meetings_service import MeetingService
-from doc3gpp.services.tdoc_service import TDocService
+from doc3gpp.services.factory import (
+    build_meeting_service,
+    build_tdoc_service,
+    build_tdoc_sync_coordinator,
+    build_tsg_service,
+    build_wi_service,
+)
+from doc3gpp.services.tdoc_sync_coordinator import (
+    MeetingMissingFtpUrlError,
+    MeetingNotFoundError,
+)
 from doc3gpp.services.tsg_service import TsgService
-from doc3gpp.services.wi_service import WiService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
-from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
-from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
-from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
 
 app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
@@ -62,13 +66,12 @@ def _build_meetings_url(tsg: str) -> str:
     return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.htm"
 
 
-def _ensure_tsg_ready(repo: SQLAlchemyTsgRepository) -> TsgService:
-    # Auto-seed so fresh installs do not require a separate `db init` step.
-    service = TsgService(repo)
-    if repo.count() == 0:
+def _ensure_tsg_ready(tsg_service: TsgService) -> TsgService:
+    """Auto-seed the TSG reference table on a fresh install."""
+    if tsg_service.count() == 0:
         logger.info("TSG reference table is empty; seeding default TSG list")
-        service.seed_defaults()
-    return service
+        tsg_service.seed_defaults()
+    return tsg_service
 
 
 def _validate_tsg_short_name(tsg: str, service: TsgService) -> str:
@@ -107,7 +110,7 @@ def db_init() -> None:
 
     logger.info("Initializing database schema")
     create_schema()
-    tsg_service = TsgService(SQLAlchemyTsgRepository())
+    tsg_service = build_tsg_service()
     seeded = tsg_service.seed_defaults()
     logger.info("Seeded %s TSG reference records", seeded)
     typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
@@ -128,9 +131,9 @@ def meetings_sync(
     """
     logger.info("Starting meetings sync for TSG %s", tsg)
     create_schema()
-    tsg_service = _ensure_tsg_ready(SQLAlchemyTsgRepository())
+    tsg_service = _ensure_tsg_ready(build_tsg_service())
     tsg = _validate_tsg_short_name(tsg, tsg_service)
-    service = MeetingService(SQLAlchemyMeetingRepository())
+    service = build_meeting_service()
     meetings_url = _build_meetings_url(tsg)
     count = service.sync(meetings_url, max_year_closed=closed_years, max_year_future=future_years)
     typer.echo(f"Meetings sync complete: {count} meeting rows stored")
@@ -202,7 +205,7 @@ def meetings_list(
         out_fields = default_fields
 
     logger.info("Listing %s recent meetings for tsg=%s name=%s location=%s year=%s", limit, tsg, name, location, year)
-    service = MeetingService(SQLAlchemyMeetingRepository())
+    service = build_meeting_service()
     records = service.list_recent(limit=limit, tsg=tsg, name_like=name, location_like=location, year=year)
     if not records:
         typer.echo("No meetings found")
@@ -242,37 +245,21 @@ def tdoc_sync(
     if (meeting_id is None) == (meeting is None):
         raise typer.BadParameter("Specify exactly one of --meeting-id or --meeting.")
 
-    create_schema()
-    service = TDocService(SQLAlchemyTDocRepository())
-    meeting_service = MeetingService(SQLAlchemyMeetingRepository())
-
-    if meeting_id is not None:
-        logger.info("Starting TDoc sync for meeting ID %s", meeting_id)
-        meeting_record = meeting_service.get_by_id(meeting_id)
-    else:
-        logger.info("Starting TDoc sync for meeting name %s", meeting)
-        meeting_record = meeting_service.get_by_name(meeting)
-
-    if meeting_record is None:
+    coordinator = build_tdoc_sync_coordinator()
+    try:
         if meeting_id is not None:
-            logger.error("Meeting not found for ID %s", meeting_id)
-            raise typer.BadParameter(f"Meeting not found with id {meeting_id}")
-        logger.error("Meeting not found for name %s", meeting)
-        raise typer.BadParameter(f"Meeting not found with name {meeting}")
+            logger.info("Starting TDoc sync for meeting ID %s", meeting_id)
+            count = coordinator.sync_for_meeting_id(meeting_id)
+        else:
+            logger.info("Starting TDoc sync for meeting name %s", meeting)
+            count = coordinator.sync_for_meeting_name(meeting)
+    except MeetingNotFoundError as exc:
+        logger.error("Meeting not found: %s", exc)
+        raise typer.BadParameter(str(exc)) from None
+    except MeetingMissingFtpUrlError as exc:
+        logger.error("Meeting has no FTP URL stored: %s", exc)
+        raise typer.BadParameter(str(exc)) from None
 
-    if not meeting_record.ftp_url:
-        logger.error(
-            "Meeting %s does not have an FTP URL stored",
-            meeting_id if meeting_id is not None else meeting,
-        )
-        raise typer.BadParameter(
-            f"Meeting {meeting_id if meeting_id is not None else meeting} does not have an FTP URL stored"
-        )
-
-    count = service.sync_from_meeting_ftp(
-        ftp_url=meeting_record.ftp_url,
-        meeting_id=meeting_record.meeting_id,
-    )
     typer.echo(f"TDoc sync complete: {count} records stored")
 
 
@@ -331,7 +318,7 @@ def tdoc_list(
     - `--cat`: SQL LIKE pattern to filter by CR category
     - `--status`: SQL LIKE pattern to filter by TDoc status
     - `--type`: SQL LIKE pattern to filter by TDoc type
-    - `--fields`: comma-separated list of fields to include, or 'all'
+    - `--fields`: comma-separated list of fields to include, or `all`
 
     By default, the output includes: tdoc_id, meeting_name, title, source, type,
     status, cr_cat, spec, version, related_wis.
@@ -339,7 +326,7 @@ def tdoc_list(
     Available fields for selection:
     tdoc_id, title, meeting_id, meeting_name, url, source, type, status,
     reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to,
-    release, spec, version, related_wis, cr_num, cr_pack
+    release, spec, version, related_wis, cr_num, cr_pack, updated_at
     """
 
     allowed_fields = [f.name for f in dataclass_fields(TDoc)]
@@ -386,7 +373,7 @@ def tdoc_list(
         type,
     )
 
-    service = TDocService(SQLAlchemyTDocRepository())
+    service = build_tdoc_service()
     records = service.list_recent(
         limit=limit,
         tsg=tsg,
@@ -412,7 +399,12 @@ def tdoc_list(
                 vals.append("-")
                 continue
 
-            vals.append(str(v))
+            if f in ("reservation_date", "uploaded_date") and v is not None:
+                vals.append(v.isoformat())
+            elif f == "updated_at":
+                vals.append(_fmt_dt(v))
+            else:
+                vals.append(str(v))
 
         typer.echo("\t".join(vals))
 
@@ -452,7 +444,7 @@ def tsg_list(
         out_fields = default_fields
 
     logger.info("Listing TSG reference records (fields=%s)", out_fields)
-    service = TsgService(SQLAlchemyTsgRepository())
+    service = build_tsg_service()
     records = service.list_all()
     if not records:
         typer.echo("No TSG records found. Run 'doc3gpp db init' to seed defaults.")
@@ -473,7 +465,7 @@ def tsg_show(
     ),
 ) -> None:
     """Show a single TSG record by short name or full tsg_name."""
-    service = TsgService(SQLAlchemyTsgRepository())
+    service = build_tsg_service()
 
     record = service.get_by_short_name(tsg) or service.get_by_tsg_name(tsg)
     if record is None:
@@ -498,7 +490,7 @@ def tsg_seed() -> None:
     or if the canonical descriptions/URLs need refreshing.
     """
     create_schema()
-    service = TsgService(SQLAlchemyTsgRepository())
+    service = build_tsg_service()
     seeded = service.seed_defaults()
     typer.echo(f"Seeded {seeded} TSG reference records")
 
@@ -522,9 +514,9 @@ def wi_sync(
     """
     logger.info("Starting WI sync for TSG %s", tsg)
     create_schema()
-    tsg_service = _ensure_tsg_ready(SQLAlchemyTsgRepository())
+    tsg_service = _ensure_tsg_ready(build_tsg_service())
     canonical_tsg = _validate_tsg_short_name(tsg, tsg_service)
-    service = WiService(SQLAlchemyWiRepository())
+    service = build_wi_service()
     count = service.sync(canonical_tsg)
     typer.echo(f"WI sync complete: {count} WI rows stored for {canonical_tsg}")
 
@@ -572,7 +564,7 @@ def wi_list(
         acronym,
         release,
     )
-    service = WiService(SQLAlchemyWiRepository())
+    service = build_wi_service()
     records = service.list_recent(
         limit=limit,
         tsg=tsg,

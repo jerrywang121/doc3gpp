@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     db_auto_migrate: bool = Field(default=True, validation_alias="DOC3GPP_DB_AUTO_MIGRATE")
     log_level: str = Field(default="INFO", validation_alias="DOC3GPP_LOG_LEVEL")
     http_verify: bool = Field(default=False, validation_alias="DOC3GPP_HTTP_VERIFY")
+    http_max_retries: int = Field(
+        default=3, ge=0, validation_alias="DOC3GPP_HTTP_MAX_RETRIES"
+    )
+    http_retry_backoff: float = Field(
+        default=0.5, ge=0.0, validation_alias="DOC3GPP_HTTP_RETRY_BACKOFF"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

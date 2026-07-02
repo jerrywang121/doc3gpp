@@ -16,22 +16,28 @@ Fixed in commit `fix/tdoc-pipeline-critical-fixes`:
 
 Tests added: `tests/unit/test_tdoc_parser.py`, `tests/unit/test_tdoc_repository_crud.py`, `tests/unit/test_ftp_source.py` (19 cases total).
 
+## Resolved (2026-07-02, important batch)
+
+Fixed in commit `fix/tdoc-pipeline-important-fixes`:
+
+- **#5 Retry/backoff in `ScraperClient`** — added `ScraperClient._request_with_retry` with exponential backoff. Retries 5xx/408/429 status codes and transient exceptions (connect/read/write/pool timeouts, network/protocol errors). Configurable via `DOC3GPP_HTTP_MAX_RETRIES` (default 3) and `DOC3GPP_HTTP_RETRY_BACKOFF` (default 0.5s).
+- **#6 `Date` columns** — `TDocORM.reservation_date` and `uploaded_date` are now `Date` (was `String(64)`); `TDoc.reservation_date`/`uploaded_date` are `date | None`; parser uses `_parse_date_cell` to coerce ISO-style strings and `datetime`/`date` instances.
+- **#7 `updated_at`** — added `TDocORM.updated_at` and surface in `TDoc.updated_at`; stamped on every `upsert_many` write so re-syncs bump the timestamp. New rows start with `updated_at` populated.
+- **#8 `pick_col` exact match** — first pass matches exact (case-insensitive) header; substring match is fallback only. `"Type"` no longer matches `"Type of CR"` when both columns exist.
+- **#9 Skip-count logging** — `read_tdoc_sheet` counts rows dropped because `CR_ID_RE` did not match and emits a single `WARNING` with the count and regex pattern.
+- **#10 Coordinator** — introduced `TDocSyncCoordinator` (Protocol-typed repos in, `TDocService`/`MeetingService` orchestration out). `cli.py tdoc sync` now delegates to it; raised exceptions are typed (`MeetingNotFoundError`, `MeetingMissingFtpUrlError`).
+- **#11 No concrete repo imports in CLI** — services constructed via `doc3gpp.services.factory.build_*` helpers. CLI no longer imports `SQLAlchemy*Repository` directly.
+- **#18 `User-Agent`** — replaced placeholder with `doc3gpp/0.1 (+https://github.com/jerrywang121/doc3gpp)`.
+- **#23 `to_text`** — now returns `Optional[str]`; `None` for missing or empty/whitespace cells. Keeps optional ORM columns correctly typed.
+- **#24 `create_schema()` removed from `tdoc sync`** — `db init` remains the single boundary. `tdoc sync` now assumes the schema has been created.
+
+Tests added: `tests/unit/test_scraper_client.py`, `tests/unit/test_tdoc_sync_coordinator.py`, plus extensions to `tests/unit/test_tdoc_parser.py`, `tests/unit/test_tdoc_repository_crud.py`. Total coverage of new files: `tdoc_sync_coordinator.py` 100%, `factory.py` 100%, `client.py` 98%.
+
 ## TDoc pipeline issues
 
 ### Important (fix soon)
 
-| # | Issue | Location |
-|---|---|---|
-| 5 | No retry/backoff in `ScraperClient` (transient network failure aborts sync) | `scraping/client.py` |
-| 6 | `reservation_date`/`uploaded_date` stored as `String(64)` — should be `Date` | `models/tdoc.py`, `TDocORM` |
-| 7 | No `updated_at` on TDoc; `created_at` does not bump on update | `TDocORM` |
-| 8 | `pick_col` substring match — column `"Type of CR"` matches `"Type"` first | `parsers/tdoc_parser.py:49` |
-| 9 | `CR_ID_RE` only matches `[RSC][1-9][-sw]\d{6}` — silent data loss on new conventions; log skip count at WARNING | `parsers/tdoc_parser.py:13` |
-| 10 | CLI `tdoc sync` orchestrates `MeetingService` + `TDocService` — belongs in a coordinator | `cli.py:245-275` |
-| 11 | CLI instantiates concrete `SQLAlchemy*Repository` — bypasses Protocol | `cli.py:246-247` |
-| 18 | `User-Agent` placeholder `https://github.com` (also in AGENTS.md anti-patterns) | `client.py:23` |
-| 23 | `to_text` returns `""` for None — conflates "missing" with "empty" for optional fields | `parsers/tdoc_parser.py:37-41`, `models/tdoc.py` |
-| 24 | `create_schema()` called inside `tdoc sync` — blurs `db init` boundary (also in AGENTS.md) | `cli.py:245` |
+_None remaining — important batch resolved 2026-07-02._
 
 ### Design (address when touching adjacent code)
 
@@ -56,13 +62,13 @@ Tests added: `tests/unit/test_tdoc_parser.py`, `tests/unit/test_tdoc_repository_
 
 | Symbol | Status | Suggested test |
 |---|---|---|
-| `ScraperClient` | no tests | mock `httpx.Client.get`, assert headers + verify |
 | `TDocService.sync_from_meeting_ftp` | no direct unit test (covered via integration) | mock `fetch_tdocs_from_meeting_ftp`, verify `upsert_many` called once |
 | CLI `tdoc sync` / `tdoc list` | partial CLI test (filter) | field-selection rejects unknown fields, `--meeting` resolves, `--meeting` missing → BadParameter |
 
 Resolved since review:
 
-- `read_tdoc_sheet` — covered by `tests/unit/test_tdoc_parser.py` (header detection + empty-cell coercion)
-- `get_text`, `get_bytes` — covered indirectly via `tests/unit/test_ftp_source.py` mocks
-- `TDocORM` — covered via `tests/unit/test_tdoc_repository_crud.py`
+- `read_tdoc_sheet` — covered by `tests/unit/test_tdoc_parser.py` (header detection + empty-cell coercion, pick_col exact match, WARNING skip count, date parsing)
+- `get_text`, `get_bytes` — covered by `tests/unit/test_scraper_client.py` (retry, backoff, status codes, UA)
+- `TDocORM` — covered via `tests/unit/test_tdoc_repository_crud.py` (date columns, updated_at, upsert_many)
 - `SQLAlchemyTDocRepository.upsert_many` — covered via `tests/unit/test_tdoc_repository_crud.py`
+- `TDocSyncCoordinator` — covered by `tests/unit/test_tdoc_sync_coordinator.py` (typed errors, Protocol-typed repos, both selectors)

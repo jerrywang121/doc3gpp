@@ -66,7 +66,6 @@ class TDocService:
     def sync_from_meeting_ftp(self, ftp_url: str, meeting_id: int | None = None) -> int:
         logger.info("Syncing TDocs from FTP %s for meeting_id %s", ftp_url, meeting_id)
         tdocs = fetch_tdocs_from_meeting_ftp(ftp_url=ftp_url, meeting_id=meeting_id)
-        for tdoc in tdocs:
-            self._repository.upsert(tdoc)
-        logger.info("Stored %s TDoc records", len(tdocs))
-        return len(tdocs)
+        stored = self._repository.upsert_many(tdocs)
+        logger.info("Stored %s TDoc records", stored)
+        return stored

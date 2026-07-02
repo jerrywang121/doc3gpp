@@ -17,54 +17,64 @@ class SQLAlchemyTDocRepository:
         self._session_factory = get_session_factory()
 
     def upsert(self, tdoc: TDoc) -> None:
-        """Save or update a TDoc record in the database.
+        """Save or update a single TDoc record in the database.
 
-        Existing records are updated by TDoc ID, while new records are inserted.
+        Delegates to :meth:`upsert_many` to keep field-copy logic in one place.
         """
+        self.upsert_many([tdoc])
+
+    def upsert_many(self, tdocs: list[TDoc]) -> int:
+        """Insert or update TDoc records in a single transaction.
+
+        Existing rows (matched by ``tdoc_id``) are updated in place; new rows
+        are inserted. Returns the number of input rows processed.
+
+        A single ``SELECT ... IN (...)`` resolves all existing rows up front
+        so the per-row branch is a dict lookup rather than a fresh query,
+        and a single ``commit`` covers the whole batch — important for
+        meetings with hundreds of TDocs where the per-row variant opened
+        hundreds of transactions.
+        """
+        if not tdocs:
+            return 0
+
         with self._session_factory() as session:
-            existing = session.scalar(select(TDocORM).where(TDocORM.tdoc_id == tdoc.tdoc_id))
-            if existing:
-                existing.title = tdoc.title
-                existing.meeting_id = tdoc.meeting_id
-                existing.url = tdoc.url
-                existing.source = tdoc.source
-                existing.type = tdoc.type
-                existing.status = tdoc.status
-                existing.reservation_date = tdoc.reservation_date
-                existing.uploaded_date = tdoc.uploaded_date
-                existing.cr_cat = tdoc.cr_cat
-                existing.is_revision_of = tdoc.is_revision_of
-                existing.revised_to = tdoc.revised_to
-                existing.release = tdoc.release
-                existing.spec = tdoc.spec
-                existing.version = tdoc.version
-                existing.related_wis = tdoc.related_wis
-                existing.cr_num = tdoc.cr_num
-                existing.cr_pack = tdoc.cr_pack
-            else:
-                session.add(
-                    TDocORM(
-                        tdoc_id=tdoc.tdoc_id,
-                        title=tdoc.title,
-                        meeting_id=tdoc.meeting_id,
-                        url=tdoc.url,
-                        source=tdoc.source,
-                        type=tdoc.type,
-                        status=tdoc.status,
-                        reservation_date=tdoc.reservation_date,
-                        uploaded_date=tdoc.uploaded_date,
-                        cr_cat=tdoc.cr_cat,
-                        is_revision_of=tdoc.is_revision_of,
-                        revised_to=tdoc.revised_to,
-                        release=tdoc.release,
-                        spec=tdoc.spec,
-                        version=tdoc.version,
-                        related_wis=tdoc.related_wis,
-                        cr_num=tdoc.cr_num,
-                        cr_pack=tdoc.cr_pack,
-                    )
-                )
+            ids = [tdoc.tdoc_id for tdoc in tdocs]
+            existing_rows = session.scalars(
+                select(TDocORM).where(TDocORM.tdoc_id.in_(ids))
+            ).all()
+            existing_by_id = {row.tdoc_id: row for row in existing_rows}
+
+            for tdoc in tdocs:
+                target = existing_by_id.get(tdoc.tdoc_id)
+                if target is None:
+                    target = TDocORM(tdoc_id=tdoc.tdoc_id)
+                    session.add(target)
+                self._copy_fields(target, tdoc)
+
             session.commit()
+        return len(tdocs)
+
+    @staticmethod
+    def _copy_fields(target: TDocORM, tdoc: TDoc) -> None:
+        """Copy dataclass fields onto an ORM instance (existing or new)."""
+        target.title = tdoc.title
+        target.meeting_id = tdoc.meeting_id
+        target.url = tdoc.url
+        target.source = tdoc.source
+        target.type = tdoc.type
+        target.status = tdoc.status
+        target.reservation_date = tdoc.reservation_date
+        target.uploaded_date = tdoc.uploaded_date
+        target.cr_cat = tdoc.cr_cat
+        target.is_revision_of = tdoc.is_revision_of
+        target.revised_to = tdoc.revised_to
+        target.release = tdoc.release
+        target.spec = tdoc.spec
+        target.version = tdoc.version
+        target.related_wis = tdoc.related_wis
+        target.cr_num = tdoc.cr_num
+        target.cr_pack = tdoc.cr_pack
 
     def list(
         self,

@@ -158,7 +158,7 @@ Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- **Protocol ↔ Impl signature drift.** `MeetingRepository.list` in `repository/protocols.py` declares only `limit`, but `SQLAlchemyMeetingRepository.list` takes `limit, tsg, name_like, location_like, year`. Update BOTH when changing filter signatures.
+- **Protocol ↔ Impl signature drift.** Previously: `MeetingRepository.list` declared only `limit`, but `SQLAlchemyMeetingRepository.list` took `limit, tsg, name_like, location_like, year`. Resolved 2026-07-02 (M2). When changing filter signatures for any other repo, keep the Protocol and impl in sync.
 - **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` already drops it.)
 - **Cross-service orchestration in CLI.** Mostly addressed: `tdoc sync` delegates to `TDocSyncCoordinator`. Other commands still construct their own services via `services.factory.build_*` helpers.
 - **Doc drift.** `docs/architecture.md` lists a `tdoc add` command that doesn't exist. Keep docs in sync when CLI surface changes.

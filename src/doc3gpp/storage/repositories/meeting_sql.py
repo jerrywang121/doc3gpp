@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import select, extract
+from datetime import date, datetime, timezone
+
+from sqlalchemy import delete, select, extract
+from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.storage.db.models import MeetingORM
@@ -14,27 +17,30 @@ class SQLAlchemyMeetingRepository:
     model and implements basic persistence operations used by the service layer.
     """
 
-    def __init__(self) -> None:
-        self._session_factory = get_session_factory()
+    def __init__(self, session_factory: sessionmaker | None = None) -> None:
+        """Initialize the repository.
+
+        Args:
+            session_factory: Optional pre-built ``sessionmaker``. When omitted
+                the repository falls back to ``get_session_factory`` so test
+                fixtures can substitute an in-memory SQLite engine.
+        """
+        self._session_factory = session_factory or get_session_factory()
 
     def upsert_many(self, meetings: list[Meeting]) -> int:
-        """Upsert multiple meeting records in a single transaction."""
+        """Upsert multiple meeting records in a single transaction.
+
+        Existing rows (matched by ``meeting_id``) are updated in place;
+        non-matches become new rows. ``updated_at`` is stamped on every
+        write so callers can detect a re-sync. Returns the number of input
+        rows processed.
+        """
+        if not meetings:
+            return 0
+
+        now = datetime.now(tz=timezone.utc)
         with self._session_factory() as session:
-            for item in meetings:
-                session.merge(
-                    MeetingORM(
-                        meeting_id=item.meeting_id,
-                        name=item.name,
-                        title=item.title,
-                        location=item.location,
-                        start_date=item.start_date,
-                        end_date=item.end_date,
-                        ftp_url=item.ftp_url,
-                        start_doc=item.start_doc,
-                        end_doc=item.end_doc,
-                        updated_at=item.updated_at,
-                    )
-                )
+            _persist(session, meetings, now)
             session.commit()
         return len(meetings)
 
@@ -69,24 +75,13 @@ class SQLAlchemyMeetingRepository:
             if year is not None:
                 stmt = stmt.where(extract("year", MeetingORM.end_date) == year)
 
-            stmt = stmt.order_by(MeetingORM.start_date.desc()).limit(limit)
+            stmt = stmt.order_by(
+                MeetingORM.start_date.desc(),
+                MeetingORM.meeting_id.desc(),
+            ).limit(limit)
             rows = session.scalars(stmt).all()
 
-        return [
-            Meeting(
-                meeting_id=row.meeting_id,
-                name=row.name,
-                title=row.title,
-                location=row.location,
-                start_date=row.start_date,
-                end_date=row.end_date,
-                ftp_url=row.ftp_url,
-                start_doc=row.start_doc,
-                end_doc=row.end_doc,
-                updated_at=row.updated_at,
-            )
-            for row in rows
-        ]
+        return [_orm_to_domain(row) for row in rows]
 
     def get_by_id(self, meeting_id: int) -> Meeting | None:
         """Retrieve a single meeting by its numeric ID."""
@@ -94,19 +89,7 @@ class SQLAlchemyMeetingRepository:
             row = session.get(MeetingORM, meeting_id)
             if row is None:
                 return None
-
-            return Meeting(
-                meeting_id=row.meeting_id,
-                name=row.name,
-                title=row.title,
-                location=row.location,
-                start_date=row.start_date,
-                end_date=row.end_date,
-                ftp_url=row.ftp_url,
-                start_doc=row.start_doc,
-                end_doc=row.end_doc,
-                updated_at=row.updated_at,
-            )
+            return _orm_to_domain(row)
 
     def get_by_name(self, meeting_name: str) -> Meeting | None:
         """Retrieve a single meeting by its exact name."""
@@ -115,16 +98,70 @@ class SQLAlchemyMeetingRepository:
             row = session.scalar(stmt)
             if row is None:
                 return None
+            return _orm_to_domain(row)
 
-            return Meeting(
-                meeting_id=row.meeting_id,
-                name=row.name,
-                title=row.title,
-                location=row.location,
-                start_date=row.start_date,
-                end_date=row.end_date,
-                ftp_url=row.ftp_url,
-                start_doc=row.start_doc,
-                end_doc=row.end_doc,
-                updated_at=row.updated_at,
+    def delete_with_end_before(self, cutoff: date) -> int:
+        """Delete meetings whose ``end_date`` is strictly before ``cutoff``.
+
+        Returns the number of rows deleted.
+        """
+        with self._session_factory() as session:
+            stmt = delete(MeetingORM).where(MeetingORM.end_date < cutoff)
+            result = session.execute(stmt)
+            session.commit()
+        return int(result.rowcount or 0)
+
+
+def _orm_to_domain(row: MeetingORM) -> Meeting:
+    """Map an ORM row into a Meeting dataclass."""
+    return Meeting(
+        meeting_id=row.meeting_id,
+        name=row.name,
+        title=row.title,
+        location=row.location,
+        start_date=row.start_date,
+        end_date=row.end_date,
+        ftp_url=row.ftp_url,
+        start_doc=row.start_doc,
+        end_doc=row.end_doc,
+        updated_at=row.updated_at,
+    )
+
+
+def _persist(session: Session, meetings: list[Meeting], updated_at: datetime) -> None:
+    """Insert or refresh each meeting row in-place on the given session.
+
+    Performs a single bulk ``SELECT`` keyed on ``meeting_id``, then issues
+    INSERT/UPDATE for each item. Mirrors ``wi_sql._persist``.
+    """
+    ids = [item.meeting_id for item in meetings]
+    existing_rows = session.scalars(select(MeetingORM).where(MeetingORM.meeting_id.in_(ids))).all()
+    existing_by_id = {row.meeting_id: row for row in existing_rows}
+
+    for item in meetings:
+        existing = existing_by_id.get(item.meeting_id)
+        if existing is not None:
+            existing.name = item.name
+            existing.title = item.title
+            existing.location = item.location
+            existing.start_date = item.start_date
+            existing.end_date = item.end_date
+            existing.ftp_url = item.ftp_url
+            existing.start_doc = item.start_doc
+            existing.end_doc = item.end_doc
+            existing.updated_at = updated_at
+        else:
+            session.add(
+                MeetingORM(
+                    meeting_id=item.meeting_id,
+                    name=item.name,
+                    title=item.title,
+                    location=item.location,
+                    start_date=item.start_date,
+                    end_date=item.end_date,
+                    ftp_url=item.ftp_url,
+                    start_doc=item.start_doc,
+                    end_doc=item.end_doc,
+                    updated_at=updated_at,
+                )
             )

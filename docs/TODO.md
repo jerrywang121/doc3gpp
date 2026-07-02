@@ -3,6 +3,7 @@
 Track issues discovered during code review. Fix priority reflects correctness/impact, not effort.
 
 Source review: TDoc handling code review (2026-07-02).
+Source review: Meetings handling code review (2026-07-02).
 
 ## Resolved (2026-07-02)
 
@@ -72,3 +73,53 @@ Resolved since review:
 - `TDocORM` — covered via `tests/unit/test_tdoc_repository_crud.py` (date columns, updated_at, upsert_many)
 - `SQLAlchemyTDocRepository.upsert_many` — covered via `tests/unit/test_tdoc_repository_crud.py`
 - `TDocSyncCoordinator` — covered by `tests/unit/test_tdoc_sync_coordinator.py` (typed errors, Protocol-typed repos, both selectors)
+
+## Meetings pipeline issues
+
+### Resolved (2026-07-02, important batch)
+
+- **M1 `_filter_by_year_window` drift** — replaced `timedelta(days=356 * N)` with a stdlib-only `years_ago(today, N)` helper (`date.replace(year=...)` with Feb 29 clamp). No drift; a meeting ending exactly N years ago is now included.
+- **M2 Protocol ↔ impl signature drift** — `MeetingRepository.list` now declares `limit, tsg, name_like, location_like, year`, matching the impl signature.
+- **M3 `Meeting.updated_at` never written** — `SQLAlchemyMeetingRepository.upsert_many` now stamps `datetime.now(tz=timezone.utc)` on every write via a bulk fetch-existing-IDs + INSERT/UPDATE pattern (mirrors `wi_sql._persist`).
+- **M4 Non-defensive calendar parser** — `_parse_date` returns `None` on bad input; malformed rows (bad dates, short rows, swapped dates) are logged + skipped instead of aborting the whole sync. FTP/doc extraction wrapped in defensive try/except.
+- **M5 Silent empty-result on missing table** — `parse_3gpp_calendar` now logs a WARNING when the page has content but no `<table class="meetings">` is found; empty pages stay silent.
+- **M6 `sync` never trimmed out-of-window rows** — `MeetingService.sync` now calls `MeetingRepository.delete_with_end_before(start_cutoff)` after the upsert, so narrowing `--closed-years` on a re-sync purges the older rows. Added `MeetingRepository.delete_with_end_before` to the Protocol and the SQL impl.
+
+Tests added: `tests/unit/test_calendar_parser_defensive.py`, `tests/unit/test_meetings_year_window.py`, `tests/unit/test_meeting_repository_upsert.py`, `tests/unit/test_meetings_service_sync.py` (28 cases total).
+
+### Important (fix soon)
+
+_None remaining._
+
+### Design (address when touching adjacent code)
+
+| # | Issue | Location |
+|---|---|---|
+| M7 | `Meeting` model `start_date`/`end_date` typed `date` but `tests/unit/test_meetings_cli.py` instantiates them as `None`. Either relax to `date \| None = None` (and ORM `nullable=True`) or fix the test. | `models/meeting.py:29-30` vs `tests/unit/test_meetings_cli.py:17-18` |
+| ~~M8~~ | ~~`session.merge()` in a loop is N SELECTs per upsert...~~ — resolved alongside M3. | `storage/repositories/meeting_sql.py:36-72` |
+| M9 | CLI `--fields` "all"/invalid-field handling duplicated in `meetings_list`, `tdoc_list`, `tsg_list`. Extract `_parse_field_selection(requested, allowed, default)` helper; tighten `if "all" in [f.lower() for f in requested]:` to a generator. | `cli.py:176-205, 332-359, 428-444` |
+| M10 | `meetings list` does not validate `--tsg` against the `tsgs` table (only `meetings sync` does). Validate via `TsgService.is_known_short_name` after upper-casing for consistency. | `cli.py:151` |
+| ~~M11~~ | ~~Brittle CANCELLED detection...~~ — resolved alongside M4. Detection now uses `if "CANCELLED" in title.upper():` and the parser test covers 4 variants. | `parsers/calendar_parser.py:96-99` |
+| M12 | `meetings list` default omits `ftp_url` — the most useful column for `tdoc sync` planning. Include it (or expose as an extra column). | `cli.py:190` |
+| M13 | No pagination on `meetings list` — only a `limit` cap (max 500). Add `--offset` / `LIMIT … OFFSET …` before the dataset grows. | `cli.py:148-159` |
+| ~~M14~~ | ~~Ordering non-deterministic on ties...~~ — resolved: `meeting_sql.list` adds `MeetingORM.meeting_id.desc()` as a secondary sort. | `storage/repositories/meeting_sql.py:78-82` |
+| ~~M15~~ | ~~No `start_date <= end_date` validation in parser...~~ — resolved alongside M4. Swapped dates now log + skip. | `parsers/calendar_parser.py:96-99` |
+| ~~M16~~ | ~~Duplicated row-to-domain mapping in three near-identical `Meeting(**)` constructions...~~ — resolved alongside M3. Extracted `_orm_to_domain(row)`. | `storage/repositories/meeting_sql.py:97-108` |
+| ~~M17~~ | ~~`_filter_by_year_window` is a `@staticmethod`...~~ — resolved alongside M1. The helper is now a module-level function (`filter_by_year_window`) with an injectable `today` parameter. | `services/meetings_service.py:118-142` |
+
+### Track but don't fix without input
+
+| # | Issue | Location |
+|---|---|---|
+| M18 | `_build_meetings_url` hard-codes `.htm` extension; 3GPP also serves `.html`. Parameterise. | `cli.py:65-66` |
+| M19 | ~~CLI help does not describe the additive year-filter behaviour...~~ — partly resolved by the M6 trim, but CLI help text could still call out that narrower `--closed-years` now deletes older rows. | `cli.py:119-139` |
+
+### Meetings test coverage gaps
+
+| Symbol | Status | Suggested test |
+|---|---|---|
+| `filter_by_year_window` (year drift) | covered | `tests/unit/test_meetings_year_window.py` |
+| `parse_3gpp_calendar` malformed row + CANCELLED variants | covered | `tests/unit/test_calendar_parser_defensive.py` |
+| `meeting_sql.upsert_many` (updated_at, bulk fetch+update) | covered | `tests/unit/test_meeting_repository_upsert.py` |
+| `MeetingService.sync` trim behaviour | covered | `tests/unit/test_meetings_service_sync.py` |
+| `meetings list` `--tsg` validation | not tested | pass unknown short name; expect `typer.BadParameter` |

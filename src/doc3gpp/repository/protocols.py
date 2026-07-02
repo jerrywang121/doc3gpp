@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Protocol
 
 from doc3gpp.models.meeting import Meeting
@@ -46,11 +47,31 @@ class MeetingRepository(Protocol):
     """Storage operations used by meetings sync service."""
 
     def upsert_many(self, meetings: list[Meeting]) -> int:
-        """Save or update multiple meeting records."""
+        """Save or update multiple meeting records.
+
+        Implementations should stamp ``Meeting.updated_at`` on every write so
+        callers can detect re-sync activity.
+        """
         ...
 
-    def list(self, limit: int = 50) -> list[Meeting]:
-        """Return a list of recent meeting records."""
+    def list(
+        self,
+        limit: int = 50,
+        tsg: str | None = None,
+        name_like: str | None = None,
+        location_like: str | None = None,
+        year: int | None = None,
+    ) -> list[Meeting]:
+        """Return a list of meeting records, optionally filtered.
+
+        Optional filters:
+            tsg: matches meeting names that *start with* this value
+                (case-insensitive).
+            name_like: SQL ``LIKE`` pattern applied to the meeting name column.
+            location_like: SQL ``LIKE`` pattern applied to the meeting
+                location column.
+            year: integer year to match against ``end_date``.
+        """
         ...
 
     def get_by_id(self, meeting_id: int) -> Meeting | None:
@@ -59,6 +80,14 @@ class MeetingRepository(Protocol):
 
     def get_by_name(self, meeting_name: str) -> Meeting | None:
         """Return a meeting record by its exact meeting name."""
+        ...
+
+    def delete_with_end_before(self, cutoff: date) -> int:
+        """Delete persisted meetings whose ``end_date`` is strictly before ``cutoff``.
+
+        Used by the sync pipeline to trim out-of-window rows after re-syncing
+        with a narrower year window. Returns the number of rows deleted.
+        """
         ...
 
 

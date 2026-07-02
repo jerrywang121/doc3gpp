@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 
 
 @dataclass(slots=True)
@@ -16,6 +17,11 @@ class TDoc:
         meeting_name: Human-readable meeting name populated when listing.
             Not persisted on the ``tdocs`` table.
         url: Optional URL where the TDoc list entry was discovered.
+        reservation_date: Optional reservation date from the source XLSX,
+            parsed as a ``date`` (not a free-form string).
+        uploaded_date: Optional upload date from the source XLSX, parsed as
+            a ``date``.
+        updated_at: Timestamp of the most recent upsert for this row.
     """
 
     tdoc_id: str
@@ -28,8 +34,8 @@ class TDoc:
     source: str | None = None
     type: str | None = None
     status: str | None = None
-    reservation_date: str | None = None
-    uploaded_date: str | None = None
+    reservation_date: date | None = None
+    uploaded_date: date | None = None
     cr_cat: str | None = None
     is_revision_of: str | None = None
     revised_to: str | None = None
@@ -40,3 +46,4 @@ class TDoc:
     cr_num: str | None = None
     # TSG CR Pack value from XLSX (nullable)
     cr_pack: str | None = None
+    updated_at: datetime | None = None

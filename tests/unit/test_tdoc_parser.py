@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import io
+import logging
 
 from openpyxl import Workbook
 
-from doc3gpp.parsers.tdoc_parser import read_tdoc_sheet
+from doc3gpp.parsers.tdoc_parser import (
+    _parse_date_cell,
+    pick_col,
+    read_tdoc_sheet,
+    to_text,
+)
 
 
 def _make_xlsx_bytes(rows: list[list[object]]) -> bytes:
@@ -153,3 +159,164 @@ def test_whitespace_only_cell_becomes_none() -> None:
     assert records[0]["title"] is None
     assert records[0]["source"] is None
     assert records[0]["type"] == "CR"
+
+
+# ---------------------------------------------------------------------------
+# #23: to_text returns None for missing AND empty cells (not "").
+# ---------------------------------------------------------------------------
+
+
+def test_to_text_none_returns_none() -> None:
+    assert to_text(None) is None
+
+
+def test_to_text_empty_string_returns_none() -> None:
+    assert to_text("") is None
+
+
+def test_to_text_whitespace_returns_none() -> None:
+    assert to_text("   \t\n ") is None
+
+
+def test_to_text_trims_surrounding_whitespace() -> None:
+    assert to_text("  hello  ") == "hello"
+
+
+def test_to_text_coerces_non_string() -> None:
+    assert to_text(42) == "42"
+    assert to_text(3.14) == "3.14"
+
+
+# ---------------------------------------------------------------------------
+# #8: pick_col must prefer exact match over substring (fixes "Type" vs "Type of CR").
+# ---------------------------------------------------------------------------
+
+
+def test_pick_col_prefers_exact_match_over_substring() -> None:
+    # When both "Type" and "Type of CR" columns are present, "Type" must
+    # resolve to its own column, not "Type of CR" via substring.
+    header_map = {
+        "tdoc": 0,
+        "title": 1,
+        "type": 2,
+        "type of cr": 3,
+    }
+
+    assert pick_col(header_map, ["Type"]) == 2
+
+
+def test_pick_col_falls_back_to_substring_when_no_exact() -> None:
+    # If no exact "Type" header exists, substring match is the fallback.
+    header_map = {
+        "tdoc": 0,
+        "title": 1,
+        "type of cr": 3,
+    }
+
+    assert pick_col(header_map, ["Type"]) == 3
+
+
+def test_pick_col_returns_none_when_no_match() -> None:
+    assert pick_col({"foo": 0, "bar": 1}, ["Type"]) is None
+
+
+# ---------------------------------------------------------------------------
+# #9: skipped (non-TDoc) rows are counted and logged at WARNING.
+# ---------------------------------------------------------------------------
+
+
+def test_skipped_rows_trigger_warning_log(caplog) -> None:
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Source", "Type"],
+            # First two rows are valid TDoc IDs.
+            ["R5-260001", "Doc A", "Acme", "CR"],
+            ["R5-260002", "Doc B", "Acme", "CR"],
+            # The next three are NOT TDoc IDs (regex miss).
+            ["meeting_minutes", "Minutes", "WG", "info"],
+            ["attendance_list", "Attendance", "WG", "info"],
+            ["agenda", "Agenda", "WG", "info"],
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="doc3gpp.parsers.tdoc_parser"):
+        records = read_tdoc_sheet(xlsx_bytes)
+
+    assert len(records) == 2
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("Skipped 3 row(s)" in r.getMessage() for r in warnings)
+
+
+def test_no_skipped_rows_no_warning(caplog) -> None:
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Source", "Type"],
+            ["R5-260001", "Doc A", "Acme", "CR"],
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="doc3gpp.parsers.tdoc_parser"):
+        read_tdoc_sheet(xlsx_bytes)
+
+    skip_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "Skipped" in r.getMessage()
+    ]
+    assert skip_warnings == []
+
+
+# ---------------------------------------------------------------------------
+# #6 parser: reservation_date / uploaded_date are parsed as date objects.
+# ---------------------------------------------------------------------------
+
+
+def test_reservation_and_uploaded_dates_parsed_as_date() -> None:
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Reservation Date", "Uploaded Date"],
+            ["R5-260001", "Doc A", "2026-06-01", "2026-06-02"],
+        ]
+    )
+
+    import datetime
+
+    records = read_tdoc_sheet(xlsx_bytes)
+    assert records[0]["reservation_date"] == datetime.date(2026, 6, 1)
+    assert records[0]["uploaded_date"] == datetime.date(2026, 6, 2)
+
+
+def test_unparseable_date_becomes_none() -> None:
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Reservation Date", "Uploaded Date"],
+            ["R5-260001", "Doc A", "not-a-date", "2026-06-02"],
+        ]
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+    assert records[0]["reservation_date"] is None
+    assert records[0]["uploaded_date"] is not None
+
+
+def test_empty_date_cell_is_none() -> None:
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Reservation Date", "Uploaded Date"],
+            ["R5-260001", "Doc A", "", ""],
+        ]
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+    assert records[0]["reservation_date"] is None
+    assert records[0]["uploaded_date"] is None
+
+
+def test_parse_date_cell_handles_datetime_instances() -> None:
+    import datetime
+
+    dt = datetime.datetime(2026, 6, 1, 12, 30)
+    assert _parse_date_cell(dt) == datetime.date(2026, 6, 1)
+
+
+def test_parse_date_cell_handles_none() -> None:
+    assert _parse_date_cell(None) is None

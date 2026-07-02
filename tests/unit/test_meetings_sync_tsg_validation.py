@@ -46,7 +46,9 @@ def test_meetings_sync_accepts_known_short_name(monkeypatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
-    monkeypatch.setattr("doc3gpp.cli.SQLAlchemyTsgRepository", lambda: _StaticRepo(16))
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+    )
 
     sync_called_with: list[str] = []
 
@@ -65,7 +67,9 @@ def test_meetings_sync_rejects_unknown_short_name(monkeypatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
-    monkeypatch.setattr("doc3gpp.cli.SQLAlchemyTsgRepository", lambda: _StaticRepo(16))
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+    )
 
     result = runner.invoke(app, ["meetings", "sync", "--tsg", "r99"])
     assert result.exit_code != 0
@@ -77,7 +81,9 @@ def test_meetings_sync_uppercases_canonical_form(monkeypatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
-    monkeypatch.setattr("doc3gpp.cli.SQLAlchemyTsgRepository", lambda: _StaticRepo(16))
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+    )
 
     captured: list[str] = []
 
@@ -97,7 +103,9 @@ def test_meetings_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
-    monkeypatch.setattr("doc3gpp.cli.SQLAlchemyTsgRepository", lambda: _StaticRepo(0))
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(0))
+    )
 
     seed_calls = {"count": 0}
     monkeypatch.setattr(

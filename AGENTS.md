@@ -145,7 +145,7 @@ Both loaders are `@lru_cache(maxsize=1)`:
 
 If a test or fixture changes `DOC3GPP_*` env vars via `monkeypatch`, it **must** `cache_clear()` both. See the `sqlite_env` fixture in `tests/conftest.py` for the canonical pattern.
 
-Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL_SIZE`, `DOC3GPP_DB_AUTO_MIGRATE`, `DOC3GPP_LOG_LEVEL`, `DOC3GPP_HTTP_VERIFY`. MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
+Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL_SIZE`, `DOC3GPP_DB_AUTO_MIGRATE`, `DOC3GPP_LOG_LEVEL`, `DOC3GPP_HTTP_VERIFY`, `DOC3GPP_HTTP_MAX_RETRIES`, `DOC3GPP_HTTP_RETRY_BACKOFF`. MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
 
 ## CONVENTIONS
 
@@ -159,12 +159,11 @@ Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **Protocol ↔ Impl signature drift.** `MeetingRepository.list` in `repository/protocols.py` declares only `limit`, but `SQLAlchemyMeetingRepository.list` takes `limit, tsg, name_like, location_like, year`. Update BOTH when changing filter signatures.
-- **CLI bypasses the Protocol.** `cli.py` imports concrete `SQLAlchemy*Repository` classes directly (lines 18-19), hard-wiring the backend. New commands should ideally depend on the Protocol-typed service interface.
-- **`create_schema()` called redundantly.** Every `sync` command calls `create_schema()` — it's idempotent but blurs the `db init` boundary.
-- **Cross-service orchestration in CLI.** `tdoc sync` instantiates both `MeetingService` and `TDocService` and stitches them together. This logic belongs in a service or coordinator.
+- **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` already drops it.)
+- **Cross-service orchestration in CLI.** Mostly addressed: `tdoc sync` delegates to `TDocSyncCoordinator`. Other commands still construct their own services via `services.factory.build_*` helpers.
 - **Doc drift.** `docs/architecture.md` lists a `tdoc add` command that doesn't exist. Keep docs in sync when CLI surface changes.
-- **Acknowledged `# noqa: F401`.** Three in `storage/db/migrate.py` (lines 4-6) — side-effect imports required for SQLAlchemy `Base.metadata` registration. Do not remove.
-- **Placeholder User-Agent.** `scraping/client.py:23` uses `https://github.com` as placeholder — replace with actual project URL before publishing.
+- **Acknowledged `# noqa: F401`.** Four in `storage/db/migrate.py` — side-effect imports required for SQLAlchemy `Base.metadata` registration. Do not remove.
+- **Retryable error surface.** `ScraperClient._is_retryable_exception` deliberately treats only transient `httpx` subclasses as retryable. Programming errors (e.g. `InvalidURL`) raise immediately — do not broaden the catch.
 
 ## UNIQUE STYLES
 
@@ -179,3 +178,47 @@ Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL
 - Calendar parser coupled to **current 3GPP DynaReport table layout** — upstream changes will break `meetings sync`.
 - TDoc extraction covers **FTP Excel lists only**. `GenerateDocumentList.aspx` and expanded metadata columns are unimplemented.
 - Online tests access live `3gpp.org` + FTP — flaky; run with `-rs` to surface skip reasons.
+
+
+<!-- headroom:rtk-instructions -->
+# RTK (Rust Token Killer) - Token-Optimized Commands
+
+When running shell commands, **always prefix with `rtk`**. This reduces context
+usage by 60-90% with zero behavior change. If rtk has no filter for a command,
+it passes through unchanged — so it is always safe to use.
+
+## Key Commands
+```bash
+# Git (59-80% savings)
+rtk git status          rtk git diff            rtk git log
+
+# Files & Search (60-75% savings)
+rtk ls <path>           rtk read <file>         rtk grep <pattern>
+rtk find <pattern>      rtk diff <file>
+
+# Test (90-99% savings) — shows failures only
+rtk pytest tests/       rtk cargo test          rtk test <cmd>
+
+# Build & Lint (80-90% savings) — shows errors only
+rtk tsc                 rtk lint                rtk cargo build
+rtk prettier --check    rtk mypy                rtk ruff check
+
+# Analysis (70-90% savings)
+rtk err <cmd>           rtk log <file>          rtk json <file>
+rtk summary <cmd>       rtk deps                rtk env
+
+# GitHub (26-87% savings)
+rtk gh pr view <n>      rtk gh run list         rtk gh issue list
+
+# Infrastructure (85% savings)
+rtk docker ps           rtk kubectl get         rtk docker logs <c>
+
+# Package managers (70-90% savings)
+rtk pip list            rtk pnpm install        rtk npm run <script>
+```
+
+## Rules
+- In command chains, prefix each segment: `rtk git add . && rtk git commit -m "msg"`
+- For debugging, use raw command without rtk prefix
+- `rtk proxy <cmd>` runs command without filtering but tracks usage
+<!-- /headroom:rtk-instructions -->

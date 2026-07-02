@@ -4,6 +4,7 @@ import logging
 import re
 from urllib.parse import urljoin
 
+import httpx
 from bs4 import BeautifulSoup
 
 from doc3gpp.models.tdoc import TDoc
@@ -65,14 +66,18 @@ def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting_id: int | None = None) ->
             if not base_root.endswith("/"):
                 base_root += "/"
 
+    failed_urls: list[tuple[str, str]] = []
     with ScraperClient() as client:
         for subfolder in ["", "docs/", "tdoc/"]:
             directory_url = urljoin("https://www.3gpp.org/ftp/", base_root + subfolder)
             logger.debug("Trying FTP directory URL: %s", directory_url)
             try:
                 html = client.get_text(directory_url)
-            except Exception:
-                logger.debug("Failed to fetch FTP directory %s", directory_url, exc_info=True)
+            except httpx.HTTPError as exc:
+                logger.debug(
+                    "HTTP error fetching FTP directory %s: %s", directory_url, exc
+                )
+                failed_urls.append((directory_url, str(exc)))
                 continue
 
             hrefs = _extract_hrefs(html)
@@ -83,32 +88,44 @@ def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting_id: int | None = None) ->
 
             file_url = urljoin(directory_url, candidate)
             logger.info("Found TDoc list file %s in %s", candidate, directory_url)
-            xlsx_bytes = client.get_bytes(file_url)
+            try:
+                xlsx_bytes = client.get_bytes(file_url)
+            except httpx.HTTPError as exc:
+                logger.debug("HTTP error fetching XLSX %s: %s", file_url, exc)
+                failed_urls.append((file_url, str(exc)))
+                continue
+
             records = read_tdoc_sheet(xlsx_bytes)
             logger.info("Parsed %s TDoc rows from %s", len(records), file_url)
             return [
-                    TDoc(
+                TDoc(
                     tdoc_id=row["tdoc"],
-                    title=row.get("title", ""),
+                    title=row.get("title"),
                     meeting_id=meeting_id,
                     url=file_url,
-                    source=row.get("source", ""),
-                    type=row.get("type", ""),
-                    status=row.get("status", ""),
-                    reservation_date=row.get("reservation_date", ""),
-                    uploaded_date=row.get("uploaded_date", ""),
-                    cr_cat=row.get("cr_cat", ""),
-                        cr_pack=row.get("cr_pack", ""),
-                    is_revision_of=row.get("is_revision_of", ""),
-                    revised_to=row.get("revised_to", ""),
-                    release=row.get("release", ""),
-                    spec=row.get("spec", ""),
-                    version=row.get("version", ""),
-                    related_wis=row.get("related_wis", ""),
-                    cr_num=row.get("cr_num", ""),
+                    source=row.get("source"),
+                    type=row.get("type"),
+                    status=row.get("status"),
+                    reservation_date=row.get("reservation_date"),
+                    uploaded_date=row.get("uploaded_date"),
+                    cr_cat=row.get("cr_cat"),
+                    cr_pack=row.get("cr_pack"),
+                    is_revision_of=row.get("is_revision_of"),
+                    revised_to=row.get("revised_to"),
+                    release=row.get("release"),
+                    spec=row.get("spec"),
+                    version=row.get("version"),
+                    related_wis=row.get("related_wis"),
+                    cr_num=row.get("cr_num"),
                 )
                 for row in records
             ]
+
+    if failed_urls:
+        details = "; ".join(f"{url} ({err})" for url, err in failed_urls)
+        raise RuntimeError(
+            f"Failed to fetch TDoc list for FTP url {ftp_url}: all subfolders failed. {details}"
+        )
 
     logger.warning("No TDoc list file found for FTP url %s", ftp_url)
     return []

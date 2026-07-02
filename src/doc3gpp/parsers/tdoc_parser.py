@@ -12,6 +12,19 @@ logger = logging.getLogger(__name__)
 
 CR_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6}(?:r\d{1})?", re.IGNORECASE)
 
+# Substrings that disambiguate the real header row from a title row that
+# happens to mention "tdoc" (e.g. "TDoc List — RAN5#111").
+_HEADER_ROW_MARKERS = frozenset(
+    {"title", "source", "type", "status", "spec", "version", "release"}
+)
+
+
+def _is_header_row(potential: Dict[str, int]) -> bool:
+    has_tdoc = any("tdoc" in key for key in potential)
+    if not has_tdoc:
+        return False
+    return any(marker in key for key in potential for marker in _HEADER_ROW_MARKERS)
+
 
 def normalize_header(value: object) -> str:
     """Normalize a cell header value to lowercase whitespace-normalized text."""
@@ -38,7 +51,7 @@ def pick_col(header_map: Dict[str, int], candidates: Iterable[str]) -> Optional[
     return None
 
 
-def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, str]]:
+def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, Optional[str]]]:
     logger.debug("Reading TDoc XLSX bytes (%s bytes)", len(xlsx_bytes))
     workbook = load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
     if workbook is None or not workbook.sheetnames:
@@ -50,7 +63,7 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, str]]:
     header_map: Dict[str, int] = {}
     for row in rows:
         potential = {normalize_header(cell): idx for idx, cell in enumerate(row) if normalize_header(cell)}
-        if any("tdoc" in key for key in potential):
+        if _is_header_row(potential):
             header_map = potential
             logger.debug("Detected header map: %s", header_map)
             break
@@ -82,7 +95,7 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, str]]:
         "cr_pack": pick_col(header_map, ["TSG CR Pack", "TSG CR pack", "CR Pack"]),
     }
 
-    result: List[Dict[str, str]] = []
+    result: List[Dict[str, Optional[str]]] = []
     for row_index, row in enumerate(rows, start=1):
         raw_tdoc = to_text(row[col_tdoc]) if col_tdoc < len(row) else ""
         if not raw_tdoc:
@@ -94,9 +107,14 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, str]]:
             logger.debug("Skipping non-TDoc row %s: %s", row_index, raw_tdoc)
             continue
 
-        record = {"tdoc": match.group(0)}
+        record: Dict[str, Optional[str]] = {"tdoc": match.group(0)}
         for key, col in mapping.items():
-            record[key] = to_text(row[col]) if col is not None and col < len(row) else ""
+            if col is not None and col < len(row):
+                value = to_text(row[col])
+                # Empty cells map to ``None`` so optional ORM columns stay nullable.
+                record[key] = value if value else None
+            else:
+                record[key] = None
         result.append(record)
 
     logger.info("Parsed %s TDoc records from XLSX", len(result))

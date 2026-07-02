@@ -9,13 +9,17 @@ class TDoc:
 
     Attributes:
         tdoc_id: The canonical TDoc identifier (e.g. R5s260001).
-        title: The document title or short description.
-        meeting: Optional meeting identifier to associate this TDoc with.
+        title: The document title or short description. May be ``None`` when
+            the source XLSX has no title cell; the parser converts empty cells
+            to ``None`` rather than coercing to a placeholder string.
+        meeting_id: Optional foreign key into ``meetings.meeting_id``.
+        meeting_name: Human-readable meeting name populated when listing.
+            Not persisted on the ``tdocs`` table.
         url: Optional URL where the TDoc list entry was discovered.
     """
 
     tdoc_id: str
-    title: str
+    title: str | None = None
     meeting_id: int | None = None
     # Convenience: human-readable meeting name populated when listing (not persisted on tdocs table)
     meeting_name: str | None = None

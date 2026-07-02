@@ -15,6 +15,15 @@ class TDocRepository(Protocol):
         """Insert or update a TDoc record in storage."""
         ...
 
+    def upsert_many(self, tdocs: list[TDoc]) -> int:
+        """Insert or update multiple TDoc records in a single transaction.
+
+        Existing rows (matched by ``tdoc_id``) are updated in place so callers
+        can re-sync without producing duplicates. Returns the number of input
+        rows processed.
+        """
+        ...
+
     def list(
         self,
         limit: int = 20,

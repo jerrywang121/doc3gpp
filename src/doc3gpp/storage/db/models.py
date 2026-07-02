@@ -25,7 +25,7 @@ class TDocORM(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     tdoc_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    title: Mapped[str] = mapped_column(String(500))
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # store as FK to meetings.meeting_id
     meeting_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("meetings.meeting_id"), nullable=True, index=True)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)

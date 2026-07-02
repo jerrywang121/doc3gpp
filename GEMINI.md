@@ -51,8 +51,8 @@ doc3gpp db check
 
 ### Common CLI Commands
 
-- **Sync Meetings:** `doc3gpp meetings sync --tsg r5`
-- **List Meetings:** `doc3gpp meetings list --limit 20`
+- **Sync Meetings:** `doc3gpp meeting sync --tsg r5`
+- **List Meetings:** `doc3gpp meeting list --limit 20`
 - **Sync TDocs:** `doc3gpp tdoc sync --meeting-id <id>` or `doc3gpp tdoc sync --meeting "Meeting Name"`
 - **List TDocs:** `doc3gpp tdoc list --tsg R5 --year 26`
 

@@ -28,7 +28,7 @@ def test_cli_fields_and_filters(monkeypatch):
 
     monkeypatch.setattr(MeetingService, "list_recent", fake_list_recent)
 
-    result = runner.invoke(app, ["meetings", "list", "--fields", "meeting_id,name"])
+    result = runner.invoke(app, ["meeting", "list", "--fields", "meeting_id,name"])
     assert result.exit_code == 0
     # expect a single line with meeting_id and name separated by tab
     lines = [l for l in result.output.splitlines() if l and not l.startswith("Listing")]

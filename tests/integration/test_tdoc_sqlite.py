@@ -188,7 +188,7 @@ def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
     monkeypatch.setattr("doc3gpp.scraping.client.ScraperClient", DummyClient)
 
     # sync meetings into the DB using the local HTML fixture
-    res = runner.invoke(app, ["meetings", "sync", "--tsg", "r5"])
+    res = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])
     assert res.exit_code == 0
 
     # run tdoc sync by meeting name present in the DB (choose one with an FTP URL)
@@ -234,7 +234,7 @@ def test_cli_tdoc_sync_from_meeting_id(monkeypatch, sqlite_env) -> None:
     monkeypatch.setattr("doc3gpp.scraping.client.ScraperClient", DummyClient)
 
     # sync meetings into DB
-    res = runner.invoke(app, ["meetings", "sync", "--tsg", "r5"])
+    res = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])
     assert res.exit_code == 0
 
     # get meeting id

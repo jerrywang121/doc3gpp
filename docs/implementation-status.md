@@ -51,8 +51,8 @@ This document tracks what is implemented today versus planned next work.
 ### CLI
 
 - db check, db init (also seeds the `tsgs` reference table).
-- meetings sync (validates `--tsg` against the reference table).
-- meetings list.
+- meeting sync (validates `--tsg` against the reference table).
+- meeting list.
 - tdoc sync, tdoc list.
 - tsg list, tsg show, tsg seed.
 - Logging is configured via `DOC3GPP_LOG_LEVEL` and available at runtime for debugging.

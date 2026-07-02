@@ -29,12 +29,12 @@ from doc3gpp.storage.db.session import get_engine
 
 app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
-meetings_app = typer.Typer(help="meetings commands")
+meeting_app = typer.Typer(help="meeting commands")
 tdoc_app = typer.Typer(help="tdoc commands")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
 app.add_typer(db_app, name="db")
-app.add_typer(meetings_app, name="meetings")
+app.add_typer(meeting_app, name="meeting")
 app.add_typer(tdoc_app, name="tdoc")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
@@ -62,7 +62,7 @@ def main_callback(ctx: typer.Context) -> None:
         typer.echo(app.get_help(ctx))
 
 
-def _build_meetings_url(tsg: str) -> str:
+def _build_meeting_url(tsg: str) -> str:
     return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.htm"
 
 
@@ -116,9 +116,9 @@ def db_init() -> None:
     typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
 
 
-@meetings_app.command("sync")
-def meetings_sync(
-    tsg: str = typer.Option(DEFAULT_TSG, help="TSG short name for 3GPP meetings report"),
+@meeting_app.command("sync")
+def meeting_sync(
+    tsg: str = typer.Option(DEFAULT_TSG, help="TSG short name for 3GPP meeting report"),
     closed_years: int = typer.Option(2, min=0, max=20, help="Years of closed meetings to keep"),
     future_years: int = typer.Option(1, min=0, max=10, help="Years of future meetings to keep"),
 ) -> None:
@@ -129,14 +129,14 @@ def meetings_sync(
     auto-seeded with the canonical 3GPP TSG list, so this command is safe to
     run without an explicit ``db init`` first.
     """
-    logger.info("Starting meetings sync for TSG %s", tsg)
+    logger.info("Starting meeting sync for TSG %s", tsg)
     create_schema()
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = build_meeting_service()
-    meetings_url = _build_meetings_url(tsg)
-    count = service.sync(meetings_url, max_year_closed=closed_years, max_year_future=future_years)
-    typer.echo(f"Meetings sync complete: {count} meeting rows stored")
+    meeting_url = _build_meeting_url(tsg)
+    count = service.sync(meeting_url, max_year_closed=closed_years, max_year_future=future_years)
+    typer.echo(f"Meeting sync complete: {count} meeting rows stored")
 
 
 def _fmt_dt(value: datetime | None) -> str:
@@ -145,8 +145,8 @@ def _fmt_dt(value: datetime | None) -> str:
     return value.isoformat(sep=" ", timespec="seconds")
 
 
-@meetings_app.command("list")
-def meetings_list(
+@meeting_app.command("list")
+def meeting_list(
     limit: int = typer.Option(20, min=1, max=500),
     tsg: str | None = typer.Option(None, help="Only list meetings for the given TSG short name"),
     name: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting name (supports % and _)") ,
@@ -233,11 +233,11 @@ def meetings_list(
 @tdoc_app.command("sync")
 def tdoc_sync(
     meeting_id: int | None = typer.Option(
-        None, help="Meeting ID from the meetings database to resolve the FTP URL"
+        None, help="Meeting ID from the meeting database (see `doc3gpp meeting sync`) to resolve the FTP URL"
     ),
     meeting: str | None = typer.Option(
         None,
-        help="Meeting name from the meetings database to resolve the FTP URL",
+        help="Meeting name from the meeting database (see `doc3gpp meeting sync`) to resolve the FTP URL",
     ),
 ) -> None:
     """Fetch TDocs from a stored meeting record and store them."""

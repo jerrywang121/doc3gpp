@@ -52,9 +52,9 @@ Behavior:
 - Seeds the `tsgs` table with the canonical 3GPP TSG list (16 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
 
-## meetings Commands
+## meeting Commands
 
-### doc3gpp meetings sync
+### doc3gpp meeting sync
 
 Purpose:
 
@@ -75,14 +75,14 @@ Options:
 
 Behavior:
 
-- Builds the 3GPP meetings report URL from the TSG short name.
+- Builds the 3GPP meeting report URL from the TSG short name.
 - Fetches HTML page.
 - Parses meeting rows.
 - Filters by date window.
 - Upserts records into meetings table.
 - Prints inserted/updated row count.
 
-### doc3gpp meetings list
+### doc3gpp meeting list
 
 Purpose:
 
@@ -115,31 +115,31 @@ Examples:
 - List recent R5 meetings (default fields):
 
 ```bash
-doc3gpp meetings list --tsg r5
+doc3gpp meeting list --tsg r5
 ```
 
 - Match names containing "TTCN" using SQL LIKE (% wildcard):
 
 ```bash
-doc3gpp meetings list --name '%TTCN%'
+doc3gpp meeting list --name '%TTCN%'
 ```
 
 - List meetings ending in 2026:
 
 ```bash
-doc3gpp meetings list --year 2026
+doc3gpp meeting list --year 2026
 ```
 
 - Output only the meeting id and name columns:
 
 ```bash
-doc3gpp meetings list --fields meeting_id,name
+doc3gpp meeting list --fields meeting_id,name
 ```
 
 - Output every available field (including `ftp_url`, `title`, `updated_at`):
 
 ```bash
-doc3gpp meetings list --fields all
+doc3gpp meeting list --fields all
 ```
 
 ## tdoc Commands
@@ -152,8 +152,8 @@ Purpose:
 
 Options:
 
-- --meeting-id: numeric meeting ID from the meetings database.
-- --meeting: exact meeting name from the meetings database.
+- --meeting-id: numeric meeting ID from the meetings database (see `doc3gpp meeting sync`).
+- --meeting: exact meeting name from the meetings database (see `doc3gpp meeting sync`).
 
 Notes:
 
@@ -229,7 +229,7 @@ doc3gpp tdoc list --fields tdoc_id,title,status
 The `tsg` sub-app exposes the canonical 3GPP TSG reference table. The table
 is created and seeded automatically by `doc3gpp db init`, and the canonical
 short names (R1..R5, RT, S1..S6, C1, C3, C4, C6) are used to validate the
-`--tsg` option on `doc3gpp meetings sync`.
+`--tsg` option on `doc3gpp meeting sync`.
 
 ### doc3gpp tsg list
 
@@ -389,8 +389,8 @@ doc3gpp wi list --acronym "%UEConTest%" --limit 50
 doc3gpp db init
 doc3gpp db check
 doc3gpp tsg list
-doc3gpp meetings sync --tsg r5
-doc3gpp meetings list --limit 20
+doc3gpp meeting sync --tsg r5
+doc3gpp meeting list --limit 20
 doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
 doc3gpp tdoc list --limit 10
 doc3gpp wi sync --tsg r5

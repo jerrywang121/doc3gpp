@@ -14,6 +14,6 @@ def test_cli_passes_location_filter(monkeypatch):
 
     monkeypatch.setattr(MeetingService, "list_recent", fake_list_recent)
 
-    result = runner.invoke(app, ["meetings", "list", "--location", "%Online%"])
+    result = runner.invoke(app, ["meeting", "list", "--location", "%Online%"])
     assert result.exit_code == 0
     assert captured['location_like'] == '%Online%'

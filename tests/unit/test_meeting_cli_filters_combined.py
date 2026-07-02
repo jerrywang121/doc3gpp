@@ -19,7 +19,7 @@ def test_cli_passes_combined_filters(monkeypatch):
 
     monkeypatch.setattr(MeetingService, "list_recent", fake_list_recent)
 
-    result = runner.invoke(app, ["meetings", "list", "--tsg", "r5", "--name", "%TTCN%", "--year", "2026"])
+    result = runner.invoke(app, ["meeting", "list", "--tsg", "r5", "--name", "%TTCN%", "--year", "2026"])
     assert result.exit_code == 0
     assert captured['tsg'] == 'r5'
     assert captured['name_like'] == '%TTCN%'

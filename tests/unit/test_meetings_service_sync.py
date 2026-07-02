@@ -70,8 +70,11 @@ def test_sync_uses_module_level_year_filter_and_trims(monkeypatch) -> None:
         today=today,
     )
 
-    assert written == 1
+    # Fixture in-window ids with today=2026-07-02, closed=10, future=2:
+    # R5-116 (2027), TTCN Workshop#74 (2026), R5-95-e (2022), R5-79 (2018).
+    assert written == 4
     assert len(repo.upserts) == 1
+    assert {m.meeting_id for m in repo.upserts[0]} == {82711, 85434, 60240, 18788}
     assert repo.deleted_cutoffs == [years_ago(today, 10)]
 
 

@@ -48,7 +48,7 @@ def test_cli_meeting_sync_and_list(sqlite_env, monkeypatch) -> None:
         ],
     )
     assert sync_res.exit_code == 0
-    assert "Meeting sync complete: 1 meeting rows stored" in sync_res.stdout
+    assert "Meeting sync complete: 4 meeting rows stored" in sync_res.stdout
 
     list_res = runner.invoke(
         app,
@@ -62,6 +62,7 @@ def test_cli_meeting_sync_and_list(sqlite_env, monkeypatch) -> None:
         ],
     )
     assert list_res.exit_code == 0
+    assert "82711\tR5-116\t2027-08-30\t2027-09-03" in list_res.stdout
     assert "85434\tR5--TTCN Workshop#74\t2026-07-02\t2026-07-02" in list_res.stdout
 
     filtered_res = runner.invoke(
@@ -78,4 +79,5 @@ def test_cli_meeting_sync_and_list(sqlite_env, monkeypatch) -> None:
         ],
     )
     assert filtered_res.exit_code == 0
+    assert "82711\tR5-116\t2027-08-30\t2027-09-03" in filtered_res.stdout
     assert "85434\tR5--TTCN Workshop#74\t2026-07-02\t2026-07-02" in filtered_res.stdout

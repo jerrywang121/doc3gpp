@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from doc3gpp.services.meetings_service import MeetingService
@@ -29,9 +30,17 @@ def test_calendar_service_persists_to_sqlite(tmp_path, monkeypatch) -> None:
 
     create_schema()
     service = MeetingService(SQLAlchemyMeetingRepository())
-    inserted = service.sync("https://example.invalid", max_year_closed=10, max_year_future=2)
+    inserted = service.sync(
+        "https://example.invalid",
+        max_year_closed=10,
+        max_year_future=2,
+        today=date(2026, 7, 2),
+    )
     rows = service.list_recent(limit=10)
 
-    assert inserted == 1
-    assert len(rows) == 1
-    assert rows[0].meeting_id == 85434
+    assert inserted == 4
+    assert len(rows) == 4
+    # SQL repo orders by start_date DESC, meeting_id DESC; R5-116 (2027) is
+    # therefore the first row in the listing.
+    assert rows[0].meeting_id == 82711
+    assert {m.meeting_id for m in rows} == {82711, 85434, 60240, 18788}

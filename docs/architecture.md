@@ -67,7 +67,7 @@ Current tables defined in src/doc3gpp/storage/db/models.py:
 	- meeting_id, name, title, location, start_date, end_date, ftp_url, start_doc, end_doc, updated_at.
 - tsgs:
 	- id, tsg_name (unique), short_name (unique), description, url.
-	- canonical 3GPP TSG list, seeded on `db init`; used to validate `--tsg` in `meetings sync`.
+	- canonical 3GPP TSG list, seeded on `db init`; used to validate `--tsg` in `meeting sync`.
 
 Schema creation currently uses Base.metadata.create_all through src/doc3gpp/storage/db/migrate.py.
 

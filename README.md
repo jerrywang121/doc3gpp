@@ -90,8 +90,8 @@ doc3gpp db check
 doc3gpp tsg list                # show the canonical 3GPP TSG reference table
 doc3gpp tsg show --tsg r5       # show a single TSG record
 doc3gpp tsg seed                # re-seed the TSG reference table
-doc3gpp meetings sync --tsg r5  # --tsg is validated against the tsg table
-doc3gpp meetings list --limit 20
+doc3gpp meeting sync --tsg r5  # --tsg is validated against the tsg table
+doc3gpp meeting list --limit 20
 doc3gpp tdoc sync --meeting-id 85434
 doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
 doc3gpp tdoc list --limit 10

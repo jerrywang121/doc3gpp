@@ -42,7 +42,7 @@ class _StaticRepo:
         return len(tsgs)
 
 
-def test_meetings_sync_accepts_known_short_name(monkeypatch) -> None:
+def test_meeting_sync_accepts_known_short_name(monkeypatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
@@ -58,12 +58,12 @@ def test_meetings_sync_accepts_known_short_name(monkeypatch) -> None:
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 
-    result = runner.invoke(app, ["meetings", "sync", "--tsg", "r5"])
+    result = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])
     assert result.exit_code == 0, result.output
     assert "R5" in sync_called_with[0]
 
 
-def test_meetings_sync_rejects_unknown_short_name(monkeypatch) -> None:
+def test_meeting_sync_rejects_unknown_short_name(monkeypatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
@@ -71,13 +71,13 @@ def test_meetings_sync_rejects_unknown_short_name(monkeypatch) -> None:
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
     )
 
-    result = runner.invoke(app, ["meetings", "sync", "--tsg", "r99"])
+    result = runner.invoke(app, ["meeting", "sync", "--tsg", "r99"])
     assert result.exit_code != 0
     assert "Unknown TSG short name 'r99'" in result.output
     assert "Run 'doc3gpp tsg list'" in result.output
 
 
-def test_meetings_sync_uppercases_canonical_form(monkeypatch) -> None:
+def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
@@ -93,12 +93,12 @@ def test_meetings_sync_uppercases_canonical_form(monkeypatch) -> None:
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 
-    result = runner.invoke(app, ["meetings", "sync", "--tsg", "s2"])
+    result = runner.invoke(app, ["meeting", "sync", "--tsg", "s2"])
     assert result.exit_code == 0, result.output
     assert "Meetings-S2.htm" in captured[0]
 
 
-def test_meetings_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
+def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
     """A fresh database should auto-seed and still validate successfully."""
     runner = CliRunner()
 
@@ -119,6 +119,6 @@ def test_meetings_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 
-    result = runner.invoke(app, ["meetings", "sync", "--tsg", "r1"])
+    result = runner.invoke(app, ["meeting", "sync", "--tsg", "r1"])
     assert result.exit_code == 0, result.output
     assert seed_calls["count"] == 1

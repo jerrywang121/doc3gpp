@@ -19,7 +19,7 @@ def test_cli_db_init_and_check(sqlite_env) -> None:
     assert "Database connection OK:" in check_res.stdout
 
 
-def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
+def test_cli_meeting_sync_and_list(sqlite_env, monkeypatch) -> None:
     runner = CliRunner()
     fixture = Path("tests/fixtures/sample_pages/3GPP-meeting-R5.html")
     html = fixture.read_text(encoding="utf-8")
@@ -37,7 +37,7 @@ def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
     sync_res = runner.invoke(
         app,
         [
-            "meetings",
+            "meeting",
             "sync",
             "--tsg",
             "r5",
@@ -48,12 +48,12 @@ def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
         ],
     )
     assert sync_res.exit_code == 0
-    assert "Meetings sync complete: 1 meeting rows stored" in sync_res.stdout
+    assert "Meeting sync complete: 1 meeting rows stored" in sync_res.stdout
 
     list_res = runner.invoke(
         app,
         [
-            "meetings",
+            "meeting",
             "list",
             "--limit",
             "5",
@@ -67,7 +67,7 @@ def test_cli_meetings_sync_and_list(sqlite_env, monkeypatch) -> None:
     filtered_res = runner.invoke(
         app,
         [
-            "meetings",
+            "meeting",
             "list",
             "--limit",
             "5",

@@ -31,7 +31,7 @@ def test_cli_fields_and_filters(monkeypatch):
     result = runner.invoke(app, ["meeting", "list", "--fields", "meeting_id,name"])
     assert result.exit_code == 0
     # expect a single line with meeting_id and name separated by tab
-    lines = [l for l in result.output.splitlines() if l and not l.startswith("Listing")]
+    lines = [line for line in result.output.splitlines() if line and not line.startswith("Listing")]
     assert lines
     parts = lines[0].split("\t")
     assert parts[0].strip() == "10"

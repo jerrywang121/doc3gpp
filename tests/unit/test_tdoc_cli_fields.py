@@ -59,7 +59,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     # test explicit fields including meeting_name and cr_pack
     result = runner.invoke(app, ["tdoc", "list", "--fields", "tdoc_id,title,meeting_name,cr_pack"])
     assert result.exit_code == 0
-    lines = [l for l in result.output.splitlines() if l and not l.startswith("Listing")]
+    lines = [line for line in result.output.splitlines() if line and not line.startswith("Listing")]
     assert lines
     parts = lines[0].split("\t")
     assert parts == ["R5s260001", "Example A", "RAN5#111", "RP-000123"]
@@ -67,7 +67,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     # test default fields (now more detailed)
     result = runner.invoke(app, ["tdoc", "list"])
     assert result.exit_code == 0
-    lines = [l for l in result.output.splitlines() if l and not l.startswith("Listing")]
+    lines = [line for line in result.output.splitlines() if line and not line.startswith("Listing")]
     assert lines
     parts = lines[0].split("\t")
     # Expected default: tdoc_id, meeting_name, title, source, type, status, cr_cat, spec, version, related_wis

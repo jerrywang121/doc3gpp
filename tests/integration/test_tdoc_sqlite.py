@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import io
-
-from openpyxl import Workbook
 from pathlib import Path
 from typer.testing import CliRunner
 

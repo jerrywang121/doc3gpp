@@ -29,7 +29,7 @@ Current scope includes:
 	- module: src/doc3gpp/repository/protocols.py.
 - services:
 	- orchestration and sync use-cases.
-	- modules: src/doc3gpp/services/meetings_service.py, src/doc3gpp/services/tdoc_service.py, src/doc3gpp/services/tsg_service.py.
+	- modules: src/doc3gpp/services/meetings_service.py, src/doc3gpp/services/tdoc_service.py, src/doc3gpp/services/tdoc_file_service.py, src/doc3gpp/services/tsg_service.py.
 - storage:
 	- SQLAlchemy ORM models, session factory, backend-specific engine options, concrete repositories.
 	- modules: src/doc3gpp/storage/db/models.py, src/doc3gpp/storage/db/session.py, src/doc3gpp/storage/backends/*.py, src/doc3gpp/storage/repositories/*.py.
@@ -56,6 +56,14 @@ Meeting-based TDoc sync flow:
 2. The meeting's stored FTP URL is used to discover the TDoc list XLSX file.
 3. `fetch_tdocs_from_meeting_ftp` parses the XLSX file and returns TDoc records.
 4. TDocService persists the discovered TDocs.
+5. TDocSyncCoordinator looks up the freshly-persisted TDoc IDs and calls
+   `TDocFileService.sync_from_meeting_ftp`.
+6. `fetch_tdoc_files_from_meeting_ftp` visits the meeting's `Inbox/`,
+   `Docs/`, `Tdocs/` and `Review/` subfolders, parses each 3GPP FTP
+   directory listing, and returns a list of `TDocFile` records
+   (revisions, reviews, support docs) that match the known TDoc IDs.
+7. `SQLAlchemyTDocFileRepository.upsert_many` persists the records,
+   using the unique `url` column as the upsert key.
 
 ## Database Schema (Current)
 
@@ -63,6 +71,9 @@ Current tables defined in src/doc3gpp/storage/db/models.py:
 
 - tdocs:
 	- tdoc_id (PK), title, meeting_id, url, source, type, status, reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to, release, spec, version, related_wis, cr_num, cr_pack, created_at.
+- tdoc_files:
+	- id (PK), tdoc_id (FK -> tdocs.tdoc_id), type ("revision" / "review" / "support"), file, url (unique), created_at, updated_at.
+	- One row per auxiliary file (revision, review, support doc) observed in the meeting's FTP subfolders. Populated automatically by `tdoc sync`.
 - meetings:
 	- meeting_id, name, title, location, start_date, end_date, ftp_url, start_doc, end_doc, updated_at.
 - tsgs:

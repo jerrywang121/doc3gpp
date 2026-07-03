@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from typing import Protocol
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 
@@ -43,6 +45,16 @@ class TDocRepository(Protocol):
 
         Pure persistence shape — no joined meeting metadata. Callers that
         need a human-readable meeting name should use :meth:`list_with_meeting`.
+        """
+        ...
+
+    def list_tdoc_ids_for_meeting(self, meeting_id: int) -> list[str]:
+        """Return the TDoc IDs currently stored for ``meeting_id``.
+
+        Used by the TDoc sync flow to compute the ID set passed to
+        :class:`TDocFileService`, whose FTP scan needs a known prefix
+        list to recognise attachments. Returns an empty list when the
+        meeting has no TDocs (or does not exist).
         """
         ...
 
@@ -171,5 +183,50 @@ class WiRepository(Protocol):
         - ``tsg``: restrict to a single TSG short name (case-insensitive).
         - ``name_like``, ``acronym_like``, ``release_like``: SQL ``LIKE``
           patterns applied to the corresponding text columns.
+        """
+        ...
+
+
+class TDocFileRepository(Protocol):
+    """Storage operations for auxiliary TDoc files (revisions, reviews, support)."""
+
+    def upsert_many(self, files: list[TDocFile]) -> int:
+        """Insert or update multiple TDocFile records keyed by ``url``.
+
+        The fully-qualified download URL is the natural identity of a file
+        on the 3GPP FTP — the same attachment lives at exactly one
+        upstream location — so the unique index on ``url`` is the upsert
+        key. Existing rows are refreshed in place (the ``file`` label and
+        ``updated_at`` are rewritten) so re-syncing a meeting does not
+        produce duplicates. Returns the number of input rows that were
+        written.
+        """
+        ...
+
+    def list(
+        self,
+        limit: int = 20,
+        tdoc_id: str | None = None,
+        file_type: str | None = None,
+        file_type_in: Iterable[str] | None = None,
+    ) -> list[TDocFile]:
+        """Return stored TDocFile records, ordered by most recently updated.
+
+        Optional filters:
+        - ``tdoc_id``: exact match against the owning TDoc identifier.
+        - ``file_type``: exact match against the ``type`` column
+          (``"revision"`` / ``"review"`` / ``"support"``).
+        - ``file_type_in``: iterable of allowed ``type`` values; useful for
+          ``type IN ('revision', 'review')`` queries.
+        """
+        ...
+
+    def delete_for_tdoc_ids(self, tdoc_ids: Iterable[str]) -> int:
+        """Delete every TDocFile whose ``tdoc_id`` is in ``tdoc_ids``.
+
+        Used by the sync flow to clear stale rows for a meeting before
+        re-inserting the freshly scraped set, so files removed upstream
+        do not linger in the table. Returns the number of rows deleted.
+        Passing an empty iterable is a no-op (returns 0).
         """
         ...

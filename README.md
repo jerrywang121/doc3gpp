@@ -83,6 +83,41 @@ pip install -e ".[mysql]"
 pip install -e ".[postgres]"
 ```
 
+## Configuration File (TOML)
+
+For structured settings — DB URL plus fetch knobs and per-command output
+defaults — drop a TOML file at one of these locations (first hit wins):
+
+1. The path named by `DOC3GPP_CONFIG` (file or directory; absolute or
+   relative).
+2. `./doc3gpp.toml` (project-local — check into git for team defaults).
+3. `~/.config/doc3gpp/config.toml` (user-wide; honors `$XDG_CONFIG_HOME`).
+
+See [`doc3gpp.toml.example`](./doc3gpp.toml.example) for the full
+schema. Highlights:
+
+```toml
+[meeting_sync]
+closed_years = 5        # default for `doc3gpp meeting sync --closed-years`
+future_years = 2        # default for `doc3gpp meeting sync --future-years`
+
+[output]
+format = "json"         # default for every `* list --format`
+
+[output.fields]
+meeting = ["meeting_id", "name", "end_date"]  # default columns
+tdoc    = ["tdoc_id", "meeting_name", "title", "spec"]
+wi      = ["wi_id", "name"]
+```
+
+Precedence (highest wins): **CLI flag > environment variable > config
+file > built-in default**. Inspect what's in effect with:
+
+```bash
+doc3gpp config path   # which file is being read
+doc3gpp config show   # the fully-resolved settings, as JSON
+```
+
 ## CLI Usage
 
 ```bash

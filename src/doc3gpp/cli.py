@@ -28,6 +28,7 @@ from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
 )
 from doc3gpp.services.tsg_service import TsgService
+from doc3gpp.settings.config_source import find_config_file, load_config_data
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
@@ -37,11 +38,13 @@ meeting_app = typer.Typer(help="meeting commands")
 tdoc_app = typer.Typer(help="tdoc commands")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
+config_app = typer.Typer(help="inspect the resolved configuration")
 app.add_typer(db_app, name="db")
 app.add_typer(meeting_app, name="meeting")
 app.add_typer(tdoc_app, name="tdoc")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
+app.add_typer(config_app, name="config")
 
 logger = logging.getLogger(__name__)
 
@@ -162,10 +165,15 @@ def _tdoc_field(item: TDocWithMeeting, name: str) -> object | None:
 VALID_FORMATS: tuple[str, ...] = ("table", "json", "markdown")
 
 
-def _resolve_format(fmt: str | None) -> str:
-    """Resolve ``--format``; default to ``table`` and reject unknown values."""
+def _resolve_format(fmt: str | None, default: str = "table") -> str:
+    """Resolve ``--format`` against an injected default and reject unknown values.
+
+    ``default`` comes from :attr:`Settings.output.format` so the config
+    file (or env var) can change the default output format without code
+    changes. The CLI flag, when present, still wins.
+    """
     if fmt is None or fmt == "":
-        return "table"
+        return default
     normalized = fmt.strip().lower()
     if normalized not in VALID_FORMATS:
         valid = ", ".join(VALID_FORMATS)
@@ -283,8 +291,24 @@ def db_init() -> None:
 @meeting_app.command("sync")
 def meeting_sync(
     tsg: str = typer.Option(DEFAULT_TSG, help="TSG short name for 3GPP meeting report"),
-    closed_years: int = typer.Option(2, min=0, max=20, help="Years of closed meetings to keep"),
-    future_years: int = typer.Option(1, min=0, max=10, help="Years of future meetings to keep"),
+    closed_years: int | None = typer.Option(
+        None,
+        min=0,
+        max=20,
+        help=(
+            "Years of closed meetings to keep. "
+            "Default: [meeting_sync].closed_years from config file or 2."
+        ),
+    ),
+    future_years: int | None = typer.Option(
+        None,
+        min=0,
+        max=10,
+        help=(
+            "Years of future meetings to keep. "
+            "Default: [meeting_sync].future_years from config file or 1."
+        ),
+    ),
 ) -> None:
     """Fetch and store meetings from 3GPP site.
 
@@ -299,14 +323,33 @@ def meeting_sync(
     before today minus ``--closed-years`` years. Re-running with a narrower
     ``--closed-years`` therefore trims older rows; widening it does not
     resurrect already-deleted rows (run a fresh sync from the source instead).
+
+    When neither ``--closed-years`` nor ``--future-years`` is passed, the
+    values come from the ``[meeting_sync]`` section of the config file
+    (``closed_years`` / ``future_years``), or the built-in defaults
+    (``2`` / ``1``) when no config file is present.
     """
-    logger.info("Starting meeting sync for TSG %s", tsg)
+    settings = get_settings()
+    effective_closed = (
+        closed_years if closed_years is not None else settings.meeting_sync.closed_years
+    )
+    effective_future = (
+        future_years if future_years is not None else settings.meeting_sync.future_years
+    )
+    logger.info(
+        "Starting meeting sync for TSG %s (closed_years=%s future_years=%s)",
+        tsg, effective_closed, effective_future,
+    )
     create_schema()
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = build_meeting_service()
     meeting_url = _build_meeting_url(tsg)
-    count = service.sync(meeting_url, max_year_closed=closed_years, max_year_future=future_years)
+    count = service.sync(
+        meeting_url,
+        max_year_closed=effective_closed,
+        max_year_future=effective_future,
+    )
     typer.echo(f"Meeting sync complete: {count} meeting rows stored")
 
 
@@ -382,12 +425,11 @@ def meeting_list(
         "updated_at",
     ]
 
-    # Default: all fields except title and updated_at (kept compact); ftp_url
-    # is retained because it drives `tdoc sync` planning.
-    default_fields = [f for f in allowed_fields if f not in ("title", "updated_at")]
+    settings = get_settings()
+    default_fields = settings.output.fields.meeting
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
-    fmt = _resolve_format(fmt)
+    fmt = _resolve_format(fmt, default=settings.output.format)
 
     # Validate --tsg against the reference table (matches `meeting sync`).
     # The table is auto-seeded on a fresh DB so this is safe without `db init`.
@@ -552,21 +594,11 @@ def tdoc_list(
     # ``meeting_name`` is a top-level attribute on ``TDocWithMeeting``; the
     # rest live on ``TDocWithMeeting.tdoc``.
     allowed_fields = [f.name for f in dataclass_fields(TDoc)] + ["meeting_name"]
-    default_fields = [
-        "tdoc_id",
-        "meeting_name",
-        "title",
-        "source",
-        "type",
-        "status",
-        "cr_cat",
-        "spec",
-        "version",
-        "related_wis",
-    ]
+    settings = get_settings()
+    default_fields = settings.output.fields.tdoc
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
-    fmt = _resolve_format(fmt)
+    fmt = _resolve_format(fmt, default=settings.output.format)
 
     logger.info(
         "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
@@ -659,10 +691,11 @@ def tsg_list(
       objects), or ``markdown`` (GitHub-flavored table).
     """
     allowed_fields = [f.name for f in dataclass_fields(Tsg)]
-    default_fields = ["tsg_name", "short_name", "description"]
+    settings = get_settings()
+    default_fields = settings.output.fields.tsg
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
-    fmt = _resolve_format(fmt)
+    fmt = _resolve_format(fmt, default=settings.output.format)
 
     logger.info("Listing TSG reference records (fields=%s)", out_fields)
     service = build_tsg_service()
@@ -815,8 +848,9 @@ def wi_list(
         release_like=release,
     )
 
-    default_fields = ["wi_id", "acronym", "release", "name"]
-    fmt = _resolve_format(fmt)
+    settings = get_settings()
+    default_fields = settings.output.fields.wi
+    fmt = _resolve_format(fmt, default=settings.output.format)
 
     rows: list[list[str]] = []
     for item in records:
@@ -830,6 +864,36 @@ def wi_list(
         output=output,
         no_records_msg="No WIs found",
     )
+
+
+@config_app.command("path")
+def config_path() -> None:
+    """Print the config file in use, or "(no config file found)".
+
+    Useful for diagnosing "why isn't my TOML being picked up?" — the
+    command prints the absolute path returned by
+    :func:`doc3gpp.settings.config_source.find_config_file`, or an empty
+    marker when no candidate exists.
+    """
+    path = find_config_file()
+    typer.echo(str(path) if path is not None else "(no config file found)")
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Print the resolved configuration as JSON.
+
+    Shows every field on :class:`doc3gpp.settings.schema.Settings` after
+    merging the active config file with environment variables and the
+    built-in defaults. The output is JSON for easy diffing; copy values
+    into a TOML file when you want to pin them. The header line records
+    which config file (if any) produced the file-derived portion of the
+    result, so unexpected overrides are easy to spot.
+    """
+    path, _data = load_config_data()
+    settings = get_settings()
+    typer.echo(f"# config source: {path if path is not None else '(no config file)'}")
+    typer.echo(json.dumps(settings.model_dump(mode="json"), indent=2, sort_keys=True))
 
 
 def main() -> None:

@@ -424,6 +424,33 @@ stdout in the chosen format, and `--output` without an explicit
 `--format` are case-insensitive and an unknown value raises a
 `BadParameter` listing the accepted tokens.
 
+The defaults for `--format` and the implicit column list can be
+overridden for every list command via a TOML config file — see the
+`config` commands below.
+
+## config Commands
+
+### doc3gpp config path
+
+Print the config file currently in effect, or `(no config file found)`
+when none of the search locations resolve. Search order:
+
+1. `$DOC3GPP_CONFIG` (file or directory).
+2. `./doc3gpp.toml` (project-local).
+3. `$XDG_CONFIG_HOME/doc3gpp/config.toml`, falling back to
+   `~/.config/doc3gpp/config.toml`.
+
+### doc3gpp config show
+
+Print the fully-resolved settings as JSON. The first line is a comment
+identifying the config source that contributed the file-derived portion
+of the result, followed by the merged view of every
+`doc3gpp.settings.schema.Settings` field after applying the precedence
+chain (CLI flags > environment variables > config file > defaults).
+
+Use this command to verify which file is in effect and to diff your
+TOML overrides against the built-in defaults.
+
 ## Examples
 
 ```bash
@@ -443,4 +470,8 @@ doc3gpp tdoc list --format json --output tdocs.json
 doc3gpp meeting list --format markdown -o meetings.md
 doc3gpp tsg list --format json
 doc3gpp wi list --format markdown -o wis.md
+
+# Inspect the resolved configuration
+doc3gpp config path
+doc3gpp config show | jq '.meeting_sync, .output'
 ```

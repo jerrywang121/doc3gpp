@@ -62,12 +62,15 @@ Meeting-based TDoc sync flow:
 Current tables defined in src/doc3gpp/storage/db/models.py:
 
 - tdocs:
-	- id, tdoc_id, title, meeting_id, url, source, type, status, reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to, release, spec, version, related_wis, cr_num, cr_pack, created_at.
+	- tdoc_id (PK), title, meeting_id, url, source, type, status, reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to, release, spec, version, related_wis, cr_num, cr_pack, created_at.
 - meetings:
 	- meeting_id, name, title, location, start_date, end_date, ftp_url, start_doc, end_doc, updated_at.
 - tsgs:
-	- id, tsg_name (unique), short_name (unique), description, url.
+	- short_name (PK), tsg_name (unique), description, url.
 	- canonical 3GPP TSG list, seeded on `db init`; used to validate `--tsg` in `meeting sync`.
+- wis:
+	- (wi_id, tsg_short) composite PK, acronym, release, name, updated_at.
+	- ``tsg_short`` FK to ``tsgs.short_name``; composite PK keeps the natural identifier stable across multi-TSG ownership.
 
 Schema creation currently uses Base.metadata.create_all through src/doc3gpp/storage/db/migrate.py.
 

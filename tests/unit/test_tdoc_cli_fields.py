@@ -1,44 +1,34 @@
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 
 
 def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     runner = CliRunner()
 
-    class FakeTDoc:
-        def __init__(self, tdoc_id: str, title: str, url: str | None = None, cr_pack: str | None = None, meeting_name: str | None = None, source: str | None = None, type: str | None = None, status: str | None = None, cr_cat: str | None = None, spec: str | None = None, version: str | None = None, related_wis: str | None = None):
-            self.tdoc_id = tdoc_id
-            self.title = title
-            self.url = url
-            self.cr_pack = cr_pack
-            self.meeting_name = meeting_name
-            self.source = source
-            self.type = type
-            self.status = status
-            self.cr_cat = cr_cat
-            self.spec = spec
-            self.version = version
-            self.related_wis = related_wis
-
-    sample = [FakeTDoc(
+    sample_tdoc = TDoc(
         tdoc_id="R5s260001",
         title="Example A",
         url="https://x/1",
         cr_pack="RP-000123",
-        meeting_name="RAN5#111",
         source="Qualcomm",
         type="CR",
         status="Agreed",
         cr_cat="F",
         spec="38.331",
         version="18.1.0",
-        related_wis="NR_ext"
-    )]
+        related_wis="NR_ext",
+    )
+    sample = [TDocWithMeeting(tdoc=sample_tdoc, meeting_name="RAN5#111")]
 
     observed_filters = {}
 
-    def fake_list_recent(self, limit=20, tsg=None, meeting_like=None, year=None, source_like=None, spec_like=None, wi_like=None, title_like=None, cat_like=None, status_like=None, type_like=None):
+    def fake_list_recent_with_meeting(
+        self, limit=20, tsg=None, meeting_like=None, year=None,
+        source_like=None, spec_like=None, wi_like=None, title_like=None,
+        cat_like=None, status_like=None, type_like=None,
+    ):
         observed_filters.update({
             "limit": limit,
             "tsg": tsg,
@@ -54,7 +44,10 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
         })
         return sample
 
-    monkeypatch.setattr("doc3gpp.services.tdoc_service.TDocService.list_recent", fake_list_recent)
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
 
     # test explicit fields including meeting_name and cr_pack
     result = runner.invoke(app, ["tdoc", "list", "--fields", "tdoc_id,title,meeting_name,cr_pack"])
@@ -91,6 +84,29 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     assert observed_filters["cat_like"] == "F"
     assert observed_filters["status_like"] == "Agreed"
     assert observed_filters["type_like"] == "CR"
+
+
+def test_cli_tdoc_list_auto_wraps_meeting_filter(monkeypatch):
+    runner = CliRunner()
+
+    captured: dict = {}
+
+    def fake_list_recent_with_meeting(self, meeting_like=None, **_kwargs):
+        captured["meeting_like"] = meeting_like
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    result = runner.invoke(app, ["tdoc", "list", "--meeting", "RAN5#111"])
+    assert result.exit_code == 0
+    assert captured["meeting_like"] == "%RAN5#111%"
+
+    result = runner.invoke(app, ["tdoc", "list", "--meeting", "R5s%"])
+    assert result.exit_code == 0
+    assert captured["meeting_like"] == "R5s%"
 
 
 def test_cli_tdoc_list_invalid_fields_error():

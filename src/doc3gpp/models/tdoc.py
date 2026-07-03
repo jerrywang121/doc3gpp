@@ -14,8 +14,6 @@ class TDoc:
             the source XLSX has no title cell; the parser converts empty cells
             to ``None`` rather than coercing to a placeholder string.
         meeting_id: Optional foreign key into ``meetings.meeting_id``.
-        meeting_name: Human-readable meeting name populated when listing.
-            Not persisted on the ``tdocs`` table.
         url: Optional URL where the TDoc list entry was discovered.
         reservation_date: Optional reservation date from the source XLSX,
             parsed as a ``date`` (not a free-form string).
@@ -27,8 +25,6 @@ class TDoc:
     tdoc_id: str
     title: str | None = None
     meeting_id: int | None = None
-    # Convenience: human-readable meeting name populated when listing (not persisted on tdocs table)
-    meeting_name: str | None = None
     url: str | None = None
     # Additional metadata extracted from TDoc list XLSX
     source: str | None = None
@@ -47,3 +43,17 @@ class TDoc:
     # TSG CR Pack value from XLSX (nullable)
     cr_pack: str | None = None
     updated_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class TDocWithMeeting:
+    """A TDoc joined with its parent meeting's display name.
+
+    Presentation-time only: ``meeting_name`` is computed by a JOIN against the
+    ``meetings`` table at read time and is not persisted on the ``tdocs``
+    table. The CLI and CSV exporter consume this DTO; pure persistence code
+    (upserts, schema migrations) should stick to :class:`TDoc`.
+    """
+
+    tdoc: TDoc
+    meeting_name: str | None = None

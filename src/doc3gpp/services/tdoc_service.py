@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.repository.protocols import TDocRepository
 from doc3gpp.scraping.ftp_source import fetch_tdocs_from_meeting_ftp
 
@@ -15,11 +15,6 @@ class TDocService:
     def __init__(self, repository: TDocRepository) -> None:
         """Initialize the TDoc service with a repository backing the TDoc storage."""
         self._repository = repository
-
-    def save(self, tdoc: TDoc) -> None:
-        """Save or update a single TDoc record through the repository."""
-        logger.debug("Saving TDoc %s", tdoc.tdoc_id)
-        self._repository.upsert(tdoc)
 
     def list_recent(
         self,
@@ -50,6 +45,39 @@ class TDocService:
             type_like,
         )
         return self._repository.list(
+            limit=limit,
+            tsg=tsg,
+            meeting_like=meeting_like,
+            year=year,
+            source_like=source_like,
+            spec_like=spec_like,
+            wi_like=wi_like,
+            title_like=title_like,
+            cat_like=cat_like,
+            status_like=status_like,
+            type_like=type_like,
+        )
+
+    def list_recent_with_meeting(
+        self,
+        limit: int = 20,
+        tsg: str | None = None,
+        meeting_like: str | None = None,
+        year: int | None = None,
+        source_like: str | None = None,
+        spec_like: str | None = None,
+        wi_like: str | None = None,
+        title_like: str | None = None,
+        cat_like: str | None = None,
+        status_like: str | None = None,
+        type_like: str | None = None,
+    ) -> list[TDocWithMeeting]:
+        """Like :meth:`list_recent` but each row carries its meeting display name.
+
+        Convenience for CLI / export paths that want to show ``meeting_name``
+        next to TDoc fields without exposing the DTO composition to callers.
+        """
+        return self._repository.list_with_meeting(
             limit=limit,
             tsg=tsg,
             meeting_like=meeting_like,

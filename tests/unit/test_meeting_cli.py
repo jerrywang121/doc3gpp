@@ -23,7 +23,7 @@ def test_cli_fields_and_filters(monkeypatch):
         ),
     ]
 
-    def fake_list_recent(self, limit=20, tsg=None, name_like=None, location_like=None, year=None):
+    def fake_list_recent(self, limit=20, offset=0, tsg=None, name_like=None, location_like=None, year=None):
         return sample
 
     monkeypatch.setattr(MeetingService, "list_recent", fake_list_recent)

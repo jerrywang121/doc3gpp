@@ -8,7 +8,7 @@ def test_cli_passes_location_filter(monkeypatch):
     runner = CliRunner()
     captured = {}
 
-    def fake_list_recent(self, limit=20, tsg=None, name_like=None, location_like=None, year=None):
+    def fake_list_recent(self, limit=20, offset=0, tsg=None, name_like=None, location_like=None, year=None):
         captured['location_like'] = location_like
         return []
 

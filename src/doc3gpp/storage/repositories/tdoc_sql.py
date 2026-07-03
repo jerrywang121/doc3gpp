@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.parsers.tdoc_parser import tdoc_id_year
 from doc3gpp.storage.db.models import TDocORM, MeetingORM
 from doc3gpp.storage.db.session import get_session_factory
 
@@ -102,6 +103,9 @@ class SQLAlchemyTDocRepository:
     ) -> list[TDoc]:
         """Return recent TDoc records ordered by creation timestamp.
 
+        Pure persistence shape — no joined meeting metadata. Callers that
+        need ``meeting_name`` should use :meth:`list_with_meeting`.
+
         Optional filters:
         - `tsg`: filter TDoc IDs that start with the given TSG prefix.
         - `meeting_like`: SQL LIKE pattern to apply to the meeting name.
@@ -127,7 +131,14 @@ class SQLAlchemyTDocRepository:
                 )
 
             if year is not None:
-                stmt = stmt.where(func.substr(TDocORM.tdoc_id, 4, 2) == f"{year:02d}")
+                # Decode the year in Python so the SQL doesn't depend on
+                # CR_ID_RE's exact shape. Project just the id column for the
+                # candidate scan; this is cheap on the indexed unique column.
+                candidate_ids = session.scalars(select(TDocORM.tdoc_id)).all()
+                matching_ids = [tid for tid in candidate_ids if tdoc_id_year(tid) == year]
+                if not matching_ids:
+                    return []
+                stmt = stmt.where(TDocORM.tdoc_id.in_(matching_ids))
 
             if source_like:
                 stmt = stmt.where(TDocORM.source.like(source_like))
@@ -153,36 +164,79 @@ class SQLAlchemyTDocRepository:
             stmt = stmt.order_by(TDocORM.created_at.desc()).limit(limit)
             rows = session.scalars(stmt).all()
 
-        # To include meeting_name for display, load names for any referenced meeting_id
-        meeting_map: dict[int, str] = {}
-        meeting_ids = {r.meeting_id for r in rows if r.meeting_id}
-        if meeting_ids:
-            stmt_m = select(MeetingORM).where(MeetingORM.meeting_id.in_(meeting_ids))
-            meetings = session.scalars(stmt_m).all()
-            meeting_map = {m.meeting_id: m.name for m in meetings}
+        return [_orm_to_domain(row) for row in rows]
 
+    def list_with_meeting(
+        self,
+        limit: int = 20,
+        tsg: str | None = None,
+        meeting_like: str | None = None,
+        year: int | None = None,
+        source_like: str | None = None,
+        spec_like: str | None = None,
+        wi_like: str | None = None,
+        title_like: str | None = None,
+        cat_like: str | None = None,
+        status_like: str | None = None,
+        type_like: str | None = None,
+    ) -> list[TDocWithMeeting]:
+        """Like :meth:`list` but wraps each row with its parent meeting's name.
+
+        Performs an extra batched lookup against ``meetings`` to populate
+        ``TDocWithMeeting.meeting_name``. Used by the CLI / export code paths.
+        """
+        tdocs = self.list(
+            limit=limit,
+            tsg=tsg,
+            meeting_like=meeting_like,
+            year=year,
+            source_like=source_like,
+            spec_like=spec_like,
+            wi_like=wi_like,
+            title_like=title_like,
+            cat_like=cat_like,
+            status_like=status_like,
+            type_like=type_like,
+        )
+        if not tdocs:
+            return []
+        with self._session_factory() as session:
+            meeting_ids = {tdoc.meeting_id for tdoc in tdocs if tdoc.meeting_id}
+            if not meeting_ids:
+                return [TDocWithMeeting(tdoc=tdoc, meeting_name=None) for tdoc in tdocs]
+            meetings = session.scalars(
+                select(MeetingORM).where(MeetingORM.meeting_id.in_(meeting_ids))
+            ).all()
+            meeting_map = {m.meeting_id: m.name for m in meetings}
         return [
-            TDoc(
-                tdoc_id=row.tdoc_id,
-                title=row.title,
-                meeting_id=row.meeting_id,
-                meeting_name=meeting_map.get(row.meeting_id) if row.meeting_id else None,
-                url=row.url,
-                source=row.source,
-                type=row.type,
-                status=row.status,
-                reservation_date=row.reservation_date,
-                uploaded_date=row.uploaded_date,
-                cr_cat=row.cr_cat,
-                is_revision_of=row.is_revision_of,
-                revised_to=row.revised_to,
-                release=row.release,
-                spec=row.spec,
-                version=row.version,
-                related_wis=row.related_wis,
-                cr_num=row.cr_num,
-                cr_pack=row.cr_pack,
-                updated_at=row.updated_at,
+            TDocWithMeeting(
+                tdoc=tdoc,
+                meeting_name=meeting_map.get(tdoc.meeting_id) if tdoc.meeting_id else None,
             )
-            for row in rows
+            for tdoc in tdocs
         ]
+
+
+def _orm_to_domain(row: TDocORM) -> TDoc:
+    """Map an ORM row to a TDoc dataclass (no joined metadata)."""
+    return TDoc(
+        tdoc_id=row.tdoc_id,
+        title=row.title,
+        meeting_id=row.meeting_id,
+        url=row.url,
+        source=row.source,
+        type=row.type,
+        status=row.status,
+        reservation_date=row.reservation_date,
+        uploaded_date=row.uploaded_date,
+        cr_cat=row.cr_cat,
+        is_revision_of=row.is_revision_of,
+        revised_to=row.revised_to,
+        release=row.release,
+        spec=row.spec,
+        version=row.version,
+        related_wis=row.related_wis,
+        cr_num=row.cr_num,
+        cr_pack=row.cr_pack,
+        updated_at=row.updated_at,
+    )

@@ -4,6 +4,7 @@ Track issues discovered during code review. Fix priority reflects correctness/im
 
 Source review: TDoc handling code review (2026-07-02).
 Source review: Meetings handling code review (2026-07-02).
+Source review: Design-issues sweep (2026-07-03).
 
 ## Resolved (2026-07-02)
 
@@ -34,6 +35,26 @@ Fixed in commit `fix/tdoc-pipeline-important-fixes`:
 
 Tests added: `tests/unit/test_scraper_client.py`, `tests/unit/test_tdoc_sync_coordinator.py`, plus extensions to `tests/unit/test_tdoc_parser.py`, `tests/unit/test_tdoc_repository_crud.py`. Total coverage of new files: `tdoc_sync_coordinator.py` 100%, `factory.py` 100%, `client.py` 98%.
 
+## Resolved (2026-07-03, design-issues sweep)
+
+Fixed in branch `fix/design-issues-sweep`:
+
+- **#12 `TDocORM.title: Text`** — switched from `String(500)` to `Text` to match `WiORM.name`. Existing SQLite/Postgres tables will need a one-time migration (no Alembic yet; `Base.metadata.create_all` is no-op for existing schemas).
+- **#13 `meeting_like` auto-wrap** — CLI now auto-wraps `--meeting` patterns with `%...%` when no SQL wildcards are present, so `--meeting RAN5#111` matches substrings. Explicit wildcards (`%`, `_`) are passed through unchanged.
+- **#14 `year` filter decoupled from `CR_ID_RE`** — new `tdoc_id_year()` helper in `parsers/tdoc_parser.py` extracts the 2-digit year in Python; `SQLAlchemyTDocRepository.list` now pre-fetches `tdoc_id`s and applies `IN (...)` based on Python-side year decoding. SQL no longer hard-codes `substr(..., 4, 2)`.
+- **#15 `TDocService.save()` removed** — was dead code per the TODO. `test_tdoc_service_save_and_list` (integration) was exercising only the removed path; removed since `test_tdoc_repository_upsert_and_list` and `test_tdoc_service_sync_from_meeting_ftp` cover the live surface.
+- **#16 `TDocWithMeeting` DTO** — new `@dataclass(slots=True) TDocWithMeeting(tdoc: TDoc, meeting_name: str | None)` separates persistence from presentation. `TDoc` no longer carries `meeting_name`. `SQLAlchemyTDocRepository.list_with_meeting` / `TDocService.list_recent_with_meeting` produce DTOs for CLI/export. CLI and `storage/export.py` updated to consume the DTO. Tests updated to construct TDocWithMeeting where the joined view is needed.
+- **#17 `TDoc` docstring drift** — drift was already resolved by `de50995`; verified clean (only `meeting_id` and `meeting_name` are referenced, both correctly named).
+- **M7 `Meeting.start_date` / `end_date` relaxed** — now `date | None = None` on the dataclass; `MeetingORM.start_date` / `end_date` are `nullable=True`. The CLI test that already used `None` now matches the type.
+- **M9 `_parse_field_selection` helper extracted** — `meeting_list`, `tdoc_list`, `tsg_list` now share one field-selection helper. The `"all" in [f.lower() for f in requested]` substring bug is fixed (`any(f.lower() == "all" for f in selected)` is a proper equality check). Error message format preserved for backward-compat with existing tests.
+- **M10 `meeting list --tsg` validation** — `--tsg` is validated via `TsgService.is_known_short_name` and uppercased for consistency with `meeting sync`. Unknown values raise `typer.BadParameter` listing the known short names.
+- **M12 `ftp_url` in `meeting list` defaults** — the default field set now includes `ftp_url` (the most useful column for `tdoc sync` planning); `title` and `updated_at` remain excluded.
+- **M13 `meeting list --offset` pagination** — new `--offset` option threads through `MeetingService.list_recent` → `MeetingRepository.list` → `SQLAlchemyMeetingRepository.list` (Protocol signature in sync) → SQL `OFFSET` clause. `--limit` / `--offset` pagination enabled without re-running the filters.
+- **M18 `_build_meeting_url` parameterised** — takes an `ext` argument (default `"htm"`); `ext="html"` is supported. Validates the extension to keep callers from passing arbitrary values.
+- **M19 `meeting sync` help text** — now describes the additive year-window trim behavior explicitly: narrower `--closed-years` deletes older rows, widening does not resurrect.
+
+Tests added: `tests/unit/test_tdoc_service_sync.py` (5 cases for `TDocService.sync_from_meeting_ftp`), `tests/unit/test_tdoc_sync_cli.py` (6 cases for the `tdoc sync` CLI selector + error conversion), and an extension to `tests/unit/test_tdoc_cli_fields.py` covering the new `_auto_wrap_like` helper. Test fakes updated to construct `TDocWithMeeting` where the joined view is exercised.
+
 ## TDoc pipeline issues
 
 ### Important (fix soon)
@@ -42,14 +63,7 @@ _None remaining — important batch resolved 2026-07-02._
 
 ### Design (address when touching adjacent code)
 
-| # | Issue | Location |
-|---|---|---|
-| 12 | `TDocORM.title: String(500)` arbitrary; `Text` would match `WiORM.name` convention | `storage/db/models.py:28` |
-| 13 | `meeting_like` filter is hidden LIKE — `--meeting RAN5#111` returns nothing without `%` | `cli.py:284-287` |
-| 14 | `year` filter uses `substr(tdoc_id, 4, 2)` — coupled to `CR_ID_RE` regex shape | `tdoc_sql.py:120` |
-| 15 | `TDocService.save()` is dead code | `tdoc_service.py:19-22` |
-| 16 | `meeting_name` mixes presentation-time data with persistence schema — consider `TDocWithMeeting` DTO | `models/tdoc.py:21`, `tdoc_sql.py:154-176` |
-| 17 | `TDoc` docstring drift — says `meeting` but field is `meeting_id` | `models/tdoc.py:13` |
+_None remaining — design batch resolved 2026-07-03._
 
 ### Track but don't fix without input
 
@@ -63,8 +77,8 @@ _None remaining — important batch resolved 2026-07-02._
 
 | Symbol | Status | Suggested test |
 |---|---|---|
-| `TDocService.sync_from_meeting_ftp` | no direct unit test (covered via integration) | mock `fetch_tdocs_from_meeting_ftp`, verify `upsert_many` called once |
-| CLI `tdoc sync` / `tdoc list` | partial CLI test (filter) | field-selection rejects unknown fields, `--meeting` resolves, `--meeting` missing → BadParameter |
+| `TDocService.sync_from_meeting_ftp` | covered | `tests/unit/test_tdoc_service_sync.py` |
+| CLI `tdoc sync` / `tdoc list` | covered | `tests/unit/test_tdoc_sync_cli.py`, `tests/unit/test_tdoc_cli_fields.py` |
 
 Resolved since review:
 
@@ -73,6 +87,7 @@ Resolved since review:
 - `TDocORM` — covered via `tests/unit/test_tdoc_repository_crud.py` (date columns, updated_at, upsert_many)
 - `SQLAlchemyTDocRepository.upsert_many` — covered via `tests/unit/test_tdoc_repository_crud.py`
 - `TDocSyncCoordinator` — covered by `tests/unit/test_tdoc_sync_coordinator.py` (typed errors, Protocol-typed repos, both selectors)
+- `SQLAlchemyTDocRepository.list_with_meeting` — covered via `tests/unit/test_tdoc_repository_filters.py::test_list_filter_meeting`
 
 ## Meetings pipeline issues
 
@@ -93,26 +108,11 @@ _None remaining._
 
 ### Design (address when touching adjacent code)
 
-| # | Issue | Location |
-|---|---|---|
-| M7 | `Meeting` model `start_date`/`end_date` typed `date` but `tests/unit/test_meetings_cli.py` instantiates them as `None`. Either relax to `date \| None = None` (and ORM `nullable=True`) or fix the test. | `models/meeting.py:29-30` vs `tests/unit/test_meetings_cli.py:17-18` |
-| ~~M8~~ | ~~`session.merge()` in a loop is N SELECTs per upsert...~~ — resolved alongside M3. | `storage/repositories/meeting_sql.py:36-72` |
-| M9 | CLI `--fields` "all"/invalid-field handling duplicated in `meeting_list`, `tdoc_list`, `tsg_list`. Extract `_parse_field_selection(requested, allowed, default)` helper; tighten `if "all" in [f.lower() for f in requested]:` to a generator. | `cli.py:176-205, 332-359, 428-444` |
-| M10 | `meeting list` does not validate `--tsg` against the `tsgs` table (only `meeting sync` does). Validate via `TsgService.is_known_short_name` after upper-casing for consistency. | `cli.py:151` |
-| ~~M11~~ | ~~Brittle CANCELLED detection...~~ — resolved alongside M4. Detection now uses `if "CANCELLED" in title.upper():` and the parser test covers 4 variants. | `parsers/calendar_parser.py:96-99` |
-| M12 | `meeting list` default omits `ftp_url` — the most useful column for `tdoc sync` planning. Include it (or expose as an extra column). | `cli.py:190` |
-| M13 | No pagination on `meeting list` — only a `limit` cap (max 500). Add `--offset` / `LIMIT … OFFSET …` before the dataset grows. | `cli.py:148-159` |
-| ~~M14~~ | ~~Ordering non-deterministic on ties...~~ — resolved: `meeting_sql.list` adds `MeetingORM.meeting_id.desc()` as a secondary sort. | `storage/repositories/meeting_sql.py:78-82` |
-| ~~M15~~ | ~~No `start_date <= end_date` validation in parser...~~ — resolved alongside M4. Swapped dates now log + skip. | `parsers/calendar_parser.py:96-99` |
-| ~~M16~~ | ~~Duplicated row-to-domain mapping in three near-identical `Meeting(**)` constructions...~~ — resolved alongside M3. Extracted `_orm_to_domain(row)`. | `storage/repositories/meeting_sql.py:97-108` |
-| ~~M17~~ | ~~`_filter_by_year_window` is a `@staticmethod`...~~ — resolved alongside M1. The helper is now a module-level function (`filter_by_year_window`) with an injectable `today` parameter. | `services/meetings_service.py:118-142` |
+_None remaining — design batch resolved 2026-07-03._
 
 ### Track but don't fix without input
 
-| # | Issue | Location |
-|---|---|---|
-| M18 | `_build_meeting_url` hard-codes `.htm` extension; 3GPP also serves `.html`. Parameterise. | `cli.py:65-66` |
-| M19 | ~~CLI help does not describe the additive year-filter behaviour...~~ — partly resolved by the M6 trim, but CLI help text could still call out that narrower `--closed-years` now deletes older rows. | `cli.py:119-139` |
+_None remaining — design batch resolved 2026-07-03 (M18 parameterised; M19 help text updated)._
 
 ### Meetings test coverage gaps
 
@@ -122,4 +122,5 @@ _None remaining._
 | `parse_3gpp_calendar` malformed row + CANCELLED variants | covered | `tests/unit/test_calendar_parser_defensive.py` |
 | `meeting_sql.upsert_many` (updated_at, bulk fetch+update) | covered | `tests/unit/test_meeting_repository_upsert.py` |
 | `MeetingService.sync` trim behaviour | covered | `tests/unit/test_meetings_service_sync.py` |
-| `meeting list` `--tsg` validation | not tested | pass unknown short name; expect `typer.BadParameter` |
+| `meeting list --tsg` validation | covered (M10) | `tests/unit/test_meeting_sync_tsg_validation.py` + updated `tests/unit/test_meeting_cli_filters_combined.py` |
+| `meeting list --offset` pagination | covered by extension | `tests/unit/test_meeting_cli_filters_combined.py` (asserts `offset` in captured filters) |

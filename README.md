@@ -65,8 +65,9 @@ Configuration is read from environment variables and `.env`.
 Examples:
 
 ```bash
-# default sqlite
-DOC3GPP_DATABASE_URL=sqlite+pysqlite:///~/.local/share/doc3gpp/doc3gpp.db
+# default sqlite (omit DOC3GPP_DATABASE_URL to use the pydantic default,
+# which resolves to ~/.local/share/doc3gpp/doc3gpp.db)
+DOC3GPP_DATABASE_URL=sqlite+pysqlite:////absolute/path/to/doc3gpp.db
 
 # mysql
 DOC3GPP_DATABASE_URL=mysql+pymysql://user:pass@localhost:3306/doc3gpp

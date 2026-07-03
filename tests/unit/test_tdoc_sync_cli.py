@@ -29,17 +29,17 @@ class _FakeCoordinator:
         self.id_raises: Exception | None = None
         self.name_raises: Exception | None = None
 
-    def sync_for_meeting_id(self, meeting_id: int) -> int:
+    def sync_for_meeting_id(self, meeting_id: int) -> str:
         self.id_calls.append(meeting_id)
         if self.id_raises is not None:
             raise self.id_raises
-        return 7
+        return "TDoc sync complete: 7 TDoc row(s) and 0 auxiliary TDoc file(s) stored"
 
-    def sync_for_meeting_name(self, meeting_name: str) -> int:
+    def sync_for_meeting_name(self, meeting_name: str) -> str:
         self.name_calls.append(meeting_name)
         if self.name_raises is not None:
             raise self.name_raises
-        return 3
+        return "TDoc sync complete: 3 TDoc row(s) and 0 auxiliary TDoc file(s) stored"
 
 
 def _patch_coordinator(monkeypatch, fake: _FakeCoordinator) -> None:
@@ -83,7 +83,8 @@ def test_tdoc_sync_routes_meeting_id(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert fake.id_calls == [42]
     assert fake.name_calls == []
-    assert "7 records stored" in result.output
+    assert "7 TDoc row(s)" in result.output
+    assert "0 auxiliary TDoc file(s)" in result.output
 
 
 def test_tdoc_sync_routes_meeting_name(monkeypatch) -> None:
@@ -95,7 +96,8 @@ def test_tdoc_sync_routes_meeting_name(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert fake.name_calls == ["RAN5#111"]
     assert fake.id_calls == []
-    assert "3 records stored" in result.output
+    assert "3 TDoc row(s)" in result.output
+    assert "0 auxiliary TDoc file(s)" in result.output
 
 
 def test_tdoc_sync_meeting_not_found_becomes_bad_parameter(monkeypatch) -> None:

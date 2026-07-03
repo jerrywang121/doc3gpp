@@ -332,10 +332,10 @@ def tdoc_sync(
     try:
         if meeting_id is not None:
             logger.info("Starting TDoc sync for meeting ID %s", meeting_id)
-            count = coordinator.sync_for_meeting_id(meeting_id)
+            summary = coordinator.sync_for_meeting_id(meeting_id)
         else:
             logger.info("Starting TDoc sync for meeting name %s", meeting)
-            count = coordinator.sync_for_meeting_name(meeting)
+            summary = coordinator.sync_for_meeting_name(meeting)
     except MeetingNotFoundError as exc:
         logger.error("Meeting not found: %s", exc)
         raise typer.BadParameter(str(exc)) from None
@@ -343,7 +343,7 @@ def tdoc_sync(
         logger.error("Meeting has no FTP URL stored: %s", exc)
         raise typer.BadParameter(str(exc)) from None
 
-    typer.echo(f"TDoc sync complete: {count} records stored")
+    typer.echo(summary)
 
 
 @tdoc_app.command("list")

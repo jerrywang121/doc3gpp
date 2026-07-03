@@ -106,3 +106,40 @@ class WiORM(Base):
         index=True,
     )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TDocFileORM(Base):
+    """Auxiliary file attached to a TDoc (revision, review, or support).
+
+    One row per file observed in a meeting's FTP subfolders (``Inbox/``,
+    ``Docs/``, ``Tdocs/``, or ``Review/``). Identity is the
+    fully-qualified download URL: the same file lives at exactly one
+    upstream location, so the ``url`` column is the natural upsert key
+    and is the only unique index in the table.
+
+    ``tdoc_id`` is a foreign key into ``tdocs.tdoc_id``; the sync flow
+    populates ``tdocs`` first and only persists ``TDocFile`` rows for
+    files whose owning TDoc ID is already known. Cascading the delete on
+    the FK is intentionally disabled — removing a TDoc should not
+    silently drop its revision history, and the sync flow uses an
+    explicit ``delete_for_tdoc_ids`` pass on re-sync.
+    """
+
+    __tablename__ = "tdoc_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id"),
+        nullable=False,
+        index=True,
+    )
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    file: Mapped[str] = mapped_column(String(256), nullable=False)
+    url: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

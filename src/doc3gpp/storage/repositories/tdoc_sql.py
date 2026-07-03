@@ -166,6 +166,12 @@ class SQLAlchemyTDocRepository:
 
         return [_orm_to_domain(row) for row in rows]
 
+    def list_tdoc_ids_for_meeting(self, meeting_id: int) -> list[str]:
+        """Return the TDoc IDs currently stored for ``meeting_id``."""
+        with self._session_factory() as session:
+            stmt = select(TDocORM.tdoc_id).where(TDocORM.meeting_id == meeting_id)
+            return list(session.scalars(stmt).all())
+
     def list_with_meeting(
         self,
         limit: int = 20,

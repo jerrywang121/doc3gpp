@@ -20,6 +20,7 @@ This document tracks what is implemented today versus planned next work.
 ### ORM and Persistence
 
 - tdocs table and SQL repository.
+- tdoc_files table and SQL repository (auxiliary files: revisions, reviews, support docs).
 - meetings table and SQL repository.
 - Schema bootstrap with create_all.
 
@@ -42,7 +43,12 @@ This document tracks what is implemented today versus planned next work.
 
 - MeetingService sync and list.
 - TDocService save and list.
-- TDocSyncCoordinator: cross-service orchestration for `tdoc sync`.
+- TDocFileService: scans meeting FTP subfolders (`Inbox/`, `Docs/`,
+  `Tdocs/`, `Review/`) and upserts auxiliary TDoc files
+  (revisions, reviews, support docs) into `tdoc_files`.
+- TDocSyncCoordinator: cross-service orchestration for `tdoc sync` —
+  resolves the meeting, runs the TDoc sync, then the TDocFile sync
+  with the freshly-persisted TDoc IDs.
 - TsgService seed/list/validate for the 3GPP TSG reference table.
 - Meeting-based TDoc sync now resolves FTP URL from stored meeting records.
 - Service composition via `services.factory.build_*` helpers (CLI depends on

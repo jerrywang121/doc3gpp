@@ -25,7 +25,7 @@ class TDocORM(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     tdoc_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
     # store as FK to meetings.meeting_id
     meeting_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("meetings.meeting_id"), nullable=True, index=True)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -60,8 +60,8 @@ class MeetingORM(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     location: Mapped[str] = mapped_column(String(300), nullable=False)
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     ftp_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
     end_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -26,8 +26,8 @@ class Meeting:
     name: str
     title: str
     location: str
-    start_date: date
-    end_date: date
+    start_date: date | None = None
+    end_date: date | None = None
     ftp_url: str | None = None
     start_doc: str | None = None
     end_doc: str | None = None

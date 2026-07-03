@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from doc3gpp.models.tdoc_file import (
     TDocFileTypeRevision,
     TDocFileTypeReview,
@@ -191,3 +193,146 @@ def test_parse_preserves_filename_text_over_href_basename() -> None:
     files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
     assert files[0].file == "R5s260001r1.zip"
     assert files[0].url == f"{base}encoded%20name.zip"
+    assert files[0].uploaded_date is None
+
+
+# ---------------------------------------------------------------------------
+# uploaded_date extraction
+# ---------------------------------------------------------------------------
+
+
+def _ftp_listing_row(
+    base: str,
+    filename: str,
+    date_text: str | None,
+    *,
+    size_text: str = "100 KB",
+) -> str:
+    """Build one <tr> that mirrors the 3GPP FTP directory listing layout.
+
+    The real layout is checkbox, icon, file link, date, size (five <td>
+    cells). The date column is optional; pass ``None`` to render the row
+    without a date <td> (mimicking legacy listings).
+    """
+    date_cell = (
+        f"<td>{date_text}</td>" if date_text is not None else ""
+    )
+    return (
+        "<tr>"
+        '<td><input type="checkbox" class="downloadInput" value="x"/></td>'
+        '<td><img class="icon" src="/ftp/geticon.axd?file=.zip"/></td>'
+        f'<td><a class="file" href="{base}{filename}">{filename}</a></td>'
+        f"{date_cell}"
+        f"<td>{size_text}</td>"
+        "</tr>"
+    )
+
+
+def _ftp_listing_html(*rows: str) -> str:
+    return f"<html><body><table><tbody>{''.join(rows)}</tbody></table></body></html>"
+
+
+def test_parse_extracts_uploaded_date_from_next_td_sibling() -> None:
+    base = "https://www.3gpp.org/ftp/Review/"
+    html = _ftp_listing_html(
+        _ftp_listing_row(
+            base,
+            "R5s260001r1.zip",
+            "2026/01/07 14:46",
+        ),
+        _ftp_listing_row(
+            base,
+            "R5s260001_MCC160Comments.zip",
+            "2025/03/04 13:59",
+        ),
+    )
+
+    files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
+    by_name = {f.file: f for f in files}
+
+    assert len(files) == 2
+    assert by_name["R5s260001r1.zip"].uploaded_date == date(2026, 1, 7)
+    assert by_name["R5s260001_MCC160Comments.zip"].uploaded_date == date(2025, 3, 4)
+
+
+def test_parse_uploaded_date_is_none_when_date_cell_missing() -> None:
+    base = "https://www.3gpp.org/ftp/Inbox/"
+    # No date <td> rendered at all (legacy / pre-date listings).
+    html = _ftp_listing_html(
+        _ftp_listing_row(
+            base,
+            "R5s260001r1.zip",
+            date_text=None,
+        ),
+    )
+
+    files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
+    assert len(files) == 1
+    assert files[0].file == "R5s260001r1.zip"
+    assert files[0].uploaded_date is None
+
+
+def test_parse_uploaded_date_is_none_when_anchor_not_in_td() -> None:
+    base = "https://www.3gpp.org/ftp/Docs/"
+    # Mirrors the stripped layout used by some integration-test fixtures:
+    # the anchor is a direct child of <body> with no surrounding <td>.
+    html = (
+        f"<html><body>"
+        f'<a class="file" href="{base}R5s260001r1.zip">R5s260001r1.zip</a>'
+        f"</body></html>"
+    )
+
+    files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
+    assert len(files) == 1
+    assert files[0].uploaded_date is None
+
+
+def test_parse_uploaded_date_is_none_when_text_malformed() -> None:
+    base = "https://www.3gpp.org/ftp/Docs/"
+    html = _ftp_listing_html(
+        _ftp_listing_row(
+            base,
+            "R5s260001r1.zip",
+            "not a date",
+        ),
+    )
+
+    files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
+    assert len(files) == 1
+    assert files[0].file == "R5s260001r1.zip"
+    assert files[0].uploaded_date is None
+
+
+def test_parse_uploaded_date_is_none_when_date_cell_empty() -> None:
+    base = "https://www.3gpp.org/ftp/Docs/"
+    html = (
+        "<html><body><table><tbody>"
+        "<tr>"
+        '<td><input type="checkbox" class="downloadInput" value="x"/></td>'
+        '<td><img class="icon" src="/ftp/geticon.axd?file=.zip"/></td>'
+        f'<td><a class="file" href="{base}R5s260001r1.zip">R5s260001r1.zip</a></td>'
+        "<td>   </td>"
+        "</tr>"
+        "</tbody></table></body></html>"
+    )
+
+    files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
+    assert len(files) == 1
+    assert files[0].uploaded_date is None
+
+
+def test_parse_uploaded_date_is_none_when_no_next_sibling() -> None:
+    base = "https://www.3gpp.org/ftp/Docs/"
+    html = (
+        "<html><body><table><tbody>"
+        "<tr>"
+        '<td><input type="checkbox" class="downloadInput" value="x"/></td>'
+        f'<td><a class="file" href="{base}R5s260001r1.zip">R5s260001r1.zip</a></td>'
+        "</tr>"
+        "</tbody></table></body></html>"
+    )
+
+    files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
+    assert len(files) == 1
+    assert files[0].file == "R5s260001r1.zip"
+    assert files[0].uploaded_date is None

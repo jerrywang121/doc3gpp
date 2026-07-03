@@ -101,6 +101,67 @@ def test_upsert_is_idempotent_on_url(sqlite_env) -> None:
     assert len(repo.list()) == 1
 
 
+def test_upsert_and_list_roundtrip_preserves_uploaded_date(sqlite_env) -> None:
+    create_schema()
+    SQLAlchemyTDocRepository().upsert_many([TDoc(tdoc_id="R5s260001")])
+    repo = SQLAlchemyTDocFileRepository()
+
+    repo.upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5s260001",
+                type="revision",
+                file="R5s260001r1.zip",
+                url="https://x/r1.zip",
+                uploaded_date=date(2026, 1, 7),
+            ),
+            TDocFile(
+                tdoc_id="R5s260001",
+                type="review",
+                file="R5s260001_MCC160Comments.zip",
+                url="https://x/r1_review.zip",
+                # uploaded_date left None — legacy listings may not
+                # expose the date column.
+            ),
+        ]
+    )
+
+    rows = repo.list(limit=10)
+    by_url = {row.url: row for row in rows}
+    assert by_url["https://x/r1.zip"].uploaded_date == date(2026, 1, 7)
+    assert by_url["https://x/r1_review.zip"].uploaded_date is None
+
+
+def test_upsert_refreshes_uploaded_date_on_re_sync(sqlite_env) -> None:
+    create_schema()
+    SQLAlchemyTDocRepository().upsert_many([TDoc(tdoc_id="R5s260001")])
+    repo = SQLAlchemyTDocFileRepository()
+
+    repo.upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5s260001", type="revision",
+                file="R5s260001r1.zip", url="https://x/r1.zip",
+                uploaded_date=date(2025, 3, 4),
+            )
+        ]
+    )
+    assert repo.list()[0].uploaded_date == date(2025, 3, 4)
+
+    # Re-sync surfaces a newer uploaded_date (FTP re-upload). The
+    # upsert must overwrite the stored value.
+    repo.upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5s260001", type="revision",
+                file="R5s260001r1.zip", url="https://x/r1.zip",
+                uploaded_date=date(2026, 1, 7),
+            )
+        ]
+    )
+    assert repo.list()[0].uploaded_date == date(2026, 1, 7)
+
+
 def test_upsert_refreshes_type_on_url_reuse(sqlite_env) -> None:
     create_schema()
     SQLAlchemyTDocRepository().upsert_many([TDoc(tdoc_id="R5s260001")])

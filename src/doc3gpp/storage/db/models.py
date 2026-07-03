@@ -137,6 +137,7 @@ class TDocFileORM(Base):
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     file: Mapped[str] = mapped_column(String(256), nullable=False)
     url: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    uploaded_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

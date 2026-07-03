@@ -65,12 +65,14 @@ class SQLAlchemyTDocFileRepository:
                         type=item.type,
                         file=item.file,
                         url=item.url,
+                        uploaded_date=item.uploaded_date,
                     )
                     session.add(target)
                 else:
                     target.tdoc_id = item.tdoc_id
                     target.type = item.type
                     target.file = item.file
+                    target.uploaded_date = item.uploaded_date
                 target.updated_at = now
 
             session.commit()
@@ -137,5 +139,6 @@ def _orm_to_domain(row: TDocFileORM) -> TDocFile:
         type=row.type,
         file=row.file,
         url=row.url,
+        uploaded_date=row.uploaded_date,
         updated_at=row.updated_at,
     )

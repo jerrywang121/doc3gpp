@@ -10,12 +10,21 @@ The 3GPP FTP server renders directory listings as an ASP.NET page. File
 links carry the ``class="file"`` attribute; subfolder links do not, so
 the parser filters on that class to skip ``Inbox/``, ``Docs/``,
 ``Tdocs/`` and ``Review/`` navigation entries.
+
+Each file row is rendered as a ``<tr>`` whose second ``<td>`` after the
+checkbox/icon prefix carries the ``Last Modified`` column. That date is
+parsed as ``YYYY/MM/DD HH:MM`` and attached to the resulting
+:class:`TDocFile` as ``uploaded_date``. The date column is optional —
+legacy listings may omit it, and the parser returns ``None`` rather than
+dropping the file when the cell is missing or unparseable.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable
+from datetime import date, datetime
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -27,9 +36,12 @@ from doc3gpp.models.tdoc_file import (
     TDocFileTypeSupport,
 )
 
+logger = logging.getLogger(__name__)
+
 _RE_REVISION_SUFFIX = re.compile(r"^r\d+$", re.IGNORECASE)
 _RE_REVIEW_SUFFIX = re.compile(r"^_MCC160Comments(_r\d+)?$", re.IGNORECASE)
 _ZIP_SUFFIX = ".zip"
+_FTP_DATE_FORMAT = "%Y/%m/%d %H:%M"
 
 
 def classify_tdoc_filename(
@@ -123,6 +135,39 @@ def parse_tdoc_files_from_listing(
                 type=file_type,
                 file=filename,
                 url=urljoin(base_url, href),
+                uploaded_date=_extract_uploaded_date(anchor),
             )
         )
     return results
+
+
+def _extract_uploaded_date(anchor) -> date | None:
+    """Parse the ``Last Modified`` column from a 3GPP FTP listing row.
+
+    The 3GPP FTP directory listing renders each file as a ``<tr>`` whose
+    cells are: checkbox, icon, file link, ``Last Modified`` date, size.
+    The anchor's parent ``<td>`` is the file-link cell; the date lives in
+    the immediately following sibling ``<td>`` and is formatted as
+    ``YYYY/MM/DD HH:MM`` (server-local time).
+
+    Returns ``None`` when the anchor is not wrapped in a ``<td>`` (e.g.
+    legacy or stripped listings), when the date cell is missing, or when
+    the cell text does not match the expected format. A missing date
+    must never cause an otherwise-valid file to be dropped — the
+    ``file``, ``url``, ``tdoc_id`` and ``type`` fields are sufficient to
+    persist the row.
+    """
+    parent_td = anchor.find_parent("td")
+    if parent_td is None:
+        return None
+    date_td = parent_td.find_next_sibling("td")
+    if date_td is None:
+        return None
+    text = date_td.get_text(strip=True)
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, _FTP_DATE_FORMAT).date()
+    except ValueError:
+        logger.debug("Could not parse uploaded_date %r from FTP listing", text)
+        return None

@@ -44,10 +44,16 @@ def _listing_html(base: str, *filenames: str) -> str:
 def test_scans_each_known_subfolder_and_collects_unique_files() -> None:
     docs_base = "https://www.3gpp.org/ftp/meeting/Docs/"
     review_base = "https://www.3gpp.org/ftp/meeting/Review/"
+    intermediate_crs_base = (
+        "https://www.3gpp.org/ftp/meeting/Inbox/Intermediate_CRs/"
+    )
     client = _client(
         directory_html={
             "inbox/": _listing_html(
                 "https://www.3gpp.org/ftp/meeting/Inbox/", "R5s260001r1.zip"
+            ),
+            "inbox/intermediate_crs/": _listing_html(
+                intermediate_crs_base, "R5-261719r1.zip"
             ),
             "docs/": _listing_html(docs_base, "R5s260001.zip"),
             "review/": _listing_html(
@@ -60,22 +66,53 @@ def test_scans_each_known_subfolder_and_collects_unique_files() -> None:
 
     with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
         files = fetch_tdoc_files_from_meeting_ftp(
-            "ftp://example.com/meeting/", tdoc_ids=["R5s260001"]
+            "ftp://example.com/meeting/",
+            tdoc_ids=["R5s260001", "R5-261719"],
         )
 
     by_file = {f.file: f for f in files}
     assert by_file["R5s260001r1.zip"].type == TDocFileTypeRevision
     assert by_file["R5s260001_MCC160Comments.zip"].type == TDocFileTypeReview
     assert by_file["R5s260001_draft.zip"].type == TDocFileTypeSupport
+    assert by_file["R5-261719r1.zip"].type == TDocFileTypeRevision
+    assert by_file["R5-261719r1.zip"].url == (
+        f"{intermediate_crs_base}R5-261719r1.zip"
+    )
     # Base TDoc ZIP is still skipped even though it appears in the listing.
     assert "R5s260001.zip" not in by_file
-    # All four subfolders were attempted; tdocs/ 404'd because the
+    # All five subfolders were attempted; tdocs/ 404'd because the
     # ``directory_html`` map has no entry for it.
-    assert client.get_text.call_count == 4
+    assert client.get_text.call_count == 5
+
+
+def test_intermediate_crs_subfolder_is_scanned() -> None:
+    intermediate_crs_base = (
+        "https://www.3gpp.org/ftp/meeting/Inbox/Intermediate_CRs/"
+    )
+    client = _client(
+        directory_html={
+            "inbox/intermediate_crs/": _listing_html(
+                intermediate_crs_base,
+                "R5-261719r1.zip",
+                "R5-261719_draft.zip",
+                "R5-261719.zip",
+            ),
+        }
+    )
+
+    with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
+        files = fetch_tdoc_files_from_meeting_ftp(
+            "ftp://example.com/meeting/", tdoc_ids=["R5-261719"]
+        )
+
+    by_file = {f.file: f for f in files}
+    assert by_file["R5-261719r1.zip"].type == TDocFileTypeRevision
+    assert by_file["R5-261719_draft.zip"].type == TDocFileTypeSupport
+    assert "R5-261719.zip" not in by_file
 
 
 def test_missing_subfolder_is_silently_skipped() -> None:
-    # Only ``docs/`` is reachable; the other three return HTTPError.
+    # Only ``docs/`` is reachable; the other four return HTTPError.
     docs_base = "https://www.3gpp.org/ftp/meeting/Docs/"
     client = _client(
         directory_html={"docs/": _listing_html(docs_base, "R5s260001r1.zip")}

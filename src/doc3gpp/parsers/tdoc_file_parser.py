@@ -55,13 +55,28 @@ def classify_tdoc_filename(
     ``R5s260001`` vs. ``R5s2600012``) and inspects the remainder to
     determine the file type.
 
-    Returns a ``(tdoc_id, file_type)`` tuple for a recognized filename,
-    or ``None`` if the file is:
+    Once a TDoc ID prefix matches, the remainder is dispatched into
+    exactly one of four outcomes:
 
-    - not a ``.zip`` file,
-    - the base TDoc itself (e.g. ``R5s260001.zip``),
-    - related to a TDoc ID not in ``tdoc_ids``, or
-    - has a suffix that does not match any of the recognised patterns.
+    1. **base TDoc (skip)** — the filename equals ``{tdoc_id}.zip``
+       with no extra suffix (e.g. ``R5-261719.zip``). These are the
+       official TDoc ZIPs already stored on the ``tdocs`` table, so
+       they are not modelled here.
+    2. **revision** — suffix matches ``r\\d+`` (e.g.
+       ``R5-261719r1.zip``). A renamed revision of the base TDoc.
+    3. **review** — suffix matches ``_MCC160Comments`` or
+       ``_MCC160Comments_r\\d+`` (e.g. ``R5s250008_MCC160Comments.zip``,
+       ``R5s250009_MCC160Comments_r1.zip``). A TTCN CR review document
+       produced for the base TDoc; only exists for TTCN email meetings.
+    4. **support** — any other suffix that starts with ``_`` (e.g.
+       ``R5s250009_R5-25xxxx_38.508-1_NRCA_interband_BWs.zip``). A
+       supporting draft or other attachment routed through the same
+       meeting folder as the base TDoc.
+
+    Returns a ``(tdoc_id, file_type)`` tuple for outcomes 2–4, or
+    ``None`` for the base TDoc and for files that are not ``.zip``,
+    do not match any ``tdoc_id``, or have a suffix that fits none of
+    the recognised patterns.
     """
     if not filename:
         return None
@@ -81,6 +96,7 @@ def classify_tdoc_filename(
             continue
         suffix = name[len(tid):]
         if not suffix:
+            # {tdoc_id}.zip — base TDoc itself; skip auxiliary modelling.
             return None
         matching_id = tid
         break

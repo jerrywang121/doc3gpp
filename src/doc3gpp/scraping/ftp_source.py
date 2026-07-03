@@ -16,7 +16,15 @@ from doc3gpp.scraping.client import ScraperClient
 
 logger = logging.getLogger(__name__)
 
-TDOC_FILE_SUBDIRS: tuple[str, ...] = ("inbox/", "docs/", "tdocs/", "review/")
+#: Nested ``inbox/intermediate_crs/`` entry covers R5 meetings whose
+#: Intermediate CRs live under a dedicated subdirectory of ``Inbox/``.
+TDOC_FILE_SUBDIRS: tuple[str, ...] = (
+    "inbox/",
+    "inbox/intermediate_crs/",
+    "docs/",
+    "tdocs/",
+    "review/",
+)
 
 
 def _normalize_ftp_path(path: str) -> str:
@@ -152,13 +160,15 @@ def fetch_tdoc_files_from_meeting_ftp(
 ) -> list[TDocFile]:
     """Scan a meeting's FTP subfolders for auxiliary TDoc files.
 
-    Visits each of ``inbox/``, ``docs/``, ``tdocs/`` and ``review/`` under
-    ``ftp_url`` and returns the union of files that match the supplied
-    ``tdoc_ids`` and the revision / review / support naming
-    conventions. Subfolders that 404 are silently skipped (most
-    meetings only have one of ``docs/``/``tdocs/``, and only R5 TTCN
-    email meetings have a ``review/`` folder); any other HTTP error
-    propagates so transient failures surface.
+    Visits each subfolder in :data:`TDOC_FILE_SUBDIRS` under
+    ``ftp_url`` and returns the union of files that match the
+    supplied ``tdoc_ids`` and the revision / review / support
+    naming conventions. Subfolders that 404 are silently skipped
+    (most meetings only have one of ``docs/``/``tdocs/``, only R5
+    TTCN email meetings have a ``review/`` folder, and only R5
+    meetings route Intermediate CRs through
+    ``inbox/intermediate_crs/``); any other HTTP error propagates so
+    transient failures surface.
 
     Files that appear in more than one subfolder are deduplicated by
     URL — the same upstream location can be reached through both

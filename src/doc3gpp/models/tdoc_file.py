@@ -4,8 +4,9 @@ A ``TDocFile`` is an attachment that lives next to a base TDoc in a meeting
 FTP directory. Three kinds of attachments are recognised:
 
 - ``revision``: a renamed revision of the base TDoc
-  (e.g. ``R5s260001r1.zip``). Stored under ``Inbox/`` for most meetings and
-  under ``Docs/`` for R5 TTCN Workshop meetings.
+  (e.g. ``R5s260001r1.zip``). Stored under ``Inbox/`` for most meetings,
+  under ``Docs/`` for R5 TTCN Workshop meetings, and under
+  ``Inbox/Intermediate_CRs/`` for R5 Intermediate CRs.
 - ``review``: a TTCN CR review document produced for a base TDoc
   (e.g. ``R5s260001_MCC160Comments.zip``). Stored under ``Review/`` for
   R5 TTCN email meetings.

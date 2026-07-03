@@ -15,7 +15,15 @@ from doc3gpp.parsers.tdoc_file_parser import (
 )
 
 
-_TDOC_IDS = ["R5s260001", "R5s260002", "R5w260100", "R5-260300"]
+_TDOC_IDS = [
+    "R5s260001",
+    "R5s260002",
+    "R5w260100",
+    "R5-260300",
+    "R5-261719",
+    "R5s250008",
+    "R5s250009",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +79,35 @@ def test_classify_longest_id_match_wins() -> None:
 
 def test_classify_base_tdoc_file_is_skipped() -> None:
     assert classify_tdoc_filename("R5s260001.zip", _TDOC_IDS) is None
+
+
+def test_classify_dash_format_base_tdoc_file_is_skipped() -> None:
+    assert classify_tdoc_filename("R5-261719.zip", _TDOC_IDS) is None
+
+
+def test_classify_dash_format_revision() -> None:
+    assert classify_tdoc_filename("R5-261719r1.zip", _TDOC_IDS) == (
+        "R5-261719",
+        TDocFileTypeRevision,
+    )
+
+
+def test_classify_ttcn_review_basename() -> None:
+    assert classify_tdoc_filename(
+        "R5s250008_MCC160Comments.zip", _TDOC_IDS
+    ) == ("R5s250008", TDocFileTypeReview)
+
+
+def test_classify_ttcn_review_revision() -> None:
+    assert classify_tdoc_filename(
+        "R5s250009_MCC160Comments_r1.zip", _TDOC_IDS
+    ) == ("R5s250009", TDocFileTypeReview)
+
+
+def test_classify_support_with_complex_suffix() -> None:
+    assert classify_tdoc_filename(
+        "R5s250009_R5-25xxxx_38.508-1_NRCA_interband_BWs.zip", _TDOC_IDS
+    ) == ("R5s250009", TDocFileTypeSupport)
 
 
 def test_classify_unknown_tdoc_id_is_skipped() -> None:

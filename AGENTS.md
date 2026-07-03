@@ -25,14 +25,14 @@ Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (7): db, meetings, tdoc, tsg, wi
+│   ├── cli.py            # Typer commands (6 groups): db, meetings, tdoc, tsg, wi, config
 │   ├── config.py         # re-export shim (legacy)
 │   ├── models/           # Meeting, TDoc, Tsg, Wi dataclasses
 │   ├── parsers/          # HTML/Excel → domain objects (no network)
 │   ├── repository/       # Protocol contracts (abstract)
 │   ├── scraping/         # HTTP/FTP transport (no parsing)
 │   ├── services/         # orchestration: MeetingService, TDocService, TsgService, WiService
-│   ├── settings/         # pydantic-settings (env-driven, @lru_cache)
+│   ├── settings/         # pydantic-settings + TOML discovery (schema, config_source, loader)
 │   └── storage/          # persistence umbrella
 │       ├── backends/     # engine kwargs per dialect
 │       ├── db/           # ORM models, session, migrate, base
@@ -87,8 +87,13 @@ doc3gpp/
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of WiRepository |
 | `get_engine` | function | `storage/db/session.py` | Cached engine factory |
 | `create_schema` | function | `storage/db/migrate.py` | Base.metadata.create_all |
-| `get_settings` | function | `settings/loader.py` | Cached settings loader |
-| `Settings` | model | `settings/schema.py` | pydantic-settings for DOC3GPP_* |
+| `get_settings` | function | `settings/loader.py` | Cached settings loader (env + TOML file) |
+| `Settings` | model | `settings/schema.py` | Root pydantic-settings (flat DOC3GPP_* + nested sub-models) |
+| `MeetingSyncSettings` | model | `settings/schema.py` | Fetch knobs (`closed_years`, `future_years`) |
+| `OutputSettings` | model | `settings/schema.py` | Default `format` + per-command field lists |
+| `OutputFieldsSettings` | model | `settings/schema.py` | Per-list-command `default_fields` lists |
+| `find_config_file` | function | `settings/config_source.py` | TOML discovery (DOC3GPP_CONFIG → ./doc3gpp.toml → XDG) |
+| `load_config_data` | function | `settings/config_source.py` | Returns `(path, dict)` for the active TOML file |
 
 ## COMMANDS
 
@@ -134,8 +139,11 @@ Flow:
 - `doc3gpp wi sync --tsg <short>` → `WiService.sync` → `fetch_wis` → `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many`. The `wis.tsg_short` column is a foreign key into `tsgs.short_name`, so the `tsgs` table is auto-seeded and `--tsg` is validated against it.
 - `doc3gpp db init` calls `create_schema()` and then `TsgService.seed_defaults()` to populate the `tsgs` reference table.
 - `doc3gpp meeting sync --tsg <short>` validates `<short>` against the `tsgs` table (auto-seeded if empty); an unknown value raises `typer.BadParameter` listing the known short names.
-- `doc3gpp tsg list` and `doc3gpp tsg show` read from the `tsgs` table via `SQLAlchemyTsgRepository`. `doc3gpp tsg seed` upserts the canonical 16 rows.
-
+- `doc3gpp tsg list` and `doc3gpp tsg show` read from the `tsgs` table via
+  `SQLAlchemyTsgRepository`. `doc3gpp tsg seed` upserts the canonical 16 rows.
+- `doc3gpp config path` reports which TOML file is in effect (or "(no
+  config file found)"); `doc3gpp config show` dumps the fully-resolved
+  settings as JSON for diffing against the schema in `doc3gpp.toml.example`.
 ## SETTINGS CACHING — FLUSH IN TESTS
 
 Both loaders are `@lru_cache(maxsize=1)`:
@@ -143,10 +151,30 @@ Both loaders are `@lru_cache(maxsize=1)`:
 - `doc3gpp.settings.loader.get_settings`
 - `doc3gpp.storage.db.session.get_engine`
 
-If a test or fixture changes `DOC3GPP_*` env vars via `monkeypatch`, it **must** `cache_clear()` both. See the `sqlite_env` fixture in `tests/conftest.py` for the canonical pattern.
+If a test or fixture changes `DOC3GPP_*` env vars via `monkeypatch`, it
+**must** `cache_clear()` both. See the `sqlite_env` fixture in
+`tests/conftest.py` for the canonical pattern.
 
-Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL_SIZE`, `DOC3GPP_DB_AUTO_MIGRATE`, `DOC3GPP_LOG_LEVEL`, `DOC3GPP_HTTP_VERIFY`, `DOC3GPP_HTTP_MAX_RETRIES`, `DOC3GPP_HTTP_RETRY_BACKOFF`. MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
+Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL_SIZE`, `DOC3GPP_DB_AUTO_MIGRATE`, `DOC3GPP_LOG_LEVEL`, `DOC3GPP_HTTP_VERIFY`, `DOC3GPP_HTTP_MAX_RETRIES`, `DOC3GPP_HTTP_RETRY_BACKOFF`. Nested settings are overridable via the `__` delimiter: `DOC3GPP_MEETING_SYNC__CLOSED_YEARS=5`, `DOC3GPP_OUTPUT__FORMAT=json`. MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
 
+## CONFIG FILE LAYER
+
+TOML configuration files are merged into `Settings` below env vars in
+precedence (CLI > env > file > defaults). Discovery order:
+
+1. `$DOC3GPP_CONFIG` (file or directory).
+2. `./doc3gpp.toml` (project-local).
+3. `~/.config/doc3gpp/config.toml` (XDG; honors `$XDG_CONFIG_HOME`).
+
+A missing file is silent (defaults are used); a malformed file raises
+`ValueError` pointing at the path. `Settings` uses `extra="ignore"` so
+unrelated keys in the file are dropped rather than rejected — keeps the
+file co-tenanted with third-party tooling metadata. See
+`doc3gpp.toml.example` for the full schema and `doc3gpp config path` /
+`doc3gpp config show` for inspection. The schema lives in
+`src/doc3gpp/settings/schema.py`; discovery in
+`src/doc3gpp/settings/config_source.py`; loader merge in
+`src/doc3gpp/settings/loader.py`.
 ## CONVENTIONS
 
 - Static type hints on all new code (project targets py310, `ruff target-version = "py310"`).

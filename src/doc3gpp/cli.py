@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import logging
+import sys
 from dataclasses import fields as dataclass_fields
 from datetime import datetime
+from pathlib import Path
+from typing import TextIO
 
-import logging
 import typer
 from sqlalchemy import text
 
@@ -155,6 +159,98 @@ def _tdoc_field(item: TDocWithMeeting, name: str) -> object | None:
     return getattr(item.tdoc, name, None)
 
 
+VALID_FORMATS: tuple[str, ...] = ("table", "json", "markdown")
+
+
+def _resolve_format(fmt: str | None) -> str:
+    """Resolve ``--format``; default to ``table`` and reject unknown values."""
+    if fmt is None or fmt == "":
+        return "table"
+    normalized = fmt.strip().lower()
+    if normalized not in VALID_FORMATS:
+        valid = ", ".join(VALID_FORMATS)
+        raise typer.BadParameter(
+            f"Unknown format {fmt!r}. Choose from: {valid}."
+        )
+    return normalized
+
+
+def _open_output(path: str | None) -> tuple[TextIO, bool]:
+    """Open ``path`` for writing, or return ``(sys.stdout, False)`` for stdout.
+
+    ``None`` and the literal ``"-"`` both resolve to stdout. The second
+    return value tells the caller whether to close the stream afterwards.
+    """
+    if path is None or path == "-":
+        return sys.stdout, False
+    return Path(path).open("w", encoding="utf-8", newline=""), True
+
+
+def _md_cell(value: str) -> str:
+    """Escape a markdown table cell.
+
+    Pipes break column alignment inside GitHub-flavored tables, so the
+    few values that contain them need a backslash to render correctly.
+    """
+    return value.replace("|", "\\|")
+
+
+def _emit_table(rows: list[list[str]], stream: TextIO) -> None:
+    for row in rows:
+        stream.write("\t".join(row))
+        stream.write("\n")
+
+
+def _emit_json(rows: list[list[str]], stream: TextIO, fields: list[str]) -> None:
+    objs = [dict(zip(fields, row)) for row in rows]
+    json.dump(objs, stream, ensure_ascii=False, indent=2)
+    stream.write("\n")
+
+
+def _emit_markdown(rows: list[list[str]], stream: TextIO, fields: list[str]) -> None:
+    stream.write("| " + " | ".join(_md_cell(h) for h in fields) + " |\n")
+    stream.write("|" + "|".join(["---"] * len(fields)) + "|\n")
+    for row in rows:
+        stream.write("| " + " | ".join(_md_cell(c) for c in row) + " |\n")
+
+
+def _emit_records(
+    rows: list[list[str]],
+    fields: list[str],
+    fmt: str,
+    output: str | None,
+    *,
+    no_records_msg: str,
+) -> None:
+    """Emit ``rows`` to ``output`` (or stdout) in the chosen format.
+
+    Empty rows are emitted as ``[]`` / header-only in JSON and markdown so
+    downstream consumers always see a parseable payload. The friendly
+    "no records" message prints only when ``--format table`` is paired
+    with stdout — writing an empty table file would just be noise.
+    """
+    stream, close_after = _open_output(output)
+    try:
+        if not rows:
+            if fmt == "json":
+                _emit_json([], stream, fields)
+            elif fmt == "markdown":
+                _emit_markdown([], stream, fields)
+            elif output is None:
+                stream.write(no_records_msg + "\n")
+            return
+
+        if fmt == "table":
+            _emit_table(rows, stream)
+        elif fmt == "json":
+            _emit_json(rows, stream, fields)
+        else:
+            _emit_markdown(rows, stream, fields)
+    finally:
+        if close_after:
+            stream.close()
+
+
 @db_app.command("check")
 def db_check() -> None:
     """Validate database connectivity for configured backend."""
@@ -234,6 +330,17 @@ def meeting_list(
         None,
         help="Comma-separated list of fields to include (or 'all' for all fields).",
     ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
 ) -> None:
     """List meetings from database with optional filtering and pagination.
 
@@ -256,6 +363,11 @@ def meeting_list(
     Available fields for selection:
     meeting_id, name, title, location, start_date, end_date, ftp_url,
     start_doc, end_doc, updated_at
+
+    Output routing:
+    - `-o, --output PATH`: write results to PATH instead of stdout.
+    - `--format`: ``table`` (legacy tab-separated, default), ``json`` (array of
+      objects), or ``markdown`` (GitHub-flavored table).
     """
     allowed_fields = [
         "meeting_id",
@@ -275,6 +387,7 @@ def meeting_list(
     default_fields = [f for f in allowed_fields if f not in ("title", "updated_at")]
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
+    fmt = _resolve_format(fmt)
 
     # Validate --tsg against the reference table (matches `meeting sync`).
     # The table is auto-seeded on a fresh DB so this is safe without `db init`.
@@ -290,10 +403,8 @@ def meeting_list(
     records = service.list_recent(
         limit=limit, offset=offset, tsg=tsg, name_like=name, location_like=location, year=year,
     )
-    if not records:
-        typer.echo("No meetings found")
-        return
 
+    rows: list[list[str]] = []
     for item in records:
         assert isinstance(item, Meeting)
         vals: list[str] = []
@@ -310,7 +421,15 @@ def meeting_list(
             else:
                 vals.append(str(v))
 
-        typer.echo("\t".join(vals))
+        rows.append(vals)
+
+    _emit_records(
+        rows=rows,
+        fields=out_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg="No meetings found",
+    )
 
 
 @tdoc_app.command("sync")
@@ -387,6 +506,17 @@ def tdoc_list(
         None,
         help="Comma-separated list of fields to include in output, or 'all' for all fields.",
     ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
 ) -> None:
     """List recent stored TDocs.
 
@@ -412,10 +542,13 @@ def tdoc_list(
     tdoc_id, title, meeting_id, meeting_name, url, source, type, status,
     reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to,
     release, spec, version, related_wis, cr_num, cr_pack, updated_at
+
+    Output routing:
+    - `-o, --output PATH`: write results to PATH instead of stdout.
+    - `--format`: ``table`` (legacy tab-separated, default), ``json`` (array of
+      objects), or ``markdown`` (GitHub-flavored table).
     """
 
-    # ``meeting_name`` is a top-level attribute on ``TDocWithMeeting``; the
-    # rest live on ``TDocWithMeeting.tdoc``.
     # ``meeting_name`` is a top-level attribute on ``TDocWithMeeting``; the
     # rest live on ``TDocWithMeeting.tdoc``.
     allowed_fields = [f.name for f in dataclass_fields(TDoc)] + ["meeting_name"]
@@ -433,6 +566,7 @@ def tdoc_list(
     ]
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
+    fmt = _resolve_format(fmt)
 
     logger.info(
         "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
@@ -463,10 +597,8 @@ def tdoc_list(
         status_like=status,
         type_like=type,
     )
-    if not records:
-        typer.echo("No TDocs found")
-        return
 
+    rows: list[list[str]] = []
     for item in records:
         assert isinstance(item, TDocWithMeeting)
         vals: list[str] = []
@@ -483,7 +615,15 @@ def tdoc_list(
             else:
                 vals.append(str(v))
 
-        typer.echo("\t".join(vals))
+        rows.append(vals)
+
+    _emit_records(
+        rows=rows,
+        fields=out_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg="No TDocs found",
+    )
 
 
 @tsg_app.command("list")
@@ -491,6 +631,17 @@ def tsg_list(
     fields: str | None = typer.Option(
         None,
         help="Comma-separated list of fields to include (or 'all' for all fields).",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
     ),
 ) -> None:
     """List TSG reference records from the database.
@@ -501,23 +652,34 @@ def tsg_list(
     By default, the output includes ``tsg_name``, ``short_name``, and
     ``description`` to keep the listing compact. Use ``--fields all`` to
     include ``url`` as well.
+
+    Output routing:
+    - `-o, --output PATH`: write results to PATH instead of stdout.
+    - `--format`: ``table`` (legacy tab-separated, default), ``json`` (array of
+      objects), or ``markdown`` (GitHub-flavored table).
     """
     allowed_fields = [f.name for f in dataclass_fields(Tsg)]
     default_fields = ["tsg_name", "short_name", "description"]
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
+    fmt = _resolve_format(fmt)
 
     logger.info("Listing TSG reference records (fields=%s)", out_fields)
     service = build_tsg_service()
     records = service.list_all()
-    if not records:
-        typer.echo("No TSG records found. Run 'doc3gpp db init' to seed defaults.")
-        return
 
+    rows: list[list[str]] = []
     for item in records:
         assert isinstance(item, Tsg)
-        vals = [str(getattr(item, f) or "-") for f in out_fields]
-        typer.echo("\t".join(vals))
+        rows.append([str(getattr(item, f) or "-") for f in out_fields])
+
+    _emit_records(
+        rows=rows,
+        fields=out_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg="No TSG records found. Run 'doc3gpp db init' to seed defaults.",
+    )
 
 
 @tsg_app.command("show")
@@ -605,6 +767,17 @@ def wi_list(
         None,
         help="SQL LIKE pattern to filter WI release marker (supports % and _).",
     ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
 ) -> None:
     """List stored WIs matching the filters (default output: wi_id, acronym, release, name).
 
@@ -619,6 +792,11 @@ def wi_list(
     By default the output prints four columns: ``wi_id``, ``acronym``,
     ``release`` and ``name``. Each value is rendered as a plain string,
     ``-`` when the underlying field is missing.
+
+    Output routing:
+    - `-o, --output PATH`: write results to PATH instead of stdout.
+    - `--format`: ``table`` (legacy tab-separated, default), ``json`` (array of
+      objects), or ``markdown`` (GitHub-flavored table).
     """
     logger.info(
         "Listing %s recent WIs with filters tsg=%s name=%s acronym=%s release=%s",
@@ -636,15 +814,22 @@ def wi_list(
         acronym_like=acronym,
         release_like=release,
     )
-    if not records:
-        typer.echo("No WIs found")
-        return
 
     default_fields = ["wi_id", "acronym", "release", "name"]
+    fmt = _resolve_format(fmt)
+
+    rows: list[list[str]] = []
     for item in records:
         assert isinstance(item, Wi)
-        vals = [str(getattr(item, f) or "-") for f in default_fields]
-        typer.echo("\t".join(vals))
+        rows.append([str(getattr(item, f) or "-") for f in default_fields])
+
+    _emit_records(
+        rows=rows,
+        fields=default_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg="No WIs found",
+    )
 
 
 def main() -> None:

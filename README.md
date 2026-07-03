@@ -101,6 +101,13 @@ doc3gpp tdoc list --tsg R5 --year 26 --meeting "%RAN3%"
 doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
 doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
+
+# Every `* list` command also accepts `--format table|json|markdown`
+# and `-o/--output PATH` to redirect the result to a file:
+doc3gpp tdoc list --format json -o tdocs.json
+doc3gpp meeting list --format markdown -o meetings.md
+doc3gpp tsg list --format json
+doc3gpp wi list --format markdown
 ```
 
 ## Testing

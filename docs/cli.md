@@ -102,6 +102,8 @@ Additional options:
 - --location: SQL LIKE pattern to filter meeting `location` (supports `%` and `_`).
 - --year: filter meetings by the year of the `end_date`.
 - --fields: comma-separated list of fields to include in output, or `all`.
+- --format: see "Common list output options" below (table | json | markdown).
+- -o, --output: write the result to a file instead of stdout.
 
 Default output fields:
 
@@ -187,6 +189,8 @@ Options:
 - --status: SQL LIKE pattern to filter by TDoc status.
 - --type: SQL LIKE pattern to filter by TDoc type.
 - --fields: comma-separated list of fields to include in output, or `all`.
+- --format: see "Common list output options" below (table | json | markdown).
+- -o, --output: write the result to a file instead of stdout.
 
 Default output fields:
 
@@ -241,6 +245,8 @@ Options:
 
 - --fields: comma-separated list of fields, or `all`.
   - default: `tsg_name,short_name,description`
+- --format: see "Common list output options" below (table | json | markdown).
+- -o, --output: write the result to a file instead of stdout.
 
 Default output fields:
 
@@ -259,6 +265,9 @@ doc3gpp tsg list --fields all
 
 # Only the short codes and full names
 doc3gpp tsg list --fields short_name,tsg_name
+
+# Dump the full table to a JSON file
+doc3gpp tsg list --format json --output tsg_reference.json
 ```
 
 ### doc3gpp tsg show
@@ -365,6 +374,8 @@ Options:
   (supports `%` and `_`).
 - --release: SQL `LIKE` pattern to filter the release marker
   (supports `%` and `_`).
+- --format: see "Common list output options" below (table | json | markdown).
+- -o, --output: write the result to a file instead of stdout.
 
 Default output fields (tab-separated):
 
@@ -381,7 +392,37 @@ doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
 
 # WIs whose acronym contains "UEConTest".
 doc3gpp wi list --acronym "%UEConTest%" --limit 50
+
+# Markdown export of all RAN WG5 WIs.
+doc3gpp wi list --tsg R5 --format markdown -o r5_wis.md
 ```
+
+## Common list output options
+
+The `meeting list`, `tdoc list`, `tsg list`, and `wi list` commands all
+accept the same two output-routing flags in addition to their
+command-specific filters:
+
+- `-o, --output PATH`: write the result to `PATH` instead of stdout. The
+  file is opened in `w` mode and truncated if it already exists; pass
+  `-o -` to force stdout.
+- `--format FMT`: choose the output format.
+  - `table` (default) — the legacy tab-separated rendering. With zero
+    records, a friendly "No X found" line is written to stdout (or
+    suppressed when stdout is redirected to a file).
+  - `json` — UTF-8 JSON array of objects keyed by the selected field
+    names. With zero records, the file contains `[]` so consumers always
+    see a parseable payload.
+  - `markdown` — a GitHub-flavored markdown table (`| col | col |` header
+    plus `|---|` separator). With zero records, only the header and
+    separator lines are emitted. Pipe characters in cell values are
+    backslash-escaped.
+
+Both flags are orthogonal: `--format` without `--output` re-prints to
+stdout in the chosen format, and `--output` without an explicit
+`--format` keeps the legacy tab-separated output. Values for
+`--format` are case-insensitive and an unknown value raises a
+`BadParameter` listing the accepted tokens.
 
 ## Examples
 
@@ -396,4 +437,10 @@ doc3gpp tdoc list --limit 10
 doc3gpp wi sync --tsg r5
 doc3gpp wi list --limit 10
 doc3gpp wi list --tsg r5 --release "Rel-19" --limit 100
+
+# Common output variants
+doc3gpp tdoc list --format json --output tdocs.json
+doc3gpp meeting list --format markdown -o meetings.md
+doc3gpp tsg list --format json
+doc3gpp wi list --format markdown -o wis.md
 ```

@@ -10,7 +10,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,8 +22,7 @@ class TDocORM(Base):
 
     __tablename__ = "tdocs"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    tdoc_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tdoc_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     # store as FK to meetings.meeting_id
     meeting_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("meetings.meeting_id"), nullable=True, index=True)
@@ -79,9 +77,8 @@ class TsgORM(Base):
 
     __tablename__ = "tsgs"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     tsg_name: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
-    short_name: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    short_name: Mapped[str] = mapped_column(String(16), primary_key=True)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -96,16 +93,15 @@ class WiORM(Base):
     """
 
     __tablename__ = "wis"
-    __table_args__ = (UniqueConstraint("wi_id", "tsg_short", name="uq_wis_wi_id_tsg_short"),)
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    wi_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    wi_id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
     acronym: Mapped[str] = mapped_column(String(256), nullable=False)
     release: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     tsg_short: Mapped[str] = mapped_column(
         String(16),
         ForeignKey("tsgs.short_name"),
+        primary_key=True,
         nullable=False,
         index=True,
     )

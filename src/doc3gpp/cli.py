@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.services.factory import (
@@ -62,8 +62,17 @@ def main_callback(ctx: typer.Context) -> None:
         typer.echo(app.get_help(ctx))
 
 
-def _build_meeting_url(tsg: str) -> str:
-    return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.htm"
+def _build_meeting_url(tsg: str, ext: str = "htm") -> str:
+    """Compose the 3GPP DynaReport meeting-calendar URL for ``tsg``.
+
+    The default ``ext="htm"`` matches the canonical 3GPP filename. Pass
+    ``"html"`` if the upstream ever switches the suffix (the ``tsg_service``
+    page already serves ``.html`` for some links, so callers can request the
+    alternate suffix without patching this helper).
+    """
+    if ext not in ("htm", "html"):
+        raise ValueError(f"Unsupported meeting URL extension: {ext!r}")
+    return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.{ext}"
 
 
 def _ensure_tsg_ready(tsg_service: TsgService) -> TsgService:
@@ -85,6 +94,65 @@ def _validate_tsg_short_name(tsg: str, service: TsgService) -> str:
             f"Run 'doc3gpp tsg list' for the full reference."
         )
     return canonical
+
+
+def _parse_field_selection(
+    requested: str | None,
+    allowed_fields: list[str],
+    default_fields: list[str],
+) -> list[str]:
+    """Resolve a ``--fields`` comma-separated option into a concrete field list.
+
+    Semantics:
+      - Empty / ``None`` input ⇒ fall back to ``default_fields``.
+      - The literal token ``all`` (case-insensitive) ⇒ return every entry in
+        ``allowed_fields`` in declaration order.
+      - Otherwise ⇒ validate each requested token against ``allowed_fields``
+        and raise ``typer.BadParameter`` listing unknown names. The error
+        message format matches what ``meeting list`` / ``tdoc list`` /
+        ``tsg list`` produced before this helper was extracted, so existing
+        tests still match.
+    """
+    if not requested:
+        return default_fields
+
+    selected = [f.strip() for f in requested.split(",") if f.strip()]
+    if any(f.lower() == "all" for f in selected):
+        return list(allowed_fields)
+
+    invalid = [f for f in selected if f not in allowed_fields]
+    if invalid:
+        valid_list = ", ".join(allowed_fields)
+        raise typer.BadParameter(
+            f"Unknown field(s): {', '.join(invalid)}. Valid fields: {valid_list}"
+        )
+    return selected
+
+
+def _auto_wrap_like(pattern: str) -> str:
+    """Auto-wrap a SQL ``LIKE`` pattern when no wildcards are present.
+
+    SQL ``LIKE`` matches the literal string when the pattern has no ``%`` or
+    ``_``; that surprises users who pass ``--meeting RAN5#111`` and expect
+    substring matching. Wrapping such patterns in ``%...%`` makes the common
+    case ergonomic while still allowing explicit wildcards when needed.
+    """
+    if "%" in pattern or "_" in pattern:
+        return pattern
+    return f"%{pattern}%"
+
+
+def _tdoc_field(item: TDocWithMeeting, name: str) -> object | None:
+    """Resolve a CLI field name against a :class:`TDocWithMeeting` DTO.
+
+    ``meeting_name`` is a top-level attribute on the DTO (computed via
+    JOIN); every other field lives on ``item.tdoc``. Centralising the
+    routing keeps the print loop free of ``isinstance`` checks and lets
+    field names mirror ``dataclass_fields(TDoc)`` + ``"meeting_name"``.
+    """
+    if name == "meeting_name":
+        return item.meeting_name
+    return getattr(item.tdoc, name, None)
 
 
 @db_app.command("check")
@@ -128,6 +196,13 @@ def meeting_sync(
     (see ``doc3gpp tsg list``). On a fresh database the reference table is
     auto-seeded with the canonical 3GPP TSG list, so this command is safe to
     run without an explicit ``db init`` first.
+
+    The year window defined by ``--closed-years`` and ``--future-years`` is
+    *additive*: after upserting the freshly scraped meetings, the sync
+    deletes any previously stored meeting whose ``end_date`` falls strictly
+    before today minus ``--closed-years`` years. Re-running with a narrower
+    ``--closed-years`` therefore trims older rows; widening it does not
+    resurrect already-deleted rows (run a fresh sync from the source instead).
     """
     logger.info("Starting meeting sync for TSG %s", tsg)
     create_schema()
@@ -148,6 +223,9 @@ def _fmt_dt(value: datetime | None) -> str:
 @meeting_app.command("list")
 def meeting_list(
     limit: int = typer.Option(20, min=1, max=500),
+    offset: int = typer.Option(
+        0, min=0, help="Number of rows to skip before applying --limit (pagination)."
+    ),
     tsg: str | None = typer.Option(None, help="Only list meetings for the given TSG short name"),
     name: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting name (supports % and _)") ,
     location: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting location (supports % and _)") ,
@@ -157,17 +235,23 @@ def meeting_list(
         help="Comma-separated list of fields to include (or 'all' for all fields).",
     ),
 ) -> None:
-    """List recent meetings from database.
+    """List meetings from database with optional filtering and pagination.
 
-    The command supports additional filters and field selection:
-    - `--tsg`: optional TSG short name to restrict results (matches name prefix)
-    - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`)
-    - `--location`: SQL LIKE pattern to filter `location` (supports `%` and `_`)
-    - `--year`: filter by the end_date year
-    - `--fields`: comma-separated list of fields to include in output, or `all`
+    The command supports filtering, pagination, and field selection:
+    - `--tsg`: optional TSG short name to restrict results (validated against
+      the ``tsgs`` reference table; matches the meeting name prefix).
+    - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`).
+    - `--location`: SQL LIKE pattern to filter `location` (supports `%` and `_`).
+    - `--year`: filter by the end_date year.
+    - `--limit` / `--offset`: pagination. ``--offset`` is applied first, then
+      ``--limit`` caps the returned rows. Use ``--offset`` to page past
+      earlier rows without re-running the filters.
+    - `--fields`: comma-separated list of fields to include, or `all`.
 
-    By default, the output includes all fields except `title`, `updated_at`, and
-    `ftp_url` to keep the listing compact.
+    By default, the output includes the most useful columns for planning
+    further commands (``meeting_id``, ``name``, ``location``, ``start_date``,
+    ``end_date``, ``ftp_url``, ``start_doc``, ``end_doc``); pass
+    ``--fields all`` for the full schema including ``title`` and ``updated_at``.
 
     Available fields for selection:
     meeting_id, name, title, location, start_date, end_date, ftp_url,
@@ -186,27 +270,26 @@ def meeting_list(
         "updated_at",
     ]
 
-    # Default: all fields except title, updated_at and ftp_url
-    default_fields = [f for f in allowed_fields if f not in ("title", "updated_at", "ftp_url")]
+    # Default: all fields except title and updated_at (kept compact); ftp_url
+    # is retained because it drives `tdoc sync` planning.
+    default_fields = [f for f in allowed_fields if f not in ("title", "updated_at")]
 
-    if fields:
-        requested = [f.strip() for f in fields.split(",") if f.strip()]
-        if "all" in [f.lower() for f in requested]:
-            out_fields = allowed_fields
-        else:
-            invalid = [f for f in requested if f not in allowed_fields]
-            if invalid:
-                valid_list = ", ".join(allowed_fields)
-                raise typer.BadParameter(
-                    f"Unknown field(s): {', '.join(invalid)}. Valid fields: {valid_list}"
-                )
-            out_fields = requested
-    else:
-        out_fields = default_fields
+    out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
 
-    logger.info("Listing %s recent meetings for tsg=%s name=%s location=%s year=%s", limit, tsg, name, location, year)
+    # Validate --tsg against the reference table (matches `meeting sync`).
+    # The table is auto-seeded on a fresh DB so this is safe without `db init`.
+    if tsg is not None:
+        tsg_service = _ensure_tsg_ready(build_tsg_service())
+        tsg = _validate_tsg_short_name(tsg, tsg_service)
+
+    logger.info(
+        "Listing meetings limit=%s offset=%s tsg=%s name=%s location=%s year=%s",
+        limit, offset, tsg, name, location, year,
+    )
     service = build_meeting_service()
-    records = service.list_recent(limit=limit, tsg=tsg, name_like=name, location_like=location, year=year)
+    records = service.list_recent(
+        limit=limit, offset=offset, tsg=tsg, name_like=name, location_like=location, year=year,
+    )
     if not records:
         typer.echo("No meetings found")
         return
@@ -310,7 +393,9 @@ def tdoc_list(
     The command supports filtering and field selection:
     - `--tsg`: filter by TSG prefix (e.g. R5, S2)
     - `--year`: filter by the two-digit year code in the TDoc ID (e.g. 26)
-    - `--meeting`: SQL LIKE pattern to filter by meeting name
+    - `--meeting`: substring filter on the meeting name; auto-wrapped with
+      wildcards when no ``%`` / ``_`` is present, so `--meeting RAN5#111`
+      matches anything containing that string.
     - `--source`: SQL LIKE pattern to filter by source/contributor
     - `--spec`: SQL LIKE pattern to filter by technical specification
     - `--wi`: SQL LIKE pattern to filter by related work items
@@ -329,7 +414,11 @@ def tdoc_list(
     release, spec, version, related_wis, cr_num, cr_pack, updated_at
     """
 
-    allowed_fields = [f.name for f in dataclass_fields(TDoc)]
+    # ``meeting_name`` is a top-level attribute on ``TDocWithMeeting``; the
+    # rest live on ``TDocWithMeeting.tdoc``.
+    # ``meeting_name`` is a top-level attribute on ``TDocWithMeeting``; the
+    # rest live on ``TDocWithMeeting.tdoc``.
+    allowed_fields = [f.name for f in dataclass_fields(TDoc)] + ["meeting_name"]
     default_fields = [
         "tdoc_id",
         "meeting_name",
@@ -343,20 +432,7 @@ def tdoc_list(
         "related_wis",
     ]
 
-    if fields:
-        requested = [f.strip() for f in fields.split(",") if f.strip()]
-        if "all" in [f.lower() for f in requested]:
-            out_fields = allowed_fields
-        else:
-            invalid = [f for f in requested if f not in allowed_fields]
-            if invalid:
-                valid_list = ", ".join(allowed_fields)
-                raise typer.BadParameter(
-                    f"Unknown field(s): {', '.join(invalid)}. Valid fields: {valid_list}"
-                )
-            out_fields = requested
-    else:
-        out_fields = default_fields
+    out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
 
     logger.info(
         "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
@@ -374,10 +450,10 @@ def tdoc_list(
     )
 
     service = build_tdoc_service()
-    records = service.list_recent(
+    records = service.list_recent_with_meeting(
         limit=limit,
         tsg=tsg,
-        meeting_like=meeting,
+        meeting_like=_auto_wrap_like(meeting) if meeting else None,
         year=year,
         source_like=source,
         spec_like=spec,
@@ -392,9 +468,10 @@ def tdoc_list(
         return
 
     for item in records:
+        assert isinstance(item, TDocWithMeeting)
         vals: list[str] = []
         for f in out_fields:
-            v = getattr(item, f, None)
+            v = _tdoc_field(item, f)
             if v is None:
                 vals.append("-")
                 continue
@@ -428,20 +505,7 @@ def tsg_list(
     allowed_fields = [f.name for f in dataclass_fields(Tsg)]
     default_fields = ["tsg_name", "short_name", "description"]
 
-    if fields:
-        requested = [f.strip() for f in fields.split(",") if f.strip()]
-        if "all" in [f.lower() for f in requested]:
-            out_fields = allowed_fields
-        else:
-            invalid = [f for f in requested if f not in allowed_fields]
-            if invalid:
-                valid_list = ", ".join(allowed_fields)
-                raise typer.BadParameter(
-                    f"Unknown field(s): {', '.join(invalid)}. Valid fields: {valid_list}"
-                )
-            out_fields = requested
-    else:
-        out_fields = default_fields
+    out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
 
     logger.info("Listing TSG reference records (fields=%s)", out_fields)
     service = build_tsg_service()

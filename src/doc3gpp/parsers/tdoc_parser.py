@@ -13,6 +13,22 @@ logger = logging.getLogger(__name__)
 
 CR_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6}(?:r\d{1})?", re.IGNORECASE)
 
+# Mirrors CR_ID_RE but exposes the year as a capture group; keep in sync.
+_TDOC_YEAR_GROUP_RE = re.compile(r"[RSC][1-9][-sw](\d{2})\d{4}(?:r\d{1})?$", re.IGNORECASE)
+
+
+def tdoc_id_year(tdoc_id: str) -> int | None:
+    """Return the 2-digit year embedded in ``tdoc_id``, or ``None``.
+
+    Centralises the structural assumption that the year sits at offset 3-4
+    inside the canonical CR_ID_RE shape, so SQL filters don't have to hard-code
+    a ``substr`` offset that would silently desync if the convention changes.
+    """
+    match = _TDOC_YEAR_GROUP_RE.fullmatch(tdoc_id)
+    if not match:
+        return None
+    return int(match.group(1))
+
 # Substrings that disambiguate the real header row from a title row that
 # happens to mention "tdoc" (e.g. "TDoc List — RAN5#111").
 _HEADER_ROW_MARKERS = frozenset(

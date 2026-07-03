@@ -99,7 +99,7 @@ def test_list_filter_year(repo):
 
 
 def test_list_filter_meeting(repo):
-    res = repo.list(meeting_like="%111%")
+    res = repo.list_with_meeting(meeting_like="%111%")
     assert len(res) == 2
     assert res[0].meeting_name == "RAN5#111"
 

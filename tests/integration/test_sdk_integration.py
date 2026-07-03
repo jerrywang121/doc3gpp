@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from doc3gpp.config import Settings, get_settings as config_get_settings
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.tsg_service import TsgService, build_tsg_url
 from doc3gpp.settings.loader import get_settings as loader_get_settings
@@ -103,7 +103,6 @@ def test_sdk_model_construction() -> None:
         tdoc_id="R5-260001",
         title="RedCap CR",
         meeting_id=1,
-        meeting_name="RAN5#111",
         url="https://example.com/doc",
         source="Qualcomm",
         type="CR",
@@ -288,12 +287,12 @@ def test_sdk_full_round_trip(sqlite_env) -> None:
     assert tdocs[0].title == "Test TDoc Updated"
     assert tdocs[0].source == "Ericsson"
 
-    # --- TDoc with meeting_name populated by list join ---
     tdoc_repo.upsert(TDoc(tdoc_id="R6s260002", title="Second TDoc", meeting_id=101))
-    tdocs_with_meetings = tdoc_repo.list(limit=5)
-    tdoc_map = {t.tdoc_id: t for t in tdocs_with_meetings}
-    assert tdoc_map["R5s260001"].tdoc_id == "R5s260001"
-    assert tdoc_map["R6s260002"].tdoc_id == "R6s260002"
+    tdocs_with_meetings = tdoc_repo.list_with_meeting(limit=5)
+    tdoc_map = {item.tdoc.tdoc_id: item for item in tdocs_with_meetings}
+    assert tdoc_map["R5s260001"].tdoc.tdoc_id == "R5s260001"
+    assert tdoc_map["R6s260002"].tdoc.tdoc_id == "R6s260002"
+    assert tdoc_map["R6s260002"].meeting_name is not None
 
     # Verify DB connectivity via engine directly
     engine = get_engine()
@@ -324,8 +323,11 @@ def test_sdk_export_csv(tmp_path) -> None:
     """export_tdocs_csv writes correct format."""
     out = tmp_path / "export.csv"
     records = [
-        TDoc(tdoc_id="R1-000001", title="First", meeting_name="RAN1#100", url="https://x/1"),
-        TDoc(tdoc_id="R1-000002", title="Second"),
+        TDocWithMeeting(
+            tdoc=TDoc(tdoc_id="R1-000001", title="First", url="https://x/1"),
+            meeting_name="RAN1#100",
+        ),
+        TDocWithMeeting(tdoc=TDoc(tdoc_id="R1-000002", title="Second")),
     ]
     export_tdocs_csv(out, records)
 

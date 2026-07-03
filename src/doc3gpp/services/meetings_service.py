@@ -68,17 +68,25 @@ class MeetingService:
     def list_recent(
         self,
         limit: int = 50,
+        offset: int = 0,
         tsg: str | None = None,
         name_like: str | None = None,
         location_like: str | None = None,
         year: int | None = None,
     ) -> list[Meeting]:
-        """Return recent meetings from storage, optionally filtered.
+        """Return recent meetings from storage, optionally filtered and paginated.
 
-        Filters are passed down to the repository for efficient SQL execution.
+        Filters and pagination are passed down to the repository for efficient
+        SQL execution. ``offset`` is applied first, then ``limit`` caps the
+        returned rows; use it to page past earlier rows in CLI listings.
         """
         return self._repository.list(
-            limit=limit, tsg=tsg, name_like=name_like, location_like=location_like, year=year
+            limit=limit,
+            offset=offset,
+            tsg=tsg,
+            name_like=name_like,
+            location_like=location_like,
+            year=year,
         )
 
     def get_by_id(self, meeting_id: int) -> Meeting | None:

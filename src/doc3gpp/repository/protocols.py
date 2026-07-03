@@ -4,7 +4,7 @@ from datetime import date
 from typing import Protocol
 
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 
@@ -39,7 +39,33 @@ class TDocRepository(Protocol):
         status_like: str | None = None,
         type_like: str | None = None,
     ) -> list[TDoc]:
-        """Return a list of recent TDoc records with optional filters."""
+        """Return a list of recent TDoc records with optional filters.
+
+        Pure persistence shape — no joined meeting metadata. Callers that
+        need a human-readable meeting name should use :meth:`list_with_meeting`.
+        """
+        ...
+
+    def list_with_meeting(
+        self,
+        limit: int = 20,
+        tsg: str | None = None,
+        meeting_like: str | None = None,
+        year: int | None = None,
+        source_like: str | None = None,
+        spec_like: str | None = None,
+        wi_like: str | None = None,
+        title_like: str | None = None,
+        cat_like: str | None = None,
+        status_like: str | None = None,
+        type_like: str | None = None,
+    ) -> list[TDocWithMeeting]:
+        """Like :meth:`list` but wraps each row with its meeting's display name.
+
+        Equivalent to ``list(...)`` plus a ``meetings`` JOIN to populate
+        ``meeting_name``. Suitable for CLI / export code paths that surface
+        the meeting name alongside TDoc fields.
+        """
         ...
 
 
@@ -57,12 +83,13 @@ class MeetingRepository(Protocol):
     def list(
         self,
         limit: int = 50,
+        offset: int = 0,
         tsg: str | None = None,
         name_like: str | None = None,
         location_like: str | None = None,
         year: int | None = None,
     ) -> list[Meeting]:
-        """Return a list of meeting records, optionally filtered.
+        """Return a list of meeting records, optionally filtered and paginated.
 
         Optional filters:
             tsg: matches meeting names that *start with* this value
@@ -71,6 +98,10 @@ class MeetingRepository(Protocol):
             location_like: SQL ``LIKE`` pattern applied to the meeting
                 location column.
             year: integer year to match against ``end_date``.
+        Pagination:
+            offset: rows to skip before applying ``limit``. Combined with
+                ``limit`` this enables CLI pagination without re-running the
+                filters.
         """
         ...
 

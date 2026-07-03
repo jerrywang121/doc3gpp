@@ -9,8 +9,9 @@ def test_cli_passes_combined_filters(monkeypatch):
 
     captured = {}
 
-    def fake_list_recent(self, limit=20, tsg=None, name_like=None, location_like=None, year=None):
+    def fake_list_recent(self, limit=20, offset=0, tsg=None, name_like=None, location_like=None, year=None):
         captured['limit'] = limit
+        captured['offset'] = offset
         captured['tsg'] = tsg
         captured['name_like'] = name_like
         captured['location_like'] = location_like
@@ -21,6 +22,6 @@ def test_cli_passes_combined_filters(monkeypatch):
 
     result = runner.invoke(app, ["meeting", "list", "--tsg", "r5", "--name", "%TTCN%", "--year", "2026"])
     assert result.exit_code == 0
-    assert captured['tsg'] == 'r5'
+    assert captured['tsg'] == 'R5'
     assert captured['name_like'] == '%TTCN%'
     assert captured['year'] == 2026

@@ -47,6 +47,7 @@ class SQLAlchemyMeetingRepository:
     def list(
         self,
         limit: int = 50,
+        offset: int = 0,
         tsg: str | None = None,
         name_like: str | None = None,
         location_like: str | None = None,
@@ -57,7 +58,9 @@ class SQLAlchemyMeetingRepository:
         Optional filters:
         - `tsg`: filter meetings whose `name` starts with this value (case-insensitive)
         - `name_like`: SQL LIKE pattern to apply to the `name` column
+        - `location_like`: SQL LIKE pattern to apply to the `location` column
         - `year`: integer year to match the `end_date`
+        - `offset`: number of rows to skip before applying `limit` (pagination)
         """
         with self._session_factory() as session:
             stmt = select(MeetingORM)
@@ -78,7 +81,7 @@ class SQLAlchemyMeetingRepository:
             stmt = stmt.order_by(
                 MeetingORM.start_date.desc(),
                 MeetingORM.meeting_id.desc(),
-            ).limit(limit)
+            ).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()
 
         return [_orm_to_domain(row) for row in rows]

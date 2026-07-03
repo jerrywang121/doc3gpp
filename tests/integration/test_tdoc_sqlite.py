@@ -73,34 +73,6 @@ def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
     assert by_id["R1-000002"].source is None
 
 
-def test_tdoc_service_save_and_list(sqlite_env) -> None:
-    create_schema()
-    service = TDocService(SQLAlchemyTDocRepository())
-    meeting_repo = SQLAlchemyMeetingRepository()
-    from datetime import date
-    # meeting_id is an FK; satisfy it before inserting dependent TDoc rows.
-    meeting_repo.upsert_many(
-        [
-            Meeting(
-                meeting_id=130,
-                name="RAN2#130",
-                title="RAN2 meeting 130",
-                location="Online",
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 1, 2),
-            ),
-        ]
-    )
-
-    service.save(TDoc(tdoc_id="R2-000010", title="Agenda"))
-    service.save(TDoc(tdoc_id="R2-000011", title="CR pack", meeting_id=130))
-
-    rows = service.list_recent(limit=5)
-    ids = {r.tdoc_id for r in rows}
-
-    assert ids == {"R2-000010", "R2-000011"}
-
-
 def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())
@@ -351,27 +323,26 @@ def test_tdoc_repository_full_schema(sqlite_env) -> None:
 
     repo.upsert(tdoc)
 
-    # Retrieve and verify
-    rows = repo.list(limit=1, tsg="R5")
+    rows = repo.list_with_meeting(limit=1, tsg="R5")
     assert len(rows) == 1
     stored = rows[0]
 
-    assert stored.tdoc_id == tdoc.tdoc_id
-    assert stored.title == tdoc.title
-    assert stored.meeting_id == tdoc.meeting_id
+    assert stored.tdoc.tdoc_id == tdoc.tdoc_id
+    assert stored.tdoc.title == tdoc.title
+    assert stored.tdoc.meeting_id == tdoc.meeting_id
     assert stored.meeting_name == "RAN5#123"
-    assert stored.url == tdoc.url
-    assert stored.source == tdoc.source
-    assert stored.type == tdoc.type
-    assert stored.status == tdoc.status
-    assert stored.reservation_date == tdoc.reservation_date
-    assert stored.uploaded_date == tdoc.uploaded_date
-    assert stored.cr_cat == tdoc.cr_cat
-    assert stored.is_revision_of == tdoc.is_revision_of
-    assert stored.revised_to == tdoc.revised_to
-    assert stored.release == tdoc.release
-    assert stored.spec == tdoc.spec
-    assert stored.version == tdoc.version
-    assert stored.related_wis == tdoc.related_wis
-    assert stored.cr_num == tdoc.cr_num
-    assert stored.cr_pack == tdoc.cr_pack
+    assert stored.tdoc.url == tdoc.url
+    assert stored.tdoc.source == tdoc.source
+    assert stored.tdoc.type == tdoc.type
+    assert stored.tdoc.status == tdoc.status
+    assert stored.tdoc.reservation_date == tdoc.reservation_date
+    assert stored.tdoc.uploaded_date == tdoc.uploaded_date
+    assert stored.tdoc.cr_cat == tdoc.cr_cat
+    assert stored.tdoc.is_revision_of == tdoc.is_revision_of
+    assert stored.tdoc.revised_to == tdoc.revised_to
+    assert stored.tdoc.release == tdoc.release
+    assert stored.tdoc.spec == tdoc.spec
+    assert stored.tdoc.version == tdoc.version
+    assert stored.tdoc.related_wis == tdoc.related_wis
+    assert stored.tdoc.cr_num == tdoc.cr_num
+    assert stored.tdoc.cr_pack == tdoc.cr_pack

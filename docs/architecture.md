@@ -1,139 +1,398 @@
 # Architecture
 
-The project is implemented with a layered Python package under src/doc3gpp and supports both library usage and CLI usage.
+The project is implemented as a layered Python package under `src/doc3gpp/`,
+shipped both as a library (SDK) and a CLI. Each layer depends only on the
+layer below it; cross-layer imports flow strictly downward.
 
-Current scope includes:
+Current scope:
 
 - Configurable SQL backends (sqlite default, mysql, postgres).
-- Calendar scraping from 3gpp DynaReport meetings pages.
-- Calendar persistence in SQLAlchemy.
-- Basic TDoc persistence and listing.
+- Calendar scraping from the 3GPP DynaReport meetings pages.
+- TDoc list scraping from per-meeting FTP folders.
+- Work-item (WI) scraping from the per-TSG DynaReport WI pages.
+- TDoc CR extraction pipeline (download zip → on-disk cache → markitdown
+  render → markdown cache → cover-page parser → persist).
+- Calendar / TDoc / WI / TDoc-CR persistence in SQLAlchemy.
 
 ## Layers
 
-- settings:
-	- schema and loading for environment-driven config.
-	- log level configuration via `DOC3GPP_LOG_LEVEL`.
-	- modules: src/doc3gpp/settings/schema.py, src/doc3gpp/settings/loader.py.
-- scraping:
-	- HTTP retrieval from 3gpp.org.
-	- modules: src/doc3gpp/scraping/client.py, src/doc3gpp/scraping/calendar_source.py.
-- parsers:
-	- HTML parsing and normalization.
-	- modules: src/doc3gpp/parsers/calendar_parser.py, src/doc3gpp/parsers/html_parsers.py, src/doc3gpp/parsers/normalizers.py.
-- models:
-	- domain models for meeting, tdoc, and tsg records.
-	- modules: src/doc3gpp/models/meeting.py, src/doc3gpp/models/tdoc.py, src/doc3gpp/models/tsg.py.
-- repository:
-	- protocol interfaces used by services.
-	- module: src/doc3gpp/repository/protocols.py.
-- services:
-	- orchestration and sync use-cases.
-	- modules: src/doc3gpp/services/meetings_service.py, src/doc3gpp/services/tdoc_service.py, src/doc3gpp/services/tdoc_file_service.py, src/doc3gpp/services/tsg_service.py.
-- storage:
-	- SQLAlchemy ORM models, session factory, backend-specific engine options, concrete repositories.
-	- modules: src/doc3gpp/storage/db/models.py, src/doc3gpp/storage/db/session.py, src/doc3gpp/storage/backends/*.py, src/doc3gpp/storage/repositories/*.py.
+The seven layers sit between the CLI entry point and the database driver.
+Each layer owns one concern; everything above depends only on the layer
+immediately below it (with `services` reaching down into `storage` via
+the `repository/` Protocols rather than touching the concrete ORM).
+
+```
+                  ┌──────────────────────────────────────┐
+                  │            cli.py  (Typer)           │
+                  └──────────────────┬───────────────────┘
+                                     │
+                  ┌──────────────────▼───────────────────┐
+                  │      services/  (orchestration)      │
+                  │    Protocol-typed repos in / out      │
+                  └──────────────────┬───────────────────┘
+                                     │
+                  ┌──────────────────▼───────────────────┐
+                  │   repository/  (abstract contracts)  │
+                  └──────────────────┬───────────────────┘
+                                     │
+   ┌────────────┐ ┌─────────────────▼─┐ ┌──────────────────┐
+   │ settings/  │ │    storage/        │ │   models/        │
+   │ (config)   │ │   (ORM + repos +  │ │  (domain DTOs)   │
+   │            │ │    engine)        │ │                  │
+   └────────────┘ └─────────┬─────────┘ └──────────────────┘
+                           │
+                  ┌────────▼─────────┐
+                  │    parsers/       │  ←─┐
+                  │  (HTML/Excel →    │    │ shared inputs:
+                  │   domain objects) │    │ bytes / str
+                  └────────┬──────────┘    │
+                           │               │
+                  ┌────────▼──────────┐    │
+                  │  scraping/        │ ───┘
+                  │ (network I/O)     │
+                  └───────────────────┘
+```
+
+Per-layer modules:
+
+- `settings/` — schema and loader for environment-driven and TOML config;
+  exposes `get_settings()` (cached) with `Settings` (root) +
+  `MeetingSyncSettings` / `OutputSettings` / `OutputFieldsSettings` /
+  `CacheSettings` sub-models.
+    - `src/doc3gpp/settings/schema.py`
+    - `src/doc3gpp/settings/loader.py`
+    - `src/doc3gpp/settings/config_source.py` (TOML discovery)
+- `scraping/` — HTTP/FTP transport. Knows about URLs and bytes; never
+  parses content.
+    - `scraping/client.py` — `ScraperClient` (retry/backoff, UA, `httpx`)
+    - `scraping/calendar_source.py` — DynaReport meetings HTML
+    - `scraping/ftp_source.py` — FTP-directory listings + TDoc-list XLSX
+    - `scraping/wi_source.py` — DynaReport WI list HTML per TSG
+    - `scraping/tdoc_zip_source.py` — TDoc zip URL builder + downloader
+      (`R5s` TTCN + `R5w` Workshop branches)
+    - `scraping/cache.py` — `TDocCache` (two-subtree on-disk cache for
+      zip + markdown, size-based FIFO eviction)
+- `parsers/` — `bytes|str` → domain objects. No network I/O.
+    - `parsers/calendar_parser.py`, `parsers/html_parsers.py`,
+      `parsers/normalizers.py` — meetings HTML → `Meeting`
+    - `parsers/tdoc_parser.py`, `parsers/tdoc_file_parser.py` — TDoc
+      list XLSX → `TDoc` / `TDocFile`
+    - `parsers/wi_parser.py` — DynaReport HTML → `Wi`
+    - `parsers/markitdown_converter.py` — `.docx`/`.doc` → markdown via
+      the optional `markitdown[all]` extra (raises
+      `MarkitdownNotInstalledError` when missing)
+    - `parsers/cr_parser.py` — markdown → `TDocCRDetails` (cover-page,
+      optional TTCN overview, optional TTCN corrections)
+- `models/` — pure domain dataclasses (`@dataclass(slots=True)`),
+  passed between layers; never leak ORM attributes.
+    - `models/meeting.py`, `models/tdoc.py`, `models/tsg.py`,
+      `models/wi.py`, `models/tdoc_file.py`, `models/tdoc_cr.py`
+      (`TDocCRDetails` + `TDocExtractMeta`)
+- `repository/` — abstract `Protocol` contracts used by services.
+    - `repository/protocols.py` — `MeetingRepository`,
+      `TDocRepository` (+ `get_by_id`), `TsgRepository`,
+      `WiRepository`, `TDocFileRepository`, `TDocCrDetailRepository`
+- `services/` — orchestration. Constructed via `services/factory.py`
+  (`build_*` helpers); the CLI never imports a concrete SQL repository
+  directly.
+    - `services/meetings_service.py`, `services/tdoc_service.py`,
+      `services/tsg_service.py`, `services/wi_service.py`
+    - `services/tdoc_file_service.py` — auxiliary FTP files
+    - `services/tdoc_sync_coordinator.py` — cross-service orchestration
+      for `tdoc sync`
+    - `services/tdoc_cr_service.py` — end-to-end CR extraction pipeline
+    - `services/factory.py` — `build_meeting_service`,
+      `build_tdoc_service`, `build_tdoc_file_service`,
+      `build_tdoc_sync_coordinator`, `build_tdoc_cr_service`,
+      `build_tsg_service`, `build_wi_service`,
+      `build_tdoc_repository`, `build_tdoc_cr_repository`
+- `storage/` — SQLAlchemy ORM models, engine / session factory,
+  backend-specific options, concrete Protocol implementations.
+    - `storage/db/models.py` — ORM classes
+    - `storage/db/session.py` — `get_engine`, `get_session_factory`
+      (cached)
+    - `storage/db/base.py` — declarative `Base`
+    - `storage/db/migrate.py` — `create_schema` (calls
+      `Base.metadata.create_all`)
+    - `storage/db/migrations/` — placeholder for future Alembic
+    - `storage/backends/{sqlite,mysql,postgres}.py` — engine kwargs
+    - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
+      — concrete `SQLAlchemy*Repository` classes
 
 ## Runtime Data Flow
 
-Meetings sync flow:
+The CLI composes a service via the factory, the service drives the
+scrapers + parsers + repos through the Protocols, and the repos own the
+SQLAlchemy session. There are four primary end-to-end flows; the
+"meeting-based TDoc sync" flow is itself composed of two sub-flows,
+and the TDoc CR extraction is the deepest.
 
-1. CLI command calls MeetingService.sync.
-2. MeetingService uses scraping.calendar_source.fetch_calendar.
-3. fetch_calendar loads HTML via ScraperClient.
-4. parsers.calendar_parser.parse_3gpp_calendar converts HTML rows into Meeting domain objects.
-5. SQLAlchemyMeetingRepository.upsert_many persists meetings into meetings table.
+### Meetings sync
 
-TDoc list flow:
+1. `doc3gpp meeting sync --tsg <short>` validates `<short>` against
+   the `tsgs` table (auto-seeded if empty).
+2. `MeetingService.sync` → `fetch_calendar` (DynaReport HTML) →
+   `parse_3gpp_calendar` (HTML → `Meeting` list) →
+   `SQLAlchemyMeetingRepository.upsert_many`, then
+   `delete_with_end_before(cutoff)` to trim out-of-window rows.
 
-1. CLI command calls TDocService.
-2. TDocService delegates to SQLAlchemyTDocRepository.
-3. Repository persists/reads rows in tdocs table.
+### TDoc list sync (per meeting)
 
-Meeting-based TDoc sync flow:
+1. `doc3gpp tdoc sync --meeting-id <id>` (or `--meeting <name>`)
+   resolves the meeting and reads its stored `ftp_url`.
+2. `TDocSyncCoordinator.sync_for_meeting_id` orchestrates:
+    - `TDocService.sync_from_meeting_ftp` →
+      `fetch_tdocs_from_meeting_ftp` →
+      `read_tdoc_sheet` (XLSX → `TDoc` list) →
+      `SQLAlchemyTDocRepository.upsert_many`.
+    - `TDocFileService.sync_from_meeting_ftp` uses the freshly-persisted
+      TDoc IDs as the prefix list to recognise attachments under
+      `Inbox/`, `Docs/`, `Tdocs/`, `Review/`.
+3. `SQLAlchemyTDocFileRepository.upsert_many` persists revision / review
+  / support files keyed by the unique `url`.
 
-1. `doc3gpp tdoc sync --meeting-id` loads meeting metadata from storage.
-2. The meeting's stored FTP URL is used to discover the TDoc list XLSX file.
-3. `fetch_tdocs_from_meeting_ftp` parses the XLSX file and returns TDoc records.
-4. TDocService persists the discovered TDocs.
-5. TDocSyncCoordinator looks up the freshly-persisted TDoc IDs and calls
-   `TDocFileService.sync_from_meeting_ftp`.
-6. `fetch_tdoc_files_from_meeting_ftp` visits the meeting's `Inbox/`,
-   `Docs/`, `Tdocs/` and `Review/` subfolders, parses each 3GPP FTP
-   directory listing, and returns a list of `TDocFile` records
-   (revisions, reviews, support docs) that match the known TDoc IDs.
-7. `SQLAlchemyTDocFileRepository.upsert_many` persists the records,
-   using the unique `url` column as the upsert key.
+### TDoc CR extraction
 
-## Database Schema (Current)
+1. `doc3gpp tdoc extract --tdoc <id>` (or `--tdoc-id N`) resolves the
+   id (via `TDocRepository.get_by_id`) and validates the row exists with
+   `type == "CR"` (raises `TDocTypeUnsupportedError` for non-CR ids).
+2. `TDocCrService.extract(tdoc_id, *, force=False)`:
+    - If the detail row already exists and `not force`, returns it
+      (`ExtractResult.from_cache = True`).
+    - Else, `download_tdoc_zip` resolves the TDoc id to its 3GPP URL
+      via the template table (`R5s` → TTCN email CR,
+      `R5w` → workshop CR), hits `ScraperClient.get_bytes`, and stages
+      the zip in `TDocCache.put_bytes(key, payload, "zips")`.
+    - `extract_docx_from_zip` returns `(filename, docx_bytes)`.
+    - The markdown for that exact `docx_bytes` is looked up by
+      `sha256(docx_bytes)` in `TDocCache.get_bytes(sha, "markdown")`;
+      on miss, `convert_document_to_markdown` runs (raises
+      `MarkitdownNotInstalledError` if `markitdown[all]` is not
+      installed) and the result is written to `markdown/<sha>.md`.
+    - `parse_cr_details(markdown, tdoc_id=...)` returns a typed
+      `TDocCRDetails` (cover-page; TTCN overview + corrections only
+      when `tdoc_id` matches `R5s\d{6}`).
+    - `TDocCrRepository.upsert(details, extract_meta)` writes both the
+      detail row and the extract-metadata row (zip/markdown paths,
+      `doc_filename`, `extracted_at`, `parser_version`) in one
+      transaction.
+    - Returns `ExtractResult(details, extract_meta, from_cache=False)`.
+3. `doc3gpp tdoc show --tdoc <id>` reads `tdocs` (via
+   `TDocRepository.get_by_id`) and, if present, the matching
+   `tdoc_cr_details` row, and prints both — the latter as a
+   `[Extracted Details]` block.
 
-Current tables defined in src/doc3gpp/storage/db/models.py:
+### Cache + CLI
 
-- tdocs:
-	- tdoc_id (PK), title, meeting_id, url, source, type, status, reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to, release, spec, version, related_wis, cr_num, cr_pack, created_at.
-- tdoc_files:
-	- id (PK), tdoc_id (FK -> tdocs.tdoc_id), type ("revision" / "review" / "support"), file, url (unique), created_at, updated_at.
-	- One row per auxiliary file (revision, review, support doc) observed in the meeting's FTP subfolders. Populated automatically by `tdoc sync`.
-- meetings:
-	- meeting_id, name, title, location, start_date, end_date, ftp_url, start_doc, end_doc, updated_at.
-- tsgs:
-	- short_name (PK), tsg_name (unique), description, url.
-	- canonical 3GPP TSG list, seeded on `db init`; used to validate `--tsg` in `meeting sync`.
-- wis:
-	- (wi_id, tsg_short) composite PK, acronym, release, name, updated_at.
-	- ``tsg_short`` FK to ``tsgs.short_name``; composite PK keeps the natural identifier stable across multi-TSG ownership.
+- `doc3gpp cache status` → `TDocCache.status()` (file count, total
+  bytes, limit, per-subdir breakdown; non-mutating).
+- `doc3gpp cache purge [--yes]` (with `DOC3GPP_CACHE__PURGE_CONFIRM`
+  gating the interactive prompt) → `TDocCache.purge()` clears both
+  subtrees and recreates them.
 
-Schema creation currently uses Base.metadata.create_all through src/doc3gpp/storage/db/migrate.py.
+## Database Schema
+
+Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
+`Base.metadata.create_all` via `doc3gpp db init`.
+
+- `tdocs`:
+    - `tdoc_id` (PK), `title`, `meeting_id` (FK → `meetings.meeting_id`),
+      `url`, `source`, `type`, `status`, `reservation_date`,
+      `uploaded_date`, `cr_cat`, `is_revision_of`, `revised_to`,
+      `release`, `spec`, `version`, `related_wis`, `cr_num`,
+      `cr_pack`, `created_at`, `updated_at`.
+- `tdoc_files`:
+    - `id` (PK), `tdoc_id` (FK → `tdocs.tdoc_id`, no cascade),
+      `type` (`revision` / `review` / `support`), `file`, `url`
+      (unique, the upsert key), `created_at`, `updated_at`.
+- `tdoc_cr_details`:
+    - `tdoc_id` (PK, FK → `tdocs.tdoc_id` **with `ondelete="CASCADE"`**),
+      one column per parsed cover-page / overview / corrections field
+      (`spec`, `cr_num`, `rev`, `version`, `title`, `source`, `tsg`,
+      `related_wis`, `date`, `cr_cat`, `release`,
+      `reason_for_change`, `consequences_if_not_approved`,
+      `clauses_affected`, `other_comments`, `revision_history`,
+      `ats_version`, `ttcn_release`, `test_case`, `test_suite`,
+      `ue`, `ss`, `corrections` JSON blob, `year`, `tech`,
+      `extracted_tdoc_id`), `parser_version`, `extracted_at`,
+      `updated_at`.
+- `tdoc_extracts`:
+    - `tdoc_id` (PK, FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`),
+      `zip_path`, `markdown_path`, `doc_filename`, `extracted_at`,
+      `parser_version`. Cache-pointer sidecar; not joined to the detail
+      row because the markdown path and the parsed detail have
+      different invalidation lifecycles.
+- `meetings`:
+    - `meeting_id` (PK), `name`, `title`, `location`, `start_date`,
+      `end_date`, `ftp_url`, `start_doc`, `end_doc`, `updated_at`.
+- `tsgs`:
+    - `short_name` (PK), `tsg_name` (unique), `description`, `url`.
+      Seeded on `db init`; validates `--tsg` in `meeting sync`.
+- `wis`:
+    - `(wi_id, tsg_short)` composite PK, `acronym`, `release`, `name`,
+      `updated_at`. `tsg_short` FK → `tsgs.short_name`; composite PK
+      keeps the natural identifier stable across multi-TSG ownership.
+
+Cascading FK deletes are deliberately inconsistent across the schema:
+`tdoc_cr_details` / `tdoc_extracts` cascade (they are derived artefacts
+of the parent TDoc and are safe to wipe with it), while `tdoc_files`
+does not (revision files survive a TDoc re-sync). The
+`test_cascade_delete_via_fk` ORM test exercises the cascade
+end-to-end via a `PRAGMA foreign_keys=ON` connect listener (SQLite
+default is OFF).
 
 ## Backend Selection
 
-The active backend is selected from DOC3GPP_DATABASE_URL.
+The active backend is selected from `DOC3GPP_DATABASE_URL`:
 
-- sqlite default: sqlite+pysqlite:///~/.local/share/doc3gpp/doc3gpp.db
-- mysql example: mysql+pymysql://user:pass@localhost:3306/doc3gpp
-- postgres example: postgresql+psycopg://user:pass@localhost:5432/doc3gpp
+- sqlite default: `sqlite+pysqlite:///~/.local/share/doc3gpp/doc3gpp.db`
+- mysql example: `mysql+pymysql://user:pass@localhost:3306/doc3gpp`
+- postgres example: `postgresql+psycopg://user:pass@localhost:5432/doc3gpp`
 
-Backend-specific engine kwargs are applied in src/doc3gpp/storage/db/session.py via:
+Backend-specific engine kwargs are applied in
+`src/doc3gpp/storage/db/session.py` via:
 
-- src/doc3gpp/storage/backends/sqlite.py
-- src/doc3gpp/storage/backends/mysql.py
-- src/doc3gpp/storage/backends/postgres.py
+- `src/doc3gpp/storage/backends/sqlite.py`
+- `src/doc3gpp/storage/backends/mysql.py`
+- `src/doc3gpp/storage/backends/postgres.py`
 
-## CLI Surface (Current)
+## CLI Surface
 
-Implemented command groups in src/doc3gpp/cli.py:
+Implemented command groups in `src/doc3gpp/cli.py` (seven groups,
+seventeen commands):
 
-- db:
-	- check
-	- init (also seeds the `tsgs` reference table)
-- meetings:
-	- sync
-	- list
-- tdoc:
-	- sync
-	- add
-	- list
-- tsg:
-	- list
-	- show
-	- seed
+- `db`:
+    - `check`
+    - `init` — also seeds the `tsgs` reference table
+- `meeting`:
+    - `sync` — validates `--tsg` against the reference table
+    - `list` — filters by `--tsg`, `--meeting`, `--location`,
+      `--start-date`, `--end-date`, `--limit`, `--offset`; auto-wraps
+      like patterns
+- `tdoc`:
+    - `sync` — `--meeting-id` or `--meeting`; delegates to
+      `TDocSyncCoordinator`
+    - `list` — filters by `--tsg`, `--meeting`, `--year`, `--source`,
+      `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`
+    - `extract` — `--tdoc` / `--tdoc-id` (repeatable), `--force`,
+      `--full`; batch extraction with per-id failure isolation
+    - `show` — `--tdoc`; renders the matching TDoc and, when present,
+      a `[Extracted Details]` block from `tdoc_cr_details`
+- `tsg`:
+    - `list`, `show`, `seed`
+- `wi`:
+    - `sync` — `--tsg`
+    - `list` — filters by `--tsg`, `--release`
+- `config`:
+    - `path` — which TOML file is in effect (or
+      `"(no config file found)"`)
+    - `show` — fully-resolved `Settings` as JSON for diffing against
+      `doc3gpp.toml.example`
+- `cache`:
+    - `status` — file count, total bytes, limit, per-subdir breakdown
+    - `purge` — `[--yes]` to skip the interactive confirm; gated by
+      `CacheSettings.purge_confirm` and overridable via
+      `DOC3GPP_CACHE__PURGE_CONFIRM=false`
+
+Every `* list` command also accepts `--format table|json|markdown`
+and `-o/--output PATH`.
+
+## Composition
+
+The CLI layer never instantiates a concrete `SQLAlchemy*Repository`
+directly; everything goes through `services/factory.py::build_*`. The
+factory wires:
+
+- `get_settings()` (cached; `cache_clear()` in tests that mutate
+  `DOC3GPP_*` env vars)
+- `get_engine()` / `get_session_factory()` (cached; same clear
+  contract)
+- `ScraperClient()` — single instance per CLI invocation
+
+`_build_cache` in the CLI constructs `TDocCache(settings.cache.dir,
+size_limit_bytes=settings.cache.size_limit_mb * 1024 * 1024)` directly
+for the `cache status` / `cache purge` commands, which don't need the
+service stack.
 
 ## Testing Layout
 
-- unit:
-	- tests/unit/test_settings.py
-	- tests/unit/test_calendar_parser.py
-- integration:
-	- tests/integration/test_sqlite_backend.py
-	- tests/integration/test_mysql_backend.py
-	- tests/integration/test_calendar_service_sqlite.py
+- `tests/unit/` — 53 files, 433 tests. Pure-Python unit tests; mock
+  external calls. Coverage is concentrated in:
+    - parser fixtures (`test_calendar_parser.py`,
+      `test_cr_parser.py`, `test_tdoc_parser.py`,
+      `test_tdoc_file_parser.py`, `test_wi_parser.py`,
+      `test_markitdown_converter.py`)
+    - scraping + cache contracts (`test_tdoc_cache.py`,
+      `test_tdoc_zip_source.py`, `test_ftp_source.py`,
+      `test_scraper_client.py`)
+    - repositories (CRUD + filter combinations; for each concrete
+      `SQLAlchemy*Repository`)
+    - services (`test_meetings_service_sync.py`,
+      `test_tdoc_service_sync.py`, `test_tdoc_sync_coordinator.py`)
+    - CLI (`test_meeting_cli*`, `test_tdoc_cli_fields.py`,
+      `test_tdoc_sync_cli.py`, `test_tdoc_extract_cli.py`,
+      `test_cache_cli.py`, `test_wi_cli.py`, `test_tsg_cli.py`)
+- `tests/integration/` — sqlite-only by default; online + mysql
+  opt-in. 10 files, 53 tests:
+    - `test_sqlite_backend.py`, `test_sdk_integration.py`
+    - `test_meeting_service_sqlite.py`,
+      `test_tdoc_sqlite.py`, `test_tdoc_file_sqlite.py`,
+      `test_tdoc_cr_sqlite.py` (12 tests + 1 e2e Typer CLI test),
+      `test_tsg_sqlite.py`, `test_wi_sqlite.py`
+    - `test_online_3gpp_calendar.py`,
+      `test_online_tdoc_extract.py` (live `R5s260009` /
+      `R5w260009`, `@pytest.mark.online`)
+    - `test_mysql_backend.py` (gated on
+      `DOC3GPP_TEST_MYSQL_URL`)
+- `tests/fixtures/tdoc_cr_doc/` — 7 CR zip fixtures
+  (`C6-250028.zip`, `R5-227476.zip`, `R5-253079.zip`,
+  `R5s260009.zip`, `R5s260051.zip`, `R5s260135.zip`,
+  `R5s260176.zip`). Regression corpus for `cr_parser` and
+  `tdoc_cr_service`.
+- Pytest markers: `online`, `mysql`. The default profile is
+  `pytest -m "not mysql and not online"`; `./scripts/test_sqlite.sh`
+  is the canonical wrapper.
 
-## Not Yet Implemented
+## Cross-cutting design rules
 
-The following are planned but not complete in current code:
+These are enforced by code review (see `AGENTS.md` §Conventions for the
+original convention list) and re-stated here for the architecture
+readers:
 
-- TDoc list sync from GenerateDocumentList.aspx.
-- FTP tdoc_list discovery fallback logic.
-- Workplan/spec extraction modules.
-- Alembic migration pipeline beyond create_all bootstrap.
+- **Ruff clean at every phase boundary** — `ruff check src/doc3gpp
+  tests` before merging.
+- **No `as any` / `# type: ignore`** — use typed code paths instead.
+- **`db init` is the single schema boundary** — services never call
+  `create_schema()`; if a table is missing, the SQL repo raises
+  `OperationalError` and the CLI translates to a friendly
+  `typer.BadParameter` ("run `doc3gpp db init` first").
+- **Protocol ↔ impl signature parity** — when changing a filter
+  signature on any repo, update both the Protocol and the impl.
+- **CLI depends on `services/factory.py` only** — never instantiate a
+  concrete `SQLAlchemy*Repository` from `cli.py`.
+- **Settings caching** — `get_settings` and `get_engine` are
+  `@lru_cache(maxsize=1)`; any test that mutates `DOC3GPP_*` must call
+  `cache_clear()` on both in teardown (the `sqlite_env` fixture is the
+  canonical pattern).
 
+## Open issues carried over
+
+These are actively tracked; see `docs/implementation-status.md`
+§Current Known Constraints for the full list and severity. Summary
+of the open items:
+
+- `ScraperClient.get_text` uses a broad `except Exception`; programming
+  errors look identical to network errors in logs.
+- `get_settings`' `@lru_cache` plus `ScraperClient.__init__` reading
+  settings once means env changes mid-process don't propagate.
+- `https://www.3gpp.org/ftp/` is hardcoded; if 3GPP moves the assets
+  to a CDN, scraping silently returns empty for `meeting sync`.
+- `R5-` and `C6-` URL templates return `None` until exercised against
+  the live site (only `R5s` and `R5w` are locked in).
+
+## Out of scope (today)
+
+- TDoc types other than CR (LS, DRAFT, BB, etc.).
+- Workplan / spec status extraction.
+- Alembic / versioned migrations (the schema bootstrap is
+  `Base.metadata.create_all` via `db init`).

@@ -112,12 +112,47 @@ This document tracks what is implemented today versus planned next work.
 
 ## Current Known Constraints
 
-- Schema bootstrap uses create_all rather than versioned migrations.
-- Calendar parser depends on current DynaReport table structure.
-- Full end-to-end online tests are not included in default test suite;
-  opt in with `python -m pytest -m online -rs` to exercise live
-  3gpp.org + FTP code paths.
+### Correctness / operational
+
+- Schema bootstrap uses `create_all` rather than versioned migrations.
+- Calendar parser depends on current DynaReport table structure; the
+  `M5` log-warning surface catches pages that no longer carry a
+  `<table class="meetings">` but a layout-only change may still break
+  field extraction silently.
 - TDoc CR extraction covers the `R5s` (TTCN) and `R5w` (Workshop) URL
   templates verified against offline fixtures; the `R5-` and `C6-`
   templates are deliberately unresolved until exercised against the
   live site.
+- Full end-to-end online tests are not included in the default test
+  suite; opt in with `python -m pytest -m online -rs` to exercise live
+  3gpp.org + FTP code paths.
+- `https://www.3gpp.org/ftp/` is hardcoded in
+  `src/doc3gpp/scraping/ftp_source.py:72`; if 3GPP moves the assets to
+  a CDN, `meeting sync` and `tdoc sync` silently return empty without
+  a clear failure surface. *(carried from TODO #19.)*
+- `ScraperClient.get_text` uses a broad `except Exception` block
+  (`src/doc3gpp/scraping/client.py:35-37, 46-48`); programming errors
+  (e.g. `httpx.InvalidURL`) look identical to network errors in logs.
+  The retry path narrows to `httpx.HTTPError` but the text-fetch path
+  has not been migrated. *(carried from TODO #20.)*
+- `get_settings`' `@lru_cache` plus `ScraperClient.__init__` reading
+  settings once means env changes mid-process do not propagate
+  (e.g. flipping `DOC3GPP_HTTP_VERIFY` after a CLI constructed the
+  client). Tests that mutate `DOC3GPP_*` must `cache_clear()` both
+  `get_settings` and `get_engine` in teardown
+  (`tests/conftest.py::sqlite_env` is the canonical pattern).
+  *(carried from TODO #21.)*
+
+### Code-style test coverage
+
+The unit suite covers every concrete `SQLAlchemy*Repository`,
+every service, every parser, every CLI subcommand, and the four
+TDoc-CR pipeline components (cache, zip source, markitdown wrapper,
+parser, ORM, service, CLI). Gaps to flag for future work:
+
+- `TDocService.sync_from_meeting_ftp` end-to-end via CLI — covered by
+  `tests/unit/test_tdoc_sync_cli.py` for the CLI selector paths, but a
+  full FTP walk is integration-only
+  (`tests/integration/test_tdoc_sqlite.py::test_cli_tdoc_sync_*`).
+  Pre-existing failures in those tests come from upstream 3gpp.org
+  DynaReport layout drift, not from the extraction pipeline.

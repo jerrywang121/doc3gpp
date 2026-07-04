@@ -2,11 +2,14 @@
 
 Pure network + cache layer — no parsing. The URL templates are derived from
 ``docs/ttcn_cr_cli_example.py:build_tdoc_zip_url`` and locked in by the
-TDoc Extraction Pipeline plan (see ``docs/tdoc-extraction-plan.md`` Phase 2).
+TDoc Extraction Pipeline design (see ``docs/implementation-status.md``
+§Scraping and Parsing).
 
 The ``R5-`` and ``C6-`` URL templates are intentionally unresolved (return
-``None``) until Phase 8 verifies them against the live site; callers should
-treat ``None`` as "not yet supported" rather than an error.
+``None``) until exercised against the live site; callers should
+treat ``None`` as "not yet supported" rather than an error. The
+known-constraints list in ``docs/implementation-status.md`` tracks
+which URL branches are still pending verification.
 """
 
 from __future__ import annotations

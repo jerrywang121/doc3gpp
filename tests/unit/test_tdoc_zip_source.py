@@ -1,9 +1,8 @@
 """Unit tests for :mod:`doc3gpp.scraping.tdoc_zip_source`.
 
-Phase 1 (``TDocCache``) is not in tree yet, so the tests use a tiny in-memory
-stub that matches the Phase-1 contract documented in
-``docs/tdoc-extraction-plan.md``. When ``src/doc3gpp/scraping/cache.py``
-lands, swap the stub for the real class.
+The tests target the Protocol-shaped ``TDocCacheLike`` contract defined
+in this module, so they work against either the real ``TDocCache`` (in
+``doc3gpp.scraping.cache``) or a small in-memory stub.
 """
 
 from __future__ import annotations

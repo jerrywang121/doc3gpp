@@ -7,9 +7,10 @@ shipped under ``tests/fixtures/tdoc_cr_doc/``. The remaining tests
 use small hand-rolled markdown fixtures so the regex logic stays in
 the default pytest pool.
 
-Snapshot contract (this is the regression contract — see
-``docs/tdoc-extraction-plan.md`` lines 296–304 for the plan-time
-values; this test file is the executable version):
+Snapshot contract (the table below is the regression contract; the
+executable assertions live in the parametrised tests below it. The
+historical plan-time values are kept here as a single source of truth
+for the fixture-driven assertions):
 
 | Fixture         | spec       | cr_num | rev | cr_cat | release | year |
 |-----------------|------------|--------|-----|--------|---------|------|

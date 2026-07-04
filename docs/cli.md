@@ -228,6 +228,168 @@ doc3gpp tdoc list --title "%RedCap%"
 doc3gpp tdoc list --fields tdoc_id,title,status
 ```
 
+### doc3gpp tdoc show
+
+Purpose:
+
+- Print every :class:`TDoc` field for a single TDoc plus the parsed CR
+  cover-page fields (if `tdoc extract` has been run for this id).
+
+Options:
+
+- `--tdoc TDOC`: canonical TDoc identifier (e.g. `R5s260009`). Required.
+
+Behavior:
+
+- Looks up the row in the `tdocs` table via a PK lookup.
+- On miss: raises `BadParameter` listing the requested id and pointing
+  to `doc3gpp tdoc sync` / `doc3gpp tdoc list`.
+- On hit: prints a `[TDoc]` section (every `TDoc` field) followed by an
+  `[Extracted Details]` section when a matching `tdoc_cr_details` row
+  exists. The `corrections` list is rendered as pretty-printed JSON.
+- Long free-text fields (`reason_for_change`,
+  `consequences_if_not_approved`) are truncated to 200 characters with
+  an ellipsis.
+
+Examples:
+
+```bash
+# Show the TDoc + any extracted CR cover-page fields.
+doc3gpp tdoc show --tdoc R5s260009
+```
+
+### doc3gpp tdoc extract
+
+Purpose:
+
+- Download a TDoc zip from the 3GPP FTP, render its `.docx` body to
+  markdown, parse the cover-page fields, and persist the result to
+  `tdoc_cr_details` + `tdoc_extracts`. Wraps the Phase 6
+  `TDocCrService.extract_many` for batch CLI use.
+
+Options:
+
+- `--tdoc TDOC`: canonical TDoc identifier (e.g. `R5s260009`).
+  Repeatable for batch extraction.
+- `--tdoc-id N`: integer form of a TDoc id; resolved against the
+  `tdocs` table (PK lookup) before extraction. Repeatable. An unknown
+  id prints a warning and is skipped — the rest of the batch still runs.
+- `--force`: skip both the on-disk zip/markdown cache and the
+  persisted `tdoc_cr_details` row so every id is re-fetched and
+  re-parsed.
+- `--full`: reserved for the parser's `full=True` mode (pulls in
+  `before_change` / `after_change` per correction). The current
+  service does not yet wire this through; accepted silently so existing
+  scripts keep parsing.
+
+Behavior:
+
+- Calls `TDocCrService.extract_many(tdoc_ids, force=force)`. The service
+  catches `TDocZipDownloadError`, `MarkitdownNotInstalledError`,
+  `TDocTypeUnsupportedError`, `TDocNotFoundError`, and
+  `CRHeaderMissingError` per-id and skips the broken entry; the CLI
+  computes the failure set as `input - successful_keys` and prints
+  one `FAILED` line per skipped id.
+- When `markitdown` is not installed the entire batch fails before any
+  per-id work happens — the CLI prints an install hint and exits 1.
+- Output per id: `<tdoc_id>: spec=<spec> cr_num=<cr_num> title=<title>`
+  on success, `<tdoc_id>: FAILED - extract error (see logs)` on failure.
+- Final summary line: `Extracted N/M TDocs (K failures)`.
+
+Exit codes:
+
+- `0` — at least one TDoc extracted successfully (cache hits count).
+- `1` — every TDoc failed, **or** `markitdown` is missing and the
+  batch could not even start.
+
+Install the optional dependency before first use:
+
+```bash
+pip install "doc3gpp[extract]"
+```
+
+Examples:
+
+```bash
+# Extract a single CR.
+doc3gpp tdoc extract --tdoc R5s260009
+
+# Batch extract three CRs, bypassing the on-disk cache.
+doc3gpp tdoc extract --tdoc R5s260009 --tdoc R5s260051 --tdoc R5s260135 --force
+
+# Mix string and integer selectors.
+doc3gpp tdoc extract --tdoc R5s260009 --tdoc-id 1234
+```
+
+## cache Commands
+
+The `cache` sub-app exposes the on-disk cache that backs the TDoc
+extraction pipeline (Phase 1 `TDocCache`). The cache lives under
+`settings.cache.dir` (default `~/.cache/doc3gpp/tdocs`) with two
+subtrees: `zips/` (raw 3GPP zip downloads) and `markdown/` (markitdown
+output keyed by content hash). Both commands are pure file-system
+operations — they do **not** touch the database.
+
+### doc3gpp cache status
+
+Purpose:
+
+- Print the current cache footprint and configured ceiling.
+
+Output (plain text, no `--format` flag for this initial cut):
+
+```text
+file_count:  3
+total_bytes: 128 B
+limit_bytes: 1.0 GB
+zips:        2
+markdown:    1
+```
+
+`limit_bytes: 0` renders as `limit_bytes: unlimited` so an unset cap
+is unambiguous. `status()` is a pure read — it does **not** trigger FIFO
+eviction, even when the cache is over the configured ceiling.
+
+Examples:
+
+```bash
+doc3gpp cache status
+```
+
+### doc3gpp cache purge
+
+Purpose:
+
+- Delete every cached zip and markdown file, recreating the subtrees
+  empty so subsequent `tdoc extract` calls still work.
+
+Options:
+
+- `--yes`, `-y`: skip the confirmation prompt.
+
+Behavior:
+
+- When `settings.cache.purge_confirm` is `True` (the default) and
+  `--yes` is **not** passed, the command prompts for confirmation
+  (`typer.confirm(..., abort=True)`). In a non-interactive environment
+  the prompt raises `Abort` and no files are deleted.
+- Set `DOC3GPP_CACHE__PURGE_CONFIRM=false` (env var) or `purge_confirm
+  = false` in the TOML config file to skip the prompt globally
+  (CI / scripted use).
+- The on-disk artefacts referenced from
+  `tdoc_extracts.markdown_path` and `tdoc_extracts.zip_path` become
+  stale — the next `tdoc extract` will repopulate them.
+
+Examples:
+
+```bash
+# Interactive confirmation.
+doc3gpp cache purge
+
+# Skip the prompt (scripted).
+doc3gpp cache purge --yes
+```
+
 ## tsg Commands
 
 The `tsg` sub-app exposes the canonical 3GPP TSG reference table. The table
@@ -461,6 +623,10 @@ doc3gpp meeting sync --tsg r5
 doc3gpp meeting list --limit 20
 doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
 doc3gpp tdoc list --limit 10
+doc3gpp tdoc extract --tdoc R5s260009
+doc3gpp tdoc show --tdoc R5s260009
+doc3gpp cache status
+doc3gpp cache purge --yes
 doc3gpp wi sync --tsg r5
 doc3gpp wi list --limit 10
 doc3gpp wi list --tsg r5 --release "Rel-19" --limit 100

@@ -16,7 +16,7 @@ doc3gpp db check
 ```
 
 Build system: **hatchling**. Stack: Python 3.10+, SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, httpx, BeautifulSoup4 + lxml, openpyxl, alembic (installed but not wired).
-Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres]` (psycopg[binary]).
+Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres]` (psycopg[binary]), `.[extract]` (`markitdown[all]` for the TDoc extraction pipeline).
 `pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"` or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 `references-external/` is gitignored local scratch — never commit changes there.
 
@@ -25,7 +25,7 @@ Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (6 groups): db, meetings, tdoc, tsg, wi, config
+│   ├── cli.py            # Typer commands (7 groups): db, meetings, tdoc, tsg, wi, config, cache
 │   ├── config.py         # re-export shim (legacy)
 │   ├── models/           # Meeting, TDoc, Tsg, Wi dataclasses
 │   ├── parsers/          # HTML/Excel → domain objects (no network)
@@ -39,9 +39,9 @@ doc3gpp/
 │       │   └── migrations/   # placeholder for future Alembic
 │       └── repositories/ # SQLAlchemy impls of Protocols
 ├── tests/
-│   ├── unit/             # 23 files (mock external calls)
-│   ├── integration/      # 9 files (sqlite + online + mysql)
-│   └── fixtures/         # sample HTML + XLSX
+│   ├── unit/             # 24 files (mock external calls)
+│   ├── integration/      # 10 files (sqlite + online + mysql)
+│   └── fixtures/         # sample HTML + XLSX + zip docs
 ├── docs/                 # architecture, CLI ref, implementation status
 └── scripts/              # test_sqlite.sh, dev_run.sh
 ```
@@ -64,14 +64,18 @@ doc3gpp/
 |--------|------|------|------|
 | `Meeting` | dataclass | `models/meeting.py` | Domain model for meetings |
 | `TDoc` | dataclass | `models/tdoc.py` | Domain model for TDocs |
+| `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, ...) |
+| `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar for an extracted TDoc (zip/markdown paths, doc_filename) |
 | `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records |
 | `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to tsg_short, updated_at) |
 | `MeetingRepository` | Protocol | `repository/protocols.py` | Contract for meeting storage |
-| `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage |
+| `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage; `get_by_id` resolves canonical id strings |
+| `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_cr_details` + `tdoc_extracts` storage |
 | `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage |
 | `WiRepository` | Protocol | `repository/protocols.py` | Contract for WI storage; upsert keyed by `(wi_id, tsg_short)` |
 | `MeetingService` | class | `services/meetings_service.py` | Meeting sync + list orchestration |
 | `TDocService` | class | `services/tdoc_service.py` | TDoc sync + list orchestration |
+| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → markitdown → parse → persist) |
 | `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; also exposes `build_tsg_url` URL pattern |
 | `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters |
 | `ScraperClient` | class | `scraping/client.py` | HTTP transport with httpx |
@@ -83,6 +87,7 @@ doc3gpp/
 | `read_tdoc_sheet` | function | `parsers/tdoc_parser.py` | XLSX→TDoc list |
 | `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of MeetingRepository |
 | `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of TDocRepository |
+| `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of TDocCrDetailRepository |
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of TsgRepository |
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of WiRepository |
 | `get_engine` | function | `storage/db/session.py` | Cached engine factory |
@@ -155,7 +160,7 @@ If a test or fixture changes `DOC3GPP_*` env vars via `monkeypatch`, it
 **must** `cache_clear()` both. See the `sqlite_env` fixture in
 `tests/conftest.py` for the canonical pattern.
 
-Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL_SIZE`, `DOC3GPP_DB_AUTO_MIGRATE`, `DOC3GPP_LOG_LEVEL`, `DOC3GPP_HTTP_VERIFY`, `DOC3GPP_HTTP_MAX_RETRIES`, `DOC3GPP_HTTP_RETRY_BACKOFF`. Nested settings are overridable via the `__` delimiter: `DOC3GPP_MEETING_SYNC__CLOSED_YEARS=5`, `DOC3GPP_OUTPUT__FORMAT=json`. MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
+Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL_SIZE`, `DOC3GPP_DB_AUTO_MIGRATE`, `DOC3GPP_LOG_LEVEL`, `DOC3GPP_HTTP_VERIFY`, `DOC3GPP_HTTP_MAX_RETRIES`, `DOC3GPP_HTTP_RETRY_BACKOFF`. Nested settings are overridable via the `__` delimiter: `DOC3GPP_MEETING_SYNC__CLOSED_YEARS=5`, `DOC3GPP_OUTPUT__FORMAT=json`, `DOC3GPP_CACHE__DIR=~/.cache/doc3gpp/tdocs`, `DOC3GPP_CACHE__PURGE_CONFIRM=false`. MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
 
 ## CONFIG FILE LAYER
 
@@ -187,7 +192,7 @@ file co-tenanted with third-party tooling metadata. See
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **Protocol ↔ Impl signature drift.** Previously: `MeetingRepository.list` declared only `limit`, but `SQLAlchemyMeetingRepository.list` took `limit, tsg, name_like, location_like, year`. Resolved 2026-07-02 (M2). When changing filter signatures for any other repo, keep the Protocol and impl in sync.
-- **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` already drops it.)
+- **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` and `tdoc extract` already drop it.)
 - **Cross-service orchestration in CLI.** Mostly addressed: `tdoc sync` delegates to `TDocSyncCoordinator`. Other commands still construct their own services via `services.factory.build_*` helpers.
 - **Doc drift.** `docs/architecture.md` lists a `tdoc add` command that doesn't exist. Keep docs in sync when CLI surface changes.
 - **Acknowledged `# noqa: F401`.** Four in `storage/db/migrate.py` — side-effect imports required for SQLAlchemy `Base.metadata` registration. Do not remove.
@@ -205,6 +210,8 @@ file co-tenanted with third-party tooling metadata. See
 - **No Alembic.** Schema bootstrap is `Base.metadata.create_all` via `storage/db/migrate.py`. `DOC3GPP_DB_AUTO_MIGRATE` is a flag only — does not run migrations.
 - Calendar parser coupled to **current 3GPP DynaReport table layout** — upstream changes will break `meetings sync`.
 - TDoc extraction covers **FTP Excel lists only**. `GenerateDocumentList.aspx` and expanded metadata columns are unimplemented.
+- TDoc CR extraction covers the `R5s` (TTCN) and `R5w` (Workshop) URL templates verified against offline fixtures; the `R5-` and `C6-` templates are intentionally unresolved until exercised against the live site.
+- `markitdown[all]` is an opt-in extra; without it the `tdoc extract` CLI prints a friendly install hint and exits 1.
 - Online tests access live `3gpp.org` + FTP — flaky; run with `-rs` to surface skip reasons.
 
 

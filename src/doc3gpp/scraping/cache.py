@@ -284,6 +284,44 @@ class TDocCache:
         logger.info("Purged %d cache files under %s", deleted, self._root)
         return deleted
 
+    def purge_subdir(self, subdir: Subdir) -> int:
+        """Delete every file under ``<root>/<subdir>/`` and recreate it empty.
+
+        Sibling subtree is left untouched, so this is the method to
+        call when re-extracting every TDoc (force the zip download
+        again while preserving the rendered-markdown sidecar) or when
+        wiping the markdown cache alone. Files with a leading ``.``
+        (leftover ``.tmp.*.partial`` blobs from an interrupted write)
+        are skipped.
+
+        Args:
+            subdir: Which subtree to wipe. Must be one of
+                ``"zips"`` / ``"markdown"``.
+
+        Returns:
+            Number of files deleted. ``0`` when the subdir was already
+            empty (or never existed).
+
+        Raises:
+            ValueError: ``subdir`` is not a recognised cache subtree.
+        """
+        self._validate_subdir(subdir)
+        path = self._root / subdir
+        deleted = 0
+        if path.exists():
+            for entry in path.rglob("*"):
+                if not entry.is_file() or entry.name.startswith("."):
+                    continue
+                try:
+                    entry.unlink()
+                    deleted += 1
+                except FileNotFoundError:
+                    continue
+        logger.info(
+            "Purged %d files from %s/%s", deleted, self._root, subdir
+        )
+        return deleted
+
     def status(self) -> CacheStatus:
         """Return a snapshot of cache size and composition.
 

@@ -38,6 +38,13 @@ This document tracks what is implemented today versus planned next work.
   - retry-and-fallback lookup of TDoc list XLSX across `docs/` and `tdoc/` subfolders.
   - reservation/uploaded date parsing into `date` objects.
   - WARNING emitted when rows are skipped because the TDoc ID regex misses.
+- TDoc CR extraction pipeline (zip download → on-disk cache →
+  `markitdown` render → markdown cache → cover-page parser → persist):
+  - URL builders for the `R5s` (TTCN) and `R5w` (Workshop) branches.
+  - `markitdown[all]` is an opt-in extra (`pip install doc3gpp[extract]`);
+    the conversion step degrades with a clear `MarkitdownNotInstalledError`.
+  - Tables: `tdoc_cr_details` (parsed cover-page fields) and
+    `tdoc_extracts` (cache-pointer sidecar).
 
 ### Services
 
@@ -60,6 +67,9 @@ This document tracks what is implemented today versus planned next work.
 - meeting sync (validates `--tsg` against the reference table).
 - meeting list.
 - tdoc sync, tdoc list.
+- tdoc show (full TDoc + extracted CR cover-page fields).
+- tdoc extract (download zip → cache → markitdown → parse → persist).
+- cache status, cache purge (on-disk cache footprint for the extraction pipeline).
 - tsg list, tsg show, tsg seed.
 - Logging is configured via `DOC3GPP_LOG_LEVEL` and available at runtime for debugging.
 
@@ -68,6 +78,16 @@ This document tracks what is implemented today versus planned next work.
 - Unit: settings defaults, calendar parser fixture.
 - Integration: sqlite connectivity, meeting service persistence.
 - Optional integration: mysql connectivity via DOC3GPP_TEST_MYSQL_URL.
+- End-to-end extraction coverage:
+  - `tests/integration/test_tdoc_cr_sqlite.py` exercises
+    `TDocCrService` end-to-end against sqlite with a mocked
+    `ScraperClient` and the 7 zip fixtures under
+    `tests/fixtures/tdoc_cr_doc/`; the final test
+    (`test_extract_end_to_end_via_cli_runner`) drives the production
+    `tdoc extract` + `tdoc show` CLI via Typer's `CliRunner`.
+  - `tests/integration/test_online_tdoc_extract.py` (opt-in,
+    `-m online`) hits the live 3GPP FTP for `R5s260009` and
+    `R5w260009` to surface URL-template rot.
 - Pytest markers are defined for profile-based execution:
   - online
   - mysql
@@ -75,11 +95,6 @@ This document tracks what is implemented today versus planned next work.
   - python -m pytest -q --cov=src/doc3gpp --cov-report=term-missing -m "not mysql and not online"
 
 ## Planned / Not Yet Implemented
-
-### TDoc Extraction Pipeline
-
-- Download and parse meeting tdoc list from GenerateDocumentList.aspx.
-- Persist expanded tdoc metadata columns from legacy implementation.
 
 ### Additional Data Sources
 
@@ -99,4 +114,10 @@ This document tracks what is implemented today versus planned next work.
 
 - Schema bootstrap uses create_all rather than versioned migrations.
 - Calendar parser depends on current DynaReport table structure.
-- Full end-to-end online tests are not included in default test suite.
+- Full end-to-end online tests are not included in default test suite;
+  opt in with `python -m pytest -m online -rs` to exercise live
+  3gpp.org + FTP code paths.
+- TDoc CR extraction covers the `R5s` (TTCN) and `R5w` (Workshop) URL
+  templates verified against offline fixtures; the `R5-` and `C6-`
+  templates are deliberately unresolved until exercised against the
+  live site.

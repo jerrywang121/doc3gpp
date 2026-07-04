@@ -144,3 +144,100 @@ class TDocFileORM(Base):
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class TDocCrDetailOrm(Base):
+    """Structured CR (Change Request) details extracted from a TDoc.
+
+    One row per TDoc that has been parsed by ``parsers.cr_parser``.
+    Carries the cover-page fields (spec, cr_num, title, ...) and the
+    TTCN-only fields (ats_version, ttcn_release, test_case, ...) plus
+    the full ``corrections`` list serialised as a single JSON string in
+    the ``corrections`` ``TEXT`` column. See
+    :class:`doc3gpp.models.tdoc_cr.TDocCRDetails` for the in-memory
+    shape; :py:meth:`TDocCRDetails.to_persisted` produces the dict
+    this table persists.
+
+    ``tdoc_id`` is the primary key AND a foreign key into
+    ``tdocs.tdoc_id``; ``ondelete="CASCADE"`` keeps the detail row in
+    sync with its parent TDoc — unlike ``TDocFileORM`` the CR details
+    are derived artefacts of the TDoc row and should be wiped when the
+    TDoc itself is removed. ``parser_version`` and ``extracted_at``
+    are diagnostic columns for re-extract audits.
+    """
+
+    __tablename__ = "tdoc_cr_details"
+
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    spec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cr_num: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rev: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    tsg: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    related_wis: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    date: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cr_cat: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    release: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason_for_change: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consequences_if_not_approved: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clauses_affected: Mapped[str | None] = mapped_column(Text, nullable=True)
+    other_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision_history: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ats_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ttcn_release: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    test_case: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    test_suite: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ue: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ss: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    corrections: Mapped[str | None] = mapped_column(Text, nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tech: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    extracted_tdoc_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parser_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="1.0.0"
+    )
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class TDocExtractOrm(Base):
+    """Metadata-only sidecar recording that a TDoc has been extracted.
+
+    The "expensive" payload (the cached zip and the rendered markdown)
+    lives on disk under the cache directory — these columns only hold
+    *paths*. A row here means ``scraping.tdoc_zip_source`` and
+    ``parsers.markitdown_converter`` have already produced artefacts
+    on disk, so the next extract call can short-circuit the network
+    and the markitdown render.
+
+    Mirrors the cascade-on-parent-delete policy of
+    :class:`TDocCrDetailOrm`: when the owning TDoc row is removed, the
+    extract metadata loses its meaning and is dropped with it.
+    """
+
+    __tablename__ = "tdoc_extracts"
+
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    zip_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    markdown_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    doc_filename: Mapped[str] = mapped_column(String(256), nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    parser_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="1.0.0"
+    )

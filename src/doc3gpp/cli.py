@@ -16,8 +16,13 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
+from doc3gpp.parsers.markitdown_converter import MarkitdownNotInstalledError
+from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.services.factory import (
     build_meeting_service,
+    build_tdoc_cr_repository,
+    build_tdoc_cr_service,
+    build_tdoc_repository,
     build_tdoc_service,
     build_tdoc_sync_coordinator,
     build_tsg_service,
@@ -39,12 +44,14 @@ tdoc_app = typer.Typer(help="tdoc commands")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
 config_app = typer.Typer(help="inspect the resolved configuration")
+cache_app = typer.Typer(help="TDoc extraction cache commands")
 app.add_typer(db_app, name="db")
 app.add_typer(meeting_app, name="meeting")
 app.add_typer(tdoc_app, name="tdoc")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
 app.add_typer(config_app, name="config")
+app.add_typer(cache_app, name="cache")
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +229,74 @@ def _emit_markdown(rows: list[list[str]], stream: TextIO, fields: list[str]) -> 
         stream.write("| " + " | ".join(_md_cell(c) for c in row) + " |\n")
 
 
+def _build_cache() -> TDocCache:
+    """Construct a :class:`TDocCache` from the active settings.
+
+    Centralises the cache construction so the ``cache status`` and
+    ``cache purge`` commands share the exact same root + size-limit
+    translation that the ``TDocCrService`` factory uses internally.
+    The size limit is converted from megabytes (the ``CacheSettings``
+    unit) to bytes (the ``TDocCache`` unit) once, here.
+    """
+    settings = get_settings()
+    return TDocCache(
+        root=settings.cache.dir,
+        size_limit_bytes=settings.cache.size_limit_mb * 1024 * 1024,
+    )
+
+
+def _fmt_bytes(n: int) -> str:
+    """Render a byte count as a short human-readable string.
+
+    Uses simple thresholds so the format stays predictable across
+    environments; ``0`` is rendered as ``"unlimited"`` for clarity in
+    the ``cache status`` table when the configured ceiling is off.
+    """
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _format_cache_status_row(label: str, value: str) -> str:
+    """Render a single ``label: value`` line padded for the status table."""
+    return f"{label:<12} {value}"
+
+
+def _emit_cache_status(status: CacheStatus, stream: TextIO) -> None:
+    """Write a plain-text ``cache status`` table to ``stream``.
+
+    No ``--format`` flag for this initial cut — the table is short
+    enough that markdown / JSON variants are not worth the surface
+    area. ``limit_bytes`` of ``0`` renders as ``"unlimited"`` so an
+    unset cap is unambiguous.
+    """
+    stream.write(_format_cache_status_row("file_count:", str(status.file_count)) + "\n")
+    stream.write(_format_cache_status_row("total_bytes:", _fmt_bytes(status.total_bytes)) + "\n")
+    limit_display = "unlimited" if status.limit_bytes == 0 else _fmt_bytes(status.limit_bytes)
+    stream.write(_format_cache_status_row("limit_bytes:", limit_display) + "\n")
+    stream.write(_format_cache_status_row("zips:", str(status.zips)) + "\n")
+    stream.write(_format_cache_status_row("markdown:", str(status.markdown)) + "\n")
+
+
+def _truncate_for_display(value: str | None, limit: int = 200) -> str:
+    """Truncate a long string for ``tdoc show`` display.
+
+    Long free-text fields (``reason_for_change``,
+    ``consequences_if_not_approved``) routinely run to many hundreds
+    of characters; the display helper caps them at ``limit`` chars and
+    appends an ellipsis so the column layout doesn't blow up.
+    """
+    if value is None:
+        return "-"
+    if len(value) <= limit:
+        return value
+    return value[:limit].rstrip() + "..."
+
+
 def _emit_records(
     rows: list[list[str]],
     fields: list[str],
@@ -257,6 +332,57 @@ def _emit_records(
     finally:
         if close_after:
             stream.close()
+
+
+@cache_app.command("status")
+def cache_status() -> None:
+    """Print cache file count, total bytes, limit, and per-subdir breakdown.
+
+    Walks both the ``zips/`` and ``markdown/`` subtrees under the
+    configured cache directory and reports their combined size and file
+    counts. The output is a fixed plain-text table; no ``--format``
+    flag is exposed in this initial cut because the table is short and
+    machine-friendly enough to grep / awk.
+
+    The status command is a pure read — it does **not** trigger FIFO
+    eviction, even if the cache is currently over the configured size
+    limit. Use ``doc3gpp cache purge`` (or the next ``tdoc extract``
+    call) to evict.
+    """
+    cache = _build_cache()
+    snapshot = cache.status()
+    _emit_cache_status(snapshot, sys.stdout)
+
+
+@cache_app.command("purge")
+def cache_purge(
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt.",
+    ),
+) -> None:
+    """Delete every cached zip and markdown file.
+
+    The ``zips/`` and ``markdown/`` subtrees are wiped and recreated
+    empty so the cache remains usable for subsequent ``tdoc extract``
+    calls. On-disk artefacts referenced from the
+    ``tdoc_extracts.markdown_path`` and ``tdoc_extracts.zip_path``
+    columns become stale — the next extract will repopulate them.
+
+    By default the command prompts for confirmation; pass ``--yes`` to
+    skip the prompt. The default is also overridable via the TOML
+    config file or the ``DOC3GPP_CACHE__PURGE_CONFIRM=false`` env var
+    — set to ``false`` to skip the prompt globally (CI / scripted
+    use).
+    """
+    settings = get_settings()
+    if settings.cache.purge_confirm and not yes:
+        typer.confirm("Delete all cached files?", abort=True)
+    cache = _build_cache()
+    deleted = cache.purge()
+    typer.echo(f"Deleted {deleted} files from cache.")
 
 
 @db_app.command("check")
@@ -656,6 +782,213 @@ def tdoc_list(
         output=output,
         no_records_msg="No TDocs found",
     )
+
+
+def _extract_failure_hints() -> str:
+    """Return the friendly error-name list for the ``tdoc extract`` summary.
+
+    Used in the exception handler at the batch level so an
+    operator-facing error message lists the per-item error categories
+    that ``TDocCrService.extract_many`` catches internally (rather than
+    letting one obscure the others). Kept as a module-local helper so
+    the doctring lives next to its only caller.
+    """
+    return (
+        "TDocZipDownloadError, MarkitdownNotInstalledError, "
+        "TDocTypeUnsupportedError, TDocNotFoundError, CRHeaderMissingError"
+    )
+
+
+@tdoc_app.command("extract")
+def tdoc_extract(
+    tdoc: list[str] = typer.Option(
+        None,
+        "--tdoc",
+        help="TDoc ID to extract (repeatable for batch).",
+    ),
+    tdoc_id: list[int] = typer.Option(
+        None,
+        "--tdoc-id",
+        help="Integer TDoc ID to resolve via the tdocs table (repeatable).",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Skip both the on-disk zip/markdown cache and the persisted tdoc_cr_details row.",
+    ),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help=(
+            "Reserved for forward-compatibility with the parser's "
+            "`full=True` mode (pulls in before_change / after_change "
+            "per correction). The current service does not yet wire "
+            "this through; accepted silently so existing scripts "
+            "keep parsing."
+        ),
+    ),
+) -> None:
+    """Download and extract structured CR cover-page fields for one or more TDocs.
+
+    Each ``--tdoc`` value is a canonical TDoc identifier (e.g.
+    ``R5s260009``). ``--tdoc-id N`` resolves the integer form against
+    the ``tdocs`` table (one DB lookup per integer) and substitutes the
+    resolved ``tdoc_id`` string into the batch. An unknown integer
+    prints a warning and is skipped — the rest of the batch still runs.
+
+    The service :meth:`TDocCrService.extract_many` catches the
+    following per-id exception types internally and skips the broken
+    id: ``TDocZipDownloadError``, ``MarkitdownNotInstalledError``,
+    ``TDocTypeUnsupportedError``, ``TDocNotFoundError``,
+    ``CRHeaderMissingError``. The CLI computes the failure set as
+    ``input - successful_keys`` and prints one ``FAILED`` line per id
+    that didn't come back.
+
+    Exit code:
+
+    - ``0`` — at least one TDoc extracted successfully.
+    - ``1`` — every TDoc failed, **or** markitdown is missing and the
+      batch could not even start.
+    """
+    if not tdoc and not tdoc_id:
+        raise typer.BadParameter("Specify at least one --tdoc or --tdoc-id.")
+
+    # Combine the two input sources into a single ordered list of
+    # canonical ``tdoc_id`` strings. ``--tdoc-id`` is resolved via a
+    # single repository lookup per integer; missing ids are skipped.
+    tdoc_ids: list[str] = []
+    if tdoc:
+        tdoc_ids.extend(tdoc)
+    if tdoc_id:
+        repo = build_tdoc_repository()
+        for raw in tdoc_id:
+            resolved = repo.get_by_id(str(raw))
+            if resolved is None:
+                typer.echo(
+                    f"warning: --tdoc-id {raw} not found in tdocs table; skipping.",
+                    err=True,
+                )
+                continue
+            tdoc_ids.append(resolved.tdoc_id)
+
+    if not tdoc_ids:
+        typer.echo("No TDocs to extract (all --tdoc-id values were unknown).")
+        raise typer.Exit(code=1)
+
+    logger.info(
+        "Starting TDoc extract for %d id(s) (force=%s, full=%s)",
+        len(tdoc_ids), force, full,
+    )
+    service = build_tdoc_cr_service()
+    try:
+        results = service.extract_many(tdoc_ids, force=force)
+    except MarkitdownNotInstalledError as exc:
+        typer.echo(
+            "markitdown is not installed; install with `pip install doc3gpp[extract]`.",
+            err=True,
+        )
+        typer.echo(f"hint: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    successful_keys = set(results.keys())
+    failures: list[str] = []
+    for raw_id in tdoc_ids:
+        normalised = raw_id.strip()
+        if normalised in successful_keys:
+            result = results[normalised]
+            typer.echo(
+                f"{normalised}: spec={result.details.spec} "
+                f"cr_num={result.details.cr_num} "
+                f"title={result.details.title}"
+            )
+        else:
+            typer.echo(f"{normalised}: FAILED - extract error (see logs)")
+            failures.append(normalised)
+
+    total = len(tdoc_ids)
+    successes = total - len(failures)
+    typer.echo(f"Extracted {successes}/{total} TDocs ({len(failures)} failures)")
+    if successes == 0:
+        raise typer.Exit(code=1)
+
+
+@tdoc_app.command("show")
+def tdoc_show(
+    tdoc: str = typer.Option(
+        ...,
+        "--tdoc",
+        help="TDoc ID to show (canonical form, e.g. R5s260009).",
+    ),
+) -> None:
+    """Show TDoc details, including extracted CR fields if available.
+
+    Looks up the TDoc row in the ``tdocs`` table and prints every
+    :class:`TDoc` field under a ``[TDoc]`` section. When a matching
+    ``tdoc_cr_details`` row exists (i.e. ``tdoc extract`` has been run
+    for this id at least once) the parsed cover-page fields are
+    printed under an ``[Extracted Details]`` section; the
+    ``corrections`` list is JSON-dumped for full fidelity.
+
+    Raises a ``BadParameter`` when the requested TDoc is not stored.
+    """
+    repo = build_tdoc_repository()
+    record = repo.get_by_id(tdoc)
+    if record is None:
+        raise typer.BadParameter(
+            f"Unknown TDoc '{tdoc}'. Run 'doc3gpp tdoc list' to see stored TDocs, "
+            f"or 'doc3gpp tdoc sync' to ingest a meeting's TDocs first."
+        )
+
+    typer.echo("[TDoc]")
+    for f in dataclass_fields(record):
+        value = getattr(record, f.name)
+        if value is None:
+            value = "-"
+        elif hasattr(value, "isoformat"):
+            value = value.isoformat()
+        else:
+            value = str(value)
+        typer.echo(f"{f.name}: {value}")
+
+    cr_repo = build_tdoc_cr_repository()
+    details = cr_repo.get(tdoc)
+    meta = cr_repo.get_extract_meta(tdoc)
+    if details is None and meta is None:
+        typer.echo("[Extracted Details]")
+        typer.echo("No extracted details; run `doc3gpp tdoc extract --tdoc <id>` first.")
+        return
+
+    typer.echo("[Extracted Details]")
+    if details is not None:
+        typer.echo(f"spec: {details.spec or '-'}")
+        typer.echo(f"cr_num: {details.cr_num or '-'}")
+        typer.echo(f"rev: {details.rev or '-'}")
+        typer.echo(f"version: {details.version or '-'}")
+        typer.echo(f"title: {details.title or '-'}")
+        typer.echo(f"source: {details.source or '-'}")
+        typer.echo(f"tsg: {details.tsg or '-'}")
+        typer.echo(f"related_wis: {details.related_wis or '-'}")
+        typer.echo(f"date: {details.date or '-'}")
+        typer.echo(f"cr_cat: {details.cr_cat or '-'}")
+        typer.echo(f"release: {details.release or '-'}")
+        typer.echo(f"reason_for_change: {_truncate_for_display(details.reason_for_change)}")
+        typer.echo(
+            "consequences_if_not_approved: "
+            f"{_truncate_for_display(details.consequences_if_not_approved)}"
+        )
+        typer.echo(f"clauses_affected: {details.clauses_affected or '-'}")
+        typer.echo(f"ats_version: {details.ats_version or '-'}")
+        typer.echo(f"ttcn_release: {details.ttcn_release or '-'}")
+        typer.echo(f"test_case: {details.test_case or '-'}")
+        typer.echo(f"test_suite: {details.test_suite or '-'}")
+        typer.echo(f"ue: {details.ue or '-'}")
+        typer.echo(f"ss: {details.ss or '-'}")
+        typer.echo(f"year: {details.year if details.year is not None else '-'}")
+        typer.echo(f"tech: {details.tech or '-'}")
+        typer.echo(f"parser_version: {details.parser_version}")
+        typer.echo(f"corrections: {json.dumps(details.corrections, ensure_ascii=False, indent=2)}")
+    if meta is not None:
+        typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")
 
 
 @tsg_app.command("list")

@@ -6,9 +6,10 @@ Two layers of settings are exposed:
   It reads ``DOC3GPP_*`` environment variables (and the optional ``.env``)
   for backward compatibility with the original CLI surface.
 * Nested sub-models (:class:`MeetingSyncSettings`,
-  :class:`OutputSettings`, :class:`OutputFieldsSettings`) carry values that
-  are most naturally configured from a TOML file rather than env vars.
-  They can still be overridden by env vars via the ``__`` delimiter
+  :class:`OutputSettings`, :class:`OutputFieldsSettings`,
+  :class:`CacheSettings`) carry values that are most naturally configured
+  from a TOML file rather than env vars. They can still be overridden by
+  env vars via the ``__`` delimiter
   (``DOC3GPP_MEETING_SYNC__CLOSED_YEARS=5``).
 
 Precedence (highest wins)::
@@ -92,13 +93,34 @@ class OutputSettings(BaseModel):
     fields: OutputFieldsSettings = Field(default_factory=OutputFieldsSettings)
 
 
+class CacheSettings(BaseModel):
+    """Disk cache configuration for TDoc extraction artifacts.
+
+    Two subtrees live under :attr:`dir`: ``zips/`` holds the raw 3GPP zip
+    downloads and ``markdown/`` holds the markitdown output. The cache
+    module evicts files in insertion order (oldest by ``st_ctime`` first)
+    whenever the combined size of both subtrees exceeds
+    :attr:`size_limit_mb` megabytes; ``0`` means unlimited. The
+    :attr:`purge_confirm` flag is read by the CLI's ``cache purge``
+    command to gate the destructive operation with an interactive prompt
+    (skip the prompt with ``--yes`` or by setting
+    ``DOC3GPP_CACHE__PURGE_CONFIRM=false``).
+    """
+
+    dir: Path = Field(
+        default_factory=lambda: Path.home() / ".cache" / "doc3gpp" / "tdocs"
+    )
+    size_limit_mb: int = Field(default=1024, ge=0)  # 0 = unlimited
+    purge_confirm: bool = Field(default=True)  # CLI guard for `cache purge`
+
+
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
     The flat fields at the root (``database_url``, ``db_echo``, ...) are
     populated from ``DOC3GPP_*`` env vars to preserve backward
-    compatibility. Nested sub-models (``meeting_sync``, ``output``) are
-    populated from a TOML config file via
+    compatibility. Nested sub-models (``meeting_sync``, ``output``,
+    ``cache``) are populated from a TOML config file via
     :func:`doc3gpp.settings.loader.get_settings`; the ``env_nested_delimiter``
     in :attr:`model_config` lets env vars override nested values too
     (``DOC3GPP_OUTPUT__FORMAT=json``).
@@ -123,6 +145,7 @@ class Settings(BaseSettings):
     # Nested config (config-file-driven, env-overridable via '__' delimiter).
     meeting_sync: MeetingSyncSettings = Field(default_factory=MeetingSyncSettings)
     output: OutputSettings = Field(default_factory=OutputSettings)
+    cache: CacheSettings = Field(default_factory=CacheSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="DOC3GPP_",

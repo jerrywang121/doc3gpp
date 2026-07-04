@@ -6,6 +6,7 @@ from typing import Protocol
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -24,6 +25,16 @@ class TDocRepository(Protocol):
         Existing rows (matched by ``tdoc_id``) are updated in place so callers
         can re-sync without producing duplicates. Returns the number of input
         rows processed.
+        """
+        ...
+
+    def get_by_id(self, tdoc_id: str) -> TDoc | None:
+        """Return a TDoc record by its canonical ``tdoc_id`` (PK lookup).
+
+        Used by :class:`doc3gpp.services.tdoc_cr_service.TDocCrService` to
+        validate that the requested id exists and to check ``type == "CR"``
+        before triggering a download. Returns ``None`` when the row is
+        absent — callers translate that into :class:`TDocNotFoundError`.
         """
         ...
 
@@ -229,4 +240,45 @@ class TDocFileRepository(Protocol):
         do not linger in the table. Returns the number of rows deleted.
         Passing an empty iterable is a no-op (returns 0).
         """
+        ...
+
+
+class TDocCrDetailRepository(Protocol):
+    """Storage operations for extracted CR details + cache-extract metadata.
+
+    Combines the ``tdoc_cr_details`` row (the parsed fields) with the
+    ``tdoc_extracts`` row (the paths to the cached zip / markdown on
+    disk). Folding both into one repository keeps the service-layer
+    surface narrow; both tables are owned by the same
+    :class:`doc3gpp.services.tdoc_cr_service.TDocCrService` and always
+    written together in a single transaction.
+
+    All methods are keyed on ``tdoc_id`` because that column is the
+    primary key on both child tables (and a FK into ``tdocs.tdoc_id``
+    with ``ondelete="CASCADE"``).
+    """
+
+    def get(self, tdoc_id: str) -> TDocCRDetails | None:
+        """Return the persisted detail row, or ``None`` on miss."""
+        ...
+
+    def upsert(
+        self,
+        details: TDocCRDetails,
+        extract_meta: TDocExtractMeta,
+    ) -> None:
+        """Insert/update both rows in a single transaction.
+
+        The detail row is keyed by ``tdoc_id``; the extract-metadata
+        row is keyed by the same id. ``updated_at`` on the detail row
+        is stamped on every write so callers can detect re-extracts.
+        """
+        ...
+
+    def get_extract_meta(self, tdoc_id: str) -> TDocExtractMeta | None:
+        """Return the cached-extract metadata, or ``None`` on miss."""
+        ...
+
+    def list_all(self) -> list[TDocCRDetails]:
+        """Return every persisted detail row (CLI / debugging)."""
         ...

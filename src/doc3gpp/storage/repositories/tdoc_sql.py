@@ -172,6 +172,20 @@ class SQLAlchemyTDocRepository:
             stmt = select(TDocORM.tdoc_id).where(TDocORM.meeting_id == meeting_id)
             return list(session.scalars(stmt).all())
 
+    def get_by_id(self, tdoc_id: str) -> TDoc | None:
+        """Return a TDoc record by its canonical ``tdoc_id`` (PK lookup).
+
+        Used by :class:`doc3gpp.services.tdoc_cr_service.TDocCrService` to
+        validate that a requested id exists and to check ``type == "CR"``
+        before triggering a download. Returns ``None`` when the row is
+        absent so callers can distinguish "not found" from a real error.
+        """
+        with self._session_factory() as session:
+            row = session.get(TDocORM, tdoc_id)
+        if row is None:
+            return None
+        return _orm_to_domain(row)
+
     def list_with_meeting(
         self,
         limit: int = 20,

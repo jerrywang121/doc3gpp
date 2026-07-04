@@ -1,0 +1,538 @@
+"""Integration tests for :class:`TDocCrService` + SQL repositories.
+
+Exercises the end-to-end extraction pipeline against a SQLite database
+seeded with a parent ``tdocs`` row and a mocked :class:`ScraperClient`
+that returns the bytes of one of the fixtures shipped under
+``tests/fixtures/tdoc_cr_doc/``. The cache is rooted under a
+``tmp_path`` directory so the tests never touch the user's home cache.
+
+The tests that require ``markitdown`` (every happy-path and the
+markdown-cache-hit test) carry a ``@pytest.mark.skipif`` guard so the
+suite stays green in environments that haven't installed the
+``[extract]`` extra. The structural tests (network failure, unknown
+tdoc, non-CR tdoc, invalid id shape) don't need markitdown.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import httpx
+import pytest
+
+from doc3gpp.models.tdoc import TDoc
+from doc3gpp.scraping.cache import TDocCache
+from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
+from doc3gpp.services.tdoc_cr_service import (
+    ExtractResult,
+    TDocCrService,
+    TDocNotFoundError,
+    TDocTypeUnsupportedError,
+)
+from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+
+FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
+
+
+def _markitdown_available() -> bool:
+    """Return True iff ``markitdown`` imports cleanly.
+
+    Mirrors the helper used in :mod:`test_markitdown_converter` so the
+    same skip guard can gate both unit and integration tests.
+    """
+    try:
+        import markitdown  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _zip_payload(zip_path: Path) -> bytes:
+    """Read a fixture zip from disk into bytes.
+
+    Centralised so the tests don't all repeat the same ``read_bytes``
+    call — and so swapping the fixture location in one place is
+    sufficient.
+    """
+    return zip_path.read_bytes()
+
+
+def _build_service(
+    tmp_path: Path,
+    *,
+    zip_bytes: bytes | Exception | None = None,
+) -> tuple[TDocCrService, MagicMock, TDocCache, SQLAlchemyTDocCrRepository, SQLAlchemyTDocRepository]:
+    """Construct a fully-wired :class:`TDocCrService` against tmp dirs.
+
+    Returns ``(service, scraper_mock, cache, cr_repo, tdoc_repo)`` so
+    each test can inspect call counts, cache contents, and DB rows
+    without rebuilding the wiring.
+
+    Args:
+        tmp_path: Per-test root used for both the cache directory and
+            the SQLite database (the latter is wired by the
+            ``sqlite_env`` fixture before this helper is called).
+        zip_bytes: Pre-cooked response for ``scraper_mock.get_bytes``.
+            When ``None`` the mock returns an empty payload and tests
+            that don't exercise the zip path are unaffected. When an
+            :class:`Exception` instance, the mock raises it on every
+            call — used by the network-failure test.
+    """
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper_mock = MagicMock()
+    if zip_bytes is None:
+        scraper_mock.get_bytes.return_value = b""
+    elif isinstance(zip_bytes, Exception):
+        scraper_mock.get_bytes.side_effect = zip_bytes
+    else:
+        scraper_mock.get_bytes.return_value = zip_bytes
+
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper_mock,
+        cr_repository=cr_repo,
+        tdoc_repository=tdoc_repo,
+    )
+    return service, scraper_mock, cache, cr_repo, tdoc_repo
+
+
+def _seed_cr_tdoc(tdoc_repo: SQLAlchemyTDocRepository, tdoc_id: str) -> None:
+    """Insert a parent ``tdocs`` row flagged as type ``"CR"``."""
+    tdoc_repo.upsert_many([TDoc(tdoc_id=tdoc_id, type="CR")])
+
+
+# ---------------------------------------------------------------------------
+# 1. Happy path: first extract downloads the zip, renders markdown,
+#    parses, persists, and returns from_cache=False.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _markitdown_available(),
+    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_happy_path(sqlite_env, tmp_path) -> None:
+    """End-to-end extract of ``R5s260009`` from the local zip fixture."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+
+    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_zip_payload(fixture)
+    )
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")
+
+    result = service.extract("R5s260009")
+
+    assert isinstance(result, ExtractResult)
+    assert result.from_cache is False
+    # Sanity: the scraper was hit exactly once for the zip download.
+    assert scraper_mock.get_bytes.call_count == 1
+    # Cover-page fields match the snapshot contract in test_cr_parser.py.
+    assert result.details.spec == "38.523-3"
+    assert result.details.cr_num == "3790"
+    assert result.details.rev == "0"
+    assert result.details.release == "Rel-18"
+    assert result.details.year == 2026
+    assert result.details.tech == "5G"
+    # Both DB rows landed.
+    assert cr_repo.get("R5s260009") is not None
+    meta = cr_repo.get_extract_meta("R5s260009")
+    assert meta is not None
+    assert meta.tdoc_id == "R5s260009"
+    assert meta.doc_filename.lower().endswith(".docx")
+    assert Path(meta.zip_path).exists()
+    assert Path(meta.markdown_path).exists()
+    # The on-disk zip lives under cache/zips/ and the markdown under
+    # cache/markdown/, both keyed by their respective identifiers.
+    cache_status = cache.status()
+    assert cache_status.zips == 1
+    assert cache_status.markdown == 1
+
+
+# ---------------------------------------------------------------------------
+# 2. DB-cache hit: second call short-circuits on the persisted row.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _markitdown_available(),
+    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_db_cache_hit_skips_network(sqlite_env, tmp_path) -> None:
+    """A second ``extract`` call must not re-invoke the scraper."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+
+    service, scraper_mock, _, _, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_zip_payload(fixture)
+    )
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")
+
+    first = service.extract("R5s260009")
+    assert first.from_cache is False
+
+    scraper_mock.reset_mock()
+
+    second = service.extract("R5s260009")
+    assert second.from_cache is True
+    assert scraper_mock.get_bytes.call_count == 0
+    # Same parsed fields (frozen dataclasses are value-equal).
+    assert second.details == first.details
+
+
+# ---------------------------------------------------------------------------
+# 3. Markdown cache hit: zip purged but markdown retained → skip markitdown.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _markitdown_available(),
+    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_markdown_cache_hit_when_zip_purged(
+    sqlite_env, tmp_path, monkeypatch
+) -> None:
+    """With the zip cache wiped but the markdown cache intact, the
+    second call re-downloads the zip yet re-uses the rendered
+    markdown — ``convert_document_to_markdown`` must NOT be called
+    again."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+
+    service, scraper_mock, cache, _, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_zip_payload(fixture)
+    )
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")
+
+    # First call: populates both caches and the DB.
+    first = service.extract("R5s260009")
+    assert first.from_cache is False
+    assert scraper_mock.get_bytes.call_count == 1
+
+    # Patch out the markitdown converter so a regression that calls it
+    # a second time blows up loudly instead of silently re-rendering.
+    def _boom(*_args, **_kwargs):  # pragma: no cover - raised via mock
+        raise AssertionError("convert_document_to_markdown should not be re-invoked")
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.convert_document_to_markdown",
+        _boom,
+        raising=False,
+    )
+
+    # Wipe the zip subtree; the markdown subtree (keyed by sha256 of
+    # the docx bytes) remains intact so the second call must hit it.
+    deleted = cache.purge_subdir("zips")
+    assert deleted == 1
+
+    # Also drop the DB row so the service is forced to re-download +
+    # re-parse. The plan requires this: a markdown cache hit must
+    # NOT be conflated with a DB cache hit.
+    from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocExtractOrm
+    from doc3gpp.storage.db.session import get_session_factory
+
+    factory = get_session_factory()
+    with factory() as session:
+        detail = session.get(TDocCrDetailOrm, "R5s260009")
+        if detail is not None:
+            session.delete(detail)
+        meta_row = session.get(TDocExtractOrm, "R5s260009")
+        if meta_row is not None:
+            session.delete(meta_row)
+        session.commit()
+
+    scraper_mock.reset_mock()
+
+    second = service.extract("R5s260009")
+    # Network was hit (zip cache was empty)…
+    assert scraper_mock.get_bytes.call_count == 1
+    # …but the markdown cache short-circuited the converter.
+    assert second.from_cache is False
+
+
+# ---------------------------------------------------------------------------
+# 4. force=True bypasses both caches.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _markitdown_available(),
+    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_force_bypasses_caches(sqlite_env, tmp_path) -> None:
+    """``force=True`` re-downloads the zip AND re-renders markdown."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+
+    service, scraper_mock, cache, _, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_zip_payload(fixture)
+    )
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")
+
+    service.extract("R5s260009")
+    scraper_calls_before = scraper_mock.get_bytes.call_count
+    cache_status_before = cache.status()
+    assert cache_status_before.zips == 1
+    assert cache_status_before.markdown == 1
+
+    # Wipe the zip subtree so a non-force second call would hit the
+    # network but should still hit the markdown cache. With force=True
+    # BOTH caches must be bypassed.
+    cache.purge_subdir("zips")
+    scraper_mock.reset_mock()
+
+    convert_mock = MagicMock(
+        wraps=__import__(
+            "doc3gpp.parsers.markitdown_converter",
+            fromlist=["convert_document_to_markdown"],
+        ).convert_document_to_markdown
+    )
+    import doc3gpp.parsers.markitdown_converter as md_mod
+
+    original = md_mod.convert_document_to_markdown
+    md_mod.convert_document_to_markdown = convert_mock
+    try:
+        result = service.extract("R5s260009", force=True)
+    finally:
+        md_mod.convert_document_to_markdown = original
+
+    assert result.from_cache is False
+    assert scraper_mock.get_bytes.call_count == 1
+    assert convert_mock.call_count == 1
+    # Sanity: scraper_calls_before was at least one (first extract).
+    assert scraper_calls_before >= 1
+
+
+# ---------------------------------------------------------------------------
+# 5. Non-CR TDoc → TDocTypeUnsupportedError.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_non_cr_tdoc_raises_type_unsupported(sqlite_env, tmp_path) -> None:
+    """A TDoc row with ``type='LS'`` must raise ``TDocTypeUnsupportedError``."""
+    create_schema()
+    service, _, _, _, tdoc_repo = _build_service(tmp_path, zip_bytes=b"unused")
+    tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="LS")])
+
+    with pytest.raises(TDocTypeUnsupportedError) as excinfo:
+        service.extract("R5s260009")
+    assert excinfo.value.tdoc_id == "R5s260009"
+    assert excinfo.value.observed_type == "LS"
+
+
+# ---------------------------------------------------------------------------
+# 6. Unknown TDoc → TDocNotFoundError.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_unknown_tdoc_raises_not_found(sqlite_env, tmp_path) -> None:
+    """A TDoc id with no row in ``tdocs`` must raise ``TDocNotFoundError``."""
+    create_schema()
+    service, _, _, _, _ = _build_service(tmp_path, zip_bytes=b"unused")
+
+    with pytest.raises(TDocNotFoundError) as excinfo:
+        service.extract("R5s260009")
+    assert excinfo.value.tdoc_id == "R5s260009"
+
+
+# ---------------------------------------------------------------------------
+# 7. Network failure → TDocZipDownloadError + no partial cache write.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_network_failure_no_partial_cache(sqlite_env, tmp_path) -> None:
+    """An ``httpx.ConnectError`` must surface as ``TDocZipDownloadError``
+    without leaving a zero-byte zip in the cache or a detail row in
+    the DB.
+    """
+    create_schema()
+    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+        tmp_path,
+        zip_bytes=httpx.ConnectError("network unreachable"),
+    )
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")
+
+    with pytest.raises(TDocZipDownloadError):
+        service.extract("R5s260009")
+
+    # The scraper was called (download was attempted)…
+    assert scraper_mock.get_bytes.call_count == 1
+    # …but no zip landed in the cache (no zero-byte file written).
+    assert cache.status().zips == 0
+    assert not any((cache.root / "zips").iterdir())
+    # And no DB row was persisted.
+    assert cr_repo.get("R5s260009") is None
+    assert cr_repo.get_extract_meta("R5s260009") is None
+
+
+# ---------------------------------------------------------------------------
+# 8. Invalid ``tdoc_id`` shape → ValueError.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_id", ["", "   ", "invalid$id", "x" * 33])
+def test_extract_invalid_tdoc_id_raises_value_error(
+    sqlite_env, tmp_path, bad_id: str
+) -> None:
+    """A garbage id must raise ``ValueError`` before any I/O happens."""
+    create_schema()
+    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=b"unused"
+    )
+    # No tdoc seed — but the shape check fires first.
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")  # ensure the parent exists for completeness
+
+    with pytest.raises(ValueError):
+        service.extract(bad_id)
+
+    # Nothing was touched.
+    assert scraper_mock.get_bytes.call_count == 0
+    assert cache.status().file_count == 0
+    assert cr_repo.get("R5s260009") is None
+
+
+# ---------------------------------------------------------------------------
+# 9. extract_many: per-id failure isolation.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _markitdown_available(),
+    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_many_skips_failures(sqlite_env, tmp_path) -> None:
+    """``extract_many`` returns a dict of successes; failures are
+    logged but never raised (so one broken id doesn't abort the batch)."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+
+    service, _, _, _, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_zip_payload(fixture)
+    )
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")
+
+    results = service.extract_many(
+        [
+            "R5s260009",
+            "R5s260010",
+            "invalid$id",
+            "R5s260009",
+        ]
+    )
+
+    assert set(results.keys()) == {"R5s260009"}
+    assert results["R5s260009"].from_cache is True
+
+
+# ---------------------------------------------------------------------------
+# 10. End-to-end: Typer CliRunner -> factory -> service -> cache -> DB.
+# ---------------------------------------------------------------------------
+
+
+class _DummyScraperClient:
+    """In-memory :class:`ScraperClient` double that serves one canned payload.
+
+    The CLI's :func:`build_tdoc_cr_service` instantiates a fresh
+    ``ScraperClient()`` with no arguments; this dummy mirrors that contract
+    so the patch is a drop-in. ``get_bytes`` returns the pre-cooked zip
+    bytes (recorded for an assertion that the scraper was actually hit) and
+    ``get_text`` is unimplemented — the extraction path never reads text.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.calls: list[str] = []
+
+    def get_bytes(self, url: str) -> bytes:
+        self.calls.append(url)
+        return self._payload
+
+    # The factory does not use ``with``; these exist only for symmetry.
+    def __enter__(self) -> "_DummyScraperClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+@pytest.mark.skipif(
+    not _markitdown_available(),
+    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) -> None:
+    """End-to-end: Typer CliRunner -> factory -> service -> cache -> DB.
+
+    Exercises the full CLI surface wired up by Phase 7 with the production
+    factory (``build_tdoc_cr_service``) and the production ScraperClient
+    class replaced by a single-fixture fake. The disk cache is redirected
+    under ``tmp_path`` so the user's home cache directory stays untouched,
+    and ``create_schema()`` is called explicitly because the CLI no longer
+    bootstraps the schema itself (it is the operator's job, normally via
+    ``doc3gpp db init``).
+    """
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+
+    # Root the disk cache under tmp_path so the user's ~/.cache stays clean.
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    from doc3gpp.settings.loader import get_settings
+    get_settings.cache_clear()
+
+    # Pre-seed the parent TDoc row the service validates against.
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    # Swap the production ScraperClient class for our dummy at the factory
+    # boundary so every download path in the new TDocCrService sees the
+    # canned fixture bytes. The fixture is read once and shared by every
+    # get_bytes call.
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+    dummy = _DummyScraperClient()
+    dummy._payload = fixture.read_bytes()  # type: ignore[attr-defined]
+    monkeypatch.setattr("doc3gpp.services.factory.ScraperClient", lambda: dummy)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "extract", "--tdoc", "R5s260009"])
+
+    # 1. CLI exited cleanly and the per-id line carries the parsed fields.
+    assert result.exit_code == 0, result.output
+    assert "R5s260009: spec=38.523-3" in result.output
+    assert "cr_num=3790" in result.output
+    assert "Extracted 1/1 TDocs (0 failures)" in result.output
+    assert dummy.calls, "ScraperClient.get_bytes was never invoked"
+
+    # 2. The DB now has the persisted tdoc_cr_details + tdoc_extracts rows.
+    cr_repo = SQLAlchemyTDocCrRepository()
+    details = cr_repo.get("R5s260009")
+    meta = cr_repo.get_extract_meta("R5s260009")
+    assert details is not None
+    assert details.spec == "38.523-3"
+    assert details.cr_num == "3790"
+    assert details.release == "Rel-18"
+    assert meta is not None
+    assert meta.tdoc_id == "R5s260009"
+    assert meta.doc_filename.lower().endswith(".docx")
+
+    # 3. A follow-up `tdoc show` invocation surfaces the persisted block.
+    show_result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260009"])
+    assert show_result.exit_code == 0, show_result.output
+    assert "[TDoc]" in show_result.output
+    assert "tdoc_id: R5s260009" in show_result.output
+    assert "[Extracted Details]" in show_result.output
+    assert "spec: 38.523-3" in show_result.output
+    assert "cr_num: 3790" in show_result.output

@@ -76,8 +76,9 @@ _TOC_PATTERN = re.compile(r'^TOC\s+\\o\s+".+?"\s+')
 _PAGEREF_PATTERN = re.compile(r"\sPAGEREF\s+_Toc\d+\s+\\h\s")
 
 # ---------------------------------------------------------------------------
-# Block helpers (originally from docs/docx2md.py — preserved verbatim so the
-# markdown output shape is identical to what the prototype produced).
+# Block helpers (originally prototyped in docs/docx2md.py — promoted into
+# the package and refined for the TDoc CR extraction pipeline; see the
+# module docstring for the full list of behaviours).
 # ---------------------------------------------------------------------------
 
 

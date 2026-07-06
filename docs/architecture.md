@@ -78,9 +78,11 @@ Per-layer modules:
     - `parsers/tdoc_parser.py`, `parsers/tdoc_file_parser.py` — TDoc
       list XLSX → `TDoc` / `TDocFile`
     - `parsers/wi_parser.py` — DynaReport HTML → `Wi`
-    - `parsers/python-docx_converter.py` — `.docx`/`.doc` → markdown via
-      the optional `python-docx[all]` extra (raises
-      `PythonDocxNotInstalledError` when missing)
+    - `parsers/docx_converter.py` — `.docx` → markdown via the
+      optional `python-docx` extra (raises
+      `PythonDocxNotInstalledError` when missing). The legacy `.doc`
+      binary format is rejected at the wrapper boundary because
+      python-docx only supports the OOXML container.
     - `parsers/cr_parser.py` — markdown → `TDocCRDetails` (cover-page,
       optional TTCN overview, optional TTCN corrections)
 - `models/` — pure domain dataclasses (`@dataclass(slots=True)`),
@@ -167,8 +169,8 @@ and the TDoc CR extraction is the deepest.
     - The markdown for that exact `docx_bytes` is looked up by
       `sha256(docx_bytes)` in `TDocCache.get_bytes(sha, "markdown")`;
       on miss, `convert_document_to_markdown` runs (raises
-      `PythonDocxNotInstalledError` if `python-docx[all]` is not
-      installed) and the result is written to `markdown/<sha>.md`.
+      `PythonDocxNotInstalledError` if `python-docx` is not installed)
+      and the result is written to `markdown/<sha>.md`.
     - `parse_cr_details(markdown, tdoc_id=...)` returns a typed
       `TDocCRDetails` (cover-page; TTCN overview + corrections only
       when `tdoc_id` matches `R5s\d{6}`).
@@ -321,7 +323,7 @@ service stack.
     - parser fixtures (`test_calendar_parser.py`,
       `test_cr_parser.py`, `test_tdoc_parser.py`,
       `test_tdoc_file_parser.py`, `test_wi_parser.py`,
-      `test_python-docx_converter.py`)
+      `test_docx_converter.py`)
     - scraping + cache contracts (`test_tdoc_cache.py`,
       `test_tdoc_zip_source.py`, `test_ftp_source.py`,
       `test_scraper_client.py`)

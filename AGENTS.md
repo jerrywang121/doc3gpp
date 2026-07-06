@@ -16,7 +16,7 @@ doc3gpp db check
 ```
 
 Build system: **hatchling**. Stack: Python 3.10+, SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, httpx, BeautifulSoup4 + lxml, openpyxl, alembic (installed but not wired).
-Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres]` (psycopg[binary]), `.[extract]` (`python-docx[all]` for the TDoc extraction pipeline).
+Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres]` (psycopg[binary]), `.[extract]` (`python-docx` for the TDoc extraction pipeline).
 `pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"` or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 `references-external/` is gitignored local scratch — never commit changes there.
 
@@ -211,7 +211,7 @@ file co-tenanted with third-party tooling metadata. See
 - Calendar parser coupled to **current 3GPP DynaReport table layout** — upstream changes will break `meetings sync`.
 - TDoc extraction covers **FTP Excel lists only**. `GenerateDocumentList.aspx` and expanded metadata columns are unimplemented.
 - TDoc CR extraction covers the `R5s` (TTCN) and `R5w` (Workshop) URL templates verified against offline fixtures; the `R5-` and `C6-` templates are intentionally unresolved until exercised against the live site.
-- `python-docx[all]` is an opt-in extra; without it the `tdoc extract` CLI prints a friendly install hint and exits 1.
+- `python-docx` is an opt-in extra; without it the `tdoc extract` CLI prints a friendly install hint and exits 1.
 - Online tests access live `3gpp.org` + FTP — flaky; run with `-rs` to surface skip reasons.
 
 

@@ -41,7 +41,7 @@ This document tracks what is implemented today versus planned next work.
 - TDoc CR extraction pipeline (zip download → on-disk cache →
   `python-docx` render → markdown cache → cover-page parser → persist):
   - URL builders for the `R5s` (TTCN) and `R5w` (Workshop) branches.
-  - `python-docx[all]` is an opt-in extra (`pip install doc3gpp[extract]`);
+  - `python-docx` is an opt-in extra (`pip install doc3gpp[extract]`);
     the conversion step degrades with a clear `PythonDocxNotInstalledError`.
   - Tables: `tdoc_cr_details` (parsed cover-page fields) and
     `tdoc_extracts` (cache-pointer sidecar).

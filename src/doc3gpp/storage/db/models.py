@@ -216,9 +216,9 @@ class TDocExtractOrm(Base):
     The "expensive" payload (the cached zip and the rendered markdown)
     lives on disk under the cache directory — these columns only hold
     *paths*. A row here means ``scraping.tdoc_zip_source`` and
-    ``parsers.markitdown_converter`` have already produced artefacts
+    ``parsers.docx_converter`` have already produced artefacts
     on disk, so the next extract call can short-circuit the network
-    and the markitdown render.
+    and the python-docx render.
 
     Mirrors the cascade-on-parent-delete policy of
     :class:`TDocCrDetailOrm`: when the owning TDoc row is removed, the

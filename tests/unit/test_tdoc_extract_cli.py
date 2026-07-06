@@ -2,7 +2,7 @@
 
 The tests stub out :func:`doc3gpp.services.factory.build_tdoc_cr_service`
 and :class:`SQLAlchemyTDocRepository` via ``monkeypatch`` so the CLI
-runs without ever touching the network, the markitdown renderer, or
+runs without ever touching the network, the python-docx renderer, or
 the ``tdocs`` table. Each test seeds the ``sqlite_env`` fixture and
 resets the settings/engine caches via ``conftest.sqlite_env``.
 """
@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 from doc3gpp.cli import app
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
-from doc3gpp.parsers.markitdown_converter import MarkitdownNotInstalledError
+from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.services.tdoc_cr_service import ExtractResult
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
@@ -226,13 +226,13 @@ def test_tdoc_extract_force_passed_through(sqlite_env, monkeypatch) -> None:
     assert fake.many_calls == [(["R5s260009"], True, False)]
 
 
-def test_tdoc_extract_markitdown_missing_friendly_error(sqlite_env, monkeypatch) -> None:
-    """When ``extract_many`` raises :class:`MarkitdownNotInstalledError`,
+def test_tdoc_extract_python_docx_missing_friendly_error(sqlite_env, monkeypatch) -> None:
+    """When ``extract_many`` raises :class:`PythonDocxNotInstalledError`,
     the CLI prints the install hint and exits 1 — the batch does not
     crash with a Python traceback."""
     runner = CliRunner()
     fake = _FakeCrService(
-        raise_from_many=MarkitdownNotInstalledError(),
+        raise_from_many=PythonDocxNotInstalledError(),
     )
     _patch_service(monkeypatch, fake)
 
@@ -240,7 +240,7 @@ def test_tdoc_extract_markitdown_missing_friendly_error(sqlite_env, monkeypatch)
         app, ["tdoc", "extract", "--tdoc", "R5s260009"],
     )
     assert result.exit_code == 1
-    assert "markitdown is not installed" in result.output
+    assert "python-docx is not installed" in result.output
     assert "pip install doc3gpp[extract]" in result.output
 
 

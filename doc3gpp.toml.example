@@ -64,7 +64,7 @@ future_years = 1     # default; CLI flag --future-years overrides
 # ── TDoc extraction cache ───────────────────────────────────────────────────
 # Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc extract`).
 # `dir` holds two subtrees: `zips/` (raw 3GPP downloads) and `markdown/`
-# (markitdown output, keyed by content hash). When the combined size of
+# (python-docx output, keyed by content hash). When the combined size of
 # both exceeds `size_limit_mb`, the cache evicts the oldest files first
 # (FIFO on `st_ctime`); `0` means unlimited. `purge_confirm` gates the
 # `doc3gpp cache purge` CLI behind an interactive prompt — set it to

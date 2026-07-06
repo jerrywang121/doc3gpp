@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cli = ["typer>=0.12.3"]
-extract = ["markitdown[all]>=0.0.1"]
+extract = ["python-docx>=0.8.11"]
 mysql = ["pymysql>=1.1.1"]
 postgres = ["psycopg[binary]>=3.2.0"]
 dev = [

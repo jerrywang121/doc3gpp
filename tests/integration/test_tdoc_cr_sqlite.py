@@ -6,11 +6,11 @@ that returns the bytes of one of the fixtures shipped under
 ``tests/fixtures/tdoc_cr_doc/``. The cache is rooted under a
 ``tmp_path`` directory so the tests never touch the user's home cache.
 
-The tests that require ``markitdown`` (every happy-path and the
+The tests that require ``python-docx`` (every happy-path and the
 markdown-cache-hit test) carry a ``@pytest.mark.skipif`` guard so the
 suite stays green in environments that haven't installed the
 ``[extract]`` extra. The structural tests (network failure, unknown
-tdoc, non-CR tdoc, invalid id shape) don't need markitdown.
+tdoc, non-CR tdoc, invalid id shape) don't need python-docx.
 """
 
 from __future__ import annotations
@@ -38,14 +38,14 @@ from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
 
-def _markitdown_available() -> bool:
-    """Return True iff ``markitdown`` imports cleanly.
+def _docx_available() -> bool:
+    """Return True iff ``python-docx`` imports cleanly.
 
-    Mirrors the helper used in :mod:`test_markitdown_converter` so the
-    same skip guard can gate both unit and integration tests.
+    Mirrors the helper used in :mod:`test_docx_converter` so the same
+    skip guard can gate both unit and integration tests.
     """
     try:
-        import markitdown  # noqa: F401
+        from docx import Document  # noqa: F401
     except ImportError:
         return False
     return True
@@ -114,8 +114,8 @@ def _seed_cr_tdoc(tdoc_repo: SQLAlchemyTDocRepository, tdoc_id: str) -> None:
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_happy_path(sqlite_env, tmp_path) -> None:
     """End-to-end extract of ``R5s260009`` from the local zip fixture."""
@@ -162,8 +162,8 @@ def test_extract_happy_path(sqlite_env, tmp_path) -> None:
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_db_cache_hit_skips_network(sqlite_env, tmp_path) -> None:
     """A second ``extract`` call must not re-invoke the scraper."""
@@ -188,13 +188,13 @@ def test_extract_db_cache_hit_skips_network(sqlite_env, tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Markdown cache hit: zip purged but markdown retained → skip markitdown.
+# 3. Markdown cache hit: zip purged but markdown retained → skip python-docx.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_markdown_cache_hit_when_zip_purged(
     sqlite_env, tmp_path, monkeypatch
@@ -216,7 +216,7 @@ def test_extract_markdown_cache_hit_when_zip_purged(
     assert first.from_cache is False
     assert scraper_mock.get_bytes.call_count == 1
 
-    # Patch out the markitdown converter so a regression that calls it
+    # Patch out the python-docx converter so a regression that calls it
     # a second time blows up loudly instead of silently re-rendering.
     def _boom(*_args, **_kwargs):  # pragma: no cover - raised via mock
         raise AssertionError("convert_document_to_markdown should not be re-invoked")
@@ -263,8 +263,8 @@ def test_extract_markdown_cache_hit_when_zip_purged(
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_force_bypasses_caches(sqlite_env, tmp_path) -> None:
     """``force=True`` re-downloads the zip AND re-renders markdown."""
@@ -290,11 +290,11 @@ def test_extract_force_bypasses_caches(sqlite_env, tmp_path) -> None:
 
     convert_mock = MagicMock(
         wraps=__import__(
-            "doc3gpp.parsers.markitdown_converter",
+            "doc3gpp.parsers.docx_converter",
             fromlist=["convert_document_to_markdown"],
         ).convert_document_to_markdown
     )
-    import doc3gpp.parsers.markitdown_converter as md_mod
+    import doc3gpp.parsers.docx_converter as md_mod
 
     original = md_mod.convert_document_to_markdown
     md_mod.convert_document_to_markdown = convert_mock
@@ -404,8 +404,8 @@ def test_extract_invalid_tdoc_id_raises_value_error(
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_many_skips_failures(sqlite_env, tmp_path) -> None:
     """``extract_many`` returns a dict of successes; failures are
@@ -465,8 +465,8 @@ class _DummyScraperClient:
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) -> None:
     """End-to-end: Typer CliRunner -> factory -> service -> cache -> DB.

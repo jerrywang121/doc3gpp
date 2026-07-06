@@ -39,10 +39,10 @@ This document tracks what is implemented today versus planned next work.
   - reservation/uploaded date parsing into `date` objects.
   - WARNING emitted when rows are skipped because the TDoc ID regex misses.
 - TDoc CR extraction pipeline (zip download → on-disk cache →
-  `markitdown` render → markdown cache → cover-page parser → persist):
+  `python-docx` render → markdown cache → cover-page parser → persist):
   - URL builders for the `R5s` (TTCN) and `R5w` (Workshop) branches.
-  - `markitdown[all]` is an opt-in extra (`pip install doc3gpp[extract]`);
-    the conversion step degrades with a clear `MarkitdownNotInstalledError`.
+  - `python-docx[all]` is an opt-in extra (`pip install doc3gpp[extract]`);
+    the conversion step degrades with a clear `PythonDocxNotInstalledError`.
   - Tables: `tdoc_cr_details` (parsed cover-page fields) and
     `tdoc_extracts` (cache-pointer sidecar).
 
@@ -68,7 +68,7 @@ This document tracks what is implemented today versus planned next work.
 - meeting list.
 - tdoc sync, tdoc list.
 - tdoc show (full TDoc + extracted CR cover-page fields).
-- tdoc extract (download zip → cache → markitdown → parse → persist).
+- tdoc extract (download zip → cache → python-docx → parse → persist).
 - cache status, cache purge (on-disk cache footprint for the extraction pipeline).
 - tsg list, tsg show, tsg seed.
 - Logging is configured via `DOC3GPP_LOG_LEVEL` and available at runtime for debugging.
@@ -147,7 +147,7 @@ This document tracks what is implemented today versus planned next work.
 
 The unit suite covers every concrete `SQLAlchemy*Repository`,
 every service, every parser, every CLI subcommand, and the four
-TDoc-CR pipeline components (cache, zip source, markitdown wrapper,
+TDoc-CR pipeline components (cache, zip source, python-docx wrapper,
 parser, ORM, service, CLI). Gaps to flag for future work:
 
 - `TDocService.sync_from_meeting_ftp` end-to-end via CLI — covered by

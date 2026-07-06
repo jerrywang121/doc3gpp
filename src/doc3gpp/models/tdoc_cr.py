@@ -15,7 +15,7 @@ Design notes:
   demand via :meth:`TDocCRDetails.to_persisted`.
 * ``extracted_tdoc_id`` records what the header parser actually found
   in the document. It may diverge from the caller's input ``tdoc_id``
-  when the document uses docx field codes that markitdown does not
+  when the document uses docx field codes that python-docx does not
   render — that's a diagnostic signal, not a hard error.
 * ``tech`` and ``year`` are derived fields rather than parsed; the
   caller can verify them independently or override them downstream.
@@ -48,7 +48,7 @@ class TDocCRDetails:
             :attr:`extracted_tdoc_id` instead.
         spec: 3GPP spec number (e.g. ``"38.523-3"``). May be ``None``
             when the document stores it in a docx field that
-            markitdown does not render.
+            python-docx does not render.
         cr_num: Numeric CR identifier as a string (e.g. ``"3790"``).
         rev: CR revision, normalised to a digit string; the cover
             page's ``-`` placeholder becomes ``"0"``.
@@ -56,7 +56,7 @@ class TDocCRDetails:
         title: CR title.
         source: Contents of ``Source to WG:``.
         tsg: Contents of ``Source to TSG:``. ``None`` when not
-            rendered by markitdown (e.g. docx field codes).
+            rendered by python-docx (e.g. docx field codes).
         related_wis: Contents of ``Work item code:``.
         date: Cover-page date string (``YYYY-MM-DD``).
         cr_cat: Single-letter category code (F / B / A / C / D).
@@ -84,7 +84,7 @@ class TDocCRDetails:
             ``"5G"`` / ``"LTE"``).
         extracted_tdoc_id: What the header parser actually found in
             the document (may differ from ``tdoc_id`` when the docx
-            uses field codes that markitdown does not render).
+            uses field codes that python-docx does not render).
         parser_version: Version of the parser that produced this
             object, persisted alongside the row for debugging.
     """

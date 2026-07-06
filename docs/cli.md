@@ -285,12 +285,12 @@ Options:
 Behavior:
 
 - Calls `TDocCrService.extract_many(tdoc_ids, force=force)`. The service
-  catches `TDocZipDownloadError`, `MarkitdownNotInstalledError`,
+  catches `TDocZipDownloadError`, `PythonDocxNotInstalledError`,
   `TDocTypeUnsupportedError`, `TDocNotFoundError`, and
   `CRHeaderMissingError` per-id and skips the broken entry; the CLI
   computes the failure set as `input - successful_keys` and prints
   one `FAILED` line per skipped id.
-- When `markitdown` is not installed the entire batch fails before any
+- When `python-docx` is not installed the entire batch fails before any
   per-id work happens — the CLI prints an install hint and exits 1.
 - Output per id: `<tdoc_id>: spec=<spec> cr_num=<cr_num> title=<title>`
   on success, `<tdoc_id>: FAILED - extract error (see logs)` on failure.
@@ -299,7 +299,7 @@ Behavior:
 Exit codes:
 
 - `0` — at least one TDoc extracted successfully (cache hits count).
-- `1` — every TDoc failed, **or** `markitdown` is missing and the
+- `1` — every TDoc failed, **or** `python-docx` is missing and the
   batch could not even start.
 
 Install the optional dependency before first use:
@@ -326,7 +326,7 @@ doc3gpp tdoc extract --tdoc R5s260009 --tdoc-id 1234
 The `cache` sub-app exposes the on-disk cache that backs the TDoc
 extraction pipeline (Phase 1 `TDocCache`). The cache lives under
 `settings.cache.dir` (default `~/.cache/doc3gpp/tdocs`) with two
-subtrees: `zips/` (raw 3GPP zip downloads) and `markdown/` (markitdown
+subtrees: `zips/` (raw 3GPP zip downloads) and `markdown/` (python-docx
 output keyed by content hash). Both commands are pure file-system
 operations — they do **not** touch the database.
 

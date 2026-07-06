@@ -10,9 +10,10 @@ Glues the per-stage building blocks together:
    :mod:`doc3gpp.scraping.tdoc_zip_source`.
 4. Extract the ``.docx`` body from the zip via
    :func:`doc3gpp.parsers.cr_parser.extract_docx_from_zip`.
-5. Convert the docx to markdown — key the markdown cache by the
-   sha256 of the **docx bytes** so a re-downloaded zip with a tweaked
-   docx invalidates the rendered markdown cleanly.
+5. Convert the docx to markdown via the python-docx-based converter
+   in :mod:`doc3gpp.parsers.docx_converter`. Key the markdown cache by
+   the sha256 of the **docx bytes** so a re-downloaded zip with a
+   tweaked docx invalidates the rendered markdown cleanly.
 6. Parse the markdown into a :class:`TDocCRDetails` value object via
    :func:`doc3gpp.parsers.cr_parser.parse_cr_details`.
 7. Persist both the details row and the cache-extract metadata sidecar
@@ -192,7 +193,7 @@ class TDocCrService:
            :class:`TDocTypeUnsupportedError` if ``type != "CR"``.
         3. If a detail row exists and ``not force``, return
            :class:`ExtractResult` with ``from_cache=True`` without
-           touching the network or the markitdown renderer.
+           touching the network or the python-docx renderer.
         4. Download the zip (cache or network) → extract the docx →
            compute sha256 of the docx bytes → look up the markdown
            cache (skip on ``force``) → render markdown if needed →
@@ -352,7 +353,7 @@ class TDocCrService:
                 )
                 return cached.decode("utf-8")
 
-        from doc3gpp.parsers.markitdown_converter import (
+        from doc3gpp.parsers.docx_converter import (
             convert_document_to_markdown,
         )
 

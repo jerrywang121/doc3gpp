@@ -536,3 +536,159 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
     assert "[Extracted Details]" in show_result.output
     assert "spec: 38.523-3" in show_result.output
     assert "cr_num: 3790" in show_result.output
+
+
+# ---------------------------------------------------------------------------
+# 10. Per-TDoc URL from the tdocs table takes precedence over the template.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None:
+    """When ``tdocs.url`` is populated, the extract pipeline must hit that
+    URL first instead of the template-based guess."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+
+    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    template_url = (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
+        "2026/Docs/R5s260009.zip"
+    )
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper_mock = MagicMock()
+    fixture_bytes = fixture.read_bytes()
+
+    def fake_get_bytes(url: str) -> bytes:
+        if url == primary_url:
+            return fixture_bytes
+        # If the template URL is ever hit, fail loudly so the assertion
+        # below catches the regression.
+        raise AssertionError(f"unexpected URL: {url} (expected only {primary_url})")
+
+    scraper_mock.get_bytes.side_effect = fake_get_bytes
+
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper_mock,
+        cr_repository=cr_repo,
+        tdoc_repository=tdoc_repo,
+    )
+    tdoc_repo.upsert_many(
+        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+    )
+
+    result = service.extract("R5s260009")
+
+    assert isinstance(result, ExtractResult)
+    assert result.from_cache is False
+    assert scraper_mock.get_bytes.call_count == 1
+    assert scraper_mock.get_bytes.call_args.args[0] == primary_url
+    called_urls = [call.args[0] for call in scraper_mock.get_bytes.call_args_list]
+    assert template_url not in called_urls
+    assert result.details.spec == "38.523-3"
+    assert result.details.cr_num == "3790"
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_falls_back_to_template_when_primary_url_fails(
+    sqlite_env, tmp_path
+) -> None:
+    """A terminal HTTP error on the stored URL triggers the template fallback."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+
+    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    template_url = (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
+        "2026/Docs/R5s260009.zip"
+    )
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper_mock = MagicMock()
+    fixture_bytes = fixture.read_bytes()
+
+    def fake_get_bytes(url: str) -> bytes:
+        if url == primary_url:
+            raise httpx.HTTPError("primary URL 404")
+        if url == template_url:
+            return fixture_bytes
+        raise AssertionError(f"unexpected URL: {url}")
+
+    scraper_mock.get_bytes.side_effect = fake_get_bytes
+
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper_mock,
+        cr_repository=cr_repo,
+        tdoc_repository=tdoc_repo,
+    )
+    tdoc_repo.upsert_many(
+        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+    )
+
+    result = service.extract("R5s260009")
+
+    assert isinstance(result, ExtractResult)
+    assert result.from_cache is False
+    called_urls = [call.args[0] for call in scraper_mock.get_bytes.call_args_list]
+    assert called_urls == [primary_url, template_url]
+    assert result.details.spec == "38.523-3"
+    assert result.details.cr_num == "3790"
+
+
+def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) -> None:
+    """A TDoc row with ``url=None`` must hit the template URL exactly once,
+    preserving the pre-primary-url behaviour."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+
+    template_url = (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
+        "2026/Docs/R5s260009.zip"
+    )
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper_mock = MagicMock()
+
+    def fake_get_bytes(url: str) -> bytes:
+        assert url == template_url
+        return fixture.read_bytes()
+
+    scraper_mock.get_bytes.side_effect = fake_get_bytes
+
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper_mock,
+        cr_repository=cr_repo,
+        tdoc_repository=tdoc_repo,
+    )
+    tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="CR")])
+
+    # The pipeline may fail at the markdown render step when python-docx
+    # is absent, or it may succeed when python-docx is installed. Either
+    # way, the scraper must have been hit exactly once with the template
+    # URL before any downstream failure — that's what this test guards.
+    try:
+        service.extract("R5s260009")
+    except Exception:
+        pass
+
+    assert scraper_mock.get_bytes.call_count == 1
+    assert scraper_mock.get_bytes.call_args.args[0] == template_url

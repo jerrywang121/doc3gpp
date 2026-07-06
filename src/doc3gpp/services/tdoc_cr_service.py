@@ -194,13 +194,16 @@ class TDocCrService:
         3. If a detail row exists and ``not force``, return
            :class:`ExtractResult` with ``from_cache=True`` without
            touching the network or the python-docx renderer.
-        4. Download the zip (cache or network) → extract the docx →
+        4. Download the zip (cache or network) — preferring the
+           per-TDoc URL stored in ``tdocs.url`` (extracted from the
+           XLSX hyperlink during ``tdoc sync``) and falling back to
+           the template-based URL on failure → extract the docx →
            compute sha256 of the docx bytes → look up the markdown
            cache (skip on ``force``) → render markdown if needed →
            parse → persist → return ``from_cache=False``.
         """
         normalised = self._validate_tdoc_id(tdoc_id)
-        self._load_tdoc(normalised)
+        tdoc = self._load_tdoc(normalised)
 
         # DB-cache hit: short-circuit everything. A force=True request
         # always bypasses this branch.
@@ -215,7 +218,12 @@ class TDocCrService:
                     from_cache=True,
                 )
 
-        zip_path = download_tdoc_zip(normalised, self._scraper, self._cache)
+        zip_path = download_tdoc_zip(
+            normalised,
+            self._scraper,
+            self._cache,
+            primary_url=tdoc.url,
+        )
         doc_filename, docx_bytes = extract_docx_from_zip(zip_path.read_bytes())
         doc_hash = hashlib.sha256(docx_bytes).hexdigest()
 

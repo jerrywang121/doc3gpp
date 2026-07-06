@@ -124,13 +124,10 @@ def get_tdoc_zip_url(tdoc: str) -> str | None:
     """Return the canonical 3GPP URL for a TDoc zip, or ``None`` if unrecognised.
 
     Strategy: derive the canonical TDoc id from the input, then build the
-    URL from the locked-in template. Per the plan, a DB lookup against
-    ``tdocs.url`` is the "fast path"; that lookup is owned by Phase 5/6
-    (``TDocRepository``), so we deliberately skip it here rather than
-    introduce a Protocol dependency that Phase 6 will own.
-
-    # TODO(phase-6): also check the tdocs table for an explicit URL stored
-    # from a prior ``tdoc sync`` run; fall back to the template on miss.
+    URL from the locked-in template. Callers that have a stored
+    ``tdocs.url`` (from a prior ``tdoc sync`` run) should pass it to
+    :func:`download_tdoc_zip` as ``primary_url`` so the per-TDoc URL takes
+    precedence over the template-based guess.
     """
     if not tdoc:
         return None
@@ -158,22 +155,33 @@ def download_tdoc_zip(
     tdoc: str,
     client: "ScraperClient",
     cache: TDocCacheLike,
+    primary_url: str | None = None,
 ) -> Path:
     """Return the cache ``Path`` to the TDoc zip, downloading on cache miss.
 
     Cache key is ``tdoc.lower()``; subdir is ``"zips"``. On cache hit the
-    cached path is returned without touching the network. On miss the URL
-    is resolved via :func:`get_tdoc_zip_url`, fetched through ``client``,
-    and written through the cache. Non-retryable ``httpx.HTTPError`` (and
-    missing URL templates) are wrapped in :class:`TDocZipDownloadError`
-    so the caller can catch a single type.
+    cached path is returned without touching the network. On miss the
+    function tries each candidate URL in order and caches the first
+    successful download:
+
+    1. ``primary_url`` (typically ``tdocs.url`` from a prior ``tdoc sync``).
+    2. The template-based URL from :func:`get_tdoc_zip_url`.
+
+    The two are deduplicated, so a ``primary_url`` that matches the
+    template only triggers one fetch. A terminal ``httpx.HTTPError`` on
+    ``primary_url`` is swallowed and the template is tried as a fallback;
+    if the template also fails, the last error is raised as
+    :class:`TDocZipDownloadError`. Programming errors (e.g.
+    ``httpx.InvalidURL``) on ``primary_url`` propagate immediately so
+    a malformed stored URL doesn't silently mask the real problem.
 
     Raises:
         ValueError: ``tdoc`` does not match the CR pattern (the cache and
             network are left untouched in that case — a bad id should
             fail fast, not produce a half-written cache entry).
-        TDocZipDownloadError: the URL template is unknown for this TDoc
-            shape, or the HTTP fetch raised a terminal ``httpx.HTTPError``.
+        TDocZipDownloadError: every candidate URL was tried and none
+            succeeded (no ``primary_url`` and no template, or all
+            fetches raised a terminal ``httpx.HTTPError``).
     """
     if not tdoc:
         raise ValueError("TDoc id is empty")
@@ -189,16 +197,35 @@ def download_tdoc_zip(
         logger.debug("Cache hit for TDoc zip %s", cache_key)
         return cache.path_for(cache_key, "zips")
 
-    url = get_tdoc_zip_url(canonical)
-    if url is None:
+    candidates: list[str] = []
+    if primary_url:
+        candidates.append(primary_url)
+    template_url = get_tdoc_zip_url(canonical)
+    if template_url and template_url not in candidates:
+        candidates.append(template_url)
+
+    if not candidates:
         raise TDocZipDownloadError(url="", original=ValueError("no URL template"))
 
-    try:
-        payload = client.get_bytes(url)
-    except httpx.HTTPError as exc:
-        logger.error("HTTP error downloading TDoc zip %s from %s: %s", cache_key, url, exc)
-        raise TDocZipDownloadError(url=url, original=exc) from exc
+    last_error: TDocZipDownloadError | None = None
+    for url in candidates:
+        try:
+            payload = client.get_bytes(url)
+        except httpx.HTTPError as exc:
+            logger.error(
+                "HTTP error downloading TDoc zip %s from %s: %s", cache_key, url, exc
+            )
+            last_error = TDocZipDownloadError(url=url, original=exc)
+            continue
+        cached_path = cache.put_bytes(cache_key, payload, "zips")
+        logger.info(
+            "Cached TDoc zip %s at %s (%d bytes) from %s",
+            cache_key,
+            cached_path,
+            len(payload),
+            url,
+        )
+        return cached_path
 
-    cached_path = cache.put_bytes(cache_key, payload, "zips")
-    logger.info("Cached TDoc zip %s at %s (%d bytes)", cache_key, cached_path, len(payload))
-    return cached_path
+    assert last_error is not None  # candidates is non-empty, so we must have set it
+    raise last_error

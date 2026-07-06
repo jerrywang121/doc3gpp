@@ -184,6 +184,17 @@ def _grid_span(cell) -> int:
             grid_span = int(val)
     return grid_span
 
+def _in_table_paragraph_text(paragraph, preserve_leading_space: bool = False) -> str:
+    # For in-table paragraphs, render the paragraph text (with field codes), preserving line breaks (as <br>) and tabs, 
+    # and optionally preserving leading spaces (for preserving the paragraph structure).
+    text = _render_children(paragraph._p)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\t", "    ")
+    text = text.replace("\n", "<br>")  # keep table cells on one line
+    if preserve_leading_space:
+        return text.rstrip()  # Only remove trailing whitespace
+    else:
+        return text.strip()   # Remove both leading and trailing
 
 def _table_to_markdown(table) -> str:
     rows = []
@@ -193,7 +204,7 @@ def _table_to_markdown(table) -> str:
         total_cells = len(row.cells)
         while ci < total_cells:
             cell = row.cells[ci]
-            cell_text = "<br>".join(p.text for p in cell.paragraphs)
+            cell_text = "<br>".join(_in_table_paragraph_text(p, preserve_leading_space=True) for p in cell.paragraphs)
             cells.append(cell_text.replace("|", "\\|"))
             span = _grid_span(cell)
             ci += max(span, 1)
@@ -209,7 +220,6 @@ def _table_to_markdown(table) -> str:
 
 
 def _clean_text(text: str) -> str:
-    import re
     # remove matching ` DOCPROPERTY  TSG/WGRef  \* MERGEFORMAT ` with regex
     text = re.sub(_DOCPROPERTY_PATTERN, "", text)
     # remove matching `TOC \o "1-3" ` with regex

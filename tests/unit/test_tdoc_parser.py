@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import io
 import logging
+from pathlib import Path
 
 from openpyxl import Workbook
 
 from doc3gpp.parsers.tdoc_parser import (
+    _extract_tdoc_hyperlinks,
     _parse_date_cell,
     pick_col,
     read_tdoc_sheet,
@@ -18,6 +20,28 @@ def _make_xlsx_bytes(rows: list[list[object]]) -> bytes:
     ws = wb.active
     for row in rows:
         ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _make_xlsx_with_hyperlinks(
+    rows: list[list[object]],
+    cell_urls: dict[tuple[int, int], str],
+) -> bytes:
+    """Build an XLSX where ``cell_urls[(row, col)]`` is set as a hyperlink.
+
+    ``row``/``col`` are 1-based to match openpyxl's ``cell(row, col)`` API.
+    Cell values are still taken from ``rows`` (which is 0-based in the
+    caller's head — i.e. ``rows[0]`` becomes Excel row 1).
+    """
+    wb = Workbook()
+    ws = wb.active
+    for row_idx, row in enumerate(rows, start=1):
+        for col_idx, value in enumerate(row, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            if (row_idx, col_idx) in cell_urls:
+                cell.hyperlink = cell_urls[(row_idx, col_idx)]
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -320,3 +344,146 @@ def test_parse_date_cell_handles_datetime_instances() -> None:
 
 def test_parse_date_cell_handles_none() -> None:
     assert _parse_date_cell(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Hyperlink extraction: per-TDoc URL must come from the TDoc column hyperlink
+# in the source XLSX (not the XLSX file URL).
+# ---------------------------------------------------------------------------
+
+
+def test_extract_tdoc_hyperlinks_returns_url_for_tdoc_column() -> None:
+    xlsx_bytes = _make_xlsx_with_hyperlinks(
+        [
+            ["TDoc", "Title", "Source", "Type"],
+            ["R5-260001", "Doc A", "Acme", "CR"],
+            ["R5-260002", "Doc B", "Acme", "CR"],
+        ],
+        cell_urls={
+            (2, 1): "https://www.3gpp.org/ftp/.../R5-260001.zip",
+            (3, 1): "https://www.3gpp.org/ftp/.../R5-260002.zip",
+        },
+    )
+
+    hyperlinks = _extract_tdoc_hyperlinks(xlsx_bytes)
+
+    assert hyperlinks[2]["A"] == "https://www.3gpp.org/ftp/.../R5-260001.zip"
+    assert hyperlinks[3]["A"] == "https://www.3gpp.org/ftp/.../R5-260002.zip"
+
+
+def test_extract_tdoc_hyperlinks_empty_when_no_links() -> None:
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title"],
+            ["R5-260001", "Doc A"],
+        ]
+    )
+
+    assert _extract_tdoc_hyperlinks(xlsx_bytes) == {}
+
+
+def test_extract_tdoc_hyperlinks_returns_empty_for_bad_zip() -> None:
+    # Not a real XLSX at all — the helper must not raise.
+    assert _extract_tdoc_hyperlinks(b"not a zip file") == {}
+
+
+def test_extract_tdoc_hyperlinks_ignores_non_http_targets() -> None:
+    # The fixture has rIds pointing at comments/drawings as well as
+    # external URLs; only http(s) targets should surface.
+    xlsx_bytes = _make_xlsx_with_hyperlinks(
+        [
+            ["TDoc", "Title"],
+            ["R5-260001", "Doc A"],
+        ],
+        cell_urls={(2, 1): "https://www.3gpp.org/ftp/R5-260001.zip"},
+    )
+
+    hyperlinks = _extract_tdoc_hyperlinks(xlsx_bytes)
+    assert hyperlinks[2]["A"] == "https://www.3gpp.org/ftp/R5-260001.zip"
+    assert set(hyperlinks[2].keys()) == {"A"}
+
+
+def test_read_tdoc_sheet_populates_tdoc_url_from_hyperlink() -> None:
+    xlsx_bytes = _make_xlsx_with_hyperlinks(
+        [
+            ["TDoc", "Title", "Source", "Type"],
+            ["R5-260001", "Doc A", "Acme", "CR"],
+        ],
+        cell_urls={(2, 1): "https://www.3gpp.org/ftp/R5-260001.zip"},
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+
+    assert len(records) == 1
+    assert records[0]["tdoc"] == "R5-260001"
+    assert records[0]["tdoc_url"] == "https://www.3gpp.org/ftp/R5-260001.zip"
+
+
+def test_read_tdoc_sheet_tdoc_url_is_none_when_no_hyperlink() -> None:
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Source", "Type"],
+            ["R5-260001", "Doc A", "Acme", "CR"],
+        ]
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+
+    assert records[0]["tdoc_url"] is None
+
+
+def test_read_tdoc_sheet_handles_mixed_hyperlink_presence() -> None:
+    # Row 2 has a hyperlink, row 3 does not — the parser must produce
+    # the correct URL for row 2 and None for row 3, not a single value
+    # shared across all rows.
+    xlsx_bytes = _make_xlsx_with_hyperlinks(
+        [
+            ["TDoc", "Title", "Source", "Type"],
+            ["R5-260001", "Doc A", "Acme", "CR"],
+            ["R5-260002", "Doc B", "Acme", "CR"],
+        ],
+        cell_urls={(2, 1): "https://www.3gpp.org/ftp/R5-260001.zip"},
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+
+    assert len(records) == 2
+    assert records[0]["tdoc_url"] == "https://www.3gpp.org/ftp/R5-260001.zip"
+    assert records[1]["tdoc_url"] is None
+
+
+def test_read_tdoc_sheet_real_fixture_extracts_per_tdoc_urls() -> None:
+    # End-to-end check against the real RAN5#111 fixture: every parsed
+    # record whose tdoc_id appears in column A with a hyperlink must get
+    # a zip URL ending in ``/{tdoc_id}.zip``.
+    fixture = (
+        Path(__file__).parent.parent
+        / "fixtures"
+        / "tdoc_xlsx"
+        / "TDoc_List_Meeting_RAN5#111.xlsx"
+    )
+    records = read_tdoc_sheet(fixture.read_bytes())
+
+    assert records, "fixture should yield at least one record"
+    by_id = {r["tdoc"]: r for r in records}
+    assert by_id["R5-261700"]["tdoc_url"] == (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/"
+        "TSGR5__111_Dalian/Docs/R5-261700.zip"
+    )
+    assert by_id["R5-261701"]["tdoc_url"] == (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/"
+        "TSGR5__111_Dalian/Docs/R5-261701.zip"
+    )
+    # And confirm the URL is *not* the XLSX file URL.
+    assert not by_id["R5-261700"]["tdoc_url"].endswith(".xlsx")
+    assert not by_id["R5-261700"]["tdoc_url"].endswith("TDoc_List_Meeting_RAN5#111.xlsx")
+
+
+def test_read_tdoc_sheet_resilient_when_xlsx_bytes_are_corrupt() -> None:
+    # A corrupt XLSX must raise from openpyxl (existing contract) — the
+    # hyperlink side-channel must not mask the original failure mode.
+    import pytest
+
+    with pytest.raises(Exception):
+        # An empty buffer is not a valid zip; openpyxl raises.
+        read_tdoc_sheet(b"")

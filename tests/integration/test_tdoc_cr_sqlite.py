@@ -15,6 +15,7 @@ tdoc, non-CR tdoc, invalid id shape) don't need python-docx.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -22,6 +23,7 @@ import httpx
 import pytest
 
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
 from doc3gpp.services.tdoc_cr_service import (
@@ -692,3 +694,134 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
 
     assert scraper_mock.get_bytes.call_count == 1
     assert scraper_mock.get_bytes.call_args.args[0] == template_url
+
+
+# ---------------------------------------------------------------------------
+# 11. Download provenance: the exact URL the zip was fetched from is
+# persisted on the tdoc_cr_details row and surfaced through the ORM.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> None:
+    """The exact URL the zip was downloaded from must land on the
+    ``tdoc_cr_details.url`` column and round-trip through the repo."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+
+    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper_mock = MagicMock()
+    fixture_bytes = fixture.read_bytes()
+
+    def fake_get_bytes(url: str) -> bytes:
+        assert url == primary_url
+        return fixture_bytes
+
+    scraper_mock.get_bytes.side_effect = fake_get_bytes
+
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper_mock,
+        cr_repository=cr_repo,
+        tdoc_repository=tdoc_repo,
+    )
+    tdoc_repo.upsert_many(
+        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+    )
+
+    result = service.extract("R5s260009")
+
+    assert result.details.url == primary_url
+    assert result.from_cache is False
+    stored = cr_repo.get("R5s260009")
+    assert stored is not None
+    assert stored.url == primary_url
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> None:
+    """When the stored primary URL fails and the template serves the
+    bytes, the template URL is the one persisted as download provenance."""
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+
+    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    template_url = (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
+        "2026/Docs/R5s260009.zip"
+    )
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper_mock = MagicMock()
+    fixture_bytes = fixture.read_bytes()
+
+    def fake_get_bytes(url: str) -> bytes:
+        if url == primary_url:
+            raise httpx.HTTPError("primary 404")
+        if url == template_url:
+            return fixture_bytes
+        raise AssertionError(f"unexpected URL: {url}")
+
+    scraper_mock.get_bytes.side_effect = fake_get_bytes
+
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper_mock,
+        cr_repository=cr_repo,
+        tdoc_repository=tdoc_repo,
+    )
+    tdoc_repo.upsert_many(
+        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+    )
+
+    result = service.extract("R5s260009")
+
+    # The template URL is what actually served the bytes, so it's the
+    # one persisted — not the failed primary.
+    assert result.details.url == template_url
+    stored = cr_repo.get("R5s260009")
+    assert stored is not None
+    assert stored.url == template_url
+
+
+def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
+    """The ``url`` column on ``TDocCrDetailOrm`` must survive a
+    write-then-read round trip, including the ``None`` case."""
+    create_schema()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="CR")])
+
+    meta = TDocExtractMeta(
+        tdoc_id="R5s260009",
+        zip_path="/tmp/r5s260009.zip",
+        markdown_path="/tmp/r5s260009.md",
+        doc_filename="R5s260009.docx",
+    )
+    with_url = TDocCRDetails(
+        tdoc_id="R5s260009",
+        spec="38.523-3",
+        cr_num="3790",
+        url="https://www.3gpp.org/ftp/stored/R5s260009.zip",
+    )
+    cr_repo.upsert(with_url, meta)
+    assert cr_repo.get("R5s260009").url == with_url.url
+
+    # Overwrite with url=None to confirm the column is nullable on update.
+    without_url = replace(with_url, url=None)
+    cr_repo.upsert(without_url, meta)
+    assert cr_repo.get("R5s260009").url is None

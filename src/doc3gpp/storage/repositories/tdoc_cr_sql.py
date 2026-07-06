@@ -134,6 +134,7 @@ class SQLAlchemyTDocCrRepository:
         target.year = details.year
         target.tech = details.tech
         target.extracted_tdoc_id = details.extracted_tdoc_id
+        target.url = details.url
         target.parser_version = details.parser_version
         target.corrections = json.dumps(details.corrections, ensure_ascii=False)
 
@@ -184,6 +185,7 @@ def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
         year=row.year,
         tech=row.tech,
         extracted_tdoc_id=row.extracted_tdoc_id,
+        url=row.url,
         parser_version=row.parser_version,
     )
 

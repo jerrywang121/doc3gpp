@@ -45,7 +45,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from doc3gpp.models.tdoc import TDoc
@@ -218,13 +218,13 @@ class TDocCrService:
                     from_cache=True,
                 )
 
-        zip_path = download_tdoc_zip(
+        downloaded = download_tdoc_zip(
             normalised,
             self._scraper,
             self._cache,
             primary_url=tdoc.url,
         )
-        doc_filename, docx_bytes = extract_docx_from_zip(zip_path.read_bytes())
+        doc_filename, docx_bytes = extract_docx_from_zip(downloaded.path.read_bytes())
         doc_hash = hashlib.sha256(docx_bytes).hexdigest()
 
         markdown = self._load_or_render_markdown(
@@ -234,10 +234,13 @@ class TDocCrService:
             force=force,
         )
 
-        details = parse_cr_details(markdown, tdoc_id=normalised)
+        details = replace(
+            parse_cr_details(markdown, tdoc_id=normalised),
+            url=downloaded.url,
+        )
         meta = TDocExtractMeta(
             tdoc_id=normalised,
-            zip_path=str(zip_path),
+            zip_path=str(downloaded.path),
             markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
             doc_filename=doc_filename,
         )

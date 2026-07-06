@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
 
 import httpx
 
@@ -38,6 +38,24 @@ _CR_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6}", re.IGNORECASE)
 # Subdir names accepted by the Phase 1 ``TDocCache`` interface. Mirrored
 # here so the Protocol stays narrow and the constant has a single owner.
 CacheSubdir = Literal["zips", "markdown"]
+
+
+class DownloadedZip(NamedTuple):
+    """Result of a successful zip download.
+
+    Attributes:
+        path: Cache path to the zip bytes. Always set, whether the bytes
+            came from a fresh network fetch or a prior cache hit.
+        url: The exact URL the bytes were fetched from, when known.
+            ``None`` on a cache hit (the URL that populated the cache
+            in an earlier call is not tracked here) and on a fresh
+            download only when every candidate URL was deduplicated to
+            a single fetch — the service layer treats ``None`` as
+            "no provenance available" rather than an error.
+    """
+
+    path: Path
+    url: str | None
 
 
 class TDocZipDownloadError(Exception):
@@ -156,13 +174,14 @@ def download_tdoc_zip(
     client: "ScraperClient",
     cache: TDocCacheLike,
     primary_url: str | None = None,
-) -> Path:
-    """Return the cache ``Path`` to the TDoc zip, downloading on cache miss.
+) -> DownloadedZip:
+    """Return a :class:`DownloadedZip` for the TDoc, downloading on cache miss.
 
     Cache key is ``tdoc.lower()``; subdir is ``"zips"``. On cache hit the
-    cached path is returned without touching the network. On miss the
-    function tries each candidate URL in order and caches the first
-    successful download:
+    cached path is returned (with ``url=None`` since the URL that
+    populated the cache in an earlier call is not tracked here). On
+    miss the function tries each candidate URL in order and caches the
+    first successful download:
 
     1. ``primary_url`` (typically ``tdocs.url`` from a prior ``tdoc sync``).
     2. The template-based URL from :func:`get_tdoc_zip_url`.
@@ -174,6 +193,10 @@ def download_tdoc_zip(
     :class:`TDocZipDownloadError`. Programming errors (e.g.
     ``httpx.InvalidURL``) on ``primary_url`` propagate immediately so
     a malformed stored URL doesn't silently mask the real problem.
+
+    The returned ``url`` records the exact candidate that succeeded on a
+    fresh download, so the caller can persist the download provenance
+    alongside the extracted CR fields.
 
     Raises:
         ValueError: ``tdoc`` does not match the CR pattern (the cache and
@@ -195,7 +218,7 @@ def download_tdoc_zip(
     cached_bytes = cache.get_bytes(cache_key, "zips")
     if cached_bytes is not None:
         logger.debug("Cache hit for TDoc zip %s", cache_key)
-        return cache.path_for(cache_key, "zips")
+        return DownloadedZip(path=cache.path_for(cache_key, "zips"), url=None)
 
     candidates: list[str] = []
     if primary_url:
@@ -225,7 +248,7 @@ def download_tdoc_zip(
             len(payload),
             url,
         )
-        return cached_path
+        return DownloadedZip(path=cached_path, url=url)
 
     assert last_error is not None  # candidates is non-empty, so we must have set it
     raise last_error

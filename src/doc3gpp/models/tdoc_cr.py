@@ -85,6 +85,10 @@ class TDocCRDetails:
         extracted_tdoc_id: What the header parser actually found in
             the document (may differ from ``tdoc_id`` when the docx
             uses field codes that python-docx does not render).
+        url: Exact URL the TDoc zip was downloaded from during this
+            extract. ``None`` when the zip came from a prior cache
+            hit (the originating URL is not tracked there) or when
+            no provenance was captured.
         parser_version: Version of the parser that produced this
             object, persisted alongside the row for debugging.
     """
@@ -119,6 +123,9 @@ class TDocCRDetails:
     year: int | None = None
     tech: str | None = None
     extracted_tdoc_id: str | None = None
+    # Download provenance (None on cache hits; otherwise the URL that
+    # supplied the cached zip bytes during this extract).
+    url: str | None = None
     parser_version: str = _PARSER_VERSION
 
     def __post_init__(self) -> None:
@@ -172,6 +179,7 @@ class TDocCRDetails:
             "year": self.year,
             "tech": self.tech,
             "extracted_tdoc_id": self.extracted_tdoc_id,
+            "url": self.url,
             "parser_version": self.parser_version,
             "corrections_json": json.dumps(
                 self.corrections, ensure_ascii=False

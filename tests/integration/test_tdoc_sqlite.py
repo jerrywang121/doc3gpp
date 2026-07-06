@@ -126,6 +126,78 @@ def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
     assert rows[0].meeting_id == 1
 
 
+def test_tdoc_sync_stores_per_tdoc_zip_url_not_xlsx_url(monkeypatch, sqlite_env) -> None:
+    """``tdocs.url`` must point at the per-TDoc zip file, not the XLSX list.
+
+    Regression: prior to the hyperlink-aware parser, every TDoc row inherited
+    the XLSX file URL (e.g. ``.../TDoc_List_Meeting_RAN5#111.xlsx``) as its
+    ``url`` field, which is useless for downloading the actual document.
+    The real RAN5#111 fixture ships hyperlinks on column A pointing at
+    each TDoc's ``.zip``; we assert those URLs round-trip through the sync
+    into the database.
+    """
+    create_schema()
+    service = TDocService(SQLAlchemyTDocRepository())
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    meeting_repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=1,
+                name="RAN5#111",
+                title="RAN5 meeting 111",
+                location="Dalian",
+                start_date=date(2026, 5, 8),
+                end_date=date(2026, 5, 12),
+            ),
+        ]
+    )
+
+    xlsx_bytes = _make_tdoc_xlsx_bytes()
+    xlsx_url = "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TSGR5__111_Dalian/Docs/TDoc_List_Meeting_RAN5#111.xlsx"
+
+    class DummyClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def get_text(self, url: str) -> str:
+            return f'<a href="{xlsx_url.rsplit("/", 1)[-1]}">list</a>'
+
+        def get_bytes(self, url: str) -> bytes:
+            return xlsx_bytes
+
+    monkeypatch.setattr("doc3gpp.scraping.ftp_source.ScraperClient", DummyClient)
+
+    count = service.sync_from_meeting_ftp(
+        ftp_url="tsg_ran/WG5_Test_ex-T1/TSGR5__111_Dalian/",
+        meeting_id=1,
+    )
+    assert count >= 1
+
+    rows = SQLAlchemyTDocRepository().list(limit=count)
+    by_id = {row.tdoc_id: row for row in rows}
+
+    # Spot-check: both rows have column-A hyperlinks pointing at their zips.
+    assert by_id["R5-261700"].url == (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/"
+        "TSGR5__111_Dalian/Docs/R5-261700.zip"
+    )
+    assert by_id["R5-261701"].url == (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/"
+        "TSGR5__111_Dalian/Docs/R5-261701.zip"
+    )
+    # Guard against regression: the XLSX list URL must never appear here.
+    for row in rows:
+        if row.url is not None:
+            assert not row.url.endswith(".xlsx"), (
+                f"TDoc {row.tdoc_id} url points at XLSX list, not zip: {row.url}"
+            )
+
+
 def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
     runner = CliRunner()
     assert runner.invoke(app, ["db", "init"]).exit_code == 0

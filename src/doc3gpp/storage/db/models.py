@@ -199,6 +199,9 @@ class TDocCrDetailOrm(Base):
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tech: Mapped[str | None] = mapped_column(String(16), nullable=True)
     extracted_tdoc_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Exact URL the TDoc zip was downloaded from during this extract;
+    # None when the bytes came from a prior cache hit.
+    url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     parser_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="1.0.0"
     )

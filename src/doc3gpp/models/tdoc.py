@@ -14,7 +14,10 @@ class TDoc:
             the source XLSX has no title cell; the parser converts empty cells
             to ``None`` rather than coercing to a placeholder string.
         meeting_id: Optional foreign key into ``meetings.meeting_id``.
-        url: Optional URL where the TDoc list entry was discovered.
+        url: Optional direct download URL for this TDoc's zip file, extracted
+            from the TDoc-column hyperlink in the source XLSX. ``None`` when
+            the XLSX has no hyperlink for this row (e.g. a deleted or
+            placeholder entry).
         reservation_date: Optional reservation date from the source XLSX,
             parsed as a ``date`` (not a free-form string).
         uploaded_date: Optional upload date from the source XLSX, parsed as

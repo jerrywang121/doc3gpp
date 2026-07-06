@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import zipfile
 from datetime import date, datetime
 from typing import Dict, Iterable, List, Optional
 
@@ -112,6 +113,130 @@ def pick_col(header_map: Dict[str, int], candidates: Iterable[str]) -> Optional[
 
 _DATE_FIELDS = frozenset({"reservation_date", "uploaded_date"})
 
+# Attribute order varies by emitter (Excel vs openpyxl vs LibreOffice),
+# so Id and Target are matched independently rather than in a fixed order.
+_REL_TAG_RE = re.compile(
+    r'<Relationship\b[^>]*?\bId="(?P<rid>rId\d+)"[^>]*?\bTarget="(?P<target>[^"]+)"',
+    re.IGNORECASE,
+)
+_REL_TAG_RE_REVERSED = re.compile(
+    r'<Relationship\b[^>]*?\bTarget="(?P<target>[^"]+)"[^>]*?\bId="(?P<rid>rId\d+)"',
+    re.IGNORECASE,
+)
+_REL_TAG_FALLBACK = re.compile(r"<Relationship\b[^>]*?/>", re.IGNORECASE)
+# A workbook-level ``<sheet>`` entry has a ``name`` and an ``r:id`` that
+# points at the worksheet's relationships. We only need the first rId
+# because TDoc list XLSX always uses the first sheet as the active one.
+_SHEET_RID_RE = re.compile(
+    r'<sheet\b[^>]*\br:id="(?P<rid>rId\d+)"',
+    re.IGNORECASE,
+)
+# Worksheet ``<hyperlink ref="A12" r:id="rId4"/>`` entries. We capture the
+# column letters and the row number so the consumer can pick the right
+# column at its own pace.
+_HYPERLINK_RE = re.compile(
+    r'<hyperlink\b[^>]*\bref="(?P<ref>[A-Z]+\d+)"[^>]*\br:id="(?P<rid>rId\d+)"',
+    re.IGNORECASE,
+)
+_CELL_REF_RE = re.compile(r"^(?P<col>[A-Z]+)(?P<row>\d+)$")
+
+
+def _extract_tdoc_hyperlinks(xlsx_bytes: bytes) -> Dict[int, Dict[str, str]]:
+    """Extract external hyperlinks from a TDoc list XLSX without loading openpyxl.
+
+    Returns a mapping ``{row_number: {column_letter: target_url}}`` for the
+    *active* sheet only. The XLSX format stores cell hyperlinks in two places:
+
+    1. ``xl/worksheets/sheetN.xml`` — ``<hyperlink ref="A12" r:id="rId4"/>``
+       elements that anchor an external relationship to a cell.
+    2. ``xl/worksheets/_rels/sheetN.xml.rels`` — the relationship file that
+       maps ``rId4`` to the actual ``Target`` URL.
+
+    We read both files directly from the underlying zip rather than going
+    through ``openpyxl.load_workbook(..., read_only=False)`` because
+    non-read-only loading is ~30x slower (≈2s vs ≈0.07s for a 425KB fixture
+    with 1.6k rows) and we only need a side-channel of URL metadata, not
+    the cell-style/formula data openpyxl would otherwise materialise.
+
+    Internal hyperlinks (``location`` attribute, no external ``r:id``) and
+    relationship entries that point at comments / drawings are skipped so
+    the returned dict only contains real TDoc download URLs.
+    """
+    result: Dict[int, Dict[str, str]] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
+            names = zf.namelist()
+
+            # 1. Find which sheet file corresponds to the active sheet.
+            #    Default to the first declared <sheet> when workbook.xml
+            #    does not carry an explicit activeTab — openpyxl does the
+            #    same and matches what `read_tdoc_sheet` will iterate.
+            try:
+                wb_xml = zf.read("xl/workbook.xml").decode("utf-8")
+                wb_rels = zf.read("xl/_rels/workbook.xml.rels").decode("utf-8")
+            except KeyError:
+                logger.debug("XLSX missing workbook.xml or its rels; no hyperlinks")
+                return result
+
+            rid_to_target: Dict[str, str] = {}
+            for m in _REL_TAG_RE.finditer(wb_rels):
+                rid_to_target[m.group("rid")] = m.group("target")
+            for m in _REL_TAG_RE_REVERSED.finditer(wb_rels):
+                rid_to_target.setdefault(m.group("rid"), m.group("target"))
+            sheet_rids = [m.group("rid") for m in _SHEET_RID_RE.finditer(wb_xml)]
+            sheet_target = next(
+                (rid_to_target[rid] for rid in sheet_rids if rid in rid_to_target),
+                None,
+            )
+            if not sheet_target:
+                return result
+
+            # Targets may be either relative (``worksheets/sheet1.xml``)
+            # or absolute (``/xl/worksheets/sheet1.xml``, as openpyxl
+            # writes); normalise to a zip-internal relative path.
+            normalised = sheet_target.lstrip("/")
+            if normalised.startswith("xl/"):
+                sheet_path = normalised
+            else:
+                sheet_path = f"xl/{normalised}"
+            sheet_basename = normalised.rsplit("/", 1)[-1]
+            sheet_rels_path = f"xl/worksheets/_rels/{sheet_basename}.rels"
+
+            if sheet_path not in names or sheet_rels_path not in names:
+                return result
+
+            # 2. Map rId -> Target URL for this sheet's relationships.
+            sheet_rels = zf.read(sheet_rels_path).decode("utf-8")
+            rid_to_url: Dict[str, str] = {}
+            for m in _REL_TAG_RE.finditer(sheet_rels):
+                rid, target = m.group("rid"), m.group("target")
+                if target.startswith(("http://", "https://", "ftp://")):
+                    rid_to_url[rid] = target
+            for m in _REL_TAG_RE_REVERSED.finditer(sheet_rels):
+                rid, target = m.group("rid"), m.group("target")
+                if target.startswith(("http://", "https://", "ftp://")):
+                    rid_to_url.setdefault(rid, target)
+
+            # 3. Walk the sheet XML and pair each <hyperlink> with its URL.
+            sheet_xml = zf.read(sheet_path).decode("utf-8")
+            for m in _HYPERLINK_RE.finditer(sheet_xml):
+                cell_ref = m.group("ref")
+                rid = m.group("rid")
+                url = rid_to_url.get(rid)
+                if not url:
+                    continue
+                ref_match = _CELL_REF_RE.match(cell_ref)
+                if not ref_match:
+                    continue
+                col_letter = ref_match.group("col")
+                row_number = int(ref_match.group("row"))
+                result.setdefault(row_number, {})[col_letter] = url
+    except (zipfile.BadZipFile, KeyError, ValueError, UnicodeDecodeError) as exc:
+        # A bad zip or unexpected layout should not abort the whole sync —
+        # the parser can still return rows with ``tdoc_url=None``.
+        logger.debug("Hyperlink extraction failed for XLSX: %s", exc)
+    return result
+
 
 def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
     logger.debug("Reading TDoc XLSX bytes (%s bytes)", len(xlsx_bytes))
@@ -121,13 +246,21 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
         raise RuntimeError("Could not read TDoc list sheet from XLSX file.")
 
     worksheet = workbook.active
-    rows = worksheet.iter_rows(values_only=True)
+
+    # Hyperlinks are not exposed in ``read_only`` mode, so pull them from
+    # the underlying XLSX zip in a separate, fast side-channel pass.
+    # The result is keyed by Excel row number so we can match it against
+    # the iteration index below.
+    hyperlinks = _extract_tdoc_hyperlinks(xlsx_bytes)
+
     header_map: Dict[str, int] = {}
-    for row in rows:
+    header_row_idx: int | None = None
+    for row_idx, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
         potential = {normalize_header(cell): idx for idx, cell in enumerate(row) if normalize_header(cell)}
         if _is_header_row(potential):
             header_map = potential
-            logger.debug("Detected header map: %s", header_map)
+            header_row_idx = row_idx
+            logger.debug("Detected header row at Excel row %s: %s", row_idx, header_map)
             break
 
     if not header_map:
@@ -138,6 +271,10 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
     if col_tdoc is None:
         logger.error("Could not find TDoc column in TDoc list sheet")
         raise RuntimeError("Could not find TDoc column in TDoc list sheet.")
+
+    # Convert the 0-based TDoc column index to the column letter that the
+    # raw-XML hyperlink map is keyed by, so we can pull the per-row URL.
+    tdoc_col_letter = _col_index_to_letter(col_tdoc)
 
     mapping = {
         "title": pick_col(header_map, ["Title"]),
@@ -159,7 +296,13 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
 
     result: List[Dict[str, object]] = []
     skipped_rows = 0
-    for row_index, row in enumerate(rows, start=1):
+    # Start a fresh iterator at the row *after* the header so the index we
+    # pair with the hyperlink map matches the real Excel row number.
+    data_rows = worksheet.iter_rows(
+        min_row=(header_row_idx or 0) + 1,
+        values_only=True,
+    )
+    for row_index, row in enumerate(data_rows, start=(header_row_idx or 0) + 1):
         raw_tdoc = to_text(row[col_tdoc]) if col_tdoc < len(row) else None
         if not raw_tdoc:
             logger.debug("Skipping empty row %s", row_index)
@@ -171,7 +314,10 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
             skipped_rows += 1
             continue
 
-        record: Dict[str, object] = {"tdoc": match.group(0)}
+        record: Dict[str, object] = {
+            "tdoc": match.group(0),
+            "tdoc_url": hyperlinks.get(row_index, {}).get(tdoc_col_letter),
+        }
         for key, col in mapping.items():
             if col is not None and col < len(row):
                 cell_value = row[col]
@@ -192,3 +338,21 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
         )
     logger.info("Parsed %s TDoc records from XLSX", len(result))
     return result
+
+
+def _col_index_to_letter(col_idx: int) -> str:
+    """Convert a 0-based column index to its Excel column letter.
+
+    Mirrors :func:`openpyxl.utils.get_column_letter` for the 0-based input
+    shape used by ``read_tdoc_sheet`` (header cells carry 0-based indices).
+    Implemented locally to avoid pulling openpyxl's utils into a hot path
+    that only deals with letters.
+    """
+    if col_idx < 0:
+        raise ValueError(f"Column index must be non-negative, got {col_idx}")
+    letters: list[str] = []
+    n = col_idx + 1
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        letters.append(chr(ord("A") + rem))
+    return "".join(reversed(letters))

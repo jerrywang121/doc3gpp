@@ -1,13 +1,5 @@
 """Markdown → structured CR-fields parser.
 
-Ported from ``docs/ttcn_cr_cli_example.py`` (Phase 4 of the TDoc
-Extraction Pipeline; see ``docs/tdoc-extraction-plan.md``). The
-reference implementation is 1839 lines of CLI-with-side-effects; the
-parser functions are lifted into this module as pure-functional
-helpers and wrapped behind a typed ``TDocCRDetails`` dataclass.
-
-Key adaptations from the reference (Phase 4 plan, lines 268–280):
-
 1. **Header sniff raises.** A markdown whose first three lines do not
    contain the literal ``3GPP TSG-`` substring raises
    :class:`CRHeaderMissingError`. The reference returned ``{}`` —
@@ -19,13 +11,10 @@ Key adaptations from the reference (Phase 4 plan, lines 268–280):
    the TTCN-specific overview and corrections sub-parsers **only**
    when ``tdoc_id`` matches ``R5s\\d{6}``.
 4. **Partial-cover-page tolerance.** When cover-page regexes miss
-   because markitdown did not render a docx field code, we record
-   the value as ``None`` and log a warning rather than aborting the
-   whole extraction (the reference returned ``False`` and dropped
-   the whole document).
-5. **Typed return.** Replaces the reference's
-   ``Dict[str, str]`` with :class:`~doc3gpp.models.tdoc_cr.TDocCRDetails`.
-6. **Module-level regex compilation.** All patterns are ``re.compile``
+   some fields, we record the value as ``None`` and log a warning 
+   rather than aborting the whole extraction (the reference returned
+   ``False`` and dropped the whole document).
+5. **Module-level regex compilation.** All patterns are ``re.compile``
    -d once at module import.
 
 Public API:
@@ -87,15 +76,14 @@ _HEADER_PATTERN = re.compile(r"3GPP\s+TSG-", re.IGNORECASE)
 # Union: ``R5-227476`` (dash) AND ``R5s260009`` / ``R5w260176`` (single
 # letter) AND ``C6-250028`` (dash). Matches in the document header
 # near the top of the markdown.
-_TDOC_HEADER_PATTERN = re.compile(r"([RSC][1-8](?:[-sw])\d{6})", re.IGNORECASE)
+_TDOC_HEADER_PATTERN = re.compile(r"([RSC][1-6](?:[-sw])\d{6})", re.IGNORECASE)
 # Email-meeting TTCN pattern. Overview / corrections are only parsed
 # for TDocs matching this shape.
 _TTCN_TDOC_PATTERN = re.compile(r"R5s\d{6}", re.IGNORECASE)
 
 # Cover-page row that holds spec / CR / rev / version. The leading
 # ``(?:\|[^|]*\|){1,3}`` matches up to three blank-prefixed cells
-# (markitdown emits the trailing-spec cell as a leading empty cell
-# in some fixtures).
+
 _COVER_SPEC_RE = re.compile(
     r"\|\s*\b(\d{2}\.\d{3}(?:-\d)?)\b\s*\|\s*CR\s*\|"
     r"\s*([\d\w-]+)\s*\|\s*rev\s*\|\s*([\d\w-]+)\s*\|"
@@ -105,19 +93,19 @@ _COVER_TITLE_RE = re.compile(r"\|\s*Title:\s*\|\s*(.*?)\s*\|")
 _COVER_SOURCE_RE = re.compile(r"\|\s*Source to WG:\s*\|\s*(.*?)\s*\|")
 _COVER_TSG_RE = re.compile(r"\|\s*Source to TSG:\s*\|\s*(.*?)\s*\|")
 _COVER_WI_RE = re.compile(r"\|\s*Work item code:\s*\|\s*(.*?)\s*\|")
-# Category + Release on the same line (markitdown's rendering).
+# Category + Release on the same line.
 _COVER_CATREL_RE = re.compile(
-    r"\|\s*Category:\s*\|\s*([^\s|]+)\s*\|(?:\s*\|)+\s*"
-    r"Release:\s*\|(?:\s*\|)+\s*([^\s|]+)\s*\|"
+    r"\|\s*Category:\s*\|\s*([^\s|]+)(?:\s*\|)+"
+    r"\s*Release:(?:\s*\|)*\s*([^\s|]+)\s*\|"
 )
-_COVER_REASON_RE = re.compile(r"\|\s*Reason for change:\s*\|\s*\|\s*(.*?)\s*\|")
+_COVER_REASON_RE = re.compile(r"\|\s*Reason for change:(?:\s*\|)+\s*(.*?)\s*\|")
 _COVER_CONSEQUENCES_RE = re.compile(
-    r"\|\s*Consequences if not approved:\s*\|\s*\|\s*(.*?)\s*\|"
+    r"\|\s*Consequences if not approved:(?:\s*\|)+\s*(.*?)\s*\|"
 )
-_COVER_CLAUSES_RE = re.compile(r"\|\s*Clauses affected:\s*\|\s*\|\s*(.*?)\s*\|")
-_COVER_OTHER_RE = re.compile(r"\|\s*Other comments:\s*\|\s*\|\s*(.*?)\s*\|")
+_COVER_CLAUSES_RE = re.compile(r"\|\s*Clauses affected:(?:\s*\|)+\s*(.*?)\s*\|")
+_COVER_OTHER_RE = re.compile(r"\|\s*Other comments:(?:\s*\|)+\s*(.*?)\s*\|")
 _COVER_REVHIST_RE = re.compile(
-    r"\|\s*This CR's revision history:\s*\|\s*\|\s*(.*?)\s*\|"
+    r"\|\s*This CR's revision history:(?:\s*\|)+\s*(.*?)\s*\|"
 )
 
 # TTCN overview fields.
@@ -131,13 +119,13 @@ _OVERVIEW_TESTSUITE_RE = re.compile(
     r"is\s+part\s+of\s+the\s+(.*?)\s+test\s+suite", re.IGNORECASE
 )
 _OVERVIEW_OVERVIEW_RE = re.compile(
-    r"^\s*(\d+\.\s*)?(Overview)\s*$", re.IGNORECASE
+    r"^(?:[#\d\.\s]*)?(Overview)\s*$", re.IGNORECASE
 )
 _OVERVIEW_TABLE_OF_CONTENTS_RE = re.compile(
-    r"^\s*(\d+\.\s*)?(Table of Contents)\s*$", re.IGNORECASE
+    r"^(?:[#\d\.\s]*)?(Table of Contents)\s*$", re.IGNORECASE
 )
 _CORRECTIONS_REQUIRED_RE = re.compile(
-    r"^\s*(\d+\.\s*)?Corrections\s+required\s*$", re.IGNORECASE
+    r"^(?:[#\d\.\s]*)?(Corrections\s+required)\s*$", re.IGNORECASE
 )
 
 # TTCN single-correction metadata table.
@@ -165,7 +153,6 @@ _SINGLE_CORRECTION_AFTER_RE = re.compile(
 _SINGLE_CORRECTION_NEW_RE = re.compile(
     r"^\s*New\s+change\s*:{0,1}\s*$", re.IGNORECASE
 )
-_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|\s*-+\s*\|\s*$", re.IGNORECASE)
 _TABLE_CELL_RE = re.compile(r"^\s*\|\s*(.+?)\s*\|")
 _FUNCTION_NAME_START_RE = re.compile(
     r"^\s*\|\s*Function\s+name\s*\|", re.IGNORECASE
@@ -275,7 +262,7 @@ def extract_docx_from_zip(zip_bytes: bytes) -> tuple[str, bytes]:
     * Skips ``__MACOSX/`` resource-fork entries (Apple drops them on
       many macs; they are not real Word files).
     * Prefers ``.docx`` over ``.doc`` when both are present
-      (``docx`` parses more reliably through markitdown).
+      (only ``docx`` parses are supported).
     * Falls back to the lexicographically smaller filename when
       ``.docx`` is not present, matching the reference's stable
       ordering.
@@ -334,7 +321,7 @@ def _parse_cr_cover_page(
     max_text_length: int = 0,
     cover_page_end: int = 0,
 ) -> tuple[bool, dict[str, str], int]:
-    """Extract cover-page fields from the markitdown output.
+    """Extract cover-page fields from the markdown output.
 
     Each cover-page pattern is a labelled cell (``| Title: |``,
     ``| Source to TSG: |`` etc.); none of them depend on line-relative
@@ -349,8 +336,8 @@ def _parse_cr_cover_page(
     (after the cover page proper). ``success`` is ``True`` when at
     least one cover-page field was located; the parser no longer
     aborts the whole extraction on a missing required field because
-    some fixtures store spec / cr_num in docx field codes that
-    markitdown does not render.
+    some fixtures store spec / cr_num in docx field codes that does 
+    not render.
     """
     details: dict[str, str] = {}
     cover_window = lines[:cover_page_end] if cover_page_end else lines
@@ -455,7 +442,7 @@ def _parse_cr_cover_page(
 def _blank_cells_to_none(details: dict[str, str | None]) -> None:
     """Coerce blank cover-page cell values to ``None`` in place.
 
-    Cover-page fields where markitdown dropped a docx field code
+    Cover-page fields where markdown converter dropped a docx field code
     render as empty strings rather than absent rows; the dataclass
     contract treats them the same as missing rows.
     """
@@ -722,6 +709,7 @@ def _parse_ttcn_cr_single_correction(
             and end_idx is not None
             and "|" not in text
         ):
+            # found a non-table line after the table; assume the table is done
             break
 
     if start_idx is None or end_idx is None:
@@ -787,7 +775,7 @@ def _parse_ttcn_cr_single_correction(
                 if _SINGLE_CORRECTION_NEW_RE.match(text):
                     key = "new_change"
                     continue
-                if _TABLE_SEPARATOR_RE.match(text):
+                if _TABLE_CELL_RE.match(text):
                     scan_idx -= 1
                     advancing2, content = _extract_change_from_table(
                         lines[scan_idx - 1 :], max_lines=5
@@ -797,6 +785,7 @@ def _parse_ttcn_cr_single_correction(
                         if key is None:
                             key = "new_change"
                         change[key] = content
+                    # for before_change, there shall be after_change, so we continue to look for after_change
                     if key != "before_change":
                         break
             next_line_number = scan_idx
@@ -825,7 +814,8 @@ def _parse_ttcn_cr_single_correction(
 def _extract_change_from_table(
     lines: Sequence[str], *, max_lines: int = 5
 ) -> tuple[int, str | None]:
-    """Pull a single content row out of a ``| --- |`` table.
+    """Pull a single content row out of a ``| ... |`` table.
+    Ingnores empty rows (e.g. ``|  |  |``) and separators (``| --- |``) and returns the first non-empty content row.
 
     Returns ``(advancing, content_or_None)``.
     """
@@ -834,19 +824,19 @@ def _extract_change_from_table(
         if idx >= max_lines:
             break
         text = _remove_markdown_formatting(line)
-        if advancing == 0:
-            if _TABLE_SEPARATOR_RE.match(text):
-                advancing = idx + 1
+        match = _TABLE_CELL_RE.match(text)
+        if match:
+            advancing = idx + 1
+            content = match.group(1).strip()
+            # check if content contains only dashes (e.g. | --- |) or `|` or is empty, if so, skip it
+            remaining_content = content.replace("-", "").replace("|", "").strip()
+            if not remaining_content:
                 continue
+            # replace <br> with newline, and replace double spaces with newline
+            content = content.replace("<br>", "\n")
+            return advancing, content
         else:
-            match = _TABLE_CELL_RE.match(text)
-            if match:
-                advancing = idx + 1
-                content = match.group(1).strip()
-                content = re.sub(r"([^\s])\s\s", r"\1\n", content)
-                return advancing, content
-            else:
-                break
+            break
     return advancing, None
 
 
@@ -890,7 +880,7 @@ def parse_cr_details(
     """Parse a CR markdown body into a :class:`TDocCRDetails`.
 
     Args:
-        markdown: The full markitdown output of the CR ``.docx``.
+        markdown: The full markdown conversion output of the CR ``.docx``.
         tdoc_id: Canonical TDoc identifier (e.g. ``"R5s260009"``,
             ``"R5-227476"``, ``"C6-250028"``). Always stored on the
             result as ``tdoc_id``; the parser records what the

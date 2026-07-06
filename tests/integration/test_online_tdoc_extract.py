@@ -15,7 +15,7 @@ The tests skip themselves unless:
 
 * the ``@pytest.mark.online`` marker is selected (default pytest skips
   online tests via ``pyproject.toml [tool.pytest.ini_options]``), AND
-* the optional ``markitdown`` extra is installed
+* the optional ``python-docx`` extra is installed
   (``pip install doc3gpp[extract]``).
 
 Both pre-seed a parent ``tdocs`` row so the service-level
@@ -31,23 +31,23 @@ import pytest
 pytestmark = pytest.mark.online
 
 
-def _markitdown_available() -> bool:
-    """Return True iff ``markitdown`` imports cleanly.
+def _docx_available() -> bool:
+    """Return True iff ``python-docx`` imports cleanly.
 
     Mirrors the helper used by ``test_tdoc_cr_sqlite.py`` and
-    ``test_markitdown_converter.py`` so the same skip guard pattern
-    applies here.
+    ``test_docx_converter.py`` so the same skip guard pattern applies
+    here.
     """
     try:
-        import markitdown  # noqa: F401
+        from docx import Document  # noqa: F401
     except ImportError:
         return False
     return True
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_live_extract_r5s260009(tmp_path, monkeypatch) -> None:
     """End-to-end live extract of ``R5s260009`` via the ``tdoc extract`` CLI.
@@ -112,8 +112,8 @@ def test_live_extract_r5s260009(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_live_extract_r5w260009_workshop_pattern(tmp_path, monkeypatch) -> None:
     """Live extract of ``R5w260009`` exercises the Workshop URL template.

@@ -97,7 +97,7 @@ class CacheSettings(BaseModel):
     """Disk cache configuration for TDoc extraction artifacts.
 
     Two subtrees live under :attr:`dir`: ``zips/`` holds the raw 3GPP zip
-    downloads and ``markdown/`` holds the markitdown output. The cache
+    downloads and ``markdown/`` holds the python-docx output. The cache
     module evicts files in insertion order (oldest by ``st_ctime`` first)
     whenever the combined size of both subtrees exceeds
     :attr:`size_limit_mb` megabytes; ``0`` means unlimited. The

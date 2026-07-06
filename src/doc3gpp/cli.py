@@ -16,7 +16,7 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
-from doc3gpp.parsers.markitdown_converter import MarkitdownNotInstalledError
+from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.services.factory import (
     build_meeting_service,
@@ -794,7 +794,7 @@ def _extract_failure_hints() -> str:
     the doctring lives next to its only caller.
     """
     return (
-        "TDocZipDownloadError, MarkitdownNotInstalledError, "
+        "TDocZipDownloadError, PythonDocxNotInstalledError, "
         "TDocTypeUnsupportedError, TDocNotFoundError, CRHeaderMissingError"
     )
 
@@ -838,7 +838,7 @@ def tdoc_extract(
 
     The service :meth:`TDocCrService.extract_many` catches the
     following per-id exception types internally and skips the broken
-    id: ``TDocZipDownloadError``, ``MarkitdownNotInstalledError``,
+    id: ``TDocZipDownloadError``, ``PythonDocxNotInstalledError``,
     ``TDocTypeUnsupportedError``, ``TDocNotFoundError``,
     ``CRHeaderMissingError``. The CLI computes the failure set as
     ``input - successful_keys`` and prints one ``FAILED`` line per id
@@ -847,7 +847,7 @@ def tdoc_extract(
     Exit code:
 
     - ``0`` — at least one TDoc extracted successfully.
-    - ``1`` — every TDoc failed, **or** markitdown is missing and the
+    - ``1`` — every TDoc failed, **or** python-docx is missing and the
       batch could not even start.
     """
     if not tdoc and not tdoc_id:
@@ -882,9 +882,9 @@ def tdoc_extract(
     service = build_tdoc_cr_service()
     try:
         results = service.extract_many(tdoc_ids, force=force)
-    except MarkitdownNotInstalledError as exc:
+    except PythonDocxNotInstalledError as exc:
         typer.echo(
-            "markitdown is not installed; install with `pip install doc3gpp[extract]`.",
+            "python-docx is not installed; install with `pip install doc3gpp[extract]`.",
             err=True,
         )
         typer.echo(f"hint: {exc}", err=True)

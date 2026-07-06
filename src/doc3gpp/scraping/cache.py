@@ -8,7 +8,7 @@ database, or HTTP — the rest of the pipeline composes on top of this.
 The cache is deliberately byte-agnostic: any blob that can be expressed
 as ``(key, bytes, subdir)`` slots in. ``zips/`` holds raw 3GPP zip
 downloads keyed by the lower-cased TDoc id; ``markdown/`` holds the
-markitdown output keyed by the content hash of the source docx so that
+python-docx output keyed by the content hash of the source docx so that
 edits to the upstream document invalidate the right way.
 
 Eviction order is insertion order. Each put writes through a tempfile
@@ -65,7 +65,7 @@ class TDocCache:
 
         <root>/
         ├── zips/      # raw 3GPP zip downloads
-        └── markdown/  # markitdown output (keyed by content hash)
+        └── markdown/  # python-docx output (keyed by content hash)
 
     The cache owns the directory layout and key sanitisation; callers
     pass only the data. Concurrent access from multiple processes is

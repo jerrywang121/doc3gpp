@@ -5,7 +5,7 @@ network, no database, no settings overrides. Each test uses pytest's
 ``tmp_path`` fixture for filesystem isolation.
 
 The cache is the foundation of the TDoc extraction pipeline: every
-other layer (zip downloader, markitdown wrapper, parser, service)
+other layer (zip downloader, docx→markdown converter, parser, service)
 composes on top of this. Keeping the test surface tight here means a
 regression in any of those layers can be traced here first.
 """

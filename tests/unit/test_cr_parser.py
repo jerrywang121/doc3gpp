@@ -2,7 +2,7 @@
 
 Cover-page, TTCN overview and corrections sub-parsers, plus the zip
 extractor and small text helpers. The fixture-driven conversion tests
-(skipping when ``markitdown`` is not installed) cover all 7 fixtures
+(skipping when ``python-docx`` is not installed) cover all 7 fixtures
 shipped under ``tests/fixtures/tdoc_cr_doc/``. The remaining tests
 use small hand-rolled markdown fixtures so the regex logic stays in
 the default pytest pool.
@@ -22,10 +22,10 @@ for the fixture-driven assertions):
 | R5s260135       | 38.523-3   | 3824   | 0   | B      | Rel-18  | 2026 |
 | R5s260176       | 36.523-3   | 4971   | 0   | B      | Rel-18  | 2026 |
 
-The markitdown-driven fixture assertions only cover what's actually
+The python-docx-driven fixture assertions only cover what's actually
 rendered in markdown (title / spec / source / tsg / cr_cat / release)
 because some fixtures store ``spec`` / ``cr_num`` in docx field codes
-that markitdown does not surface — for those, the hand-rolled
+that python-docx does not surface — for those, the hand-rolled
 markdown fixture check applies.
 """
 
@@ -53,10 +53,10 @@ from doc3gpp.parsers.cr_parser import (
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
 
-def _markitdown_available() -> bool:
-    """Return True iff ``markitdown`` imports cleanly."""
+def _docx_available() -> bool:
+    """Return True iff ``python-docx`` imports cleanly."""
     try:
-        import markitdown  # noqa: F401
+        from docx import Document  # noqa: F401
     except ImportError:
         return False
     return True
@@ -78,7 +78,7 @@ def _extract_docx_from_zip(zip_path: Path) -> tuple[str, bytes]:
 
 
 def _extract_docx_text(docx_bytes: bytes) -> str:
-    """Pull all ``<w:t>`` text out of a docx for inspection without markitdown."""
+    """Pull all ``<w:t>`` text out of a docx for inspection without python-docx."""
     with zipfile.ZipFile(io.BytesIO(docx_bytes)) as z:
         for name in z.namelist():
             if name.endswith("document.xml") and not name.startswith("__MACOSX"):
@@ -482,13 +482,13 @@ def test_extract_docx_from_zip_real_fixture() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixture-driven extraction tests (require markitdown)
+# Fixture-driven extraction tests (require python-docx)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
-    not _markitdown_available(),
-    reason="markitdown not installed; install with `pip install doc3gpp[extract]`",
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 @pytest.mark.parametrize(
     ("fixture_name", "expected"),
@@ -605,14 +605,15 @@ def test_fixture_extraction_matches_snapshot(
 ) -> None:
     """End-to-end pipeline against a real CR zip fixture.
 
-    The markitdown wrapper from Phase 3 is used to convert the
-    ``.docx`` extracted from the zip; the parsed fields are
-    compared to the values that markitdown actually surfaces (some
-    fixtures store spec / cr_num / title / cr_cat / release in docx
-    field codes that markitdown does not render — those come back
-    as None even though the snapshot table records their values).
+    The python-docx wrapper from :mod:`doc3gpp.parsers.docx_converter`
+    is used to convert the ``.docx`` extracted from the zip; the
+    parsed fields are compared to the values the converter actually
+    surfaces (some fixtures store spec / cr_num / title / cr_cat /
+    release in docx field codes that python-docx does not render —
+    those come back as None even though the snapshot table records
+    their values).
     """
-    from doc3gpp.parsers.markitdown_converter import convert_document_to_markdown
+    from doc3gpp.parsers.docx_converter import convert_document_to_markdown
 
     zip_path = FIXTURES_DIR / fixture_name
     assert zip_path.exists(), f"missing fixture: {zip_path}"
@@ -653,7 +654,7 @@ def test_fixture_extraction_matches_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# Fixture-driven schema validation (no markitdown needed)
+# Fixture-driven schema validation (no python-docx needed)
 # ---------------------------------------------------------------------------
 
 
@@ -676,10 +677,10 @@ _SNAPSHOT = {
 def test_fixture_xml_drive_invariants(fixture_name: str) -> None:
     """Read each fixture's ``word/document.xml`` and check invariants.
 
-    Independent of markitdown — proves the snapshot values are
+    Independent of python-docx — proves the snapshot values are
     correct against the literal document text. The category /
     release / spec values come from the same ``<w:t>`` cells the
-    markitdown output draws from, so this is a sanity check that
+    markdown output draws from, so this is a sanity check that
     the conversion isn't dropping state.
     """
     zip_path = FIXTURES_DIR / fixture_name

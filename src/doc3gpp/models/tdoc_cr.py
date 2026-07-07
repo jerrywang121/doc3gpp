@@ -194,7 +194,7 @@ class TDocCRDetails:
 
 @dataclass(slots=True, frozen=True)
 class TDocExtractMeta:
-    """Cache-extraction metadata for one TDoc.
+    """Cache-extraction metadata for one **immutable download URL**.
 
     Mirrors :class:`doc3gpp.storage.db.models.TDocExtractOrm` but stays
     a pure value object so the service layer can move the data around
@@ -202,9 +202,16 @@ class TDocExtractMeta:
     cached artefacts are persisted here — the bytes live under
     :mod:`doc3gpp.scraping.cache`.
 
+    Identity is the immutable URL — the same URL serves byte-for-byte
+    identical 3GPP artefacts, while a TDoc id may map to multiple URLs
+    across revisions. ``tdoc_id`` stays as a logical reference and a
+    foreign key into ``tdocs``.
+
     Attributes:
-        tdoc_id: Canonical TDoc identifier; primary key in both the
-            metadata table and the detail table.
+        url: Immutable download URL this cache row is keyed on; matches
+            the corresponding :class:`TDocCRDetails` row's ``url``.
+        tdoc_id: Canonical TDoc identifier (logical reference, FK into
+            ``tdocs.tdoc_id``).
         zip_path: Absolute path to the cached 3GPP zip download.
         markdown_path: Absolute path to the cached markdown rendering
             of the CR's ``.docx`` body.
@@ -218,9 +225,23 @@ class TDocExtractMeta:
             ORM column's default and :class:`TDocCRDetails`.
     """
 
+    url: str
     tdoc_id: str
     zip_path: str
     markdown_path: str
     doc_filename: str
     extracted_at: datetime | None = None
     parser_version: str = _PARSER_VERSION
+
+    def __post_init__(self) -> None:
+        # Mirror TDocCRDetails' invariant; the URL is the row identity.
+        stripped = self.url.strip()
+        if not stripped:
+            raise ValueError("TDocExtractMeta requires a non-empty url")
+        if stripped != self.url:
+            object.__setattr__(self, "url", stripped)
+        stripped_id = self.tdoc_id.strip()
+        if not stripped_id:
+            raise ValueError("TDocExtractMeta requires a non-empty tdoc_id")
+        if stripped_id != self.tdoc_id:
+            object.__setattr__(self, "tdoc_id", stripped_id)

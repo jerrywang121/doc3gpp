@@ -63,6 +63,7 @@ from doc3gpp.scraping.tdoc_zip_source import (
     TDocCacheLike,
     TDocZipDownloadError,
     download_tdoc_zip,
+    resolve_download_url,
 )
 
 if TYPE_CHECKING:
@@ -191,32 +192,40 @@ class TDocCrService:
            :meth:`TDocRepository.get_by_id` — raise
            :class:`TDocNotFoundError` on miss and
            :class:`TDocTypeUnsupportedError` if ``type != "CR"``.
-        3. If a detail row exists and ``not force``, return
-           :class:`ExtractResult` with ``from_cache=True`` without
-           touching the network or the python-docx renderer.
+        3. Pre-resolve the candidate download URL(s) via
+           :func:`resolve_download_url` and probe the DB cache by URL
+           before any network I/O. A hit short-circuits with
+           ``from_cache=True`` (and ``force=True`` skips this).
         4. Download the zip (cache or network) — preferring the
-           per-TDoc URL stored in ``tdocs.url`` (extracted from the
-           XLSX hyperlink during ``tdoc sync``) and falling back to
-           the template-based URL on failure → extract the docx →
-           compute sha256 of the docx bytes → look up the markdown
-           cache (skip on ``force``) → render markdown if needed →
-           parse → persist → return ``from_cache=False``.
+           per-TDoc URL stored in ``tdocs.url`` and falling back to
+           the template-based URL on failure.
+        5. Once the actual serving URL is known, probe the DB cache
+           again by that URL — covers the case where ``primary_url``
+           was unset at step 3 but the template URL was usable.
+        6. Otherwise: extract the docx → compute sha256 of the
+           docx bytes → look up the markdown cache (skip on
+           ``force``) → render markdown if needed → parse → persist
+           under the resolved URL → return ``from_cache=False``.
         """
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
 
-        # DB-cache hit: short-circuit everything. A force=True request
-        # always bypasses this branch.
+        # Pre-download cache probe: known candidate URLs can be
+        # resolved from ``tdocs.url`` + the template without touching
+        # the network, so the DB cache short-circuits the zip fetch.
         if not force:
-            cached_details = self._repo.get(normalised)
-            cached_meta = self._repo.get_extract_meta(normalised)
-            if cached_details is not None and cached_meta is not None:
-                logger.debug("DB cache hit for TDoc %s", normalised)
-                return ExtractResult(
-                    details=cached_details,
-                    extract_meta=cached_meta,
-                    from_cache=True,
-                )
+            for candidate in resolve_download_url(normalised, tdoc.url):
+                cached_details = self._repo.get_by_url(candidate)
+                cached_meta = self._repo.get_extract_meta_by_url(candidate)
+                if cached_details is not None and cached_meta is not None:
+                    logger.debug(
+                        "DB cache hit for TDoc %s at URL %s", normalised, candidate
+                    )
+                    return ExtractResult(
+                        details=cached_details,
+                        extract_meta=cached_meta,
+                        from_cache=True,
+                    )
 
         downloaded = download_tdoc_zip(
             normalised,
@@ -224,6 +233,24 @@ class TDocCrService:
             self._cache,
             primary_url=tdoc.url,
         )
+
+        # Post-download probe: ``tdoc.url`` was None so step 3 had no
+        # candidates, but the download resolved a URL via the
+        # template. The cache contract is per-URL, so we check again.
+        resolved_url = downloaded.url
+        if not force and resolved_url:
+            cached_details = self._repo.get_by_url(resolved_url)
+            cached_meta = self._repo.get_extract_meta_by_url(resolved_url)
+            if cached_details is not None and cached_meta is not None:
+                logger.debug(
+                    "DB cache hit for TDoc %s at URL %s", normalised, resolved_url
+                )
+                return ExtractResult(
+                    details=cached_details,
+                    extract_meta=cached_meta,
+                    from_cache=True,
+                )
+
         doc_filename, docx_bytes = extract_docx_from_zip(downloaded.path.read_bytes())
         doc_hash = hashlib.sha256(docx_bytes).hexdigest()
 
@@ -236,9 +263,10 @@ class TDocCrService:
 
         details = replace(
             parse_cr_details(markdown, tdoc_id=normalised),
-            url=downloaded.url,
+            url=resolved_url,
         )
         meta = TDocExtractMeta(
+            url=resolved_url or "",
             tdoc_id=normalised,
             zip_path=str(downloaded.path),
             markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
@@ -246,8 +274,9 @@ class TDocCrService:
         )
         self._repo.upsert(details, meta)
         logger.info(
-            "Persisted CR details for TDoc %s (spec=%s cr_num=%s)",
+            "Persisted CR details for TDoc %s at URL %s (spec=%s cr_num=%s)",
             normalised,
+            resolved_url,
             details.spec,
             details.cr_num,
         )

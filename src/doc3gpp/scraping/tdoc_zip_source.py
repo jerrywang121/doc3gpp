@@ -155,6 +155,28 @@ def get_tdoc_zip_url(tdoc: str) -> str | None:
     return _build_tdoc_zip_url(canonical)
 
 
+def resolve_download_url(
+    tdoc: str,
+    primary_url: str | None = None,
+) -> list[str]:
+    """Return the URL(s) ``download_tdoc_zip`` would try, in order.
+
+    Pre-resolves the candidate URLs without touching the network so the
+    caller can perform a ``get_by_url`` DB cache lookup before paying
+    the cost of an HTTP fetch. The order matches
+    :func:`download_tdoc_zip`: ``primary_url`` first (when provided and
+    distinct from the template), then the template URL. ``tdoc`` is
+    first canonicalised; an unrecognised id returns an empty list.
+    """
+    candidates: list[str] = []
+    if primary_url:
+        candidates.append(primary_url)
+    template_url = get_tdoc_zip_url(tdoc)
+    if template_url and template_url not in candidates:
+        candidates.append(template_url)
+    return candidates
+
+
 def _canonicalise_tdoc_id(tdoc: str) -> str | None:
     """Normalise a TDoc id to the canonical ``Ts260009`` form.
 

@@ -923,10 +923,12 @@ def tdoc_show(
     """Show TDoc details, including extracted CR fields if available.
 
     Looks up the TDoc row in the ``tdocs`` table and prints every
-    :class:`TDoc` field under a ``[TDoc]`` section. When a matching
-    ``tdoc_cr_details`` row exists (i.e. ``tdoc extract`` has been run
-    for this id at least once) the parsed cover-page fields are
-    printed under an ``[Extracted Details]`` section; the
+    :class:`TDoc` field under a ``[TDoc]`` section. When one or more
+    matching ``tdoc_cr_details`` rows exist (i.e. ``tdoc extract`` has
+    been run for this id at least once) the parsed cover-page fields
+    are printed under one ``[Extracted Details]`` block **per revision**
+    (each revision is keyed by the immutable download URL — multiple
+    URLs share the same ``tdoc_id`` across revisions). The
     ``corrections`` list is JSON-dumped for full fidelity.
 
     Raises a ``BadParameter`` when the requested TDoc is not stored.
@@ -951,15 +953,18 @@ def tdoc_show(
         typer.echo(f"{f.name}: {value}")
 
     cr_repo = build_tdoc_cr_repository()
-    details = cr_repo.get(tdoc)
-    meta = cr_repo.get_extract_meta(tdoc)
-    if details is None and meta is None:
+    details_list = cr_repo.get(tdoc)
+    meta_list = cr_repo.get_extract_meta(tdoc)
+    if not details_list and not meta_list:
         typer.echo("[Extracted Details]")
         typer.echo("No extracted details; run `doc3gpp tdoc extract --tdoc <id>` first.")
         return
 
-    typer.echo("[Extracted Details]")
-    if details is not None:
+    meta_by_url = {meta.url: meta for meta in meta_list}
+    for details in details_list:
+        typer.echo("[Extracted Details]")
+        if details.url:
+            typer.echo(f"url: {details.url}")
         typer.echo(f"spec: {details.spec or '-'}")
         typer.echo(f"cr_num: {details.cr_num or '-'}")
         typer.echo(f"rev: {details.rev or '-'}")
@@ -987,8 +992,9 @@ def tdoc_show(
         typer.echo(f"tech: {details.tech or '-'}")
         typer.echo(f"parser_version: {details.parser_version}")
         typer.echo(f"corrections: {json.dumps(details.corrections, ensure_ascii=False, indent=2)}")
-    if meta is not None:
-        typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")
+        meta = meta_by_url.get(details.url or "")
+        if meta is not None:
+            typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")
 
 
 @tsg_app.command("list")

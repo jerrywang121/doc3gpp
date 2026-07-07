@@ -253,13 +253,30 @@ class TDocCrDetailRepository(Protocol):
     :class:`doc3gpp.services.tdoc_cr_service.TDocCrService` and always
     written together in a single transaction.
 
-    All methods are keyed on ``tdoc_id`` because that column is the
-    primary key on both child tables (and a FK into ``tdocs.tdoc_id``
-    with ``ondelete="CASCADE"``).
+    Identity on both tables is the immutable download ``url`` —
+    3GPP zip assets are byte-for-byte identical for the lifetime of
+    a URL, while the logical ``tdoc_id`` may map to multiple URLs
+    across revisions. ``tdoc_id`` remains a non-PK FK into
+    ``tdocs.tdoc_id`` with ``ondelete="CASCADE"`` so deleting a
+    parent TDoc still cleans up every revision's detail rows.
     """
 
-    def get(self, tdoc_id: str) -> TDocCRDetails | None:
-        """Return the persisted detail row, or ``None`` on miss."""
+    def get(self, tdoc_id: str) -> list[TDocCRDetails]:
+        """Return every detail row for ``tdoc_id``, newest first.
+
+        The same ``tdoc_id`` may map to multiple URLs across revisions;
+        callers (the ``tdoc show`` CLI, debugging scripts) want every
+        revision. Ordered by ``extracted_at`` descending so the most
+        recent extract is at index ``0``.
+        """
+        ...
+
+    def get_by_url(self, url: str) -> TDocCRDetails | None:
+        """Return the detail row for an immutable ``url``, or ``None``.
+
+        Used by the extraction service to perform an O(1) cache-hit
+        check after the download has resolved the actual URL.
+        """
         ...
 
     def upsert(
@@ -269,14 +286,23 @@ class TDocCrDetailRepository(Protocol):
     ) -> None:
         """Insert/update both rows in a single transaction.
 
-        The detail row is keyed by ``tdoc_id``; the extract-metadata
-        row is keyed by the same id. ``updated_at`` on the detail row
-        is stamped on every write so callers can detect re-extracts.
+        Both tables are keyed by ``url`` (the immutable download URL).
+        ``updated_at`` on the detail row is stamped on every write so
+        callers can detect re-extracts at the same URL.
         """
         ...
 
-    def get_extract_meta(self, tdoc_id: str) -> TDocExtractMeta | None:
-        """Return the cached-extract metadata, or ``None`` on miss."""
+    def get_extract_meta(self, tdoc_id: str) -> list[TDocExtractMeta]:
+        """Return every cached-extract metadata row for ``tdoc_id``.
+
+        Mirror of :meth:`get` for the ``tdoc_extracts`` sidecar.
+        Indexed lookup on the FK; ordered ``extracted_at`` desc so
+        callers see the most recent extract first.
+        """
+        ...
+
+    def get_extract_meta_by_url(self, url: str) -> TDocExtractMeta | None:
+        """Return the extract-metadata row for an immutable ``url``."""
         ...
 
     def list_all(self) -> list[TDocCRDetails]:

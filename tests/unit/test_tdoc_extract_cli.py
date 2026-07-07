@@ -109,7 +109,9 @@ def _make_result(
     title: str | None = "Example CR",
 ) -> ExtractResult:
     """Build a fully-wired :class:`ExtractResult` for the fake service."""
+    url = f"https://www.3gpp.org/ftp/stored/{tdoc_id}.zip"
     meta = TDocExtractMeta(
+        url=url,
         tdoc_id=tdoc_id,
         zip_path=f"/tmp/cache/zips/{tdoc_id}",
         markdown_path=f"/tmp/cache/markdown/{tdoc_id}.md",
@@ -249,16 +251,19 @@ def test_tdoc_extract_python_docx_missing_friendly_error(sqlite_env, monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def _seed_full_crdetail_row(tdoc_id: str) -> None:
+def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
     """Insert a parent TDoc + a populated CR detail row via the real repo.
 
     Uses the SQL repositories directly so the test exercises the same
     write path the production CLI relies on. The CR detail row carries
     enough fields to verify the ``[Extracted Details]`` block output.
+    The URL defaults to a unique-per-call value so multiple seeds in
+    the same test produce distinct (URL-keyed) detail rows.
     """
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR"))
+    resolved_url = url or f"https://www.3gpp.org/ftp/stored/{tdoc_id}.zip"
     details = TDocCRDetails(
         tdoc_id=tdoc_id,
         spec="38.523-3",
@@ -283,9 +288,11 @@ def _seed_full_crdetail_row(tdoc_id: str) -> None:
         ss="SS_NR5G",
         year=2026,
         tech="5G",
+        url=resolved_url,
         parser_version="1.0.0",
     )
     meta = TDocExtractMeta(
+        url=resolved_url,
         tdoc_id=tdoc_id,
         zip_path="/tmp/cache/zips/R5s260009",
         markdown_path="/tmp/cache/markdown/R5s260009.md",
@@ -344,3 +351,22 @@ def test_tdoc_show_missing_tdoc_option_is_required(sqlite_env) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["tdoc", "show"])
     assert result.exit_code != 0
+
+
+def test_tdoc_show_renders_multiple_revisions(sqlite_env) -> None:
+    """Two distinct URLs for the same TDoc id render as separate
+    ``[Extracted Details]`` blocks (most recent first)."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+    _seed_full_crdetail_row(
+        "R5s260009",
+        url="https://www.3gpp.org/ftp/stored/R5s260009_rev2.zip",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260009"])
+    assert result.exit_code == 0, result.output
+    # Two distinct URLs surface as two ``[Extracted Details]`` blocks.
+    assert "R5s260009.zip" in result.output
+    assert "R5s260009_rev2.zip" in result.output
+    assert result.output.count("[Extracted Details]") == 2

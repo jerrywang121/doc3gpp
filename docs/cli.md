@@ -244,9 +244,12 @@ Behavior:
 - Looks up the row in the `tdocs` table via a PK lookup.
 - On miss: raises `BadParameter` listing the requested id and pointing
   to `doc3gpp tdoc sync` / `doc3gpp tdoc list`.
-- On hit: prints a `[TDoc]` section (every `TDoc` field) followed by an
-  `[Extracted Details]` section when a matching `tdoc_cr_details` row
-  exists. The `corrections` list is rendered as pretty-printed JSON.
+- On hit: prints a `[TDoc]` section (every `TDoc` field) followed by
+  one `[Extracted Details]` block **per revision** when one or more
+  matching `tdoc_cr_details` rows exist (a single `tdoc_id` may have
+  multiple revisions at distinct URLs; the CLI renders one block per
+  URL with `extracted_at` newest first). The `corrections` list of
+  every block is rendered as pretty-printed JSON.
 - Long free-text fields (`reason_for_change`,
   `consequences_if_not_approved`) are truncated to 200 characters with
   an ellipsis.

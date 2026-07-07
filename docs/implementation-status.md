@@ -115,6 +115,20 @@ This document tracks what is implemented today versus planned next work.
 ### Correctness / operational
 
 - Schema bootstrap uses `create_all` rather than versioned migrations.
+  Existing deployments must drop and recreate `tdoc_cr_details` /
+  `tdoc_extracts` after the URL-PK change (`doc3gpp db init` will
+  recreate them; previous rows are not preserved because no Alembic
+  migration exists yet). For a non-destructive migration, run:
+
+  ```sql
+  ALTER TABLE tdoc_cr_details RENAME TO tdoc_cr_details_old;
+  ALTER TABLE tdoc_extracts  RENAME TO tdoc_extracts_old;
+  -- then re-run `doc3gpp db init` to create the new schema
+  -- then ``INSERT INTO new SELECT * FROM old`` per row mapping
+  -- the new PK (the immutable URL from the prior row's `url`
+  -- column on `tdoc_cr_details`; `tdoc_extracts` was URL-free so
+  -- the only available identity is `tdoc_id` + a synthetic suffix).
+  ```
 - Calendar parser depends on current DynaReport table structure; the
   `M5` log-warning surface catches pages that no longer carry a
   `<table class="meetings">` but a layout-only change may still break

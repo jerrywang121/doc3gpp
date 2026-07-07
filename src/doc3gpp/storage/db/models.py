@@ -149,29 +149,39 @@ class TDocFileORM(Base):
 class TDocCrDetailOrm(Base):
     """Structured CR (Change Request) details extracted from a TDoc.
 
-    One row per TDoc that has been parsed by ``parsers.cr_parser``.
+    One row per **immutable download URL** rather than per TDoc id —
+    3GPP zip assets are byte-for-byte identical for the lifetime of the
+    URL, while the logical ``tdoc_id`` may map to multiple URLs across
+    revisions. Keying on ``url`` lets every revision of the same
+    ``tdoc_id`` coexist: a fresh extract at a new URL writes a new
+    row instead of clobbering the parsed record for the previous one.
+
     Carries the cover-page fields (spec, cr_num, title, ...) and the
     TTCN-only fields (ats_version, ttcn_release, test_case, ...) plus
-    the full ``corrections`` list serialised as a single JSON string in
-    the ``corrections`` ``TEXT`` column. See
+    the full ``corrections`` list serialised as a single JSON string
+    in the ``corrections`` ``TEXT`` column. See
     :class:`doc3gpp.models.tdoc_cr.TDocCRDetails` for the in-memory
     shape; :py:meth:`TDocCRDetails.to_persisted` produces the dict
     this table persists.
 
-    ``tdoc_id`` is the primary key AND a foreign key into
-    ``tdocs.tdoc_id``; ``ondelete="CASCADE"`` keeps the detail row in
-    sync with its parent TDoc — unlike ``TDocFileORM`` the CR details
-    are derived artefacts of the TDoc row and should be wiped when the
-    TDoc itself is removed. ``parser_version`` and ``extracted_at``
-    are diagnostic columns for re-extract audits.
+    ``url`` is the primary key — the same URL serves the same bytes
+    forever, so re-extracting at the same URL is idempotent. ``tdoc_id``
+    is a non-PK foreign key into ``tdocs.tdoc_id`` indexed for the
+    ``get(tdoc_id)`` lookup; ``ondelete="CASCADE"`` keeps the detail
+    rows in sync with their parent TDoc — unlike ``TDocFileORM`` the
+    CR details are derived artefacts of the TDoc row and should be
+    wiped when the TDoc itself is removed. ``parser_version`` and
+    ``extracted_at`` are diagnostic columns for re-extract audits.
     """
 
     __tablename__ = "tdoc_cr_details"
 
+    url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
-        primary_key=True,
+        nullable=False,
+        index=True,
     )
     spec: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cr_num: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -199,9 +209,6 @@ class TDocCrDetailOrm(Base):
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tech: Mapped[str | None] = mapped_column(String(16), nullable=True)
     extracted_tdoc_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Exact URL the TDoc zip was downloaded from during this extract;
-    # None when the bytes came from a prior cache hit.
-    url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     parser_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="1.0.0"
     )
@@ -223,20 +230,24 @@ class TDocExtractOrm(Base):
     on disk, so the next extract call can short-circuit the network
     and the python-docx render.
 
-    Mirrors the cascade-on-parent-delete policy of
-    :class:`TDocCrDetailOrm`: when the owning TDoc row is removed, the
-    extract metadata loses its meaning and is dropped with it.
+    Mirrors the URL-PK scheme of :class:`TDocCrDetailOrm`: identity
+    is the immutable download URL, and ``tdoc_id`` is a non-PK FK into
+    ``tdocs.tdoc_id`` with ``ondelete="CASCADE"`` — when the owning
+    TDoc row is removed, the extract metadata loses its meaning and
+    is dropped with it.
     """
 
     __tablename__ = "tdoc_extracts"
 
+    url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
-        primary_key=True,
+        nullable=False,
+        index=True,
     )
-    zip_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    markdown_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    zip_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    markdown_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     doc_filename: Mapped[str] = mapped_column(String(256), nullable=False)
     extracted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

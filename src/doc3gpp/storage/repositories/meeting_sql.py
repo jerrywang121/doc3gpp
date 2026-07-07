@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 
 from sqlalchemy import delete, select, extract
 from sqlalchemy.orm import Session, sessionmaker
@@ -31,16 +31,14 @@ class SQLAlchemyMeetingRepository:
         """Upsert multiple meeting records in a single transaction.
 
         Existing rows (matched by ``meeting_id``) are updated in place;
-        non-matches become new rows. ``updated_at`` is stamped on every
-        write so callers can detect a re-sync. Returns the number of input
-        rows processed.
+        non-matches become new rows. Returns the number of input rows
+        processed.
         """
         if not meetings:
             return 0
 
-        now = datetime.now(tz=timezone.utc)
         with self._session_factory() as session:
-            _persist(session, meetings, now)
+            _persist(session, meetings)
             session.commit()
         return len(meetings)
 
@@ -127,11 +125,10 @@ def _orm_to_domain(row: MeetingORM) -> Meeting:
         ftp_url=row.ftp_url,
         start_doc=row.start_doc,
         end_doc=row.end_doc,
-        updated_at=row.updated_at,
     )
 
 
-def _persist(session: Session, meetings: list[Meeting], updated_at: datetime) -> None:
+def _persist(session: Session, meetings: list[Meeting]) -> None:
     """Insert or refresh each meeting row in-place on the given session.
 
     Performs a single bulk ``SELECT`` keyed on ``meeting_id``, then issues
@@ -152,7 +149,6 @@ def _persist(session: Session, meetings: list[Meeting], updated_at: datetime) ->
             existing.ftp_url = item.ftp_url
             existing.start_doc = item.start_doc
             existing.end_doc = item.end_doc
-            existing.updated_at = updated_at
         else:
             session.add(
                 MeetingORM(
@@ -165,6 +161,5 @@ def _persist(session: Session, meetings: list[Meeting], updated_at: datetime) ->
                     ftp_url=item.ftp_url,
                     start_doc=item.start_doc,
                     end_doc=item.end_doc,
-                    updated_at=updated_at,
                 )
             )

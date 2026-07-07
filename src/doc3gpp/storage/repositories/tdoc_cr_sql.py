@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -120,7 +119,6 @@ class SQLAlchemyTDocCrRepository:
             )
 
         url = details.url
-        now = datetime.now(tz=timezone.utc)
         with self._session_factory() as session:
             detail_row = session.get(TDocCrDetailOrm, url)
             if detail_row is None:
@@ -133,7 +131,6 @@ class SQLAlchemyTDocCrRepository:
                 # the PK, so a different URL means a different row.
                 detail_row.tdoc_id = details.tdoc_id
             self._details_to_orm(detail_row, details)
-            detail_row.updated_at = now
 
             extract_row = session.get(TDocExtractOrm, url)
             if extract_row is None:
@@ -181,8 +178,7 @@ class SQLAlchemyTDocCrRepository:
 
         Excludes ``url`` (PK, never overwritten after construction),
         ``tdoc_id`` (handled by :meth:`upsert` because it is the FK),
-        and ``extracted_at`` / ``updated_at`` (stamped separately by
-        :meth:`upsert` / server-side defaults).
+        and ``extracted_at`` (stamped by the server-side default).
         """
         target.spec = details.spec
         target.cr_num = details.cr_num

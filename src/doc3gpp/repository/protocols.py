@@ -96,11 +96,7 @@ class MeetingRepository(Protocol):
     """Storage operations used by meetings sync service."""
 
     def upsert_many(self, meetings: list[Meeting]) -> int:
-        """Save or update multiple meeting records.
-
-        Implementations should stamp ``Meeting.updated_at`` on every write so
-        callers can detect re-sync activity.
-        """
+        """Save or update multiple meeting records."""
         ...
 
     def list(
@@ -207,10 +203,9 @@ class TDocFileRepository(Protocol):
         The fully-qualified download URL is the natural identity of a file
         on the 3GPP FTP — the same attachment lives at exactly one
         upstream location — so the unique index on ``url`` is the upsert
-        key. Existing rows are refreshed in place (the ``file`` label and
-        ``updated_at`` are rewritten) so re-syncing a meeting does not
-        produce duplicates. Returns the number of input rows that were
-        written.
+        key. Existing rows are refreshed in place (the ``file`` label is
+        rewritten) so re-syncing a meeting does not produce duplicates.
+        Returns the number of input rows that were written.
         """
         ...
 
@@ -286,9 +281,11 @@ class TDocCrDetailRepository(Protocol):
     ) -> None:
         """Insert/update both rows in a single transaction.
 
-        Both tables are keyed by ``url`` (the immutable download URL).
-        ``updated_at`` on the detail row is stamped on every write so
-        callers can detect re-extracts at the same URL.
+        Both tables are keyed by ``url`` (the immutable download URL), so
+        re-extracting the same URL is idempotent. ``extracted_at`` on the
+        detail row is set on first insert via the server-side default and
+        stays put for subsequent upserts (the column is not bumped on
+        re-extract).
         """
         ...
 

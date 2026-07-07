@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
@@ -19,7 +18,7 @@ class SQLAlchemyTDocFileRepository:
     Identity is the unique ``url`` column: a file lives at exactly one
     upstream location on the 3GPP FTP, so re-syncing the same meeting
     is idempotent — existing rows are refreshed in place with the
-    latest ``file`` label and ``updated_at`` timestamp.
+    latest ``file`` label.
     """
 
     def __init__(self, session_factory: sessionmaker | None = None) -> None:
@@ -29,8 +28,8 @@ class SQLAlchemyTDocFileRepository:
             session_factory: Optional pre-built ``sessionmaker``. When
                 omitted the function falls back to
                 :func:`doc3gpp.storage.db.session.get_session_factory`. The
-                parameter is primarily used by unit tests that want to bind
-                a repository to an in-memory SQLite engine.
+                parameter is primarily used by unit tests that want to bind a
+                repository to an in-memory SQLite engine.
         """
         self._session_factory = session_factory or get_session_factory()
 
@@ -38,9 +37,8 @@ class SQLAlchemyTDocFileRepository:
         """Insert or update multiple TDocFile records.
 
         Each input is matched by its ``url``; matches update the
-        ``tdoc_id``, ``type``, ``file`` and ``updated_at`` columns in
-        place, while non-matches become new rows. ``updated_at`` is
-        stamped on every write.
+        ``tdoc_id``, ``type``, ``file`` and ``uploaded_date`` columns in
+        place, while non-matches become new rows.
 
         Returns:
             The number of input rows that were written (insert or update).
@@ -48,7 +46,6 @@ class SQLAlchemyTDocFileRepository:
         if not files:
             return 0
 
-        now = datetime.now(tz=timezone.utc)
         with self._session_factory() as session:
             urls = [item.url for item in files]
             existing_rows = session.scalars(
@@ -58,8 +55,7 @@ class SQLAlchemyTDocFileRepository:
 
             for item in files:
                 target = existing_by_url.get(item.url)
-                is_new = target is None
-                if is_new:
+                if target is None:
                     target = TDocFileORM(
                         tdoc_id=item.tdoc_id,
                         type=item.type,
@@ -73,7 +69,6 @@ class SQLAlchemyTDocFileRepository:
                     target.type = item.type
                     target.file = item.file
                     target.uploaded_date = item.uploaded_date
-                target.updated_at = now
 
             session.commit()
         return len(files)
@@ -85,9 +80,11 @@ class SQLAlchemyTDocFileRepository:
         file_type: str | None = None,
         file_type_in: Iterable[str] | None = None,
     ) -> list[TDocFile]:
-        """Return stored TDocFile records ordered by most recently updated.
+        """Return stored TDocFile records ordered by descending primary key.
 
-        Optional filters:
+        The auto-increment ``id`` is monotonic with insertion order, so
+        descending ``id`` is a stable approximation of "most recently
+        written". Optional filters:
         - ``tdoc_id``: exact match against the owning TDoc identifier.
         - ``file_type``: exact match against the ``type`` column.
         - ``file_type_in``: iterable of allowed ``type`` values.
@@ -107,10 +104,7 @@ class SQLAlchemyTDocFileRepository:
                     return []
                 stmt = stmt.where(TDocFileORM.type.in_(values))
 
-            stmt = stmt.order_by(
-                TDocFileORM.updated_at.desc().nullslast(),
-                TDocFileORM.id.desc(),
-            ).limit(limit)
+            stmt = stmt.order_by(TDocFileORM.id.desc()).limit(limit)
             rows = session.scalars(stmt).all()
 
         return [_orm_to_domain(row) for row in rows]
@@ -140,5 +134,4 @@ def _orm_to_domain(row: TDocFileORM) -> TDocFile:
         file=row.file,
         url=row.url,
         uploaded_date=row.uploaded_date,
-        updated_at=row.updated_at,
     )

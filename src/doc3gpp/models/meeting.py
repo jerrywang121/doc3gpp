@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-from datetime import datetime
 from dataclasses import dataclass
 
 
@@ -19,7 +18,6 @@ class Meeting:
         ftp_url: Optional FTP path used to discover meeting documents.
         start_doc: Optional start document for the meeting.
         end_doc: Optional end document for the meeting.
-        updated_at: Timestamp of last record update.
     """
 
     meeting_id: int
@@ -31,4 +29,3 @@ class Meeting:
     ftp_url: str | None = None
     start_doc: str | None = None
     end_doc: str | None = None
-    updated_at: datetime | None = None

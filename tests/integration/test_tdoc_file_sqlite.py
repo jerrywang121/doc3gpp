@@ -408,5 +408,8 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
     tdoc_files = SQLAlchemyTDocFileRepository().list(limit=10)
     assert tdocs, "TDoc sync should have stored rows from the fixture XLSX"
     assert tdoc_files, "TDoc file sync should have stored the Inbox/ revision"
-    assert all(f.tdoc_id in {t.tdoc_id for t in tdocs} for f in tdoc_files)
+    meeting_tdoc_ids = set(
+        SQLAlchemyTDocRepository().list_tdoc_ids_for_meeting(1)
+    )
+    assert all(f.tdoc_id in meeting_tdoc_ids for f in tdoc_files)
     assert "TDoc sync complete:" in summary

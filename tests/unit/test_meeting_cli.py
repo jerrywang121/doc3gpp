@@ -19,7 +19,6 @@ def test_cli_fields_and_filters(monkeypatch):
             ftp_url=None,
             start_doc=None,
             end_doc=None,
-            updated_at=None,
         ),
     ]
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -43,7 +41,6 @@ def _seed(session) -> None:
                 release="Rel-19",
                 name="Building Block: Core part: Inter-RAT mode mobility support from E-UTRAN TN to NR NTN",
                 tsg_short="R5",
-                updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             ),
             WiORM(
                 wi_id=1100035,
@@ -51,7 +48,6 @@ def _seed(session) -> None:
                 release="Rel-20",
                 name="Building Block: UE Conformance - Low-power wake-up signal and receiver for NR",
                 tsg_short="R5",
-                updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
             ),
             WiORM(
                 wi_id=60067,
@@ -59,7 +55,6 @@ def _seed(session) -> None:
                 release="R99",
                 name="Building Block: Open Service Access",
                 tsg_short="S2",
-                updated_at=datetime(2025, 12, 30, tzinfo=timezone.utc),
             ),
         ]
     )
@@ -124,10 +119,8 @@ def test_list_combined_filters(repo) -> None:
     assert {r.wi_id for r in rows} == {1100035}
 
 
-def test_list_orders_by_updated_at_desc(repo) -> None:
-    """Newest ``updated_at`` first; ties broken by ``wi_id`` desc."""
+def test_list_orders_by_wi_id_desc(repo) -> None:
     rows = repo.list(limit=10)
-    # R5 entries: 2026-01-02 then 2026-01-01; S2 entry last.
     assert rows[0].wi_id == 1100035
     assert rows[1].wi_id == 1031076
     assert rows[-1].wi_id == 60067
@@ -140,7 +133,6 @@ def test_upsert_many_inserts_and_refreshes(repo) -> None:
     initial = repo.list(tsg="R5")
     assert len(initial) == 2
 
-    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
     new_rows = [
         Wi(
             wi_id=1031076,
@@ -148,7 +140,6 @@ def test_upsert_many_inserts_and_refreshes(repo) -> None:
             release="Rel-19",
             name="Renamed title",
             tsg_short="R5",
-            updated_at=now,
         ),
         Wi(
             wi_id=9100111,
@@ -156,7 +147,6 @@ def test_upsert_many_inserts_and_refreshes(repo) -> None:
             release="Rel-21",
             name="Brand new WI",
             tsg_short="R5",
-            updated_at=now,
         ),
     ]
     stored = repo.upsert_many(new_rows)

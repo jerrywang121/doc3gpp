@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 
 @dataclass(slots=True)
@@ -23,8 +22,6 @@ class Wi:
         name: Full human-readable WI title as displayed on the 3GPP WIs page.
         tsg_short: Uppercase TSG short name that owns this WI (e.g. ``R5``).
             Foreign key to ``tsgs.short_name``.
-        updated_at: Timestamp set by the service layer when the row is
-            inserted or refreshed; ``None`` for rows not yet persisted.
     """
 
     wi_id: int
@@ -32,4 +29,3 @@ class Wi:
     release: str
     name: str
     tsg_short: str
-    updated_at: datetime | None = None

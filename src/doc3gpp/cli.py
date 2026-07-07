@@ -527,11 +527,11 @@ def meeting_list(
     By default, the output includes the most useful columns for planning
     further commands (``meeting_id``, ``name``, ``location``, ``start_date``,
     ``end_date``, ``ftp_url``, ``start_doc``, ``end_doc``); pass
-    ``--fields all`` for the full schema including ``title`` and ``updated_at``.
+    ``--fields all`` for the full schema including ``title``.
 
     Available fields for selection:
     meeting_id, name, title, location, start_date, end_date, ftp_url,
-    start_doc, end_doc, updated_at
+    start_doc, end_doc
 
     Output routing:
     - `-o, --output PATH`: write results to PATH instead of stdout.
@@ -548,7 +548,6 @@ def meeting_list(
         "ftp_url",
         "start_doc",
         "end_doc",
-        "updated_at",
     ]
 
     settings = get_settings()
@@ -584,8 +583,6 @@ def meeting_list(
 
             if f in ("start_date", "end_date"):
                 vals.append(v.isoformat())
-            elif f == "updated_at":
-                vals.append(_fmt_dt(v))
             else:
                 vals.append(str(v))
 
@@ -709,7 +706,7 @@ def tdoc_list(
     Available fields for selection:
     tdoc_id, title, meeting_id, meeting_name, url, source, type, status,
     reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to,
-    release, spec, version, related_wis, cr_num, cr_pack, updated_at
+    release, spec, version, related_wis, cr_num, cr_pack
 
     Output routing:
     - `-o, --output PATH`: write results to PATH instead of stdout.
@@ -768,8 +765,6 @@ def tdoc_list(
 
             if f in ("reservation_date", "uploaded_date") and v is not None:
                 vals.append(v.isoformat())
-            elif f == "updated_at":
-                vals.append(_fmt_dt(v))
             else:
                 vals.append(str(v))
 
@@ -1108,7 +1103,7 @@ def wi_sync(
     auto-seeded so this command is safe to run without an explicit
     ``db init`` first. Existing rows for the same ``(wi_id, tsg_short)``
     pair are updated in place, so re-running this command refreshes the
-    acronym, release, name and ``updated_at`` fields without duplication.
+    acronym, release and name fields without duplication.
     """
     logger.info("Starting WI sync for TSG %s", tsg)
     create_schema()

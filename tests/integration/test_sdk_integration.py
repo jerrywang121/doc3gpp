@@ -74,7 +74,6 @@ def test_sdk_model_construction() -> None:
     assert m.meeting_id == 1
     assert m.name == "RAN5#111"
     assert m.ftp_url is None
-    assert m.updated_at is None
 
     # Meeting — all optional fields
     m2 = Meeting(

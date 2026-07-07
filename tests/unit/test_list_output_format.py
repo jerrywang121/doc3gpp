@@ -39,7 +39,6 @@ SAMPLE_MEETING = Meeting(
     ftp_url=None,
     start_doc=None,
     end_doc=None,
-    updated_at=None,
 )
 
 SAMPLE_TDOC = TDoc(
@@ -68,7 +67,6 @@ SAMPLE_WI = Wi(
     acronym="NTShar",
     release="Rel-19",
     name="NTM sharing",
-    updated_at=None,
 )
 
 

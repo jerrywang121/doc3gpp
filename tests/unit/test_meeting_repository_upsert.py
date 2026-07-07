@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -31,37 +31,6 @@ def _make_meeting(meeting_id: int, name: str = "R5", end: date | None = date(202
         start_date=date(2026, 7, 2),
         end_date=end,
     )
-
-
-def test_upsert_many_stamps_updated_at() -> None:
-    repo, Session = _make_repo()
-
-    repo.upsert_many([_make_meeting(1)])
-
-    with Session() as session:
-        row = session.scalar(select(MeetingORM).where(MeetingORM.meeting_id == 1))
-        assert row is not None
-        assert row.updated_at is not None
-        assert isinstance(row.updated_at, datetime)
-
-
-def test_upsert_many_refreshes_updated_at_on_existing_row() -> None:
-    repo, Session = _make_repo()
-    repo.upsert_many([_make_meeting(1)])
-
-    with Session() as session:
-        first = session.scalar(select(MeetingORM).where(MeetingORM.meeting_id == 1))
-        assert first is not None
-        first.updated_at = datetime(2020, 1, 1)
-        session.commit()
-
-    repo.upsert_many([_make_meeting(1, name="R5-renamed")])
-
-    with Session() as session:
-        row = session.scalar(select(MeetingORM).where(MeetingORM.meeting_id == 1))
-        assert row is not None
-        assert row.updated_at > datetime(2026, 1, 1)
-        assert row.name == "R5-renamed"
 
 
 def test_upsert_many_updates_existing_row_in_place() -> None:
@@ -142,7 +111,7 @@ def test_list_ordering_ties_break_by_meeting_id_desc() -> None:
 
 
 def test_orm_to_domain_helper_round_trips() -> None:
-    """Sanity: every code path that maps ORM→domain should preserve updated_at."""
+    """Sanity: every code path that maps ORM→domain preserves the row data."""
 
     repo, _ = _make_repo()
     repo.upsert_many([_make_meeting(1, name="R5-XYZ")])
@@ -151,12 +120,10 @@ def test_orm_to_domain_helper_round_trips() -> None:
     assert len(rows) == 1
     assert rows[0].meeting_id == 1
     assert rows[0].name == "R5-XYZ"
-    assert rows[0].updated_at is not None
 
     one = repo.get_by_id(1)
     assert one is not None
     assert one.name == "R5-XYZ"
-    assert one.updated_at is not None
 
     by_name = repo.get_by_name("R5-XYZ")
     assert by_name is not None

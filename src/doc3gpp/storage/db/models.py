@@ -41,12 +41,6 @@ class TDocORM(Base):
     related_wis: Mapped[str | None] = mapped_column(String(256), nullable=True)
     cr_num: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cr_pack: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
 class MeetingORM(Base):
@@ -63,7 +57,6 @@ class MeetingORM(Base):
     ftp_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
     end_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TsgORM(Base):
@@ -105,7 +98,6 @@ class WiORM(Base):
         nullable=False,
         index=True,
     )
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TDocFileORM(Base):
@@ -138,12 +130,6 @@ class TDocFileORM(Base):
     file: Mapped[str] = mapped_column(String(256), nullable=False)
     url: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
     uploaded_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
 class TDocCrDetailOrm(Base):
@@ -214,9 +200,6 @@ class TDocCrDetailOrm(Base):
     )
     extracted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
     )
 
 

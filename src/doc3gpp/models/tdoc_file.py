@@ -21,7 +21,7 @@ on :class:`doc3gpp.models.tdoc.TDoc` as the ``url`` field.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 
 
 # Allowed values for :attr:`TDocFile.type`. Centralised as module constants so
@@ -62,8 +62,6 @@ class TDocFile:
             omits a date or the parser cannot decode it. Mirrors the
             ``uploaded_date`` field on :class:`doc3gpp.models.tdoc.TDoc`
             so cross-table joins do not require type coercion.
-        updated_at: Timestamp of the most recent upsert. ``None`` until the
-            row is persisted.
     """
 
     tdoc_id: str
@@ -72,4 +70,3 @@ class TDocFile:
     url: str
     id: int | None = None
     uploaded_date: date | None = None
-    updated_at: datetime | None = None

@@ -62,8 +62,6 @@ def test_sync_persists_rows_via_service(sqlite_env, monkeypatch) -> None:
     rows = service.list_recent(tsg="R5")
     assert rows
     assert {row.tsg_short for row in rows} == {"R5"}
-    # Every row should carry a non-null updated_at from the upsert.
-    assert all(row.updated_at is not None for row in rows)
 
 
 def test_upsert_is_idempotent(sqlite_env, monkeypatch) -> None:

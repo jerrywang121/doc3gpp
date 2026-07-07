@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from sqlalchemy import select
 
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
@@ -30,9 +28,7 @@ class SQLAlchemyTDocRepository:
         """Insert or update TDoc records in a single transaction.
 
         Existing rows (matched by ``tdoc_id``) are updated in place; new rows
-        are inserted. ``updated_at`` is stamped on every write so callers can
-        tell when a row was last refreshed (created rows start with NULL).
-        Returns the number of input rows processed.
+        are inserted. Returns the number of input rows processed.
 
         A single ``SELECT ... IN (...)`` resolves all existing rows up front
         so the per-row branch is a dict lookup rather than a fresh query,
@@ -43,7 +39,6 @@ class SQLAlchemyTDocRepository:
         if not tdocs:
             return 0
 
-        now = datetime.now(tz=timezone.utc)
         with self._session_factory() as session:
             ids = [tdoc.tdoc_id for tdoc in tdocs]
             existing_rows = session.scalars(
@@ -53,15 +48,10 @@ class SQLAlchemyTDocRepository:
 
             for tdoc in tdocs:
                 target = existing_by_id.get(tdoc.tdoc_id)
-                is_new = target is None
-                if is_new:
+                if target is None:
                     target = TDocORM(tdoc_id=tdoc.tdoc_id)
                     session.add(target)
                 self._copy_fields(target, tdoc)
-                # ``updated_at`` tracks the last write; left NULL on insert so
-                # a stale-but-never-refreshed row is distinguishable from one
-                # that was touched by a re-sync.
-                target.updated_at = now
 
             session.commit()
         return len(tdocs)
@@ -101,9 +91,12 @@ class SQLAlchemyTDocRepository:
         status_like: str | None = None,
         type_like: str | None = None,
     ) -> list[TDoc]:
-        """Return recent TDoc records ordered by creation timestamp.
+        """Return recent TDoc records ordered by descending ``tdoc_id``.
 
-        Pure persistence shape — no joined meeting metadata. Callers that
+        ``tdoc_id`` encodes the source-year and sequence (e.g.
+        ``R5s260001``), so a lexicographic descending order is a stable
+        approximation of "newest first" within a single TSG. Pure
+        persistence shape — no joined meeting metadata. Callers that
         need ``meeting_name`` should use :meth:`list_with_meeting`.
 
         Optional filters:
@@ -161,7 +154,7 @@ class SQLAlchemyTDocRepository:
             if type_like:
                 stmt = stmt.where(TDocORM.type.like(type_like))
 
-            stmt = stmt.order_by(TDocORM.created_at.desc()).limit(limit)
+            stmt = stmt.order_by(TDocORM.tdoc_id.desc()).limit(limit)
             rows = session.scalars(stmt).all()
 
         return [_orm_to_domain(row) for row in rows]
@@ -258,5 +251,4 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
         related_wis=row.related_wis,
         cr_num=row.cr_num,
         cr_pack=row.cr_pack,
-        updated_at=row.updated_at,
     )

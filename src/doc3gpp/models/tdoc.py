@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 
 
 @dataclass(slots=True)
@@ -22,7 +22,6 @@ class TDoc:
             parsed as a ``date`` (not a free-form string).
         uploaded_date: Optional upload date from the source XLSX, parsed as
             a ``date``.
-        updated_at: Timestamp of the most recent upsert for this row.
     """
 
     tdoc_id: str
@@ -45,7 +44,6 @@ class TDoc:
     cr_num: str | None = None
     # TSG CR Pack value from XLSX (nullable)
     cr_pack: str | None = None
-    updated_at: datetime | None = None
 
 
 @dataclass(slots=True)

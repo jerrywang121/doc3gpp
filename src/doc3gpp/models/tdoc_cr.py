@@ -89,10 +89,11 @@ class TDocCRDetails:
         extracted_tdoc_id: What the header parser actually found in
             the document (may differ from ``tdoc_id`` when the docx
             uses field codes that python-docx does not render).
-        url: Exact URL the TDoc zip was downloaded from during this
-            extract. ``None`` when the zip came from a prior cache
-            hit (the originating URL is not tracked there) or when
-            no provenance was captured.
+        ftp_url: Exact URL the TDoc zip was downloaded from during
+            this extract, stored as a path relative to
+            ``https://www.3gpp.org/ftp/``. ``None`` when the zip came
+            from a prior cache hit (the originating URL is not tracked
+            there) or when no provenance was captured.
         parser_version: Version of the parser that produced this
             object, persisted alongside the row for debugging.
     """
@@ -127,9 +128,10 @@ class TDocCRDetails:
     year: int | None = None
     tech: str | None = None
     extracted_tdoc_id: str | None = None
-    # Download provenance (None on cache hits; otherwise the URL that
-    # supplied the cached zip bytes during this extract).
-    url: str | None = None
+    # Download provenance (None on cache hits; otherwise the relative URL
+    # path, relative to https://www.3gpp.org/ftp/, that supplied the cached
+    # zip bytes during this extract).
+    ftp_url: str | None = None
     parser_version: str = _PARSER_VERSION
 
     def __post_init__(self) -> None:
@@ -183,7 +185,7 @@ class TDocCRDetails:
             "year": self.year,
             "tech": self.tech,
             "extracted_tdoc_id": self.extracted_tdoc_id,
-            "url": self.url,
+            "ftp_url": self.ftp_url,
             "parser_version": self.parser_version,
             "corrections_json": json.dumps(
                 self.corrections, ensure_ascii=False
@@ -208,8 +210,10 @@ class TDocExtractMeta:
     foreign key into ``tdocs``.
 
     Attributes:
-        url: Immutable download URL this cache row is keyed on; matches
-            the corresponding :class:`TDocCRDetails` row's ``url``.
+        ftp_url: Immutable download URL this cache row is keyed on,
+            stored as a path relative to ``https://www.3gpp.org/ftp/``;
+            matches the corresponding :class:`TDocCRDetails` row's
+            ``ftp_url``.
         tdoc_id: Canonical TDoc identifier (logical reference, FK into
             ``tdocs.tdoc_id``).
         zip_path: Absolute path to the cached 3GPP zip download.
@@ -225,7 +229,7 @@ class TDocExtractMeta:
             ORM column's default and :class:`TDocCRDetails`.
     """
 
-    url: str
+    ftp_url: str
     tdoc_id: str
     zip_path: str
     markdown_path: str
@@ -235,11 +239,11 @@ class TDocExtractMeta:
 
     def __post_init__(self) -> None:
         # Mirror TDocCRDetails' invariant; the URL is the row identity.
-        stripped = self.url.strip()
+        stripped = self.ftp_url.strip()
         if not stripped:
-            raise ValueError("TDocExtractMeta requires a non-empty url")
-        if stripped != self.url:
-            object.__setattr__(self, "url", stripped)
+            raise ValueError("TDocExtractMeta requires a non-empty ftp_url")
+        if stripped != self.ftp_url:
+            object.__setattr__(self, "ftp_url", stripped)
         stripped_id = self.tdoc_id.strip()
         if not stripped_id:
             raise ValueError("TDocExtractMeta requires a non-empty tdoc_id")

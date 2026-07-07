@@ -109,9 +109,9 @@ def _make_result(
     title: str | None = "Example CR",
 ) -> ExtractResult:
     """Build a fully-wired :class:`ExtractResult` for the fake service."""
-    url = f"https://www.3gpp.org/ftp/stored/{tdoc_id}.zip"
+    url = f"stored/{tdoc_id}.zip"
     meta = TDocExtractMeta(
-        url=url,
+        ftp_url=url,
         tdoc_id=tdoc_id,
         zip_path=f"/tmp/cache/zips/{tdoc_id}",
         markdown_path=f"/tmp/cache/markdown/{tdoc_id}.md",
@@ -263,7 +263,7 @@ def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR"))
-    resolved_url = url or f"https://www.3gpp.org/ftp/stored/{tdoc_id}.zip"
+    resolved_url = url or f"stored/{tdoc_id}.zip"
     details = TDocCRDetails(
         tdoc_id=tdoc_id,
         spec="38.523-3",
@@ -288,11 +288,11 @@ def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
         ss="SS_NR5G",
         year=2026,
         tech="5G",
-        url=resolved_url,
+        ftp_url=resolved_url,
         parser_version="1.0.0",
     )
     meta = TDocExtractMeta(
-        url=resolved_url,
+        ftp_url=resolved_url,
         tdoc_id=tdoc_id,
         zip_path="/tmp/cache/zips/R5s260009",
         markdown_path="/tmp/cache/markdown/R5s260009.md",
@@ -360,7 +360,7 @@ def test_tdoc_show_renders_multiple_revisions(sqlite_env) -> None:
     _seed_full_crdetail_row("R5s260009")
     _seed_full_crdetail_row(
         "R5s260009",
-        url="https://www.3gpp.org/ftp/stored/R5s260009_rev2.zip",
+        url="stored/R5s260009_rev2.zip",
     )
 
     runner = CliRunner()

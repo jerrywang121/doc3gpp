@@ -4,7 +4,7 @@ Glues the per-stage building blocks together:
 
 1. Validate the requested ``tdoc_id``.
 2. Confirm the TDoc exists in the ``tdocs`` table and is of type
-   ``"CR"`` (the ``tdocs.url`` row is the source of truth — the TDoc
+   ``"CR"`` (the ``tdocs.ftp_url`` row is the source of truth — the TDoc
    list XLSX classifies each id by document type).
 3. Download (or cache-hit) the TDoc zip from the 3GPP FTP via
    :mod:`doc3gpp.scraping.tdoc_zip_source`.
@@ -55,6 +55,7 @@ from doc3gpp.parsers.cr_parser import (
     extract_docx_from_zip,
     parse_cr_details,
 )
+from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.repository.protocols import (
     TDocCrDetailRepository,
     TDocRepository,
@@ -197,26 +198,40 @@ class TDocCrService:
            before any network I/O. A hit short-circuits with
            ``from_cache=True`` (and ``force=True`` skips this).
         4. Download the zip (cache or network) — preferring the
-           per-TDoc URL stored in ``tdocs.url`` and falling back to
-           the template-based URL on failure.
+           per-TDoc URL stored in ``tdocs.ftp_url`` (rebuilt to a full
+           URL via :func:`build_ftp_url`) and falling back to the
+           template-based URL on failure.
         5. Once the actual serving URL is known, probe the DB cache
            again by that URL — covers the case where ``primary_url``
            was unset at step 3 but the template URL was usable.
         6. Otherwise: extract the docx → compute sha256 of the
            docx bytes → look up the markdown cache (skip on
            ``force``) → render markdown if needed → parse → persist
-           under the resolved URL → return ``from_cache=False``.
+           under the resolved URL (normalised back to the relative
+           ``ftp_url`` form via :func:`normalize_ftp_path`) → return
+           ``from_cache=False``.
         """
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
 
+        # Stored ``ftp_url`` is relative to the 3GPP FTP root; rebuild
+        # the absolute URL the network layer expects.
+        primary_url = (
+            build_ftp_url(tdoc.ftp_url) if tdoc.ftp_url else None
+        )
+
         # Pre-download cache probe: known candidate URLs can be
-        # resolved from ``tdocs.url`` + the template without touching
-        # the network, so the DB cache short-circuits the zip fetch.
+        # resolved from ``tdocs.ftp_url`` (rebuilt to an absolute
+        # URL above) + the template without touching the network, so
+        # the DB cache short-circuits the zip fetch.
         if not force:
-            for candidate in resolve_download_url(normalised, tdoc.url):
-                cached_details = self._repo.get_by_url(candidate)
-                cached_meta = self._repo.get_extract_meta_by_url(candidate)
+            for candidate in resolve_download_url(normalised, primary_url):
+                cached_details = self._repo.get_by_url(
+                    normalize_ftp_path(candidate)
+                )
+                cached_meta = self._repo.get_extract_meta_by_url(
+                    normalize_ftp_path(candidate)
+                )
                 if cached_details is not None and cached_meta is not None:
                     logger.debug(
                         "DB cache hit for TDoc %s at URL %s", normalised, candidate
@@ -231,16 +246,20 @@ class TDocCrService:
             normalised,
             self._scraper,
             self._cache,
-            primary_url=tdoc.url,
+            primary_url=primary_url,
         )
 
-        # Post-download probe: ``tdoc.url`` was None so step 3 had no
-        # candidates, but the download resolved a URL via the
+        # Post-download probe: ``tdoc.ftp_url`` was None so step 3 had
+        # no candidates, but the download resolved a URL via the
         # template. The cache contract is per-URL, so we check again.
         resolved_url = downloaded.url
         if not force and resolved_url:
-            cached_details = self._repo.get_by_url(resolved_url)
-            cached_meta = self._repo.get_extract_meta_by_url(resolved_url)
+            cached_details = self._repo.get_by_url(
+                normalize_ftp_path(resolved_url)
+            )
+            cached_meta = self._repo.get_extract_meta_by_url(
+                normalize_ftp_path(resolved_url)
+            )
             if cached_details is not None and cached_meta is not None:
                 logger.debug(
                     "DB cache hit for TDoc %s at URL %s", normalised, resolved_url
@@ -261,12 +280,19 @@ class TDocCrService:
             force=force,
         )
 
+        # Persist under the relative ``ftp_url`` form so the database
+        # stores the same shape as ``meetings.ftp_url``. The download
+        # layer hands us an absolute URL; normalise before storage.
+        stored_ftp_url = (
+            normalize_ftp_path(resolved_url) if resolved_url else None
+        )
+
         details = replace(
             parse_cr_details(markdown, tdoc_id=normalised),
-            url=resolved_url,
+            ftp_url=stored_ftp_url,
         )
         meta = TDocExtractMeta(
-            url=resolved_url or "",
+            ftp_url=stored_ftp_url or "",
             tdoc_id=normalised,
             zip_path=str(downloaded.path),
             markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
@@ -274,9 +300,9 @@ class TDocCrService:
         )
         self._repo.upsert(details, meta)
         logger.info(
-            "Persisted CR details for TDoc %s at URL %s (spec=%s cr_num=%s)",
+            "Persisted CR details for TDoc %s at ftp_url %s (spec=%s cr_num=%s)",
             normalised,
-            resolved_url,
+            stored_ftp_url,
             details.spec,
             details.cr_num,
         )

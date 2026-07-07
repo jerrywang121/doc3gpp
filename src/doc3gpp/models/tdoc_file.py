@@ -15,7 +15,7 @@ FTP directory. Three kinds of attachments are recognised:
   ``Review/``.
 
 The base TDoc itself (``{tdoc_id}.zip``) is **not** modelled here — it lives
-on :class:`doc3gpp.models.tdoc.TDoc` as the ``url`` field.
+on :class:`doc3gpp.models.tdoc.TDoc` as the ``ftp_url`` field.
 """
 
 from __future__ import annotations
@@ -53,9 +53,10 @@ class TDocFile:
             ``R5s260001_MCC160Comments.zip``. Stored without any directory
             prefix so the same file can be discovered across different
             meeting layouts.
-        url: Fully-qualified download URL on ``https://www.3gpp.org/ftp/``.
-            Unique across the table; the repository uses it as the
-            idempotency key for upserts.
+        ftp_url: Relative download URL on ``https://www.3gpp.org/ftp/``,
+            stored as a path relative to the FTP root. Unique across the
+            table; the repository uses it as the idempotency key for
+            upserts.
         uploaded_date: Date the attachment was uploaded to the 3GPP FTP,
             parsed from the directory listing's ``Last Modified`` column
             (``YYYY/MM/DD HH:MM``). ``None`` when the upstream listing
@@ -67,6 +68,6 @@ class TDocFile:
     tdoc_id: str
     type: str
     file: str
-    url: str
+    ftp_url: str
     id: int | None = None
     uploaded_date: date | None = None

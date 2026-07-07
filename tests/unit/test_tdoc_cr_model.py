@@ -154,19 +154,19 @@ def test_dataclass_is_frozen() -> None:
 
 
 def test_extract_meta_post_init_rejects_blank_url() -> None:
-    """A blank ``url`` raises ``ValueError``; URL is the row identity."""
-    with pytest.raises(ValueError, match="non-empty url"):
+    """A blank ``ftp_url`` raises ``ValueError``; URL is the row identity."""
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
         TDocExtractMeta(
-            url="",
+            ftp_url="",
             tdoc_id="R5s260009",
             zip_path="/tmp/z",
             markdown_path="/tmp/m",
             doc_filename="R5s260009.docx",
         )
 
-    with pytest.raises(ValueError, match="non-empty url"):
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
         TDocExtractMeta(
-            url="   ",
+            ftp_url="   ",
             tdoc_id="R5s260009",
             zip_path="/tmp/z",
             markdown_path="/tmp/m",
@@ -178,7 +178,7 @@ def test_extract_meta_post_init_rejects_blank_tdoc_id() -> None:
     """A blank ``tdoc_id`` raises ``ValueError`` (FK target must exist)."""
     with pytest.raises(ValueError, match="non-empty tdoc_id"):
         TDocExtractMeta(
-            url="https://example.com/r5s260009.zip",
+            ftp_url="example.com/r5s260009.zip",
             tdoc_id="",
             zip_path="/tmp/z",
             markdown_path="/tmp/m",
@@ -189,13 +189,13 @@ def test_extract_meta_post_init_rejects_blank_tdoc_id() -> None:
 def test_extract_meta_post_init_strips_whitespace() -> None:
     """Leading/trailing whitespace on required fields is stripped."""
     meta = TDocExtractMeta(
-        url="  https://example.com/r5s260009.zip\n",
+        ftp_url="  example.com/r5s260009.zip\n",
         tdoc_id=" R5s260009 ",
         zip_path="/tmp/z",
         markdown_path="/tmp/m",
         doc_filename="R5s260009.docx",
     )
-    assert meta.url == "https://example.com/r5s260009.zip"
+    assert meta.ftp_url == "example.com/r5s260009.zip"
     assert meta.tdoc_id == "R5s260009"
 
 
@@ -267,11 +267,11 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
         ]
     )
 
-    url = "https://www.3gpp.org/ftp/stored/R5s260176.zip"
+    url = "stored/R5s260176.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260176")
         row = TDocCrDetailOrm(
-            url=url,
+            ftp_url=url,
             tdoc_id="R5s260176",
             spec="36.523-3",
             cr_num="4971",
@@ -306,7 +306,7 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
     with Session() as session:
         loaded = session.get(TDocCrDetailOrm, url)
         assert loaded is not None
-        assert loaded.url == url
+        assert loaded.ftp_url == url
         assert loaded.tdoc_id == "R5s260176"
         assert loaded.spec == "36.523-3"
         assert loaded.cr_num == "4971"
@@ -347,11 +347,11 @@ def test_tdoc_extract_orm_round_trip() -> None:
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
 
-    url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    url = "stored/R5s260009.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260009")
         row = TDocExtractOrm(
-            url=url,
+            ftp_url=url,
             tdoc_id="R5s260009",
             zip_path="/cache/zips/R5s260009.zip",
             markdown_path="/cache/markdown/R5s260009.md",
@@ -381,11 +381,11 @@ def test_tdoc_cr_detail_orm_minimal() -> None:
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
 
-    url = "https://www.3gpp.org/ftp/stored/R5-227476.zip"
+    url = "stored/R5-227476.zip"
     with Session() as session:
         _seed_tdoc(session, "R5-227476")
         row = TDocCrDetailOrm(
-            url=url,
+            ftp_url=url,
             tdoc_id="R5-227476",
             parser_version="1.0.0",
         )
@@ -395,7 +395,7 @@ def test_tdoc_cr_detail_orm_minimal() -> None:
     with Session() as session:
         loaded = session.get(TDocCrDetailOrm, url)
         assert loaded is not None
-        assert loaded.url == url
+        assert loaded.ftp_url == url
         assert loaded.tdoc_id == "R5-227476"
         assert loaded.parser_version == "1.0.0"
         assert loaded.spec is None
@@ -417,19 +417,19 @@ def test_multiple_revisions_for_same_tdoc_id() -> None:
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
 
-    url_a = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
-    url_b = "https://www.3gpp.org/ftp/stored/R5s260009_rev2.zip"
+    url_a = "stored/R5s260009.zip"
+    url_b = "stored/R5s260009_rev2.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260009")
         session.add(
             TDocCrDetailOrm(
-                url=url_a, tdoc_id="R5s260009", spec="38.523-3",
+                ftp_url=url_a, tdoc_id="R5s260009", spec="38.523-3",
                 cr_num="3790", rev="0",
             )
         )
         session.add(
             TDocCrDetailOrm(
-                url=url_b, tdoc_id="R5s260009", spec="38.523-3",
+                ftp_url=url_b, tdoc_id="R5s260009", spec="38.523-3",
                 cr_num="3790", rev="2",
             )
         )
@@ -445,7 +445,7 @@ def test_multiple_revisions_for_same_tdoc_id() -> None:
             .all()
         )
         assert len(rows) == 2
-        urls = {row.url for row in rows}
+        urls = {row.ftp_url for row in rows}
         assert urls == {url_a, url_b}
         revs = {row.rev for row in rows}
         assert revs == {"0", "2"}
@@ -465,13 +465,13 @@ def test_cascade_delete_via_fk() -> None:
     engine = _make_engine(foreign_keys=True)
     Session = sessionmaker(bind=engine)
 
-    url_a = "https://www.3gpp.org/ftp/stored/R5s260051.zip"
-    url_b = "https://www.3gpp.org/ftp/stored/R5s260051_rev2.zip"
+    url_a = "stored/R5s260051.zip"
+    url_b = "stored/R5s260051_rev2.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260051")
         session.add(
             TDocCrDetailOrm(
-                url=url_a,
+                ftp_url=url_a,
                 tdoc_id="R5s260051",
                 spec="38.523-3",
                 cr_num="3806",
@@ -479,7 +479,7 @@ def test_cascade_delete_via_fk() -> None:
         )
         session.add(
             TDocCrDetailOrm(
-                url=url_b,
+                ftp_url=url_b,
                 tdoc_id="R5s260051",
                 spec="38.523-3",
                 cr_num="3806",
@@ -487,7 +487,7 @@ def test_cascade_delete_via_fk() -> None:
         )
         session.add(
             TDocExtractOrm(
-                url=url_a,
+                ftp_url=url_a,
                 tdoc_id="R5s260051",
                 zip_path="/z",
                 markdown_path="/m",
@@ -496,7 +496,7 @@ def test_cascade_delete_via_fk() -> None:
         )
         session.add(
             TDocExtractOrm(
-                url=url_b,
+                ftp_url=url_b,
                 tdoc_id="R5s260051",
                 zip_path="/z2",
                 markdown_path="/m2",

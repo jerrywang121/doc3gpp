@@ -143,9 +143,10 @@ def get_tdoc_zip_url(tdoc: str) -> str | None:
 
     Strategy: derive the canonical TDoc id from the input, then build the
     URL from the locked-in template. Callers that have a stored
-    ``tdocs.url`` (from a prior ``tdoc sync`` run) should pass it to
-    :func:`download_tdoc_zip` as ``primary_url`` so the per-TDoc URL takes
-    precedence over the template-based guess.
+    ``tdocs.ftp_url`` (from a prior ``tdoc sync`` run) should pass it to
+    :func:`download_tdoc_zip` as ``primary_url`` (after rebuilding the
+    absolute URL via :func:`doc3gpp.parsers.normalizers.build_ftp_url`)
+    so the per-TDoc URL takes precedence over the template-based guess.
     """
     if not tdoc:
         return None
@@ -205,7 +206,8 @@ def download_tdoc_zip(
     miss the function tries each candidate URL in order and caches the
     first successful download:
 
-    1. ``primary_url`` (typically ``tdocs.url`` from a prior ``tdoc sync``).
+    1. ``primary_url`` (typically rebuilt from ``tdocs.ftp_url`` via
+   :func:`doc3gpp.parsers.normalizers.build_ftp_url`).
     2. The template-based URL from :func:`get_tdoc_zip_url`.
 
     The two are deduplicated, so a ``primary_url`` that matches the

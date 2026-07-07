@@ -17,7 +17,7 @@ def test_export_tdocs_csv_writes_rows(tmp_path) -> None:
     out = Path(tmp_path) / "tdocs.csv"
     records = [
         TDocWithMeeting(
-            tdoc=TDoc(tdoc_id="R1-000001", title="Title 1", url="https://example.test/1"),
+            tdoc=TDoc(tdoc_id="R1-000001", title="Title 1", ftp_url="example.test/1"),
             meeting_name="RAN1#100",
         ),
         TDocWithMeeting(tdoc=TDoc(tdoc_id="R1-000002", title="Title 2")),
@@ -26,6 +26,6 @@ def test_export_tdocs_csv_writes_rows(tmp_path) -> None:
     export_tdocs_csv(out, records)
     text = out.read_text(encoding="utf-8")
 
-    assert "tdoc_id,title,meeting,url" in text
-    assert "R1-000001,Title 1,RAN1#100,https://example.test/1" in text
+    assert "tdoc_id,title,meeting,ftp_url" in text
+    assert "R1-000001,Title 1,RAN1#100,example.test/1" in text
     assert "R1-000002,Title 2,," in text

@@ -62,28 +62,28 @@ def test_upsert_and_list_roundtrip(sqlite_env) -> None:
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
                 file="R5s260001r1.zip",
-                url="https://www.3gpp.org/ftp/x/R5s260001r1.zip",
+                ftp_url="x/R5s260001r1.zip",
             ),
             TDocFile(
                 tdoc_id="R5s260001", type="review",
                 file="R5s260001_MCC160Comments.zip",
-                url="https://www.3gpp.org/ftp/x/R5s260001_MCC160Comments.zip",
+                ftp_url="x/R5s260001_MCC160Comments.zip",
             ),
             TDocFile(
                 tdoc_id="R5s260002", type="support",
                 file="R5s260002_draft.zip",
-                url="https://www.3gpp.org/ftp/x/R5s260002_draft.zip",
+                ftp_url="x/R5s260002_draft.zip",
             ),
         ]
     )
 
     rows = repo.list(limit=10)
-    by_id = {row.url: row for row in rows}
+    by_id = {row.ftp_url: row for row in rows}
     assert len(rows) == 3
-    assert by_id["https://www.3gpp.org/ftp/x/R5s260001r1.zip"].type == "revision"
-    assert by_id["https://www.3gpp.org/ftp/x/R5s260001r1.zip"].tdoc_id == "R5s260001"
-    assert by_id["https://www.3gpp.org/ftp/x/R5s260001_MCC160Comments.zip"].type == "review"
-    assert by_id["https://www.3gpp.org/ftp/x/R5s260002_draft.zip"].type == "support"
+    assert by_id["x/R5s260001r1.zip"].type == "revision"
+    assert by_id["x/R5s260001r1.zip"].tdoc_id == "R5s260001"
+    assert by_id["x/R5s260001_MCC160Comments.zip"].type == "review"
+    assert by_id["x/R5s260002_draft.zip"].type == "support"
 
 
 def test_upsert_is_idempotent_on_url(sqlite_env) -> None:
@@ -94,7 +94,7 @@ def test_upsert_is_idempotent_on_url(sqlite_env) -> None:
     payload = TDocFile(
         tdoc_id="R5s260001", type="revision",
         file="R5s260001r1.zip",
-        url="https://x/r1.zip",
+        ftp_url="x/r1.zip",
     )
     repo.upsert_many([payload])
     repo.upsert_many([payload])
@@ -112,14 +112,14 @@ def test_upsert_and_list_roundtrip_preserves_uploaded_date(sqlite_env) -> None:
                 tdoc_id="R5s260001",
                 type="revision",
                 file="R5s260001r1.zip",
-                url="https://x/r1.zip",
+                ftp_url="x/r1.zip",
                 uploaded_date=date(2026, 1, 7),
             ),
             TDocFile(
                 tdoc_id="R5s260001",
                 type="review",
                 file="R5s260001_MCC160Comments.zip",
-                url="https://x/r1_review.zip",
+                ftp_url="x/r1_review.zip",
                 # uploaded_date left None — legacy listings may not
                 # expose the date column.
             ),
@@ -127,9 +127,9 @@ def test_upsert_and_list_roundtrip_preserves_uploaded_date(sqlite_env) -> None:
     )
 
     rows = repo.list(limit=10)
-    by_url = {row.url: row for row in rows}
-    assert by_url["https://x/r1.zip"].uploaded_date == date(2026, 1, 7)
-    assert by_url["https://x/r1_review.zip"].uploaded_date is None
+    by_url = {row.ftp_url: row for row in rows}
+    assert by_url["x/r1.zip"].uploaded_date == date(2026, 1, 7)
+    assert by_url["x/r1_review.zip"].uploaded_date is None
 
 
 def test_upsert_refreshes_uploaded_date_on_re_sync(sqlite_env) -> None:
@@ -141,7 +141,7 @@ def test_upsert_refreshes_uploaded_date_on_re_sync(sqlite_env) -> None:
         [
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
-                file="R5s260001r1.zip", url="https://x/r1.zip",
+                file="R5s260001r1.zip", ftp_url="x/r1.zip",
                 uploaded_date=date(2025, 3, 4),
             )
         ]
@@ -154,7 +154,7 @@ def test_upsert_refreshes_uploaded_date_on_re_sync(sqlite_env) -> None:
         [
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
-                file="R5s260001r1.zip", url="https://x/r1.zip",
+                file="R5s260001r1.zip", ftp_url="x/r1.zip",
                 uploaded_date=date(2026, 1, 7),
             )
         ]
@@ -172,7 +172,7 @@ def test_upsert_refreshes_type_on_url_reuse(sqlite_env) -> None:
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
                 file="R5s260001r1.zip",
-                url="https://x/r1.zip",
+                ftp_url="x/r1.zip",
             )
         ]
     )
@@ -181,7 +181,7 @@ def test_upsert_refreshes_type_on_url_reuse(sqlite_env) -> None:
             TDocFile(
                 tdoc_id="R5s260001", type="review",
                 file="R5s260001r1.zip",  # same filename, different type
-                url="https://x/r1.zip",
+                ftp_url="x/r1.zip",
             )
         ]
     )
@@ -199,7 +199,7 @@ def test_unique_url_constraint_is_enforced(sqlite_env) -> None:
         [
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
-                file="R5s260001r1.zip", url="https://x/r1.zip",
+                file="R5s260001r1.zip", ftp_url="x/r1.zip",
             )
         ]
     )
@@ -215,7 +215,7 @@ def test_unique_url_constraint_is_enforced(sqlite_env) -> None:
                 tdoc_id="R5s260001",
                 type="review",
                 file="R5s260001_MCC160Comments.zip",
-                url="https://x/r1.zip",
+                ftp_url="x/r1.zip",
             )
         )
         with pytest.raises(IntegrityError):
@@ -231,18 +231,18 @@ def test_list_filter_by_tdoc_id_and_type(sqlite_env) -> None:
     repo.upsert_many(
         [
             TDocFile(tdoc_id="R5s260001", type="revision",
-                     file="R5s260001r1.zip", url="https://x/r1.zip"),
+                     file="R5s260001r1.zip", ftp_url="x/r1.zip"),
             TDocFile(tdoc_id="R5s260001", type="review",
                      file="R5s260001_MCC160Comments.zip",
-                     url="https://x/r1_review.zip"),
+                     ftp_url="x/r1_review.zip"),
             TDocFile(tdoc_id="R5s260002", type="revision",
-                     file="R5s260002r1.zip", url="https://x/r2.zip"),
+                     file="R5s260002r1.zip", ftp_url="x/r2.zip"),
         ]
     )
 
-    assert {r.url for r in repo.list(tdoc_id="R5s260001")} == {
-        "https://x/r1.zip",
-        "https://x/r1_review.zip",
+    assert {r.ftp_url for r in repo.list(tdoc_id="R5s260001")} == {
+        "x/r1.zip",
+        "x/r1_review.zip",
     }
     revisions = repo.list(file_type="revision")
     assert len(revisions) == 2
@@ -264,9 +264,9 @@ def test_delete_for_tdoc_ids(sqlite_env) -> None:
     repo.upsert_many(
         [
             TDocFile(tdoc_id="R5s260001", type="revision",
-                     file="R5s260001r1.zip", url="https://x/r1.zip"),
+                     file="R5s260001r1.zip", ftp_url="x/r1.zip"),
             TDocFile(tdoc_id="R5s260002", type="revision",
-                     file="R5s260002r1.zip", url="https://x/r2.zip"),
+                     file="R5s260002r1.zip", ftp_url="x/r2.zip"),
         ]
     )
 
@@ -287,7 +287,7 @@ def test_foreign_key_blocks_unknown_tdoc_id(sqlite_env) -> None:
                 TDocFile(
                     tdoc_id="R5s999999",  # not in tdocs table
                     type="revision", file="R5s999999r1.zip",
-                    url="https://x/orphan.zip",
+                    ftp_url="x/orphan.zip",
                 )
             ]
         )
@@ -313,12 +313,12 @@ def test_service_sync_writes_files_to_repository(sqlite_env, monkeypatch) -> Non
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
                 file="R5s260001r1.zip",
-                url=f"{ftp_url}R5s260001r1.zip",
+                ftp_url=f"{ftp_url}R5s260001r1.zip",
             ),
             TDocFile(
                 tdoc_id="R5s260002", type="review",
                 file="R5s260002_MCC160Comments.zip",
-                url=f"{ftp_url}R5s260002_MCC160Comments.zip",
+                ftp_url=f"{ftp_url}R5s260002_MCC160Comments.zip",
             ),
         ]
 

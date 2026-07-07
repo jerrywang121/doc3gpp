@@ -61,7 +61,7 @@ class SQLAlchemyTDocRepository:
         """Copy dataclass fields onto an ORM instance (existing or new)."""
         target.title = tdoc.title
         target.meeting_id = tdoc.meeting_id
-        target.url = tdoc.url
+        target.ftp_url = tdoc.ftp_url
         target.source = tdoc.source
         target.type = tdoc.type
         target.status = tdoc.status
@@ -236,7 +236,7 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
         tdoc_id=row.tdoc_id,
         title=row.title,
         meeting_id=row.meeting_id,
-        url=row.url,
+        ftp_url=row.ftp_url,
         source=row.source,
         type=row.type,
         status=row.status,

@@ -110,8 +110,9 @@ TDocs are represented by the `TDoc` model with these extracted fields:
   - Optional meeting identifier associated with the document.
   - Example: `RAN3#100`.
 
-- `url` (str | None)
-  - Optional URL for the document.
+- `ftp_url` (str | None)
+  - Optional relative URL for the document, stored as a path relative
+    to the canonical 3GPP FTP root (`https://www.3gpp.org/ftp/`).
 
 ### TDocFile records (auxiliary attachments)
 
@@ -130,8 +131,10 @@ The `TDocFile` model captures auxiliary files attached to a TDoc: revisions, rev
 - `file` (str)
   - Bare filename of the attachment, e.g. `R5s260001_MCC160Comments.zip`.
 
-- `url` (str)
-  - Fully-qualified download URL on `https://www.3gpp.org/ftp/`. Unique across the table; serves as the upsert key.
+- `ftp_url` (str)
+  - Relative download URL on `https://www.3gpp.org/ftp/`, stored as a
+    path relative to the FTP root. Unique across the table; serves as
+    the upsert key.
 
 - `updated_at` (datetime | None)
   - Stamped by the persistence layer on every insert/update.
@@ -429,7 +432,7 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 - `tdoc_id`
 - `title`
 - `meeting`
-- `url`
+- `ftp_url`
 
 ### TDocFiles
 
@@ -437,7 +440,7 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 - `tdoc_id`
 - `type`
 - `file`
-- `url`
+- `ftp_url`
 - `updated_at`
 
 ### WIs

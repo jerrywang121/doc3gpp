@@ -35,6 +35,7 @@ from doc3gpp.models.tdoc_file import (
     TDocFileTypeReview,
     TDocFileTypeSupport,
 )
+from doc3gpp.parsers.normalizers import normalize_ftp_path
 
 logger = logging.getLogger(__name__)
 
@@ -145,12 +146,13 @@ def parse_tdoc_files_from_listing(
         if classification is None:
             continue
         tdoc_id, file_type = classification
+        absolute_url = urljoin(base_url, href)
         results.append(
             TDocFile(
                 tdoc_id=tdoc_id,
                 type=file_type,
                 file=filename,
-                url=urljoin(base_url, href),
+                ftp_url=normalize_ftp_path(absolute_url),
                 uploaded_date=_extract_uploaded_date(anchor),
             )
         )

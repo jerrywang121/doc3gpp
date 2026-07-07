@@ -154,7 +154,7 @@ def _listing_html(*hrefs: str) -> str:
     return f"<html><body>{body}</body></html>"
 
 
-def test_parse_returns_matched_files_with_absolute_urls() -> None:
+def test_parse_returns_matched_files_with_relative_ftp_urls() -> None:
     base = "https://www.3gpp.org/ftp/tsg_ran/WG5/Test_2026/Docs/"
     html = _listing_html(
         f"{base}R5s260001r1.zip",
@@ -170,7 +170,7 @@ def test_parse_returns_matched_files_with_absolute_urls() -> None:
     assert by_name["R5s260001_MCC160Comments.zip"].type == TDocFileTypeReview
     assert by_name["R5s260001_draft.zip"].type == TDocFileTypeSupport
     assert all(f.tdoc_id == "R5s260001" for f in files)
-    assert all(f.url.startswith(base) for f in files)
+    assert all(f.ftp_url.startswith("tsg_ran/") for f in files)
 
 
 def test_parse_skips_files_for_unknown_tdoc_ids() -> None:
@@ -229,7 +229,7 @@ def test_parse_preserves_filename_text_over_href_basename() -> None:
 
     files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
     assert files[0].file == "R5s260001r1.zip"
-    assert files[0].url == f"{base}encoded%20name.zip"
+    assert files[0].ftp_url == "Docs/encoded%20name.zip"
     assert files[0].uploaded_date is None
 
 

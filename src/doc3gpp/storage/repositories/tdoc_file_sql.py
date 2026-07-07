@@ -15,10 +15,10 @@ from doc3gpp.storage.db.session import get_session_factory
 class SQLAlchemyTDocFileRepository:
     """SQLAlchemy implementation that stores auxiliary TDoc files.
 
-    Identity is the unique ``url`` column: a file lives at exactly one
-    upstream location on the 3GPP FTP, so re-syncing the same meeting
-    is idempotent — existing rows are refreshed in place with the
-    latest ``file`` label.
+    Identity is the unique ``ftp_url`` column: a file lives at exactly
+    one upstream location on the 3GPP FTP, so re-syncing the same
+    meeting is idempotent — existing rows are refreshed in place with
+    the latest ``file`` label.
     """
 
     def __init__(self, session_factory: sessionmaker | None = None) -> None:
@@ -36,7 +36,7 @@ class SQLAlchemyTDocFileRepository:
     def upsert_many(self, files: list[TDocFile]) -> int:
         """Insert or update multiple TDocFile records.
 
-        Each input is matched by its ``url``; matches update the
+        Each input is matched by its ``ftp_url``; matches update the
         ``tdoc_id``, ``type``, ``file`` and ``uploaded_date`` columns in
         place, while non-matches become new rows.
 
@@ -47,20 +47,20 @@ class SQLAlchemyTDocFileRepository:
             return 0
 
         with self._session_factory() as session:
-            urls = [item.url for item in files]
+            urls = [item.ftp_url for item in files]
             existing_rows = session.scalars(
-                select(TDocFileORM).where(TDocFileORM.url.in_(urls))
+                select(TDocFileORM).where(TDocFileORM.ftp_url.in_(urls))
             ).all()
-            existing_by_url = {row.url: row for row in existing_rows}
+            existing_by_url = {row.ftp_url: row for row in existing_rows}
 
             for item in files:
-                target = existing_by_url.get(item.url)
+                target = existing_by_url.get(item.ftp_url)
                 if target is None:
                     target = TDocFileORM(
                         tdoc_id=item.tdoc_id,
                         type=item.type,
                         file=item.file,
-                        url=item.url,
+                        ftp_url=item.ftp_url,
                         uploaded_date=item.uploaded_date,
                     )
                     session.add(target)
@@ -132,6 +132,6 @@ def _orm_to_domain(row: TDocFileORM) -> TDocFile:
         tdoc_id=row.tdoc_id,
         type=row.type,
         file=row.file,
-        url=row.url,
+        ftp_url=row.ftp_url,
         uploaded_date=row.uploaded_date,
     )

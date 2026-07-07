@@ -10,7 +10,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     sample_tdoc = TDoc(
         tdoc_id="R5s260001",
         title="Example A",
-        url="https://x/1",
+        ftp_url="x/1",
         cr_pack="RP-000123",
         source="Qualcomm",
         type="CR",

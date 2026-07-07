@@ -704,7 +704,7 @@ def tdoc_list(
     status, cr_cat, spec, version, related_wis.
 
     Available fields for selection:
-    tdoc_id, title, meeting_id, meeting_name, url, source, type, status,
+    tdoc_id, title, meeting_id, meeting_name, ftp_url, source, type, status,
     reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to,
     release, spec, version, related_wis, cr_num, cr_pack
 
@@ -955,11 +955,11 @@ def tdoc_show(
         typer.echo("No extracted details; run `doc3gpp tdoc extract --tdoc <id>` first.")
         return
 
-    meta_by_url = {meta.url: meta for meta in meta_list}
+    meta_by_url = {meta.ftp_url: meta for meta in meta_list}
     for details in details_list:
         typer.echo("[Extracted Details]")
-        if details.url:
-            typer.echo(f"url: {details.url}")
+        if details.ftp_url:
+            typer.echo(f"ftp_url: {details.ftp_url}")
         typer.echo(f"spec: {details.spec or '-'}")
         typer.echo(f"cr_num: {details.cr_num or '-'}")
         typer.echo(f"rev: {details.rev or '-'}")
@@ -987,7 +987,7 @@ def tdoc_show(
         typer.echo(f"tech: {details.tech or '-'}")
         typer.echo(f"parser_version: {details.parser_version}")
         typer.echo(f"corrections: {json.dumps(details.corrections, ensure_ascii=False, indent=2)}")
-        meta = meta_by_url.get(details.url or "")
+        meta = meta_by_url.get(details.ftp_url or "")
         if meta is not None:
             typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")
 

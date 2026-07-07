@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterable
 from urllib.parse import urljoin
 
@@ -10,11 +9,16 @@ from bs4 import BeautifulSoup
 
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.parsers.normalizers import (
+    FTP_BASE_URL,
+    normalize_ftp_path,
+)
 from doc3gpp.parsers.tdoc_file_parser import parse_tdoc_files_from_listing
 from doc3gpp.parsers.tdoc_parser import read_tdoc_sheet
 from doc3gpp.scraping.client import ScraperClient
 
 logger = logging.getLogger(__name__)
+
 
 #: Nested ``inbox/intermediate_crs/`` entry covers R5 meetings whose
 #: Intermediate CRs live under a dedicated subdirectory of ``Inbox/``.
@@ -27,15 +31,25 @@ TDOC_FILE_SUBDIRS: tuple[str, ...] = (
 )
 
 
-def _normalize_ftp_path(path: str) -> str:
-    """Normalize a meeting FTP path to a canonical relative path."""
-    normalized = path.strip().replace("\\", "/")
-    normalized = re.sub(r"^ftp:/+", "", normalized, flags=re.IGNORECASE)
-    normalized = re.sub(r"^https?://www\.3gpp\.org/ftp/", "", normalized, flags=re.IGNORECASE)
-    normalized = normalized.lstrip("/")
-    normalized = re.sub(r"/{2,}", "/", normalized)
-    return normalized
+def _normalize_optional_url(value: object) -> str | None:
+    """Normalize an optional URL harvested from the XLSX parser.
 
+    The XLSX hyperlink targets are absolute ``https://...`` URLs; the
+    database stores the relative path instead. ``None`` and empty
+    strings pass through untouched so callers can still distinguish
+    "no hyperlink on this row" from "some path we couldn't resolve".
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return normalize_ftp_path(text)
+
+
+# Backwards-compatible alias for the historical private name. New code
+# should call :func:`doc3gpp.parsers.normalizers.normalize_ftp_path`.
+_normalize_ftp_path = normalize_ftp_path
 
 def _find_tdoc_list_filename(hrefs: list[str]) -> str | None:
     """Select a TDoc list XLSX filename from directory listing links.
@@ -63,7 +77,7 @@ def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting_id: int | None = None) ->
 
     `meeting_id` is an optional integer referring to `meetings.meeting_id`.
     """
-    base_url = _normalize_ftp_path(ftp_url)
+    base_url = normalize_ftp_path(ftp_url)
     if not base_url.endswith("/"):
         base_url += "/"
 
@@ -82,7 +96,7 @@ def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting_id: int | None = None) ->
     failed_urls: list[tuple[str, str]] = []
     with ScraperClient() as client:
         for subfolder in ["", "docs/", "tdoc/"]:
-            directory_url = urljoin("https://www.3gpp.org/ftp/", base_root + subfolder)
+            directory_url = urljoin(FTP_BASE_URL, base_root + subfolder)
             logger.debug("Trying FTP directory URL: %s", directory_url)
             try:
                 html = client.get_text(directory_url)
@@ -115,7 +129,7 @@ def fetch_tdocs_from_meeting_ftp(ftp_url: str, meeting_id: int | None = None) ->
                     tdoc_id=row["tdoc"],
                     title=row.get("title"),
                     meeting_id=meeting_id,
-                    url=row.get("tdoc_url"),
+                    ftp_url=_normalize_optional_url(row.get("tdoc_url")),
                     source=row.get("source"),
                     type=row.get("type"),
                     status=row.get("status"),
@@ -179,7 +193,7 @@ def fetch_tdoc_files_from_meeting_ftp(
         logger.debug("No TDoc IDs supplied; skipping TDoc file scan for %s", ftp_url)
         return []
 
-    base_url = _normalize_ftp_path(ftp_url)
+    base_url = normalize_ftp_path(ftp_url)
     if not base_url.endswith("/"):
         base_url += "/"
     base_root = _strip_terminal_subdir(base_url)
@@ -189,7 +203,7 @@ def fetch_tdoc_files_from_meeting_ftp(
 
     with ScraperClient() as client:
         for subfolder in TDOC_FILE_SUBDIRS:
-            directory_url = urljoin("https://www.3gpp.org/ftp/", base_root + subfolder)
+            directory_url = urljoin(FTP_BASE_URL, base_root + subfolder)
             logger.debug("Scanning FTP directory for TDoc files: %s", directory_url)
             try:
                 html = client.get_text(directory_url)
@@ -202,9 +216,9 @@ def fetch_tdoc_files_from_meeting_ftp(
             for file in parse_tdoc_files_from_listing(
                 html, base_url=directory_url, tdoc_ids=tdoc_id_set
             ):
-                if file.url in seen_urls:
+                if file.ftp_url in seen_urls:
                     continue
-                seen_urls.add(file.url)
+                seen_urls.add(file.ftp_url)
                 results.append(file)
 
     logger.info(

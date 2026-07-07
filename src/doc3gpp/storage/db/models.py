@@ -26,7 +26,7 @@ class TDocORM(Base):
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     # store as FK to meetings.meeting_id
     meeting_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("meetings.meeting_id"), nullable=True, index=True)
-    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ftp_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(String(256), nullable=True)
     type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -105,9 +105,10 @@ class TDocFileORM(Base):
 
     One row per file observed in a meeting's FTP subfolders (``Inbox/``,
     ``Docs/``, ``Tdocs/``, or ``Review/``). Identity is the
-    fully-qualified download URL: the same file lives at exactly one
-    upstream location, so the ``url`` column is the natural upsert key
-    and is the only unique index in the table.
+    download URL path relative to ``https://www.3gpp.org/ftp/``: the
+    same file lives at exactly one upstream location, so the
+    ``ftp_url`` column is the natural upsert key and is the only
+    unique index in the table.
 
     ``tdoc_id`` is a foreign key into ``tdocs.tdoc_id``; the sync flow
     populates ``tdocs`` first and only persists ``TDocFile`` rows for
@@ -128,7 +129,7 @@ class TDocFileORM(Base):
     )
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     file: Mapped[str] = mapped_column(String(256), nullable=False)
-    url: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    ftp_url: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
     uploaded_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
@@ -138,7 +139,7 @@ class TDocCrDetailOrm(Base):
     One row per **immutable download URL** rather than per TDoc id —
     3GPP zip assets are byte-for-byte identical for the lifetime of the
     URL, while the logical ``tdoc_id`` may map to multiple URLs across
-    revisions. Keying on ``url`` lets every revision of the same
+    revisions. Keying on ``ftp_url`` lets every revision of the same
     ``tdoc_id`` coexist: a fresh extract at a new URL writes a new
     row instead of clobbering the parsed record for the previous one.
 
@@ -150,7 +151,7 @@ class TDocCrDetailOrm(Base):
     shape; :py:meth:`TDocCRDetails.to_persisted` produces the dict
     this table persists.
 
-    ``url`` is the primary key — the same URL serves the same bytes
+    ``ftp_url`` is the primary key — the same URL serves the same bytes
     forever, so re-extracting at the same URL is idempotent. ``tdoc_id``
     is a non-PK foreign key into ``tdocs.tdoc_id`` indexed for the
     ``get(tdoc_id)`` lookup; ``ondelete="CASCADE"`` keeps the detail
@@ -158,11 +159,16 @@ class TDocCrDetailOrm(Base):
     CR details are derived artefacts of the TDoc row and should be
     wiped when the TDoc itself is removed. ``parser_version`` and
     ``extracted_at`` are diagnostic columns for re-extract audits.
+
+    The URL is stored as a path relative to the canonical 3GPP FTP
+    root (``https://www.3gpp.org/ftp/``) to match the convention used
+    by ``meetings.ftp_url``; the service layer is responsible for
+    normalising at the boundary.
     """
 
     __tablename__ = "tdoc_cr_details"
 
-    url: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    ftp_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
@@ -214,15 +220,15 @@ class TDocExtractOrm(Base):
     and the python-docx render.
 
     Mirrors the URL-PK scheme of :class:`TDocCrDetailOrm`: identity
-    is the immutable download URL, and ``tdoc_id`` is a non-PK FK into
-    ``tdocs.tdoc_id`` with ``ondelete="CASCADE"`` — when the owning
-    TDoc row is removed, the extract metadata loses its meaning and
-    is dropped with it.
+    is the immutable download URL (stored relative to the 3GPP FTP
+    root), and ``tdoc_id`` is a non-PK FK into ``tdocs.tdoc_id`` with
+    ``ondelete="CASCADE"`` — when the owning TDoc row is removed, the
+    extract metadata loses its meaning and is dropped with it.
     """
 
     __tablename__ = "tdoc_extracts"
 
-    url: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    ftp_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),

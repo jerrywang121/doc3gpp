@@ -11,11 +11,11 @@ def export_tdocs_csv(path: Path, records: list[TDocWithMeeting]) -> None:
 
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["tdoc_id", "title", "meeting", "url"])
+        writer.writerow(["tdoc_id", "title", "meeting", "ftp_url"])
         for item in records:
             writer.writerow([
                 item.tdoc.tdoc_id,
                 item.tdoc.title,
                 item.meeting_name or "",
-                item.tdoc.url or "",
+                item.tdoc.ftp_url or "",
             ])

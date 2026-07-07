@@ -10,7 +10,7 @@ resets the settings/engine caches via ``conftest.sqlite_env``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from typer.testing import CliRunner
 
@@ -269,7 +269,7 @@ def _seed_full_crdetail_row(tdoc_id: str) -> None:
         source="Qualcomm",
         tsg="R5",
         related_wis="NR_ext",
-        date="2026-06-12",
+        date=date(2026, 6, 12),
         cr_cat="F",
         release="Rel-18",
         reason_for_change="Some long reason " * 20,

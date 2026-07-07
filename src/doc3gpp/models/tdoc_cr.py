@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date
 from datetime import datetime
 from typing import Any
 
@@ -58,7 +59,10 @@ class TDocCRDetails:
         tsg: Contents of ``Source to TSG:``. ``None`` when not
             rendered by python-docx (e.g. docx field codes).
         related_wis: Contents of ``Work item code:``.
-        date: Cover-page date string (``YYYY-MM-DD``).
+        date: Cover-page date (``YYYY-MM-DD``) parsed from the ``Date:``
+            cell on the docx cover page into a :class:`datetime.date`.
+            ``None`` when the cell is missing or the value is not a
+            valid ISO 8601 date.
         cr_cat: Single-letter category code (F / B / A / C / D).
         release: Release label (e.g. ``"Rel-18"``).
         reason_for_change: Reason-for-change cell text.
@@ -102,7 +106,7 @@ class TDocCRDetails:
     source: str | None = None
     tsg: str | None = None
     related_wis: str | None = None
-    date: str | None = None
+    date: date | None = None
     cr_cat: str | None = None
     release: str | None = None
     reason_for_change: str | None = None

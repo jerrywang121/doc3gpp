@@ -39,6 +39,7 @@ import logging
 import re
 import zipfile
 from dataclasses import fields
+from datetime import date as _date
 from typing import Sequence
 
 from doc3gpp.models.tdoc_cr import TDocCRDetails
@@ -92,7 +93,7 @@ _COVER_SPEC_RE = re.compile(
 _COVER_TITLE_RE = re.compile(r"\|\s*Title:\s*\|\s*(.*?)\s*\|")
 _COVER_SOURCE_RE = re.compile(r"\|\s*Source to WG:\s*\|\s*(.*?)\s*\|")
 _COVER_TSG_RE = re.compile(r"\|\s*Source to TSG:\s*\|\s*(.*?)\s*\|")
-_COVER_WI_RE = re.compile(r"\|\s*Work item code:\s*\|\s*(.*?)\s*\|")
+_COVER_WI_DATE_RE = re.compile(r"\|\s*Work item code:\s*\|\s*(.*?)\s*\|(?:\s+\|)*\s*Date:\s*\|\s*([\d\\-]+)\s*\|")
 # Category + Release on the same line.
 _COVER_CATREL_RE = re.compile(
     r"\|\s*Category:\s*\|\s*([^\s|]+)(?:\s*\|)+"
@@ -358,7 +359,7 @@ def _parse_cr_cover_page(
         (False, ["title"], [1], _COVER_TITLE_RE),
         (False, ["source"], [1], _COVER_SOURCE_RE),
         (False, ["tsg"], [1], _COVER_TSG_RE),
-        (True, ["related_wis"], [1], _COVER_WI_RE),
+        (True, ["related_wis","date"], [1, 2], _COVER_WI_DATE_RE),
         (
             False,
             ["cr_cat", "release"],
@@ -996,8 +997,22 @@ def parse_cr_details(
         )
         resolved_tsg = fallback_tsg
 
-    # --- date is not in the cover-page regex set; skip ---
-    date_value: str | None = None
+    # --- date: parse cover-page "Date:" cell into a date object ---
+    # Defensive ISO 8601 parse — some fixtures store locale-specific
+    # shapes that ``fromisoformat`` rejects; a malformed value is
+    # logged and dropped to ``None`` rather than aborting the extract.
+    raw_date = cover_details.get("date")
+    date_value: _date | None = None
+    if raw_date:
+        try:
+            date_value = _date.fromisoformat(raw_date.strip())
+        except ValueError:
+            logger.warning(
+                "Could not parse cover-page date %r as ISO 8601 (YYYY-MM-DD); "
+                "leaving tdoc_cr_details.date as None",
+                raw_date,
+            )
+            date_value = None
 
     # --- derived: year (from input id), tech (from spec) ---
     year = _year_from_tdoc_id(final_tdoc_id)

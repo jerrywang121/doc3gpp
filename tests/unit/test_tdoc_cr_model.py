@@ -20,6 +20,7 @@ the dataclass's ``to_persisted()`` contract.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
 from sqlalchemy import create_engine, event, inspect
@@ -230,7 +231,7 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
             source="RAN5",
             tsg="R5",
             related_wis="IMS5",
-            date="2026-03-15",
+            date=date(2026, 3, 15),
             cr_cat="B",
             release="Rel-18",
             reason_for_change="NW behaviour diverged",
@@ -264,7 +265,7 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
         assert loaded.source == "RAN5"
         assert loaded.tsg == "R5"
         assert loaded.related_wis == "IMS5"
-        assert loaded.date == "2026-03-15"
+        assert loaded.date == date(2026, 3, 15)
         assert loaded.cr_cat == "B"
         assert loaded.release == "Rel-18"
         assert loaded.reason_for_change == "NW behaviour diverged"

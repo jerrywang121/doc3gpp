@@ -16,6 +16,7 @@ import pytest
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.scraping.tdoc_zip_source import (
     TDocZipDownloadError,
+    canonicalise_tdoc_id,
     download_tdoc_zip,
     get_tdoc_zip_url,
     tsg_meeting_year_for,
@@ -483,3 +484,41 @@ def test_download_tdoc_zip_url_is_none_without_primary_url(
 
     assert result.url == template
     assert result.path == cache.path_for("r5s260009", "zips")
+
+
+# ---------------------------------------------------------------------------
+# 10. canonicalise_tdoc_id — CLI uses this to map lowercase user input
+# to the canonical DB-stored form. The canonical output is the TSG
+# short name upper-cased; everything else is preserved.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Already-canonical input is returned unchanged.
+        ("R5s260009", "R5s260009"),
+        ("R5w260009", "R5w260009"),
+        ("R5-227476", "R5-227476"),
+        ("C6-250028", "C6-250028"),
+        # Lowercase input is canonicalised to uppercase TSG prefix.
+        ("r5s260009", "R5s260009"),
+        ("r5w260009", "R5w260009"),
+        ("r5-227476", "R5-227476"),
+        ("c6-250028", "C6-250028"),
+        # All-uppercase suffix is canonicalised to lowercase subtype.
+        ("R5S260009", "R5s260009"),
+        ("R5W260009", "R5w260009"),
+        # Surrounding whitespace is stripped.
+        ("  r5s260009  ", "R5s260009"),
+        # Empty / non-CR / unrecognised inputs return None so the CLI
+        # can fall back to the stripped raw input for non-CR shapes.
+        ("", None),
+        ("bogus", None),
+        ("LS-260001", None),  # non-CR shape — narrow regex returns None
+        ("R5", None),
+        ("R5s", None),
+    ],
+)
+def test_canonicalise_tdoc_id(raw: str, expected: str | None) -> None:
+    assert canonicalise_tdoc_id(raw) == expected

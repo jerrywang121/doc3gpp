@@ -150,7 +150,7 @@ def get_tdoc_zip_url(tdoc: str) -> str | None:
     """
     if not tdoc:
         return None
-    canonical = _canonicalise_tdoc_id(tdoc)
+    canonical = canonicalise_tdoc_id(tdoc)
     if canonical is None:
         return None
     return _build_tdoc_zip_url(canonical)
@@ -178,13 +178,27 @@ def resolve_download_url(
     return candidates
 
 
-def _canonicalise_tdoc_id(tdoc: str) -> str | None:
-    """Normalise a TDoc id to the canonical ``Ts260009`` form.
+def canonicalise_tdoc_id(tdoc: str) -> str | None:
+    """Normalise a CR-shape TDoc id to its canonical ``R5s260009`` form.
 
-    Strips surrounding whitespace, lowercases the input, and matches it
-    against ``_CR_ID_RE``. Returns the canonical form (TSG short name
-    upper-cased) on match, ``None`` otherwise.
+    Returns the canonical form (TSG short name upper-cased, everything
+    else as-is) on a match against ``_CR_ID_RE``, ``None`` otherwise.
+
+    Examples:
+        ``r5s260009`` -> ``R5s260009``
+        ``R5S260009`` -> ``R5s260009``
+        ``R5-227476`` -> ``R5-227476``
+        ``bogus``     -> ``None``
+        ``LS-260001`` -> ``None`` (non-CR shape)
+
+    Intentionally narrow to CR shapes; the only ones whose download URL
+    template we resolve. Non-CR rows (LS / DRAFT / etc.) live in the
+    ``tdocs`` table with their own shapes; callers that accept arbitrary
+    ids should fall back to the stripped input when this returns
+    ``None`` rather than rejecting the id outright.
     """
+    if not tdoc:
+        return None
     match = _CR_ID_RE.fullmatch(tdoc.strip().lower())
     if match is None:
         return None
@@ -233,7 +247,7 @@ def download_tdoc_zip(
     if not tdoc:
         raise ValueError("TDoc id is empty")
 
-    canonical = _canonicalise_tdoc_id(tdoc)
+    canonical = canonicalise_tdoc_id(tdoc)
     if canonical is None:
         raise ValueError(f"Invalid TDoc id shape: {tdoc!r}")
 

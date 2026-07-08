@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
+import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -344,6 +345,87 @@ def test_tdoc_show_unknown_tdoc_raises_bad_parameter(sqlite_env) -> None:
     result = runner.invoke(app, ["tdoc", "show", "--tdoc", "bogus"])
     assert result.exit_code != 0
     assert "Unknown TDoc 'bogus'" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Case-insensitive --tdoc normalisation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw_input", "expected_canonical"),
+    [
+        # Lowercase / uppercase suffix -> canonical R5s###### form.
+        ("r5s260213", "R5s260213"),
+        ("R5S260213", "R5s260213"),
+        ("r5w260213", "R5w260213"),
+        ("r5-227476", "R5-227476"),
+        ("c6-250028", "C6-250028"),
+        # Already-canonical input is a no-op.
+        ("R5s260009", "R5s260009"),
+        # Surrounding whitespace is stripped before canonicalisation.
+        ("  r5s260213  ", "R5s260213"),
+    ],
+)
+def test_tdoc_extract_canonicalises_input(
+    sqlite_env, monkeypatch, raw_input: str, expected_canonical: str
+) -> None:
+    """``--tdoc r5s260213`` must flow into ``extract_many`` as ``R5s260213``
+    so the DB lookup against the canonical PK succeeds."""
+    runner = CliRunner()
+    fake = _FakeCrService(
+        results={expected_canonical: _make_result(expected_canonical)},
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(app, ["tdoc", "extract", "--tdoc", raw_input])
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [([expected_canonical], False, False)]
+    assert f"{expected_canonical}: spec=" in result.output
+
+
+def test_tdoc_extract_non_cr_shape_passes_through(sqlite_env, monkeypatch) -> None:
+    """Non-CR shapes (e.g. LS) have no canonical mapping; the input is
+    stripped of whitespace and forwarded verbatim — the DB lookup
+    succeeds iff the user typed it exactly as stored."""
+    runner = CliRunner()
+    fake = _FakeCrService(results={"LS-260001": _make_result("LS-260001")})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "extract", "--tdoc", "  LS-260001  "],
+    )
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [(["LS-260001"], False, False)]
+
+
+def test_tdoc_show_lowercase_input_resolves_canonical_row(
+    sqlite_env, monkeypatch
+) -> None:
+    """``tdoc show --tdoc r5s260213`` finds the canonical-form row stored
+    in the ``tdocs`` table (R5s260213); the output is unchanged."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260213")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "r5s260213"])
+    assert result.exit_code == 0, result.output
+    assert "tdoc_id: R5s260213" in result.output
+    assert "[Extracted Details]" in result.output
+
+
+def test_tdoc_show_uppercase_suffix_input_resolves_canonical_row(
+    sqlite_env,
+) -> None:
+    """All-uppercase suffix variant ``R5S260213`` resolves to the
+    canonical row ``R5s260213`` in the DB."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260213")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5S260213"])
+    assert result.exit_code == 0, result.output
+    assert "tdoc_id: R5s260213" in result.output
 
 
 def test_tdoc_show_missing_tdoc_option_is_required(sqlite_env) -> None:

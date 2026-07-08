@@ -19,6 +19,7 @@ from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
+from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
     build_tdoc_cr_repository,
@@ -873,12 +874,30 @@ def _extract_failure_hints() -> str:
     )
 
 
+def _normalise_cli_tdoc_id(raw: str) -> str:
+    """Return the canonical form of ``raw`` for a CLI ``--tdoc`` argument.
+
+    The database stores TDoc IDs in their canonical case (``R5s260213``);
+    a CLI user typing ``r5s260213`` would otherwise fail the PK lookup.
+    For CR-shape IDs :func:`canonicalise_tdoc_id` returns the canonical
+    form; non-CR shapes (LS / DRAFT / etc.) have no canonical mapping,
+    so the input is returned whitespace-stripped and the user is on the
+    hook for typing it exactly as the DB has it.
+    """
+    canonical = canonicalise_tdoc_id(raw)
+    return canonical if canonical is not None else raw.strip()
+
+
 @tdoc_app.command("extract")
 def tdoc_extract(
     tdoc: list[str] = typer.Option(
         None,
         "--tdoc",
-        help="TDoc ID to extract (repeatable for batch).",
+        help=(
+            "TDoc ID to extract (repeatable for batch). "
+            "Case-insensitive for CR-shape IDs (e.g. 'r5s260213' resolves "
+            "to 'R5s260213' as stored in the database)."
+        ),
     ),
     tdoc_id: list[int] = typer.Option(
         None,
@@ -927,12 +946,13 @@ def tdoc_extract(
     if not tdoc and not tdoc_id:
         raise typer.BadParameter("Specify at least one --tdoc or --tdoc-id.")
 
-    # Combine the two input sources into a single ordered list of
-    # canonical ``tdoc_id`` strings. ``--tdoc-id`` is resolved via a
-    # single repository lookup per integer; missing ids are skipped.
+    # ``--tdoc`` values are case-normalised to canonical form (R5s######)
+    # so a CLI user typing ``r5s260213`` resolves the same DB row as
+    # ``R5s260213``. ``--tdoc-id`` is resolved via a single repository
+    # lookup per integer; missing ids are skipped.
     tdoc_ids: list[str] = []
     if tdoc:
-        tdoc_ids.extend(tdoc)
+        tdoc_ids.extend(_normalise_cli_tdoc_id(raw) for raw in tdoc)
     if tdoc_id:
         repo = build_tdoc_repository()
         for raw in tdoc_id:
@@ -991,7 +1011,10 @@ def tdoc_show(
     tdoc: str = typer.Option(
         ...,
         "--tdoc",
-        help="TDoc ID to show (canonical form, e.g. R5s260009).",
+        help=(
+            "TDoc ID to show (canonical form, e.g. R5s260009). "
+            "Case-insensitive for CR-shape IDs."
+        ),
     ),
 ) -> None:
     """Show TDoc details, including extracted CR fields if available.
@@ -1005,10 +1028,14 @@ def tdoc_show(
     URLs share the same ``tdoc_id`` across revisions). The
     ``corrections`` list is JSON-dumped for full fidelity.
 
+    The ``--tdoc`` argument is case-insensitive for CR-shape IDs (so
+    ``r5s260213`` and ``R5s260213`` resolve the same row); the DB still
+    stores the canonical form.
+
     Raises a ``BadParameter`` when the requested TDoc is not stored.
     """
     repo = build_tdoc_repository()
-    record = repo.get_by_id(tdoc)
+    record = repo.get_by_id(_normalise_cli_tdoc_id(tdoc))
     if record is None:
         raise typer.BadParameter(
             f"Unknown TDoc '{tdoc}'. Run 'doc3gpp tdoc list' to see stored TDocs, "

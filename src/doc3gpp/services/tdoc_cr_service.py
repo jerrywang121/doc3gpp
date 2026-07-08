@@ -209,7 +209,11 @@ class TDocCrService:
            ``force``) → render markdown if needed → parse → persist
            under the resolved URL (normalised back to the relative
            ``ftp_url`` form via :func:`normalize_ftp_path`) → return
-           ``from_cache=False``.
+           ``from_cache=False``. When the zip was served from the
+           local cache, ``downloaded.url`` is ``None`` (the URL that
+           originally populated the cache is not tracked); fall back
+           to the first candidate the resolver would currently try
+           so persistence still has a non-empty identity URL.
         """
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
@@ -220,12 +224,18 @@ class TDocCrService:
             build_ftp_url(tdoc.ftp_url) if tdoc.ftp_url else None
         )
 
+        # Hoist the URL candidates so the persistence fallback below
+        # (used when the zip cache hits and ``downloaded.url`` is
+        # None) reuses the same ordering the cache probe iterates
+        # over — a freshly-persisted row must be findable by the
+        # next probe without re-resolving.
+        candidates = resolve_download_url(normalised, primary_url)
+
         # Pre-download cache probe: known candidate URLs can be
-        # resolved from ``tdocs.ftp_url`` (rebuilt to an absolute
-        # URL above) + the template without touching the network, so
-        # the DB cache short-circuits the zip fetch.
+        # resolved without touching the network, so the DB cache
+        # short-circuits the zip fetch.
         if not force:
-            for candidate in resolve_download_url(normalised, primary_url):
+            for candidate in candidates:
                 cached_details = self._repo.get_by_url(
                     normalize_ftp_path(candidate)
                 )
@@ -282,10 +292,18 @@ class TDocCrService:
 
         # Persist under the relative ``ftp_url`` form so the database
         # stores the same shape as ``meetings.ftp_url``. The download
-        # layer hands us an absolute URL; normalise before storage.
-        stored_ftp_url = (
-            normalize_ftp_path(resolved_url) if resolved_url else None
-        )
+        # layer hands us an absolute URL on a fresh fetch; on a zip
+        # cache hit it returns ``url=None`` (the URL that originally
+        # populated the cache is unknown), so fall back to the first
+        # candidate the resolver would try — the same URL the cache
+        # probe above iterates over, which keeps the DB-cache contract
+        # consistent for the next call. ``download_tdoc_zip`` raises
+        # before returning when no candidate exists, so ``candidates``
+        # is non-empty here.
+        if resolved_url:
+            stored_ftp_url = normalize_ftp_path(resolved_url)
+        else:
+            stored_ftp_url = normalize_ftp_path(candidates[0])
 
         details = replace(
             parse_cr_details(markdown, tdoc_id=normalised),

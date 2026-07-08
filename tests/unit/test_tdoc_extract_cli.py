@@ -10,8 +10,9 @@ resets the settings/engine caches via ``conftest.sqlite_env``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
+import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -109,7 +110,9 @@ def _make_result(
     title: str | None = "Example CR",
 ) -> ExtractResult:
     """Build a fully-wired :class:`ExtractResult` for the fake service."""
+    url = f"stored/{tdoc_id}.zip"
     meta = TDocExtractMeta(
+        ftp_url=url,
         tdoc_id=tdoc_id,
         zip_path=f"/tmp/cache/zips/{tdoc_id}",
         markdown_path=f"/tmp/cache/markdown/{tdoc_id}.md",
@@ -249,16 +252,19 @@ def test_tdoc_extract_python_docx_missing_friendly_error(sqlite_env, monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def _seed_full_crdetail_row(tdoc_id: str) -> None:
+def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
     """Insert a parent TDoc + a populated CR detail row via the real repo.
 
     Uses the SQL repositories directly so the test exercises the same
     write path the production CLI relies on. The CR detail row carries
     enough fields to verify the ``[Extracted Details]`` block output.
+    The URL defaults to a unique-per-call value so multiple seeds in
+    the same test produce distinct (URL-keyed) detail rows.
     """
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR"))
+    resolved_url = url or f"stored/{tdoc_id}.zip"
     details = TDocCRDetails(
         tdoc_id=tdoc_id,
         spec="38.523-3",
@@ -269,7 +275,7 @@ def _seed_full_crdetail_row(tdoc_id: str) -> None:
         source="Qualcomm",
         tsg="R5",
         related_wis="NR_ext",
-        date="2026-06-12",
+        date=date(2026, 6, 12),
         cr_cat="F",
         release="Rel-18",
         reason_for_change="Some long reason " * 20,
@@ -283,9 +289,11 @@ def _seed_full_crdetail_row(tdoc_id: str) -> None:
         ss="SS_NR5G",
         year=2026,
         tech="5G",
+        ftp_url=resolved_url,
         parser_version="1.0.0",
     )
     meta = TDocExtractMeta(
+        ftp_url=resolved_url,
         tdoc_id=tdoc_id,
         zip_path="/tmp/cache/zips/R5s260009",
         markdown_path="/tmp/cache/markdown/R5s260009.md",
@@ -339,8 +347,108 @@ def test_tdoc_show_unknown_tdoc_raises_bad_parameter(sqlite_env) -> None:
     assert "Unknown TDoc 'bogus'" in result.output
 
 
+# ---------------------------------------------------------------------------
+# Case-insensitive --tdoc normalisation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw_input", "expected_canonical"),
+    [
+        # Lowercase / uppercase suffix -> canonical R5s###### form.
+        ("r5s260213", "R5s260213"),
+        ("R5S260213", "R5s260213"),
+        ("r5w260213", "R5w260213"),
+        ("r5-227476", "R5-227476"),
+        ("c6-250028", "C6-250028"),
+        # Already-canonical input is a no-op.
+        ("R5s260009", "R5s260009"),
+        # Surrounding whitespace is stripped before canonicalisation.
+        ("  r5s260213  ", "R5s260213"),
+    ],
+)
+def test_tdoc_extract_canonicalises_input(
+    sqlite_env, monkeypatch, raw_input: str, expected_canonical: str
+) -> None:
+    """``--tdoc r5s260213`` must flow into ``extract_many`` as ``R5s260213``
+    so the DB lookup against the canonical PK succeeds."""
+    runner = CliRunner()
+    fake = _FakeCrService(
+        results={expected_canonical: _make_result(expected_canonical)},
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(app, ["tdoc", "extract", "--tdoc", raw_input])
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [([expected_canonical], False, False)]
+    assert f"{expected_canonical}: spec=" in result.output
+
+
+def test_tdoc_extract_non_cr_shape_passes_through(sqlite_env, monkeypatch) -> None:
+    """Non-CR shapes (e.g. LS) have no canonical mapping; the input is
+    stripped of whitespace and forwarded verbatim — the DB lookup
+    succeeds iff the user typed it exactly as stored."""
+    runner = CliRunner()
+    fake = _FakeCrService(results={"LS-260001": _make_result("LS-260001")})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "extract", "--tdoc", "  LS-260001  "],
+    )
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [(["LS-260001"], False, False)]
+
+
+def test_tdoc_show_lowercase_input_resolves_canonical_row(
+    sqlite_env, monkeypatch
+) -> None:
+    """``tdoc show --tdoc r5s260213`` finds the canonical-form row stored
+    in the ``tdocs`` table (R5s260213); the output is unchanged."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260213")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "r5s260213"])
+    assert result.exit_code == 0, result.output
+    assert "tdoc_id: R5s260213" in result.output
+    assert "[Extracted Details]" in result.output
+
+
+def test_tdoc_show_uppercase_suffix_input_resolves_canonical_row(
+    sqlite_env,
+) -> None:
+    """All-uppercase suffix variant ``R5S260213`` resolves to the
+    canonical row ``R5s260213`` in the DB."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260213")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5S260213"])
+    assert result.exit_code == 0, result.output
+    assert "tdoc_id: R5s260213" in result.output
+
+
 def test_tdoc_show_missing_tdoc_option_is_required(sqlite_env) -> None:
     """Typer's own validation rejects a missing ``--tdoc`` value."""
     runner = CliRunner()
     result = runner.invoke(app, ["tdoc", "show"])
     assert result.exit_code != 0
+
+
+def test_tdoc_show_renders_multiple_revisions(sqlite_env) -> None:
+    """Two distinct URLs for the same TDoc id render as separate
+    ``[Extracted Details]`` blocks (most recent first)."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+    _seed_full_crdetail_row(
+        "R5s260009",
+        url="stored/R5s260009_rev2.zip",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260009"])
+    assert result.exit_code == 0, result.output
+    # Two distinct URLs surface as two ``[Extracted Details]`` blocks.
+    assert "R5s260009.zip" in result.output
+    assert "R5s260009_rev2.zip" in result.output
+    assert result.output.count("[Extracted Details]") == 2

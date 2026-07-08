@@ -78,8 +78,20 @@ def test_live_extract_r5s260009(tmp_path, monkeypatch) -> None:
     from doc3gpp.storage.db.models import TDocORM
     from doc3gpp.storage.db.session import get_engine, get_session_factory
 
+    # Pin the database under tmp_path so a stale ~/.local/share/...
+    # SQLite file from a previous schema version doesn't break the
+    # SELECT against the new ``tdocs.ftp_url`` column.
+    db_path = tmp_path / "doc3gpp.db"
+    monkeypatch.setenv("DOC3GPP_DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
     # Cache root → tmp_path so we don't pollute ~/.cache/doc3gpp/tdocs.
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    # Pin the database under tmp_path so a stale ~/.local/share/...
+    # SQLite file from a previous schema version doesn't break the
+    # SELECT against the new ``tdocs.ftp_url`` column.
+    monkeypatch.setenv(
+        "DOC3GPP_DATABASE_URL",
+        f"sqlite+pysqlite:///{tmp_path / 'doc3gpp.db'}",
+    )
     from doc3gpp.settings.loader import get_settings
 
     get_settings.cache_clear()
@@ -132,6 +144,13 @@ def test_live_extract_r5w260009_workshop_pattern(tmp_path, monkeypatch) -> None:
     from doc3gpp.storage.db.session import get_engine, get_session_factory
 
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    # Pin the database under tmp_path so a stale ~/.local/share/...
+    # SQLite file from a previous schema version doesn't break the
+    # SELECT against the new ``tdocs.ftp_url`` column.
+    monkeypatch.setenv(
+        "DOC3GPP_DATABASE_URL",
+        f"sqlite+pysqlite:///{tmp_path / 'doc3gpp.db'}",
+    )
     from doc3gpp.settings.loader import get_settings
 
     get_settings.cache_clear()

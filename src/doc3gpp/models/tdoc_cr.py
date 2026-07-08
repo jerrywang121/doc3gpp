@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date
 from datetime import datetime
 from typing import Any
 
@@ -58,7 +59,10 @@ class TDocCRDetails:
         tsg: Contents of ``Source to TSG:``. ``None`` when not
             rendered by python-docx (e.g. docx field codes).
         related_wis: Contents of ``Work item code:``.
-        date: Cover-page date string (``YYYY-MM-DD``).
+        date: Cover-page date (``YYYY-MM-DD``) parsed from the ``Date:``
+            cell on the docx cover page into a :class:`datetime.date`.
+            ``None`` when the cell is missing or the value is not a
+            valid ISO 8601 date.
         cr_cat: Single-letter category code (F / B / A / C / D).
         release: Release label (e.g. ``"Rel-18"``).
         reason_for_change: Reason-for-change cell text.
@@ -85,10 +89,11 @@ class TDocCRDetails:
         extracted_tdoc_id: What the header parser actually found in
             the document (may differ from ``tdoc_id`` when the docx
             uses field codes that python-docx does not render).
-        url: Exact URL the TDoc zip was downloaded from during this
-            extract. ``None`` when the zip came from a prior cache
-            hit (the originating URL is not tracked there) or when
-            no provenance was captured.
+        ftp_url: Exact URL the TDoc zip was downloaded from during
+            this extract, stored as a path relative to
+            ``https://www.3gpp.org/ftp/``. ``None`` when the zip came
+            from a prior cache hit (the originating URL is not tracked
+            there) or when no provenance was captured.
         parser_version: Version of the parser that produced this
             object, persisted alongside the row for debugging.
     """
@@ -102,7 +107,7 @@ class TDocCRDetails:
     source: str | None = None
     tsg: str | None = None
     related_wis: str | None = None
-    date: str | None = None
+    date: date | None = None
     cr_cat: str | None = None
     release: str | None = None
     reason_for_change: str | None = None
@@ -123,9 +128,10 @@ class TDocCRDetails:
     year: int | None = None
     tech: str | None = None
     extracted_tdoc_id: str | None = None
-    # Download provenance (None on cache hits; otherwise the URL that
-    # supplied the cached zip bytes during this extract).
-    url: str | None = None
+    # Download provenance (None on cache hits; otherwise the relative URL
+    # path, relative to https://www.3gpp.org/ftp/, that supplied the cached
+    # zip bytes during this extract).
+    ftp_url: str | None = None
     parser_version: str = _PARSER_VERSION
 
     def __post_init__(self) -> None:
@@ -179,7 +185,7 @@ class TDocCRDetails:
             "year": self.year,
             "tech": self.tech,
             "extracted_tdoc_id": self.extracted_tdoc_id,
-            "url": self.url,
+            "ftp_url": self.ftp_url,
             "parser_version": self.parser_version,
             "corrections_json": json.dumps(
                 self.corrections, ensure_ascii=False
@@ -190,7 +196,7 @@ class TDocCRDetails:
 
 @dataclass(slots=True, frozen=True)
 class TDocExtractMeta:
-    """Cache-extraction metadata for one TDoc.
+    """Cache-extraction metadata for one **immutable download URL**.
 
     Mirrors :class:`doc3gpp.storage.db.models.TDocExtractOrm` but stays
     a pure value object so the service layer can move the data around
@@ -198,9 +204,18 @@ class TDocExtractMeta:
     cached artefacts are persisted here — the bytes live under
     :mod:`doc3gpp.scraping.cache`.
 
+    Identity is the immutable URL — the same URL serves byte-for-byte
+    identical 3GPP artefacts, while a TDoc id may map to multiple URLs
+    across revisions. ``tdoc_id`` stays as a logical reference and a
+    foreign key into ``tdocs``.
+
     Attributes:
-        tdoc_id: Canonical TDoc identifier; primary key in both the
-            metadata table and the detail table.
+        ftp_url: Immutable download URL this cache row is keyed on,
+            stored as a path relative to ``https://www.3gpp.org/ftp/``;
+            matches the corresponding :class:`TDocCRDetails` row's
+            ``ftp_url``.
+        tdoc_id: Canonical TDoc identifier (logical reference, FK into
+            ``tdocs.tdoc_id``).
         zip_path: Absolute path to the cached 3GPP zip download.
         markdown_path: Absolute path to the cached markdown rendering
             of the CR's ``.docx`` body.
@@ -214,9 +229,23 @@ class TDocExtractMeta:
             ORM column's default and :class:`TDocCRDetails`.
     """
 
+    ftp_url: str
     tdoc_id: str
     zip_path: str
     markdown_path: str
     doc_filename: str
     extracted_at: datetime | None = None
     parser_version: str = _PARSER_VERSION
+
+    def __post_init__(self) -> None:
+        # Mirror TDocCRDetails' invariant; the URL is the row identity.
+        stripped = self.ftp_url.strip()
+        if not stripped:
+            raise ValueError("TDocExtractMeta requires a non-empty ftp_url")
+        if stripped != self.ftp_url:
+            object.__setattr__(self, "ftp_url", stripped)
+        stripped_id = self.tdoc_id.strip()
+        if not stripped_id:
+            raise ValueError("TDocExtractMeta requires a non-empty tdoc_id")
+        if stripped_id != self.tdoc_id:
+            object.__setattr__(self, "tdoc_id", stripped_id)

@@ -10,7 +10,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     sample_tdoc = TDoc(
         tdoc_id="R5s260001",
         title="Example A",
-        url="https://x/1",
+        ftp_url="x/1",
         cr_pack="RP-000123",
         source="Qualcomm",
         type="CR",
@@ -25,7 +25,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     observed_filters = {}
 
     def fake_list_recent_with_meeting(
-        self, limit=20, tsg=None, meeting_like=None, year=None,
+        self, limit=20, tsg=None, meeting_like=None, meeting_id=None, year=None,
         source_like=None, spec_like=None, wi_like=None, title_like=None,
         cat_like=None, status_like=None, type_like=None,
     ):
@@ -33,6 +33,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
             "limit": limit,
             "tsg": tsg,
             "meeting_like": meeting_like,
+            "meeting_id": meeting_id,
             "year": year,
             "source_like": source_like,
             "spec_like": spec_like,

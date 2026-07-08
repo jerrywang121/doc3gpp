@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
@@ -16,10 +15,10 @@ from doc3gpp.storage.db.session import get_session_factory
 class SQLAlchemyTDocFileRepository:
     """SQLAlchemy implementation that stores auxiliary TDoc files.
 
-    Identity is the unique ``url`` column: a file lives at exactly one
-    upstream location on the 3GPP FTP, so re-syncing the same meeting
-    is idempotent — existing rows are refreshed in place with the
-    latest ``file`` label and ``updated_at`` timestamp.
+    Identity is the unique ``ftp_url`` column: a file lives at exactly
+    one upstream location on the 3GPP FTP, so re-syncing the same
+    meeting is idempotent — existing rows are refreshed in place with
+    the latest ``file`` label.
     """
 
     def __init__(self, session_factory: sessionmaker | None = None) -> None:
@@ -29,18 +28,17 @@ class SQLAlchemyTDocFileRepository:
             session_factory: Optional pre-built ``sessionmaker``. When
                 omitted the function falls back to
                 :func:`doc3gpp.storage.db.session.get_session_factory`. The
-                parameter is primarily used by unit tests that want to bind
-                a repository to an in-memory SQLite engine.
+                parameter is primarily used by unit tests that want to bind a
+                repository to an in-memory SQLite engine.
         """
         self._session_factory = session_factory or get_session_factory()
 
     def upsert_many(self, files: list[TDocFile]) -> int:
         """Insert or update multiple TDocFile records.
 
-        Each input is matched by its ``url``; matches update the
-        ``tdoc_id``, ``type``, ``file`` and ``updated_at`` columns in
-        place, while non-matches become new rows. ``updated_at`` is
-        stamped on every write.
+        Each input is matched by its ``ftp_url``; matches update the
+        ``tdoc_id``, ``type``, ``file`` and ``uploaded_date`` columns in
+        place, while non-matches become new rows.
 
         Returns:
             The number of input rows that were written (insert or update).
@@ -48,23 +46,21 @@ class SQLAlchemyTDocFileRepository:
         if not files:
             return 0
 
-        now = datetime.now(tz=timezone.utc)
         with self._session_factory() as session:
-            urls = [item.url for item in files]
+            urls = [item.ftp_url for item in files]
             existing_rows = session.scalars(
-                select(TDocFileORM).where(TDocFileORM.url.in_(urls))
+                select(TDocFileORM).where(TDocFileORM.ftp_url.in_(urls))
             ).all()
-            existing_by_url = {row.url: row for row in existing_rows}
+            existing_by_url = {row.ftp_url: row for row in existing_rows}
 
             for item in files:
-                target = existing_by_url.get(item.url)
-                is_new = target is None
-                if is_new:
+                target = existing_by_url.get(item.ftp_url)
+                if target is None:
                     target = TDocFileORM(
                         tdoc_id=item.tdoc_id,
                         type=item.type,
                         file=item.file,
-                        url=item.url,
+                        ftp_url=item.ftp_url,
                         uploaded_date=item.uploaded_date,
                     )
                     session.add(target)
@@ -73,7 +69,6 @@ class SQLAlchemyTDocFileRepository:
                     target.type = item.type
                     target.file = item.file
                     target.uploaded_date = item.uploaded_date
-                target.updated_at = now
 
             session.commit()
         return len(files)
@@ -85,9 +80,11 @@ class SQLAlchemyTDocFileRepository:
         file_type: str | None = None,
         file_type_in: Iterable[str] | None = None,
     ) -> list[TDocFile]:
-        """Return stored TDocFile records ordered by most recently updated.
+        """Return stored TDocFile records ordered by descending primary key.
 
-        Optional filters:
+        The auto-increment ``id`` is monotonic with insertion order, so
+        descending ``id`` is a stable approximation of "most recently
+        written". Optional filters:
         - ``tdoc_id``: exact match against the owning TDoc identifier.
         - ``file_type``: exact match against the ``type`` column.
         - ``file_type_in``: iterable of allowed ``type`` values.
@@ -107,10 +104,7 @@ class SQLAlchemyTDocFileRepository:
                     return []
                 stmt = stmt.where(TDocFileORM.type.in_(values))
 
-            stmt = stmt.order_by(
-                TDocFileORM.updated_at.desc().nullslast(),
-                TDocFileORM.id.desc(),
-            ).limit(limit)
+            stmt = stmt.order_by(TDocFileORM.id.desc()).limit(limit)
             rows = session.scalars(stmt).all()
 
         return [_orm_to_domain(row) for row in rows]
@@ -138,7 +132,6 @@ def _orm_to_domain(row: TDocFileORM) -> TDocFile:
         tdoc_id=row.tdoc_id,
         type=row.type,
         file=row.file,
-        url=row.url,
+        ftp_url=row.ftp_url,
         uploaded_date=row.uploaded_date,
-        updated_at=row.updated_at,
     )

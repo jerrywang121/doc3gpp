@@ -43,6 +43,7 @@ class TDocRepository(Protocol):
         limit: int = 20,
         tsg: str | None = None,
         meeting_like: str | None = None,
+        meeting_id: int | None = None,
         year: int | None = None,
         source_like: str | None = None,
         spec_like: str | None = None,
@@ -53,6 +54,14 @@ class TDocRepository(Protocol):
         type_like: str | None = None,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
+
+        Optional filters:
+        - ``tsg``: TSG prefix matched against the TDoc identifier.
+        - ``meeting_like``: SQL ``LIKE`` pattern applied to the parent
+          meeting's name (joins the ``meetings`` table).
+        - ``meeting_id``: exact match against ``tdocs.meeting_id``. Can
+          be combined with ``meeting_like``; rows must satisfy both.
+        - ``year``: two-digit year code embedded in the TDoc identifier.
 
         Pure persistence shape — no joined meeting metadata. Callers that
         need a human-readable meeting name should use :meth:`list_with_meeting`.
@@ -74,6 +83,7 @@ class TDocRepository(Protocol):
         limit: int = 20,
         tsg: str | None = None,
         meeting_like: str | None = None,
+        meeting_id: int | None = None,
         year: int | None = None,
         source_like: str | None = None,
         spec_like: str | None = None,
@@ -87,7 +97,8 @@ class TDocRepository(Protocol):
 
         Equivalent to ``list(...)`` plus a ``meetings`` JOIN to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
-        the meeting name alongside TDoc fields.
+        the meeting name alongside TDoc fields. Accepts the same filters as
+        :meth:`list`.
         """
         ...
 
@@ -96,11 +107,7 @@ class MeetingRepository(Protocol):
     """Storage operations used by meetings sync service."""
 
     def upsert_many(self, meetings: list[Meeting]) -> int:
-        """Save or update multiple meeting records.
-
-        Implementations should stamp ``Meeting.updated_at`` on every write so
-        callers can detect re-sync activity.
-        """
+        """Save or update multiple meeting records."""
         ...
 
     def list(
@@ -207,10 +214,9 @@ class TDocFileRepository(Protocol):
         The fully-qualified download URL is the natural identity of a file
         on the 3GPP FTP — the same attachment lives at exactly one
         upstream location — so the unique index on ``url`` is the upsert
-        key. Existing rows are refreshed in place (the ``file`` label and
-        ``updated_at`` are rewritten) so re-syncing a meeting does not
-        produce duplicates. Returns the number of input rows that were
-        written.
+        key. Existing rows are refreshed in place (the ``file`` label is
+        rewritten) so re-syncing a meeting does not produce duplicates.
+        Returns the number of input rows that were written.
         """
         ...
 
@@ -253,13 +259,30 @@ class TDocCrDetailRepository(Protocol):
     :class:`doc3gpp.services.tdoc_cr_service.TDocCrService` and always
     written together in a single transaction.
 
-    All methods are keyed on ``tdoc_id`` because that column is the
-    primary key on both child tables (and a FK into ``tdocs.tdoc_id``
-    with ``ondelete="CASCADE"``).
+    Identity on both tables is the immutable download ``url`` —
+    3GPP zip assets are byte-for-byte identical for the lifetime of
+    a URL, while the logical ``tdoc_id`` may map to multiple URLs
+    across revisions. ``tdoc_id`` remains a non-PK FK into
+    ``tdocs.tdoc_id`` with ``ondelete="CASCADE"`` so deleting a
+    parent TDoc still cleans up every revision's detail rows.
     """
 
-    def get(self, tdoc_id: str) -> TDocCRDetails | None:
-        """Return the persisted detail row, or ``None`` on miss."""
+    def get(self, tdoc_id: str) -> list[TDocCRDetails]:
+        """Return every detail row for ``tdoc_id``, newest first.
+
+        The same ``tdoc_id`` may map to multiple URLs across revisions;
+        callers (the ``tdoc show`` CLI, debugging scripts) want every
+        revision. Ordered by ``extracted_at`` descending so the most
+        recent extract is at index ``0``.
+        """
+        ...
+
+    def get_by_url(self, url: str) -> TDocCRDetails | None:
+        """Return the detail row for an immutable ``url``, or ``None``.
+
+        Used by the extraction service to perform an O(1) cache-hit
+        check after the download has resolved the actual URL.
+        """
         ...
 
     def upsert(
@@ -269,14 +292,25 @@ class TDocCrDetailRepository(Protocol):
     ) -> None:
         """Insert/update both rows in a single transaction.
 
-        The detail row is keyed by ``tdoc_id``; the extract-metadata
-        row is keyed by the same id. ``updated_at`` on the detail row
-        is stamped on every write so callers can detect re-extracts.
+        Both tables are keyed by ``url`` (the immutable download URL), so
+        re-extracting the same URL is idempotent. ``extracted_at`` on the
+        detail row is set on first insert via the server-side default and
+        stays put for subsequent upserts (the column is not bumped on
+        re-extract).
         """
         ...
 
-    def get_extract_meta(self, tdoc_id: str) -> TDocExtractMeta | None:
-        """Return the cached-extract metadata, or ``None`` on miss."""
+    def get_extract_meta(self, tdoc_id: str) -> list[TDocExtractMeta]:
+        """Return every cached-extract metadata row for ``tdoc_id``.
+
+        Mirror of :meth:`get` for the ``tdoc_extracts`` sidecar.
+        Indexed lookup on the FK; ordered ``extracted_at`` desc so
+        callers see the most recent extract first.
+        """
+        ...
+
+    def get_extract_meta_by_url(self, url: str) -> TDocExtractMeta | None:
+        """Return the extract-metadata row for an immutable ``url``."""
         ...
 
     def list_all(self) -> list[TDocCRDetails]:

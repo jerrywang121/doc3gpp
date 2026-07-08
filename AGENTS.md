@@ -143,6 +143,7 @@ Flow:
 - `doc3gpp tdoc sync --meeting-id <id>` resolves stored `Meeting.ftp_url` from DB, fetches `TDoc_List_Meeting_*.xlsx` from FTP. **No meeting row → no TDoc sync.**
 - `doc3gpp wi sync --tsg <short>` → `WiService.sync` → `fetch_wis` → `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many`. The `wis.tsg_short` column is a foreign key into `tsgs.short_name`, so the `tsgs` table is auto-seeded and `--tsg` is validated against it.
 - `doc3gpp db init` calls `create_schema()` and then `TsgService.seed_defaults()` to populate the `tsgs` reference table.
+- `doc3gpp db reset [--yes]` is the destructive recovery path: delete the SQLite file (plus WAL/SHM/journal sidecars), clear the cached engine, then re-run `create_schema()` + `seed_defaults()`. Refuses non-SQLite URLs. Use after an ORM change leaves the live schema out of sync (no Alembic is wired up).
 - `doc3gpp meeting sync --tsg <short>` validates `<short>` against the `tsgs` table (auto-seeded if empty); an unknown value raises `typer.BadParameter` listing the known short names.
 - `doc3gpp tsg list` and `doc3gpp tsg show` read from the `tsgs` table via
   `SQLAlchemyTsgRepository`. `doc3gpp tsg seed` upserts the canonical 16 rows.

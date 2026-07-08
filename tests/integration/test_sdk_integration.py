@@ -74,7 +74,6 @@ def test_sdk_model_construction() -> None:
     assert m.meeting_id == 1
     assert m.name == "RAN5#111"
     assert m.ftp_url is None
-    assert m.updated_at is None
 
     # Meeting — all optional fields
     m2 = Meeting(
@@ -103,7 +102,7 @@ def test_sdk_model_construction() -> None:
         tdoc_id="R5-260001",
         title="RedCap CR",
         meeting_id=1,
-        url="https://example.com/doc",
+        ftp_url="example.com/doc",
         source="Qualcomm",
         type="CR",
         status="Agreed",
@@ -264,7 +263,7 @@ def test_sdk_full_round_trip(sqlite_env) -> None:
         tdoc_id="R5s260001",
         title="Test TDoc",
         meeting_id=100,
-        url="https://example.test/1",
+        ftp_url="example.test/1",
         source="Qualcomm",
         type="CR",
         status="Agreed",
@@ -275,7 +274,7 @@ def test_sdk_full_round_trip(sqlite_env) -> None:
         tdoc_id="R5s260001",
         title="Test TDoc Updated",
         meeting_id=100,
-        url="https://example.test/1",
+        ftp_url="example.test/1",
         source="Ericsson",
         type="CR",
         status="Noted",
@@ -324,7 +323,7 @@ def test_sdk_export_csv(tmp_path) -> None:
     out = tmp_path / "export.csv"
     records = [
         TDocWithMeeting(
-            tdoc=TDoc(tdoc_id="R1-000001", title="First", url="https://x/1"),
+            tdoc=TDoc(tdoc_id="R1-000001", title="First", ftp_url="x/1"),
             meeting_name="RAN1#100",
         ),
         TDocWithMeeting(tdoc=TDoc(tdoc_id="R1-000002", title="Second")),
@@ -332,6 +331,6 @@ def test_sdk_export_csv(tmp_path) -> None:
     export_tdocs_csv(out, records)
 
     lines = out.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == "tdoc_id,title,meeting,url"
-    assert lines[1] == "R1-000001,First,RAN1#100,https://x/1"
+    assert lines[0] == "tdoc_id,title,meeting,ftp_url"
+    assert lines[1] == "R1-000001,First,RAN1#100,x/1"
     assert lines[2] == "R1-000002,Second,,"

@@ -9,7 +9,7 @@ the trim log/integration path).
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 from sqlalchemy import create_engine, select
@@ -210,8 +210,6 @@ def test_sync_trims_via_real_sqlalchemy_repo(monkeypatch) -> None:
     with Session() as s:
         rows = s.scalars(select(MeetingORM)).all()
         assert [r.meeting_id for r in rows] == [1]
-        assert rows[0].updated_at is not None
-        assert isinstance(rows[0].updated_at, datetime)
 
 
 def test_filter_does_not_drop_recent_and_future_endpoints() -> None:

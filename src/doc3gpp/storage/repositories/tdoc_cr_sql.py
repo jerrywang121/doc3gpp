@@ -5,6 +5,16 @@ cache-extract metadata sidecar (``tdoc_extracts``) that point at the
 on-disk artefacts under :mod:`doc3gpp.scraping.cache`. ``upsert`` writes
 both rows inside a single transaction so the two tables never disagree.
 
+Both tables are keyed by the immutable download ``ftp_url`` — a path
+relative to the canonical 3GPP FTP root (``https://www.3gpp.org/ftp/``)
+that uniquely identifies the upstream asset. 3GPP assets are byte-for-byte
+identical for the lifetime of a URL, so re-extracting the same URL is
+idempotent, while multiple revisions of a single ``tdoc_id`` land at
+distinct URLs and occupy distinct rows. ``tdoc_id`` is a non-PK FK into
+``tdocs.tdoc_id`` (indexed for the per-tdoc lookup) with
+``ondelete="CASCADE"`` so deleting a parent TDoc still cleans up every
+revision's detail rows.
+
 The ``corrections`` list of dicts on :class:`TDocCRDetails` is
 serialised to a single ``TEXT`` column (``corrections``) via
 :func:`json.dumps`. Reads use a tolerant decoder that falls back to
@@ -16,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -32,8 +41,8 @@ class SQLAlchemyTDocCrRepository:
 
     Persists two tables — ``tdoc_cr_details`` (parsed fields) and
     ``tdoc_extracts`` (paths to cached zip / markdown) — both keyed by
-    ``tdoc_id`` (PK + FK into ``tdocs.tdoc_id``). The ``upsert`` call
-    writes both rows inside a single transaction.
+    the immutable download ``ftp_url``. The ``upsert`` call writes both
+    rows inside a single transaction.
     """
 
     def __init__(self, session_factory=None) -> None:
@@ -49,10 +58,36 @@ class SQLAlchemyTDocCrRepository:
         """
         self._session_factory = session_factory or get_session_factory()
 
-    def get(self, tdoc_id: str) -> TDocCRDetails | None:
-        """Return the persisted detail row, or ``None`` on miss."""
+    def get(self, tdoc_id: str) -> list[TDocCRDetails]:
+        """Return every detail row for ``tdoc_id``, newest first.
+
+        Newest first means highest ``extracted_at``; ties (multiple
+        upserts in the same second) break on the ``ftp_url`` so the
+        order is deterministic across runs.
+        """
         with self._session_factory() as session:
-            row = session.get(TDocCrDetailOrm, tdoc_id)
+            rows = (
+                session.scalars(
+                    select(TDocCrDetailOrm)
+                    .where(TDocCrDetailOrm.tdoc_id == tdoc_id)
+                    .order_by(
+                        TDocCrDetailOrm.extracted_at.desc(),
+                        TDocCrDetailOrm.ftp_url.asc(),
+                    )
+                )
+                .all()
+            )
+        return [_orm_to_details(row) for row in rows]
+
+    def get_by_url(self, url: str) -> TDocCRDetails | None:
+        """Return the detail row whose URL matches, or ``None``.
+
+        ``url`` is the relative ``ftp_url`` (the PK); callers that
+        hold a full upstream URL must normalise via
+        :func:`doc3gpp.scraping.ftp_source.normalize_ftp_path` first.
+        """
+        with self._session_factory() as session:
+            row = session.get(TDocCrDetailOrm, url)
         if row is None:
             return None
         return _orm_to_details(row)
@@ -64,33 +99,80 @@ class SQLAlchemyTDocCrRepository:
     ) -> None:
         """Insert/update both rows in a single transaction.
 
-        Both tables are keyed by ``tdoc_id``. The detail row gets a
-        fresh ``updated_at`` timestamp on every write; the extract-meta
-        row relies on its ``server_default`` for ``extracted_at`` and is
-        rewritten in place so the on-disk paths always reflect the
-        latest successful extract.
+        ``upsert`` requires that ``details.ftp_url`` and
+        ``extract_meta.ftp_url`` agree (and both be non-empty) — the
+        two tables share the URL as their primary key and a
+        transactional write that put one row in one table and a
+        different row in the other would corrupt the read contract.
+        The guard here is the only place that assertion is centralised.
         """
-        now = datetime.now(tz=timezone.utc)
-        with self._session_factory() as session:
-            detail_row = session.get(TDocCrDetailOrm, details.tdoc_id)
-            if detail_row is None:
-                detail_row = TDocCrDetailOrm(tdoc_id=details.tdoc_id)
-                session.add(detail_row)
-            self._details_to_orm(detail_row, details)
-            detail_row.updated_at = now
+        if not details.ftp_url:
+            raise ValueError(
+                "TDocCRDetails requires a non-empty ftp_url for URL-keyed upsert"
+            )
+        if not extract_meta.ftp_url:
+            raise ValueError(
+                "TDocExtractMeta requires a non-empty ftp_url for URL-keyed upsert"
+            )
+        if details.ftp_url != extract_meta.ftp_url:
+            raise ValueError(
+                "details.ftp_url and extract_meta.ftp_url must match "
+                f"(got {details.ftp_url!r} vs {extract_meta.ftp_url!r})"
+            )
+        if details.tdoc_id != extract_meta.tdoc_id:
+            raise ValueError(
+                "details.tdoc_id and extract_meta.tdoc_id must match "
+                f"(got {details.tdoc_id!r} vs {extract_meta.tdoc_id!r})"
+            )
 
-            extract_row = session.get(TDocExtractOrm, extract_meta.tdoc_id)
+        ftp_url = details.ftp_url
+        with self._session_factory() as session:
+            detail_row = session.get(TDocCrDetailOrm, ftp_url)
+            if detail_row is None:
+                detail_row = TDocCrDetailOrm(ftp_url=ftp_url, tdoc_id=details.tdoc_id)
+                session.add(detail_row)
+            else:
+                # ``tdoc_id`` may shift if the underlying TDoc id was
+                # reassigned; follow the new value so the FK stays
+                # accurate. Same for ``ftp_url`` itself — except the
+                # URL is the PK, so a different URL means a different
+                # row.
+                detail_row.tdoc_id = details.tdoc_id
+            self._details_to_orm(detail_row, details)
+
+            extract_row = session.get(TDocExtractOrm, ftp_url)
             if extract_row is None:
-                extract_row = TDocExtractOrm(tdoc_id=extract_meta.tdoc_id)
+                extract_row = TDocExtractOrm(ftp_url=ftp_url, tdoc_id=extract_meta.tdoc_id)
                 session.add(extract_row)
+            else:
+                extract_row.tdoc_id = extract_meta.tdoc_id
             self._meta_to_orm(extract_row, extract_meta)
 
             session.commit()
 
-    def get_extract_meta(self, tdoc_id: str) -> TDocExtractMeta | None:
-        """Return the cached-extract metadata, or ``None`` on miss."""
+    def get_extract_meta(self, tdoc_id: str) -> list[TDocExtractMeta]:
+        """Return every metadata row for ``tdoc_id``, newest first."""
         with self._session_factory() as session:
-            row = session.get(TDocExtractOrm, tdoc_id)
+            rows = (
+                session.scalars(
+                    select(TDocExtractOrm)
+                    .where(TDocExtractOrm.tdoc_id == tdoc_id)
+                    .order_by(
+                        TDocExtractOrm.extracted_at.desc(),
+                        TDocExtractOrm.ftp_url.asc(),
+                    )
+                )
+                .all()
+            )
+        return [_orm_to_meta(row) for row in rows]
+
+    def get_extract_meta_by_url(self, url: str) -> TDocExtractMeta | None:
+        """Return the extract-metadata row whose URL matches.
+
+        ``url`` is the relative ``ftp_url`` (the PK).
+        """
+        with self._session_factory() as session:
+            row = session.get(TDocExtractOrm, url)
         if row is None:
             return None
         return _orm_to_meta(row)
@@ -105,9 +187,9 @@ class SQLAlchemyTDocCrRepository:
     def _details_to_orm(target: TDocCrDetailOrm, details: TDocCRDetails) -> None:
         """Copy :class:`TDocCRDetails` fields onto an ORM instance.
 
-        Excludes ``tdoc_id`` (PK, never overwritten) and ``extracted_at``
-        / ``updated_at`` (stamped separately by :meth:`upsert` /
-        server-side defaults).
+        Excludes ``ftp_url`` (PK, never overwritten after construction),
+        ``tdoc_id`` (handled by :meth:`upsert` because it is the FK),
+        and ``extracted_at`` (stamped by the server-side default).
         """
         target.spec = details.spec
         target.cr_num = details.cr_num
@@ -134,13 +216,16 @@ class SQLAlchemyTDocCrRepository:
         target.year = details.year
         target.tech = details.tech
         target.extracted_tdoc_id = details.extracted_tdoc_id
-        target.url = details.url
         target.parser_version = details.parser_version
         target.corrections = json.dumps(details.corrections, ensure_ascii=False)
 
     @staticmethod
     def _meta_to_orm(target: TDocExtractOrm, meta: TDocExtractMeta) -> None:
-        """Copy :class:`TDocExtractMeta` fields onto an ORM instance."""
+        """Copy :class:`TDocExtractMeta` fields onto an ORM instance.
+
+        Excludes ``ftp_url`` (PK) and ``tdoc_id`` (FK, handled by
+        :meth:`upsert`).
+        """
         target.zip_path = meta.zip_path
         target.markdown_path = meta.markdown_path
         target.doc_filename = meta.doc_filename
@@ -154,8 +239,8 @@ def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
 
     The ``corrections`` ``TEXT`` column is decoded with a tolerant
     fallback to ``[]`` so a ``None`` / empty / unparseable blob never
-    breaks a read. The dataclass itself rejects blank ``tdoc_id`` in
-    ``__post_init__``, so we pass it through verbatim from the ORM row.
+    breaks a read. ``ftp_url`` is read straight from the row — the
+    URL is now the PK rather than a nullable provenance column.
     """
     return TDocCRDetails(
         tdoc_id=row.tdoc_id,
@@ -185,7 +270,7 @@ def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
         year=row.year,
         tech=row.tech,
         extracted_tdoc_id=row.extracted_tdoc_id,
-        url=row.url,
+        ftp_url=row.ftp_url,
         parser_version=row.parser_version,
     )
 
@@ -193,6 +278,7 @@ def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
 def _orm_to_meta(row: TDocExtractOrm) -> TDocExtractMeta:
     """Reconstruct a :class:`TDocExtractMeta` from an ORM row."""
     return TDocExtractMeta(
+        ftp_url=row.ftp_url,
         tdoc_id=row.tdoc_id,
         zip_path=row.zip_path,
         markdown_path=row.markdown_path,

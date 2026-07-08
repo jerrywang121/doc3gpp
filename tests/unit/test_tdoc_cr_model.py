@@ -14,18 +14,21 @@ The ORM tests at the bottom of the file exercise the persistence
 shape — :class:`TDocCrDetailOrm` and :class:`TDocExtractOrm` —
 against an in-memory sqlite engine to confirm the metadata-based
 ``create_all`` registers the new tables and the column types match
-the dataclass's ``to_persisted()`` contract.
+the dataclass's ``to_persisted()`` contract. Both ORM tables are
+keyed on the immutable download ``url`` so multiple revisions of the
+same ``tdoc_id`` live at distinct rows.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
-from sqlalchemy import create_engine, event, inspect
+from sqlalchemy import create_engine, event, inspect, select
 from sqlalchemy.orm import sessionmaker
 
-from doc3gpp.models.tdoc_cr import TDocCRDetails
+from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import TDocCrDetailOrm
 from doc3gpp.storage.db.models import TDocExtractOrm
@@ -150,6 +153,52 @@ def test_dataclass_is_frozen() -> None:
         details.tdoc_id = "R5s260010"  # type: ignore[misc]
 
 
+def test_extract_meta_post_init_rejects_blank_url() -> None:
+    """A blank ``ftp_url`` raises ``ValueError``; URL is the row identity."""
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
+        TDocExtractMeta(
+            ftp_url="",
+            tdoc_id="R5s260009",
+            zip_path="/tmp/z",
+            markdown_path="/tmp/m",
+            doc_filename="R5s260009.docx",
+        )
+
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
+        TDocExtractMeta(
+            ftp_url="   ",
+            tdoc_id="R5s260009",
+            zip_path="/tmp/z",
+            markdown_path="/tmp/m",
+            doc_filename="R5s260009.docx",
+        )
+
+
+def test_extract_meta_post_init_rejects_blank_tdoc_id() -> None:
+    """A blank ``tdoc_id`` raises ``ValueError`` (FK target must exist)."""
+    with pytest.raises(ValueError, match="non-empty tdoc_id"):
+        TDocExtractMeta(
+            ftp_url="example.com/r5s260009.zip",
+            tdoc_id="",
+            zip_path="/tmp/z",
+            markdown_path="/tmp/m",
+            doc_filename="R5s260009.docx",
+        )
+
+
+def test_extract_meta_post_init_strips_whitespace() -> None:
+    """Leading/trailing whitespace on required fields is stripped."""
+    meta = TDocExtractMeta(
+        ftp_url="  example.com/r5s260009.zip\n",
+        tdoc_id=" R5s260009 ",
+        zip_path="/tmp/z",
+        markdown_path="/tmp/m",
+        doc_filename="R5s260009.docx",
+    )
+    assert meta.ftp_url == "example.com/r5s260009.zip"
+    assert meta.tdoc_id == "R5s260009"
+
+
 # ---------------------------------------------------------------------------
 # ORM round-trip tests (Phase 5).
 # ---------------------------------------------------------------------------
@@ -218,9 +267,11 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
         ]
     )
 
+    url = "stored/R5s260176.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260176")
         row = TDocCrDetailOrm(
+            ftp_url=url,
             tdoc_id="R5s260176",
             spec="36.523-3",
             cr_num="4971",
@@ -230,7 +281,7 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
             source="RAN5",
             tsg="R5",
             related_wis="IMS5",
-            date="2026-03-15",
+            date=date(2026, 3, 15),
             cr_cat="B",
             release="Rel-18",
             reason_for_change="NW behaviour diverged",
@@ -253,8 +304,9 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
         session.commit()
 
     with Session() as session:
-        loaded = session.get(TDocCrDetailOrm, "R5s260176")
+        loaded = session.get(TDocCrDetailOrm, url)
         assert loaded is not None
+        assert loaded.ftp_url == url
         assert loaded.tdoc_id == "R5s260176"
         assert loaded.spec == "36.523-3"
         assert loaded.cr_num == "4971"
@@ -264,7 +316,7 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
         assert loaded.source == "RAN5"
         assert loaded.tsg == "R5"
         assert loaded.related_wis == "IMS5"
-        assert loaded.date == "2026-03-15"
+        assert loaded.date == date(2026, 3, 15)
         assert loaded.cr_cat == "B"
         assert loaded.release == "Rel-18"
         assert loaded.reason_for_change == "NW behaviour diverged"
@@ -295,9 +347,11 @@ def test_tdoc_extract_orm_round_trip() -> None:
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
 
+    url = "stored/R5s260009.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260009")
         row = TDocExtractOrm(
+            ftp_url=url,
             tdoc_id="R5s260009",
             zip_path="/cache/zips/R5s260009.zip",
             markdown_path="/cache/markdown/R5s260009.md",
@@ -307,8 +361,9 @@ def test_tdoc_extract_orm_round_trip() -> None:
         session.commit()
 
     with Session() as session:
-        loaded = session.get(TDocExtractOrm, "R5s260009")
+        loaded = session.get(TDocExtractOrm, url)
         assert loaded is not None
+        assert loaded.tdoc_id == "R5s260009"
         assert loaded.zip_path == "/cache/zips/R5s260009.zip"
         assert loaded.markdown_path == "/cache/markdown/R5s260009.md"
         assert loaded.doc_filename == "R5s260009.docx"
@@ -317,24 +372,30 @@ def test_tdoc_extract_orm_round_trip() -> None:
 
 
 def test_tdoc_cr_detail_orm_minimal() -> None:
-    """A detail row with only ``tdoc_id`` + ``parser_version`` survives.
+    """A detail row with just ``url`` + ``tdoc_id`` survives.
 
     All cover-page / TTCN columns are nullable; an early parse that
-    only knows the tdoc_id (e.g. before the markdown body has been
-    classified as a CR) must still be persistable.
+    only knows the URL + TDoc id (e.g. before the markdown body has
+    been classified as a CR) must still be persistable.
     """
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
 
+    url = "stored/R5-227476.zip"
     with Session() as session:
         _seed_tdoc(session, "R5-227476")
-        row = TDocCrDetailOrm(tdoc_id="R5-227476", parser_version="1.0.0")
+        row = TDocCrDetailOrm(
+            ftp_url=url,
+            tdoc_id="R5-227476",
+            parser_version="1.0.0",
+        )
         session.add(row)
         session.commit()
 
     with Session() as session:
-        loaded = session.get(TDocCrDetailOrm, "R5-227476")
+        loaded = session.get(TDocCrDetailOrm, url)
         assert loaded is not None
+        assert loaded.ftp_url == url
         assert loaded.tdoc_id == "R5-227476"
         assert loaded.parser_version == "1.0.0"
         assert loaded.spec is None
@@ -346,6 +407,50 @@ def test_tdoc_cr_detail_orm_minimal() -> None:
         assert loaded.extracted_at is not None
 
 
+def test_multiple_revisions_for_same_tdoc_id() -> None:
+    """Two URLs for the same ``tdoc_id`` land in distinct rows.
+
+    Validates the URL-as-PK invariant: the same logical TDoc id can
+    occupy multiple rows when the 3GPP asset is hosted at distinct
+    URLs (e.g. ``R5s260009`` and a later ``R5s260009_rev2``).
+    """
+    engine = _make_engine()
+    Session = sessionmaker(bind=engine)
+
+    url_a = "stored/R5s260009.zip"
+    url_b = "stored/R5s260009_rev2.zip"
+    with Session() as session:
+        _seed_tdoc(session, "R5s260009")
+        session.add(
+            TDocCrDetailOrm(
+                ftp_url=url_a, tdoc_id="R5s260009", spec="38.523-3",
+                cr_num="3790", rev="0",
+            )
+        )
+        session.add(
+            TDocCrDetailOrm(
+                ftp_url=url_b, tdoc_id="R5s260009", spec="38.523-3",
+                cr_num="3790", rev="2",
+            )
+        )
+        session.commit()
+
+    with Session() as session:
+        rows = (
+            session.scalars(
+                select(TDocCrDetailOrm).where(
+                    TDocCrDetailOrm.tdoc_id == "R5s260009"
+                )
+            )
+            .all()
+        )
+        assert len(rows) == 2
+        urls = {row.ftp_url for row in rows}
+        assert urls == {url_a, url_b}
+        revs = {row.rev for row in rows}
+        assert revs == {"0", "2"}
+
+
 def test_cascade_delete_via_fk() -> None:
     """Deleting a parent TDoc wipes the dependent detail + extract rows.
 
@@ -353,20 +458,48 @@ def test_cascade_delete_via_fk() -> None:
     ``PRAGMA foreign_keys=ON`` connect listener; sqlite's default is
     OFF, so we opt in for this test. The cascade is declared via
     ``ForeignKey(..., ondelete="CASCADE")`` on both child tables.
+    Both child tables are now keyed by URL; the cascade fires when
+    the parent TDoc row vanishes regardless of how many revisions
+    exist.
     """
     engine = _make_engine(foreign_keys=True)
     Session = sessionmaker(bind=engine)
 
+    url_a = "stored/R5s260051.zip"
+    url_b = "stored/R5s260051_rev2.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260051")
         session.add(
-            TDocCrDetailOrm(tdoc_id="R5s260051", spec="38.523-3", cr_num="3806")
+            TDocCrDetailOrm(
+                ftp_url=url_a,
+                tdoc_id="R5s260051",
+                spec="38.523-3",
+                cr_num="3806",
+            )
+        )
+        session.add(
+            TDocCrDetailOrm(
+                ftp_url=url_b,
+                tdoc_id="R5s260051",
+                spec="38.523-3",
+                cr_num="3806",
+            )
         )
         session.add(
             TDocExtractOrm(
+                ftp_url=url_a,
                 tdoc_id="R5s260051",
                 zip_path="/z",
                 markdown_path="/m",
+                doc_filename="R5s260051.docx",
+            )
+        )
+        session.add(
+            TDocExtractOrm(
+                ftp_url=url_b,
+                tdoc_id="R5s260051",
+                zip_path="/z2",
+                markdown_path="/m2",
                 doc_filename="R5s260051.docx",
             )
         )
@@ -380,5 +513,7 @@ def test_cascade_delete_via_fk() -> None:
 
     with Session() as session:
         assert session.get(TDocORM, "R5s260051") is None
-        assert session.get(TDocCrDetailOrm, "R5s260051") is None
-        assert session.get(TDocExtractOrm, "R5s260051") is None
+        assert session.get(TDocCrDetailOrm, url_a) is None
+        assert session.get(TDocCrDetailOrm, url_b) is None
+        assert session.get(TDocExtractOrm, url_a) is None
+        assert session.get(TDocExtractOrm, url_b) is None

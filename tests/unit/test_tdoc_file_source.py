@@ -75,8 +75,8 @@ def test_scans_each_known_subfolder_and_collects_unique_files() -> None:
     assert by_file["R5s260001_MCC160Comments.zip"].type == TDocFileTypeReview
     assert by_file["R5s260001_draft.zip"].type == TDocFileTypeSupport
     assert by_file["R5-261719r1.zip"].type == TDocFileTypeRevision
-    assert by_file["R5-261719r1.zip"].url == (
-        f"{intermediate_crs_base}R5-261719r1.zip"
+    assert by_file["R5-261719r1.zip"].ftp_url == (
+        "meeting/Inbox/Intermediate_CRs/R5-261719r1.zip"
     )
     # Base TDoc ZIP is still skipped even though it appears in the listing.
     assert "R5s260001.zip" not in by_file

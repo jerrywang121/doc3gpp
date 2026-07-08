@@ -26,7 +26,7 @@ class TDocORM(Base):
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     # store as FK to meetings.meeting_id
     meeting_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("meetings.meeting_id"), nullable=True, index=True)
-    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ftp_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(String(256), nullable=True)
     type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -41,12 +41,6 @@ class TDocORM(Base):
     related_wis: Mapped[str | None] = mapped_column(String(256), nullable=True)
     cr_num: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cr_pack: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
 class MeetingORM(Base):
@@ -63,7 +57,6 @@ class MeetingORM(Base):
     ftp_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
     end_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TsgORM(Base):
@@ -105,7 +98,6 @@ class WiORM(Base):
         nullable=False,
         index=True,
     )
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TDocFileORM(Base):
@@ -113,9 +105,10 @@ class TDocFileORM(Base):
 
     One row per file observed in a meeting's FTP subfolders (``Inbox/``,
     ``Docs/``, ``Tdocs/``, or ``Review/``). Identity is the
-    fully-qualified download URL: the same file lives at exactly one
-    upstream location, so the ``url`` column is the natural upsert key
-    and is the only unique index in the table.
+    download URL path relative to ``https://www.3gpp.org/ftp/``: the
+    same file lives at exactly one upstream location, so the
+    ``ftp_url`` column is the natural upsert key and is the only
+    unique index in the table.
 
     ``tdoc_id`` is a foreign key into ``tdocs.tdoc_id``; the sync flow
     populates ``tdocs`` first and only persists ``TDocFile`` rows for
@@ -136,42 +129,51 @@ class TDocFileORM(Base):
     )
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     file: Mapped[str] = mapped_column(String(256), nullable=False)
-    url: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    ftp_url: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
     uploaded_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
 class TDocCrDetailOrm(Base):
     """Structured CR (Change Request) details extracted from a TDoc.
 
-    One row per TDoc that has been parsed by ``parsers.cr_parser``.
+    One row per **immutable download URL** rather than per TDoc id —
+    3GPP zip assets are byte-for-byte identical for the lifetime of the
+    URL, while the logical ``tdoc_id`` may map to multiple URLs across
+    revisions. Keying on ``ftp_url`` lets every revision of the same
+    ``tdoc_id`` coexist: a fresh extract at a new URL writes a new
+    row instead of clobbering the parsed record for the previous one.
+
     Carries the cover-page fields (spec, cr_num, title, ...) and the
     TTCN-only fields (ats_version, ttcn_release, test_case, ...) plus
-    the full ``corrections`` list serialised as a single JSON string in
-    the ``corrections`` ``TEXT`` column. See
+    the full ``corrections`` list serialised as a single JSON string
+    in the ``corrections`` ``TEXT`` column. See
     :class:`doc3gpp.models.tdoc_cr.TDocCRDetails` for the in-memory
     shape; :py:meth:`TDocCRDetails.to_persisted` produces the dict
     this table persists.
 
-    ``tdoc_id`` is the primary key AND a foreign key into
-    ``tdocs.tdoc_id``; ``ondelete="CASCADE"`` keeps the detail row in
-    sync with its parent TDoc — unlike ``TDocFileORM`` the CR details
-    are derived artefacts of the TDoc row and should be wiped when the
-    TDoc itself is removed. ``parser_version`` and ``extracted_at``
-    are diagnostic columns for re-extract audits.
+    ``ftp_url`` is the primary key — the same URL serves the same bytes
+    forever, so re-extracting at the same URL is idempotent. ``tdoc_id``
+    is a non-PK foreign key into ``tdocs.tdoc_id`` indexed for the
+    ``get(tdoc_id)`` lookup; ``ondelete="CASCADE"`` keeps the detail
+    rows in sync with their parent TDoc — unlike ``TDocFileORM`` the
+    CR details are derived artefacts of the TDoc row and should be
+    wiped when the TDoc itself is removed. ``parser_version`` and
+    ``extracted_at`` are diagnostic columns for re-extract audits.
+
+    The URL is stored as a path relative to the canonical 3GPP FTP
+    root (``https://www.3gpp.org/ftp/``) to match the convention used
+    by ``meetings.ftp_url``; the service layer is responsible for
+    normalising at the boundary.
     """
 
     __tablename__ = "tdoc_cr_details"
 
+    ftp_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
-        primary_key=True,
+        nullable=False,
+        index=True,
     )
     spec: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cr_num: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -181,7 +183,7 @@ class TDocCrDetailOrm(Base):
     source: Mapped[str | None] = mapped_column(String(256), nullable=True)
     tsg: Mapped[str | None] = mapped_column(String(16), nullable=True)
     related_wis: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    date: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    date: Mapped[date | None] = mapped_column(Date, nullable=True)
     cr_cat: Mapped[str | None] = mapped_column(String(16), nullable=True)
     release: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason_for_change: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -199,17 +201,11 @@ class TDocCrDetailOrm(Base):
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tech: Mapped[str | None] = mapped_column(String(16), nullable=True)
     extracted_tdoc_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Exact URL the TDoc zip was downloaded from during this extract;
-    # None when the bytes came from a prior cache hit.
-    url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     parser_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="1.0.0"
     )
     extracted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
     )
 
 
@@ -223,20 +219,24 @@ class TDocExtractOrm(Base):
     on disk, so the next extract call can short-circuit the network
     and the python-docx render.
 
-    Mirrors the cascade-on-parent-delete policy of
-    :class:`TDocCrDetailOrm`: when the owning TDoc row is removed, the
+    Mirrors the URL-PK scheme of :class:`TDocCrDetailOrm`: identity
+    is the immutable download URL (stored relative to the 3GPP FTP
+    root), and ``tdoc_id`` is a non-PK FK into ``tdocs.tdoc_id`` with
+    ``ondelete="CASCADE"`` — when the owning TDoc row is removed, the
     extract metadata loses its meaning and is dropped with it.
     """
 
     __tablename__ = "tdoc_extracts"
 
+    ftp_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
-        primary_key=True,
+        nullable=False,
+        index=True,
     )
-    zip_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    markdown_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    zip_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    markdown_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     doc_filename: Mapped[str] = mapped_column(String(256), nullable=False)
     extracted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

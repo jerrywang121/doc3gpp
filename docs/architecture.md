@@ -151,7 +151,7 @@ and the TDoc CR extraction is the deepest.
       TDoc IDs as the prefix list to recognise attachments under
       `Inbox/`, `Docs/`, `Tdocs/`, `Review/`.
 3. `SQLAlchemyTDocFileRepository.upsert_many` persists revision / review
-  / support files keyed by the unique `url`.
+   / support files keyed by the unique `ftp_url`.
 
 ### TDoc CR extraction
 
@@ -159,12 +159,20 @@ and the TDoc CR extraction is the deepest.
    id (via `TDocRepository.get_by_id`) and validates the row exists with
    `type == "CR"` (raises `TDocTypeUnsupportedError` for non-CR ids).
 2. `TDocCrService.extract(tdoc_id, *, force=False)`:
-    - If the detail row already exists and `not force`, returns it
-      (`ExtractResult.from_cache = True`).
+    - Pre-resolves the candidate download URL(s) via
+      `resolve_download_url(tdoc_id, build_ftp_url(tdocs.ftp_url))`
+      (combining the stored `tdocs.ftp_url` rebuilt to an absolute URL
+      via `build_ftp_url`, and the template URL), then probes
+      `TDocCrRepository.get_by_url` (normalised via `normalize_ftp_path`)
+      per candidate. A hit short-circuits with
+      `ExtractResult.from_cache = True` and skips the network.
     - Else, `download_tdoc_zip` resolves the TDoc id to its 3GPP URL
       via the template table (`R5s` → TTCN email CR,
       `R5w` → workshop CR), hits `ScraperClient.get_bytes`, and stages
-      the zip in `TDocCache.put_bytes(key, payload, "zips")`.
+      the zip in `TDocCache.put_bytes(key, payload, "zips")`. On cache
+      miss the function tries the stored `tdocs.ftp_url` (rebuilt to
+      an absolute URL), falling back to the template on a terminal
+      HTTP error.
     - `extract_docx_from_zip` returns `(filename, docx_bytes)`.
     - The markdown for that exact `docx_bytes` is looked up by
       `sha256(docx_bytes)` in `TDocCache.get_bytes(sha, "markdown")`;
@@ -175,14 +183,16 @@ and the TDoc CR extraction is the deepest.
       `TDocCRDetails` (cover-page; TTCN overview + corrections only
       when `tdoc_id` matches `R5s\d{6}`).
     - `TDocCrRepository.upsert(details, extract_meta)` writes both the
-      detail row and the extract-metadata row (zip/markdown paths,
-      `doc_filename`, `extracted_at`, `parser_version`) in one
-      transaction.
+      detail row and the extract-metadata row (both keyed by the
+      relative `ftp_url`) in one transaction. The URL is the immutable
+      identity — multiple extracts at distinct URLs for the same
+      `tdoc_id` write distinct rows, one per revision.
     - Returns `ExtractResult(details, extract_meta, from_cache=False)`.
 3. `doc3gpp tdoc show --tdoc <id>` reads `tdocs` (via
-   `TDocRepository.get_by_id`) and, if present, the matching
-   `tdoc_cr_details` row, and prints both — the latter as a
-   `[Extracted Details]` block.
+   `TDocRepository.get_by_id`) and every matching `tdoc_cr_details`
+   row (one per URL/revision), printing each under its own
+   `[Extracted Details]` block with the URL as a header. The
+   `corrections` list of every block is JSON-dumped for full fidelity.
 
 ### Cache + CLI
 
@@ -199,17 +209,20 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
 
 - `tdocs`:
     - `tdoc_id` (PK), `title`, `meeting_id` (FK → `meetings.meeting_id`),
-      `url`, `source`, `type`, `status`, `reservation_date`,
+      `ftp_url`, `source`, `type`, `status`, `reservation_date`,
       `uploaded_date`, `cr_cat`, `is_revision_of`, `revised_to`,
       `release`, `spec`, `version`, `related_wis`, `cr_num`,
       `cr_pack`, `created_at`, `updated_at`.
 - `tdoc_files`:
     - `id` (PK), `tdoc_id` (FK → `tdocs.tdoc_id`, no cascade),
-      `type` (`revision` / `review` / `support`), `file`, `url`
-      (unique, the upsert key), `created_at`, `updated_at`.
+      `type` (`revision` / `review` / `support`), `file`, `ftp_url`
+      (unique, the upsert key; stored as a path relative to the
+      canonical 3GPP FTP root), `created_at`, `updated_at`.
 - `tdoc_cr_details`:
-    - `tdoc_id` (PK, FK → `tdocs.tdoc_id` **with `ondelete="CASCADE"`**),
-      one column per parsed cover-page / overview / corrections field
+    - `ftp_url` (PK, immutable download URL stored relative to the
+      3GPP FTP root) + `tdoc_id` (non-PK FK → `tdocs.tdoc_id` with
+      `ondelete="CASCADE"`, indexed for the per-tdoc lookup), one
+      column per parsed cover-page / overview / corrections field
       (`spec`, `cr_num`, `rev`, `version`, `title`, `source`, `tsg`,
       `related_wis`, `date`, `cr_cat`, `release`,
       `reason_for_change`, `consequences_if_not_approved`,
@@ -217,13 +230,21 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `ats_version`, `ttcn_release`, `test_case`, `test_suite`,
       `ue`, `ss`, `corrections` JSON blob, `year`, `tech`,
       `extracted_tdoc_id`), `parser_version`, `extracted_at`,
-      `updated_at`.
+      `updated_at`. Identity is the URL because 3GPP assets are
+      byte-for-byte identical for the lifetime of the URL while a
+      single `tdoc_id` may map to multiple URLs across revisions —
+      every revision's parsed record is preserved.
 - `tdoc_extracts`:
-    - `tdoc_id` (PK, FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`),
-      `zip_path`, `markdown_path`, `doc_filename`, `extracted_at`,
-      `parser_version`. Cache-pointer sidecar; not joined to the detail
-      row because the markdown path and the parsed detail have
-      different invalidation lifecycles.
+    - `ftp_url` (PK, matches `tdoc_cr_details.ftp_url`) + `tdoc_id`
+      (non-PK FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed
+      for the per-tdoc lookup), `zip_path`, `markdown_path`,
+      `doc_filename`, `extracted_at`, `parser_version`. Cache-pointer
+      sidecar — the two child tables share the URL as their identity
+      but have **no FK between themselves**: the on-disk cache can be
+      purged (deleting every `tdoc_extracts` row) without dropping the
+      parsed `tdoc_cr_details` history, and the parsed record can be
+      rebuilt (deleting `tdoc_cr_details`) without invalidating the
+      cached zip/markdown.
 - `meetings`:
     - `meeting_id` (PK), `name`, `title`, `location`, `start_date`,
       `end_date`, `ftp_url`, `start_doc`, `end_doc`, `updated_at`.
@@ -236,12 +257,16 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       keeps the natural identifier stable across multi-TSG ownership.
 
 Cascading FK deletes are deliberately inconsistent across the schema:
-`tdoc_cr_details` / `tdoc_extracts` cascade (they are derived artefacts
-of the parent TDoc and are safe to wipe with it), while `tdoc_files`
-does not (revision files survive a TDoc re-sync). The
-`test_cascade_delete_via_fk` ORM test exercises the cascade
-end-to-end via a `PRAGMA foreign_keys=ON` connect listener (SQLite
-default is OFF).
+`tdoc_cr_details` / `tdoc_extracts` cascade on `tdocs.tdoc_id`
+deletion (they are derived artefacts of the parent TDoc and are safe
+to wipe with it), while `tdoc_files` does not (revision files
+survive a TDoc re-sync). The `tdoc_cr_details` and
+`tdoc_extracts` tables have **no FK between each other**: the cache
+sidecar can be purged without dropping parsed detail history, and
+the parsed detail can be rebuilt without invalidating the cached
+zip/markdown. The `test_cascade_delete_via_fk` ORM test exercises
+the cascade end-to-end via a `PRAGMA foreign_keys=ON` connect
+listener (SQLite default is OFF).
 
 ## Backend Selection
 
@@ -274,8 +299,8 @@ seventeen commands):
 - `tdoc`:
     - `sync` — `--meeting-id` or `--meeting`; delegates to
       `TDocSyncCoordinator`
-    - `list` — filters by `--tsg`, `--meeting`, `--year`, `--source`,
-      `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`
+    - `list` — filters by `--tsg`, `--meeting`, `--meeting-id`, `--year`,
+      `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`
     - `extract` — `--tdoc` / `--tdoc-id` (repeatable), `--force`,
       `--full`; batch extraction with per-id failure isolation
     - `show` — `--tdoc`; renders the matching TDoc and, when present,

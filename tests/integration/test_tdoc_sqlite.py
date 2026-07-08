@@ -43,7 +43,7 @@ def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
             tdoc_id="R1-000001",
             title="First",
             meeting_id=100,
-            url="https://x/1",
+            ftp_url="x/1",
             source="Qualcomm",
             type="CR",
             status="Agreed",
@@ -56,7 +56,7 @@ def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
             tdoc_id="R1-000001",
             title="First updated",
             meeting_id=100,
-            url="https://x/1a",
+            ftp_url="x/1a",
             source="Ericsson",
             cr_pack="RP-000124",
         )
@@ -127,14 +127,14 @@ def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
 
 
 def test_tdoc_sync_stores_per_tdoc_zip_url_not_xlsx_url(monkeypatch, sqlite_env) -> None:
-    """``tdocs.url`` must point at the per-TDoc zip file, not the XLSX list.
+    """``tdocs.ftp_url`` must point at the per-TDoc zip file, not the XLSX list.
 
     Regression: prior to the hyperlink-aware parser, every TDoc row inherited
     the XLSX file URL (e.g. ``.../TDoc_List_Meeting_RAN5#111.xlsx``) as its
-    ``url`` field, which is useless for downloading the actual document.
+    ``ftp_url`` field, which is useless for downloading the actual document.
     The real RAN5#111 fixture ships hyperlinks on column A pointing at
     each TDoc's ``.zip``; we assert those URLs round-trip through the sync
-    into the database.
+    into the database as paths relative to ``https://www.3gpp.org/ftp/``.
     """
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())
@@ -182,19 +182,18 @@ def test_tdoc_sync_stores_per_tdoc_zip_url_not_xlsx_url(monkeypatch, sqlite_env)
     by_id = {row.tdoc_id: row for row in rows}
 
     # Spot-check: both rows have column-A hyperlinks pointing at their zips.
-    assert by_id["R5-261700"].url == (
-        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/"
-        "TSGR5__111_Dalian/Docs/R5-261700.zip"
+    # ``ftp_url`` is stored as a path relative to the 3GPP FTP root.
+    assert by_id["R5-261700"].ftp_url == (
+        "tsg_ran/WG5_Test_ex-T1/TSGR5__111_Dalian/Docs/R5-261700.zip"
     )
-    assert by_id["R5-261701"].url == (
-        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/"
-        "TSGR5__111_Dalian/Docs/R5-261701.zip"
+    assert by_id["R5-261701"].ftp_url == (
+        "tsg_ran/WG5_Test_ex-T1/TSGR5__111_Dalian/Docs/R5-261701.zip"
     )
     # Guard against regression: the XLSX list URL must never appear here.
     for row in rows:
-        if row.url is not None:
-            assert not row.url.endswith(".xlsx"), (
-                f"TDoc {row.tdoc_id} url points at XLSX list, not zip: {row.url}"
+        if row.ftp_url is not None:
+            assert not row.ftp_url.endswith(".xlsx"), (
+                f"TDoc {row.tdoc_id} ftp_url points at XLSX list, not zip: {row.ftp_url}"
             )
 
 
@@ -305,9 +304,9 @@ def test_cli_tdoc_list_filters(sqlite_env) -> None:
     m3 = Meeting(meeting_id=110, name="RAN6#110", title="RAN6 meeting", location="Online", start_date=date(2026,3,1), end_date=date(2026,3,2))
     meeting_repo.upsert_many([m1, m2, m3])
 
-    repo.upsert(TDoc(tdoc_id="R5s260001", title="Example A", meeting_id=100, url="https://x/1"))
-    repo.upsert(TDoc(tdoc_id="R5s260002", title="Example B", meeting_id=101, url="https://x/2"))
-    repo.upsert(TDoc(tdoc_id="R6s260003", title="Example C", meeting_id=110, url="https://x/3"))
+    repo.upsert(TDoc(tdoc_id="R5s260001", title="Example A", meeting_id=100, ftp_url="x/1"))
+    repo.upsert(TDoc(tdoc_id="R5s260002", title="Example B", meeting_id=101, ftp_url="x/2"))
+    repo.upsert(TDoc(tdoc_id="R6s260003", title="Example C", meeting_id=110, ftp_url="x/3"))
 
     result = runner.invoke(
         app,
@@ -323,14 +322,61 @@ def test_cli_tdoc_list_filters(sqlite_env) -> None:
             "--limit",
             "10",
             "--fields",
-            "tdoc_id,title,meeting_name,url",
+            "tdoc_id,title,meeting_name,ftp_url",
         ],
     )
 
     assert result.exit_code == 0
-    assert "R5s260001\tExample A\tRAN3#100\thttps://x/1" in result.stdout
-    assert "R5s260002\tExample B\tRAN3#101\thttps://x/2" in result.stdout
+    assert "R5s260001\tExample A\tRAN3#100\tx/1" in result.stdout
+    assert "R5s260002\tExample B\tRAN3#101\tx/2" in result.stdout
     assert "R6s260003" not in result.stdout
+
+
+def test_cli_tdoc_list_filter_by_meeting_id(sqlite_env) -> None:
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+
+    repo = SQLAlchemyTDocRepository()
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    m1 = Meeting(meeting_id=200, name="RAN5#200", title="RAN5 meeting 200", location="Online", start_date=date(2026,1,1), end_date=date(2026,1,2))
+    m2 = Meeting(meeting_id=201, name="RAN5#201", title="RAN5 meeting 201", location="Online", start_date=date(2026,2,1), end_date=date(2026,2,2))
+    meeting_repo.upsert_many([m1, m2])
+
+    repo.upsert(TDoc(tdoc_id="R5s260001", title="Example A", meeting_id=200, ftp_url="x/1"))
+    repo.upsert(TDoc(tdoc_id="R5s260002", title="Example B", meeting_id=201, ftp_url="x/2"))
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc",
+            "list",
+            "--meeting-id",
+            "200",
+            "--limit",
+            "10",
+            "--fields",
+            "tdoc_id,title,meeting_name",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "R5s260001\tExample A\tRAN5#200" in result.stdout
+    assert "R5s260002" not in result.stdout
+
+
+def test_cli_tdoc_list_meeting_id_unknown_returns_no_rows(sqlite_env) -> None:
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "list", "--meeting-id", "999999"],
+    )
+
+    assert result.exit_code == 0
+    assert "No TDocs found" in result.stdout
 
 
 def test_cli_tdoc_sync_meeting_args_are_exclusive(sqlite_env) -> None:
@@ -376,7 +422,7 @@ def test_tdoc_repository_full_schema(sqlite_env) -> None:
         tdoc_id="R5-260001",
         title="Full Schema Test",
         meeting_id=123,
-        url="https://example.com/tdoc",
+        ftp_url="example.com/tdoc",
         source="Company A",
         type="CR",
         status="Agreed",
@@ -403,7 +449,7 @@ def test_tdoc_repository_full_schema(sqlite_env) -> None:
     assert stored.tdoc.title == tdoc.title
     assert stored.tdoc.meeting_id == tdoc.meeting_id
     assert stored.meeting_name == "RAN5#123"
-    assert stored.tdoc.url == tdoc.url
+    assert stored.tdoc.ftp_url == tdoc.ftp_url
     assert stored.tdoc.source == tdoc.source
     assert stored.tdoc.type == tdoc.type
     assert stored.tdoc.status == tdoc.status

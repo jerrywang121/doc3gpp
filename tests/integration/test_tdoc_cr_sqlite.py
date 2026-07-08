@@ -144,9 +144,12 @@ def test_extract_happy_path(sqlite_env, tmp_path) -> None:
     assert result.details.year == 2026
     assert result.details.tech == "5G"
     # Both DB rows landed.
-    assert cr_repo.get("R5s260009") is not None
-    meta = cr_repo.get_extract_meta("R5s260009")
-    assert meta is not None
+    details_list = cr_repo.get("R5s260009")
+    assert len(details_list) == 1
+    assert details_list[0].spec == "38.523-3"
+    meta_list = cr_repo.get_extract_meta("R5s260009")
+    assert len(meta_list) == 1
+    meta = meta_list[0]
     assert meta.tdoc_id == "R5s260009"
     assert meta.doc_filename.lower().endswith(".docx")
     assert Path(meta.zip_path).exists()
@@ -234,20 +237,32 @@ def test_extract_markdown_cache_hit_when_zip_purged(
     deleted = cache.purge_subdir("zips")
     assert deleted == 1
 
-    # Also drop the DB row so the service is forced to re-download +
+    # Also drop the DB rows so the service is forced to re-download +
     # re-parse. The plan requires this: a markdown cache hit must
-    # NOT be conflated with a DB cache hit.
+    # NOT be conflated with a DB cache hit. Both child tables are
+    # keyed by URL, so the lookups below go via the non-PK ``tdoc_id``
+    # FK; every matching revision row is dropped.
+    from sqlalchemy import select
+
     from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocExtractOrm
     from doc3gpp.storage.db.session import get_session_factory
 
     factory = get_session_factory()
     with factory() as session:
-        detail = session.get(TDocCrDetailOrm, "R5s260009")
-        if detail is not None:
-            session.delete(detail)
-        meta_row = session.get(TDocExtractOrm, "R5s260009")
-        if meta_row is not None:
-            session.delete(meta_row)
+        detail_rows = session.scalars(
+            select(TDocCrDetailOrm).where(
+                TDocCrDetailOrm.tdoc_id == "R5s260009"
+            )
+        ).all()
+        for row in detail_rows:
+            session.delete(row)
+        meta_rows = session.scalars(
+            select(TDocExtractOrm).where(
+                TDocExtractOrm.tdoc_id == "R5s260009"
+            )
+        ).all()
+        for row in meta_rows:
+            session.delete(row)
         session.commit()
 
     scraper_mock.reset_mock()
@@ -369,9 +384,9 @@ def test_extract_network_failure_no_partial_cache(sqlite_env, tmp_path) -> None:
     # …but no zip landed in the cache (no zero-byte file written).
     assert cache.status().zips == 0
     assert not any((cache.root / "zips").iterdir())
-    # And no DB row was persisted.
-    assert cr_repo.get("R5s260009") is None
-    assert cr_repo.get_extract_meta("R5s260009") is None
+    # And no DB rows were persisted.
+    assert cr_repo.get("R5s260009") == []
+    assert cr_repo.get_extract_meta("R5s260009") == []
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +412,7 @@ def test_extract_invalid_tdoc_id_raises_value_error(
     # Nothing was touched.
     assert scraper_mock.get_bytes.call_count == 0
     assert cache.status().file_count == 0
-    assert cr_repo.get("R5s260009") is None
+    assert cr_repo.get("R5s260009") == []  # ``get(tdoc_id)`` now returns a list
 
 
 # ---------------------------------------------------------------------------
@@ -520,15 +535,18 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
 
     # 2. The DB now has the persisted tdoc_cr_details + tdoc_extracts rows.
     cr_repo = SQLAlchemyTDocCrRepository()
-    details = cr_repo.get("R5s260009")
-    meta = cr_repo.get_extract_meta("R5s260009")
-    assert details is not None
+    details_list = cr_repo.get("R5s260009")
+    meta_list = cr_repo.get_extract_meta("R5s260009")
+    assert len(details_list) == 1
+    details = details_list[0]
     assert details.spec == "38.523-3"
     assert details.cr_num == "3790"
     assert details.release == "Rel-18"
-    assert meta is not None
+    assert len(meta_list) == 1
+    meta = meta_list[0]
     assert meta.tdoc_id == "R5s260009"
     assert meta.doc_filename.lower().endswith(".docx")
+    assert meta.ftp_url and details.ftp_url == meta.ftp_url
 
     # 3. A follow-up `tdoc show` invocation surfaces the persisted block.
     show_result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260009"])
@@ -550,13 +568,16 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None:
-    """When ``tdocs.url`` is populated, the extract pipeline must hit that
+    """When ``tdocs.ftp_url`` is populated, the extract pipeline must hit that
     URL first instead of the template-based guess."""
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    # ``ftp_url`` is stored as a path relative to the 3GPP FTP root;
+    # ``build_ftp_url`` reconstructs the absolute URL the scraper sees.
+    primary_ftp_url = "stored/R5s260009.zip"
+    primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
     template_url = (
         "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
         "2026/Docs/R5s260009.zip"
@@ -584,7 +605,7 @@ def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
-        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+        [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
     )
 
     result = service.extract("R5s260009")
@@ -611,7 +632,8 @@ def test_extract_falls_back_to_template_when_primary_url_fails(
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    primary_ftp_url = "stored/R5s260009.zip"
+    primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
     template_url = (
         "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
         "2026/Docs/R5s260009.zip"
@@ -639,7 +661,7 @@ def test_extract_falls_back_to_template_when_primary_url_fails(
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
-        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+        [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
     )
 
     result = service.extract("R5s260009")
@@ -708,12 +730,13 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
 )
 def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> None:
     """The exact URL the zip was downloaded from must land on the
-    ``tdoc_cr_details.url`` column and round-trip through the repo."""
+    ``tdoc_cr_details.ftp_url`` column and round-trip through the repo."""
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    primary_ftp_url = "stored/R5s260009.zip"
+    primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
     scraper_mock = MagicMock()
@@ -734,16 +757,19 @@ def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> No
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
-        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+        [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
     )
 
     result = service.extract("R5s260009")
 
-    assert result.details.url == primary_url
+    # The service normalises the resolved URL back to the relative
+    # ``ftp_url`` form before persisting, so the stored/downloaded
+    # URLs should round-trip to ``primary_ftp_url``.
+    assert result.details.ftp_url == primary_ftp_url
     assert result.from_cache is False
-    stored = cr_repo.get("R5s260009")
-    assert stored is not None
-    assert stored.url == primary_url
+    stored_list = cr_repo.get("R5s260009")
+    assert len(stored_list) == 1
+    assert stored_list[0].ftp_url == primary_ftp_url
 
 
 @pytest.mark.skipif(
@@ -757,10 +783,14 @@ def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> N
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    primary_url = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    primary_ftp_url = "stored/R5s260009.zip"
+    primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
     template_url = (
         "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
         "2026/Docs/R5s260009.zip"
+    )
+    template_ftp_url = (
+        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
     )
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
@@ -785,28 +815,34 @@ def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> N
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
-        [TDoc(tdoc_id="R5s260009", type="CR", url=primary_url)]
+        [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
     )
 
     result = service.extract("R5s260009")
 
     # The template URL is what actually served the bytes, so it's the
-    # one persisted — not the failed primary.
-    assert result.details.url == template_url
-    stored = cr_repo.get("R5s260009")
-    assert stored is not None
-    assert stored.url == template_url
+    # one persisted — not the failed primary. The service normalises
+    # back to the relative form before storage.
+    assert result.details.ftp_url == template_ftp_url
+    stored_list = cr_repo.get("R5s260009")
+    assert len(stored_list) == 1
+    assert stored_list[0].ftp_url == template_ftp_url
 
 
 def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
     """The ``url`` column on ``TDocCrDetailOrm`` must survive a
-    write-then-read round trip, including the ``None`` case."""
+    write-then-read round trip; URL is the primary key in the new
+    schema, so an upsert at the same URL replaces the row in place
+    while a fresh URL creates a second revision row.
+    """
     create_schema()
     cr_repo = SQLAlchemyTDocCrRepository()
     tdoc_repo = SQLAlchemyTDocRepository()
     tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="CR")])
 
+    url = "stored/R5s260009.zip"
     meta = TDocExtractMeta(
+        ftp_url=url,
         tdoc_id="R5s260009",
         zip_path="/tmp/r5s260009.zip",
         markdown_path="/tmp/r5s260009.md",
@@ -816,12 +852,87 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
         tdoc_id="R5s260009",
         spec="38.523-3",
         cr_num="3790",
-        url="https://www.3gpp.org/ftp/stored/R5s260009.zip",
+        ftp_url=url,
     )
     cr_repo.upsert(with_url, meta)
-    assert cr_repo.get("R5s260009").url == with_url.url
+    loaded = cr_repo.get_by_url(url)
+    assert loaded is not None
+    assert loaded.ftp_url == url
+    assert loaded.tdoc_id == "R5s260009"
 
-    # Overwrite with url=None to confirm the column is nullable on update.
-    without_url = replace(with_url, url=None)
-    cr_repo.upsert(without_url, meta)
-    assert cr_repo.get("R5s260009").url is None
+    # Same URL updates in place rather than creating a duplicate row.
+    cr_repo.upsert(
+        TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3791", ftp_url=url),
+        meta,
+    )
+    rows = cr_repo.get("R5s260009")
+    assert len(rows) == 1
+    assert rows[0].cr_num == "3791"
+
+    # A different URL creates a second revision row.
+    url_b = "stored/R5s260009_rev2.zip"
+    cr_repo.upsert(
+        TDocCRDetails(
+            tdoc_id="R5s260009",
+            spec="38.523-3",
+            cr_num="3791",
+            rev="2",
+            ftp_url=url_b,
+        ),
+        replace(meta, ftp_url=url_b),
+    )
+    rows = cr_repo.get("R5s260009")
+    urls = {row.ftp_url for row in rows}
+    assert urls == {url, url_b}
+
+
+def test_extract_repository_rejects_mismatched_urls(sqlite_env) -> None:
+    """``upsert`` rejects a details/meta pair whose URLs disagree.
+
+    The two child tables share the URL as their primary key and are
+    written in one transaction; a divergent ``url`` would let the
+    tables disagree, which the read contract forbids.
+    """
+    create_schema()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id="R5s260009", type="CR")]
+    )
+
+    details = TDocCRDetails(
+        tdoc_id="R5s260009",
+        spec="38.523-3",
+        cr_num="3790",
+        ftp_url="stored/R5s260009.zip",
+    )
+    meta = TDocExtractMeta(
+        ftp_url="stored/R5s260009_v2.zip",
+        tdoc_id="R5s260009",
+        zip_path="/tmp/z",
+        markdown_path="/tmp/m",
+        doc_filename="R5s260009.docx",
+    )
+    with pytest.raises(ValueError, match="must match"):
+        cr_repo.upsert(details, meta)
+
+
+def test_extract_repository_rejects_blank_url(sqlite_env) -> None:
+    """``upsert`` rejects an empty ``ftp_url`` on either side."""
+    create_schema()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id="R5s260009", type="CR")]
+    )
+
+    details = TDocCRDetails(
+        tdoc_id="R5s260009", spec="38.523-3", cr_num="3790", ftp_url=""
+    )
+    meta = TDocExtractMeta(
+        ftp_url="stored/R5s260009.zip",
+        tdoc_id="R5s260009",
+        zip_path="/tmp/z",
+        markdown_path="/tmp/m",
+        doc_filename="R5s260009.docx",
+    )
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
+        cr_repo.upsert(details, meta)

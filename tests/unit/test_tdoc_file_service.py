@@ -31,11 +31,11 @@ def test_sync_forwards_files_to_upsert_many(monkeypatch) -> None:
     fetched = [
         TDocFile(
             tdoc_id="R5s260001", type="revision", file="R5s260001r1.zip",
-            url="https://x/r1.zip",
+            ftp_url="x/r1.zip",
         ),
         TDocFile(
             tdoc_id="R5s260001", type="review", file="R5s260001_MCC160Comments.zip",
-            url="https://x/review.zip",
+            ftp_url="x/review.zip",
         ),
     ]
 

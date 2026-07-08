@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,8 +16,8 @@ class SQLAlchemyWiRepository:
     Identity within the table is the composite of ``wi_id`` and
     ``tsg_short``. The same numeric WI identifier can appear under multiple
     TSG WGs on the upstream DynaReport pages, so upserts use the pair to
-    refresh the acronym/release/title/updated_at fields rather than relying
-    on ``wi_id`` alone.
+    refresh the acronym/release/name fields rather than relying on
+    ``wi_id`` alone.
     """
 
     def __init__(self, session_factory: sessionmaker | None = None) -> None:
@@ -38,9 +36,8 @@ class SQLAlchemyWiRepository:
         """Insert or update multiple WI records.
 
         Each item is matched by the ``(wi_id, tsg_short)`` pair; matches
-        update the acronym, release, name and ``updated_at`` columns in
-        place, while non-matches become new rows. ``updated_at`` is stamped
-        with the current UTC time on every write.
+        update the acronym, release and name columns in place, while
+        non-matches become new rows.
 
         Returns:
             The number of input rows that were written (insert or update).
@@ -48,9 +45,8 @@ class SQLAlchemyWiRepository:
         if not wis:
             return 0
 
-        now = datetime.now(tz=timezone.utc)
         with self._session_factory() as session:
-            _persist(session, wis, now)
+            _persist(session, wis)
             session.commit()
         return len(wis)
 
@@ -62,8 +58,10 @@ class SQLAlchemyWiRepository:
         acronym_like: str | None = None,
         release_like: str | None = None,
     ) -> list[Wi]:
-        """Return WI rows ordered by most recently updated.
+        """Return WI rows ordered by descending ``wi_id``.
 
+        ``wi_id`` is a monotonically increasing DynaReport identifier, so
+        descending ``wi_id`` is a stable approximation of "newest first".
         Optional filters:
         - ``tsg``: case-insensitive match against ``tsg_short``.
         - ``name_like``, ``acronym_like``, ``release_like``: SQL ``LIKE``
@@ -84,10 +82,7 @@ class SQLAlchemyWiRepository:
             if release_like:
                 stmt = stmt.where(WiORM.release.like(release_like))
 
-            stmt = stmt.order_by(
-                WiORM.updated_at.desc().nullslast(),
-                WiORM.wi_id.desc(),
-            ).limit(limit)
+            stmt = stmt.order_by(WiORM.wi_id.desc()).limit(limit)
             rows = session.scalars(stmt).all()
 
         return [
@@ -97,13 +92,12 @@ class SQLAlchemyWiRepository:
                 release=row.release,
                 name=row.name,
                 tsg_short=row.tsg_short,
-                updated_at=row.updated_at,
             )
             for row in rows
         ]
 
 
-def _persist(session: Session, wis: list[Wi], updated_at: datetime) -> None:
+def _persist(session: Session, wis: list[Wi]) -> None:
     """Insert or refresh each row in-place on the given session."""
     for item in wis:
         stmt = select(WiORM).where(
@@ -114,7 +108,6 @@ def _persist(session: Session, wis: list[Wi], updated_at: datetime) -> None:
             existing.acronym = item.acronym
             existing.release = item.release
             existing.name = item.name
-            existing.updated_at = updated_at
         else:
             session.add(
                 WiORM(
@@ -123,6 +116,5 @@ def _persist(session: Session, wis: list[Wi], updated_at: datetime) -> None:
                     release=item.release,
                     name=item.name,
                     tsg_short=item.tsg_short,
-                    updated_at=updated_at,
                 )
             )

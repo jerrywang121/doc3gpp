@@ -143,25 +143,62 @@ def get_tdoc_zip_url(tdoc: str) -> str | None:
 
     Strategy: derive the canonical TDoc id from the input, then build the
     URL from the locked-in template. Callers that have a stored
-    ``tdocs.url`` (from a prior ``tdoc sync`` run) should pass it to
-    :func:`download_tdoc_zip` as ``primary_url`` so the per-TDoc URL takes
-    precedence over the template-based guess.
+    ``tdocs.ftp_url`` (from a prior ``tdoc sync`` run) should pass it to
+    :func:`download_tdoc_zip` as ``primary_url`` (after rebuilding the
+    absolute URL via :func:`doc3gpp.parsers.normalizers.build_ftp_url`)
+    so the per-TDoc URL takes precedence over the template-based guess.
     """
     if not tdoc:
         return None
-    canonical = _canonicalise_tdoc_id(tdoc)
+    canonical = canonicalise_tdoc_id(tdoc)
     if canonical is None:
         return None
     return _build_tdoc_zip_url(canonical)
 
 
-def _canonicalise_tdoc_id(tdoc: str) -> str | None:
-    """Normalise a TDoc id to the canonical ``Ts260009`` form.
+def resolve_download_url(
+    tdoc: str,
+    primary_url: str | None = None,
+) -> list[str]:
+    """Return the URL(s) ``download_tdoc_zip`` would try, in order.
 
-    Strips surrounding whitespace, lowercases the input, and matches it
-    against ``_CR_ID_RE``. Returns the canonical form (TSG short name
-    upper-cased) on match, ``None`` otherwise.
+    Pre-resolves the candidate URLs without touching the network so the
+    caller can perform a ``get_by_url`` DB cache lookup before paying
+    the cost of an HTTP fetch. The order matches
+    :func:`download_tdoc_zip`: ``primary_url`` first (when provided and
+    distinct from the template), then the template URL. ``tdoc`` is
+    first canonicalised; an unrecognised id returns an empty list.
     """
+    candidates: list[str] = []
+    if primary_url:
+        candidates.append(primary_url)
+    template_url = get_tdoc_zip_url(tdoc)
+    if template_url and template_url not in candidates:
+        candidates.append(template_url)
+    return candidates
+
+
+def canonicalise_tdoc_id(tdoc: str) -> str | None:
+    """Normalise a CR-shape TDoc id to its canonical ``R5s260009`` form.
+
+    Returns the canonical form (TSG short name upper-cased, everything
+    else as-is) on a match against ``_CR_ID_RE``, ``None`` otherwise.
+
+    Examples:
+        ``r5s260009`` -> ``R5s260009``
+        ``R5S260009`` -> ``R5s260009``
+        ``R5-227476`` -> ``R5-227476``
+        ``bogus``     -> ``None``
+        ``LS-260001`` -> ``None`` (non-CR shape)
+
+    Intentionally narrow to CR shapes; the only ones whose download URL
+    template we resolve. Non-CR rows (LS / DRAFT / etc.) live in the
+    ``tdocs`` table with their own shapes; callers that accept arbitrary
+    ids should fall back to the stripped input when this returns
+    ``None`` rather than rejecting the id outright.
+    """
+    if not tdoc:
+        return None
     match = _CR_ID_RE.fullmatch(tdoc.strip().lower())
     if match is None:
         return None
@@ -183,7 +220,8 @@ def download_tdoc_zip(
     miss the function tries each candidate URL in order and caches the
     first successful download:
 
-    1. ``primary_url`` (typically ``tdocs.url`` from a prior ``tdoc sync``).
+    1. ``primary_url`` (typically rebuilt from ``tdocs.ftp_url`` via
+   :func:`doc3gpp.parsers.normalizers.build_ftp_url`).
     2. The template-based URL from :func:`get_tdoc_zip_url`.
 
     The two are deduplicated, so a ``primary_url`` that matches the
@@ -209,7 +247,7 @@ def download_tdoc_zip(
     if not tdoc:
         raise ValueError("TDoc id is empty")
 
-    canonical = _canonicalise_tdoc_id(tdoc)
+    canonical = canonicalise_tdoc_id(tdoc)
     if canonical is None:
         raise ValueError(f"Invalid TDoc id shape: {tdoc!r}")
 

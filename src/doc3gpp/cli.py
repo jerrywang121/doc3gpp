@@ -10,6 +10,7 @@ from typing import TextIO
 
 import typer
 from sqlalchemy import text
+from sqlalchemy.engine.url import make_url
 
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
@@ -18,6 +19,7 @@ from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
+from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
     build_tdoc_cr_repository,
@@ -414,6 +416,84 @@ def db_init() -> None:
     typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
 
 
+@db_app.command("reset")
+def db_reset(
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt.",
+    ),
+) -> None:
+    """Delete the SQLite database file and recreate the schema from scratch.
+
+    Intended for recovering from schema drift after an ORM change — Alembic is
+    not wired up in this project, so manual migrations are the norm and a
+    mismatched schema can leave the DB unusable. This command is destructive:
+    every row in every table is wiped.
+
+    Only file-based SQLite URLs are supported:
+
+    - ``sqlite:///...`` / ``sqlite+pysqlite:///...`` — the on-disk file is
+      deleted and recreated.
+    - ``sqlite:///:memory:`` — there is nothing to delete; the schema is
+      re-applied to the (transient) in-memory database.
+
+    MySQL and PostgreSQL URLs are rejected with an explicit error — use the
+    backend-native ``DROP DATABASE`` / ``CREATE DATABASE`` workflow instead.
+
+    By default the command prompts for confirmation; pass ``--yes`` to skip
+    the prompt. After deletion the SQLAlchemy engine cache is cleared so the
+    subsequent ``create_schema()`` opens a fresh connection to the (now
+    empty) file. The ``tsgs`` reference table is then re-seeded.
+    """
+
+    settings = get_settings()
+    parsed = make_url(settings.database_url)
+
+    if not parsed.drivername.startswith("sqlite"):
+        raise typer.BadParameter(
+            f"'db reset' only supports SQLite backends "
+            f"(configured URL: {settings.database_url}). "
+            "Use the backend-native schema reset for MySQL or PostgreSQL."
+        )
+
+    db_file: Path | None = None
+    if parsed.database and parsed.database != ":memory:":
+        db_file = Path(parsed.database)
+
+    if db_file is not None and db_file.exists():
+        if not yes:
+            typer.confirm(
+                f"Delete SQLite database file at {db_file}?",
+                abort=True,
+            )
+        logger.info("Deleting SQLite database file %s", db_file)
+        db_file.unlink()
+        # Also remove any SQLite journal sidecar files (-wal, -shm, -journal)
+        # so a half-written WAL from a previous session does not survive
+        # the reset and confuse the new schema.
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = db_file.with_name(db_file.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+                logger.debug("Removed SQLite sidecar %s", sidecar)
+        typer.echo(f"Deleted {db_file}")
+    else:
+        typer.echo("No existing SQLite file to delete.")
+
+    # SQLAlchemy cached the engine from the pre-delete file path; clear it
+    # so create_schema() opens a fresh connection to the (now empty) file.
+    get_engine.cache_clear()
+
+    logger.info("Recreating database schema")
+    create_schema()
+    tsg_service = build_tsg_service()
+    seeded = tsg_service.seed_defaults()
+    logger.info("Seeded %s TSG reference records", seeded)
+    typer.echo(f"Database reset complete; seeded {seeded} TSG records")
+
+
 @meeting_app.command("sync")
 def meeting_sync(
     tsg: str = typer.Option(DEFAULT_TSG, help="TSG short name for 3GPP meeting report"),
@@ -527,11 +607,11 @@ def meeting_list(
     By default, the output includes the most useful columns for planning
     further commands (``meeting_id``, ``name``, ``location``, ``start_date``,
     ``end_date``, ``ftp_url``, ``start_doc``, ``end_doc``); pass
-    ``--fields all`` for the full schema including ``title`` and ``updated_at``.
+    ``--fields all`` for the full schema including ``title``.
 
     Available fields for selection:
     meeting_id, name, title, location, start_date, end_date, ftp_url,
-    start_doc, end_doc, updated_at
+    start_doc, end_doc
 
     Output routing:
     - `-o, --output PATH`: write results to PATH instead of stdout.
@@ -548,7 +628,6 @@ def meeting_list(
         "ftp_url",
         "start_doc",
         "end_doc",
-        "updated_at",
     ]
 
     settings = get_settings()
@@ -584,8 +663,6 @@ def meeting_list(
 
             if f in ("start_date", "end_date"):
                 vals.append(v.isoformat())
-            elif f == "updated_at":
-                vals.append(_fmt_dt(v))
             else:
                 vals.append(str(v))
 
@@ -642,6 +719,10 @@ def tdoc_list(
         None,
         help="SQL LIKE pattern to filter meeting name; supports % and _."
     ),
+    meeting_id: int | None = typer.Option(
+        None,
+        help="Exact meeting ID to filter TDocs (see `doc3gpp meeting list`).",
+    ),
     source: str | None = typer.Option(
         None,
         help="SQL LIKE pattern to filter TDoc source (e.g. 'Qualcomm%', '%Huawei%')."
@@ -694,6 +775,8 @@ def tdoc_list(
     - `--meeting`: substring filter on the meeting name; auto-wrapped with
       wildcards when no ``%`` / ``_`` is present, so `--meeting RAN5#111`
       matches anything containing that string.
+    - `--meeting-id`: exact match on the meeting ID. Combinable with
+      `--meeting`; rows must satisfy both predicates.
     - `--source`: SQL LIKE pattern to filter by source/contributor
     - `--spec`: SQL LIKE pattern to filter by technical specification
     - `--wi`: SQL LIKE pattern to filter by related work items
@@ -707,9 +790,9 @@ def tdoc_list(
     status, cr_cat, spec, version, related_wis.
 
     Available fields for selection:
-    tdoc_id, title, meeting_id, meeting_name, url, source, type, status,
+    tdoc_id, title, meeting_id, meeting_name, ftp_url, source, type, status,
     reservation_date, uploaded_date, cr_cat, is_revision_of, revised_to,
-    release, spec, version, related_wis, cr_num, cr_pack, updated_at
+    release, spec, version, related_wis, cr_num, cr_pack
 
     Output routing:
     - `-o, --output PATH`: write results to PATH instead of stdout.
@@ -727,11 +810,12 @@ def tdoc_list(
     fmt = _resolve_format(fmt, default=settings.output.format)
 
     logger.info(
-        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
+        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s meeting_id=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
         limit,
         tsg,
         year,
         meeting,
+        meeting_id,
         source,
         spec,
         wi,
@@ -746,6 +830,7 @@ def tdoc_list(
         limit=limit,
         tsg=tsg,
         meeting_like=_auto_wrap_like(meeting) if meeting else None,
+        meeting_id=meeting_id,
         year=year,
         source_like=source,
         spec_like=spec,
@@ -768,8 +853,6 @@ def tdoc_list(
 
             if f in ("reservation_date", "uploaded_date") and v is not None:
                 vals.append(v.isoformat())
-            elif f == "updated_at":
-                vals.append(_fmt_dt(v))
             else:
                 vals.append(str(v))
 
@@ -799,12 +882,30 @@ def _extract_failure_hints() -> str:
     )
 
 
+def _normalise_cli_tdoc_id(raw: str) -> str:
+    """Return the canonical form of ``raw`` for a CLI ``--tdoc`` argument.
+
+    The database stores TDoc IDs in their canonical case (``R5s260213``);
+    a CLI user typing ``r5s260213`` would otherwise fail the PK lookup.
+    For CR-shape IDs :func:`canonicalise_tdoc_id` returns the canonical
+    form; non-CR shapes (LS / DRAFT / etc.) have no canonical mapping,
+    so the input is returned whitespace-stripped and the user is on the
+    hook for typing it exactly as the DB has it.
+    """
+    canonical = canonicalise_tdoc_id(raw)
+    return canonical if canonical is not None else raw.strip()
+
+
 @tdoc_app.command("extract")
 def tdoc_extract(
     tdoc: list[str] = typer.Option(
         None,
         "--tdoc",
-        help="TDoc ID to extract (repeatable for batch).",
+        help=(
+            "TDoc ID to extract (repeatable for batch). "
+            "Case-insensitive for CR-shape IDs (e.g. 'r5s260213' resolves "
+            "to 'R5s260213' as stored in the database)."
+        ),
     ),
     tdoc_id: list[int] = typer.Option(
         None,
@@ -853,12 +954,13 @@ def tdoc_extract(
     if not tdoc and not tdoc_id:
         raise typer.BadParameter("Specify at least one --tdoc or --tdoc-id.")
 
-    # Combine the two input sources into a single ordered list of
-    # canonical ``tdoc_id`` strings. ``--tdoc-id`` is resolved via a
-    # single repository lookup per integer; missing ids are skipped.
+    # ``--tdoc`` values are case-normalised to canonical form (R5s######)
+    # so a CLI user typing ``r5s260213`` resolves the same DB row as
+    # ``R5s260213``. ``--tdoc-id`` is resolved via a single repository
+    # lookup per integer; missing ids are skipped.
     tdoc_ids: list[str] = []
     if tdoc:
-        tdoc_ids.extend(tdoc)
+        tdoc_ids.extend(_normalise_cli_tdoc_id(raw) for raw in tdoc)
     if tdoc_id:
         repo = build_tdoc_repository()
         for raw in tdoc_id:
@@ -917,22 +1019,31 @@ def tdoc_show(
     tdoc: str = typer.Option(
         ...,
         "--tdoc",
-        help="TDoc ID to show (canonical form, e.g. R5s260009).",
+        help=(
+            "TDoc ID to show (canonical form, e.g. R5s260009). "
+            "Case-insensitive for CR-shape IDs."
+        ),
     ),
 ) -> None:
     """Show TDoc details, including extracted CR fields if available.
 
     Looks up the TDoc row in the ``tdocs`` table and prints every
-    :class:`TDoc` field under a ``[TDoc]`` section. When a matching
-    ``tdoc_cr_details`` row exists (i.e. ``tdoc extract`` has been run
-    for this id at least once) the parsed cover-page fields are
-    printed under an ``[Extracted Details]`` section; the
+    :class:`TDoc` field under a ``[TDoc]`` section. When one or more
+    matching ``tdoc_cr_details`` rows exist (i.e. ``tdoc extract`` has
+    been run for this id at least once) the parsed cover-page fields
+    are printed under one ``[Extracted Details]`` block **per revision**
+    (each revision is keyed by the immutable download URL — multiple
+    URLs share the same ``tdoc_id`` across revisions). The
     ``corrections`` list is JSON-dumped for full fidelity.
+
+    The ``--tdoc`` argument is case-insensitive for CR-shape IDs (so
+    ``r5s260213`` and ``R5s260213`` resolve the same row); the DB still
+    stores the canonical form.
 
     Raises a ``BadParameter`` when the requested TDoc is not stored.
     """
     repo = build_tdoc_repository()
-    record = repo.get_by_id(tdoc)
+    record = repo.get_by_id(_normalise_cli_tdoc_id(tdoc))
     if record is None:
         raise typer.BadParameter(
             f"Unknown TDoc '{tdoc}'. Run 'doc3gpp tdoc list' to see stored TDocs, "
@@ -951,15 +1062,18 @@ def tdoc_show(
         typer.echo(f"{f.name}: {value}")
 
     cr_repo = build_tdoc_cr_repository()
-    details = cr_repo.get(tdoc)
-    meta = cr_repo.get_extract_meta(tdoc)
-    if details is None and meta is None:
+    details_list = cr_repo.get(tdoc)
+    meta_list = cr_repo.get_extract_meta(tdoc)
+    if not details_list and not meta_list:
         typer.echo("[Extracted Details]")
         typer.echo("No extracted details; run `doc3gpp tdoc extract --tdoc <id>` first.")
         return
 
-    typer.echo("[Extracted Details]")
-    if details is not None:
+    meta_by_url = {meta.ftp_url: meta for meta in meta_list}
+    for details in details_list:
+        typer.echo("[Extracted Details]")
+        if details.ftp_url:
+            typer.echo(f"ftp_url: {details.ftp_url}")
         typer.echo(f"spec: {details.spec or '-'}")
         typer.echo(f"cr_num: {details.cr_num or '-'}")
         typer.echo(f"rev: {details.rev or '-'}")
@@ -987,8 +1101,9 @@ def tdoc_show(
         typer.echo(f"tech: {details.tech or '-'}")
         typer.echo(f"parser_version: {details.parser_version}")
         typer.echo(f"corrections: {json.dumps(details.corrections, ensure_ascii=False, indent=2)}")
-    if meta is not None:
-        typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")
+        meta = meta_by_url.get(details.ftp_url or "")
+        if meta is not None:
+            typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")
 
 
 @tsg_app.command("list")
@@ -1102,7 +1217,7 @@ def wi_sync(
     auto-seeded so this command is safe to run without an explicit
     ``db init`` first. Existing rows for the same ``(wi_id, tsg_short)``
     pair are updated in place, so re-running this command refreshes the
-    acronym, release, name and ``updated_at`` fields without duplication.
+    acronym, release and name fields without duplication.
     """
     logger.info("Starting WI sync for TSG %s", tsg)
     create_schema()

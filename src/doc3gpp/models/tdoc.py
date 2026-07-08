@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 
 
 @dataclass(slots=True)
@@ -14,21 +14,22 @@ class TDoc:
             the source XLSX has no title cell; the parser converts empty cells
             to ``None`` rather than coercing to a placeholder string.
         meeting_id: Optional foreign key into ``meetings.meeting_id``.
-        url: Optional direct download URL for this TDoc's zip file, extracted
-            from the TDoc-column hyperlink in the source XLSX. ``None`` when
-            the XLSX has no hyperlink for this row (e.g. a deleted or
-            placeholder entry).
+        ftp_url: Optional relative download URL for this TDoc's zip file on
+            the 3GPP FTP, extracted from the TDoc-column hyperlink in the
+            source XLSX and stored as a path relative to
+            ``https://www.3gpp.org/ftp/`` (the canonical 3GPP FTP root).
+            ``None`` when the XLSX has no hyperlink for this row (e.g. a
+            deleted or placeholder entry).
         reservation_date: Optional reservation date from the source XLSX,
             parsed as a ``date`` (not a free-form string).
         uploaded_date: Optional upload date from the source XLSX, parsed as
             a ``date``.
-        updated_at: Timestamp of the most recent upsert for this row.
     """
 
     tdoc_id: str
     title: str | None = None
     meeting_id: int | None = None
-    url: str | None = None
+    ftp_url: str | None = None
     # Additional metadata extracted from TDoc list XLSX
     source: str | None = None
     type: str | None = None
@@ -45,7 +46,6 @@ class TDoc:
     cr_num: str | None = None
     # TSG CR Pack value from XLSX (nullable)
     cr_pack: str | None = None
-    updated_at: datetime | None = None
 
 
 @dataclass(slots=True)

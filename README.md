@@ -205,6 +205,7 @@ doc3gpp config show   # the fully-resolved settings, as JSON
 ```bash
 doc3gpp db init
 doc3gpp db check
+doc3gpp db reset --yes          # destructive: wipe + recreate SQLite schema
 doc3gpp tsg list                # show the canonical 3GPP TSG reference table
 doc3gpp tsg show --tsg r5       # show a single TSG record
 doc3gpp tsg seed                # re-seed the TSG reference table
@@ -215,6 +216,7 @@ doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
 doc3gpp tdoc list --limit 10
 # Filtered list examples
 doc3gpp tdoc list --tsg R5 --year 26 --meeting "%RAN3%"
+doc3gpp tdoc list --meeting-id 85434             # scope to a single meeting by ID
 doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
 doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100

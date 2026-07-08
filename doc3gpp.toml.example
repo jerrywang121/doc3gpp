@@ -57,6 +57,7 @@ future_years = 1     # default; CLI flag --future-years overrides
 #   "tdoc_id", "meeting_name", "title",
 #   "source", "type", "status",
 #   "cr_cat", "spec", "version", "related_wis",
+#   # "ftp_url" — relative path to the TDoc zip on https://www.3gpp.org/ftp/
 # ]
 # tsg = ["tsg_name", "short_name", "description"]
 # wi = ["wi_id", "acronym", "release", "name"]

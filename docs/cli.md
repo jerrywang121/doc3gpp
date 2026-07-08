@@ -52,6 +52,34 @@ Behavior:
 - Seeds the `tsgs` table with the canonical 3GPP TSG list (16 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
 
+### doc3gpp db reset
+
+Purpose:
+
+- Recover from schema drift by wiping the SQLite database file and
+  recreating it from scratch. Use this after an ORM change has left the
+  live schema out of sync — Alembic is not wired up in this project, so
+  manual migrations are the norm and a mismatched schema can leave the
+  DB unusable. **Destructive: every row in every table is wiped.**
+
+Options:
+
+- `--yes`, `-y`: skip the interactive confirmation prompt.
+
+Behavior:
+
+- Refuses to run on MySQL or PostgreSQL URLs (use the backend-native
+  `DROP DATABASE` / `CREATE DATABASE` workflow instead).
+- For file-based SQLite URLs (`sqlite:///...` /
+  `sqlite+pysqlite:///...`): deletes the on-disk `.db` file plus any
+  WAL / SHM / journal sidecars, then re-runs `create_schema` +
+  `seed_defaults`.
+- For in-memory SQLite (`sqlite:///:memory:`): skips the delete step
+  (there is nothing to delete) and re-runs `create_schema` +
+  `seed_defaults`.
+- Clears the cached SQLAlchemy engine so the subsequent `create_schema`
+  opens a fresh connection to the (now empty) file.
+
 ## meeting Commands
 
 ### doc3gpp meeting sync
@@ -621,6 +649,7 @@ TOML overrides against the built-in defaults.
 ```bash
 doc3gpp db init
 doc3gpp db check
+doc3gpp db reset --yes           # destructive: wipe + recreate SQLite schema
 doc3gpp tsg list
 doc3gpp meeting sync --tsg r5
 doc3gpp meeting list --limit 20

@@ -205,6 +205,7 @@ doc3gpp config show   # the fully-resolved settings, as JSON
 ```bash
 doc3gpp db init
 doc3gpp db check
+doc3gpp db reset --yes          # destructive: wipe + recreate SQLite schema
 doc3gpp tsg list                # show the canonical 3GPP TSG reference table
 doc3gpp tsg show --tsg r5       # show a single TSG record
 doc3gpp tsg seed                # re-seed the TSG reference table

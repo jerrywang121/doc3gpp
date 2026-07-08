@@ -63,7 +63,8 @@ This document tracks what is implemented today versus planned next work.
 
 ### CLI
 
-- db check, db init (also seeds the `tsgs` reference table).
+- db check, db init (also seeds the `tsgs` reference table), db reset
+  (destructive: wipe + recreate the SQLite file; refuses MySQL/Postgres).
 - meeting sync (validates `--tsg` against the reference table).
 - meeting list.
 - tdoc sync, tdoc list.

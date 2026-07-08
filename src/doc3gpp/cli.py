@@ -10,6 +10,7 @@ from typing import TextIO
 
 import typer
 from sqlalchemy import text
+from sqlalchemy.engine.url import make_url
 
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
@@ -412,6 +413,84 @@ def db_init() -> None:
     seeded = tsg_service.seed_defaults()
     logger.info("Seeded %s TSG reference records", seeded)
     typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
+
+
+@db_app.command("reset")
+def db_reset(
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt.",
+    ),
+) -> None:
+    """Delete the SQLite database file and recreate the schema from scratch.
+
+    Intended for recovering from schema drift after an ORM change — Alembic is
+    not wired up in this project, so manual migrations are the norm and a
+    mismatched schema can leave the DB unusable. This command is destructive:
+    every row in every table is wiped.
+
+    Only file-based SQLite URLs are supported:
+
+    - ``sqlite:///...`` / ``sqlite+pysqlite:///...`` — the on-disk file is
+      deleted and recreated.
+    - ``sqlite:///:memory:`` — there is nothing to delete; the schema is
+      re-applied to the (transient) in-memory database.
+
+    MySQL and PostgreSQL URLs are rejected with an explicit error — use the
+    backend-native ``DROP DATABASE`` / ``CREATE DATABASE`` workflow instead.
+
+    By default the command prompts for confirmation; pass ``--yes`` to skip
+    the prompt. After deletion the SQLAlchemy engine cache is cleared so the
+    subsequent ``create_schema()`` opens a fresh connection to the (now
+    empty) file. The ``tsgs`` reference table is then re-seeded.
+    """
+
+    settings = get_settings()
+    parsed = make_url(settings.database_url)
+
+    if not parsed.drivername.startswith("sqlite"):
+        raise typer.BadParameter(
+            f"'db reset' only supports SQLite backends "
+            f"(configured URL: {settings.database_url}). "
+            "Use the backend-native schema reset for MySQL or PostgreSQL."
+        )
+
+    db_file: Path | None = None
+    if parsed.database and parsed.database != ":memory:":
+        db_file = Path(parsed.database)
+
+    if db_file is not None and db_file.exists():
+        if not yes:
+            typer.confirm(
+                f"Delete SQLite database file at {db_file}?",
+                abort=True,
+            )
+        logger.info("Deleting SQLite database file %s", db_file)
+        db_file.unlink()
+        # Also remove any SQLite journal sidecar files (-wal, -shm, -journal)
+        # so a half-written WAL from a previous session does not survive
+        # the reset and confuse the new schema.
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = db_file.with_name(db_file.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+                logger.debug("Removed SQLite sidecar %s", sidecar)
+        typer.echo(f"Deleted {db_file}")
+    else:
+        typer.echo("No existing SQLite file to delete.")
+
+    # SQLAlchemy cached the engine from the pre-delete file path; clear it
+    # so create_schema() opens a fresh connection to the (now empty) file.
+    get_engine.cache_clear()
+
+    logger.info("Recreating database schema")
+    create_schema()
+    tsg_service = build_tsg_service()
+    seeded = tsg_service.seed_defaults()
+    logger.info("Seeded %s TSG reference records", seeded)
+    typer.echo(f"Database reset complete; seeded {seeded} TSG records")
 
 
 @meeting_app.command("sync")

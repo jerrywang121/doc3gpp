@@ -20,7 +20,13 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
-from doc3gpp.services.tdoc_cr_service import ExtractResult
+from doc3gpp.services.tdoc_cr_service import (
+    BatchExtractResult,
+    ExtractResult,
+    TDocNotFoundError,
+    TDocTypeUnsupportedError,
+    TDocZipDownloadError,
+)
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
@@ -52,19 +58,24 @@ class _FakeCrService:
     def __init__(
         self,
         results: dict[str, ExtractResult] | None = None,
+        failures: dict[str, str] | None = None,
         raise_from_many: Exception | None = None,
     ) -> None:
         self._results = results or {}
+        self._failures = failures or {}
         self._raise_from_many = raise_from_many
         self.many_calls: list[tuple[list[str], bool, bool]] = []
 
     def extract_many(
         self, tdoc_ids, *, force: bool = False, full: bool = False,
-    ) -> dict[str, ExtractResult]:
+    ) -> BatchExtractResult:
         self.many_calls.append((list(tdoc_ids), force, full))
         if self._raise_from_many is not None:
             raise self._raise_from_many
-        return dict(self._results)
+        return BatchExtractResult(
+            successes=dict(self._results),
+            failures=dict(self._failures),
+        )
 
 
 class _FakeTDocRepoList:
@@ -258,11 +269,13 @@ def test_tdoc_parse_happy_path(sqlite_env, monkeypatch) -> None:
 
 
 def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
-    """When ``extract_many`` returns only some ids, the CLI prints
-    ``FAILED - extract error`` for the missing ones and exits 0."""
+    """When ``extract_many`` reports a failure for one id via
+    ``batch.failures``, the CLI prints ``FAILED - {reason}`` inline and
+    still exits 0 (one success keeps the batch non-fatal)."""
     runner = CliRunner()
     fake = _FakeCrService(
         results={"R5s260009": _make_result("R5s260009")},
+        failures={"R5s260010": "TDocNotFoundError: TDoc 'R5s260010' is not stored"},
     )
     _patch_service(monkeypatch, fake)
 
@@ -276,15 +289,22 @@ def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "R5s260009: spec=" in result.output
-    assert "R5s260010: FAILED - extract error" in result.output
+    assert "R5s260010: FAILED - TDocNotFoundError: TDoc 'R5s260010' is not stored" in result.output
     assert "Extracted 1/2 TDocs (1 failures)" in result.output
 
 
 def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
-    """``extract_many`` returning an empty dict (every id skipped by the
-    service) yields exit 1 and an all-failures summary."""
+    """``extract_many`` reporting every id as a failure (no successes)
+    yields exit 1 and an all-failures summary that surfaces the per-id
+    reason instead of the old generic "see logs" message."""
     runner = CliRunner()
-    fake = _FakeCrService(results={})
+    fake = _FakeCrService(
+        results={},
+        failures={
+            "R5s260009": "TDocNotFoundError: TDoc 'R5s260009' is not stored",
+            "R5s260010": "TDocTypeUnsupportedError: TDoc 'R5s260010' has type 'LS'",
+        },
+    )
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
@@ -296,9 +316,58 @@ def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
         ],
     )
     assert result.exit_code == 1
-    assert "R5s260009: FAILED - extract error" in result.output
-    assert "R5s260010: FAILED - extract error" in result.output
+    assert "R5s260009: FAILED - TDocNotFoundError:" in result.output
+    assert "R5s260010: FAILED - TDocTypeUnsupportedError:" in result.output
     assert "Extracted 0/2 TDocs (2 failures)" in result.output
+    assert "extract error (see logs)" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_class"),
+    [
+        # The exception class names are exactly what the user reads on
+        # the FAILED line — they map 1:1 to a step in the extract
+        # pipeline, so the operator can tell *where* the failure was
+        # without tailing the log file.
+        (lambda: TDocNotFoundError("R5s260010"), "TDocNotFoundError"),
+        (
+            lambda: TDocTypeUnsupportedError("R5s260010", "LS"),
+            "TDocTypeUnsupportedError",
+        ),
+        (
+            lambda: TDocZipDownloadError(
+                "https://www.3gpp.org/ftp/R5s260010.zip",
+                RuntimeError("404 Not Found"),
+            ),
+            "TDocZipDownloadError",
+        ),
+        (
+            lambda: ValueError("Invalid tdoc_id shape: 'X'"),
+            "ValueError",
+        ),
+    ],
+)
+def test_tdoc_parse_failure_message_names_the_step(
+    sqlite_env, monkeypatch, exc_factory, expected_class
+) -> None:
+    """The ``FAILED - {ExceptionClassName}: {message}`` format lets the
+    operator see *which* step failed (type guard, DB lookup, network,
+    shape check) without opening the log file."""
+    exc = exc_factory()
+    fake = _FakeCrService(
+        results={},
+        failures={"R5s260010": f"{type(exc).__name__}: {exc}"},
+    )
+    _patch_service(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260010"])
+    assert result.exit_code == 1
+    assert f"R5s260010: FAILED - {expected_class}:" in result.output
+    # The original exception message (which carries the actionable
+    # detail — e.g. "run `doc3gpp tdoc sync` first" for the not-found
+    # case) is included on the same line.
+    assert str(exc) in result.output
 
 
 def test_tdoc_parse_no_tdocs_specified(sqlite_env) -> None:

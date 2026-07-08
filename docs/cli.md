@@ -346,16 +346,22 @@ Options:
 
 Behavior:
 
-- Calls `TDocCrService.extract_many(tdoc_ids, force=force)`. The service
-  catches `TDocZipDownloadError`, `PythonDocxNotInstalledError`,
-  `TDocTypeUnsupportedError`, `TDocNotFoundError`, and
-  `CRHeaderMissingError` per-id and skips the broken entry; the CLI
-  computes the failure set as `input - successful_keys` and prints
-  one `FAILED` line per skipped id.
+- Calls `TDocCrService.extract_many(tdoc_ids, force=force)`, which
+  returns a `BatchExtractResult` bundling successes with a per-id
+  failure reason. The service catches `TDocZipDownloadError`,
+  `TDocTypeUnsupportedError`, `TDocNotFoundError`, `CRHeaderMissingError`,
+  plus the `ValueError` raised by the tdoc_id shape guard, and
+  records the failure reason (formatted as
+  `"{ExceptionClassName}: {exc}"`) so the CLI can surface it inline.
 - When `python-docx` is not installed the entire batch fails before any
   per-id work happens — the CLI prints an install hint and exits 1.
 - Output per id: `<tdoc_id>: spec=<spec> cr_num=<cr_num> title=<title>`
-  on success, `<tdoc_id>: FAILED - extract error (see logs)` on failure.
+  on success; `<tdoc_id>: FAILED - {ExceptionClassName}: {exc}` on
+  failure (e.g. `R5s260010: FAILED - TDocNotFoundError: TDoc 'R5s260010'
+  is not stored in the tdocs table; run \`doc3gpp tdoc sync\` first`).
+  The class name tells the operator *which* step failed (type guard,
+  DB lookup, network, shape check) without tailing the log file; a
+  full traceback is still written to the logs for debugging.
 - Final summary line: `Extracted N/M TDocs (K failures)`.
 - `--meeting-id` first validates the meeting row exists (otherwise
   prints `Unknown meeting_id N` and exits non-zero), then asks the

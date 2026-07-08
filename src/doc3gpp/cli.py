@@ -966,11 +966,13 @@ def tdoc_parse(
 
     The service :meth:`TDocCrService.extract_many` catches the
     following per-id exception types internally and skips the broken
-    id: ``TDocZipDownloadError``, ``PythonDocxNotInstalledError``,
-    ``TDocTypeUnsupportedError``, ``TDocNotFoundError``,
-    ``CRHeaderMissingError``. The CLI computes the failure set as
-    ``input - successful_keys`` and prints one ``FAILED`` line per id
-    that didn't come back.
+    id: ``TDocZipDownloadError``, ``TDocTypeUnsupportedError``,
+    ``TDocNotFoundError``, ``CRHeaderMissingError``, plus the
+    ``ValueError`` raised by the tdoc_id shape guard. The CLI prints
+    one ``FAILED - {ExceptionClassName}: {message}`` line per broken
+    id so the operator can tell *which* step failed (download, parse,
+    type guard) without tailing the log file. A full traceback is still
+    written to the logs for debugging.
 
     Exit code:
 
@@ -1063,7 +1065,7 @@ def tdoc_parse(
     )
     service = build_tdoc_cr_service()
     try:
-        results = service.extract_many(tdoc_ids, force=force)
+        batch = service.extract_many(tdoc_ids, force=force)
     except PythonDocxNotInstalledError as exc:
         typer.echo(
             "python-docx is not installed; install with `pip install doc3gpp[extract]`.",
@@ -1072,19 +1074,23 @@ def tdoc_parse(
         typer.echo(f"hint: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    successful_keys = set(results.keys())
     failures: list[str] = []
     for raw_id in tdoc_ids:
         normalised = raw_id.strip()
-        if normalised in successful_keys:
-            result = results[normalised]
+        if normalised in batch.successes:
+            result = batch.successes[normalised]
             typer.echo(
                 f"{normalised}: spec={result.details.spec} "
                 f"cr_num={result.details.cr_num} "
                 f"title={result.details.title}"
             )
+        elif normalised in batch.failures:
+            typer.echo(f"{normalised}: FAILED - {batch.failures[normalised]}")
+            failures.append(normalised)
         else:
-            typer.echo(f"{normalised}: FAILED - extract error (see logs)")
+            # Defensive: extract_many should always record a success or
+            # failure per id; this only fires on a contract regression.
+            typer.echo(f"{normalised}: FAILED - extract error (no diagnostic)")
             failures.append(normalised)
 
     total = len(tdoc_ids)

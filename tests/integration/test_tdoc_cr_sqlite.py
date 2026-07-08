@@ -31,6 +31,7 @@ from doc3gpp.scraping.tdoc_zip_source import (
     get_tdoc_zip_url,
 )
 from doc3gpp.services.tdoc_cr_service import (
+    BatchExtractResult,
     ExtractResult,
     TDocCrService,
     TDocNotFoundError,
@@ -500,8 +501,12 @@ def test_extract_invalid_tdoc_id_raises_value_error(
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_extract_many_skips_failures(sqlite_env, tmp_path) -> None:
-    """``extract_many`` returns a dict of successes; failures are
-    logged but never raised (so one broken id doesn't abort the batch)."""
+    """``extract_many`` returns a :class:`BatchExtractResult` whose
+    ``successes`` dict holds the canonical ids that produced an
+    extract and whose ``failures`` dict maps the broken ids to a
+    short reason string (``"{ExceptionClassName}: {exc}"``). Per-id
+    failures are logged but never raised (so one broken id doesn't
+    abort the batch)."""
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
 
@@ -510,7 +515,7 @@ def test_extract_many_skips_failures(sqlite_env, tmp_path) -> None:
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
 
-    results = service.extract_many(
+    batch = service.extract_many(
         [
             "R5s260009",
             "R5s260010",
@@ -519,8 +524,16 @@ def test_extract_many_skips_failures(sqlite_env, tmp_path) -> None:
         ]
     )
 
-    assert set(results.keys()) == {"R5s260009"}
-    assert results["R5s260009"].from_cache is True
+    assert isinstance(batch, BatchExtractResult)
+    assert set(batch.successes.keys()) == {"R5s260009"}
+    assert batch.successes["R5s260009"].from_cache is True
+
+    # ``R5s260010`` is not in the tdocs table → TDocNotFoundError.
+    # ``invalid$id`` fails the shape guard → ValueError.
+    assert "R5s260010" in batch.failures
+    assert batch.failures["R5s260010"].startswith("TDocNotFoundError:")
+    assert "invalid$id" in batch.failures
+    assert batch.failures["invalid$id"].startswith("ValueError:")
 
 
 # ---------------------------------------------------------------------------

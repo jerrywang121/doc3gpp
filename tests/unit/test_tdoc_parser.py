@@ -346,6 +346,48 @@ def test_parse_date_cell_handles_none() -> None:
     assert _parse_date_cell(None) is None
 
 
+def test_parse_date_cell_handles_dd_mm_yyyy_with_time() -> None:
+    import datetime
+
+    assert _parse_date_cell("02/04/2026 15:24:41") == datetime.date(2026, 4, 2)
+
+
+def test_parse_date_cell_handles_dd_mm_yyyy_date_only() -> None:
+    import datetime
+
+    assert _parse_date_cell("14/04/2026") == datetime.date(2026, 4, 14)
+
+
+def test_parse_date_cell_falls_back_to_mm_dd_yyyy_for_high_second_part() -> None:
+    import datetime
+
+    assert _parse_date_cell("02/14/2026") == datetime.date(2026, 2, 14)
+
+
+def test_parse_date_cell_prefers_dd_mm_for_ambiguous_slash_dates() -> None:
+    import datetime
+
+    assert _parse_date_cell("02/04/2026") == datetime.date(2026, 4, 2)
+
+
+def test_parse_date_cell_returns_none_for_invalid_both_interpretations() -> None:
+    assert _parse_date_cell("31/04/2026") is None
+
+
+def test_reservation_date_extracted_from_dd_mm_yyyy_string_cell() -> None:
+    import datetime
+
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Reservation Date"],
+            ["R5-260001", "Doc A", "02/04/2026 15:24:41"],
+        ]
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+    assert records[0]["reservation_date"] == datetime.date(2026, 4, 2)
+
+
 # ---------------------------------------------------------------------------
 # Hyperlink extraction: per-TDoc URL must come from the TDoc column hyperlink
 # in the source XLSX (not the XLSX file URL).

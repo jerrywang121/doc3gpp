@@ -134,9 +134,17 @@ and the TDoc CR extraction is the deepest.
 1. `doc3gpp meeting sync --tsg <short>` validates `<short>` against
    the `tsgs` table (auto-seeded if empty).
 2. `MeetingService.sync` → `fetch_calendar` (DynaReport HTML) →
-   `parse_3gpp_calendar` (HTML → `Meeting` list) →
-   `SQLAlchemyMeetingRepository.upsert_many`, then
-   `delete_with_end_before(cutoff)` to trim out-of-window rows.
+   `parse_3gpp_calendar` (HTML → `Meeting` list). Every parsed
+   `Meeting` is then stamped with `Meeting.tsg = <short>` (canonicalised
+   to upper case) before being handed to
+   `SQLAlchemyMeetingRepository.upsert_many`. The FK constraint
+   requires the parent row to exist in `tsgs`, so the auto-seed in
+   step 1 is a hard prerequisite.
+3. `SQLAlchemyMeetingRepository.upsert_many` writes the rows; a final
+   `delete_with_end_before(cutoff)` pass trims out-of-window rows.
+4. `doc3gpp meeting list --tsg <short>` is an FK-equality lookup on the
+   indexed `meetings.tsg` column (case-insensitive on input). Rows
+   without an owning TSG are excluded.
 
 ### TDoc list sync (per meeting)
 

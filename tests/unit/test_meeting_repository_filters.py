@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.storage.db.base import Base
-from doc3gpp.storage.db.models import MeetingORM
+from doc3gpp.storage.db.models import MeetingORM, TsgORM
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 
 
@@ -13,6 +13,24 @@ def _make_engine():
 
 
 def insert_rows(session):
+    # Seed TSG reference rows first; meetings.tsg is an FK to tsgs.short_name
+    session.add_all(
+        [
+            TsgORM(
+                tsg_name="RAN WG5",
+                short_name="R5",
+                description="Mobile terminal conformance testing",
+                url=None,
+            ),
+            TsgORM(
+                tsg_name="SA WG2",
+                short_name="S2",
+                description="System Architecture",
+                url=None,
+            ),
+        ]
+    )
+    session.flush()
     rows = [
         MeetingORM(
             meeting_id=1,
@@ -21,6 +39,7 @@ def insert_rows(session):
             location="Online",
             start_date=date(2025, 1, 10),
             end_date=date(2025, 1, 14),
+            tsg="R5",
         ),
         MeetingORM(
             meeting_id=2,
@@ -29,6 +48,7 @@ def insert_rows(session):
             location="Rome",
             start_date=date(2026, 5, 20),
             end_date=date(2026, 5, 24),
+            tsg="R5",
         ),
         MeetingORM(
             meeting_id=3,
@@ -37,6 +57,7 @@ def insert_rows(session):
             location="Online",
             start_date=date(2026, 7, 2),
             end_date=date(2026, 7, 2),
+            tsg="R5",
         ),
         # TTCN email meeting: starts Dec 2025 and runs through Dec 2026.
         # The TDoc numbering on its FTP server uses the end_date year (2026),
@@ -48,6 +69,26 @@ def insert_rows(session):
             location="Online",
             start_date=date(2025, 12, 1),
             end_date=date(2026, 12, 1),
+            tsg="R5",
+        ),
+        # Cross-TSG row to assert the FK filter excludes it.
+        MeetingORM(
+            meeting_id=5,
+            name="S2-150",
+            title="Test 150",
+            location="Vienna",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 5),
+            tsg="S2",
+        ),
+        # Legacy row without an owning TSG — excluded by the FK filter.
+        MeetingORM(
+            meeting_id=6,
+            name="LEGACY-no-tsg",
+            title="Imported before column was added",
+            location="Online",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 2),
         ),
     ]
 
@@ -68,13 +109,13 @@ def test_list_filters_by_tsg_and_year_and_like():
     # inject our session factory
     repo._session_factory = Session
 
-    # tsg filter (names starting with R5) should match R5-100 and R5-101
+    # FK equality; SA WG2 row and legacy null-tsg row must be excluded.
     r5 = repo.list(limit=10, tsg="r5")
-    assert len(r5) == 2
+    assert {m.meeting_id for m in r5} == {1, 2, 3, 4}
 
     # year filter (end_date year): TTCN row ends Dec 2026, so it joins the 2026 bucket
     y2026 = repo.list(limit=10, year=2026)
-    assert {m.meeting_id for m in y2026} == {2, 3, 4}
+    assert {m.meeting_id for m in y2026} == {2, 3, 4, 5, 6}
 
     # TTCN row starts in 2025 but must NOT match year=2025 because its end_date is 2026
     y2025 = repo.list(limit=10, year=2025)

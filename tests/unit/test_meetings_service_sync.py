@@ -243,3 +243,68 @@ def test_filter_does_not_drop_recent_and_future_endpoints() -> None:
     ]
     kept = filter_by_year_window(meetings, max_year_closed=2, max_year_future=1, today=date(2026, 7, 2))
     assert {m.meeting_id for m in kept} == {1, 2}
+
+
+def test_sync_stamps_tsg_on_every_meeting_row(monkeypatch) -> None:
+    """``sync(tsg=...)`` must populate ``Meeting.tsg`` on every upserted row."""
+    repo = _FakeRepo()
+    service = MeetingService(repo)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "doc3gpp.services.meetings_service.fetch_calendar",
+        lambda _url: [
+            Meeting(
+                meeting_id=1,
+                name="R5-200",
+                title="x",
+                location="x",
+                start_date=date(2026, 7, 2),
+                end_date=date(2026, 7, 3),
+            ),
+            Meeting(
+                meeting_id=2,
+                name="RAN5-TTCN Workshop",
+                title="x",
+                location="x",
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 1),
+            ),
+        ],
+    )
+
+    service.sync(
+        "https://example.invalid",
+        max_year_closed=2,
+        max_year_future=1,
+        today=date(2026, 7, 2),
+        tsg="r5",
+    )
+
+    assert len(repo.upserts) == 1
+    stamped = repo.upserts[0]
+    assert {m.meeting_id for m in stamped} == {1, 2}
+    assert all(m.tsg == "R5" for m in stamped)
+
+
+def test_sync_leaves_tsg_unset_when_not_provided(monkeypatch) -> None:
+    """``sync(tsg=None)`` (default) must not stamp the field — bulk-import / tests use this path."""
+    repo = _FakeRepo()
+    service = MeetingService(repo)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "doc3gpp.services.meetings_service.fetch_calendar",
+        lambda _url: [
+            Meeting(
+                meeting_id=1,
+                name="R5-200",
+                title="x",
+                location="x",
+                start_date=date(2026, 7, 2),
+                end_date=date(2026, 7, 3),
+            )
+        ],
+    )
+
+    service.sync("https://example.invalid", today=date(2026, 7, 2))
+
+    assert repo.upserts[0][0].tsg is None

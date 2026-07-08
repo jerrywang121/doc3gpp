@@ -44,7 +44,15 @@ class TDocORM(Base):
 
 
 class MeetingORM(Base):
-    """Persisted 3GPP meeting calendar record."""
+    """Persisted 3GPP meeting calendar record.
+
+    ``tsg`` is a foreign key into ``tsgs.short_name`` populated when the
+    CLI passes ``--tsg`` to ``doc3gpp meeting sync``. Nullable so rows
+    imported from older schemas (where the column did not exist) or
+    scraped without a known owning TSG can still be persisted.
+    Indexed because the ``meeting list --tsg`` filter runs an equality
+    lookup on every call.
+    """
 
     __tablename__ = "meetings"
 
@@ -57,6 +65,12 @@ class MeetingORM(Base):
     ftp_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
     end_doc: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tsg: Mapped[str | None] = mapped_column(
+        String(16),
+        ForeignKey("tsgs.short_name"),
+        nullable=True,
+        index=True,
+    )
 
 
 class TsgORM(Base):

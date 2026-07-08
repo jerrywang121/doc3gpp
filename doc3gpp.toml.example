@@ -49,7 +49,7 @@ future_years = 1     # default; CLI flag --future-years overrides
 
 # [output.fields]
 # meeting = [
-#   "meeting_id", "name", "location",
+#   "meeting_id", "name", "tsg", "location",
 #   "start_date", "end_date",
 #   "ftp_url", "start_doc", "end_doc",
 # ]

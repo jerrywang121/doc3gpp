@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from datetime import timedelta
 import logging
@@ -29,6 +30,7 @@ class MeetingService:
         max_year_closed: int = 2,
         max_year_future: int = 1,
         today: date | None = None,
+        tsg: str | None = None,
     ) -> int:
         """Fetch meetings from the 3GPP calendar URL and persist filtered results.
 
@@ -40,6 +42,12 @@ class MeetingService:
                 (filters by ``start_date`` <= today plus N calendar years).
             today: Optional override for ``date.today()``. Used by tests to
                 pin the window to a deterministic date.
+            tsg: Canonical TSG short name (e.g. ``R5``) owning the meeting
+                page being scraped. When provided, stamped onto every
+                parsed :class:`Meeting` so the persisted ``meetings.tsg``
+                FK is populated and downstream ``meeting list --tsg``
+                filters can scope by owning group. ``None`` leaves the
+                field un-stamped (useful for tests / bulk imports).
 
         ``sync`` also trims out-of-window rows after the upsert so a later
         re-sync with a narrower ``--closed-years`` does not leave stale rows
@@ -52,6 +60,9 @@ class MeetingService:
         anchor = today if today is not None else date.today()
         meetings = filter_by_year_window(meetings, max_year_closed, max_year_future, anchor)
         logger.debug("Filtered meetings to %s within year window", len(meetings))
+        if tsg is not None:
+            canonical_tsg = tsg.upper()
+            meetings = [replace(m, tsg=canonical_tsg) for m in meetings]
         written = self._repository.upsert_many(meetings)
 
         start_cutoff = years_ago(anchor, max_year_closed)

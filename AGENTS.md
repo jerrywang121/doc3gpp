@@ -62,7 +62,7 @@ doc3gpp/
 
 | Symbol | Type | File | Role |
 |--------|------|------|------|
-| `Meeting` | dataclass | `models/meeting.py` | Domain model for meetings |
+| `Meeting` | dataclass | `models/meeting.py` | Domain model for meetings (`tsg` is the owning TSG FK; populated by `meeting sync --tsg`) |
 | `TDoc` | dataclass | `models/tdoc.py` | Domain model for TDocs |
 | `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, ...) |
 | `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar for an extracted TDoc (zip/markdown paths, doc_filename) |
@@ -139,7 +139,7 @@ python -m pytest -m mysql
 | `cli.py` | Typer commands | thin: build service, call it, format output |
 
 Flow:
-- `doc3gpp meeting sync` → `MeetingService.sync` → fetch DynaReport HTML → `parse_3gpp_calendar` → `SQLAlchemyMeetingRepository.upsert_many`
+- `doc3gpp meeting sync` → `MeetingService.sync` → fetch DynaReport HTML → `parse_3gpp_calendar` → stamp `Meeting.tsg` from validated `--tsg` → `SQLAlchemyMeetingRepository.upsert_many`
 - `doc3gpp tdoc sync --meeting-id <id>` resolves stored `Meeting.ftp_url` from DB, fetches `TDoc_List_Meeting_*.xlsx` from FTP. **No meeting row → no TDoc sync.**
 - `doc3gpp wi sync --tsg <short>` → `WiService.sync` → `fetch_wis` → `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many`. The `wis.tsg_short` column is a foreign key into `tsgs.short_name`, so the `tsgs` table is auto-seeded and `--tsg` is validated against it.
 - `doc3gpp db init` calls `create_schema()` and then `TsgService.seed_defaults()` to populate the `tsgs` reference table.
@@ -208,7 +208,7 @@ file co-tenanted with third-party tooling metadata. See
 
 ## KNOWN CONSTRAINTS
 
-- **No Alembic.** Schema bootstrap is `Base.metadata.create_all` via `storage/db/migrate.py`. `DOC3GPP_DB_AUTO_MIGRATE` is a flag only — does not run migrations.
+- **No Alembic.** Schema bootstrap is `Base.metadata.create_all` via `storage/db/migrate.py`. `DOC3GPP_DB_AUTO_MIGRATE` is a flag only — does not run migrations. **Existing SQLite installs must run `doc3gpp db reset --yes` after pulling a change that adds a column (e.g. `meetings.tsg`).**
 - Calendar parser coupled to **current 3GPP DynaReport table layout** — upstream changes will break `meetings sync`.
 - TDoc extraction covers **FTP Excel lists only**. `GenerateDocumentList.aspx` and expanded metadata columns are unimplemented.
 - TDoc CR extraction covers the `R5s` (TTCN) and `R5w` (Workshop) URL templates verified against offline fixtures; the `R5-` and `C6-` templates are intentionally unresolved until exercised against the live site.

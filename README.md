@@ -35,7 +35,9 @@ PostgreSQL available via configuration.
 ## Features
 
 - **Meeting sync** — fetch the 3GPP DynaReport calendar (`meetings` table) and
-  persist it to your store of choice.
+  persist it to your store of choice. The `--tsg` flag is stamped onto every
+  row as a foreign key into `tsgs.short_name`, powering the `meeting list
+  --tsg` filter.
 - **TDoc sync** — discover and fetch `TDoc_List_Meeting_*.xlsx` from the 3GPP
   FTP for a stored meeting.
 - **TDoc CR extraction** — optional `python-docx` pipeline that downloads,

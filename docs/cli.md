@@ -107,6 +107,11 @@ Behavior:
 - Fetches HTML page.
 - Parses meeting rows.
 - Filters by date window.
+- Stamps the canonical (`--tsg` upper-cased) short name onto every
+  parsed `Meeting` so the persisted `meetings.tsg` FK column is
+  populated. The parent row in `tsgs` must exist (auto-seeded on a
+  fresh install); sync without a matching `tsgs` row will fail the FK
+  constraint.
 - Upserts records into meetings table.
 - Prints inserted/updated row count.
 
@@ -122,6 +127,10 @@ Options:
   - default: 20
 - --tsg: only list meetings for the given TSG short name.
   - default: none
+  - exact-match on the `meetings.tsg` FK (case-insensitive on input;
+    stored canonicalised to upper case by `meeting sync`). Rows whose
+    `tsg` is `NULL` (e.g. imported before the column was added) are
+    excluded.
 
 Additional options:
 
@@ -137,8 +146,9 @@ Default output fields:
 
 - `meeting_id`, `name`, `location`, `start_date`, `end_date`, `start_doc`, `end_doc`
 
-Note: by default `title`, `updated_at`, and `ftp_url` are excluded to keep
-the listing compact; use `--fields all` to include every available column.
+Note: by default `title`, `updated_at`, `ftp_url`, and `tsg` are excluded
+to keep the listing compact; use `--fields all` to include every
+available column (or `--fields tsg` to add just the owning TSG).
 
 Examples:
 
@@ -164,6 +174,12 @@ doc3gpp meeting list --year 2026
 
 ```bash
 doc3gpp meeting list --fields meeting_id,name
+```
+
+- Include the owning TSG (FK column populated by `meeting sync --tsg`):
+
+```bash
+doc3gpp meeting list --fields meeting_id,name,tsg --tsg r5
 ```
 
 - Output every available field (including `ftp_url`, `title`, `updated_at`):

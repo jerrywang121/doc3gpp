@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.storage.db.base import Base
-from doc3gpp.storage.db.models import MeetingORM
+from doc3gpp.storage.db.models import MeetingORM, TsgORM
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 
 
@@ -17,6 +17,25 @@ def _make_repo():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
+    # Seed TSG reference rows so meetings.tsg FK can resolve
+    with Session() as s:
+        s.add_all(
+            [
+                TsgORM(
+                    tsg_name="RAN WG5",
+                    short_name="R5",
+                    description="Mobile terminal conformance testing",
+                    url=None,
+                ),
+                TsgORM(
+                    tsg_name="SA WG2",
+                    short_name="S2",
+                    description="System Architecture",
+                    url=None,
+                ),
+            ]
+        )
+        s.commit()
     repo = SQLAlchemyMeetingRepository()
     repo._session_factory = Session
     return repo, Session
@@ -49,6 +68,7 @@ def test_upsert_many_updates_existing_row_in_place() -> None:
                 ftp_url="tsg_ran/docs/",
                 start_doc="R5w260300",
                 end_doc="R5w260301",
+                tsg="R5",
             )
         ]
     )
@@ -64,6 +84,76 @@ def test_upsert_many_updates_existing_row_in_place() -> None:
         assert row.ftp_url == "tsg_ran/docs/"
         assert row.start_doc == "R5w260300"
         assert row.end_doc == "R5w260301"
+        assert row.tsg == "R5"
+
+
+def test_upsert_many_persists_tsg_and_round_trips() -> None:
+    """Inserting with ``tsg`` writes the FK and listing surfaces it on the domain."""
+    repo, Session = _make_repo()
+    repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=10,
+                name="R5-100",
+                title="x",
+                location="x",
+                start_date=date(2026, 7, 2),
+                end_date=date(2026, 7, 3),
+                tsg="R5",
+            ),
+            Meeting(
+                meeting_id=11,
+                name="S2-150",
+                title="x",
+                location="x",
+                start_date=date(2026, 7, 2),
+                end_date=date(2026, 7, 3),
+                tsg="S2",
+            ),
+        ]
+    )
+
+    rows = repo.list(limit=10)
+    by_id = {r.meeting_id: r for r in rows}
+    assert by_id[10].tsg == "R5"
+    assert by_id[11].tsg == "S2"
+
+
+def test_upsert_many_updates_tsg_on_existing_row() -> None:
+    """A re-sync that swaps the owning TSG must update the column, not insert a duplicate."""
+    repo, Session = _make_repo()
+    repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=1,
+                name="R5-100",
+                title="x",
+                location="x",
+                start_date=date(2026, 7, 2),
+                end_date=date(2026, 7, 3),
+                tsg="R5",
+            )
+        ]
+    )
+
+    repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=1,
+                name="R5-100",
+                title="x",
+                location="x",
+                start_date=date(2026, 7, 2),
+                end_date=date(2026, 7, 3),
+                tsg="S2",
+            )
+        ]
+    )
+
+    with Session() as session:
+        rows = session.scalars(select(MeetingORM)).all()
+        assert len(rows) == 1
+        assert rows[0].tsg == "S2"
 
 
 def test_upsert_many_no_op_when_empty() -> None:

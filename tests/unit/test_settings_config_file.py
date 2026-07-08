@@ -391,7 +391,7 @@ def test_meeting_sync_uses_settings_defaults(
 
     captured: dict = {}
 
-    def fake_sync(self, meetings_url, max_year_closed, max_year_future, today=None):
+    def fake_sync(self, meetings_url, max_year_closed, max_year_future, today=None, tsg=None):
         captured["closed"] = max_year_closed
         captured["future"] = max_year_future
         return 0
@@ -422,7 +422,7 @@ def test_meeting_sync_cli_flag_overrides_settings(
 
     captured: dict = {}
 
-    def fake_sync(self, meetings_url, max_year_closed, max_year_future, today=None):
+    def fake_sync(self, meetings_url, max_year_closed, max_year_future, today=None, tsg=None):
         captured["closed"] = max_year_closed
         captured["future"] = max_year_future
         return 0

@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.storage.db.base import Base
-from doc3gpp.storage.db.models import MeetingORM
+from doc3gpp.storage.db.models import MeetingORM, TsgORM
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 
 
@@ -13,6 +13,24 @@ def _make_engine():
 
 
 def insert_rows(session):
+    # Seed TSG reference rows first; meetings.tsg is an FK to tsgs.short_name
+    session.add_all(
+        [
+            TsgORM(
+                tsg_name="RAN WG5",
+                short_name="R5",
+                description="Mobile terminal conformance testing",
+                url=None,
+            ),
+            TsgORM(
+                tsg_name="SA WG2",
+                short_name="S2",
+                description="System Architecture",
+                url=None,
+            ),
+        ]
+    )
+    session.flush()
     rows = [
         MeetingORM(
             meeting_id=1,
@@ -21,6 +39,7 @@ def insert_rows(session):
             location="Online",
             start_date=date(2026, 7, 2),
             end_date=date(2026, 7, 2),
+            tsg="R5",
         ),
         MeetingORM(
             meeting_id=2,
@@ -29,6 +48,7 @@ def insert_rows(session):
             location="Online",
             start_date=date(2026, 7, 2),
             end_date=date(2026, 7, 2),
+            tsg="R5",
         ),
         MeetingORM(
             meeting_id=3,
@@ -37,6 +57,16 @@ def insert_rows(session):
             location="City",
             start_date=date(2025, 5, 20),
             end_date=date(2025, 5, 24),
+            tsg="R5",
+        ),
+        MeetingORM(
+            meeting_id=4,
+            name="S2-150",
+            title="Other",
+            location="City",
+            start_date=date(2026, 7, 2),
+            end_date=date(2026, 7, 2),
+            tsg="S2",
         ),
     ]
 
@@ -55,12 +85,14 @@ def test_combined_filters_match_only_row_1():
     repo = SQLAlchemyMeetingRepository()
     repo._session_factory = Session
 
-    # Combine tsg='r5' (name startswith), name_like '%TTCN%', year=2026
+    # tsg='r5' + name_like='%TTCN%' + year=2026 — row 2 (its name contains TTCN)
     rows = repo.list(limit=10, tsg="r5", name_like="%TTCN%", year=2026)
-    # Only meeting_id 1 should match (name 'R5-300' contains no TTCN, but title does; repository filters on name)
-    # In this test we expect zero matches because name_like matches 'TTCN' only in name for row 2, but row 2 doesn't start with R5
-    assert [r.meeting_id for r in rows] == []
+    assert [r.meeting_id for r in rows] == [2]
 
-    # Now a pattern matching 'R5-%' and year 2026 should find meeting 1
+    # tsg='r5' + name_like='R5-%' + year=2026 — row 1 (its name starts with "R5-")
     rows2 = repo.list(limit=10, tsg="r5", name_like="R5-%", year=2026)
     assert [r.meeting_id for r in rows2] == [1]
+
+    # FK filter alone skips the SA WG2 fixture
+    r5_only = repo.list(limit=10, tsg="r5")
+    assert {r.meeting_id for r in r5_only} == {1, 2, 3}

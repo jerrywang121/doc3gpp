@@ -130,6 +130,13 @@ This document tracks what is implemented today versus planned next work.
   -- column on `tdoc_cr_details`; `tdoc_extracts` was URL-free so
   -- the only available identity is `tdoc_id` + a synthetic suffix).
   ```
+- The `meetings.tsg` column (FK into `tsgs.short_name`, populated by
+  `meeting sync --tsg`) was added after the initial schema. Existing
+  SQLite installs must run `doc3gpp db reset --yes` (or drop+recreate
+  the `meetings` table) to pick it up. Without that, `meeting sync`
+  will fail the FK constraint when inserting rows; `meeting list
+  --tsg` returns zero rows on legacy schemas (the FK-equality filter
+  is meaningless without the column).
 - Calendar parser depends on current DynaReport table structure; the
   `M5` log-warning surface catches pages that no longer carry a
   `<table class="meetings">` but a layout-only change may still break

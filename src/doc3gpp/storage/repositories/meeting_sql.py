@@ -54,7 +54,8 @@ class SQLAlchemyMeetingRepository:
         """List the most recent meeting records, ordered by start date.
 
         Optional filters:
-        - `tsg`: filter meetings whose `name` starts with this value (case-insensitive)
+        - `tsg`: exact-match on the ``meetings.tsg`` FK (case-insensitive
+          via upper-case canonical form, populated by ``meeting sync --tsg``).
         - `name_like`: SQL LIKE pattern to apply to the `name` column
         - `location_like`: SQL LIKE pattern to apply to the `location` column
         - `year`: integer year to match the `end_date`
@@ -64,8 +65,8 @@ class SQLAlchemyMeetingRepository:
             stmt = select(MeetingORM)
 
             if tsg:
-                # match names that start with the TSG short name (case-insensitive)
-                stmt = stmt.where(MeetingORM.name.ilike(f"{tsg}%"))
+                # FK equality on meetings.tsg; stored upper-case by sync so callers may pass any case
+                stmt = stmt.where(MeetingORM.tsg == tsg.upper())
 
             if name_like:
                 stmt = stmt.where(MeetingORM.name.like(name_like))
@@ -125,6 +126,7 @@ def _orm_to_domain(row: MeetingORM) -> Meeting:
         ftp_url=row.ftp_url,
         start_doc=row.start_doc,
         end_doc=row.end_doc,
+        tsg=row.tsg,
     )
 
 
@@ -133,6 +135,10 @@ def _persist(session: Session, meetings: list[Meeting]) -> None:
 
     Performs a single bulk ``SELECT`` keyed on ``meeting_id``, then issues
     INSERT/UPDATE for each item. Mirrors ``wi_sql._persist``.
+
+    ``tsg`` is written as-is from the domain object; the service layer is
+    responsible for stamping the canonical short name before calling
+    ``upsert_many`` so callers can update the owning TSG on a re-sync.
     """
     ids = [item.meeting_id for item in meetings]
     existing_rows = session.scalars(select(MeetingORM).where(MeetingORM.meeting_id.in_(ids))).all()
@@ -149,6 +155,7 @@ def _persist(session: Session, meetings: list[Meeting]) -> None:
             existing.ftp_url = item.ftp_url
             existing.start_doc = item.start_doc
             existing.end_doc = item.end_doc
+            existing.tsg = item.tsg
         else:
             session.add(
                 MeetingORM(
@@ -161,5 +168,6 @@ def _persist(session: Session, meetings: list[Meeting]) -> None:
                     ftp_url=item.ftp_url,
                     start_doc=item.start_doc,
                     end_doc=item.end_doc,
+                    tsg=item.tsg,
                 )
             )

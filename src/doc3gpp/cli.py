@@ -555,6 +555,7 @@ def meeting_sync(
         meeting_url,
         max_year_closed=effective_closed,
         max_year_future=effective_future,
+        tsg=tsg,
     )
     typer.echo(f"Meeting sync complete: {count} meeting rows stored")
 
@@ -595,7 +596,7 @@ def meeting_list(
 
     The command supports filtering, pagination, and field selection:
     - `--tsg`: optional TSG short name to restrict results (validated against
-      the ``tsgs`` reference table; matches the meeting name prefix).
+      the ``tsgs`` reference table; matches the ``meetings.tsg`` FK exactly).
     - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`).
     - `--location`: SQL LIKE pattern to filter `location` (supports `%` and `_`).
     - `--year`: filter by the end_date year.
@@ -607,11 +608,11 @@ def meeting_list(
     By default, the output includes the most useful columns for planning
     further commands (``meeting_id``, ``name``, ``location``, ``start_date``,
     ``end_date``, ``ftp_url``, ``start_doc``, ``end_doc``); pass
-    ``--fields all`` for the full schema including ``title``.
+    ``--fields all`` for the full schema including ``title`` and ``tsg``.
 
     Available fields for selection:
     meeting_id, name, title, location, start_date, end_date, ftp_url,
-    start_doc, end_doc
+    start_doc, end_doc, tsg
 
     Output routing:
     - `-o, --output PATH`: write results to PATH instead of stdout.
@@ -628,6 +629,7 @@ def meeting_list(
         "ftp_url",
         "start_doc",
         "end_doc",
+        "tsg",
     ]
 
     settings = get_settings()

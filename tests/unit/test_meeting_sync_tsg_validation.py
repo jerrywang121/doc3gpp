@@ -50,17 +50,19 @@ def test_meeting_sync_accepts_known_short_name(monkeypatch) -> None:
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
     )
 
-    sync_called_with: list[str] = []
+    sync_called_with: list[dict] = []
 
-    def fake_sync(self, url, max_year_closed=2, max_year_future=1):
-        sync_called_with.append(url)
+    def fake_sync(self, url, max_year_closed=2, max_year_future=1, tsg=None):
+        sync_called_with.append({"url": url, "tsg": tsg})
         return 0
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 
     result = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])
     assert result.exit_code == 0, result.output
-    assert "R5" in sync_called_with[0]
+    assert "R5" in sync_called_with[0]["url"]
+    # CLI must hand the canonical (uppercase) short name to the service for the meetings.tsg FK
+    assert sync_called_with[0]["tsg"] == "R5"
 
 
 def test_meeting_sync_rejects_unknown_short_name(monkeypatch) -> None:
@@ -85,17 +87,18 @@ def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
     )
 
-    captured: list[str] = []
+    captured: list[dict] = []
 
-    def fake_sync(self, url, max_year_closed=2, max_year_future=1):
-        captured.append(url)
+    def fake_sync(self, url, max_year_closed=2, max_year_future=1, tsg=None):
+        captured.append({"url": url, "tsg": tsg})
         return 0
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 
     result = runner.invoke(app, ["meeting", "sync", "--tsg", "s2"])
     assert result.exit_code == 0, result.output
-    assert "Meetings-S2.htm" in captured[0]
+    assert "Meetings-S2.htm" in captured[0]["url"]
+    assert captured[0]["tsg"] == "S2"
 
 
 def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
@@ -114,7 +117,7 @@ def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
         lambda self: (seed_calls.update(count=seed_calls["count"] + 1) or 16),
     )
 
-    def fake_sync(self, url, max_year_closed=2, max_year_future=1):
+    def fake_sync(self, url, max_year_closed=2, max_year_future=1, tsg=None):
         return 0
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)

@@ -18,6 +18,11 @@ class Meeting:
         ftp_url: Optional FTP path used to discover meeting documents.
         start_doc: Optional start document for the meeting.
         end_doc: Optional end document for the meeting.
+        tsg: Canonical TSG short name (e.g. ``R5``) owning this meeting;
+            populated during sync from the ``--tsg`` flag. Foreign key into
+            ``tsgs.short_name`` at the persistence layer; ``None`` for
+            rows inserted before the column was added or for meetings
+            imported without a known owning TSG.
     """
 
     meeting_id: int
@@ -29,3 +34,4 @@ class Meeting:
     ftp_url: str | None = None
     start_doc: str | None = None
     end_doc: str | None = None
+    tsg: str | None = None

@@ -122,16 +122,18 @@ class MeetingRepository(Protocol):
         """Return a list of meeting records, optionally filtered and paginated.
 
         Optional filters:
-            tsg: matches meeting names that *start with* this value
-                (case-insensitive).
+            tsg: exact-match on the ``meetings.tsg`` FK (case-insensitive
+                on input, stored canonicalised in upper-case by sync).
+                Rows whose ``tsg`` is ``NULL`` (e.g. imported before the
+                column was added) are excluded.
             name_like: SQL ``LIKE`` pattern applied to the meeting name column.
             location_like: SQL ``LIKE`` pattern applied to the meeting
                 location column.
             year: integer year to match against ``end_date``.
         Pagination:
             offset: rows to skip before applying ``limit``. Combined with
-                ``limit`` this enables CLI pagination without re-running the
-                filters.
+                ``limit`` this enables CLI pagination without re-running
+                the filters.
         """
         ...
 

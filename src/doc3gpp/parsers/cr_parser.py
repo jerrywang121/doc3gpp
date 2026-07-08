@@ -131,7 +131,7 @@ _CORRECTIONS_REQUIRED_RE = re.compile(
 
 # TTCN single-correction metadata table.
 _SINGLE_CORRECTION_FUNCTION_RE = re.compile(
-    r"^\s*\|\s*Function\s+name\s*\|\s*(.+?)\s*\|", re.IGNORECASE
+    r"^\s*\|\s*(?:Function\s+name|Template\s+name)\s*\|\s*(.+?)\s*\|", re.IGNORECASE
 )
 _SINGLE_CORRECTION_REASON_RE = re.compile(
     r"^\s*\|\s*Reason\s+for\s+change\s*\|\s*(.+?)\s*\|", re.IGNORECASE
@@ -156,7 +156,7 @@ _SINGLE_CORRECTION_NEW_RE = re.compile(
 )
 _TABLE_CELL_RE = re.compile(r"^\s*\|\s*(.+?)\s*\|")
 _FUNCTION_NAME_START_RE = re.compile(
-    r"^\s*\|\s*Function\s+name\s*\|", re.IGNORECASE
+    r"^\s*\|\s*(?:Function\s+name|Template\s+name)\s*\|", re.IGNORECASE
 )
 _TTCN_MODULE_END_RE = re.compile(r"^\s*\|\s*TTCN\s+module\s*\|", re.IGNORECASE)
 _MCC160_END_RE = re.compile(r"^\s*\|\s*MCC160\s+Comment\s*\|", re.IGNORECASE)
@@ -477,7 +477,7 @@ def _search_pattern_in_lines(
     advancing = 0
     for line in lines:
         advancing += 1
-        text = _remove_markdown_formatting(line)
+        text = line
         match = pattern.search(text)
         if match:
             for field_name, group_number in zip(field_names, group_numbers):
@@ -513,7 +513,7 @@ def _parse_ttcn_cr_overview(
     end_idx: int | None = None
 
     for idx, line in enumerate(lines):
-        text = _remove_markdown_formatting(line)
+        text = line
         if _OVERVIEW_TABLE_OF_CONTENTS_RE.match(text):
             start_idx = idx
             continue
@@ -551,7 +551,7 @@ def _parse_ttcn_cr_overview(
     ats_version: str | None = None
     for line in overview_lines:
         advancing += 1
-        text = _remove_markdown_formatting(line)
+        text = line
 
         match = _OVERVIEW_TESTCASE_RE.search(text + " ")
         if match and "testcase" not in details:
@@ -606,7 +606,7 @@ def _parse_ttcn_cr_corrections(
 
     # Find the start of the Corrections required section.
     for idx in range(total_lines):
-        text = _remove_markdown_formatting(lines[idx])
+        text = lines[idx]
         if _CORRECTIONS_REQUIRED_RE.match(text):
             next_line_number = idx + 1
             break
@@ -625,7 +625,7 @@ def _parse_ttcn_cr_corrections(
         if is_heading:
             advancing = idx - next_line_number
             break
-        text = _remove_markdown_formatting(lines[idx])
+        text = lines[idx]
         if _FUNCTION_NAME_START_RE.match(text):
             # Back up two lines to capture any preamble text rows.
             advancing = idx - 2 - next_line_number
@@ -695,7 +695,7 @@ def _parse_ttcn_cr_single_correction(
     start_idx: int | None = None
     end_idx: int | None = None
     for idx, line in enumerate(lines):
-        text = _remove_markdown_formatting(line)
+        text = line
         if _FUNCTION_NAME_START_RE.match(text):
             start_idx = idx
             continue
@@ -739,7 +739,7 @@ def _parse_ttcn_cr_single_correction(
         nonlocal advancing, next_line_number
         for line in change_lines[advancing:]:
             advancing += 1
-            text = _remove_markdown_formatting(line)
+            text = line
             match = label_re.match(text)
             if match:
                 change[target] = match.group(1).strip()
@@ -760,9 +760,7 @@ def _parse_ttcn_cr_single_correction(
             key: str | None = None
             scan_idx = next_line_number
             while scan_idx < total_lines:
-                text = _remove_markdown_formatting(
-                    lines[scan_idx], _MD_RM_KEEP_HEADERS
-                )
+                text = lines[scan_idx]
                 scan_idx += 1
                 if text.startswith("#"):
                     scan_idx -= 1
@@ -824,7 +822,7 @@ def _extract_change_from_table(
     for idx, line in enumerate(lines):
         if idx >= max_lines:
             break
-        text = _remove_markdown_formatting(line)
+        text = line
         match = _TABLE_CELL_RE.match(text)
         if match:
             advancing = idx + 1
@@ -918,7 +916,7 @@ def parse_cr_details(
 
     # --- header sniff: raise loudly when the 3GPP banner is absent ---
     header_blob = _collapse_whitespace(
-        _remove_markdown_formatting("\n".join(lines[:3]))
+        "\n".join(lines[:3])
     )
     if not _HEADER_PATTERN.search(header_blob):
         snippet = header_blob[:100]

@@ -24,8 +24,12 @@ import pytest
 
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.cache import TDocCache
-from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
+from doc3gpp.scraping.tdoc_zip_source import (
+    TDocZipDownloadError,
+    get_tdoc_zip_url,
+)
 from doc3gpp.services.tdoc_cr_service import (
     ExtractResult,
     TDocCrService,
@@ -325,6 +329,77 @@ def test_extract_force_bypasses_caches(sqlite_env, tmp_path) -> None:
     assert convert_mock.call_count == 1
     # Sanity: scraper_calls_before was at least one (first extract).
     assert scraper_calls_before >= 1
+
+
+# ---------------------------------------------------------------------------
+# 4b. Regression: zip cache hit + DB extract miss must persist
+#     successfully using the first resolved candidate URL.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_extract_zip_cache_hit_persists_with_candidate_url(
+    sqlite_env, tmp_path
+) -> None:
+    """When the zip cache is pre-populated but the DB extract tables
+    have no row, ``extract`` must persist under the resolver's first
+    candidate URL — ``download_tdoc_zip`` returns
+    ``DownloadedZip(url=None)`` on a cache hit (the URL that originally
+    populated the cache is not tracked), so the service falls back to
+    ``resolve_download_url``'s first entry for persistence. Previously
+    this surfaced as ``TDocExtractMeta requires a non-empty ftp_url``
+    and the TDoc silently failed in :meth:`extract_many`.
+    """
+    create_schema()
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+
+    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_zip_payload(fixture)
+    )
+    _seed_cr_tdoc(tdoc_repo, "R5s260009")
+
+    # Pre-condition: zip cache populated, DB extract tables empty.
+    # ``download_tdoc_zip`` keys the cache by ``tdoc.lower()``.
+    cache.put_bytes("r5s260009", _zip_payload(fixture), "zips")
+    scraper_mock.reset_mock()
+
+    result = service.extract("R5s260009")
+
+    assert isinstance(result, ExtractResult)
+    assert result.from_cache is False
+    # Network was bypassed — the zip came from the local cache.
+    assert scraper_mock.get_bytes.call_count == 0
+
+    # Persistence succeeded with a non-empty ftp_url. The fallback
+    # is the first resolver candidate: the template URL for R5s ids
+    # when ``tdocs.ftp_url`` is unset.
+    expected_url = normalize_ftp_path(
+        get_tdoc_zip_url("R5s260009") or ""
+    )
+    assert expected_url, "test precondition: R5s template URL must resolve"
+
+    details_list = cr_repo.get("R5s260009")
+    assert len(details_list) == 1
+    assert details_list[0].ftp_url == expected_url
+
+    meta_list = cr_repo.get_extract_meta("R5s260009")
+    assert len(meta_list) == 1
+    assert meta_list[0].ftp_url == expected_url
+    assert meta_list[0].ftp_url, (
+        "ftp_url must not be empty on zip-cache-hit persistence "
+        "(regression: previously raised TDocExtractMeta requires a "
+        "non-empty ftp_url)"
+    )
+
+    # A subsequent call must now hit the DB cache at the URL we
+    # just persisted — no re-extract, no network.
+    scraper_mock.reset_mock()
+    second = service.extract("R5s260009")
+    assert second.from_cache is True
+    assert scraper_mock.get_bytes.call_count == 0
 
 
 # ---------------------------------------------------------------------------

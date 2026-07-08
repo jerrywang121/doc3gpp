@@ -98,19 +98,19 @@ _HEADER_LINES = (
     "",
     "**Online, , 12th Dec 2025 - 31st Dec 2026**",
     "",
-    "|  | **38.523-3** | **CR** | **3790** | **rev** | **-** | **Current version:** | **18.4.0** |  |",
+    "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |",
     "|  | | | | | | | | |",
     "| *For* ***HELP*** *on using this form.* | | | | | | | | |",
-    "| ***Title:*** | Correction to NR testcase 7.1.3.5.3 | | | | | | | | |",
-    "| ***Source to WG:*** | ROHDE & SCHWARZ | | | | | | | | |",
-    "| ***Source to TSG:*** | R5 | | | | | | | | |",
-    "| ***Work item code:*** | TEI15_Test, 5GS_NR_LTE-UEConTest | | | | | | | | |",
-    "| ***Category:*** | **F** | | | | | | ***Release:*** | | | Rel-18 |",
-    "| ***Reason for change:*** | | The SS is creating 3 PDCP DATA PDUs. | | | | | | | |",
-    "| ***Consequences if not approved:*** | | Test will fail unfairly. | | | | | | | |",
-    "| ***Clauses affected:*** | | 7.1.3.5.3 | | | | | | | | |",
-    "| ***Other comments:*** | | None | | | | | | | | |",
-    "| ***This CR's revision history:*** | | rev - | | | | | | | |",
+    "| Title: | Correction to NR testcase 7.1.3.5.3 | | | | | | | | |",
+    "| Source to WG: | ROHDE & SCHWARZ | | | | | | | | |",
+    "| Source to TSG: | R5 | | | | | | | | |",
+    "| Work item code: | TEI15_Test, 5GS_NR_LTE-UEConTest | | | | | | | | |",
+    "| Category: | F | | | | | | Release: | | | Rel-18 |",
+    "| Reason for change: | | The SS is creating 3 PDCP DATA PDUs. | | | | | | | |",
+    "| Consequences if not approved: | | Test will fail unfairly. | | | | | | | |",
+    "| Clauses affected: | | 7.1.3.5.3 | | | | | | | | |",
+    "| Other comments: | | None | | | | | | | | |",
+    "| This CR's revision history: | | rev - | | | | | | | |",
 )
 
 _TTCN_OVERVIEW_LINES = (
@@ -250,11 +250,11 @@ _NON_TTCN_HEADER_LINES = (
     "",
     "**Toulouse, France, 14th Nov 2022 - 18th Nov 2022**",
     "",
-    "|  | **38.508-1** | **CR** | **2678** | **rev** | **1** | **Current version:** | **17.6.0** |  |",
-    "| ***Title:*** | Addition of USIM configuration for MUSIM test cases | | | | | | | | |",
-    "| ***Source to WG:*** | Qualcomm Incorporated | | | | | | | | |",
-    "| ***Source to TSG:*** | R5 | | | | | | | | |",
-    "| ***Category:*** | **F** | | | | | | ***Release:*** | | | Rel-17 |",
+    "|  | 38.508-1 | CR | 2678 | rev | 1 | Current version: | 17.6.0 |  |",
+    "| Title: | Addition of USIM configuration for MUSIM test cases | | | | | | | | |",
+    "| Source to WG: | Qualcomm Incorporated | | | | | | | | |",
+    "| Source to TSG: | R5 | | | | | | | | |",
+    "| Category: | F | | | | | | Release: | | | Rel-17 |",
 )
 
 
@@ -295,13 +295,47 @@ def test_ttcn_cr_invokes_overview_and_corrections_parsers() -> None:
     # One correction found.
     assert len(details.corrections) == 1
     change = details.corrections[0]
-    assert change["function_name"] == "flTC71353_Body", (
-        "_remove_markdown_formatting strips inner underscores (matching the "
-        "reference's behaviour); identifiers collapse partially."
-    )
+    # Markdown formatting is no longer stripped, so inner underscores
+    # in identifiers (e.g. ``fl_TC_7_1_3_5_3_Body``) survive verbatim.
+    assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
     assert change["reason_for_change"] == "Change due to MCX feature addition."
     assert change["summary_of_change"] == "Use new PDCP function."
-    assert change["ttcn_module"] == "NRDCTestcases.ttcn"
+    assert change["ttcn_module"] == "NR_DC_Testcases.ttcn"
+    assert change["mcc160_comment"] == "OK"
+
+
+_TTCN_TEMPLATE_CORRECTION_LINES = (
+    "",
+    "Changes provided in TTCN CR R5s260009 are required for the verification of NR5GC 7.1.3.5.3.",
+    "",
+    "| Template name | tr_CommonPart_Template |",
+    "| Reason for change | New template for MCX. |",
+    "| Summary of change | Add template body. |",
+    "| TTCN module | NR_DC_Templates.ttcn |",
+    "| MCC160 Comment | OK |",
+    "",
+    "### 3. Method of test",
+)
+
+
+def test_ttcn_cr_extracts_function_name_from_template_name_row() -> None:
+    """The function-name regex also matches ``Template name`` rows.
+
+    Some TTCN CRs use a ``| Template name |`` row instead of
+    ``| Function name |`` to identify the changed template. The
+    parser must surface the value as ``function_name`` regardless
+    of which label the source table uses.
+    """
+    md = "\n".join(
+        list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_TEMPLATE_CORRECTION_LINES)
+    )
+    details = parse_cr_details(md, tdoc_id="R5s260009")
+    assert len(details.corrections) == 1
+    change = details.corrections[0]
+    assert change["function_name"] == "tr_CommonPart_Template"
+    assert change["reason_for_change"] == "New template for MCX."
+    assert change["summary_of_change"] == "Add template body."
+    assert change["ttcn_module"] == "NR_DC_Templates.ttcn"
     assert change["mcc160_comment"] == "OK"
 
 

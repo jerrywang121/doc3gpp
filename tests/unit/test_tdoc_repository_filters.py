@@ -104,6 +104,29 @@ def test_list_filter_meeting(repo):
     assert res[0].meeting_name == "RAN5#111"
 
 
+def test_list_filter_meeting_id(repo):
+    res = repo.list(meeting_id=1)
+    assert len(res) == 2
+    assert all(t.meeting_id == 1 for t in res)
+
+    res = repo.list(meeting_id=2)
+    assert len(res) == 1
+    assert res[0].tdoc_id == "S2-260100"
+
+
+def test_list_filter_meeting_id_with_meeting_like(repo):
+    res = repo.list_with_meeting(meeting_id=1, meeting_like="%RAN5%")
+    assert len(res) == 2
+    assert res[0].meeting_name == "RAN5#111"
+
+    res = repo.list_with_meeting(meeting_id=1, meeting_like="%SA2%")
+    assert len(res) == 0
+
+
+def test_list_filter_meeting_id_no_match(repo):
+    assert repo.list(meeting_id=999) == []
+
+
 def test_list_filter_source(repo):
     res = repo.list(source_like="Qualcomm")
     assert len(res) == 1

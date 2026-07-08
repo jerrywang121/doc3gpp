@@ -332,6 +332,53 @@ def test_cli_tdoc_list_filters(sqlite_env) -> None:
     assert "R6s260003" not in result.stdout
 
 
+def test_cli_tdoc_list_filter_by_meeting_id(sqlite_env) -> None:
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+
+    repo = SQLAlchemyTDocRepository()
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    m1 = Meeting(meeting_id=200, name="RAN5#200", title="RAN5 meeting 200", location="Online", start_date=date(2026,1,1), end_date=date(2026,1,2))
+    m2 = Meeting(meeting_id=201, name="RAN5#201", title="RAN5 meeting 201", location="Online", start_date=date(2026,2,1), end_date=date(2026,2,2))
+    meeting_repo.upsert_many([m1, m2])
+
+    repo.upsert(TDoc(tdoc_id="R5s260001", title="Example A", meeting_id=200, ftp_url="x/1"))
+    repo.upsert(TDoc(tdoc_id="R5s260002", title="Example B", meeting_id=201, ftp_url="x/2"))
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc",
+            "list",
+            "--meeting-id",
+            "200",
+            "--limit",
+            "10",
+            "--fields",
+            "tdoc_id,title,meeting_name",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "R5s260001\tExample A\tRAN5#200" in result.stdout
+    assert "R5s260002" not in result.stdout
+
+
+def test_cli_tdoc_list_meeting_id_unknown_returns_no_rows(sqlite_env) -> None:
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "list", "--meeting-id", "999999"],
+    )
+
+    assert result.exit_code == 0
+    assert "No TDocs found" in result.stdout
+
+
 def test_cli_tdoc_sync_meeting_args_are_exclusive(sqlite_env) -> None:
     runner = CliRunner()
     assert runner.invoke(app, ["db", "init"]).exit_code == 0

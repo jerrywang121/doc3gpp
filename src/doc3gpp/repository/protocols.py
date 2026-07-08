@@ -43,6 +43,7 @@ class TDocRepository(Protocol):
         limit: int = 20,
         tsg: str | None = None,
         meeting_like: str | None = None,
+        meeting_id: int | None = None,
         year: int | None = None,
         source_like: str | None = None,
         spec_like: str | None = None,
@@ -53,6 +54,14 @@ class TDocRepository(Protocol):
         type_like: str | None = None,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
+
+        Optional filters:
+        - ``tsg``: TSG prefix matched against the TDoc identifier.
+        - ``meeting_like``: SQL ``LIKE`` pattern applied to the parent
+          meeting's name (joins the ``meetings`` table).
+        - ``meeting_id``: exact match against ``tdocs.meeting_id``. Can
+          be combined with ``meeting_like``; rows must satisfy both.
+        - ``year``: two-digit year code embedded in the TDoc identifier.
 
         Pure persistence shape — no joined meeting metadata. Callers that
         need a human-readable meeting name should use :meth:`list_with_meeting`.
@@ -74,6 +83,7 @@ class TDocRepository(Protocol):
         limit: int = 20,
         tsg: str | None = None,
         meeting_like: str | None = None,
+        meeting_id: int | None = None,
         year: int | None = None,
         source_like: str | None = None,
         spec_like: str | None = None,
@@ -87,7 +97,8 @@ class TDocRepository(Protocol):
 
         Equivalent to ``list(...)`` plus a ``meetings`` JOIN to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
-        the meeting name alongside TDoc fields.
+        the meeting name alongside TDoc fields. Accepts the same filters as
+        :meth:`list`.
         """
         ...
 

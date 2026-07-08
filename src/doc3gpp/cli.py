@@ -719,6 +719,10 @@ def tdoc_list(
         None,
         help="SQL LIKE pattern to filter meeting name; supports % and _."
     ),
+    meeting_id: int | None = typer.Option(
+        None,
+        help="Exact meeting ID to filter TDocs (see `doc3gpp meeting list`).",
+    ),
     source: str | None = typer.Option(
         None,
         help="SQL LIKE pattern to filter TDoc source (e.g. 'Qualcomm%', '%Huawei%')."
@@ -771,6 +775,8 @@ def tdoc_list(
     - `--meeting`: substring filter on the meeting name; auto-wrapped with
       wildcards when no ``%`` / ``_`` is present, so `--meeting RAN5#111`
       matches anything containing that string.
+    - `--meeting-id`: exact match on the meeting ID. Combinable with
+      `--meeting`; rows must satisfy both predicates.
     - `--source`: SQL LIKE pattern to filter by source/contributor
     - `--spec`: SQL LIKE pattern to filter by technical specification
     - `--wi`: SQL LIKE pattern to filter by related work items
@@ -804,11 +810,12 @@ def tdoc_list(
     fmt = _resolve_format(fmt, default=settings.output.format)
 
     logger.info(
-        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
+        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s meeting_id=%s source=%s spec=%s wi=%s title=%s cat=%s status=%s type=%s",
         limit,
         tsg,
         year,
         meeting,
+        meeting_id,
         source,
         spec,
         wi,
@@ -823,6 +830,7 @@ def tdoc_list(
         limit=limit,
         tsg=tsg,
         meeting_like=_auto_wrap_like(meeting) if meeting else None,
+        meeting_id=meeting_id,
         year=year,
         source_like=source,
         spec_like=spec,

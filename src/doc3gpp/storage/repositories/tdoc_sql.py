@@ -82,6 +82,7 @@ class SQLAlchemyTDocRepository:
         limit: int = 20,
         tsg: str | None = None,
         meeting_like: str | None = None,
+        meeting_id: int | None = None,
         year: int | None = None,
         source_like: str | None = None,
         spec_like: str | None = None,
@@ -102,6 +103,8 @@ class SQLAlchemyTDocRepository:
         Optional filters:
         - `tsg`: filter TDoc IDs that start with the given TSG prefix.
         - `meeting_like`: SQL LIKE pattern to apply to the meeting name.
+        - `meeting_id`: exact match on ``tdocs.meeting_id``. Combinable
+          with `meeting_like`; rows must satisfy both predicates.
         - `year`: two-digit year embedded in the TDoc identifier.
         - `source_like`: SQL LIKE pattern to apply to the document source field.
         - `spec_like`: SQL LIKE pattern to filter by technical specification (spec field).
@@ -122,6 +125,9 @@ class SQLAlchemyTDocRepository:
                 stmt = stmt.join(MeetingORM, TDocORM.meeting_id == MeetingORM.meeting_id).where(
                     MeetingORM.name.like(meeting_like)
                 )
+
+            if meeting_id is not None:
+                stmt = stmt.where(TDocORM.meeting_id == meeting_id)
 
             if year is not None:
                 # Decode the year in Python so the SQL doesn't depend on
@@ -184,6 +190,7 @@ class SQLAlchemyTDocRepository:
         limit: int = 20,
         tsg: str | None = None,
         meeting_like: str | None = None,
+        meeting_id: int | None = None,
         year: int | None = None,
         source_like: str | None = None,
         spec_like: str | None = None,
@@ -202,6 +209,7 @@ class SQLAlchemyTDocRepository:
             limit=limit,
             tsg=tsg,
             meeting_like=meeting_like,
+            meeting_id=meeting_id,
             year=year,
             source_like=source_like,
             spec_like=spec_like,

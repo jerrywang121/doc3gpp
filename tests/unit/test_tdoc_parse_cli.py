@@ -1,4 +1,4 @@
-"""Unit tests for the ``tdoc extract`` and ``tdoc show`` CLI commands.
+"""Unit tests for the ``tdoc parse`` and ``tdoc show`` CLI commands.
 
 The tests stub out :func:`doc3gpp.services.factory.build_tdoc_cr_service`
 and :class:`SQLAlchemyTDocRepository` via ``monkeypatch`` so the CLI
@@ -127,17 +127,17 @@ def _make_result(
 
 
 # ---------------------------------------------------------------------------
-# tdoc extract
+# tdoc parse
 # ---------------------------------------------------------------------------
 
 
-def test_tdoc_extract_happy_path(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_happy_path(sqlite_env, monkeypatch) -> None:
     """A single successful ``--tdoc`` prints spec/cr_num/title and exits 0."""
     runner = CliRunner()
     fake = _FakeCrService(results={"R5s260009": _make_result()})
     _patch_service(monkeypatch, fake)
 
-    result = runner.invoke(app, ["tdoc", "extract", "--tdoc", "R5s260009"])
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
     assert result.exit_code == 0, result.output
     assert "spec=38.523-3" in result.output
     assert "cr_num=3790" in result.output
@@ -147,7 +147,7 @@ def test_tdoc_extract_happy_path(sqlite_env, monkeypatch) -> None:
     assert fake.many_calls == [(["R5s260009"], False, False)]
 
 
-def test_tdoc_extract_partial_failure(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
     """When ``extract_many`` returns only some ids, the CLI prints
     ``FAILED - extract error`` for the missing ones and exits 0."""
     runner = CliRunner()
@@ -159,7 +159,7 @@ def test_tdoc_extract_partial_failure(sqlite_env, monkeypatch) -> None:
     result = runner.invoke(
         app,
         [
-            "tdoc", "extract",
+            "tdoc", "parse",
             "--tdoc", "R5s260009",
             "--tdoc", "R5s260010",
         ],
@@ -170,7 +170,7 @@ def test_tdoc_extract_partial_failure(sqlite_env, monkeypatch) -> None:
     assert "Extracted 1/2 TDocs (1 failures)" in result.output
 
 
-def test_tdoc_extract_all_failures(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
     """``extract_many`` returning an empty dict (every id skipped by the
     service) yields exit 1 and an all-failures summary."""
     runner = CliRunner()
@@ -180,7 +180,7 @@ def test_tdoc_extract_all_failures(sqlite_env, monkeypatch) -> None:
     result = runner.invoke(
         app,
         [
-            "tdoc", "extract",
+            "tdoc", "parse",
             "--tdoc", "R5s260009",
             "--tdoc", "R5s260010",
         ],
@@ -191,15 +191,15 @@ def test_tdoc_extract_all_failures(sqlite_env, monkeypatch) -> None:
     assert "Extracted 0/2 TDocs (2 failures)" in result.output
 
 
-def test_tdoc_extract_no_tdocs_specified(sqlite_env) -> None:
+def test_tdoc_parse_no_tdocs_specified(sqlite_env) -> None:
     """Invoking the command with no selector raises ``BadParameter``."""
     runner = CliRunner()
-    result = runner.invoke(app, ["tdoc", "extract"])
+    result = runner.invoke(app, ["tdoc", "parse"])
     assert result.exit_code != 0
     assert "Specify at least one --tdoc or --tdoc-id" in result.output
 
 
-def test_tdoc_extract_tdoc_id_resolves(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_tdoc_id_resolves(sqlite_env, monkeypatch) -> None:
     """``--tdoc-id`` is looked up via the repository; the resolved id
     string flows into ``extract_many``."""
     runner = CliRunner()
@@ -210,26 +210,26 @@ def test_tdoc_extract_tdoc_id_resolves(sqlite_env, monkeypatch) -> None:
         by_int={"1": TDoc(tdoc_id="R5s260009", type="CR")},
     )
 
-    result = runner.invoke(app, ["tdoc", "extract", "--tdoc-id", "1"])
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc-id", "1"])
     assert result.exit_code == 0, result.output
     assert fake.many_calls == [(["R5s260009"], False, False)]
     assert "R5s260009: spec=38.523-3" in result.output
 
 
-def test_tdoc_extract_force_passed_through(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_force_passed_through(sqlite_env, monkeypatch) -> None:
     """``--force=True`` is forwarded to ``extract_many``."""
     runner = CliRunner()
     fake = _FakeCrService(results={"R5s260009": _make_result()})
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
-        app, ["tdoc", "extract", "--tdoc", "R5s260009", "--force"],
+        app, ["tdoc", "parse", "--tdoc", "R5s260009", "--force"],
     )
     assert result.exit_code == 0, result.output
     assert fake.many_calls == [(["R5s260009"], True, False)]
 
 
-def test_tdoc_extract_python_docx_missing_friendly_error(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) -> None:
     """When ``extract_many`` raises :class:`PythonDocxNotInstalledError`,
     the CLI prints the install hint and exits 1 — the batch does not
     crash with a Python traceback."""
@@ -240,7 +240,7 @@ def test_tdoc_extract_python_docx_missing_friendly_error(sqlite_env, monkeypatch
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
-        app, ["tdoc", "extract", "--tdoc", "R5s260009"],
+        app, ["tdoc", "parse", "--tdoc", "R5s260009"],
     )
     assert result.exit_code == 1
     assert "python-docx is not installed" in result.output
@@ -335,7 +335,7 @@ def test_tdoc_show_no_extract_row(sqlite_env) -> None:
     assert "[TDoc]" in result.output
     assert "tdoc_id: R5s260010" in result.output
     assert "No extracted details" in result.output
-    assert "doc3gpp tdoc extract" in result.output
+    assert "doc3gpp tdoc parse" in result.output
 
 
 def test_tdoc_show_unknown_tdoc_raises_bad_parameter(sqlite_env) -> None:
@@ -367,7 +367,7 @@ def test_tdoc_show_unknown_tdoc_raises_bad_parameter(sqlite_env) -> None:
         ("  r5s260213  ", "R5s260213"),
     ],
 )
-def test_tdoc_extract_canonicalises_input(
+def test_tdoc_parse_canonicalises_input(
     sqlite_env, monkeypatch, raw_input: str, expected_canonical: str
 ) -> None:
     """``--tdoc r5s260213`` must flow into ``extract_many`` as ``R5s260213``
@@ -378,13 +378,13 @@ def test_tdoc_extract_canonicalises_input(
     )
     _patch_service(monkeypatch, fake)
 
-    result = runner.invoke(app, ["tdoc", "extract", "--tdoc", raw_input])
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", raw_input])
     assert result.exit_code == 0, result.output
     assert fake.many_calls == [([expected_canonical], False, False)]
     assert f"{expected_canonical}: spec=" in result.output
 
 
-def test_tdoc_extract_non_cr_shape_passes_through(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_non_cr_shape_passes_through(sqlite_env, monkeypatch) -> None:
     """Non-CR shapes (e.g. LS) have no canonical mapping; the input is
     stripped of whitespace and forwarded verbatim — the DB lookup
     succeeds iff the user typed it exactly as stored."""
@@ -393,7 +393,7 @@ def test_tdoc_extract_non_cr_shape_passes_through(sqlite_env, monkeypatch) -> No
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
-        app, ["tdoc", "extract", "--tdoc", "  LS-260001  "],
+        app, ["tdoc", "parse", "--tdoc", "  LS-260001  "],
     )
     assert result.exit_code == 0, result.output
     assert fake.many_calls == [(["LS-260001"], False, False)]

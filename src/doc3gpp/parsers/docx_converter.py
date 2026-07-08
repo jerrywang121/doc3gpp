@@ -50,7 +50,7 @@ class PythonDocxNotInstalledError(ImportError):
 
     Surfaces an actionable install hint instead of letting a bare
     ``ImportError`` propagate up through the service layer and crash the
-    ``tdoc extract`` CLI with an unfriendly traceback.
+    ``tdoc parse`` CLI with an unfriendly traceback.
     """
 
     def __init__(self, message: str | None = None) -> None:

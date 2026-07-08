@@ -286,7 +286,7 @@ doc3gpp tdoc list --fields tdoc_id,title,status
 Purpose:
 
 - Print every :class:`TDoc` field for a single TDoc plus the parsed CR
-  cover-page fields (if `tdoc extract` has been run for this id).
+  cover-page fields (if `tdoc parse` has been run for this id).
 
 Options:
 
@@ -314,7 +314,7 @@ Examples:
 doc3gpp tdoc show --tdoc R5s260009
 ```
 
-### doc3gpp tdoc extract
+### doc3gpp tdoc parse
 
 Purpose:
 
@@ -368,13 +368,13 @@ Examples:
 
 ```bash
 # Extract a single CR.
-doc3gpp tdoc extract --tdoc R5s260009
+doc3gpp tdoc parse --tdoc R5s260009
 
 # Batch extract three CRs, bypassing the on-disk cache.
-doc3gpp tdoc extract --tdoc R5s260009 --tdoc R5s260051 --tdoc R5s260135 --force
+doc3gpp tdoc parse --tdoc R5s260009 --tdoc R5s260051 --tdoc R5s260135 --force
 
 # Mix string and integer selectors.
-doc3gpp tdoc extract --tdoc R5s260009 --tdoc-id 1234
+doc3gpp tdoc parse --tdoc R5s260009 --tdoc-id 1234
 ```
 
 ## cache Commands
@@ -417,7 +417,7 @@ doc3gpp cache status
 Purpose:
 
 - Delete every cached zip and markdown file, recreating the subtrees
-  empty so subsequent `tdoc extract` calls still work.
+  empty so subsequent `tdoc parse` calls still work.
 
 Options:
 
@@ -434,7 +434,7 @@ Behavior:
   (CI / scripted use).
 - The on-disk artefacts referenced from
   `tdoc_extracts.markdown_path` and `tdoc_extracts.zip_path` become
-  stale — the next `tdoc extract` will repopulate them.
+  stale — the next `tdoc parse` will repopulate them.
 
 Examples:
 
@@ -680,7 +680,7 @@ doc3gpp meeting sync --tsg r5
 doc3gpp meeting list --limit 20
 doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
 doc3gpp tdoc list --limit 10
-doc3gpp tdoc extract --tdoc R5s260009
+doc3gpp tdoc parse --tdoc R5s260009
 doc3gpp tdoc show --tdoc R5s260009
 doc3gpp cache status
 doc3gpp cache purge --yes

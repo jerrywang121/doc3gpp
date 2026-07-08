@@ -209,6 +209,9 @@ Options:
 - --tsg: filter TDoc IDs by TSG prefix (e.g. R5, S2).
 - --year: filter by the two-digit year code embedded in the TDoc identifier.
 - --meeting: SQL LIKE pattern to filter by meeting name (supports % and _).
+- --meeting-id: exact match on the parent meeting's numeric ID (see
+  `doc3gpp meeting list`). Combinable with `--meeting`; rows must satisfy
+  both predicates.
 - --source: SQL LIKE pattern to filter by TDoc source/contributor.
 - --spec: SQL LIKE pattern to filter by technical specification.
 - --wi: SQL LIKE pattern to filter by related work items.
@@ -248,6 +251,12 @@ doc3gpp tdoc list --wi "%NR_ext%"
 
 ```bash
 doc3gpp tdoc list --title "%RedCap%"
+```
+
+- List all TDocs from a single meeting by its numeric ID:
+
+```bash
+doc3gpp tdoc list --meeting-id 85434
 ```
 
 - Output only ID, title and status:

@@ -299,8 +299,8 @@ seventeen commands):
 - `tdoc`:
     - `sync` — `--meeting-id` or `--meeting`; delegates to
       `TDocSyncCoordinator`
-    - `list` — filters by `--tsg`, `--meeting`, `--year`, `--source`,
-      `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`
+    - `list` — filters by `--tsg`, `--meeting`, `--meeting-id`, `--year`,
+      `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`
     - `extract` — `--tdoc` / `--tdoc-id` (repeatable), `--force`,
       `--full`; batch extraction with per-id failure isolation
     - `show` — `--tdoc`; renders the matching TDoc and, when present,

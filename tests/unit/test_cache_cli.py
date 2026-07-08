@@ -113,7 +113,7 @@ def test_cache_purge_with_yes(cache_env) -> None:
     assert result.exit_code == 0, result.output
     assert "Deleted 3 files from cache." in result.output
 
-    # The subdirs are recreated empty (so subsequent ``tdoc extract``
+    # The subdirs are recreated empty (so subsequent ``tdoc parse``
     # calls still work).
     assert (cache_env / "zips").is_dir()
     assert (cache_env / "markdown").is_dir()

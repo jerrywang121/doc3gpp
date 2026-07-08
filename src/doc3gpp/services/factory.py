@@ -37,7 +37,7 @@ def build_tdoc_service() -> TDocService:
 def build_tdoc_repository() -> SQLAlchemyTDocRepository:
     """Construct a :class:`SQLAlchemyTDocRepository` for direct lookups.
 
-    Used by the Phase 7 ``tdoc show`` and ``tdoc extract`` CLI commands
+    Used by the Phase 7 ``tdoc show`` and ``tdoc parse`` CLI commands
     when a single TDoc needs to be resolved by its canonical
     ``tdoc_id`` without going through a service-layer wrapper. Keeps
     the existing :func:`build_tdoc_service` factory untouched.
@@ -86,7 +86,7 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
 
 
 def build_tdoc_cr_service() -> TDocCrService:
-    """Construct a :class:`TDocCrService` for the ``tdoc extract`` command.
+    """Construct a :class:`TDocCrService` for the ``tdoc parse`` command.
 
     Wires together:
 

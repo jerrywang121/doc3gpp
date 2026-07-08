@@ -348,7 +348,7 @@ def cache_status() -> None:
 
     The status command is a pure read — it does **not** trigger FIFO
     eviction, even if the cache is currently over the configured size
-    limit. Use ``doc3gpp cache purge`` (or the next ``tdoc extract``
+    limit. Use ``doc3gpp cache purge`` (or the next ``tdoc parse``
     call) to evict.
     """
     cache = _build_cache()
@@ -368,7 +368,7 @@ def cache_purge(
     """Delete every cached zip and markdown file.
 
     The ``zips/`` and ``markdown/`` subtrees are wiped and recreated
-    empty so the cache remains usable for subsequent ``tdoc extract``
+    empty so the cache remains usable for subsequent ``tdoc parse``
     calls. On-disk artefacts referenced from the
     ``tdoc_extracts.markdown_path`` and ``tdoc_extracts.zip_path``
     columns become stale — the next extract will repopulate them.
@@ -870,7 +870,7 @@ def tdoc_list(
 
 
 def _extract_failure_hints() -> str:
-    """Return the friendly error-name list for the ``tdoc extract`` summary.
+    """Return the friendly error-name list for the ``tdoc parse`` summary.
 
     Used in the exception handler at the batch level so an
     operator-facing error message lists the per-item error categories
@@ -898,13 +898,13 @@ def _normalise_cli_tdoc_id(raw: str) -> str:
     return canonical if canonical is not None else raw.strip()
 
 
-@tdoc_app.command("extract")
-def tdoc_extract(
+@tdoc_app.command("parse")
+def tdoc_parse(
     tdoc: list[str] = typer.Option(
         None,
         "--tdoc",
         help=(
-            "TDoc ID to extract (repeatable for batch). "
+            "TDoc ID to parse (repeatable for batch). "
             "Case-insensitive for CR-shape IDs (e.g. 'r5s260213' resolves "
             "to 'R5s260213' as stored in the database)."
         ),
@@ -980,7 +980,7 @@ def tdoc_extract(
         raise typer.Exit(code=1)
 
     logger.info(
-        "Starting TDoc extract for %d id(s) (force=%s, full=%s)",
+        "Starting TDoc parse for %d id(s) (force=%s, full=%s)",
         len(tdoc_ids), force, full,
     )
     service = build_tdoc_cr_service()
@@ -1031,7 +1031,7 @@ def tdoc_show(
 
     Looks up the TDoc row in the ``tdocs`` table and prints every
     :class:`TDoc` field under a ``[TDoc]`` section. When one or more
-    matching ``tdoc_cr_details`` rows exist (i.e. ``tdoc extract`` has
+    matching ``tdoc_cr_details`` rows exist (i.e. ``tdoc parse`` has
     been run for this id at least once) the parsed cover-page fields
     are printed under one ``[Extracted Details]`` block **per revision**
     (each revision is keyed by the immutable download URL — multiple
@@ -1068,7 +1068,7 @@ def tdoc_show(
     meta_list = cr_repo.get_extract_meta(tdoc)
     if not details_list and not meta_list:
         typer.echo("[Extracted Details]")
-        typer.echo("No extracted details; run `doc3gpp tdoc extract --tdoc <id>` first.")
+        typer.echo("No extracted details; run `doc3gpp tdoc parse --tdoc <id>` first.")
         return
 
     meta_by_url = {meta.ftp_url: meta for meta in meta_list}

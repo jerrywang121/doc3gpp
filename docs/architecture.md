@@ -163,7 +163,7 @@ and the TDoc CR extraction is the deepest.
 
 ### TDoc CR extraction
 
-1. `doc3gpp tdoc extract --tdoc <id>` (or `--tdoc-id N`) resolves the
+1. `doc3gpp tdoc parse --tdoc <id>` (or `--tdoc-id N`) resolves the
    id (via `TDocRepository.get_by_id`) and validates the row exists with
    `type == "CR"` (raises `TDocTypeUnsupportedError` for non-CR ids).
 2. `TDocCrService.extract(tdoc_id, *, force=False)`:
@@ -365,7 +365,7 @@ service stack.
     - services (`test_meetings_service_sync.py`,
       `test_tdoc_service_sync.py`, `test_tdoc_sync_coordinator.py`)
     - CLI (`test_meeting_cli*`, `test_tdoc_cli_fields.py`,
-      `test_tdoc_sync_cli.py`, `test_tdoc_extract_cli.py`,
+      `test_tdoc_sync_cli.py`, `test_tdoc_parse_cli.py`,
       `test_cache_cli.py`, `test_wi_cli.py`, `test_tsg_cli.py`)
 - `tests/integration/` — sqlite-only by default; online + mysql
   opt-in. 10 files, 53 tests:
@@ -375,7 +375,7 @@ service stack.
       `test_tdoc_cr_sqlite.py` (12 tests + 1 e2e Typer CLI test),
       `test_tsg_sqlite.py`, `test_wi_sqlite.py`
     - `test_online_3gpp_calendar.py`,
-      `test_online_tdoc_extract.py` (live `R5s260009` /
+      `test_online_tdoc_parse.py` (live `R5s260009` /
       `R5w260009`, `@pytest.mark.online`)
     - `test_mysql_backend.py` (gated on
       `DOC3GPP_TEST_MYSQL_URL`)

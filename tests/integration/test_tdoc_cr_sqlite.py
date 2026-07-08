@@ -599,7 +599,7 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
     monkeypatch.setattr("doc3gpp.services.factory.ScraperClient", lambda: dummy)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["tdoc", "extract", "--tdoc", "R5s260009"])
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
 
     # 1. CLI exited cleanly and the per-id line carries the parsed fields.
     assert result.exit_code == 0, result.output

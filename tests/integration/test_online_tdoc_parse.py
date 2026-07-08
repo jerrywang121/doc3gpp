@@ -1,7 +1,7 @@
 """Online integration tests for the TDoc extraction pipeline.
 
 These tests hit the live 3GPP FTP (``www.3gpp.org``) through the same
-``doc3gpp tdoc extract`` command a human operator would run, end-to-end
+``doc3gpp tdoc parse`` command a human operator would run, end-to-end
 through Typer's :class:`CliRunner`. The goal is to surface URL-template
 rot for the patterns Phase 2 verified against offline fixtures — the
 Phase 2 unit tests pin the URL builders, but only a live fetch proves
@@ -50,7 +50,7 @@ def _docx_available() -> bool:
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_live_extract_r5s260009(tmp_path, monkeypatch) -> None:
-    """End-to-end live extract of ``R5s260009`` via the ``tdoc extract`` CLI.
+    """End-to-end live parse of ``R5s260009`` via the ``tdoc parse`` CLI.
 
     This is the Phase 8 live-URL verification per the plan: the R5s
     URL template was locked in by Phase 2 against offline fixtures;
@@ -109,7 +109,7 @@ def test_live_extract_r5s260009(tmp_path, monkeypatch) -> None:
     # Run via the same Typer entry point a human operator would use.
     runner = CliRunner()
     result = runner.invoke(
-        app, ["tdoc", "extract", "--tdoc", "R5s260009", "--force"],
+        app, ["tdoc", "parse", "--tdoc", "R5s260009", "--force"],
     )
 
     # Either success (URL template + zip + docx parse all OK) or a
@@ -166,7 +166,7 @@ def test_live_extract_r5w260009_workshop_pattern(tmp_path, monkeypatch) -> None:
 
     runner = CliRunner()
     result = runner.invoke(
-        app, ["tdoc", "extract", "--tdoc", "R5w260009", "--force"],
+        app, ["tdoc", "parse", "--tdoc", "R5w260009", "--force"],
     )
 
     combined = result.stdout + (result.stderr or "")

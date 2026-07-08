@@ -193,7 +193,7 @@ file co-tenanted with third-party tooling metadata. See
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **Protocol ↔ Impl signature drift.** Previously: `MeetingRepository.list` declared only `limit`, but `SQLAlchemyMeetingRepository.list` took `limit, tsg, name_like, location_like, year`. Resolved 2026-07-02 (M2). When changing filter signatures for any other repo, keep the Protocol and impl in sync.
-- **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` and `tdoc extract` already drop it.)
+- **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` and `tdoc parse` already drop it.)
 - **Cross-service orchestration in CLI.** Mostly addressed: `tdoc sync` delegates to `TDocSyncCoordinator`. Other commands still construct their own services via `services.factory.build_*` helpers.
 - **Doc drift.** `docs/architecture.md` lists a `tdoc add` command that doesn't exist. Keep docs in sync when CLI surface changes.
 - **Acknowledged `# noqa: F401`.** Four in `storage/db/migrate.py` — side-effect imports required for SQLAlchemy `Base.metadata` registration. Do not remove.
@@ -212,7 +212,7 @@ file co-tenanted with third-party tooling metadata. See
 - Calendar parser coupled to **current 3GPP DynaReport table layout** — upstream changes will break `meetings sync`.
 - TDoc extraction covers **FTP Excel lists only**. `GenerateDocumentList.aspx` and expanded metadata columns are unimplemented.
 - TDoc CR extraction covers the `R5s` (TTCN) and `R5w` (Workshop) URL templates verified against offline fixtures; the `R5-` and `C6-` templates are intentionally unresolved until exercised against the live site.
-- `python-docx` is an opt-in extra; without it the `tdoc extract` CLI prints a friendly install hint and exits 1.
+- `python-docx` is an opt-in extra; without it the `tdoc parse` CLI prints a friendly install hint and exits 1.
 - Online tests access live `3gpp.org` + FTP — flaky; run with `-rs` to surface skip reasons.
 
 

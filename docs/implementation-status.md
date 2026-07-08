@@ -69,7 +69,7 @@ This document tracks what is implemented today versus planned next work.
 - meeting list.
 - tdoc sync, tdoc list.
 - tdoc show (full TDoc + extracted CR cover-page fields).
-- tdoc extract (download zip → cache → python-docx → parse → persist).
+- tdoc parse (download zip → cache → python-docx → parse → persist).
 - cache status, cache purge (on-disk cache footprint for the extraction pipeline).
 - tsg list, tsg show, tsg seed.
 - Logging is configured via `DOC3GPP_LOG_LEVEL` and available at runtime for debugging.
@@ -85,8 +85,8 @@ This document tracks what is implemented today versus planned next work.
     `ScraperClient` and the 7 zip fixtures under
     `tests/fixtures/tdoc_cr_doc/`; the final test
     (`test_extract_end_to_end_via_cli_runner`) drives the production
-    `tdoc extract` + `tdoc show` CLI via Typer's `CliRunner`.
-  - `tests/integration/test_online_tdoc_extract.py` (opt-in,
+    `tdoc parse` + `tdoc show` CLI via Typer's `CliRunner`.
+  - `tests/integration/test_online_tdoc_parse.py` (opt-in,
     `-m online`) hits the live 3GPP FTP for `R5s260009` and
     `R5w260009` to surface URL-template rot.
 - Pytest markers are defined for profile-based execution:

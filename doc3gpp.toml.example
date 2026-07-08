@@ -63,7 +63,7 @@ future_years = 1     # default; CLI flag --future-years overrides
 # wi = ["wi_id", "acronym", "release", "name"]
 
 # ── TDoc extraction cache ───────────────────────────────────────────────────
-# Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc extract`).
+# Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc parse`).
 # `dir` holds two subtrees: `zips/` (raw 3GPP downloads) and `markdown/`
 # (python-docx output, keyed by content hash). When the combined size of
 # both exceeds `size_limit_mb`, the cache evicts the oldest files first

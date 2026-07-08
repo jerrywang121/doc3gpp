@@ -173,6 +173,12 @@ def _tdoc_field(item: TDocWithMeeting, name: str) -> object | None:
 
 VALID_FORMATS: tuple[str, ...] = ("table", "json", "markdown")
 
+# Upper bound for ``tdoc parse --meeting-id`` batches. ``TDocRepository.list``
+# has no "no limit" variant; the typer-enforced ``max=500`` only applies to
+# the ``tdoc list`` CLI. 3GPP meetings rarely exceed a few hundred TDocs, so
+# this cap is well above the realistic ceiling without bloating the protocol.
+_TDOC_BATCH_LIMIT = 10_000
+
 
 def _resolve_format(fmt: str | None, default: str = "table") -> str:
     """Resolve ``--format`` against an injected default and reject unknown values.
@@ -914,6 +920,17 @@ def tdoc_parse(
         "--tdoc-id",
         help="Integer TDoc ID to resolve via the tdocs table (repeatable).",
     ),
+    meeting_id: int | None = typer.Option(
+        None,
+        "--meeting-id",
+        help=(
+            "Batch parse all CR-type TDocs under the given meeting ID "
+            "(see `doc3gpp meeting list`). Without --force, only TDocs "
+            "that have not been parsed yet are processed; pass --force "
+            "to re-parse every CR-type TDoc under the meeting. "
+            "Mutually exclusive with --tdoc and --tdoc-id."
+        ),
+    ),
     force: bool = typer.Option(
         False,
         "--force",
@@ -939,6 +956,14 @@ def tdoc_parse(
     resolved ``tdoc_id`` string into the batch. An unknown integer
     prints a warning and is skipped — the rest of the batch still runs.
 
+    ``--meeting-id N`` is a batch selector that resolves the meeting
+    row, fetches every CR-type TDoc stored under it, and dispatches the
+    same batch through :meth:`TDocCrService.extract_many`. Without
+    ``--force`` only TDocs that have not yet been parsed (no row in
+    ``tdoc_cr_details``) are processed; ``--force`` re-parses every
+    CR-type TDoc under the meeting. The selector is mutually exclusive
+    with ``--tdoc`` and ``--tdoc-id``.
+
     The service :meth:`TDocCrService.extract_many` catches the
     following per-id exception types internally and skips the broken
     id: ``TDocZipDownloadError``, ``PythonDocxNotInstalledError``,
@@ -949,16 +974,25 @@ def tdoc_parse(
 
     Exit code:
 
-    - ``0`` — at least one TDoc extracted successfully.
+    - ``0`` — at least one TDoc extracted successfully (or, for
+      ``--meeting-id`` without ``--force``, every CR-type TDoc was
+      already parsed and there was nothing new to do).
     - ``1`` — every TDoc failed, **or** python-docx is missing and the
-      batch could not even start.
+      batch could not even start, **or** the meeting holds no CR-type
+      TDocs.
     """
-    if not tdoc and not tdoc_id:
-        raise typer.BadParameter("Specify at least one --tdoc or --tdoc-id.")
+    if meeting_id is not None and (tdoc or tdoc_id):
+        raise typer.BadParameter(
+            "--meeting-id is mutually exclusive with --tdoc and --tdoc-id."
+        )
+    if not tdoc and not tdoc_id and meeting_id is None:
+        raise typer.BadParameter(
+            "Specify at least one --tdoc, --tdoc-id, or --meeting-id."
+        )
 
     # ``--tdoc`` values are case-normalised to canonical form (R5s######)
     # so a CLI user typing ``r5s260213`` resolves the same DB row as
-    # ``R5s260213``. ``--tdoc-id`` is resolved via a single repository
+    # ``R5s260009``. ``--tdoc-id`` is resolved via a single repository
     # lookup per integer; missing ids are skipped.
     tdoc_ids: list[str] = []
     if tdoc:
@@ -974,6 +1008,50 @@ def tdoc_parse(
                 )
                 continue
             tdoc_ids.append(resolved.tdoc_id)
+
+    if meeting_id is not None:
+        # Validate the meeting exists so a typo produces a clear error
+        # rather than an empty "no CR-type TDocs" exit.
+        meeting = build_meeting_service().get_by_id(meeting_id)
+        if meeting is None:
+            raise typer.BadParameter(
+                f"Unknown meeting_id {meeting_id}. "
+                f"Run 'doc3gpp meeting list' to see stored meetings."
+            )
+        tdoc_repo = build_tdoc_repository()
+        cr_tdocs = tdoc_repo.list(
+            meeting_id=meeting_id,
+            type_like="CR",
+            limit=_TDOC_BATCH_LIMIT,
+        )
+        if not cr_tdocs:
+            typer.echo(
+                f"No CR-type TDocs found for meeting_id {meeting_id}."
+            )
+            raise typer.Exit(code=1)
+
+        if force:
+            tdoc_ids.extend(row.tdoc_id for row in cr_tdocs)
+        else:
+            cr_repo = build_tdoc_cr_repository()
+            new_ids = [
+                row.tdoc_id for row in cr_tdocs
+                if not cr_repo.get(row.tdoc_id)
+            ]
+            skipped = len(cr_tdocs) - len(new_ids)
+            if not new_ids:
+                typer.echo(
+                    f"All {len(cr_tdocs)} CR-type TDocs for meeting_id "
+                    f"{meeting_id} are already parsed "
+                    f"(use --force to re-parse)."
+                )
+                raise typer.Exit(code=0)
+            if skipped:
+                logger.info(
+                    "Skipped %d already-parsed CR-type TDocs for meeting_id %d",
+                    skipped, meeting_id,
+                )
+            tdoc_ids.extend(new_ids)
 
     if not tdoc_ids:
         typer.echo("No TDocs to extract (all --tdoc-id values were unknown).")

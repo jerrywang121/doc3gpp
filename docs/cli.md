@@ -330,6 +330,12 @@ Options:
 - `--tdoc-id N`: integer form of a TDoc id; resolved against the
   `tdocs` table (PK lookup) before extraction. Repeatable. An unknown
   id prints a warning and is skipped — the rest of the batch still runs.
+- `--meeting-id N`: batch selector that fetches every CR-type TDoc
+  stored under meeting `N` (see `doc3gpp meeting list`) and runs them
+  through the same pipeline. Without `--force` only TDocs that have
+  not yet been parsed (no row in `tdoc_cr_details`) are processed;
+  `--force` re-parses every CR-type TDoc under the meeting.
+  Mutually exclusive with `--tdoc` and `--tdoc-id`.
 - `--force`: skip both the on-disk zip/markdown cache and the
   persisted `tdoc_cr_details` row so every id is re-fetched and
   re-parsed.
@@ -351,12 +357,20 @@ Behavior:
 - Output per id: `<tdoc_id>: spec=<spec> cr_num=<cr_num> title=<title>`
   on success, `<tdoc_id>: FAILED - extract error (see logs)` on failure.
 - Final summary line: `Extracted N/M TDocs (K failures)`.
+- `--meeting-id` first validates the meeting row exists (otherwise
+  prints `Unknown meeting_id N` and exits non-zero), then asks the
+  TDoc repository for CR-type rows under it, and finally checks each
+  row's parsed status against `tdoc_cr_details` unless `--force`
+  bypasses the check. When every row is already parsed, the CLI
+  prints a "use --force to re-parse" hint and exits 0.
 
 Exit codes:
 
-- `0` — at least one TDoc extracted successfully (cache hits count).
+- `0` — at least one TDoc extracted successfully (cache hits count),
+  or `--meeting-id` without `--force` had nothing new to parse.
 - `1` — every TDoc failed, **or** `python-docx` is missing and the
-  batch could not even start.
+  batch could not even start, **or** `--meeting-id` resolved to a
+  meeting that has no CR-type TDocs.
 
 Install the optional dependency before first use:
 
@@ -375,6 +389,12 @@ doc3gpp tdoc parse --tdoc R5s260009 --tdoc R5s260051 --tdoc R5s260135 --force
 
 # Mix string and integer selectors.
 doc3gpp tdoc parse --tdoc R5s260009 --tdoc-id 1234
+
+# Parse every not-yet-parsed CR-type TDoc under meeting 85434.
+doc3gpp tdoc parse --meeting-id 85434
+
+# Re-parse every CR-type TDoc under the meeting (cache + DB row bypassed).
+doc3gpp tdoc parse --meeting-id 85434 --force
 ```
 
 ## cache Commands

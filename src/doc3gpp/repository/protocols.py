@@ -52,6 +52,17 @@ class TDocRepository(Protocol):
         cat_like: str | None = None,
         status_like: str | None = None,
         type_like: str | None = None,
+        status: str | None = None,
+        cr_cat: str | None = None,
+        spec: str | None = None,
+        wi: str | None = None,
+        revision_of: str | None = None,
+        revised_to: str | None = None,
+        title: str | None = None,
+        ftp_url: str | None = None,
+        source: str | None = None,
+        tdoc_type: str | None = None,
+        uploaded_date: str | None = None,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
 
@@ -62,6 +73,16 @@ class TDocRepository(Protocol):
         - ``meeting_id``: exact match against ``tdocs.meeting_id``. Can
           be combined with ``meeting_like``; rows must satisfy both.
         - ``year``: two-digit year code embedded in the TDoc identifier.
+        - The ``*_like`` parameters are SQL ``LIKE`` patterns for
+          matching text columns (legacy surface used by ``tdoc list``).
+        - The un-suffixed parameters accept the rich filter syntax
+          described in :mod:`doc3gpp.cli_filters` — ``null`` /
+          ``not-null`` match the nullability, anything else is treated
+          as a ``LIKE`` pattern, and ``uploaded_date`` additionally
+          accepts a ``"<op> 'YYYY-MM-DD'"`` comparison. These are the
+          surface used by ``tdoc parse --meeting-id``. ``tdoc_type``
+          is the un-suffixed alias for ``type_like`` (the latter name
+          would shadow the parameter declaration).
 
         Pure persistence shape — no joined meeting metadata. Callers that
         need a human-readable meeting name should use :meth:`list_with_meeting`.
@@ -92,6 +113,17 @@ class TDocRepository(Protocol):
         cat_like: str | None = None,
         status_like: str | None = None,
         type_like: str | None = None,
+        status: str | None = None,
+        cr_cat: str | None = None,
+        spec: str | None = None,
+        wi: str | None = None,
+        revision_of: str | None = None,
+        revised_to: str | None = None,
+        title: str | None = None,
+        ftp_url: str | None = None,
+        source: str | None = None,
+        tdoc_type: str | None = None,
+        uploaded_date: str | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its meeting's display name.
 

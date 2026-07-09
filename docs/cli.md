@@ -335,7 +335,22 @@ Options:
   through the same pipeline. Without `--force` only TDocs that have
   not yet been parsed (no row in `tdoc_cr_details`) are processed;
   `--force` re-parses every CR-type TDoc under the meeting.
-  Mutually exclusive with `--tdoc` and `--tdoc-id`.
+  Mutually exclusive with `--tdoc` and `--tdoc-id`. Combinable with
+  the field filters below (only active when `--meeting-id` is used).
+- `--status PATTERN`: filter meeting TDocs by `status` (SQL `LIKE`).
+- `--cr-cat PATTERN`: filter meeting TDocs by `cr_cat`.
+- `--spec PATTERN`: filter meeting TDocs by technical specification
+  (`spec`).
+- `--wi PATTERN`: filter meeting TDocs by `related_wis`.
+- `--revision-of PATTERN`: filter meeting TDocs by `is_revision_of`.
+- `--revised-to PATTERN`: filter meeting TDocs by `revised_to`.
+- `--title PATTERN`: filter meeting TDocs by `title`.
+- `--ftp-url PATTERN`: filter meeting TDocs by `ftp_url`.
+- `--source PATTERN`: filter meeting TDocs by source / contributor.
+- `--type PATTERN`: filter meeting TDocs by document `type`.
+- `--uploaded-date EXPR`: filter meeting TDocs by `uploaded_date`.
+  See [Filter syntax](#filter-syntax-for-meeting-id-batch) below for
+  the accepted forms (including date comparisons).
 - `--force`: skip both the on-disk zip/markdown cache and the
   persisted `tdoc_cr_details` row so every id is re-fetched and
   re-parsed.
@@ -343,6 +358,36 @@ Options:
   `before_change` / `after_change` per correction). The current
   service does not yet wire this through; accepted silently so existing
   scripts keep parsing.
+
+#### Filter syntax for `--meeting-id` batch
+
+The ten text filters above (`--status`, `--cr-cat`, `--spec`, `--wi`,
+`--revision-of`, `--revised-to`, `--title`, `--ftp-url`, `--source`,
+`--type`) accept the same value grammar:
+
+| Value          | Effect                                                |
+| -------------- | ----------------------------------------------------- |
+| `null`         | match rows whose column is `NULL`                     |
+| `not-null`     | match rows whose column is not `NULL`                 |
+| any other text | applied as a SQL `LIKE` pattern (use `%` / `_`)       |
+
+`--uploaded-date` accepts the same `null` / `not-null` tokens plus a
+parameterised SQL comparison of the form ` "<op> 'YYYY-MM-DD'"` where
+`<op>` is one of `=`, `!=`, `<`, `<=`, `>`, `>=`. The operator and the
+date literal are bound as SQLAlchemy parameters — the date string is
+never string-interpolated into the SQL, so the surface is safe to
+expose to operator input. Anything else is rejected at the CLI
+boundary with a clear error before the database is touched:
+
+```
+Invalid date filter 'yesterday'. Expected 'null', 'not-null',
+or an expression like ">= 'YYYY-MM-DD'" with one of =, !=, <, <=, >, >=.
+```
+
+The filters compose: combining several filters narrows the batch with
+`AND`. They are only active with `--meeting-id`; passing them with
+`--tdoc` or `--tdoc-id` is silently ignored (the per-id selectors do
+not need them).
 
 Behavior:
 
@@ -376,7 +421,8 @@ Exit codes:
   or `--meeting-id` without `--force` had nothing new to parse.
 - `1` — every TDoc failed, **or** `python-docx` is missing and the
   batch could not even start, **or** `--meeting-id` resolved to a
-  meeting that has no CR-type TDocs.
+  meeting that has no CR-type TDocs (after filters), **or** an invalid
+  `--uploaded-date` value was supplied.
 
 Install the optional dependency before first use:
 
@@ -401,6 +447,18 @@ doc3gpp tdoc parse --meeting-id 85434
 
 # Re-parse every CR-type TDoc under the meeting (cache + DB row bypassed).
 doc3gpp tdoc parse --meeting-id 85434 --force
+
+# Narrow the batch: only 38.331 CRs sourced from Qualcomm, uploaded in Q1.
+doc3gpp tdoc parse --meeting-id 85434 \
+    --spec '38.331%' \
+    --source 'Qualcomm%' \
+    --uploaded-date ">= '2026-01-01'"
+
+# Re-parse CRs whose `cr_cat` is currently NULL (i.e. not yet classified).
+doc3gpp tdoc parse --meeting-id 85434 --cr-cat null --force
+
+# Find revisions of a known TDoc id under the meeting.
+doc3gpp tdoc parse --meeting-id 85434 --revision-of 'R5-260050'
 ```
 
 ## cache Commands

@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 
 from doc3gpp.config import get_settings
+from doc3gpp.cli_filters import validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
@@ -920,15 +921,110 @@ def tdoc_parse(
         "--tdoc-id",
         help="Integer TDoc ID to resolve via the tdocs table (repeatable).",
     ),
-    meeting_id: int | None = typer.Option(
+meeting_id: int | None = typer.Option(
         None,
         "--meeting-id",
         help=(
             "Batch parse all CR-type TDocs under the given meeting ID "
             "(see `doc3gpp meeting list`). Without --force, only TDocs "
-            "that have not been parsed yet are processed; pass --force "
+            "that have not yet been parsed yet are processed; pass --force "
             "to re-parse every CR-type TDoc under the meeting. "
-            "Mutually exclusive with --tdoc and --tdoc-id."
+            "Mutually exclusive with --tdoc and --tdoc-id. Combinable with "
+            "the field filters below (--status, --cr-cat, --spec, --wi, "
+            "--revision-of, --revised-to, --title, --ftp-url, --source, "
+            "--type, --uploaded-date) to narrow the batch before extraction."
+        ),
+    ),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help=(
+            "Filter meeting TDocs by status (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL status rows."
+        ),
+    ),
+    cr_cat: str | None = typer.Option(
+        None,
+        "--cr-cat",
+        help=(
+            "Filter meeting TDocs by CR category / `cr_cat` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL cr_cat rows."
+        ),
+    ),
+    spec: str | None = typer.Option(
+        None,
+        "--spec",
+        help=(
+            "Filter meeting TDocs by technical specification (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL spec rows."
+        ),
+    ),
+    wi: str | None = typer.Option(
+        None,
+        "--wi",
+        help=(
+            "Filter meeting TDocs by `related_wis` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL related_wis rows."
+        ),
+    ),
+    revision_of: str | None = typer.Option(
+        None,
+        "--revision-of",
+        help=(
+            "Filter meeting TDocs by `is_revision_of` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL rows."
+        ),
+    ),
+    revised_to: str | None = typer.Option(
+        None,
+        "--revised-to",
+        help=(
+            "Filter meeting TDocs by `revised_to` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL rows."
+        ),
+    ),
+    title_filter: str | None = typer.Option(
+        None,
+        "--title",
+        help=(
+            "Filter meeting TDocs by title (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL title rows."
+        ),
+    ),
+    ftp_url: str | None = typer.Option(
+        None,
+        "--ftp-url",
+        help=(
+            "Filter meeting TDocs by `ftp_url` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL ftp_url rows."
+        ),
+    ),
+    source: str | None = typer.Option(
+        None,
+        "--source",
+        help=(
+            "Filter meeting TDocs by source / contributor (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL source rows."
+        ),
+    ),
+    tdoc_type: str | None = typer.Option(
+        None,
+        "--type",
+        help=(
+            "Filter meeting TDocs by document type (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL type rows."
+        ),
+    ),
+    uploaded_date: str | None = typer.Option(
+        None,
+        "--uploaded-date",
+        help=(
+            "Filter meeting TDocs by `uploaded_date`. Accepts:\n\n"
+            "- 'null' / 'not-null' to match NULL / NOT NULL rows;\n"
+            "- an SQL comparison like \">= '2026-02-31'\", "
+            "\"< '2026-01-01'\", \"= '2026-03-15'\", etc. — the operator "
+            "(=, !=, <, <=, >, >=) is bound as a parameter so injection "
+            "is impossible."
         ),
     ),
     force: bool = typer.Option(
@@ -964,6 +1060,21 @@ def tdoc_parse(
     CR-type TDoc under the meeting. The selector is mutually exclusive
     with ``--tdoc`` and ``--tdoc-id``.
 
+    Combinable with ``--meeting-id`` are the field filters ``--status``,
+    ``--cr-cat``, ``--spec``, ``--wi``, ``--revision-of``, ``--revised-to``,
+    ``--title``, ``--ftp-url``, ``--source``, ``--type`` and
+    ``--uploaded-date``. The first ten treat their value as a SQL
+    ``LIKE`` pattern (with ``%`` / ``_`` wildcards), and additionally
+    accept the literal tokens ``null`` / ``not-null`` to match the
+    column's nullability. ``--uploaded-date`` accepts the same
+    ``null`` / ``not-null`` tokens plus an SQL date comparison of the
+    form ``"<op> 'YYYY-MM-DD'"`` with ``<op>`` in ``=`` / ``!=`` / ``<`` /
+    ``<=`` / ``>`` / ``>=``. The operator and date literal are bound
+    as parameters — the date string is never string-interpolated into
+    the SQL, so injection is impossible. Invalid date inputs are
+    rejected at the CLI boundary with a clear error before the database
+    is touched.
+
     The service :meth:`TDocCrService.extract_many` catches the
     following per-id exception types internally and skips the broken
     id: ``TDocZipDownloadError``, ``TDocTypeUnsupportedError``,
@@ -981,7 +1092,7 @@ def tdoc_parse(
       already parsed and there was nothing new to do).
     - ``1`` — every TDoc failed, **or** python-docx is missing and the
       batch could not even start, **or** the meeting holds no CR-type
-      TDocs.
+      TDocs, **or** an invalid ``--uploaded-date`` value was supplied.
     """
     if meeting_id is not None and (tdoc or tdoc_id):
         raise typer.BadParameter(
@@ -1012,6 +1123,12 @@ def tdoc_parse(
             tdoc_ids.append(resolved.tdoc_id)
 
     if meeting_id is not None:
+        if uploaded_date is not None:
+            try:
+                validate_date_filter(uploaded_date)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from None
+
         # Validate the meeting exists so a typo produces a clear error
         # rather than an empty "no CR-type TDocs" exit.
         meeting = build_meeting_service().get_by_id(meeting_id)
@@ -1025,6 +1142,17 @@ def tdoc_parse(
             meeting_id=meeting_id,
             type_like="CR",
             limit=_TDOC_BATCH_LIMIT,
+            status=status,
+            cr_cat=cr_cat,
+            spec=spec,
+            wi=wi,
+            revision_of=revision_of,
+            revised_to=revised_to,
+            title=title_filter,
+            ftp_url=ftp_url,
+            source=source,
+            tdoc_type=tdoc_type,
+            uploaded_date=uploaded_date,
         )
         if not cr_tdocs:
             typer.echo(

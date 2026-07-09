@@ -472,7 +472,22 @@ def test_tdoc_parse_meeting_id_parses_new_only(
     assert result.exit_code == 0, result.output
     # The CLI asked for CR-type TDocs under the meeting with a positive limit.
     assert tdoc_repo.list_calls == [
-        {"meeting_id": meeting_id, "type_like": "CR", "limit": 10_000},
+        {
+            "meeting_id": meeting_id,
+            "type_like": "CR",
+            "limit": 10_000,
+            "status": None,
+            "cr_cat": None,
+            "spec": None,
+            "wi": None,
+            "revision_of": None,
+            "revised_to": None,
+            "title": None,
+            "ftp_url": None,
+            "source": None,
+            "tdoc_type": None,
+            "uploaded_date": None,
+        },
     ]
     # The CLI probed parsed status for every row in the meeting.
     assert sorted(cr_repo.get_calls) == ["R5s260009", "R5s260010", "R5s260011"]
@@ -649,6 +664,213 @@ def test_tdoc_parse_meeting_id_with_tdoc_id_mutually_exclusive(
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output
     assert fake.many_calls == []
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse --meeting-id field filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _meeting_with_cr_tdocs(sqlite_env, monkeypatch):
+    """Seed a meeting with a few CR TDocs and stub the supporting services.
+
+    Returns a small namespace with the meeting id, the fake TDoc repo
+    (so the test can assert the filter kwargs reached the repo), the
+    fake CR service, and the ``invoke`` callable. The TDoc repo is
+    seeded with three rows so a filter that excludes one of them can
+    be observed downstream.
+    """
+    meeting_id = 99
+    cr_tdocs = [
+        TDoc(
+            tdoc_id="R5s260009",
+            type="CR",
+            meeting_id=meeting_id,
+            status="Agreed",
+            source="Qualcomm",
+        ),
+        TDoc(
+            tdoc_id="R5s260010",
+            type="CR",
+            meeting_id=meeting_id,
+            status="Noted",
+            source="Huawei",
+        ),
+        TDoc(
+            tdoc_id="R5s260011",
+            type="CR",
+            meeting_id=meeting_id,
+            status="Agreed",
+            source="Ericsson",
+        ),
+    ]
+
+    _patch_meeting_service(
+        monkeypatch,
+        {
+            meeting_id: Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#111",
+                title="RAN WG5 #111",
+                location="Online",
+            ),
+        },
+    )
+    tdoc_repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={
+            "R5s260009": _make_result("R5s260009"),
+            "R5s260010": _make_result("R5s260010"),
+            "R5s260011": _make_result("R5s260011"),
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    class _Ns:
+        pass
+
+    ns = _Ns()
+    ns.meeting_id = meeting_id
+    ns.tdoc_repo = tdoc_repo
+    ns.fake = fake
+    ns.runner = CliRunner()
+    return ns
+
+
+def test_tdoc_parse_meeting_id_passes_status_filter(_meeting_with_cr_tdocs) -> None:
+    """`--status` flows through to the repo's `list` call."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(ns.meeting_id),
+            "--status", "Agreed",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(ns.tdoc_repo.list_calls) == 1
+    assert ns.tdoc_repo.list_calls[0]["status"] == "Agreed"
+    assert ns.tdoc_repo.list_calls[0]["spec"] is None
+    assert ns.tdoc_repo.list_calls[0]["uploaded_date"] is None
+
+
+def test_tdoc_parse_meeting_id_passes_null_status(_meeting_with_cr_tdocs) -> None:
+    """`--status null` is forwarded verbatim to the repo (which
+    interprets the literal token as a NULL filter)."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(ns.meeting_id),
+            "--status", "null",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert ns.tdoc_repo.list_calls[0]["status"] == "null"
+
+
+def test_tdoc_parse_meeting_id_passes_date_filter(_meeting_with_cr_tdocs) -> None:
+    """`--uploaded-date ">='2026-02-31'"` is forwarded verbatim."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(ns.meeting_id),
+            "--uploaded-date", ">= '2026-02-31'",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert ns.tdoc_repo.list_calls[0]["uploaded_date"] == ">= '2026-02-31'"
+
+
+def test_tdoc_parse_meeting_id_rejects_bad_date_filter(_meeting_with_cr_tdocs) -> None:
+    """An invalid `--uploaded-date` is caught at the CLI boundary with
+    a clear BadParameter and never reaches the repo."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(ns.meeting_id),
+            "--uploaded-date", "yesterday",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Invalid date filter" in result.output
+    assert "'yesterday'" in result.output
+    assert ns.tdoc_repo.list_calls == []
+    assert ns.fake.many_calls == []
+
+
+def test_tdoc_parse_meeting_id_rejects_bad_date_operator(_meeting_with_cr_tdocs) -> None:
+    """An unsupported operator (`==`) is rejected with the same
+    BadParameter message before the repo is touched."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(ns.meeting_id),
+            "--uploaded-date", "== '2026-02-31'",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Invalid date filter" in result.output
+    assert ns.tdoc_repo.list_calls == []
+
+
+@pytest.mark.parametrize(
+    ("flag", "kwarg"),
+    [
+        ("--cr-cat", "cr_cat"),
+        ("--spec", "spec"),
+        ("--wi", "wi"),
+        ("--revision-of", "revision_of"),
+        ("--revised-to", "revised_to"),
+        ("--title", "title"),
+        ("--ftp-url", "ftp_url"),
+        ("--source", "source"),
+        ("--type", "tdoc_type"),
+    ],
+)
+def test_tdoc_parse_meeting_id_passes_text_filters(
+    _meeting_with_cr_tdocs, flag, kwarg
+) -> None:
+    """Every text-column filter is forwarded to the repo under its
+    expected kwarg name."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        ["tdoc", "parse", "--meeting-id", str(ns.meeting_id), flag, "X%Y"],
+    )
+    assert result.exit_code == 0, result.output
+    assert ns.tdoc_repo.list_calls[0][kwarg] == "X%Y"
+
+
+def test_tdoc_parse_meeting_id_combines_filters(_meeting_with_cr_tdocs) -> None:
+    """Passing multiple filters at once forwards each to its own kwarg
+    without any cross-contamination."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(ns.meeting_id),
+            "--status", "Agreed",
+            "--spec", "38.%",
+            "--uploaded-date", "< '2026-12-31'",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    call = ns.tdoc_repo.list_calls[0]
+    assert call["status"] == "Agreed"
+    assert call["spec"] == "38.%"
+    assert call["uploaded_date"] == "< '2026-12-31'"
 
 
 # ---------------------------------------------------------------------------

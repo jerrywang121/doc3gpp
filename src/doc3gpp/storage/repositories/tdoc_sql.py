@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, Select, select
 
+from doc3gpp.cli_filters import DATE_FILTER_RE, is_not_null_token, is_null_token
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.parsers.tdoc_parser import tdoc_id_year
 from doc3gpp.storage.db.models import TDocORM, MeetingORM
@@ -91,6 +92,17 @@ class SQLAlchemyTDocRepository:
         cat_like: str | None = None,
         status_like: str | None = None,
         type_like: str | None = None,
+        status: str | None = None,
+        cr_cat: str | None = None,
+        spec: str | None = None,
+        wi: str | None = None,
+        revision_of: str | None = None,
+        revised_to: str | None = None,
+        title: str | None = None,
+        ftp_url: str | None = None,
+        source: str | None = None,
+        tdoc_type: str | None = None,
+        uploaded_date: str | None = None,
     ) -> list[TDoc]:
         """Return recent TDoc records ordered by descending ``tdoc_id``.
 
@@ -113,6 +125,25 @@ class SQLAlchemyTDocRepository:
         - `cat_like`: SQL LIKE pattern to filter by CR category.
         - `status_like`: SQL LIKE pattern to filter by document status.
         - `type_like`: SQL LIKE pattern to filter by document type.
+
+        The un-suffixed parameters (``status``, ``cr_cat``, ``spec``,
+        ``wi``, ``revision_of``, ``revised_to``, ``title``, ``ftp_url``,
+        ``source``, ``tdoc_type``, ``uploaded_date``) accept the rich
+        filter syntax described in :mod:`doc3gpp.cli_filters`:
+
+        - the literal token ``null`` matches rows whose column is NULL;
+        - ``not-null`` matches rows whose column is NOT NULL;
+        - any other value is treated as a SQL ``LIKE`` pattern;
+        - ``uploaded_date`` additionally accepts ``"<op> 'YYYY-MM-DD'"``
+          with ``<op>`` in ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``,
+          producing a parameterised column comparison.
+
+        When both the ``*_like`` and the un-suffixed form of the same
+        column are passed (e.g. ``source_like`` and ``source``), the
+        predicates are combined with ``AND`` — narrowing rather than
+        overriding. This is intentional: callers that only need the
+        legacy surface keep working unchanged, and the new surface is
+        additive.
         """
         with self._session_factory() as session:
             stmt = select(TDocORM)
@@ -160,6 +191,18 @@ class SQLAlchemyTDocRepository:
             if type_like:
                 stmt = stmt.where(TDocORM.type.like(type_like))
 
+            stmt = _apply_text_filter(stmt, TDocORM.status, status)
+            stmt = _apply_text_filter(stmt, TDocORM.cr_cat, cr_cat)
+            stmt = _apply_text_filter(stmt, TDocORM.spec, spec)
+            stmt = _apply_text_filter(stmt, TDocORM.related_wis, wi)
+            stmt = _apply_text_filter(stmt, TDocORM.is_revision_of, revision_of)
+            stmt = _apply_text_filter(stmt, TDocORM.revised_to, revised_to)
+            stmt = _apply_text_filter(stmt, TDocORM.title, title)
+            stmt = _apply_text_filter(stmt, TDocORM.ftp_url, ftp_url)
+            stmt = _apply_text_filter(stmt, TDocORM.source, source)
+            stmt = _apply_text_filter(stmt, TDocORM.type, tdoc_type)
+            stmt = _apply_date_filter(stmt, TDocORM.uploaded_date, uploaded_date)
+
             stmt = stmt.order_by(TDocORM.tdoc_id.desc()).limit(limit)
             rows = session.scalars(stmt).all()
 
@@ -199,11 +242,23 @@ class SQLAlchemyTDocRepository:
         cat_like: str | None = None,
         status_like: str | None = None,
         type_like: str | None = None,
+        status: str | None = None,
+        cr_cat: str | None = None,
+        spec: str | None = None,
+        wi: str | None = None,
+        revision_of: str | None = None,
+        revised_to: str | None = None,
+        title: str | None = None,
+        ftp_url: str | None = None,
+        source: str | None = None,
+        tdoc_type: str | None = None,
+        uploaded_date: str | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its parent meeting's name.
 
         Performs an extra batched lookup against ``meetings`` to populate
         ``TDocWithMeeting.meeting_name``. Used by the CLI / export code paths.
+        Accepts the same rich filters as :meth:`list`.
         """
         tdocs = self.list(
             limit=limit,
@@ -218,6 +273,17 @@ class SQLAlchemyTDocRepository:
             cat_like=cat_like,
             status_like=status_like,
             type_like=type_like,
+            status=status,
+            cr_cat=cr_cat,
+            spec=spec,
+            wi=wi,
+            revision_of=revision_of,
+            revised_to=revised_to,
+            title=title,
+            ftp_url=ftp_url,
+            source=source,
+            tdoc_type=tdoc_type,
+            uploaded_date=uploaded_date,
         )
         if not tdocs:
             return []
@@ -260,3 +326,39 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
         cr_num=row.cr_num,
         cr_pack=row.cr_pack,
     )
+
+
+def _apply_text_filter(
+    stmt: Select, column: ColumnElement, value: str | None
+) -> Select:
+    """Filter by text column: ``None`` → pass-through, ``null``/``not-null`` → nullability, else ``LIKE``."""
+    if value is None:
+        return stmt
+    if is_null_token(value):
+        return stmt.where(column.is_(None))
+    if is_not_null_token(value):
+        return stmt.where(column.is_not(None))
+    return stmt.where(column.like(value))
+
+
+def _apply_date_filter(
+    stmt: Select, column: ColumnElement, value: str | None
+) -> Select:
+    """Filter by date column: ``None`` → pass-through, ``null``/``not-null`` → nullability, else operator against ``'YYYY-MM-DD'``."""
+    if value is None:
+        return stmt
+    if is_null_token(value):
+        return stmt.where(column.is_(None))
+    if is_not_null_token(value):
+        return stmt.where(column.is_not(None))
+    match = DATE_FILTER_RE.match(value)
+    if match is None:
+        raise ValueError(
+            f"Invalid date filter {value!r}. Expected 'null', 'not-null', "
+            f"or an expression like \">= 'YYYY-MM-DD'\" with one of "
+            f"=, !=, <, <=, >, >=."
+        )
+    return stmt.where(column.op(match["op"])(match["date"]))
+
+
+__all__ = ["SQLAlchemyTDocRepository", "_apply_text_filter", "_apply_date_filter", "DATE_FILTER_RE"]

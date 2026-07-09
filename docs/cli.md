@@ -228,13 +228,19 @@ Options:
 - --meeting-id: exact match on the parent meeting's numeric ID (see
   `doc3gpp meeting list`). Combinable with `--meeting`; rows must satisfy
   both predicates.
-- --source: SQL LIKE pattern to filter by TDoc source/contributor.
-- --spec: SQL LIKE pattern to filter by technical specification.
-- --wi: SQL LIKE pattern to filter by related work items.
-- --title: SQL LIKE pattern to filter by TDoc title.
-- --cat: SQL LIKE pattern to filter by CR category.
-- --status: SQL LIKE pattern to filter by TDoc status.
-- --type: SQL LIKE pattern to filter by TDoc type.
+- --source: filter by TDoc source/contributor.
+- --spec: filter by technical specification.
+- --wi: filter by related work items.
+- --title: filter by TDoc title.
+- --cat: filter by CR category (`cr_cat`).
+- --status: filter by TDoc status.
+- --type: filter by TDoc type.
+- --revision-of: filter by `is_revision_of`.
+- --revised-to: filter by `revised_to`.
+- --ftp-url: filter by `ftp_url`.
+- --uploaded-date: filter by `uploaded_date`. See
+  [Filter syntax](#filter-syntax-for-text-and-date-filters) below for the
+  accepted forms (including date comparisons).
 - --fields: comma-separated list of fields to include in output, or `all`.
 - --format: see "Common list output options" below (table | json | markdown).
 - -o, --output: write the result to a file instead of stdout.
@@ -267,6 +273,12 @@ doc3gpp tdoc list --wi "%NR_ext%"
 
 ```bash
 doc3gpp tdoc list --title "%RedCap%"
+```
+
+- Exclude titles containing "Sidelink" (NOT LIKE):
+
+```bash
+doc3gpp tdoc list --title "!%Sidelink%"
 ```
 
 - List all TDocs from a single meeting by its numeric ID:
@@ -338,7 +350,7 @@ Options:
   Mutually exclusive with `--tdoc` and `--tdoc-id`. Combinable with
   the field filters below (only active when `--meeting-id` is used).
 - `--status PATTERN`: filter meeting TDocs by `status` (SQL `LIKE`).
-- `--cr-cat PATTERN`: filter meeting TDocs by `cr_cat`.
+- `--cat PATTERN`: filter meeting TDocs by `cr_cat`.
 - `--spec PATTERN`: filter meeting TDocs by technical specification
   (`spec`).
 - `--wi PATTERN`: filter meeting TDocs by `related_wis`.
@@ -361,15 +373,16 @@ Options:
 
 #### Filter syntax for `--meeting-id` batch
 
-The ten text filters above (`--status`, `--cr-cat`, `--spec`, `--wi`,
+The ten text filters above (`--status`, `--cat`, `--spec`, `--wi`,
 `--revision-of`, `--revised-to`, `--title`, `--ftp-url`, `--source`,
 `--type`) accept the same value grammar:
 
-| Value          | Effect                                                |
-| -------------- | ----------------------------------------------------- |
-| `null`         | match rows whose column is `NULL`                     |
-| `not-null`     | match rows whose column is not `NULL`                 |
-| any other text | applied as a SQL `LIKE` pattern (use `%` / `_`)       |
+| Value              | Effect                                                          |
+| ------------------ | --------------------------------------------------------------- |
+| `null`             | match rows whose column is `NULL`                               |
+| `not-null`         | match rows whose column is not `NULL`                           |
+| `!<pattern>`       | match rows whose column does NOT LIKE `<pattern>` — the `!` is consumed and the rest is bound as the LIKE pattern (e.g. `!%Sidelink%` excludes titles containing `Sidelink`) |
+| any other text     | applied as a SQL `LIKE` pattern (use `%` / `_`)                 |
 
 `--uploaded-date` accepts the same `null` / `not-null` tokens plus a
 parameterised SQL comparison of the form ` "<op> 'YYYY-MM-DD'"` where
@@ -455,10 +468,13 @@ doc3gpp tdoc parse --meeting-id 85434 \
     --uploaded-date ">= '2026-01-01'"
 
 # Re-parse CRs whose `cr_cat` is currently NULL (i.e. not yet classified).
-doc3gpp tdoc parse --meeting-id 85434 --cr-cat null --force
+doc3gpp tdoc parse --meeting-id 85434 --cat null --force
 
 # Find revisions of a known TDoc id under the meeting.
 doc3gpp tdoc parse --meeting-id 85434 --revision-of 'R5-260050'
+
+# Exclude Sidelink titles from the batch (NOT LIKE).
+doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'
 ```
 
 ## cache Commands

@@ -14,10 +14,12 @@ import pytest
 
 from doc3gpp.cli_filters import (
     DATE_FILTER_RE,
+    NOT_LIKE_PREFIX,
     NOT_NULL_TOKEN,
     NULL_TOKEN,
     is_not_null_token,
     is_null_token,
+    split_not_like_prefix,
     validate_date_filter,
 )
 
@@ -136,3 +138,44 @@ class TestDateFilterRegex:
         repository layer — accidental rename would be a breaking change."""
         assert NULL_TOKEN == "null"
         assert NOT_NULL_TOKEN == "not-null"
+
+
+class TestNotLikePrefix:
+    """``!X`` is the marker for a negated ``LIKE`` filter; the bang is
+    consumed and the remainder is bound as the pattern."""
+
+    def test_prefix_constant(self) -> None:
+        assert NOT_LIKE_PREFIX == "!"
+
+    @pytest.mark.parametrize(
+        "value,pattern",
+        [
+            ("!%RAN5%", "%RAN5%"),
+            ("!foo", "foo"),
+            ("!tsg_ran/WG5%", "tsg_ran/WG5%"),
+            ("!_underscore", "_underscore"),
+            ("!", ""),  # bare bang → empty pattern (matches everything)
+        ],
+    )
+    def test_bang_is_consumed(self, value: str, pattern: str) -> None:
+        negated, actual = split_not_like_prefix(value)
+        assert negated is True
+        assert actual == pattern
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "%RAN5%",
+            "foo",
+            "tsg_ran/WG5%",
+            "",  # empty value is not negated
+            "  !foo",  # leading whitespace is not stripped
+            "  foo",
+            "null",  # nullability tokens are NOT consumed by this helper
+            "not-null",
+        ],
+    )
+    def test_non_negated_values_pass_through(self, value: str) -> None:
+        negated, actual = split_not_like_prefix(value)
+        assert negated is False
+        assert actual == value

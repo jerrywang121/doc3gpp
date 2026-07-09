@@ -26,8 +26,10 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
 
     def fake_list_recent_with_meeting(
         self, limit=20, tsg=None, meeting_like=None, meeting_id=None, year=None,
-        source_like=None, spec_like=None, wi_like=None, title_like=None,
-        cat_like=None, status_like=None, type_like=None,
+        source=None, spec=None, wi=None, title=None, cr_cat=None,
+        status=None, tdoc_type=None,
+        revision_of=None, revised_to=None, ftp_url=None, uploaded_date=None,
+        **_kwargs,
     ):
         observed_filters.update({
             "limit": limit,
@@ -35,13 +37,17 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
             "meeting_like": meeting_like,
             "meeting_id": meeting_id,
             "year": year,
-            "source_like": source_like,
-            "spec_like": spec_like,
-            "wi_like": wi_like,
-            "title_like": title_like,
-            "cat_like": cat_like,
-            "status_like": status_like,
-            "type_like": type_like,
+            "source": source,
+            "spec": spec,
+            "wi": wi,
+            "title": title,
+            "cr_cat": cr_cat,
+            "status": status,
+            "tdoc_type": tdoc_type,
+            "revision_of": revision_of,
+            "revised_to": revised_to,
+            "ftp_url": ftp_url,
+            "uploaded_date": uploaded_date,
         })
         return sample
 
@@ -67,7 +73,8 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     # Expected default: tdoc_id, meeting_name, title, source, type, status, cr_cat, spec, version, related_wis
     assert parts == ["R5s260001", "RAN5#111", "Example A", "Qualcomm", "CR", "Agreed", "F", "38.331", "18.1.0", "NR_ext"]
 
-    # test all new filters
+    # Text filters route through the un-suffixed (rich-filter) repo params so
+    # the CLI surface is consistent with `tdoc parse --meeting-id`.
     runner.invoke(app, [
         "tdoc", "list",
         "--source", "Q%",
@@ -76,15 +83,120 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
         "--title", "RedCap%",
         "--cat", "F",
         "--status", "Agreed",
-        "--type", "CR"
+        "--type", "CR",
     ])
-    assert observed_filters["source_like"] == "Q%"
-    assert observed_filters["spec_like"] == "38.331"
-    assert observed_filters["wi_like"] == "NR%"
-    assert observed_filters["title_like"] == "RedCap%"
-    assert observed_filters["cat_like"] == "F"
-    assert observed_filters["status_like"] == "Agreed"
-    assert observed_filters["type_like"] == "CR"
+    assert observed_filters["source"] == "Q%"
+    assert observed_filters["spec"] == "38.331"
+    assert observed_filters["wi"] == "NR%"
+    assert observed_filters["title"] == "RedCap%"
+    assert observed_filters["cr_cat"] == "F"
+    assert observed_filters["status"] == "Agreed"
+    assert observed_filters["tdoc_type"] == "CR"
+    # `_like` variants stay None — the CLI no longer routes through them.
+    assert observed_filters["revision_of"] is None
+    assert observed_filters["revised_to"] is None
+    assert observed_filters["ftp_url"] is None
+    assert observed_filters["uploaded_date"] is None
+
+    # New filters added for parity with `tdoc parse --meeting-id`.
+    runner.invoke(app, [
+        "tdoc", "list",
+        "--revision-of", "R5s260000",
+        "--revised-to", "R5s260100",
+        "--ftp-url", "tsg_ran/%",
+        "--uploaded-date", ">= '2026-01-01'",
+    ])
+    assert observed_filters["revision_of"] == "R5s260000"
+    assert observed_filters["revised_to"] == "R5s260100"
+    assert observed_filters["ftp_url"] == "tsg_ran/%"
+    assert observed_filters["uploaded_date"] == ">= '2026-01-01'"
+
+
+def test_cli_tdoc_list_passes_not_like_prefix_unchanged(monkeypatch):
+    """`-prefixed values are forwarded to the repo verbatim; the bang
+    is consumed by the repository's ``_apply_text_filter`` to emit
+    ``NOT LIKE``. The CLI does not interpret the bang — it must
+    survive the trip through Typer / Click untouched."""
+    runner = CliRunner()
+    observed: dict = {}
+
+    def fake_list_recent_with_meeting(self, **_kwargs):
+        observed.update(_kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    result = runner.invoke(app, [
+        "tdoc", "list",
+        "--title", "!%Sidelink%",
+        "--source", "!Qualcomm",
+        "--cat", "!F",
+    ])
+    assert result.exit_code == 0, result.output
+    assert observed["title"] == "!%Sidelink%"
+    assert observed["source"] == "!Qualcomm"
+    assert observed["cr_cat"] == "!F"
+
+
+def test_cli_tdoc_list_passes_null_and_not_null_tokens(monkeypatch):
+    """`null` / `not-null` literals flow through to the repo verbatim so
+    the rich-filter grammar is consistent with `tdoc parse`."""
+    runner = CliRunner()
+    observed: dict = {}
+
+    def fake_list_recent_with_meeting(self, **_kwargs):
+        observed.update(_kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    runner.invoke(app, [
+        "tdoc", "list",
+        "--cat", "null",
+        "--source", "not-null",
+        "--spec", "38.331",
+    ])
+    assert observed["cr_cat"] == "null"
+    assert observed["source"] == "not-null"
+    assert observed["spec"] == "38.331"
+
+
+def test_cli_tdoc_list_rejects_invalid_uploaded_date(monkeypatch):
+    """The CLI mirrors `tdoc parse` and rejects malformed --uploaded-date
+    values before the service is touched."""
+    runner = CliRunner()
+    called = {"count": 0}
+
+    def fake_list_recent_with_meeting(self, **_kwargs):
+        called["count"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "list", "--uploaded-date", "yesterday"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid date filter" in result.output
+    assert called["count"] == 0
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "list", "--uploaded-date", "== '2026-02-31'"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid date filter" in result.output
+    assert called["count"] == 0
 
 
 def test_cli_tdoc_list_auto_wraps_meeting_filter(monkeypatch):

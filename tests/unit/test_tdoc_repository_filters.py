@@ -310,3 +310,52 @@ def test_list_filter_text_and_like_combine_with_and(repo):
     res = repo.list(meeting_like="RAN5%", type_like="CR", status="Agreed")
     assert len(res) == 1
     assert res[0].tdoc_id == "R5-260001"
+
+
+def test_list_filter_not_like_excludes_matching_rows(repo):
+    """`title="!%Sidelink%"` emits ``NOT LIKE '%Sidelink%'``; the
+    Sidelink row is excluded and the two RAN5 rows remain."""
+    res = repo.list(title="!%Sidelink%")
+    assert len(res) == 2
+    assert {t.tdoc_id for t in res} == {"R5-260001", "R5-260002"}
+
+
+def test_list_filter_not_like_exact_match(repo):
+    """`status="!Agreed"` excludes the Agreed row and returns the
+    remaining two."""
+    res = repo.list(status="!Agreed")
+    assert len(res) == 2
+    assert all(t.status != "Agreed" for t in res)
+
+
+def test_list_filter_not_like_bang_is_consumed(repo):
+    """The leading ``!`` is consumed before binding. If it were
+    preserved, the pattern would be ``!%Sidelink%`` and would match
+    zero rows (no title starts with ``!``). The fact that the negated
+    filter returns the two RAN5 rows proves the bang was stripped."""
+    res = repo.list(title="!%Sidelink%")
+    assert all("Sidelink" not in t.title for t in res)
+
+
+def test_list_filter_null_token_takes_precedence_over_not_like(repo):
+    """The nullability check runs first: ``status="null"`` is treated
+    as ``IS NULL`` (not ``NOT LIKE 'null'``). All fixture statuses
+    are non-NULL, so the positive form returns zero rows.
+
+    By contrast, ``status="!null"`` falls through to the NOT LIKE
+    branch (the null-token check rejects the ``!``-prefixed value)
+    and returns every row whose status is not the literal string
+    ``"null"`` — all three fixture rows.
+    """
+    assert repo.list(status="null") == []
+    assert len(repo.list(status="!null")) == 3
+
+
+def test_list_filter_not_like_null_column_excluded(repo):
+    """`ftp_url="!tsg_ran/%"` excludes the two R5 rows whose ftp_url
+    matches the pattern. The S2 row has a NULL ftp_url, and SQL's
+    three-valued logic means ``NULL NOT LIKE 'x'`` is NULL, which
+    excludes the row from the result set — so the negated filter
+    returns zero rows."""
+    assert len(repo.list(ftp_url="tsg_ran/%")) == 2
+    assert repo.list(ftp_url="!tsg_ran/%") == []

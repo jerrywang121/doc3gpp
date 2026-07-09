@@ -852,6 +852,34 @@ def test_tdoc_parse_meeting_id_passes_text_filters(
     assert ns.tdoc_repo.list_calls[0][kwarg] == "X%Y"
 
 
+@pytest.mark.parametrize(
+    ("flag", "kwarg"),
+    [
+        ("--title", "title"),
+        ("--source", "source"),
+        ("--cat", "cr_cat"),
+        ("--spec", "spec"),
+        ("--wi", "wi"),
+        ("--revision-of", "revision_of"),
+        ("--revised-to", "revised_to"),
+        ("--ftp-url", "ftp_url"),
+    ],
+)
+def test_tdoc_parse_meeting_id_passes_not_like_prefix(
+    _meeting_with_cr_tdocs, flag, kwarg
+) -> None:
+    """`-prefixed values flow through to the repo verbatim. The bang
+    is consumed by ``_apply_text_filter`` to emit ``NOT LIKE``; the
+    CLI layer must not interpret it."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        ["tdoc", "parse", "--meeting-id", str(ns.meeting_id), flag, "!%X%"],
+    )
+    assert result.exit_code == 0, result.output
+    assert ns.tdoc_repo.list_calls[0][kwarg] == "!%X%"
+
+
 def test_tdoc_parse_meeting_id_combines_filters(_meeting_with_cr_tdocs) -> None:
     """Passing multiple filters at once forwards each to its own kwarg
     without any cross-contamination."""

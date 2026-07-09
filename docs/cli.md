@@ -275,6 +275,12 @@ doc3gpp tdoc list --wi "%NR_ext%"
 doc3gpp tdoc list --title "%RedCap%"
 ```
 
+- Exclude titles containing "Sidelink" (NOT LIKE):
+
+```bash
+doc3gpp tdoc list --title "!%Sidelink%"
+```
+
 - List all TDocs from a single meeting by its numeric ID:
 
 ```bash
@@ -371,11 +377,12 @@ The ten text filters above (`--status`, `--cat`, `--spec`, `--wi`,
 `--revision-of`, `--revised-to`, `--title`, `--ftp-url`, `--source`,
 `--type`) accept the same value grammar:
 
-| Value          | Effect                                                |
-| -------------- | ----------------------------------------------------- |
-| `null`         | match rows whose column is `NULL`                     |
-| `not-null`     | match rows whose column is not `NULL`                 |
-| any other text | applied as a SQL `LIKE` pattern (use `%` / `_`)       |
+| Value              | Effect                                                          |
+| ------------------ | --------------------------------------------------------------- |
+| `null`             | match rows whose column is `NULL`                               |
+| `not-null`         | match rows whose column is not `NULL`                           |
+| `!<pattern>`       | match rows whose column does NOT LIKE `<pattern>` — the `!` is consumed and the rest is bound as the LIKE pattern (e.g. `!%Sidelink%` excludes titles containing `Sidelink`) |
+| any other text     | applied as a SQL `LIKE` pattern (use `%` / `_`)                 |
 
 `--uploaded-date` accepts the same `null` / `not-null` tokens plus a
 parameterised SQL comparison of the form ` "<op> 'YYYY-MM-DD'"` where
@@ -465,6 +472,9 @@ doc3gpp tdoc parse --meeting-id 85434 --cat null --force
 
 # Find revisions of a known TDoc id under the meeting.
 doc3gpp tdoc parse --meeting-id 85434 --revision-of 'R5-260050'
+
+# Exclude Sidelink titles from the batch (NOT LIKE).
+doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'
 ```
 
 ## cache Commands

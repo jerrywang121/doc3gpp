@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from sqlalchemy import ColumnElement, Select, select
 
-from doc3gpp.cli_filters import DATE_FILTER_RE, is_not_null_token, is_null_token
+from doc3gpp.cli_filters import (
+    DATE_FILTER_RE,
+    is_not_null_token,
+    is_null_token,
+    split_not_like_prefix,
+)
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.parsers.tdoc_parser import tdoc_id_year
 from doc3gpp.storage.db.models import TDocORM, MeetingORM
@@ -133,6 +138,9 @@ class SQLAlchemyTDocRepository:
 
         - the literal token ``null`` matches rows whose column is NULL;
         - ``not-null`` matches rows whose column is NOT NULL;
+        - a leading ``!`` flips the comparison to ``NOT LIKE``; the
+          ``!`` is consumed and the remainder is bound as the pattern
+          (e.g. ``!%RAN5%`` → ``column NOT LIKE '%RAN5%'``);
         - any other value is treated as a SQL ``LIKE`` pattern;
         - ``uploaded_date`` additionally accepts ``"<op> 'YYYY-MM-DD'"``
           with ``<op>`` in ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``,
@@ -331,14 +339,23 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
 def _apply_text_filter(
     stmt: Select, column: ColumnElement, value: str | None
 ) -> Select:
-    """Filter by text column: ``None`` → pass-through, ``null``/``not-null`` → nullability, else ``LIKE``."""
+    """Filter by text column.
+
+    ``None`` is a pass-through. ``null`` / ``not-null`` match the
+    column's nullability. A leading ``!`` flips the comparison to
+    ``NOT LIKE``; the ``!`` is consumed and the remainder is bound
+    as the pattern. Any other value is bound as a ``LIKE`` pattern.
+    """
     if value is None:
         return stmt
     if is_null_token(value):
         return stmt.where(column.is_(None))
     if is_not_null_token(value):
         return stmt.where(column.is_not(None))
-    return stmt.where(column.like(value))
+    negated, pattern = split_not_like_prefix(value)
+    if negated:
+        return stmt.where(column.notlike(pattern))
+    return stmt.where(column.like(pattern))
 
 
 def _apply_date_filter(

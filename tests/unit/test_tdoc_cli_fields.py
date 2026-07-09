@@ -112,6 +112,35 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     assert observed_filters["uploaded_date"] == ">= '2026-01-01'"
 
 
+def test_cli_tdoc_list_passes_not_like_prefix_unchanged(monkeypatch):
+    """`-prefixed values are forwarded to the repo verbatim; the bang
+    is consumed by the repository's ``_apply_text_filter`` to emit
+    ``NOT LIKE``. The CLI does not interpret the bang — it must
+    survive the trip through Typer / Click untouched."""
+    runner = CliRunner()
+    observed: dict = {}
+
+    def fake_list_recent_with_meeting(self, **_kwargs):
+        observed.update(_kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    result = runner.invoke(app, [
+        "tdoc", "list",
+        "--title", "!%Sidelink%",
+        "--source", "!Qualcomm",
+        "--cat", "!F",
+    ])
+    assert result.exit_code == 0, result.output
+    assert observed["title"] == "!%Sidelink%"
+    assert observed["source"] == "!Qualcomm"
+    assert observed["cr_cat"] == "!F"
+
+
 def test_cli_tdoc_list_passes_null_and_not_null_tokens(monkeypatch):
     """`null` / `not-null` literals flow through to the repo verbatim so
     the rich-filter grammar is consistent with `tdoc parse`."""

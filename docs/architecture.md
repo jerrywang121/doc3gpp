@@ -311,9 +311,10 @@ seventeen commands):
       `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`,
       `--revision-of`, `--revised-to`, `--ftp-url`, `--uploaded-date`.
       Text-column filters accept the rich grammar from
-      `src/doc3gpp/cli_filters.py` (`null` / `not-null` / SQL `LIKE`);
-      `--uploaded-date` additionally accepts `OP 'YYYY-MM-DD'` parameterised
-      comparisons — the same surface `tdoc parse --meeting-id` exposes.
+      `src/doc3gpp/cli_filters.py` (`null` / `not-null` / `!<pattern>` for
+      `NOT LIKE` / SQL `LIKE`); `--uploaded-date` additionally accepts
+      `OP 'YYYY-MM-DD'` parameterised comparisons — the same surface
+      `tdoc parse --meeting-id` exposes.
     - `parse` — `--tdoc` / `--tdoc-id` (repeatable), `--meeting-id`
       (batch + combinable field filters), `--force`, `--full`; batch
       extraction with per-id failure isolation

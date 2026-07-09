@@ -736,49 +736,49 @@ def tdoc_list(
         None,
         help=(
             "Filter TDoc source / contributor (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL source rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL source rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     spec: str | None = typer.Option(
         None,
         help=(
             "Filter by technical specification (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL spec rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL spec rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     wi: str | None = typer.Option(
         None,
         help=(
             "Filter by related work items (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL related_wis rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL related_wis rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     title: str | None = typer.Option(
         None,
         help=(
             "Filter by TDoc title (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL title rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL title rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     cat: str | None = typer.Option(
         None,
         help=(
             "Filter by CR category / `cr_cat` (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL cr_cat rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_cat rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     status: str | None = typer.Option(
         None,
         help=(
             "Filter by TDoc status (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL status rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL status rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     type: str | None = typer.Option(
         None,
         help=(
             "Filter by TDoc type (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL type rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL type rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     revision_of: str | None = typer.Option(
@@ -786,7 +786,7 @@ def tdoc_list(
         "--revision-of",
         help=(
             "Filter by `is_revision_of` (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     revised_to: str | None = typer.Option(
@@ -794,7 +794,7 @@ def tdoc_list(
         "--revised-to",
         help=(
             "Filter by `revised_to` (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     ftp_url: str | None = typer.Option(
@@ -802,7 +802,7 @@ def tdoc_list(
         "--ftp-url",
         help=(
             "Filter by `ftp_url` (SQL LIKE pattern; supports % and _). "
-            "Pass 'null' or 'not-null' to match NULL ftp_url rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL ftp_url rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     uploaded_date: str | None = typer.Option(
@@ -848,12 +848,16 @@ def tdoc_list(
     ``--cat``, ``--status``, ``--type``, ``--revision-of``, ``--revised-to``,
     ``--ftp-url``) each accept a SQL ``LIKE`` pattern (with ``%`` / ``_``
     wildcards) and additionally the literal tokens ``null`` / ``not-null``
-    to match the column's nullability. ``--uploaded-date`` accepts the same
-    ``null`` / ``not-null`` tokens plus an SQL date comparison of the form
-    ``"<op> 'YYYY-MM-DD'"`` with ``<op>`` in ``=`` / ``!=`` / ``<`` / ``<=`` /
-    ``>`` / ``>=``. Invalid date inputs are rejected at the CLI boundary
-    with a clear error before the database is touched. The operator and
-    date literal are bound as parameters — injection is impossible.
+    to match the column's nullability. A leading ``!`` flips the
+    comparison to ``NOT LIKE`` — the ``!`` is consumed and the
+    remainder is bound as the pattern (e.g. ``--title "!%Sidelink%"``
+    excludes rows whose title contains ``Sidelink``). ``--uploaded-date``
+    accepts the same ``null`` / ``not-null`` tokens plus an SQL date
+    comparison of the form ``"<op> 'YYYY-MM-DD'"`` with ``<op>`` in
+    ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``. Invalid date inputs
+    are rejected at the CLI boundary with a clear error before the
+    database is touched. The operator and date literal are bound as
+    parameters — injection is impossible.
 
     Field selection:
     - `--fields`: comma-separated list of fields to include, or `all`.
@@ -1023,7 +1027,7 @@ meeting_id: int | None = typer.Option(
         "--status",
         help=(
             "Filter meeting TDocs by status (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL status rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL status rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     cat: str | None = typer.Option(
@@ -1031,7 +1035,7 @@ meeting_id: int | None = typer.Option(
         "--cat",
         help=(
             "Filter meeting TDocs by CR category / `cr_cat` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL cr_cat rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_cat rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     spec: str | None = typer.Option(
@@ -1039,7 +1043,7 @@ meeting_id: int | None = typer.Option(
         "--spec",
         help=(
             "Filter meeting TDocs by technical specification (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL spec rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL spec rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     wi: str | None = typer.Option(
@@ -1047,7 +1051,7 @@ meeting_id: int | None = typer.Option(
         "--wi",
         help=(
             "Filter meeting TDocs by `related_wis` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL related_wis rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL related_wis rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     revision_of: str | None = typer.Option(
@@ -1055,7 +1059,7 @@ meeting_id: int | None = typer.Option(
         "--revision-of",
         help=(
             "Filter meeting TDocs by `is_revision_of` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     revised_to: str | None = typer.Option(
@@ -1063,7 +1067,7 @@ meeting_id: int | None = typer.Option(
         "--revised-to",
         help=(
             "Filter meeting TDocs by `revised_to` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     title_filter: str | None = typer.Option(
@@ -1071,7 +1075,7 @@ meeting_id: int | None = typer.Option(
         "--title",
         help=(
             "Filter meeting TDocs by title (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL title rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL title rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     ftp_url: str | None = typer.Option(
@@ -1079,7 +1083,7 @@ meeting_id: int | None = typer.Option(
         "--ftp-url",
         help=(
             "Filter meeting TDocs by `ftp_url` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL ftp_url rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL ftp_url rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     source: str | None = typer.Option(
@@ -1087,7 +1091,7 @@ meeting_id: int | None = typer.Option(
         "--source",
         help=(
             "Filter meeting TDocs by source / contributor (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL source rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL source rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     tdoc_type: str | None = typer.Option(
@@ -1095,7 +1099,7 @@ meeting_id: int | None = typer.Option(
         "--type",
         help=(
             "Filter meeting TDocs by document type (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL type rows."
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL type rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
     uploaded_date: str | None = typer.Option(
@@ -1149,14 +1153,16 @@ meeting_id: int | None = typer.Option(
     ``--uploaded-date``. The first ten treat their value as a SQL
     ``LIKE`` pattern (with ``%`` / ``_`` wildcards), and additionally
     accept the literal tokens ``null`` / ``not-null`` to match the
-    column's nullability. ``--uploaded-date`` accepts the same
-    ``null`` / ``not-null`` tokens plus an SQL date comparison of the
-    form ``"<op> 'YYYY-MM-DD'"`` with ``<op>`` in ``=`` / ``!=`` / ``<`` /
-    ``<=`` / ``>`` / ``>=``. The operator and date literal are bound
-    as parameters — the date string is never string-interpolated into
-    the SQL, so injection is impossible. Invalid date inputs are
-    rejected at the CLI boundary with a clear error before the database
-    is touched.
+    column's nullability. A leading ``!`` flips the comparison to
+    ``NOT LIKE`` (e.g. ``--title "!%Sidelink%"`` excludes titles
+    containing ``Sidelink``); the ``!`` is consumed before the pattern
+    is bound. ``--uploaded-date`` accepts the same ``null`` / ``not-null``
+    tokens plus an SQL date comparison of the form ``"<op> 'YYYY-MM-DD'"``
+    with ``<op>`` in ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``.
+    The operator and date literal are bound as parameters — the date
+    string is never string-interpolated into the SQL, so injection is
+    impossible. Invalid date inputs are rejected at the CLI boundary
+    with a clear error before the database is touched.
 
     The service :meth:`TDocCrService.extract_many` catches the
     following per-id exception types internally and skips the broken

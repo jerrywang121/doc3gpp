@@ -7,6 +7,10 @@ strings whose semantics differ by column type:
   source, type, is_revision_of, revised_to):
     - the literal token ``null`` or ``not-null`` selects rows whose
       column is ``NULL`` or not ``NULL`` respectively;
+    - a leading ``!`` flips the comparison to ``NOT LIKE`` (e.g.
+      ``!%RAN5%`` excludes rows whose column matches ``%RAN5%``);
+      the ``!`` itself is consumed and the remainder is bound as the
+      ``LIKE`` pattern;
     - any other value is treated as a SQL ``LIKE`` pattern (the user
       is responsible for ``%`` / ``_`` wildcards).
 
@@ -38,6 +42,10 @@ import re
 NULL_TOKEN = "null"
 NOT_NULL_TOKEN = "not-null"
 
+# Syntactic marker for a negated ``LIKE`` pattern. ``!%foo%`` binds
+# as ``column NOT LIKE '%foo%'``; the ``!`` is consumed first.
+NOT_LIKE_PREFIX = "!"
+
 
 # ``OP 'YYYY-MM-DD'`` with optional whitespace; OP is one of
 # {=, !=, <, <=, >, >=}. The named groups let callers unpack the
@@ -59,6 +67,19 @@ def is_null_token(value: str) -> bool:
 def is_not_null_token(value: str) -> bool:
     """Return ``True`` when ``value`` (stripped, lower-cased) is ``"not-null"``."""
     return value.strip().lower() == NOT_NULL_TOKEN
+
+
+def split_not_like_prefix(value: str) -> tuple[bool, str]:
+    """Split ``value`` into ``(is_negated, pattern)``.
+
+    A leading ``!`` (the :data:`NOT_LIKE_PREFIX`) flips the comparison
+    to ``NOT LIKE``; the ``!`` is consumed and the remainder is the
+    pattern. Without a leading ``!``, ``is_negated`` is ``False`` and
+    ``pattern`` is the original value.
+    """
+    if value.startswith(NOT_LIKE_PREFIX):
+        return True, value[len(NOT_LIKE_PREFIX):]
+    return False, value
 
 
 def validate_date_filter(value: str) -> None:

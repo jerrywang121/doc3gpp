@@ -330,6 +330,27 @@ Options:
 - `--tdoc-id N`: integer form of a TDoc id; resolved against the
   `tdocs` table (PK lookup) before extraction. Repeatable. An unknown
   id prints a warning and is skipped — the rest of the batch still runs.
+- `--meeting-id N`: batch selector that fetches every CR-type TDoc
+  stored under meeting `N` (see `doc3gpp meeting list`) and runs them
+  through the same pipeline. Without `--force` only TDocs that have
+  not yet been parsed (no row in `tdoc_cr_details`) are processed;
+  `--force` re-parses every CR-type TDoc under the meeting.
+  Mutually exclusive with `--tdoc` and `--tdoc-id`. Combinable with
+  the field filters below (only active when `--meeting-id` is used).
+- `--status PATTERN`: filter meeting TDocs by `status` (SQL `LIKE`).
+- `--cr-cat PATTERN`: filter meeting TDocs by `cr_cat`.
+- `--spec PATTERN`: filter meeting TDocs by technical specification
+  (`spec`).
+- `--wi PATTERN`: filter meeting TDocs by `related_wis`.
+- `--revision-of PATTERN`: filter meeting TDocs by `is_revision_of`.
+- `--revised-to PATTERN`: filter meeting TDocs by `revised_to`.
+- `--title PATTERN`: filter meeting TDocs by `title`.
+- `--ftp-url PATTERN`: filter meeting TDocs by `ftp_url`.
+- `--source PATTERN`: filter meeting TDocs by source / contributor.
+- `--type PATTERN`: filter meeting TDocs by document `type`.
+- `--uploaded-date EXPR`: filter meeting TDocs by `uploaded_date`.
+  See [Filter syntax](#filter-syntax-for-meeting-id-batch) below for
+  the accepted forms (including date comparisons).
 - `--force`: skip both the on-disk zip/markdown cache and the
   persisted `tdoc_cr_details` row so every id is re-fetched and
   re-parsed.
@@ -338,25 +359,70 @@ Options:
   service does not yet wire this through; accepted silently so existing
   scripts keep parsing.
 
+#### Filter syntax for `--meeting-id` batch
+
+The ten text filters above (`--status`, `--cr-cat`, `--spec`, `--wi`,
+`--revision-of`, `--revised-to`, `--title`, `--ftp-url`, `--source`,
+`--type`) accept the same value grammar:
+
+| Value          | Effect                                                |
+| -------------- | ----------------------------------------------------- |
+| `null`         | match rows whose column is `NULL`                     |
+| `not-null`     | match rows whose column is not `NULL`                 |
+| any other text | applied as a SQL `LIKE` pattern (use `%` / `_`)       |
+
+`--uploaded-date` accepts the same `null` / `not-null` tokens plus a
+parameterised SQL comparison of the form ` "<op> 'YYYY-MM-DD'"` where
+`<op>` is one of `=`, `!=`, `<`, `<=`, `>`, `>=`. The operator and the
+date literal are bound as SQLAlchemy parameters — the date string is
+never string-interpolated into the SQL, so the surface is safe to
+expose to operator input. Anything else is rejected at the CLI
+boundary with a clear error before the database is touched:
+
+```
+Invalid date filter 'yesterday'. Expected 'null', 'not-null',
+or an expression like ">= 'YYYY-MM-DD'" with one of =, !=, <, <=, >, >=.
+```
+
+The filters compose: combining several filters narrows the batch with
+`AND`. They are only active with `--meeting-id`; passing them with
+`--tdoc` or `--tdoc-id` is silently ignored (the per-id selectors do
+not need them).
+
 Behavior:
 
-- Calls `TDocCrService.extract_many(tdoc_ids, force=force)`. The service
-  catches `TDocZipDownloadError`, `PythonDocxNotInstalledError`,
-  `TDocTypeUnsupportedError`, `TDocNotFoundError`, and
-  `CRHeaderMissingError` per-id and skips the broken entry; the CLI
-  computes the failure set as `input - successful_keys` and prints
-  one `FAILED` line per skipped id.
+- Calls `TDocCrService.extract_many(tdoc_ids, force=force)`, which
+  returns a `BatchExtractResult` bundling successes with a per-id
+  failure reason. The service catches `TDocZipDownloadError`,
+  `TDocTypeUnsupportedError`, `TDocNotFoundError`, `CRHeaderMissingError`,
+  plus the `ValueError` raised by the tdoc_id shape guard, and
+  records the failure reason (formatted as
+  `"{ExceptionClassName}: {exc}"`) so the CLI can surface it inline.
 - When `python-docx` is not installed the entire batch fails before any
   per-id work happens — the CLI prints an install hint and exits 1.
 - Output per id: `<tdoc_id>: spec=<spec> cr_num=<cr_num> title=<title>`
-  on success, `<tdoc_id>: FAILED - extract error (see logs)` on failure.
+  on success; `<tdoc_id>: FAILED - {ExceptionClassName}: {exc}` on
+  failure (e.g. `R5s260010: FAILED - TDocNotFoundError: TDoc 'R5s260010'
+  is not stored in the tdocs table; run \`doc3gpp tdoc sync\` first`).
+  The class name tells the operator *which* step failed (type guard,
+  DB lookup, network, shape check) without tailing the log file; a
+  full traceback is still written to the logs for debugging.
 - Final summary line: `Extracted N/M TDocs (K failures)`.
+- `--meeting-id` first validates the meeting row exists (otherwise
+  prints `Unknown meeting_id N` and exits non-zero), then asks the
+  TDoc repository for CR-type rows under it, and finally checks each
+  row's parsed status against `tdoc_cr_details` unless `--force`
+  bypasses the check. When every row is already parsed, the CLI
+  prints a "use --force to re-parse" hint and exits 0.
 
 Exit codes:
 
-- `0` — at least one TDoc extracted successfully (cache hits count).
+- `0` — at least one TDoc extracted successfully (cache hits count),
+  or `--meeting-id` without `--force` had nothing new to parse.
 - `1` — every TDoc failed, **or** `python-docx` is missing and the
-  batch could not even start.
+  batch could not even start, **or** `--meeting-id` resolved to a
+  meeting that has no CR-type TDocs (after filters), **or** an invalid
+  `--uploaded-date` value was supplied.
 
 Install the optional dependency before first use:
 
@@ -375,6 +441,24 @@ doc3gpp tdoc parse --tdoc R5s260009 --tdoc R5s260051 --tdoc R5s260135 --force
 
 # Mix string and integer selectors.
 doc3gpp tdoc parse --tdoc R5s260009 --tdoc-id 1234
+
+# Parse every not-yet-parsed CR-type TDoc under meeting 85434.
+doc3gpp tdoc parse --meeting-id 85434
+
+# Re-parse every CR-type TDoc under the meeting (cache + DB row bypassed).
+doc3gpp tdoc parse --meeting-id 85434 --force
+
+# Narrow the batch: only 38.331 CRs sourced from Qualcomm, uploaded in Q1.
+doc3gpp tdoc parse --meeting-id 85434 \
+    --spec '38.331%' \
+    --source 'Qualcomm%' \
+    --uploaded-date ">= '2026-01-01'"
+
+# Re-parse CRs whose `cr_cat` is currently NULL (i.e. not yet classified).
+doc3gpp tdoc parse --meeting-id 85434 --cr-cat null --force
+
+# Find revisions of a known TDoc id under the meeting.
+doc3gpp tdoc parse --meeting-id 85434 --revision-of 'R5-260050'
 ```
 
 ## cache Commands

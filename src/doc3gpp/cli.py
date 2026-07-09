@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 
 from doc3gpp.config import get_settings
+from doc3gpp.cli_filters import validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
@@ -172,6 +173,12 @@ def _tdoc_field(item: TDocWithMeeting, name: str) -> object | None:
 
 
 VALID_FORMATS: tuple[str, ...] = ("table", "json", "markdown")
+
+# Upper bound for ``tdoc parse --meeting-id`` batches. ``TDocRepository.list``
+# has no "no limit" variant; the typer-enforced ``max=500`` only applies to
+# the ``tdoc list`` CLI. 3GPP meetings rarely exceed a few hundred TDocs, so
+# this cap is well above the realistic ceiling without bloating the protocol.
+_TDOC_BATCH_LIMIT = 10_000
 
 
 def _resolve_format(fmt: str | None, default: str = "table") -> str:
@@ -914,6 +921,112 @@ def tdoc_parse(
         "--tdoc-id",
         help="Integer TDoc ID to resolve via the tdocs table (repeatable).",
     ),
+meeting_id: int | None = typer.Option(
+        None,
+        "--meeting-id",
+        help=(
+            "Batch parse all CR-type TDocs under the given meeting ID "
+            "(see `doc3gpp meeting list`). Without --force, only TDocs "
+            "that have not yet been parsed yet are processed; pass --force "
+            "to re-parse every CR-type TDoc under the meeting. "
+            "Mutually exclusive with --tdoc and --tdoc-id. Combinable with "
+            "the field filters below (--status, --cr-cat, --spec, --wi, "
+            "--revision-of, --revised-to, --title, --ftp-url, --source, "
+            "--type, --uploaded-date) to narrow the batch before extraction."
+        ),
+    ),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help=(
+            "Filter meeting TDocs by status (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL status rows."
+        ),
+    ),
+    cr_cat: str | None = typer.Option(
+        None,
+        "--cr-cat",
+        help=(
+            "Filter meeting TDocs by CR category / `cr_cat` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL cr_cat rows."
+        ),
+    ),
+    spec: str | None = typer.Option(
+        None,
+        "--spec",
+        help=(
+            "Filter meeting TDocs by technical specification (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL spec rows."
+        ),
+    ),
+    wi: str | None = typer.Option(
+        None,
+        "--wi",
+        help=(
+            "Filter meeting TDocs by `related_wis` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL related_wis rows."
+        ),
+    ),
+    revision_of: str | None = typer.Option(
+        None,
+        "--revision-of",
+        help=(
+            "Filter meeting TDocs by `is_revision_of` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL rows."
+        ),
+    ),
+    revised_to: str | None = typer.Option(
+        None,
+        "--revised-to",
+        help=(
+            "Filter meeting TDocs by `revised_to` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL rows."
+        ),
+    ),
+    title_filter: str | None = typer.Option(
+        None,
+        "--title",
+        help=(
+            "Filter meeting TDocs by title (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL title rows."
+        ),
+    ),
+    ftp_url: str | None = typer.Option(
+        None,
+        "--ftp-url",
+        help=(
+            "Filter meeting TDocs by `ftp_url` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL ftp_url rows."
+        ),
+    ),
+    source: str | None = typer.Option(
+        None,
+        "--source",
+        help=(
+            "Filter meeting TDocs by source / contributor (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL source rows."
+        ),
+    ),
+    tdoc_type: str | None = typer.Option(
+        None,
+        "--type",
+        help=(
+            "Filter meeting TDocs by document type (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL type rows."
+        ),
+    ),
+    uploaded_date: str | None = typer.Option(
+        None,
+        "--uploaded-date",
+        help=(
+            "Filter meeting TDocs by `uploaded_date`. Accepts:\n\n"
+            "- 'null' / 'not-null' to match NULL / NOT NULL rows;\n"
+            "- an SQL comparison like \">= '2026-02-31'\", "
+            "\"< '2026-01-01'\", \"= '2026-03-15'\", etc. — the operator "
+            "(=, !=, <, <=, >, >=) is bound as a parameter so injection "
+            "is impossible."
+        ),
+    ),
     force: bool = typer.Option(
         False,
         "--force",
@@ -939,26 +1052,60 @@ def tdoc_parse(
     resolved ``tdoc_id`` string into the batch. An unknown integer
     prints a warning and is skipped — the rest of the batch still runs.
 
+    ``--meeting-id N`` is a batch selector that resolves the meeting
+    row, fetches every CR-type TDoc stored under it, and dispatches the
+    same batch through :meth:`TDocCrService.extract_many`. Without
+    ``--force`` only TDocs that have not yet been parsed (no row in
+    ``tdoc_cr_details``) are processed; ``--force`` re-parses every
+    CR-type TDoc under the meeting. The selector is mutually exclusive
+    with ``--tdoc`` and ``--tdoc-id``.
+
+    Combinable with ``--meeting-id`` are the field filters ``--status``,
+    ``--cr-cat``, ``--spec``, ``--wi``, ``--revision-of``, ``--revised-to``,
+    ``--title``, ``--ftp-url``, ``--source``, ``--type`` and
+    ``--uploaded-date``. The first ten treat their value as a SQL
+    ``LIKE`` pattern (with ``%`` / ``_`` wildcards), and additionally
+    accept the literal tokens ``null`` / ``not-null`` to match the
+    column's nullability. ``--uploaded-date`` accepts the same
+    ``null`` / ``not-null`` tokens plus an SQL date comparison of the
+    form ``"<op> 'YYYY-MM-DD'"`` with ``<op>`` in ``=`` / ``!=`` / ``<`` /
+    ``<=`` / ``>`` / ``>=``. The operator and date literal are bound
+    as parameters — the date string is never string-interpolated into
+    the SQL, so injection is impossible. Invalid date inputs are
+    rejected at the CLI boundary with a clear error before the database
+    is touched.
+
     The service :meth:`TDocCrService.extract_many` catches the
     following per-id exception types internally and skips the broken
-    id: ``TDocZipDownloadError``, ``PythonDocxNotInstalledError``,
-    ``TDocTypeUnsupportedError``, ``TDocNotFoundError``,
-    ``CRHeaderMissingError``. The CLI computes the failure set as
-    ``input - successful_keys`` and prints one ``FAILED`` line per id
-    that didn't come back.
+    id: ``TDocZipDownloadError``, ``TDocTypeUnsupportedError``,
+    ``TDocNotFoundError``, ``CRHeaderMissingError``, plus the
+    ``ValueError`` raised by the tdoc_id shape guard. The CLI prints
+    one ``FAILED - {ExceptionClassName}: {message}`` line per broken
+    id so the operator can tell *which* step failed (download, parse,
+    type guard) without tailing the log file. A full traceback is still
+    written to the logs for debugging.
 
     Exit code:
 
-    - ``0`` — at least one TDoc extracted successfully.
+    - ``0`` — at least one TDoc extracted successfully (or, for
+      ``--meeting-id`` without ``--force``, every CR-type TDoc was
+      already parsed and there was nothing new to do).
     - ``1`` — every TDoc failed, **or** python-docx is missing and the
-      batch could not even start.
+      batch could not even start, **or** the meeting holds no CR-type
+      TDocs, **or** an invalid ``--uploaded-date`` value was supplied.
     """
-    if not tdoc and not tdoc_id:
-        raise typer.BadParameter("Specify at least one --tdoc or --tdoc-id.")
+    if meeting_id is not None and (tdoc or tdoc_id):
+        raise typer.BadParameter(
+            "--meeting-id is mutually exclusive with --tdoc and --tdoc-id."
+        )
+    if not tdoc and not tdoc_id and meeting_id is None:
+        raise typer.BadParameter(
+            "Specify at least one --tdoc, --tdoc-id, or --meeting-id."
+        )
 
     # ``--tdoc`` values are case-normalised to canonical form (R5s######)
     # so a CLI user typing ``r5s260213`` resolves the same DB row as
-    # ``R5s260213``. ``--tdoc-id`` is resolved via a single repository
+    # ``R5s260009``. ``--tdoc-id`` is resolved via a single repository
     # lookup per integer; missing ids are skipped.
     tdoc_ids: list[str] = []
     if tdoc:
@@ -975,6 +1122,67 @@ def tdoc_parse(
                 continue
             tdoc_ids.append(resolved.tdoc_id)
 
+    if meeting_id is not None:
+        if uploaded_date is not None:
+            try:
+                validate_date_filter(uploaded_date)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from None
+
+        # Validate the meeting exists so a typo produces a clear error
+        # rather than an empty "no CR-type TDocs" exit.
+        meeting = build_meeting_service().get_by_id(meeting_id)
+        if meeting is None:
+            raise typer.BadParameter(
+                f"Unknown meeting_id {meeting_id}. "
+                f"Run 'doc3gpp meeting list' to see stored meetings."
+            )
+        tdoc_repo = build_tdoc_repository()
+        cr_tdocs = tdoc_repo.list(
+            meeting_id=meeting_id,
+            type_like="CR",
+            limit=_TDOC_BATCH_LIMIT,
+            status=status,
+            cr_cat=cr_cat,
+            spec=spec,
+            wi=wi,
+            revision_of=revision_of,
+            revised_to=revised_to,
+            title=title_filter,
+            ftp_url=ftp_url,
+            source=source,
+            tdoc_type=tdoc_type,
+            uploaded_date=uploaded_date,
+        )
+        if not cr_tdocs:
+            typer.echo(
+                f"No CR-type TDocs found for meeting_id {meeting_id}."
+            )
+            raise typer.Exit(code=1)
+
+        if force:
+            tdoc_ids.extend(row.tdoc_id for row in cr_tdocs)
+        else:
+            cr_repo = build_tdoc_cr_repository()
+            new_ids = [
+                row.tdoc_id for row in cr_tdocs
+                if not cr_repo.get(row.tdoc_id)
+            ]
+            skipped = len(cr_tdocs) - len(new_ids)
+            if not new_ids:
+                typer.echo(
+                    f"All {len(cr_tdocs)} CR-type TDocs for meeting_id "
+                    f"{meeting_id} are already parsed "
+                    f"(use --force to re-parse)."
+                )
+                raise typer.Exit(code=0)
+            if skipped:
+                logger.info(
+                    "Skipped %d already-parsed CR-type TDocs for meeting_id %d",
+                    skipped, meeting_id,
+                )
+            tdoc_ids.extend(new_ids)
+
     if not tdoc_ids:
         typer.echo("No TDocs to extract (all --tdoc-id values were unknown).")
         raise typer.Exit(code=1)
@@ -985,7 +1193,7 @@ def tdoc_parse(
     )
     service = build_tdoc_cr_service()
     try:
-        results = service.extract_many(tdoc_ids, force=force)
+        batch = service.extract_many(tdoc_ids, force=force)
     except PythonDocxNotInstalledError as exc:
         typer.echo(
             "python-docx is not installed; install with `pip install doc3gpp[extract]`.",
@@ -994,19 +1202,23 @@ def tdoc_parse(
         typer.echo(f"hint: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    successful_keys = set(results.keys())
     failures: list[str] = []
     for raw_id in tdoc_ids:
         normalised = raw_id.strip()
-        if normalised in successful_keys:
-            result = results[normalised]
+        if normalised in batch.successes:
+            result = batch.successes[normalised]
             typer.echo(
                 f"{normalised}: spec={result.details.spec} "
                 f"cr_num={result.details.cr_num} "
                 f"title={result.details.title}"
             )
+        elif normalised in batch.failures:
+            typer.echo(f"{normalised}: FAILED - {batch.failures[normalised]}")
+            failures.append(normalised)
         else:
-            typer.echo(f"{normalised}: FAILED - extract error (see logs)")
+            # Defensive: extract_many should always record a success or
+            # failure per id; this only fires on a contract regression.
+            typer.echo(f"{normalised}: FAILED - extract error (no diagnostic)")
             failures.append(normalised)
 
     total = len(tdoc_ids)

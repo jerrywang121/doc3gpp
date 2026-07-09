@@ -153,6 +153,34 @@ class ExtractResult:
     from_cache: bool
 
 
+@dataclass(slots=True, frozen=True)
+class BatchExtractResult:
+    """Outcome of a batch :meth:`TDocCrService.extract_many` call.
+
+    Bundles successful extracts with a per-id failure reason so the
+    CLI can surface a short inline message (e.g.
+    ``TDocNotFoundError: TDoc 'R5s260010' is not stored...``) instead
+    of pointing the operator at the log file. A single broken id does
+    not abort the batch — it lands in :attr:`failures` keyed by the
+    normalised tdoc_id, and the remaining ids continue.
+
+    Attributes:
+        successes: ``{tdoc_id: ExtractResult}`` for every id that
+            produced a usable extract (cache hit or fresh). The keys are
+            the canonical (normalised) ids as stored in the database.
+        failures: ``{tdoc_id: short reason}`` for every id that the
+            per-id ``try/except`` swallowed. The reason is formatted as
+            ``"{ExceptionClassName}: {exc}"`` — the class name tells
+            the operator *which* step failed (download, parse, type
+            guard) without tailing logs, and the exception's own
+            message carries the actionable detail (e.g. "run
+            ``doc3gpp tdoc sync`` first" for a missing row).
+    """
+
+    successes: dict[str, ExtractResult]
+    failures: dict[str, str]
+
+
 # ---------------------------------------------------------------------------
 # Service.
 # ---------------------------------------------------------------------------
@@ -335,13 +363,15 @@ class TDocCrService:
         tdoc_ids: Iterable[str],
         *,
         force: bool = False,
-    ) -> dict[str, ExtractResult]:
-        """Extract a batch of TDocs and return only the successes.
+    ) -> BatchExtractResult:
+        """Extract a batch of TDocs and bundle successes with per-id failure reasons.
 
-        Failures are logged at ``WARNING`` level via the module logger
-        (not raised) so a single broken id doesn't abort the rest of
-        the batch. The CLI surfaces a summary line built from the
-        difference between the input set and the returned dict's keys.
+        Failures are logged at ``WARNING`` level (with the full
+        traceback) and recorded in :attr:`BatchExtractResult.failures`
+        keyed by the normalised tdoc_id, so a single broken id doesn't
+        abort the rest of the batch. The CLI surfaces the short reason
+        inline so the operator can tell which step failed without
+        tailing the log file.
 
         Args:
             tdoc_ids: Iterable of TDoc ids to extract. Strings that
@@ -351,12 +381,13 @@ class TDocCrService:
                 TDoc is re-fetched and re-parsed from scratch.
 
         Returns:
-            ``{tdoc_id: ExtractResult}`` for every successful extract.
-            Cache hits and fresh extracts both land in the dict — the
-            ``from_cache`` flag on each :class:`ExtractResult` tells
-            the caller which it was.
+            A :class:`BatchExtractResult` whose ``successes`` dict maps
+            the canonical tdoc_id to its :class:`ExtractResult` and
+            whose ``failures`` dict maps the normalised tdoc_id to a
+            short reason string (``"{ExceptionClassName}: {exc}"``).
         """
-        results: dict[str, ExtractResult] = {}
+        successes: dict[str, ExtractResult] = {}
+        failures: dict[str, str] = {}
         for raw_id in tdoc_ids:
             try:
                 result = self.extract(raw_id, force=force)
@@ -365,10 +396,12 @@ class TDocCrService:
                     "Failed to extract TDoc %r: %s",
                     raw_id,
                     exc,
+                    exc_info=True,
                 )
+                failures[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
                 continue
-            results[result.details.tdoc_id] = result
-        return results
+            successes[result.details.tdoc_id] = result
+        return BatchExtractResult(successes=successes, failures=failures)
 
     # ------------------------------------------------------------------
     # Internals
@@ -454,6 +487,7 @@ class TDocCrService:
 # type if they want to treat "not a CR markdown" as a soft failure in
 # batch flows. Not part of the Plan but convenient.
 __all__ = [
+    "BatchExtractResult",
     "CRHeaderMissingError",
     "ExtractResult",
     "TDocCrService",

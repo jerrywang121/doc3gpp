@@ -307,7 +307,7 @@ seventeen commands):
 - `tdoc`:
     - `sync` — `--meeting-id` or `--meeting`; delegates to
       `TDocSyncCoordinator`
-    - `list` — filters by `--tsg`, `--meeting`, `--meeting-id`, `--year`,
+    - `list` — filters by `--tdoc`, `--meeting`, `--meeting-id`,
       `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`,
       `--revision-of`, `--revised-to`, `--ftp-url`, `--uploaded-date`.
       Text-column filters accept the rich grammar from

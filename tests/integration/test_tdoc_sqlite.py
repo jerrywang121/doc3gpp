@@ -313,12 +313,10 @@ def test_cli_tdoc_list_filters(sqlite_env) -> None:
         [
             "tdoc",
             "list",
-            "--tsg",
-            "R5",
+            "--tdoc",
+            "R5%",
             "--meeting",
             "%RAN3%",
-            "--year",
-            "26",
             "--limit",
             "10",
             "--fields",
@@ -441,7 +439,7 @@ def test_tdoc_repository_full_schema(sqlite_env) -> None:
 
     repo.upsert(tdoc)
 
-    rows = repo.list_with_meeting(limit=1, tsg="R5")
+    rows = repo.list_with_meeting(limit=1, tdoc_id="R5%")
     assert len(rows) == 1
     stored = rows[0]
 

@@ -41,11 +41,9 @@ class TDocRepository(Protocol):
     def list(
         self,
         limit: int = 20,
-        tsg: str | None = None,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
-        year: int | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -61,19 +59,17 @@ class TDocRepository(Protocol):
         """Return a list of recent TDoc records with optional filters.
 
         Optional filters:
-        - ``tsg``: TSG prefix matched against the TDoc identifier.
         - ``tdoc_id``: SQL ``LIKE`` pattern matched against the
           ``tdocs.tdoc_id`` column. Accepts the rich filter syntax
           described in :mod:`doc3gpp.cli_filters` (``null`` /
-          ``not-null`` / ``!pattern`` / plain LIKE). Lets the
-          ``tdoc parse`` CLI expose ``--tdoc`` as a filter rather than
-          a per-id selector — combined with ``--meeting-id`` or any
-          text filter it narrows the candidate set before extraction.
+          ``not-null`` / ``!pattern`` / plain LIKE). Powers the
+          ``--tdoc`` flag on both ``tdoc parse`` and ``tdoc list`` —
+          combined with ``--meeting-id`` or any text filter it narrows
+          the candidate set.
         - ``meeting_like``: SQL ``LIKE`` pattern applied to the parent
           meeting's name (joins the ``meetings`` table).
         - ``meeting_id``: exact match against ``tdocs.meeting_id``. Can
           be combined with ``meeting_like``; rows must satisfy both.
-        - ``year``: two-digit year code embedded in the TDoc identifier.
         - The remaining parameters accept the rich filter syntax
           described in :mod:`doc3gpp.cli_filters` — ``null`` /
           ``not-null`` match the column's nullability, a leading ``!``
@@ -101,11 +97,9 @@ class TDocRepository(Protocol):
     def list_with_meeting(
         self,
         limit: int = 20,
-        tsg: str | None = None,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
-        year: int | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -123,7 +117,7 @@ class TDocRepository(Protocol):
         Equivalent to ``list(...)`` plus a ``meetings`` JOIN to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
         the meeting name alongside TDoc fields. Accepts the same filters as
-        :meth:`list`` (including the new ``tdoc_id`` LIKE pattern).
+        :meth:`list``.
         """
         ...
 

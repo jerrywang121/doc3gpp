@@ -716,8 +716,20 @@ def tdoc_sync(
 @tdoc_app.command("list")
 def tdoc_list(
     limit: int = typer.Option(20, min=1, max=500),
-    tsg: str | None = typer.Option(None, help="TSG prefix to filter TDoc IDs (e.g. R5)."),
-    year: int | None = typer.Option(None, help="Two-digit year code within the TDoc identifier."),
+    tdoc: str | None = typer.Option(
+        None,
+        "--tdoc",
+        help=(
+            "TDoc identifier pattern. SQL LIKE — pass a literal id "
+            "(e.g. 'R5s260009') for an exact match, or a pattern with "
+            "%/_ wildcards (e.g. 'R5s26%', 'R5_260001') to widen. "
+            "Also accepts the rich filter tokens 'null' / 'not-null' / "
+            "'!pattern'. The flag is singular — passing it more than "
+            "once silently keeps the last value (Click's default for "
+            "non-multi options); build the pattern with LIKE wildcards "
+            "to match multiple ids. Mirrors the `tdoc parse --tdoc` filter."
+        ),
+    ),
     meeting: str | None = typer.Option(
         None,
         help="SQL LIKE pattern to filter meeting name; supports % and _."
@@ -831,8 +843,12 @@ def tdoc_list(
     """List recent stored TDocs.
 
     The command supports filtering and field selection:
-    - `--tsg`: filter by TSG prefix (e.g. R5, S2)
-    - `--year`: filter by the two-digit year code in the TDoc ID (e.g. 26)
+    - `--tdoc`: SQL LIKE pattern on the TDoc identifier (e.g. ``R5s26%``
+      to match every TDoc in the RAN5 2026 cycle, or ``R5s260009`` for
+      an exact id). Accepts the rich filter grammar shared with
+      ``tdoc parse``: ``null`` / ``not-null`` test column nullability
+      and a leading ``!`` flips the comparison to ``NOT LIKE`` (the
+      ``!`` is consumed).
     - `--meeting`: substring filter on the meeting name; auto-wrapped with
       wildcards when no ``%`` / ``_`` is present, so `--meeting RAN5#111`
       matches anything containing that string.
@@ -890,12 +906,11 @@ def tdoc_list(
     fmt = _resolve_format(fmt, default=settings.output.format)
 
     logger.info(
-        "Listing %s recent TDocs with filters tsg=%s year=%s meeting=%s meeting_id=%s "
+        "Listing %s recent TDocs with filters tdoc=%s meeting=%s meeting_id=%s "
         "source=%s spec=%s wi=%s title=%s cr_cat=%s status=%s type=%s "
         "revision_of=%s revised_to=%s ftp_url=%s uploaded_date=%s",
         limit,
-        tsg,
-        year,
+        tdoc,
         meeting,
         meeting_id,
         source,
@@ -914,10 +929,9 @@ def tdoc_list(
     service = build_tdoc_service()
     records = service.list_recent_with_meeting(
         limit=limit,
-        tsg=tsg,
+        tdoc_id=tdoc,
         meeting_like=_auto_wrap_like(meeting) if meeting else None,
         meeting_id=meeting_id,
-        year=year,
         # Rich-filter surface — supports `null` / `not-null` / LIKE.
         source=source,
         spec=spec,

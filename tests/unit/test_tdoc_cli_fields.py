@@ -25,7 +25,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     observed_filters = {}
 
     def fake_list_recent_with_meeting(
-        self, limit=20, tsg=None, meeting_like=None, meeting_id=None, year=None,
+        self, limit=20, tdoc_id=None, meeting_like=None, meeting_id=None,
         source=None, spec=None, wi=None, title=None, cr_cat=None,
         status=None, tdoc_type=None,
         revision_of=None, revised_to=None, ftp_url=None, uploaded_date=None,
@@ -33,10 +33,9 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     ):
         observed_filters.update({
             "limit": limit,
-            "tsg": tsg,
+            "tdoc_id": tdoc_id,
             "meeting_like": meeting_like,
             "meeting_id": meeting_id,
-            "year": year,
             "source": source,
             "spec": spec,
             "wi": wi,
@@ -110,6 +109,58 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     assert observed_filters["revised_to"] == "R5s260100"
     assert observed_filters["ftp_url"] == "tsg_ran/%"
     assert observed_filters["uploaded_date"] == ">= '2026-01-01'"
+
+
+def test_cli_tdoc_list_forwards_tdoc_pattern(monkeypatch):
+    """`--tdoc` is a SQL LIKE pattern on `tdocs.tdoc_id` and is forwarded
+    verbatim to the repository. Mirrors `tdoc parse --tdoc`: a literal id
+    is an exact match, a pattern with `%` / `_` wildcards widens the set,
+    and `!pattern` flips to `NOT LIKE`.
+    """
+    runner = CliRunner()
+    observed: dict = {}
+
+    def fake_list_recent_with_meeting(self, **_kwargs):
+        observed.update(_kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    result = runner.invoke(app, ["tdoc", "list", "--tdoc", "R5s260009"])
+    assert result.exit_code == 0, result.output
+    assert observed["tdoc_id"] == "R5s260009"
+
+    result = runner.invoke(app, ["tdoc", "list", "--tdoc", "R5s26%"])
+    assert result.exit_code == 0, result.output
+    assert observed["tdoc_id"] == "R5s26%"
+
+    result = runner.invoke(app, ["tdoc", "list", "--tdoc", "!R5s260009"])
+    assert result.exit_code == 0, result.output
+    assert observed["tdoc_id"] == "!R5s260009"
+
+    result = runner.invoke(app, ["tdoc", "list", "--tdoc", "null"])
+    assert result.exit_code == 0, result.output
+    assert observed["tdoc_id"] == "null"
+
+    result = runner.invoke(app, ["tdoc", "list", "--tdoc", "not-null"])
+    assert result.exit_code == 0, result.output
+    assert observed["tdoc_id"] == "not-null"
+
+    result = runner.invoke(app, [
+        "tdoc", "list",
+        "--tdoc", "R5s26%",
+        "--meeting-id", "42",
+        "--meeting", "%RAN5%",
+        "--status", "Agreed",
+    ])
+    assert result.exit_code == 0, result.output
+    assert observed["tdoc_id"] == "R5s26%"
+    assert observed["meeting_id"] == 42
+    assert observed["meeting_like"] == "%RAN5%"
+    assert observed["status"] == "Agreed"
 
 
 def test_cli_tdoc_list_passes_not_like_prefix_unchanged(monkeypatch):

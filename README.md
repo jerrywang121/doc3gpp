@@ -129,7 +129,7 @@ doc3gpp db init                            # create schema + seed tsgs table
 doc3gpp meeting sync --tsg r5              # scrape DynaReport, validate --tsg
 doc3gpp meeting list --limit 5
 doc3gpp tdoc sync --meeting-id 85434       # requires a stored meeting row
-doc3gpp tdoc list --tsg R5 --year 26
+doc3gpp tdoc list --tdoc 'R5%'
 doc3gpp tdoc parse --meeting-id 85434      # extract CR cover pages; prompts before batch
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes   # pattern match, skip confirmation
 doc3gpp wi sync --tsg r5                   # scrape WI DynaReport for R5
@@ -220,7 +220,7 @@ doc3gpp tdoc sync --meeting-id 85434
 doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
 doc3gpp tdoc list --limit 10
 # Filtered list examples
-doc3gpp tdoc list --tsg R5 --year 26 --meeting "%RAN3%"
+doc3gpp tdoc list --tdoc 'R5%' --meeting "%RAN3%"
 doc3gpp tdoc list --meeting-id 85434             # scope to a single meeting by ID
 # TDoc extraction — every flag is a filter; combine freely
 doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts to confirm

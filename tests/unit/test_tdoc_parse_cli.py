@@ -827,7 +827,7 @@ def test_tdoc_parse_meeting_id_rejects_bad_date_operator(_meeting_with_cr_tdocs)
 @pytest.mark.parametrize(
     ("flag", "kwarg"),
     [
-        ("--cr-cat", "cr_cat"),
+        ("--cat", "cr_cat"),
         ("--spec", "spec"),
         ("--wi", "wi"),
         ("--revision-of", "revision_of"),

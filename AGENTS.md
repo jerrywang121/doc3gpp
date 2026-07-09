@@ -86,7 +86,7 @@ doc3gpp/
 | `parse_3gpp_wis` | function | `parsers/wi_parser.py` | HTML→Wi list (extracts wi_id, acronym, release, name) |
 | `read_tdoc_sheet` | function | `parsers/tdoc_parser.py` | XLSX→TDoc list |
 | `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of MeetingRepository |
-| `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of TDocRepository; rich filter helpers `_apply_text_filter` / `_apply_date_filter` consume `cli_filters.DATE_FILTER_RE` to interpret `null` / `not-null` / `LIKE` / `OP 'YYYY-MM-DD'` filter values for `tdoc parse --meeting-id` |
+| `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of TDocRepository; rich filter helpers `_apply_text_filter` / `_apply_date_filter` consume `cli_filters.DATE_FILTER_RE` to interpret `null` / `not-null` / `LIKE` / `OP 'YYYY-MM-DD'` filter values for both `tdoc list` and `tdoc parse --meeting-id` |
 | `validate_date_filter` | function | `cli_filters.py` | Boundary guard for `--uploaded-date`; rejects anything that doesn't match `null` / `not-null` / `"<op> 'YYYY-MM-DD'"` before the database is touched |
 | `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of TDocCrDetailRepository |
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of TsgRepository |
@@ -190,7 +190,7 @@ file co-tenanted with third-party tooling metadata. See
 - Keep `README.md`, `AGENTS.md`, and `docs/*.md` in sync when behaviour or CLI surface changes.
 - Do not auto-commit. Plan first, implement, run lint + the sqlite test profile, then hand off.
 - Scripts in `scripts/` use `set -euo pipefail`.
-- **Filter values for `tdoc parse --meeting-id`** follow a single grammar defined in `src/doc3gpp/cli_filters.py`: `null` / `not-null` select by nullability, anything else is a SQL `LIKE` pattern, and `--uploaded-date` additionally accepts `"<op> 'YYYY-MM-DD'"` (op ∈ `= != < <= > >=`). The CLI validates with `validate_date_filter` before touching the DB; the repository's `_apply_*_filter` helpers emit SQLAlchemy parameter bindings — never string interpolation — so the surface is injection-safe.
+- **Filter values for `tdoc list` and `tdoc parse --meeting-id`** share a single grammar defined in `src/doc3gpp/cli_filters.py`: `null` / `not-null` select by nullability, anything else is a SQL `LIKE` pattern, and `--uploaded-date` additionally accepts `"<op> 'YYYY-MM-DD'"` (op ∈ `= != < <= > >=`). Both CLIs validate with `validate_date_filter` before touching the DB; the repository's `_apply_*_filter` helpers emit SQLAlchemy parameter bindings — never string interpolation — so the surface is injection-safe. The text-column flags are now uniform across both commands (`--status`, `--cat`, `--spec`, `--wi`, `--title`, `--source`, `--type`, `--revision-of`, `--revised-to`, `--ftp-url`, `--uploaded-date`).
 
 ## ANTI-PATTERNS (THIS PROJECT)
 

@@ -75,11 +75,31 @@ class TDocService:
         cat_like: str | None = None,
         status_like: str | None = None,
         type_like: str | None = None,
+        status: str | None = None,
+        cr_cat: str | None = None,
+        spec: str | None = None,
+        wi: str | None = None,
+        revision_of: str | None = None,
+        revised_to: str | None = None,
+        title: str | None = None,
+        ftp_url: str | None = None,
+        source: str | None = None,
+        tdoc_type: str | None = None,
+        uploaded_date: str | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list_recent` but each row carries its meeting display name.
 
         Convenience for CLI / export paths that want to show ``meeting_name``
         next to TDoc fields without exposing the DTO composition to callers.
+
+        The un-suffixed parameters (``status``, ``cr_cat``, ``spec``, ``wi``,
+        ``revision_of``, ``revised_to``, ``title``, ``ftp_url``, ``source``,
+        ``tdoc_type``, ``uploaded_date``) accept the rich filter grammar
+        described in :mod:`doc3gpp.cli_filters` (``null`` / ``not-null`` /
+        SQL ``LIKE`` for text columns; date comparison for ``uploaded_date``).
+        When both the ``*_like`` and un-suffixed forms of the same column are
+        passed the predicates are combined with ``AND`` (narrowing, not
+        overriding).
         """
         return self._repository.list_with_meeting(
             limit=limit,
@@ -94,6 +114,17 @@ class TDocService:
             cat_like=cat_like,
             status_like=status_like,
             type_like=type_like,
+            status=status,
+            cr_cat=cr_cat,
+            spec=spec,
+            wi=wi,
+            revision_of=revision_of,
+            revised_to=revised_to,
+            title=title,
+            ftp_url=ftp_url,
+            source=source,
+            tdoc_type=tdoc_type,
+            uploaded_date=uploaded_date,
         )
 
     def sync_from_meeting_ftp(self, ftp_url: str, meeting_id: int | None = None) -> int:

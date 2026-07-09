@@ -308,9 +308,15 @@ seventeen commands):
     - `sync` — `--meeting-id` or `--meeting`; delegates to
       `TDocSyncCoordinator`
     - `list` — filters by `--tsg`, `--meeting`, `--meeting-id`, `--year`,
-      `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`
-    - `extract` — `--tdoc` / `--tdoc-id` (repeatable), `--force`,
-      `--full`; batch extraction with per-id failure isolation
+      `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`,
+      `--revision-of`, `--revised-to`, `--ftp-url`, `--uploaded-date`.
+      Text-column filters accept the rich grammar from
+      `src/doc3gpp/cli_filters.py` (`null` / `not-null` / SQL `LIKE`);
+      `--uploaded-date` additionally accepts `OP 'YYYY-MM-DD'` parameterised
+      comparisons — the same surface `tdoc parse --meeting-id` exposes.
+    - `parse` — `--tdoc` / `--tdoc-id` (repeatable), `--meeting-id`
+      (batch + combinable field filters), `--force`, `--full`; batch
+      extraction with per-id failure isolation
     - `show` — `--tdoc`; renders the matching TDoc and, when present,
       a `[Extracted Details]` block from `tdoc_cr_details`
 - `tsg`:

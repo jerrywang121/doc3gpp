@@ -282,3 +282,66 @@ def test_cli_tdoc_list_invalid_fields_error():
     assert "tdoc_id" in result.output
     assert "meeting_id" in result.output
     assert "meeting_name" in result.output
+
+
+def test_cli_tdoc_list_forwards_release_version_cr_num_cr_pack(monkeypatch):
+    """`--release`, `--version`, `--cr-num`, `--cr-pack` are forwarded
+    to ``list_recent_with_meeting`` verbatim so the repo's
+    `_apply_text_filter` can interpret the rich-filter grammar
+    (`null` / `not-null` / `!pattern` / plain LIKE).
+    """
+    runner = CliRunner()
+    observed: dict = {}
+
+    def fake_list_recent_with_meeting(self, **_kwargs):
+        observed.update(_kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    # Plain LIKE patterns route to the service unchanged.
+    result = runner.invoke(app, [
+        "tdoc", "list",
+        "--release", "Rel-18",
+        "--version", "18.1.0",
+        "--cr-num", "3790",
+        "--cr-pack", "RP-%",
+    ])
+    assert result.exit_code == 0, result.output
+    assert observed["release"] == "Rel-18"
+    assert observed["version"] == "18.1.0"
+    assert observed["cr_num"] == "3790"
+    assert observed["cr_pack"] == "RP-%"
+
+    # `null` / `not-null` tokens flow through verbatim so the repo
+    # can match column nullability.
+    result = runner.invoke(app, [
+        "tdoc", "list",
+        "--release", "null",
+        "--version", "not-null",
+        "--cr-num", "null",
+        "--cr-pack", "not-null",
+    ])
+    assert result.exit_code == 0, result.output
+    assert observed["release"] == "null"
+    assert observed["version"] == "not-null"
+    assert observed["cr_num"] == "null"
+    assert observed["cr_pack"] == "not-null"
+
+    # A leading `!` is forwarded untouched — the bang is consumed by
+    # the repository's `_apply_text_filter` to emit `NOT LIKE`.
+    result = runner.invoke(app, [
+        "tdoc", "list",
+        "--release", "!Rel-18",
+        "--version", "!18.%",
+        "--cr-num", "!379%",
+        "--cr-pack", "!RP-%",
+    ])
+    assert result.exit_code == 0, result.output
+    assert observed["release"] == "!Rel-18"
+    assert observed["version"] == "!18.%"
+    assert observed["cr_num"] == "!379%"
+    assert observed["cr_pack"] == "!RP-%"

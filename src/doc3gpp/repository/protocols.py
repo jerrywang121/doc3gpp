@@ -55,6 +55,10 @@ class TDocRepository(Protocol):
         source: str | None = None,
         tdoc_type: str | None = None,
         uploaded_date: str | None = None,
+        release: str | None = None,
+        version: str | None = None,
+        cr_num: str | None = None,
+        cr_pack: str | None = None,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
 
@@ -78,6 +82,11 @@ class TDocRepository(Protocol):
           ``uploaded_date`` additionally accepts a
           ``"<op> 'YYYY-MM-DD'"`` comparison with ``<op>`` in
           ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``.
+          ``release``, ``version``, ``cr_num``, ``cr_pack`` are
+          text-column filters newly wired through for both
+          ``tdoc list`` and ``tdoc parse`` — they accept the same
+          ``null`` / ``not-null`` / ``!pattern`` / plain LIKE grammar
+          as the other text columns.
 
         Pure persistence shape — no joined meeting metadata. Callers that
         need a human-readable meeting name should use :meth:`list_with_meeting`.
@@ -111,6 +120,10 @@ class TDocRepository(Protocol):
         source: str | None = None,
         tdoc_type: str | None = None,
         uploaded_date: str | None = None,
+        release: str | None = None,
+        version: str | None = None,
+        cr_num: str | None = None,
+        cr_pack: str | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its meeting's display name.
 

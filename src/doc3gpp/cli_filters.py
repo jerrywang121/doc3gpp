@@ -4,7 +4,8 @@ The ``tdoc parse --meeting-id`` selector accepts per-field filter
 strings whose semantics differ by column type:
 
 - **Text columns** (status, cr_cat, spec, related_wis, title, ftp_url,
-  source, type, is_revision_of, revised_to):
+  source, type, is_revision_of, revised_to, release, version, cr_num,
+  cr_pack):
     - the literal token ``null`` or ``not-null`` selects rows whose
       column is ``NULL`` or not ``NULL`` respectively;
     - a leading ``!`` flips the comparison to ``NOT LIKE`` (e.g.

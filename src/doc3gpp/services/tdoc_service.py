@@ -33,6 +33,10 @@ class TDocService:
         source: str | None = None,
         tdoc_type: str | None = None,
         uploaded_date: str | None = None,
+        release: str | None = None,
+        version: str | None = None,
+        cr_num: str | None = None,
+        cr_pack: str | None = None,
     ) -> list[TDocWithMeeting]:
         """Return recent TDoc records joined with their parent meeting name.
 
@@ -44,7 +48,10 @@ class TDocService:
         column's nullability, a leading ``!`` flips the comparison to
         ``NOT LIKE`` (with the ``!`` consumed), and anything else is
         treated as a ``LIKE`` pattern. ``uploaded_date`` additionally
-        accepts a ``"<op> 'YYYY-MM-DD'"`` comparison.
+        accepts a ``"<op> 'YYYY-MM-DD'"`` comparison. ``release``,
+        ``version``, ``cr_num``, ``cr_pack`` are the text-column
+        filters newly wired through for ``tdoc list`` and ``tdoc parse``
+        and accept the same grammar.
 
         ``tdoc_id`` is the LIKE pattern against ``tdocs.tdoc_id`` and
         mirrors the ``--tdoc`` flag on ``tdoc parse`` / ``tdoc list``.
@@ -65,6 +72,10 @@ class TDocService:
             source=source,
             tdoc_type=tdoc_type,
             uploaded_date=uploaded_date,
+            release=release,
+            version=version,
+            cr_num=cr_num,
+            cr_pack=cr_pack,
         )
 
     def sync_from_meeting_ftp(self, ftp_url: str, meeting_id: int | None = None) -> int:

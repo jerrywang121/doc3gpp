@@ -130,6 +130,8 @@ doc3gpp meeting sync --tsg r5              # scrape DynaReport, validate --tsg
 doc3gpp meeting list --limit 5
 doc3gpp tdoc sync --meeting-id 85434       # requires a stored meeting row
 doc3gpp tdoc list --tsg R5 --year 26
+doc3gpp tdoc parse --meeting-id 85434      # extract CR cover pages; prompts before batch
+doc3gpp tdoc parse --tdoc 'R5s26%' --yes   # pattern match, skip confirmation
 doc3gpp wi sync --tsg r5                   # scrape WI DynaReport for R5
 doc3gpp wi list --release "Rel-19" --limit 50
 ```
@@ -148,6 +150,7 @@ Configuration is read from environment variables (and `.env`).
 | `DOC3GPP_HTTP_VERIFY`      | TLS verification toggle                  |
 | `DOC3GPP_HTTP_MAX_RETRIES` | HTTP retry attempts                      |
 | `DOC3GPP_HTTP_RETRY_BACKOFF` | HTTP retry backoff base                |
+| `DOC3GPP_TDOC_PARSE__MAX_BATCH` | Upper bound on TDocs per `tdoc parse` invocation (default `100`) |
 
 Nested settings can be overridden with the `__` delimiter, e.g.
 `DOC3GPP_OUTPUT__FORMAT=json`,
@@ -219,6 +222,12 @@ doc3gpp tdoc list --limit 10
 # Filtered list examples
 doc3gpp tdoc list --tsg R5 --year 26 --meeting "%RAN3%"
 doc3gpp tdoc list --meeting-id 85434             # scope to a single meeting by ID
+# TDoc extraction — every flag is a filter; combine freely
+doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts to confirm
+doc3gpp tdoc parse --tdoc 'R5s26%' --yes         # LIKE pattern on tdoc_id; non-interactive
+doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --cr-cat F
+doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'  # NOT LIKE
+doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything under the meeting
 doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
 doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100

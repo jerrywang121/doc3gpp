@@ -93,6 +93,26 @@ class OutputSettings(BaseModel):
     fields: OutputFieldsSettings = Field(default_factory=OutputFieldsSettings)
 
 
+class TDocParseSettings(BaseModel):
+    """Knobs for ``doc3gpp tdoc parse``.
+
+    :attr:`max_batch` caps how many TDocs a single ``tdoc parse``
+    invocation will actually process. Filters narrow the candidate
+    set; matches above this ceiling are truncated and reported as
+    ``remaining`` in the completion summary so the operator can
+    re-run the same command (without ``--force``) to continue where
+    the previous invocation stopped.
+
+    The default of 100 is conservative — 3GPP meetings rarely exceed
+    that for CR-type TDocs and most ad-hoc runs are well under it.
+    Operators can raise it for big-batch sweeps via the TOML
+    ``[tdoc_parse] max_batch`` key or the
+    ``DOC3GPP_TDOC_PARSE__MAX_BATCH`` env var.
+    """
+
+    max_batch: int = Field(default=100, ge=1)
+
+
 class CacheSettings(BaseModel):
     """Disk cache configuration for TDoc extraction artifacts.
 
@@ -146,6 +166,7 @@ class Settings(BaseSettings):
     meeting_sync: MeetingSyncSettings = Field(default_factory=MeetingSyncSettings)
     output: OutputSettings = Field(default_factory=OutputSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
+    tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="DOC3GPP_",

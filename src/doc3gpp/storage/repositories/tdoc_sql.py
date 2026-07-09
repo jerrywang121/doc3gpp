@@ -87,6 +87,7 @@ class SQLAlchemyTDocRepository:
         self,
         limit: int = 20,
         tsg: str | None = None,
+        tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
@@ -112,6 +113,9 @@ class SQLAlchemyTDocRepository:
 
         Optional filters:
         - ``tsg``: filter TDoc IDs that start with the given TSG prefix.
+        - ``tdoc_id``: SQL ``LIKE`` pattern against ``tdocs.tdoc_id``
+          (rich-filter grammar — ``null`` / ``not-null`` /
+          ``!pattern`` / plain LIKE).
         - ``meeting_like``: SQL LIKE pattern to apply to the meeting name.
         - ``meeting_id``: exact match on ``tdocs.meeting_id``. Combinable
           with ``meeting_like``; rows must satisfy both predicates.
@@ -157,6 +161,7 @@ class SQLAlchemyTDocRepository:
                     return []
                 stmt = stmt.where(TDocORM.tdoc_id.in_(matching_ids))
 
+            stmt = _apply_text_filter(stmt, TDocORM.tdoc_id, tdoc_id)
             stmt = _apply_text_filter(stmt, TDocORM.status, status)
             stmt = _apply_text_filter(stmt, TDocORM.cr_cat, cr_cat)
             stmt = _apply_text_filter(stmt, TDocORM.spec, spec)
@@ -198,6 +203,7 @@ class SQLAlchemyTDocRepository:
         self,
         limit: int = 20,
         tsg: str | None = None,
+        tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
@@ -222,6 +228,7 @@ class SQLAlchemyTDocRepository:
         tdocs = self.list(
             limit=limit,
             tsg=tsg,
+            tdoc_id=tdoc_id,
             meeting_like=meeting_like,
             meeting_id=meeting_id,
             year=year,

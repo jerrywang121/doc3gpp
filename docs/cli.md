@@ -335,47 +335,59 @@ Purpose:
   `tdoc_cr_details` + `tdoc_extracts`. Wraps the Phase 6
   `TDocCrService.extract_many` for batch CLI use.
 
+Every flag is a **filter** — the candidate set is the intersection of
+every supplied predicate, and CR-type is the implicit default (the
+extractor only handles CR TDocs). The two batch-style selectors from
+earlier releases (`--tdoc-id` as an integer PK and the mutual
+exclusivity with `--meeting-id`) have been removed; `--tdoc` is now a
+LIKE pattern on `tdoc_id` that can be freely combined with
+`--meeting-id` and every text or date filter. At least one filter is
+required — an empty call exits non-zero before any DB lookup.
+
 Options:
 
-- `--tdoc TDOC`: canonical TDoc identifier (e.g. `R5s260009`).
-  Repeatable for batch extraction.
-- `--tdoc-id N`: integer form of a TDoc id; resolved against the
-  `tdocs` table (PK lookup) before extraction. Repeatable. An unknown
-  id prints a warning and is skipped — the rest of the batch still runs.
-- `--meeting-id N`: batch selector that fetches every CR-type TDoc
-  stored under meeting `N` (see `doc3gpp meeting list`) and runs them
-  through the same pipeline. Without `--force` only TDocs that have
-  not yet been parsed (no row in `tdoc_cr_details`) are processed;
-  `--force` re-parses every CR-type TDoc under the meeting.
-  Mutually exclusive with `--tdoc` and `--tdoc-id`. Combinable with
-  the field filters below (only active when `--meeting-id` is used).
-- `--status PATTERN`: filter meeting TDocs by `status` (SQL `LIKE`).
-- `--cat PATTERN`: filter meeting TDocs by `cr_cat`.
-- `--spec PATTERN`: filter meeting TDocs by technical specification
-  (`spec`).
-- `--wi PATTERN`: filter meeting TDocs by `related_wis`.
-- `--revision-of PATTERN`: filter meeting TDocs by `is_revision_of`.
-- `--revised-to PATTERN`: filter meeting TDocs by `revised_to`.
-- `--title PATTERN`: filter meeting TDocs by `title`.
-- `--ftp-url PATTERN`: filter meeting TDocs by `ftp_url`.
-- `--source PATTERN`: filter meeting TDocs by source / contributor.
-- `--type PATTERN`: filter meeting TDocs by document `type`.
-- `--uploaded-date EXPR`: filter meeting TDocs by `uploaded_date`.
-  See [Filter syntax](#filter-syntax-for-meeting-id-batch) below for
-  the accepted forms (including date comparisons).
+- `--tdoc PATTERN`: SQL `LIKE` pattern on `tdoc_id`. Accepts a
+  literal id (`R5s260009` for an exact match), a pattern with `%`
+  / `_` wildcards (`R5s26%`, `R5_260001`), the literal tokens
+  `null` / `not-null`, or a `!pattern` form. The flag is singular
+  — combining multiple `--tdoc` values is not supported; build the
+  pattern instead.
+- `--meeting-id N`: exact integer match against `meetings.meeting_id`.
+  Combinable with every other filter; rows must satisfy every
+  supplied predicate.
+- `--meeting PATTERN`: SQL `LIKE` pattern on `meetings.name` (joins
+  the `meetings` table to filter the candidate set).
+- `--status PATTERN`: filter on `status`.
+- `--cr-cat PATTERN`: filter on `cr_cat` (CR category — `F`, `B`,
+  etc.). Renamed from `--cat` to mirror the column name.
+- `--spec PATTERN`: filter on technical specification (`spec`).
+- `--wi PATTERN`: filter on `related_wis`.
+- `--revision-of PATTERN`: filter on `is_revision_of`.
+- `--revised-to PATTERN`: filter on `revised_to`.
+- `--title PATTERN`: filter on `title`.
+- `--ftp-url PATTERN`: filter on `ftp_url`.
+- `--source PATTERN`: filter on source / contributor.
+- `--type PATTERN`: filter on document `type`. Defaults to `CR`
+  when no type filter is supplied (the extractor only handles CR
+  TDocs); pass an explicit `--type` to override.
+- `--uploaded-date EXPR`: filter on `uploaded_date` — see
+  [Filter syntax](#filter-syntax) for accepted forms.
 - `--force`: skip both the on-disk zip/markdown cache and the
   persisted `tdoc_cr_details` row so every id is re-fetched and
   re-parsed.
 - `--full`: reserved for the parser's `full=True` mode (pulls in
   `before_change` / `after_change` per correction). The current
-  service does not yet wire this through; accepted silently so existing
-  scripts keep parsing.
+  service does not yet wire this through; accepted silently so
+  existing scripts keep parsing.
+- `--yes` / `-y`: skip the confirmation prompt before extracting.
+  Useful in scripts and CI where an interactive prompt would block.
 
-#### Filter syntax for `--meeting-id` batch
+#### Filter syntax
 
-The ten text filters above (`--status`, `--cat`, `--spec`, `--wi`,
-`--revision-of`, `--revised-to`, `--title`, `--ftp-url`, `--source`,
-`--type`) accept the same value grammar:
+Every text-column filter above (`--tdoc`, `--meeting`, `--status`,
+`--cr-cat`, `--spec`, `--wi`, `--revision-of`, `--revised-to`,
+`--title`, `--ftp-url`, `--source`, `--type`) accepts the same value
+grammar:
 
 | Value              | Effect                                                          |
 | ------------------ | --------------------------------------------------------------- |
@@ -386,9 +398,9 @@ The ten text filters above (`--status`, `--cat`, `--spec`, `--wi`,
 
 `--uploaded-date` accepts the same `null` / `not-null` tokens plus a
 parameterised SQL comparison of the form ` "<op> 'YYYY-MM-DD'"` where
-`<op>` is one of `=`, `!=`, `<`, `<=`, `>`, `>=`. The operator and the
-date literal are bound as SQLAlchemy parameters — the date string is
-never string-interpolated into the SQL, so the surface is safe to
+`<op>` is one of `=`, `!=`, `<`, `<=`, `>`, `>=`. The operator and
+the date literal are bound as SQLAlchemy parameters — the date string
+is never string-interpolated into the SQL, so the surface is safe to
 expose to operator input. Anything else is rejected at the CLI
 boundary with a clear error before the database is touched:
 
@@ -397,10 +409,72 @@ Invalid date filter 'yesterday'. Expected 'null', 'not-null',
 or an expression like ">= 'YYYY-MM-DD'" with one of =, !=, <, <=, >, >=.
 ```
 
-The filters compose: combining several filters narrows the batch with
-`AND`. They are only active with `--meeting-id`; passing them with
-`--tdoc` or `--tdoc-id` is silently ignored (the per-id selectors do
-not need them).
+The filters compose with `AND`; combining several narrows the
+candidate set. Patterns that would scan the whole table (e.g.
+`--tdoc '%'`) are still allowed — pair them with a more specific
+filter when feasible.
+
+#### Filter → display column mapping
+
+In the confirmation prompt, the CLI renders each matched TDoc as a
+row with a base column set plus one extra column per active filter:
+
+| Filter flag         | Base / extra column       |
+| ------------------- | ------------------------- |
+| always              | `tdoc_id`, `title`, `type`, `cr_cat`, `status` |
+| `--meeting` / `--meeting-id` | extra: `meeting_name` |
+| `--spec`            | extra: `spec`             |
+| `--wi`              | extra: `related_wis`      |
+| `--revision-of`     | extra: `is_revision_of`   |
+| `--revised-to`      | extra: `revised_to`       |
+| `--ftp-url`         | extra: `ftp_url`          |
+| `--source`          | extra: `source`           |
+| `--uploaded-date`   | extra: `uploaded_date`    |
+| `--tdoc` / `--status` / `--cr-cat` / `--title` / `--type` | already in the base columns |
+
+Duplicate columns are dropped; missing values render as `-`; the
+table is truncated to the first 20 rows per group with an explicit
+`... and N more` suffix when larger.
+
+#### Confirmation prompt and completion summary
+
+After filters resolve, the CLI:
+
+1. Splits the matches into an **already-parsed** group (rows that
+   already have a `tdoc_cr_details` entry) and a **to-parse** group
+   (rows that do not). With `--force`, every match goes into the
+   to-parse group regardless of parsed status.
+2. Prints both groups with the column set above. A group with no
+   rows prints `(none)`.
+3. Unless `--yes` / `-y` was passed, prompts with `Extract N TDoc(s)?`
+   (`y/N`, default `N`). A declined prompt exits 0 with `Aborted.`
+   — no work happened, so non-zero is misleading.
+4. Dispatches the batch through `TDocCrService.extract_many`.
+5. Prints a completion summary on four counters:
+   - `Skipped (already parsed before this run): N`
+   - `Re-parsed (with --force): N`
+   - `Newly parsed: N`
+   - `Failures: N`
+   When the filter result exceeded `max_batch`, a `Remaining
+   (truncated by max_batch=…): N` line is appended with a hint to
+   re-run the same command without `--force` to continue.
+
+#### Batch limits
+
+The candidate set is capped by `Settings.tdoc_parse.max_batch`
+(default `100`, override via `[tdoc_parse] max_batch` in TOML or
+`DOC3GPP_TDOC_PARSE__MAX_BATCH` in env). When the filter result
+exceeds the cap, a warning describes the continuation flow:
+
+- Raise the cap (`DOC3GPP_TDOC_PARSE__MAX_BATCH=500` or the TOML
+  equivalent) to ingest everything in one go;
+- Re-run the same command **without** `--force` to pick up the
+  next batch — already-parsed rows are skipped so the second run
+  continues exactly where the first stopped.
+
+The cap is checked against **actual work** (`total` when `--force`
+is set, otherwise `total - already-parsed`), so a flag combination
+that mostly hits cached rows does not fire the warning.
 
 Behavior:
 
@@ -420,22 +494,18 @@ Behavior:
   The class name tells the operator *which* step failed (type guard,
   DB lookup, network, shape check) without tailing the log file; a
   full traceback is still written to the logs for debugging.
-- Final summary line: `Extracted N/M TDocs (K failures)`.
 - `--meeting-id` first validates the meeting row exists (otherwise
-  prints `Unknown meeting_id N` and exits non-zero), then asks the
-  TDoc repository for CR-type rows under it, and finally checks each
-  row's parsed status against `tdoc_cr_details` unless `--force`
-  bypasses the check. When every row is already parsed, the CLI
-  prints a "use --force to re-parse" hint and exits 0.
+  prints `Unknown meeting_id N` and exits non-zero); the rest of the
+  pipeline then runs identically to the filter-only path.
 
 Exit codes:
 
-- `0` — at least one TDoc extracted successfully (cache hits count),
-  or `--meeting-id` without `--force` had nothing new to parse.
+- `0` — at least one TDoc extracted successfully; **or** every match
+  was already parsed and there was nothing new; **or** the prompt was
+  declined before any work started.
 - `1` — every TDoc failed, **or** `python-docx` is missing and the
-  batch could not even start, **or** `--meeting-id` resolved to a
-  meeting that has no CR-type TDocs (after filters), **or** an invalid
-  `--uploaded-date` value was supplied.
+  batch could not even start, **or** the filter set matched zero
+  TDocs, **or** an invalid `--uploaded-date` value was supplied.
 
 Install the optional dependency before first use:
 
@@ -449,17 +519,17 @@ Examples:
 # Extract a single CR.
 doc3gpp tdoc parse --tdoc R5s260009
 
-# Batch extract three CRs, bypassing the on-disk cache.
-doc3gpp tdoc parse --tdoc R5s260009 --tdoc R5s260051 --tdoc R5s260135 --force
-
-# Mix string and integer selectors.
-doc3gpp tdoc parse --tdoc R5s260009 --tdoc-id 1234
+# Wildcard pattern — any TDoc id starting with the 2026 source prefix.
+doc3gpp tdoc parse --tdoc 'R5s26%' --yes
 
 # Parse every not-yet-parsed CR-type TDoc under meeting 85434.
 doc3gpp tdoc parse --meeting-id 85434
 
 # Re-parse every CR-type TDoc under the meeting (cache + DB row bypassed).
 doc3gpp tdoc parse --meeting-id 85434 --force
+
+# Combine a meeting-id scope with a tdoc-id LIKE pattern and a meeting filter.
+doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --tdoc 'R5s26%'
 
 # Narrow the batch: only 38.331 CRs sourced from Qualcomm, uploaded in Q1.
 doc3gpp tdoc parse --meeting-id 85434 \
@@ -468,13 +538,16 @@ doc3gpp tdoc parse --meeting-id 85434 \
     --uploaded-date ">= '2026-01-01'"
 
 # Re-parse CRs whose `cr_cat` is currently NULL (i.e. not yet classified).
-doc3gpp tdoc parse --meeting-id 85434 --cat null --force
+doc3gpp tdoc parse --meeting-id 85434 --cr-cat null --force
 
 # Find revisions of a known TDoc id under the meeting.
 doc3gpp tdoc parse --meeting-id 85434 --revision-of 'R5-260050'
 
 # Exclude Sidelink titles from the batch (NOT LIKE).
 doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'
+
+# Non-interactive run (script / CI): pick up after a previously truncated run.
+doc3gpp tdoc parse --meeting-id 85434 --yes
 ```
 
 ## cache Commands

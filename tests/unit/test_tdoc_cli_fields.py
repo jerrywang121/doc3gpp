@@ -74,14 +74,14 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     assert parts == ["R5s260001", "RAN5#111", "Example A", "Qualcomm", "CR", "Agreed", "F", "38.331", "18.1.0", "NR_ext"]
 
     # Text filters route through the un-suffixed (rich-filter) repo params so
-    # the CLI surface is consistent with `tdoc parse --meeting-id`.
+    # the CLI surface is consistent with `tdoc parse`.
     runner.invoke(app, [
         "tdoc", "list",
         "--source", "Q%",
         "--spec", "38.331",
         "--wi", "NR%",
         "--title", "RedCap%",
-        "--cat", "F",
+        "--cr-cat", "F",
         "--status", "Agreed",
         "--type", "CR",
     ])
@@ -98,7 +98,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     assert observed_filters["ftp_url"] is None
     assert observed_filters["uploaded_date"] is None
 
-    # New filters added for parity with `tdoc parse --meeting-id`.
+    # New filters added for parity with `tdoc parse`.
     runner.invoke(app, [
         "tdoc", "list",
         "--revision-of", "R5s260000",
@@ -133,7 +133,7 @@ def test_cli_tdoc_list_passes_not_like_prefix_unchanged(monkeypatch):
         "tdoc", "list",
         "--title", "!%Sidelink%",
         "--source", "!Qualcomm",
-        "--cat", "!F",
+        "--cr-cat", "!F",
     ])
     assert result.exit_code == 0, result.output
     assert observed["title"] == "!%Sidelink%"
@@ -158,7 +158,7 @@ def test_cli_tdoc_list_passes_null_and_not_null_tokens(monkeypatch):
 
     runner.invoke(app, [
         "tdoc", "list",
-        "--cat", "null",
+        "--cr-cat", "null",
         "--source", "not-null",
         "--spec", "38.331",
     ])

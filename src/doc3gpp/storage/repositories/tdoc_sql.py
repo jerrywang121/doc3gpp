@@ -90,13 +90,6 @@ class SQLAlchemyTDocRepository:
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
-        source_like: str | None = None,
-        spec_like: str | None = None,
-        wi_like: str | None = None,
-        title_like: str | None = None,
-        cat_like: str | None = None,
-        status_like: str | None = None,
-        type_like: str | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -118,20 +111,13 @@ class SQLAlchemyTDocRepository:
         need ``meeting_name`` should use :meth:`list_with_meeting`.
 
         Optional filters:
-        - `tsg`: filter TDoc IDs that start with the given TSG prefix.
-        - `meeting_like`: SQL LIKE pattern to apply to the meeting name.
-        - `meeting_id`: exact match on ``tdocs.meeting_id``. Combinable
-          with `meeting_like`; rows must satisfy both predicates.
-        - `year`: two-digit year embedded in the TDoc identifier.
-        - `source_like`: SQL LIKE pattern to apply to the document source field.
-        - `spec_like`: SQL LIKE pattern to filter by technical specification (spec field).
-        - `wi_like`: SQL LIKE pattern to filter by related work items (related_wis field).
-        - `title_like`: SQL LIKE pattern to filter by document title.
-        - `cat_like`: SQL LIKE pattern to filter by CR category.
-        - `status_like`: SQL LIKE pattern to filter by document status.
-        - `type_like`: SQL LIKE pattern to filter by document type.
+        - ``tsg``: filter TDoc IDs that start with the given TSG prefix.
+        - ``meeting_like``: SQL LIKE pattern to apply to the meeting name.
+        - ``meeting_id``: exact match on ``tdocs.meeting_id``. Combinable
+          with ``meeting_like``; rows must satisfy both predicates.
+        - ``year``: two-digit year embedded in the TDoc identifier.
 
-        The un-suffixed parameters (``status``, ``cr_cat``, ``spec``,
+        The remaining parameters (``status``, ``cr_cat``, ``spec``,
         ``wi``, ``revision_of``, ``revised_to``, ``title``, ``ftp_url``,
         ``source``, ``tdoc_type``, ``uploaded_date``) accept the rich
         filter syntax described in :mod:`doc3gpp.cli_filters`:
@@ -145,13 +131,6 @@ class SQLAlchemyTDocRepository:
         - ``uploaded_date`` additionally accepts ``"<op> 'YYYY-MM-DD'"``
           with ``<op>`` in ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``,
           producing a parameterised column comparison.
-
-        When both the ``*_like`` and the un-suffixed form of the same
-        column are passed (e.g. ``source_like`` and ``source``), the
-        predicates are combined with ``AND`` — narrowing rather than
-        overriding. This is intentional: callers that only need the
-        legacy surface keep working unchanged, and the new surface is
-        additive.
         """
         with self._session_factory() as session:
             stmt = select(TDocORM)
@@ -177,27 +156,6 @@ class SQLAlchemyTDocRepository:
                 if not matching_ids:
                     return []
                 stmt = stmt.where(TDocORM.tdoc_id.in_(matching_ids))
-
-            if source_like:
-                stmt = stmt.where(TDocORM.source.like(source_like))
-
-            if spec_like:
-                stmt = stmt.where(TDocORM.spec.like(spec_like))
-
-            if wi_like:
-                stmt = stmt.where(TDocORM.related_wis.like(wi_like))
-
-            if title_like:
-                stmt = stmt.where(TDocORM.title.like(title_like))
-
-            if cat_like:
-                stmt = stmt.where(TDocORM.cr_cat.like(cat_like))
-
-            if status_like:
-                stmt = stmt.where(TDocORM.status.like(status_like))
-
-            if type_like:
-                stmt = stmt.where(TDocORM.type.like(type_like))
 
             stmt = _apply_text_filter(stmt, TDocORM.status, status)
             stmt = _apply_text_filter(stmt, TDocORM.cr_cat, cr_cat)
@@ -243,13 +201,6 @@ class SQLAlchemyTDocRepository:
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
-        source_like: str | None = None,
-        spec_like: str | None = None,
-        wi_like: str | None = None,
-        title_like: str | None = None,
-        cat_like: str | None = None,
-        status_like: str | None = None,
-        type_like: str | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -274,13 +225,6 @@ class SQLAlchemyTDocRepository:
             meeting_like=meeting_like,
             meeting_id=meeting_id,
             year=year,
-            source_like=source_like,
-            spec_like=spec_like,
-            wi_like=wi_like,
-            title_like=title_like,
-            cat_like=cat_like,
-            status_like=status_like,
-            type_like=type_like,
             status=status,
             cr_cat=cr_cat,
             spec=spec,

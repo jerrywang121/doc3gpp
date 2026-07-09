@@ -1229,7 +1229,7 @@ meeting_id: int | None = typer.Option(
         tdoc_repo = build_tdoc_repository()
         cr_tdocs = tdoc_repo.list(
             meeting_id=meeting_id,
-            type_like="CR",
+            tdoc_type=tdoc_type or "CR",
             limit=_TDOC_BATCH_LIMIT,
             status=status,
             cr_cat=cat,
@@ -1240,7 +1240,6 @@ meeting_id: int | None = typer.Option(
             title=title_filter,
             ftp_url=ftp_url,
             source=source,
-            tdoc_type=tdoc_type,
             uploaded_date=uploaded_date,
         )
         if not cr_tdocs:

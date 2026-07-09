@@ -143,57 +143,59 @@ def test_list_filter_meeting_id_no_match(repo):
 
 
 def test_list_filter_source(repo):
-    res = repo.list(source_like="Qualcomm")
+    res = repo.list(source="Qualcomm")
     assert len(res) == 1
     assert res[0].source == "Qualcomm"
 
-    res = repo.list(source_like="%uawei%")
+    res = repo.list(source="%uawei%")
     assert len(res) == 1
     assert res[0].source == "Huawei"
 
 
 def test_list_filter_spec(repo):
-    res = repo.list(spec_like="38.331")
+    res = repo.list(spec="38.331")
     assert len(res) == 1
     assert res[0].spec == "38.331"
 
-    res = repo.list(spec_like="38.%")
+    res = repo.list(spec="38.%")
     assert len(res) == 2
 
 
 def test_list_filter_wi(repo):
-    res = repo.list(wi_like="%ext%")
+    res = repo.list(wi="%ext%")
     assert len(res) == 1
     assert "NR_ext" in res[0].related_wis
 
 
 def test_list_filter_title(repo):
-    res = repo.list(title_like="%RedCap%")
+    res = repo.list(title="%RedCap%")
     assert len(res) == 1
     assert "RedCap" in res[0].title
 
 
 def test_list_filter_cat(repo):
-    res = repo.list(cat_like="F")
+    res = repo.list(cr_cat="F")
     assert len(res) == 1
     assert res[0].cr_cat == "F"
 
 
 def test_list_filter_status(repo):
-    res = repo.list(status_like="Agreed")
+    res = repo.list(status="Agreed")
     assert len(res) == 1
     assert res[0].status == "Agreed"
 
 
 def test_list_filter_type(repo):
-    res = repo.list(type_like="%Discussion%")
+    res = repo.list(tdoc_type="%Discussion%")
     assert len(res) == 1
     assert "Discussion" in res[0].type
 
 
 # Rich filter surface (text nullability + date operators) used by
-# `tdoc parse --meeting-id`. The legacy `*_like` parameters are
-# tested separately above.
+# `tdoc parse --meeting-id`. The un-suffixed params accept the grammar
+# from `cli_filters.py`: `null` / `not-null` match nullability, a
+# leading `!` flips to `NOT LIKE`, anything else is a `LIKE` pattern.
+# Date-specific cases (`uploaded_date` ops + invalid form) live below.
 
 
 def test_list_filter_status_null_token(repo):
@@ -208,6 +210,34 @@ def test_list_filter_cr_cat_null_token(repo):
     res = repo.list(cr_cat="null")
     assert len(res) == 1
     assert res[0].tdoc_id == "S2-260100"
+
+
+@pytest.mark.parametrize(
+    ("param_name", "expected_null", "expected_notnull", "not_like_value", "expected_notlike"),
+    [
+        # Only `cr_cat` has a NULL in the fixture; the rest are fully populated.
+        ("status", 0, 3, "!Agreed", 2),
+        ("cr_cat", 1, 2, "!F", 1),  # S2 row's NULL is excluded by NOT LIKE.
+        ("spec", 0, 3, "!38.331", 2),
+        ("wi", 0, 3, "!NR_ext", 2),
+        ("title", 0, 3, "!%Sidelink%", 2),
+        ("source", 0, 3, "!Ericsson", 2),
+        ("tdoc_type", 0, 3, "!CR", 1),  # matches "Discussion Paper" only.
+    ],
+)
+def test_list_filter_rich_grammar_per_column(
+    repo, param_name, expected_null, expected_notnull, not_like_value, expected_notlike
+):
+    """Each un-suffixed text-filter param accepts the full `cli_filters`
+    grammar: `null` / `not-null` for nullability, a leading `!` to
+    negate as `NOT LIKE`. The `!` is consumed before the pattern is
+    bound, and SQL's three-valued logic means `NULL NOT LIKE 'x'` is
+    NULL (treated as false), so the negated filter excludes NULL rows
+    from the result set.
+    """
+    assert len(repo.list(**{param_name: "null"})) == expected_null
+    assert len(repo.list(**{param_name: "not-null"})) == expected_notnull
+    assert len(repo.list(**{param_name: not_like_value})) == expected_notlike
 
 
 def test_list_filter_revision_of_like_pattern(repo):
@@ -255,7 +285,7 @@ def test_list_filter_source_like_pattern(repo):
 
 
 def test_list_filter_tdoc_type_like_pattern(repo):
-    """`tdoc_type` is the un-suffixed alias for `type_like`."""
+    """`tdoc_type` accepts a LIKE pattern matching the `type` column."""
     res = repo.list(tdoc_type="Discussion Paper")
     assert len(res) == 1
     assert res[0].tdoc_id == "S2-260100"
@@ -304,10 +334,10 @@ def test_list_filter_uploaded_date_invalid_raises(repo):
         repo.list(uploaded_date="== '2026-02-31'")
 
 
-def test_list_filter_text_and_like_combine_with_and(repo):
-    """The `*_like` and un-suffixed forms are combined with AND when
-    both are passed — narrowing rather than overriding."""
-    res = repo.list(meeting_like="RAN5%", type_like="CR", status="Agreed")
+def test_list_filter_combined_rich_params_and(repo):
+    """Multiple rich-filter parameters AND-combine on different columns
+    (here: meeting name, tdoc type, and status)."""
+    res = repo.list(meeting_like="RAN5%", tdoc_type="CR", status="Agreed")
     assert len(res) == 1
     assert res[0].tdoc_id == "R5-260001"
 

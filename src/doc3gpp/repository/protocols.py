@@ -45,13 +45,6 @@ class TDocRepository(Protocol):
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
-        source_like: str | None = None,
-        spec_like: str | None = None,
-        wi_like: str | None = None,
-        title_like: str | None = None,
-        cat_like: str | None = None,
-        status_like: str | None = None,
-        type_like: str | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -73,16 +66,14 @@ class TDocRepository(Protocol):
         - ``meeting_id``: exact match against ``tdocs.meeting_id``. Can
           be combined with ``meeting_like``; rows must satisfy both.
         - ``year``: two-digit year code embedded in the TDoc identifier.
-        - The ``*_like`` parameters are SQL ``LIKE`` patterns for
-          matching text columns (legacy surface used by ``tdoc list``).
-        - The un-suffixed parameters accept the rich filter syntax
+        - The remaining parameters accept the rich filter syntax
           described in :mod:`doc3gpp.cli_filters` — ``null`` /
-          ``not-null`` match the nullability, anything else is treated
-          as a ``LIKE`` pattern, and ``uploaded_date`` additionally
-          accepts a ``"<op> 'YYYY-MM-DD'"`` comparison. These are the
-          surface used by ``tdoc parse --meeting-id``. ``tdoc_type``
-          is the un-suffixed alias for ``type_like`` (the latter name
-          would shadow the parameter declaration).
+          ``not-null`` match the column's nullability, a leading ``!``
+          flips the comparison to ``NOT LIKE`` (with the ``!``
+          consumed), and anything else is treated as a ``LIKE`` pattern.
+          ``uploaded_date`` additionally accepts a
+          ``"<op> 'YYYY-MM-DD'"`` comparison with ``<op>`` in
+          ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``.
 
         Pure persistence shape — no joined meeting metadata. Callers that
         need a human-readable meeting name should use :meth:`list_with_meeting`.
@@ -106,13 +97,6 @@ class TDocRepository(Protocol):
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
-        source_like: str | None = None,
-        spec_like: str | None = None,
-        wi_like: str | None = None,
-        title_like: str | None = None,
-        cat_like: str | None = None,
-        status_like: str | None = None,
-        type_like: str | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,

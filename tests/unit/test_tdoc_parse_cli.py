@@ -84,7 +84,7 @@ class _FakeTDocRepoList:
     ``get_by_id`` returns ``None`` so a stray ``--tdoc-id`` lookup
     surfaces as a miss; ``list`` returns the pre-seeded ``_list_tdocs``
     list verbatim and records every call's kwargs so the test can
-    assert the CLI asked for ``type_like="CR"`` with the right
+    assert the CLI asked for ``tdoc_type="CR"`` with the right
     ``meeting_id``.
     """
 
@@ -163,7 +163,7 @@ def _patch_tdoc_repo_for_listing(
     """Stub ``build_tdoc_repository`` so ``--meeting-id`` can call ``list()``.
 
     Records every ``list`` call so the test can assert the meeting-id
-    branch queried for ``type_like="CR"`` with the expected ``meeting_id``
+    branch queried for ``tdoc_type="CR"`` with the expected ``meeting_id``
     and a positive ``limit``. Only ``list`` is exercised; ``get_by_id``
     returns ``None`` so a stray ``--tdoc-id`` lookup surfaces as a miss.
     """
@@ -474,7 +474,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
     assert tdoc_repo.list_calls == [
         {
             "meeting_id": meeting_id,
-            "type_like": "CR",
+            "tdoc_type": "CR",
             "limit": 10_000,
             "status": None,
             "cr_cat": None,
@@ -485,7 +485,6 @@ def test_tdoc_parse_meeting_id_parses_new_only(
             "title": None,
             "ftp_url": None,
             "source": None,
-            "tdoc_type": None,
             "uploaded_date": None,
         },
     ]

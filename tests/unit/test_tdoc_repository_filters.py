@@ -48,6 +48,10 @@ def insert_data(session):
             is_revision_of=None,
             revised_to="R5-260050",
             spec="38.331",
+            release="Rel-18",
+            version="18.1.0",
+            cr_num="3790",
+            cr_pack="RP-220001",
             related_wis="NR_ext",
         ),
         TDocORM(
@@ -64,6 +68,10 @@ def insert_data(session):
             is_revision_of=None,
             revised_to=None,
             spec="38.523-1",
+            release="Rel-18",
+            version="18.2.0",
+            cr_num="3791",
+            cr_pack="RP-220002",
             related_wis="NR_core",
         ),
         TDocORM(
@@ -80,6 +88,10 @@ def insert_data(session):
             is_revision_of=None,
             revised_to=None,
             spec="23.501",
+            release=None,  # NULL release to exercise the not-null branch.
+            version=None,
+            cr_num=None,
+            cr_pack=None,
             related_wis="SL_enh",
         ),
     ]
@@ -397,3 +409,180 @@ def test_list_filter_not_like_null_column_excluded(repo):
     returns zero rows."""
     assert len(repo.list(ftp_url="tsg_ran/%")) == 2
     assert repo.list(ftp_url="!tsg_ran/%") == []
+
+
+# ---------------------------------------------------------------------------
+# New text-column filters: release / version / cr_num / cr_pack.
+# Each accepts the full rich grammar (LIKE / null / not-null / NOT LIKE)
+# shared with the other text columns. The fixture seeds the two R5
+# rows with values and leaves the S2 row's columns NULL so the null
+# / not-null branches have something to discriminate against.
+# ---------------------------------------------------------------------------
+
+
+def test_list_filter_release_like(repo):
+    """`release="Rel-18"` matches the two RAN5 rows (literal LIKE
+    without wildcards matches the exact value)."""
+    res = repo.list(release="Rel-18")
+    assert len(res) == 2
+    assert {t.tdoc_id for t in res} == {"R5-260001", "R5-260002"}
+
+
+def test_list_filter_release_pattern(repo):
+    """`release="Rel-%"` matches the two RAN5 rows whose release
+    starts with ``Rel-``."""
+    res = repo.list(release="Rel-%")
+    assert len(res) == 2
+    assert all(t.release and t.release.startswith("Rel-") for t in res)
+
+
+def test_list_filter_release_null_token(repo):
+    """`release="null"` matches the one row with a NULL release
+    (S2-260100). The other two rows are excluded."""
+    res = repo.list(release="null")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "S2-260100"
+
+
+def test_list_filter_release_not_null_token(repo):
+    """`release="not-null"` matches every row whose release is set;
+    the two RAN5 rows qualify, the S2 row (NULL release) is excluded."""
+    res = repo.list(release="not-null")
+    assert len(res) == 2
+    assert all(t.release is not None for t in res)
+
+
+def test_list_filter_release_not_like(repo):
+    """`release="!Rel-18"` emits ``NOT LIKE 'Rel-18'``; the two RAN5
+    rows whose release is exactly ``Rel-18`` are excluded. SQL's
+    three-valued logic excludes NULL rows from the result set, so
+    only the S2 row is returned (but only if release were non-NULL —
+    in this fixture release is NULL for the S2 row, so the negated
+    filter returns zero rows)."""
+    assert len(repo.list(release="Rel-18")) == 2
+    assert repo.list(release="!Rel-18") == []
+
+
+def test_list_filter_version_like(repo):
+    """`version="18.1.0"` matches the one RAN5 row with that exact
+    version literal."""
+    res = repo.list(version="18.1.0")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "R5-260001"
+    assert res[0].version == "18.1.0"
+
+
+def test_list_filter_version_pattern(repo):
+    """`version="18.%"` matches the two RAN5 rows whose version
+    starts with ``18.``."""
+    res = repo.list(version="18.%")
+    assert len(res) == 2
+    assert all(t.version and t.version.startswith("18.") for t in res)
+
+
+def test_list_filter_version_null_token(repo):
+    """`version="null"` matches the one row with a NULL version."""
+    res = repo.list(version="null")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "S2-260100"
+
+
+def test_list_filter_version_not_null_token(repo):
+    """`version="not-null"` matches every row whose version is set."""
+    res = repo.list(version="not-null")
+    assert len(res) == 2
+    assert all(t.version is not None for t in res)
+
+
+def test_list_filter_version_not_like(repo):
+    """`version="!18.%"` emits ``NOT LIKE '18.%'`` and excludes the
+    two RAN5 rows whose version starts with ``18.``. The S2 row has
+    a NULL version, which is excluded by SQL's three-valued logic,
+    so the negated filter returns zero rows."""
+    assert len(repo.list(version="18.%")) == 2
+    assert repo.list(version="!18.%") == []
+
+
+def test_list_filter_cr_num_like(repo):
+    """`cr_num="3790"` matches the one RAN5 row with that exact
+    cr_num literal."""
+    res = repo.list(cr_num="3790")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "R5-260001"
+    assert res[0].cr_num == "3790"
+
+
+def test_list_filter_cr_num_pattern(repo):
+    """`cr_num="379%"` matches both RAN5 rows whose cr_num starts
+    with ``379``."""
+    res = repo.list(cr_num="379%")
+    assert len(res) == 2
+    assert all(t.cr_num and t.cr_num.startswith("379") for t in res)
+
+
+def test_list_filter_cr_num_null_token(repo):
+    """`cr_num="null"` matches the one row with a NULL cr_num."""
+    res = repo.list(cr_num="null")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "S2-260100"
+
+
+def test_list_filter_cr_num_not_null_token(repo):
+    """`cr_num="not-null"` matches every row whose cr_num is set."""
+    res = repo.list(cr_num="not-null")
+    assert len(res) == 2
+    assert all(t.cr_num is not None for t in res)
+
+
+def test_list_filter_cr_num_not_like(repo):
+    """`cr_num="!379%"` emits ``NOT LIKE '379%'`` and excludes the
+    two RAN5 rows. The S2 row's NULL cr_num is excluded by SQL's
+    three-valued logic, so the negated filter returns zero rows."""
+    assert len(repo.list(cr_num="379%")) == 2
+    assert repo.list(cr_num="!379%") == []
+
+
+def test_list_filter_cr_pack_like(repo):
+    """`cr_pack="RP-%"` matches the two RAN5 rows whose cr_pack
+    starts with ``RP-``."""
+    res = repo.list(cr_pack="RP-%")
+    assert len(res) == 2
+    assert all(t.cr_pack and t.cr_pack.startswith("RP-") for t in res)
+
+
+def test_list_filter_cr_pack_exact(repo):
+    """`cr_pack="RP-220001"` (no wildcards) matches via SQL LIKE."""
+    res = repo.list(cr_pack="RP-220001")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "R5-260001"
+    assert res[0].cr_pack == "RP-220001"
+
+
+def test_list_filter_cr_pack_null_token(repo):
+    """`cr_pack="null"` matches the one row with a NULL cr_pack."""
+    res = repo.list(cr_pack="null")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "S2-260100"
+
+
+def test_list_filter_cr_pack_not_null_token(repo):
+    """`cr_pack="not-null"` matches every row whose cr_pack is set."""
+    res = repo.list(cr_pack="not-null")
+    assert len(res) == 2
+    assert all(t.cr_pack is not None for t in res)
+
+
+def test_list_filter_cr_pack_not_like(repo):
+    """`cr_pack="!RP-%"` emits ``NOT LIKE 'RP-%'`` and excludes the
+    two RAN5 rows. SQL's three-valued logic excludes NULL cr_pack
+    rows, so the negated filter returns zero rows."""
+    assert len(repo.list(cr_pack="RP-%")) == 2
+    assert repo.list(cr_pack="!RP-%") == []
+
+
+def test_list_filter_combined_release_and_cr_num(repo):
+    """Multiple new-filter parameters AND-combine on different
+    columns (here: release and cr_num)."""
+    res = repo.list(release="Rel-18", cr_num="3790")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "R5-260001"

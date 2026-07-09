@@ -812,6 +812,38 @@ def tdoc_list(
             "Pass 'null' or 'not-null' to match NULL / NOT NULL ftp_url rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
+    release: str | None = typer.Option(
+        None,
+        "--release",
+        help=(
+            "Filter by `release` (SQL LIKE pattern; supports % and _). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL release rows; prefix with '!' (e.g. '!%Rel-18%') to negate as NOT LIKE."
+        ),
+    ),
+    version: str | None = typer.Option(
+        None,
+        "--version",
+        help=(
+            "Filter by `version` (SQL LIKE pattern; supports % and _). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL version rows; prefix with '!' (e.g. '!18.%') to negate as NOT LIKE."
+        ),
+    ),
+    cr_num: str | None = typer.Option(
+        None,
+        "--cr-num",
+        help=(
+            "Filter by `cr_num` (SQL LIKE pattern; supports % and _). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_num rows; prefix with '!' (e.g. '!%3790%') to negate as NOT LIKE."
+        ),
+    ),
+    cr_pack: str | None = typer.Option(
+        None,
+        "--cr-pack",
+        help=(
+            "Filter by `cr_pack` (SQL LIKE pattern; supports % and _). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_pack rows; prefix with '!' (e.g. '!%RP-%') to negate as NOT LIKE."
+        ),
+    ),
     uploaded_date: str | None = typer.Option(
         None,
         "--uploaded-date",
@@ -857,7 +889,8 @@ def tdoc_list(
 
     The text-column filters (``--source``, ``--spec``, ``--wi``, ``--title``,
     ``--cr-cat``, ``--status``, ``--type``, ``--revision-of``, ``--revised-to``,
-    ``--ftp-url``) each accept a SQL ``LIKE`` pattern (with ``%`` / ``_``
+    ``--ftp-url``, ``--release``, ``--version``, ``--cr-num``, ``--cr-pack``)
+    each accept a SQL ``LIKE`` pattern (with ``%`` / ``_``
     wildcards) and additionally the literal tokens ``null`` / ``not-null``
     to match the column's nullability. A leading ``!`` flips the
     comparison to ``NOT LIKE`` — the ``!`` is consumed and the
@@ -908,7 +941,8 @@ def tdoc_list(
     logger.info(
         "Listing %s recent TDocs with filters tdoc=%s meeting=%s meeting_id=%s "
         "source=%s spec=%s wi=%s title=%s cr_cat=%s status=%s type=%s "
-        "revision_of=%s revised_to=%s ftp_url=%s uploaded_date=%s",
+        "revision_of=%s revised_to=%s ftp_url=%s release=%s version=%s "
+        "cr_num=%s cr_pack=%s uploaded_date=%s",
         limit,
         tdoc,
         meeting,
@@ -923,6 +957,10 @@ def tdoc_list(
         revision_of,
         revised_to,
         ftp_url,
+        release,
+        version,
+        cr_num,
+        cr_pack,
         uploaded_date,
     )
 
@@ -943,6 +981,10 @@ def tdoc_list(
         revision_of=revision_of,
         revised_to=revised_to,
         ftp_url=ftp_url,
+        release=release,
+        version=version,
+        cr_num=cr_num,
+        cr_pack=cr_pack,
         uploaded_date=uploaded_date,
     )
 
@@ -1099,6 +1141,38 @@ def tdoc_parse(
             "Pass 'null' or 'not-null' to match NULL / NOT NULL ftp_url rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
         ),
     ),
+    release: str | None = typer.Option(
+        None,
+        "--release",
+        help=(
+            "Filter by `release` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL release rows; prefix with '!' (e.g. '!%Rel-18%') to negate as NOT LIKE."
+        ),
+    ),
+    version: str | None = typer.Option(
+        None,
+        "--version",
+        help=(
+            "Filter by `version` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL version rows; prefix with '!' (e.g. '!18.%') to negate as NOT LIKE."
+        ),
+    ),
+    cr_num: str | None = typer.Option(
+        None,
+        "--cr-num",
+        help=(
+            "Filter by `cr_num` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_num rows; prefix with '!' (e.g. '!%3790%') to negate as NOT LIKE."
+        ),
+    ),
+    cr_pack: str | None = typer.Option(
+        None,
+        "--cr-pack",
+        help=(
+            "Filter by `cr_pack` (LIKE pattern). "
+            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_pack rows; prefix with '!' (e.g. '!%RP-%') to negate as NOT LIKE."
+        ),
+    ),
     source: str | None = typer.Option(
         None,
         "--source",
@@ -1220,6 +1294,10 @@ def tdoc_parse(
         "revised_to": revised_to,
         "title": title_filter,
         "ftp_url": ftp_url,
+        "release": release,
+        "version": version,
+        "cr_num": cr_num,
+        "cr_pack": cr_pack,
         "source": source,
         "tdoc_type": tdoc_type,
         "uploaded_date": uploaded_date,
@@ -1228,7 +1306,8 @@ def tdoc_parse(
         raise typer.BadParameter(
             "Specify at least one filter (--tdoc, --meeting-id, --meeting, "
             "--status, --cr-cat, --spec, --wi, --revision-of, --revised-to, "
-            "--title, --ftp-url, --source, --type, --uploaded-date)."
+            "--title, --ftp-url, --release, --version, --cr-num, --cr-pack, "
+            "--source, --type, --uploaded-date)."
         )
 
     if uploaded_date is not None:
@@ -1262,6 +1341,10 @@ def tdoc_parse(
         revised_to=revised_to,
         title=title_filter,
         ftp_url=ftp_url,
+        release=release,
+        version=version,
+        cr_num=cr_num,
+        cr_pack=cr_pack,
         source=source,
         uploaded_date=uploaded_date,
     )
@@ -1386,6 +1469,10 @@ _FILTER_TO_PARSE_COLUMN: dict[str, str] = {
     "revision_of": "is_revision_of",
     "revised_to": "revised_to",
     "ftp_url": "ftp_url",
+    "release": "release",
+    "version": "version",
+    "cr_num": "cr_num",
+    "cr_pack": "cr_pack",
     "source": "source",
     "uploaded_date": "uploaded_date",
     "meeting_id": "meeting_name",

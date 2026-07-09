@@ -99,6 +99,10 @@ class SQLAlchemyTDocRepository:
         source: str | None = None,
         tdoc_type: str | None = None,
         uploaded_date: str | None = None,
+        release: str | None = None,
+        version: str | None = None,
+        cr_num: str | None = None,
+        cr_pack: str | None = None,
     ) -> list[TDoc]:
         """Return recent TDoc records ordered by descending ``tdoc_id``.
 
@@ -119,7 +123,8 @@ class SQLAlchemyTDocRepository:
 
         The remaining parameters (``status``, ``cr_cat``, ``spec``,
         ``wi``, ``revision_of``, ``revised_to``, ``title``, ``ftp_url``,
-        ``source``, ``tdoc_type``, ``uploaded_date``) accept the rich
+        ``source``, ``tdoc_type``, ``uploaded_date``, ``release``,
+        ``version``, ``cr_num``, ``cr_pack``) accept the rich
         filter syntax described in :mod:`doc3gpp.cli_filters`:
 
         - the literal token ``null`` matches rows whose column is NULL;
@@ -155,6 +160,10 @@ class SQLAlchemyTDocRepository:
             stmt = _apply_text_filter(stmt, TDocORM.ftp_url, ftp_url)
             stmt = _apply_text_filter(stmt, TDocORM.source, source)
             stmt = _apply_text_filter(stmt, TDocORM.type, tdoc_type)
+            stmt = _apply_text_filter(stmt, TDocORM.release, release)
+            stmt = _apply_text_filter(stmt, TDocORM.version, version)
+            stmt = _apply_text_filter(stmt, TDocORM.cr_num, cr_num)
+            stmt = _apply_text_filter(stmt, TDocORM.cr_pack, cr_pack)
             stmt = _apply_date_filter(stmt, TDocORM.uploaded_date, uploaded_date)
 
             stmt = stmt.order_by(TDocORM.tdoc_id.desc()).limit(limit)
@@ -199,6 +208,10 @@ class SQLAlchemyTDocRepository:
         source: str | None = None,
         tdoc_type: str | None = None,
         uploaded_date: str | None = None,
+        release: str | None = None,
+        version: str | None = None,
+        cr_num: str | None = None,
+        cr_pack: str | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its parent meeting's name.
 
@@ -222,6 +235,10 @@ class SQLAlchemyTDocRepository:
             source=source,
             tdoc_type=tdoc_type,
             uploaded_date=uploaded_date,
+            release=release,
+            version=version,
+            cr_num=cr_num,
+            cr_pack=cr_pack,
         )
         if not tdocs:
             return []

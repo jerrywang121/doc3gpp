@@ -558,6 +558,10 @@ def test_tdoc_parse_meeting_id_parses_new_only(
         "revised_to": None,
         "title": None,
         "ftp_url": None,
+        "release": None,
+        "version": None,
+        "cr_num": None,
+        "cr_pack": None,
         "source": None,
         "uploaded_date": None,
     }
@@ -908,6 +912,10 @@ def test_tdoc_parse_rejects_bad_date_operator(_meeting_with_cr_tdocs) -> None:
         ("--ftp-url", "ftp_url"),
         ("--source", "source"),
         ("--type", "tdoc_type"),
+        ("--release", "release"),
+        ("--version", "version"),
+        ("--cr-num", "cr_num"),
+        ("--cr-pack", "cr_pack"),
     ],
 )
 def test_tdoc_parse_passes_text_filters(
@@ -935,6 +943,10 @@ def test_tdoc_parse_passes_text_filters(
         ("--revision-of", "revision_of"),
         ("--revised-to", "revised_to"),
         ("--ftp-url", "ftp_url"),
+        ("--release", "release"),
+        ("--version", "version"),
+        ("--cr-num", "cr_num"),
+        ("--cr-pack", "cr_pack"),
     ],
 )
 def test_tdoc_parse_passes_not_like_prefix(
@@ -972,6 +984,33 @@ def test_tdoc_parse_combines_filters(_meeting_with_cr_tdocs) -> None:
     assert call["status"] == "Agreed"
     assert call["spec"] == "38.%"
     assert call["uploaded_date"] == "< '2026-12-31'"
+
+
+def test_tdoc_parse_passes_null_and_not_null_for_new_filters(
+    _meeting_with_cr_tdocs,
+) -> None:
+    """`--release`, `--version`, `--cr-num`, `--cr-pack` all accept
+    `null` / `not-null` literal tokens for column nullability,
+    consistent with the rest of the text-column filter surface."""
+    ns = _meeting_with_cr_tdocs
+    result = ns.runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(ns.meeting_id),
+            "--release", "null",
+            "--version", "not-null",
+            "--cr-num", "null",
+            "--cr-pack", "not-null",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    call = ns.tdoc_repo.list_with_meeting_calls[0]
+    assert call["release"] == "null"
+    assert call["version"] == "not-null"
+    assert call["cr_num"] == "null"
+    assert call["cr_pack"] == "not-null"
 
 
 def test_tdoc_parse_tdoc_and_meeting_id_combine(sqlite_env, monkeypatch) -> None:

@@ -243,6 +243,10 @@ Options:
 - --revision-of: filter by `is_revision_of`.
 - --revised-to: filter by `revised_to`.
 - --ftp-url: filter by `ftp_url`.
+- --release: filter by `release` (e.g. `Rel-18`).
+- --version: filter by `version` (e.g. `18.1.0`).
+- --cr-num: filter by `cr_num` (e.g. `3790`).
+- --cr-pack: filter by `cr_pack` (e.g. `RP-220001`).
 - --uploaded-date: filter by `uploaded_date`. See
   [Filter syntax](#filter-syntax) below for the
   accepted forms (including date comparisons).
@@ -387,6 +391,14 @@ Options:
 - `--type PATTERN`: filter on document `type`. Defaults to `CR`
   when no type filter is supplied (the extractor only handles CR
   TDocs); pass an explicit `--type` to override.
+- `--release PATTERN`: filter on the TDoc's `release` (e.g.
+  `Rel-18`). Accepts the same rich-filter grammar as `--spec`.
+- `--version PATTERN`: filter on `version` (e.g. `18.1.0`).
+  Accepts the same rich-filter grammar as `--spec`.
+- `--cr-num PATTERN`: filter on `cr_num` (e.g. `3790`).
+  Accepts the same rich-filter grammar as `--spec`.
+- `--cr-pack PATTERN`: filter on `cr_pack` (e.g. `RP-220001`).
+  Accepts the same rich-filter grammar as `--spec`.
 - `--uploaded-date EXPR`: filter on `uploaded_date` — see
   [Filter syntax](#filter-syntax) for accepted forms.
 - `--force`: skip both the on-disk zip/markdown cache and the
@@ -403,7 +415,8 @@ Options:
 
 Every text-column filter above (`--tdoc`, `--meeting`, `--status`,
 `--cr-cat`, `--spec`, `--wi`, `--revision-of`, `--revised-to`,
-`--title`, `--ftp-url`, `--source`, `--type`) accepts the same value
+`--title`, `--ftp-url`, `--source`, `--type`, `--release`,
+`--version`, `--cr-num`, `--cr-pack`) accepts the same value
 grammar:
 
 | Value              | Effect                                                          |
@@ -445,6 +458,10 @@ row with a base column set plus one extra column per active filter:
 | `--revision-of`     | extra: `is_revision_of`   |
 | `--revised-to`      | extra: `revised_to`       |
 | `--ftp-url`         | extra: `ftp_url`          |
+| `--release`         | extra: `release`          |
+| `--version`         | extra: `version`          |
+| `--cr-num`          | extra: `cr_num`           |
+| `--cr-pack`         | extra: `cr_pack`          |
 | `--source`          | extra: `source`           |
 | `--uploaded-date`   | extra: `uploaded_date`    |
 | `--tdoc` / `--status` / `--cr-cat` / `--title` / `--type` | already in the base columns |

@@ -227,6 +227,7 @@ doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts to conf
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes         # LIKE pattern on tdoc_id; non-interactive
 doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --cr-cat F
 doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'  # NOT LIKE
+doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
 doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything under the meeting
 doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name

@@ -309,15 +309,19 @@ seventeen commands):
       `TDocSyncCoordinator`
     - `list` — filters by `--tdoc`, `--meeting`, `--meeting-id`,
       `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`,
-      `--revision-of`, `--revised-to`, `--ftp-url`, `--uploaded-date`.
+      `--revision-of`, `--revised-to`, `--ftp-url`, `--release`, `--version`,
+      `--cr-num`, `--cr-pack`, `--uploaded-date`.
       Text-column filters accept the rich grammar from
       `src/doc3gpp/cli_filters.py` (`null` / `not-null` / `!<pattern>` for
       `NOT LIKE` / SQL `LIKE`); `--uploaded-date` additionally accepts
       `OP 'YYYY-MM-DD'` parameterised comparisons — the same surface
-      `tdoc parse --meeting-id` exposes.
-    - `parse` — `--tdoc` / `--tdoc-id` (repeatable), `--meeting-id`
-      (batch + combinable field filters), `--force`, `--full`; batch
-      extraction with per-id failure isolation
+      `tdoc parse` exposes.
+    - `parse` — `--tdoc` (LIKE pattern on `tdoc_id`), `--meeting-id`,
+      `--meeting`, plus every text-column filter and `--uploaded-date`;
+      `--force` re-extracts already-parsed rows, `--full` is reserved
+      for the parser's `full=True` mode. End-to-end filter-driven:
+      candidates are the intersection of every supplied predicate, with
+      CR-type as the implicit default and a `max_batch` cap.
     - `show` — `--tdoc`; renders the matching TDoc and, when present,
       a `[Extracted Details]` block from `tdoc_cr_details`
 - `tsg`:

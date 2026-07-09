@@ -222,8 +222,13 @@ Options:
 
 - --limit: maximum number of rows.
   - default: 20
-- --tsg: filter TDoc IDs by TSG prefix (e.g. R5, S2).
-- --year: filter by the two-digit year code embedded in the TDoc identifier.
+- --tdoc: SQL `LIKE` pattern on `tdoc_id` (e.g. `R5s26%` for every TDoc
+  in the RAN5 2026 cycle, or `R5s260009` for an exact id). Accepts the
+  same value grammar as `tdoc parse --tdoc` (see
+  [Filter syntax](#filter-syntax) below) — the literal tokens
+  `null` / `not-null`, a `!pattern` form, or any other text applied as
+  a LIKE pattern with `%` / `_` wildcards. The flag is singular;
+  combine with other filters instead of passing it twice.
 - --meeting: SQL LIKE pattern to filter by meeting name (supports % and _).
 - --meeting-id: exact match on the parent meeting's numeric ID (see
   `doc3gpp meeting list`). Combinable with `--meeting`; rows must satisfy
@@ -239,7 +244,7 @@ Options:
 - --revised-to: filter by `revised_to`.
 - --ftp-url: filter by `ftp_url`.
 - --uploaded-date: filter by `uploaded_date`. See
-  [Filter syntax](#filter-syntax-for-text-and-date-filters) below for the
+  [Filter syntax](#filter-syntax) below for the
   accepted forms (including date comparisons).
 - --fields: comma-separated list of fields to include in output, or `all`.
 - --format: see "Common list output options" below (table | json | markdown).
@@ -250,6 +255,18 @@ Default output fields:
 - `tdoc_id`, `meeting_name`, `title`, `source`, `type`, `status`, `cr_cat`, `spec`, `version`, `related_wis`
 
 Examples:
+
+- Match every RAN5 2026 TDoc (`--tdoc` LIKE pattern):
+
+```bash
+doc3gpp tdoc list --tdoc 'R5s26%'
+```
+
+- Exclude all RAN5 TDocs from the result (`--tdoc` NOT LIKE):
+
+```bash
+doc3gpp tdoc list --tdoc '!R5s%'
+```
 
 - List TDocs from Qualcomm:
 

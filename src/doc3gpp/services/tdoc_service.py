@@ -19,10 +19,9 @@ class TDocService:
     def list_recent_with_meeting(
         self,
         limit: int = 20,
-        tsg: str | None = None,
+        tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
-        year: int | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -46,13 +45,15 @@ class TDocService:
         ``NOT LIKE`` (with the ``!`` consumed), and anything else is
         treated as a ``LIKE`` pattern. ``uploaded_date`` additionally
         accepts a ``"<op> 'YYYY-MM-DD'"`` comparison.
+
+        ``tdoc_id`` is the LIKE pattern against ``tdocs.tdoc_id`` and
+        mirrors the ``--tdoc`` flag on ``tdoc parse`` / ``tdoc list``.
         """
         return self._repository.list_with_meeting(
             limit=limit,
-            tsg=tsg,
+            tdoc_id=tdoc_id,
             meeting_like=meeting_like,
             meeting_id=meeting_id,
-            year=year,
             status=status,
             cr_cat=cr_cat,
             spec=spec,

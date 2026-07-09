@@ -9,7 +9,6 @@ from doc3gpp.cli_filters import (
     split_not_like_prefix,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.parsers.tdoc_parser import tdoc_id_year
 from doc3gpp.storage.db.models import TDocORM, MeetingORM
 from doc3gpp.storage.db.session import get_session_factory
 
@@ -86,11 +85,9 @@ class SQLAlchemyTDocRepository:
     def list(
         self,
         limit: int = 20,
-        tsg: str | None = None,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
-        year: int | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -112,14 +109,13 @@ class SQLAlchemyTDocRepository:
         need ``meeting_name`` should use :meth:`list_with_meeting`.
 
         Optional filters:
-        - ``tsg``: filter TDoc IDs that start with the given TSG prefix.
         - ``tdoc_id``: SQL ``LIKE`` pattern against ``tdocs.tdoc_id``
           (rich-filter grammar — ``null`` / ``not-null`` /
-          ``!pattern`` / plain LIKE).
+          ``!pattern`` / plain LIKE). The same parameter powers the
+          ``--tdoc`` flag on both ``tdoc list`` and ``tdoc parse``.
         - ``meeting_like``: SQL LIKE pattern to apply to the meeting name.
         - ``meeting_id``: exact match on ``tdocs.meeting_id``. Combinable
           with ``meeting_like``; rows must satisfy both predicates.
-        - ``year``: two-digit year embedded in the TDoc identifier.
 
         The remaining parameters (``status``, ``cr_cat``, ``spec``,
         ``wi``, ``revision_of``, ``revised_to``, ``title``, ``ftp_url``,
@@ -139,9 +135,6 @@ class SQLAlchemyTDocRepository:
         with self._session_factory() as session:
             stmt = select(TDocORM)
 
-            if tsg:
-                stmt = stmt.where(TDocORM.tdoc_id.ilike(f"{tsg}%"))
-
             if meeting_like:
                 # join meetings to filter by meeting name
                 stmt = stmt.join(MeetingORM, TDocORM.meeting_id == MeetingORM.meeting_id).where(
@@ -150,16 +143,6 @@ class SQLAlchemyTDocRepository:
 
             if meeting_id is not None:
                 stmt = stmt.where(TDocORM.meeting_id == meeting_id)
-
-            if year is not None:
-                # Decode the year in Python so the SQL doesn't depend on
-                # CR_ID_RE's exact shape. Project just the id column for the
-                # candidate scan; this is cheap on the indexed unique column.
-                candidate_ids = session.scalars(select(TDocORM.tdoc_id)).all()
-                matching_ids = [tid for tid in candidate_ids if tdoc_id_year(tid) == year]
-                if not matching_ids:
-                    return []
-                stmt = stmt.where(TDocORM.tdoc_id.in_(matching_ids))
 
             stmt = _apply_text_filter(stmt, TDocORM.tdoc_id, tdoc_id)
             stmt = _apply_text_filter(stmt, TDocORM.status, status)
@@ -202,11 +185,9 @@ class SQLAlchemyTDocRepository:
     def list_with_meeting(
         self,
         limit: int = 20,
-        tsg: str | None = None,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
-        year: int | None = None,
         status: str | None = None,
         cr_cat: str | None = None,
         spec: str | None = None,
@@ -227,11 +208,9 @@ class SQLAlchemyTDocRepository:
         """
         tdocs = self.list(
             limit=limit,
-            tsg=tsg,
             tdoc_id=tdoc_id,
             meeting_like=meeting_like,
             meeting_id=meeting_id,
-            year=year,
             status=status,
             cr_cat=cr_cat,
             spec=spec,

@@ -102,15 +102,23 @@ def repo():
     return r
 
 
-def test_list_filter_tsg(repo):
-    res = repo.list(tsg="R5")
+def test_list_filter_tdoc_id_like(repo):
+    res = repo.list(tdoc_id="R5%")
     assert len(res) == 2
     assert all(t.tdoc_id.startswith("R5") for t in res)
 
 
-def test_list_filter_year(repo):
-    res = repo.list(year=26)
+def test_list_filter_tdoc_id_exact(repo):
+    res = repo.list(tdoc_id="S2-260100")
+    assert len(res) == 1
+    assert res[0].tdoc_id == "S2-260100"
+
+
+def test_list_filter_tdoc_id_year_prefix(repo):
+    """`%26%` matches every TDoc from the 2026 cycle regardless of TSG."""
+    res = repo.list(tdoc_id="%26%")
     assert len(res) == 3
+    assert all("26" in t.tdoc_id for t in res)
 
 
 def test_list_filter_meeting(repo):

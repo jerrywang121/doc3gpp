@@ -79,18 +79,20 @@ class _FakeCrService:
 
 
 class _FakeTDocRepoList:
-    """In-memory :class:`TDocRepository` double exposing ``list()`` for meeting-id tests.
+    """In-memory :class:`TDocRepository` double exposing ``list()`` / ``list_with_meeting``.
 
-    ``get_by_id`` returns ``None`` so a stray ``--tdoc-id`` lookup
-    surfaces as a miss; ``list`` returns the pre-seeded ``_list_tdocs``
-    list verbatim and records every call's kwargs so the test can
+    The ``--meeting-id`` / filter branch calls ``list_with_meeting``;
+    older tests stubbed ``list`` directly, so we mirror both APIs on
+    the same fixture. Records every call's kwargs so the test can
     assert the CLI asked for ``tdoc_type="CR"`` with the right
-    ``meeting_id``.
+    ``meeting_id`` and the configured ``max_batch``.
     """
 
-    def __init__(self, list_tdocs: list[TDoc]) -> None:
+    def __init__(self, list_tdocs: list[TDoc], meeting_names: dict[int, str] | None = None) -> None:
         self._list_tdocs = list_tdocs
+        self._meeting_names = meeting_names or {}
         self.list_calls: list[dict] = []
+        self.list_with_meeting_calls: list[dict] = []
 
     def get_by_id(self, tdoc_id: str) -> TDoc | None:
         return None
@@ -98,6 +100,18 @@ class _FakeTDocRepoList:
     def list(self, **kwargs) -> list[TDoc]:
         self.list_calls.append(kwargs)
         return list(self._list_tdocs)
+
+    def list_with_meeting(self, **kwargs):
+        from doc3gpp.models.tdoc import TDocWithMeeting
+
+        self.list_with_meeting_calls.append(kwargs)
+        return [
+            TDocWithMeeting(
+                tdoc=tdoc,
+                meeting_name=self._meeting_names.get(tdoc.meeting_id) if tdoc.meeting_id else None,
+            )
+            for tdoc in self._list_tdocs
+        ]
 
 
 class _FakeMeetingService:
@@ -115,9 +129,9 @@ class _FakeMeetingService:
 class _FakeCrDetailRepo:
     """In-memory :class:`TDocCrDetailRepository` double that answers ``get(tdoc_id)``.
 
-    Only ``get`` is exercised by the ``--meeting-id`` branch; an empty
-    return list means "not parsed" and a one-element list means "at
-    least one detail row exists" (mirroring the real repo contract).
+    Only ``get`` is exercised by the ``tdoc parse`` filter branch; an
+    empty return list means "not parsed" and a one-element list means
+    "at least one detail row exists" (mirroring the real repo contract).
     """
 
     def __init__(self, parsed_ids: set[str]) -> None:
@@ -140,34 +154,20 @@ def _patch_service(monkeypatch, fake: _FakeCrService) -> None:
     )
 
 
-def _patch_tdoc_repo(monkeypatch, by_int: dict[str, TDoc | None]) -> None:
-    """Stub ``build_tdoc_repository`` so ``--tdoc-id`` lookups return fixtures.
-
-    ``by_int`` maps the stringified integer arg to a TDoc (or None to
-    simulate a miss). Only ``get_by_id`` is exercised by the CLI.
-    """
-
-    class _Repo:
-        def get_by_id(self, tdoc_id: str) -> TDoc | None:
-            return by_int.get(tdoc_id)
-
-    monkeypatch.setattr(
-        "doc3gpp.cli.build_tdoc_repository",
-        lambda: _Repo(),
-    )
-
-
 def _patch_tdoc_repo_for_listing(
-    monkeypatch, list_tdocs: list[TDoc]
+    monkeypatch,
+    list_tdocs: list[TDoc],
+    meeting_names: dict[int, str] | None = None,
 ) -> "_FakeTDocRepoList":
-    """Stub ``build_tdoc_repository`` so ``--meeting-id`` can call ``list()``.
+    """Stub ``build_tdoc_repository`` so ``tdoc parse`` can call ``list_with_meeting``.
 
-    Records every ``list`` call so the test can assert the meeting-id
-    branch queried for ``tdoc_type="CR"`` with the expected ``meeting_id``
-    and a positive ``limit``. Only ``list`` is exercised; ``get_by_id``
-    returns ``None`` so a stray ``--tdoc-id`` lookup surfaces as a miss.
+    Records every ``list_with_meeting`` call so the test can assert
+    the filter branch queried for ``tdoc_type="CR"`` with the expected
+    ``meeting_id`` and ``limit=max_batch``. Only ``list_with_meeting``
+    and ``list`` are exercised; ``get_by_id`` returns ``None`` so a
+    stray lookup surfaces as a miss.
     """
-    fake = _FakeTDocRepoList(list_tdocs)
+    fake = _FakeTDocRepoList(list_tdocs, meeting_names=meeting_names)
 
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_repository",
@@ -196,12 +196,12 @@ def _patch_meeting_service(
 def _patch_cr_repo(
     monkeypatch, parsed_ids: set[str]
 ) -> "_FakeCrDetailRepo":
-    """Stub ``build_tdoc_cr_repository`` so ``--meeting-id`` can probe parsed status.
+    """Stub ``build_tdoc_cr_repository`` so ``tdoc parse`` can probe parsed status.
 
     ``parsed_ids`` is the set of TDoc ids considered already parsed
-    (``get(tdoc_id)`` returns a non-empty list for these). Records every
-    ``get`` call so the test can verify the CLI checked parsed status
-    per row when ``force=False``.
+    (``get(tdoc_id)`` returns a non-empty list for these). Records
+    every ``get`` call so the test can verify the CLI checked parsed
+    status per row when ``force=False``.
     """
     fake = _FakeCrDetailRepo(parsed_ids)
 
@@ -248,35 +248,44 @@ def _make_result(
 
 
 # ---------------------------------------------------------------------------
-# tdoc parse
+# tdoc parse — flag surface
 # ---------------------------------------------------------------------------
 
 
-def test_tdoc_parse_happy_path(sqlite_env, monkeypatch) -> None:
-    """A single successful ``--tdoc`` prints spec/cr_num/title and exits 0."""
+def test_tdoc_parse_rejects_no_filters(sqlite_env) -> None:
+    """Invoking the command with no filter flag raises ``BadParameter``."""
     runner = CliRunner()
-    fake = _FakeCrService(results={"R5s260009": _make_result()})
-    _patch_service(monkeypatch, fake)
-
-    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
-    assert result.exit_code == 0, result.output
-    assert "spec=38.523-3" in result.output
-    assert "cr_num=3790" in result.output
-    assert "title=Example CR" in result.output
-    assert "Extracted 1/1 TDocs (0 failures)" in result.output
-    # extract_many was called with the resolved id only.
-    assert fake.many_calls == [(["R5s260009"], False, False)]
+    result = runner.invoke(app, ["tdoc", "parse"])
+    assert result.exit_code != 0
+    assert "Specify at least one filter" in result.output
 
 
-def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
-    """When ``extract_many`` reports a failure for one id via
-    ``batch.failures``, the CLI prints ``FAILED - {reason}`` inline and
-    still exits 0 (one success keeps the batch non-fatal)."""
+def test_tdoc_parse_tdoc_id_flag_removed(sqlite_env) -> None:
+    """``--tdoc-id`` no longer exists — Typer's usage error surfaces."""
     runner = CliRunner()
-    fake = _FakeCrService(
-        results={"R5s260009": _make_result("R5s260009")},
-        failures={"R5s260010": "TDocNotFoundError: TDoc 'R5s260010' is not stored"},
-    )
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc-id", "1"])
+    assert result.exit_code != 0
+    assert "no such option" in result.output.lower() or "Unknown option" in result.output
+
+
+def test_tdoc_parse_cat_flag_renamed_to_cr_cat(sqlite_env) -> None:
+    """``--cat`` was renamed to ``--cr-cat`` — old flag now rejected."""
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "parse", "--cat", "F"])
+    assert result.exit_code != 0
+    assert "no such option" in result.output.lower() or "Unknown option" in result.output
+
+
+def test_tdoc_parse_tdoc_flag_singular_silently_keeps_last(sqlite_env, monkeypatch) -> None:
+    """``--tdoc`` is singular — passing it twice silently keeps the last
+    value (Click's standard non-multi behaviour). Operators wanting to
+    match multiple ids should build a single LIKE pattern instead.
+    """
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260010", type="CR")]
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260010": _make_result("R5s260010")})
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
@@ -285,12 +294,102 @@ def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
             "tdoc", "parse",
             "--tdoc", "R5s260009",
             "--tdoc", "R5s260010",
+            "--yes",
         ],
+    )
+    # Click keeps the last value; exit is 0 because the LIKE match
+    # resolves a row.
+    assert result.exit_code == 0, result.output
+    # The repo saw only the LAST --tdoc value.
+    assert repo.list_with_meeting_calls[0]["tdoc_id"] == "R5s260010"
+    # And the dispatched id is the resolved one, not both.
+    assert fake.many_calls == [(["R5s260010"], False, False)]
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse — --tdoc LIKE pattern
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_tdoc_like_pattern_happy_path(sqlite_env, monkeypatch) -> None:
+    """``--tdoc R5s260009`` (no wildcards) resolves through the repo's
+    LIKE filter and dispatches the match to ``extract_many``."""
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result()})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009", "--yes"])
+    assert result.exit_code == 0, result.output
+    # The repo received the exact value as a LIKE pattern (not normalised).
+    assert fake.many_calls == [(["R5s260009"], False, False)]
+    # The to-parse group was printed, plus a "Newly parsed" summary.
+    assert "To parse" in result.output
+    assert "R5s260009" in result.output
+    assert "Newly parsed:                              1" in result.output
+
+
+def test_tdoc_parse_tdoc_wildcard_pattern(sqlite_env, monkeypatch) -> None:
+    """``--tdoc 'R5s26%'`` is forwarded as a LIKE pattern verbatim;
+    the repo filters to matching rows."""
+    runner = CliRunner()
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260001", type="CR"),
+        TDoc(tdoc_id="R5s260002", type="CR"),
+    ]
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={
+            "R5s260001": _make_result("R5s260001"),
+            "R5s260002": _make_result("R5s260002"),
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s26%", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    assert repo.list_with_meeting_calls[0]["tdoc_id"] == "R5s26%"
+    assert sorted(fake.many_calls[0][0]) == ["R5s260001", "R5s260002"]
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse — partial / all failures
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
+    """When ``extract_many`` reports a failure for one id via
+    ``batch.failures``, the CLI prints ``FAILED - {reason}`` inline and
+    still exits 0 (one success keeps the batch non-fatal)."""
+    runner = CliRunner()
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260009", type="CR"),
+        TDoc(tdoc_id="R5s260010", type="CR"),
+    ]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={"R5s260009": _make_result("R5s260009")},
+        failures={"R5s260010": "TDocNotFoundError: TDoc 'R5s260010' is not stored"},
+    )
+    _patch_service(monkeypatch, fake)
+
+    # LIKE pattern that matches both ids — singular flag, two matches
+    # via the wildcard.
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--tdoc", "R5s2600%", "--yes"],
     )
     assert result.exit_code == 0, result.output
     assert "R5s260009: spec=" in result.output
     assert "R5s260010: FAILED - TDocNotFoundError: TDoc 'R5s260010' is not stored" in result.output
-    assert "Extracted 1/2 TDocs (1 failures)" in result.output
+    assert "Newly parsed:                              1" in result.output
+    assert "Failures:                                  1" in result.output
 
 
 def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
@@ -298,6 +397,12 @@ def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
     yields exit 1 and an all-failures summary that surfaces the per-id
     reason instead of the old generic "see logs" message."""
     runner = CliRunner()
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260009", type="CR"),
+        TDoc(tdoc_id="R5s260010", type="CR"),
+    ]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
     fake = _FakeCrService(
         results={},
         failures={
@@ -307,28 +412,16 @@ def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
     )
     _patch_service(monkeypatch, fake)
 
-    result = runner.invoke(
-        app,
-        [
-            "tdoc", "parse",
-            "--tdoc", "R5s260009",
-            "--tdoc", "R5s260010",
-        ],
-    )
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s26%", "--yes"])
     assert result.exit_code == 1
     assert "R5s260009: FAILED - TDocNotFoundError:" in result.output
     assert "R5s260010: FAILED - TDocTypeUnsupportedError:" in result.output
-    assert "Extracted 0/2 TDocs (2 failures)" in result.output
-    assert "extract error (see logs)" not in result.output
+    assert "Newly parsed:                              0" in result.output
 
 
 @pytest.mark.parametrize(
     ("exc_factory", "expected_class"),
     [
-        # The exception class names are exactly what the user reads on
-        # the FAILED line — they map 1:1 to a step in the extract
-        # pipeline, so the operator can tell *where* the failure was
-        # without tailing the log file.
         (lambda: TDocNotFoundError("R5s260010"), "TDocNotFoundError"),
         (
             lambda: TDocTypeUnsupportedError("R5s260010", "LS"),
@@ -354,6 +447,9 @@ def test_tdoc_parse_failure_message_names_the_step(
     operator see *which* step failed (type guard, DB lookup, network,
     shape check) without opening the log file."""
     exc = exc_factory()
+    cr_tdocs = [TDoc(tdoc_id="R5s260010", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
     fake = _FakeCrService(
         results={},
         failures={"R5s260010": f"{type(exc).__name__}: {exc}"},
@@ -361,48 +457,24 @@ def test_tdoc_parse_failure_message_names_the_step(
     _patch_service(monkeypatch, fake)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260010"])
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260010", "--yes"])
     assert result.exit_code == 1
     assert f"R5s260010: FAILED - {expected_class}:" in result.output
-    # The original exception message (which carries the actionable
-    # detail — e.g. "run `doc3gpp tdoc sync` first" for the not-found
-    # case) is included on the same line.
     assert str(exc) in result.output
-
-
-def test_tdoc_parse_no_tdocs_specified(sqlite_env) -> None:
-    """Invoking the command with no selector raises ``BadParameter``."""
-    runner = CliRunner()
-    result = runner.invoke(app, ["tdoc", "parse"])
-    assert result.exit_code != 0
-    assert "Specify at least one --tdoc, --tdoc-id, or --meeting-id" in result.output
-
-
-def test_tdoc_parse_tdoc_id_resolves(sqlite_env, monkeypatch) -> None:
-    """``--tdoc-id`` is looked up via the repository; the resolved id
-    string flows into ``extract_many``."""
-    runner = CliRunner()
-    fake = _FakeCrService(results={"R5s260009": _make_result("R5s260009")})
-    _patch_service(monkeypatch, fake)
-    _patch_tdoc_repo(
-        monkeypatch,
-        by_int={"1": TDoc(tdoc_id="R5s260009", type="CR")},
-    )
-
-    result = runner.invoke(app, ["tdoc", "parse", "--tdoc-id", "1"])
-    assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], False, False)]
-    assert "R5s260009: spec=38.523-3" in result.output
 
 
 def test_tdoc_parse_force_passed_through(sqlite_env, monkeypatch) -> None:
     """``--force=True`` is forwarded to ``extract_many``."""
     runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
     fake = _FakeCrService(results={"R5s260009": _make_result()})
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
-        app, ["tdoc", "parse", "--tdoc", "R5s260009", "--force"],
+        app,
+        ["tdoc", "parse", "--tdoc", "R5s260009", "--force", "--yes"],
     )
     assert result.exit_code == 0, result.output
     assert fake.many_calls == [(["R5s260009"], True, False)]
@@ -413,13 +485,14 @@ def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) 
     the CLI prints the install hint and exits 1 — the batch does not
     crash with a Python traceback."""
     runner = CliRunner()
-    fake = _FakeCrService(
-        raise_from_many=PythonDocxNotInstalledError(),
-    )
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(raise_from_many=PythonDocxNotInstalledError())
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
-        app, ["tdoc", "parse", "--tdoc", "R5s260009"],
+        app, ["tdoc", "parse", "--tdoc", "R5s260009", "--yes"],
     )
     assert result.exit_code == 1
     assert "python-docx is not installed" in result.output
@@ -427,7 +500,7 @@ def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) 
 
 
 # ---------------------------------------------------------------------------
-# tdoc parse --meeting-id
+# tdoc parse — --meeting-id + filter composition
 # ---------------------------------------------------------------------------
 
 
@@ -447,7 +520,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
     # R5s260010 is already parsed; the other two are new.
     parsed = {"R5s260010"}
 
-    meeting_svc = _patch_meeting_service(
+    _patch_meeting_service(
         monkeypatch,
         {
             meeting_id: Meeting(
@@ -458,8 +531,8 @@ def test_tdoc_parse_meeting_id_parses_new_only(
             ),
         },
     )
-    tdoc_repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    cr_repo = _patch_cr_repo(monkeypatch, parsed)
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={
             "R5s260009": _make_result("R5s260009"),
@@ -468,42 +541,42 @@ def test_tdoc_parse_meeting_id_parses_new_only(
     )
     _patch_service(monkeypatch, fake)
 
-    result = runner.invoke(app, ["tdoc", "parse", "--meeting-id", str(meeting_id)])
+    result = runner.invoke(app, ["tdoc", "parse", "--meeting-id", str(meeting_id), "--yes"])
     assert result.exit_code == 0, result.output
     # The CLI asked for CR-type TDocs under the meeting with a positive limit.
-    assert tdoc_repo.list_calls == [
-        {
-            "meeting_id": meeting_id,
-            "tdoc_type": "CR",
-            "limit": 10_000,
-            "status": None,
-            "cr_cat": None,
-            "spec": None,
-            "wi": None,
-            "revision_of": None,
-            "revised_to": None,
-            "title": None,
-            "ftp_url": None,
-            "source": None,
-            "uploaded_date": None,
-        },
-    ]
-    # The CLI probed parsed status for every row in the meeting.
-    assert sorted(cr_repo.get_calls) == ["R5s260009", "R5s260010", "R5s260011"]
+    assert repo.list_with_meeting_calls[0] == {
+        "limit": 100,  # default max_batch
+        "tdoc_id": None,
+        "meeting_like": None,
+        "meeting_id": meeting_id,
+        "tdoc_type": "CR",
+        "status": None,
+        "cr_cat": None,
+        "spec": None,
+        "wi": None,
+        "revision_of": None,
+        "revised_to": None,
+        "title": None,
+        "ftp_url": None,
+        "source": None,
+        "uploaded_date": None,
+    }
+    # The to-parse group should be only the new ones; already-parsed are listed
+    # separately and never dispatched.
     assert fake.many_calls == [(["R5s260009", "R5s260011"], False, False)]
-    assert "R5s260009: spec=" in result.output
-    assert "R5s260011: spec=" in result.output
-    assert "R5s260010" not in result.output  # parsed → skipped from output
-    assert "Extracted 2/2 TDocs (0 failures)" in result.output
-    assert meeting_svc.get_calls == [meeting_id]
+    assert "R5s260009" in result.output
+    assert "R5s260011" in result.output
+    assert "Already parsed in tdoc_cr_details" in result.output
+    assert "Newly parsed:                              2" in result.output
 
 
-def test_tdoc_parse_meeting_id_force_parses_all(
+def test_tdoc_parse_meeting_id_force_re_extracts_parsed(
     sqlite_env, monkeypatch
 ) -> None:
     """With ``--force``, every CR-type TDoc under the meeting reaches
-    ``extract_many`` regardless of parsed status — the CLI must not
-    even probe the CR repo in this branch."""
+    ``extract_many`` regardless of parsed status — the parsed-status
+    group is printed as informational only and labelled
+    'with --force, these will be re-extracted'."""
     runner = CliRunner()
     meeting_id = 7
     cr_tdocs = [
@@ -525,7 +598,7 @@ def test_tdoc_parse_meeting_id_force_parses_all(
         },
     )
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    cr_repo = _patch_cr_repo(monkeypatch, parsed)
+    _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={
             "R5s260009": _make_result("R5s260009"),
@@ -535,13 +608,16 @@ def test_tdoc_parse_meeting_id_force_parses_all(
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
-        app, ["tdoc", "parse", "--meeting-id", str(meeting_id), "--force"],
+        app,
+        ["tdoc", "parse", "--meeting-id", str(meeting_id), "--force", "--yes"],
     )
     assert result.exit_code == 0, result.output
     # force=True was forwarded to extract_many with every CR tdoc id.
     assert fake.many_calls == [(["R5s260009", "R5s260010"], True, False)]
-    # The CLI never asked the CR repo which rows were parsed under --force.
-    assert cr_repo.get_calls == []
+    # The completion summary reports Re-parsed + Newly parsed correctly.
+    assert "Re-parsed (with --force):                  2" in result.output
+    assert "Newly parsed:                              0" in result.output
+    assert "with --force, these will be re-extracted" in result.output
 
 
 def test_tdoc_parse_meeting_id_unknown_meeting(sqlite_env, monkeypatch) -> None:
@@ -549,20 +625,19 @@ def test_tdoc_parse_meeting_id_unknown_meeting(sqlite_env, monkeypatch) -> None:
     pointer to ``meeting list`` and never reaches the TDoc repo."""
     runner = CliRunner()
     _patch_meeting_service(monkeypatch, meetings={})
-    tdoc_repo = _patch_tdoc_repo_for_listing(monkeypatch, list_tdocs=[])
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, list_tdocs=[])
 
     result = runner.invoke(app, ["tdoc", "parse", "--meeting-id", "9999"])
     assert result.exit_code != 0
     assert "Unknown meeting_id 9999" in result.output
     assert "doc3gpp meeting list" in result.output
     # The CLI bailed before fetching the TDoc list.
-    assert tdoc_repo.list_calls == []
+    assert repo.list_with_meeting_calls == []
 
 
-def test_tdoc_parse_meeting_id_no_cr_tdocs(sqlite_env, monkeypatch) -> None:
-    """A meeting with zero CR-type TDocs (e.g. only LS / DRAFT rows) is
-    a clear "nothing to do" case — friendly message, exit 1, and no
-    extract_many call."""
+def test_tdoc_parse_meeting_id_no_matches_exits_1(sqlite_env, monkeypatch) -> None:
+    """When the filter set matches zero TDocs the CLI prints a friendly
+    message and exits 1."""
     runner = CliRunner()
     meeting_id = 1
     _patch_meeting_service(
@@ -580,16 +655,19 @@ def test_tdoc_parse_meeting_id_no_cr_tdocs(sqlite_env, monkeypatch) -> None:
     fake = _FakeCrService(results={})
     _patch_service(monkeypatch, fake)
 
-    result = runner.invoke(app, ["tdoc", "parse", "--meeting-id", str(meeting_id)])
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--meeting-id", str(meeting_id), "--yes"],
+    )
     assert result.exit_code == 1
-    assert f"No CR-type TDocs found for meeting_id {meeting_id}" in result.output
+    assert "No TDoc matched" in result.output
     assert fake.many_calls == []
 
 
-def test_tdoc_parse_meeting_id_all_parsed(sqlite_env, monkeypatch) -> None:
-    """When every CR-type TDoc under the meeting is already parsed and
-    ``--force`` is *not* set, the CLI prints a "use --force" hint and
-    exits 0 — the user's intent (parse new ones) was satisfied."""
+def test_tdoc_parse_all_already_parsed_exits_0(sqlite_env, monkeypatch) -> None:
+    """When every match is already parsed and ``--force`` is *not* set,
+    the CLI prints the group, exits 0 with "Nothing to extract", and
+    never dispatches ``extract_many``."""
     runner = CliRunner()
     meeting_id = 5
     cr_tdocs = [
@@ -614,59 +692,49 @@ def test_tdoc_parse_meeting_id_all_parsed(sqlite_env, monkeypatch) -> None:
     fake = _FakeCrService(results={})
     _patch_service(monkeypatch, fake)
 
-    result = runner.invoke(app, ["tdoc", "parse", "--meeting-id", str(meeting_id)])
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--meeting-id", str(meeting_id), "--yes"],
+    )
     assert result.exit_code == 0
-    assert "All 2 CR-type TDocs for meeting_id 5 are already parsed" in result.output
-    assert "use --force to re-parse" in result.output
+    assert "Nothing to extract" in result.output
     # Nothing reached extract_many — the CLI exited before dispatching.
     assert fake.many_calls == []
 
 
-def test_tdoc_parse_meeting_id_mutually_exclusive(
-    sqlite_env, monkeypatch
-) -> None:
-    """``--meeting-id`` cannot be combined with the per-id selectors."""
+# ---------------------------------------------------------------------------
+# tdoc parse — --meeting (LIKE on meeting name)
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_meeting_like_flows_to_repo(sqlite_env, monkeypatch) -> None:
+    """``--meeting PATTERN`` is forwarded as ``meeting_like``."""
     runner = CliRunner()
-    fake = _FakeCrService(results={})
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=10),
+        TDoc(tdoc_id="R5s260002", type="CR", meeting_id=10),
+    ]
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={
+            "R5s260001": _make_result("R5s260001"),
+            "R5s260002": _make_result("R5s260002"),
+        },
+    )
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(
         app,
-        [
-            "tdoc", "parse",
-            "--meeting-id", "1",
-            "--tdoc", "R5s260009",
-        ],
+        ["tdoc", "parse", "--meeting", "%RAN5%", "--yes"],
     )
-    assert result.exit_code != 0
-    assert "mutually exclusive" in result.output
-    # extract_many was never reached.
-    assert fake.many_calls == []
-
-
-def test_tdoc_parse_meeting_id_with_tdoc_id_mutually_exclusive(
-    sqlite_env, monkeypatch
-) -> None:
-    """``--meeting-id`` is also mutually exclusive with ``--tdoc-id``."""
-    runner = CliRunner()
-    fake = _FakeCrService(results={})
-    _patch_service(monkeypatch, fake)
-
-    result = runner.invoke(
-        app,
-        [
-            "tdoc", "parse",
-            "--meeting-id", "1",
-            "--tdoc-id", "2",
-        ],
-    )
-    assert result.exit_code != 0
-    assert "mutually exclusive" in result.output
-    assert fake.many_calls == []
+    assert result.exit_code == 0, result.output
+    assert repo.list_with_meeting_calls[0]["meeting_like"] == "%RAN5%"
+    assert repo.list_with_meeting_calls[0]["meeting_id"] is None
 
 
 # ---------------------------------------------------------------------------
-# tdoc parse --meeting-id field filters
+# tdoc parse — combined filters
 # ---------------------------------------------------------------------------
 
 
@@ -738,8 +806,8 @@ def _meeting_with_cr_tdocs(sqlite_env, monkeypatch):
     return ns
 
 
-def test_tdoc_parse_meeting_id_passes_status_filter(_meeting_with_cr_tdocs) -> None:
-    """`--status` flows through to the repo's `list` call."""
+def test_tdoc_parse_passes_status_filter(_meeting_with_cr_tdocs) -> None:
+    """`--status` flows through to the repo's `list_with_meeting` call."""
     ns = _meeting_with_cr_tdocs
     result = ns.runner.invoke(
         app,
@@ -747,16 +815,17 @@ def test_tdoc_parse_meeting_id_passes_status_filter(_meeting_with_cr_tdocs) -> N
             "tdoc", "parse",
             "--meeting-id", str(ns.meeting_id),
             "--status", "Agreed",
+            "--yes",
         ],
     )
     assert result.exit_code == 0, result.output
-    assert len(ns.tdoc_repo.list_calls) == 1
-    assert ns.tdoc_repo.list_calls[0]["status"] == "Agreed"
-    assert ns.tdoc_repo.list_calls[0]["spec"] is None
-    assert ns.tdoc_repo.list_calls[0]["uploaded_date"] is None
+    assert len(ns.tdoc_repo.list_with_meeting_calls) == 1
+    assert ns.tdoc_repo.list_with_meeting_calls[0]["status"] == "Agreed"
+    assert ns.tdoc_repo.list_with_meeting_calls[0]["spec"] is None
+    assert ns.tdoc_repo.list_with_meeting_calls[0]["uploaded_date"] is None
 
 
-def test_tdoc_parse_meeting_id_passes_null_status(_meeting_with_cr_tdocs) -> None:
+def test_tdoc_parse_passes_null_status(_meeting_with_cr_tdocs) -> None:
     """`--status null` is forwarded verbatim to the repo (which
     interprets the literal token as a NULL filter)."""
     ns = _meeting_with_cr_tdocs
@@ -766,13 +835,14 @@ def test_tdoc_parse_meeting_id_passes_null_status(_meeting_with_cr_tdocs) -> Non
             "tdoc", "parse",
             "--meeting-id", str(ns.meeting_id),
             "--status", "null",
+            "--yes",
         ],
     )
     assert result.exit_code == 0, result.output
-    assert ns.tdoc_repo.list_calls[0]["status"] == "null"
+    assert ns.tdoc_repo.list_with_meeting_calls[0]["status"] == "null"
 
 
-def test_tdoc_parse_meeting_id_passes_date_filter(_meeting_with_cr_tdocs) -> None:
+def test_tdoc_parse_passes_date_filter(_meeting_with_cr_tdocs) -> None:
     """`--uploaded-date ">='2026-02-31'"` is forwarded verbatim."""
     ns = _meeting_with_cr_tdocs
     result = ns.runner.invoke(
@@ -781,13 +851,14 @@ def test_tdoc_parse_meeting_id_passes_date_filter(_meeting_with_cr_tdocs) -> Non
             "tdoc", "parse",
             "--meeting-id", str(ns.meeting_id),
             "--uploaded-date", ">= '2026-02-31'",
+            "--yes",
         ],
     )
     assert result.exit_code == 0, result.output
-    assert ns.tdoc_repo.list_calls[0]["uploaded_date"] == ">= '2026-02-31'"
+    assert ns.tdoc_repo.list_with_meeting_calls[0]["uploaded_date"] == ">= '2026-02-31'"
 
 
-def test_tdoc_parse_meeting_id_rejects_bad_date_filter(_meeting_with_cr_tdocs) -> None:
+def test_tdoc_parse_rejects_bad_date_filter(_meeting_with_cr_tdocs) -> None:
     """An invalid `--uploaded-date` is caught at the CLI boundary with
     a clear BadParameter and never reaches the repo."""
     ns = _meeting_with_cr_tdocs
@@ -797,16 +868,17 @@ def test_tdoc_parse_meeting_id_rejects_bad_date_filter(_meeting_with_cr_tdocs) -
             "tdoc", "parse",
             "--meeting-id", str(ns.meeting_id),
             "--uploaded-date", "yesterday",
+            "--yes",
         ],
     )
     assert result.exit_code != 0
     assert "Invalid date filter" in result.output
     assert "'yesterday'" in result.output
-    assert ns.tdoc_repo.list_calls == []
+    assert ns.tdoc_repo.list_with_meeting_calls == []
     assert ns.fake.many_calls == []
 
 
-def test_tdoc_parse_meeting_id_rejects_bad_date_operator(_meeting_with_cr_tdocs) -> None:
+def test_tdoc_parse_rejects_bad_date_operator(_meeting_with_cr_tdocs) -> None:
     """An unsupported operator (`==`) is rejected with the same
     BadParameter message before the repo is touched."""
     ns = _meeting_with_cr_tdocs
@@ -816,17 +888,18 @@ def test_tdoc_parse_meeting_id_rejects_bad_date_operator(_meeting_with_cr_tdocs)
             "tdoc", "parse",
             "--meeting-id", str(ns.meeting_id),
             "--uploaded-date", "== '2026-02-31'",
+            "--yes",
         ],
     )
     assert result.exit_code != 0
     assert "Invalid date filter" in result.output
-    assert ns.tdoc_repo.list_calls == []
+    assert ns.tdoc_repo.list_with_meeting_calls == []
 
 
 @pytest.mark.parametrize(
     ("flag", "kwarg"),
     [
-        ("--cat", "cr_cat"),
+        ("--cr-cat", "cr_cat"),
         ("--spec", "spec"),
         ("--wi", "wi"),
         ("--revision-of", "revision_of"),
@@ -837,7 +910,7 @@ def test_tdoc_parse_meeting_id_rejects_bad_date_operator(_meeting_with_cr_tdocs)
         ("--type", "tdoc_type"),
     ],
 )
-def test_tdoc_parse_meeting_id_passes_text_filters(
+def test_tdoc_parse_passes_text_filters(
     _meeting_with_cr_tdocs, flag, kwarg
 ) -> None:
     """Every text-column filter is forwarded to the repo under its
@@ -845,10 +918,10 @@ def test_tdoc_parse_meeting_id_passes_text_filters(
     ns = _meeting_with_cr_tdocs
     result = ns.runner.invoke(
         app,
-        ["tdoc", "parse", "--meeting-id", str(ns.meeting_id), flag, "X%Y"],
+        ["tdoc", "parse", "--meeting-id", str(ns.meeting_id), flag, "X%Y", "--yes"],
     )
     assert result.exit_code == 0, result.output
-    assert ns.tdoc_repo.list_calls[0][kwarg] == "X%Y"
+    assert ns.tdoc_repo.list_with_meeting_calls[0][kwarg] == "X%Y"
 
 
 @pytest.mark.parametrize(
@@ -856,7 +929,7 @@ def test_tdoc_parse_meeting_id_passes_text_filters(
     [
         ("--title", "title"),
         ("--source", "source"),
-        ("--cat", "cr_cat"),
+        ("--cr-cat", "cr_cat"),
         ("--spec", "spec"),
         ("--wi", "wi"),
         ("--revision-of", "revision_of"),
@@ -864,7 +937,7 @@ def test_tdoc_parse_meeting_id_passes_text_filters(
         ("--ftp-url", "ftp_url"),
     ],
 )
-def test_tdoc_parse_meeting_id_passes_not_like_prefix(
+def test_tdoc_parse_passes_not_like_prefix(
     _meeting_with_cr_tdocs, flag, kwarg
 ) -> None:
     """`-prefixed values flow through to the repo verbatim. The bang
@@ -873,13 +946,13 @@ def test_tdoc_parse_meeting_id_passes_not_like_prefix(
     ns = _meeting_with_cr_tdocs
     result = ns.runner.invoke(
         app,
-        ["tdoc", "parse", "--meeting-id", str(ns.meeting_id), flag, "!%X%"],
+        ["tdoc", "parse", "--meeting-id", str(ns.meeting_id), flag, "!%X%", "--yes"],
     )
     assert result.exit_code == 0, result.output
-    assert ns.tdoc_repo.list_calls[0][kwarg] == "!%X%"
+    assert ns.tdoc_repo.list_with_meeting_calls[0][kwarg] == "!%X%"
 
 
-def test_tdoc_parse_meeting_id_combines_filters(_meeting_with_cr_tdocs) -> None:
+def test_tdoc_parse_combines_filters(_meeting_with_cr_tdocs) -> None:
     """Passing multiple filters at once forwards each to its own kwarg
     without any cross-contamination."""
     ns = _meeting_with_cr_tdocs
@@ -891,17 +964,419 @@ def test_tdoc_parse_meeting_id_combines_filters(_meeting_with_cr_tdocs) -> None:
             "--status", "Agreed",
             "--spec", "38.%",
             "--uploaded-date", "< '2026-12-31'",
+            "--yes",
         ],
     )
     assert result.exit_code == 0, result.output
-    call = ns.tdoc_repo.list_calls[0]
+    call = ns.tdoc_repo.list_with_meeting_calls[0]
     assert call["status"] == "Agreed"
     assert call["spec"] == "38.%"
     assert call["uploaded_date"] == "< '2026-12-31'"
 
 
+def test_tdoc_parse_tdoc_and_meeting_id_combine(sqlite_env, monkeypatch) -> None:
+    """``--tdoc`` and ``--meeting-id`` now combine freely — both flow
+    into the same ``list_with_meeting`` call as filters."""
+    runner = CliRunner()
+    meeting_id = 11
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260002", type="CR", meeting_id=meeting_id),
+    ]
+    _patch_meeting_service(
+        monkeypatch,
+        {
+            meeting_id: Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#111",
+                title="RAN WG5 #111",
+                location="Online",
+            ),
+        },
+    )
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={
+            "R5s260001": _make_result("R5s260001"),
+            "R5s260002": _make_result("R5s260002"),
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--tdoc", "R5s260001",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    call = repo.list_with_meeting_calls[0]
+    assert call["meeting_id"] == meeting_id
+    assert call["tdoc_id"] == "R5s260001"
+
+
 # ---------------------------------------------------------------------------
-# tdoc show
+# tdoc parse — confirmation prompt and --yes skip
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_yes_skips_confirmation_prompt(sqlite_env, monkeypatch) -> None:
+    """``--yes`` short-circuits the ``typer.confirm`` call entirely."""
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result()})
+    _patch_service(monkeypatch, fake)
+
+    confirm_calls = {"count": 0}
+
+    def fake_confirm(*args, **kwargs):
+        confirm_calls["count"] += 1
+        return True
+
+    monkeypatch.setattr("doc3gpp.cli.typer.confirm", fake_confirm)
+
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s260009", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    assert confirm_calls["count"] == 0
+
+
+def test_tdoc_parse_declined_prompt_exits_0(sqlite_env, monkeypatch) -> None:
+    """A declined ``typer.confirm`` aborts before any work and exits 0."""
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result()})
+    _patch_service(monkeypatch, fake)
+
+    monkeypatch.setattr("doc3gpp.cli.typer.confirm", lambda *a, **k: False)
+
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
+    assert result.exit_code == 0
+    assert "Aborted." in result.output
+    # No work was dispatched.
+    assert fake.many_calls == []
+
+
+def test_tdoc_parse_accepted_prompt_dispatches(sqlite_env, monkeypatch) -> None:
+    """When ``typer.confirm`` returns True the batch runs normally."""
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result()})
+    _patch_service(monkeypatch, fake)
+
+    monkeypatch.setattr("doc3gpp.cli.typer.confirm", lambda *a, **k: True)
+
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [(["R5s260009"], False, False)]
+
+
+def test_tdoc_parse_yes_short_alias_works(sqlite_env, monkeypatch) -> None:
+    """``-y`` is registered as the short alias for ``--yes``."""
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result()})
+    _patch_service(monkeypatch, fake)
+
+    confirm_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.typer.confirm",
+        lambda *a, **k: (confirm_calls.update(count=confirm_calls["count"] + 1) or True),
+    )
+
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009", "-y"])
+    assert result.exit_code == 0, result.output
+    assert confirm_calls["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse — two-group rendering + active-column selection
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> None:
+    """When some matches are already parsed, both groups are printed
+    with a base column set + per-filter extras."""
+    runner = CliRunner()
+    meeting_id = 33
+    cr_tdocs = [
+        TDoc(
+            tdoc_id="R5s260009",
+            type="CR",
+            meeting_id=meeting_id,
+            title="Example CR title",
+            cr_cat="F",
+            status="Agreed",
+            spec="38.331",
+        ),
+        TDoc(
+            tdoc_id="R5s260010",
+            type="CR",
+            meeting_id=meeting_id,
+            title="Another CR title",
+            cr_cat="F",
+            status="Noted",
+            spec="38.331",
+        ),
+    ]
+    _patch_meeting_service(
+        monkeypatch,
+        {
+            meeting_id: Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#111",
+                title="RAN WG5 #111",
+                location="Online",
+            ),
+        },
+    )
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, {"R5s260010"})
+    fake = _FakeCrService(results={"R5s260009": _make_result("R5s260009")})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--spec", "38.331",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # Both groups are present.
+    assert "To parse [count=1]:" in result.output
+    assert "Already parsed in tdoc_cr_details [count=1]:" in result.output
+    # The active --spec filter pulls in the spec column.
+    assert "spec" in result.output
+    # Each id appears in the output at least once.
+    assert "R5s260009" in result.output
+    assert "R5s260010" in result.output
+    # Base columns header is rendered.
+    assert "tdoc_id" in result.output
+    assert "title" in result.output
+    assert "type" in result.output
+    assert "cr_cat" in result.output
+    assert "status" in result.output
+
+
+def test_tdoc_parse_meeting_filter_adds_meeting_name_column(
+    sqlite_env, monkeypatch
+) -> None:
+    """``--meeting`` and ``--meeting-id`` add the ``meeting_name``
+    column to the rendered groups."""
+    runner = CliRunner()
+    meeting_id = 50
+    cr_tdocs = [
+        TDoc(
+            tdoc_id="R5s260009",
+            type="CR",
+            meeting_id=meeting_id,
+            title="Example CR",
+            cr_cat="F",
+            status="Agreed",
+        ),
+    ]
+    _patch_meeting_service(
+        monkeypatch,
+        {
+            meeting_id: Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#111",
+                title="RAN WG5 #111",
+                location="Online",
+            ),
+        },
+    )
+    _patch_tdoc_repo_for_listing(
+        monkeypatch, cr_tdocs, meeting_names={meeting_id: "RAN5#111"},
+    )
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result("R5s260009")})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "meeting_name" in result.output
+    assert "RAN5#111" in result.output
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse — completion summary counters
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> None:
+    """``--force`` re-parses already-parsed rows; ``--no-force``
+    dispatches only new ones. The completion summary reflects both
+    with separate counters."""
+    runner = CliRunner()
+    meeting_id = 77
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260002", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260003", type="CR", meeting_id=meeting_id),
+    ]
+    parsed = {"R5s260001"}  # only one pre-parsed
+    _patch_meeting_service(
+        monkeypatch,
+        {meeting_id: Meeting(
+            meeting_id=meeting_id,
+            name="RAN5#111",
+            title="RAN WG5 #111",
+            location="Online",
+        )},
+    )
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, parsed)
+    fake = _FakeCrService(
+        results={
+            "R5s260001": _make_result("R5s260001"),
+            "R5s260002": _make_result("R5s260002"),
+            "R5s260003": _make_result("R5s260003"),
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--force",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # With --force, all three are dispatched; R5s260001 was already
+    # parsed (counted as Re-parsed), the other two are Newly parsed.
+    assert fake.many_calls == [(["R5s260001", "R5s260002", "R5s260003"], True, False)]
+    assert "Re-parsed (with --force):                  1" in result.output
+    assert "Newly parsed:                              2" in result.output
+    assert "Skipped (already parsed before this run): 0" in result.output
+    assert "Failures:                                  0" in result.output
+
+
+def test_tdoc_parse_summary_without_force_dispatches_only_new(
+    sqlite_env, monkeypatch
+) -> None:
+    """Without ``--force``, the previously-parsed row is skipped entirely
+    and counted as ``Skipped`` (not as Newly parsed or Re-parsed)."""
+    runner = CliRunner()
+    meeting_id = 78
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260002", type="CR", meeting_id=meeting_id),
+    ]
+    parsed = {"R5s260001"}
+    _patch_meeting_service(
+        monkeypatch,
+        {meeting_id: Meeting(
+            meeting_id=meeting_id,
+            name="RAN5#111",
+            title="RAN WG5 #111",
+            location="Online",
+        )},
+    )
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, parsed)
+    fake = _FakeCrService(
+        results={"R5s260002": _make_result("R5s260002")},
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [(["R5s260002"], False, False)]
+    assert "Skipped (already parsed before this run): 1" in result.output
+    assert "Re-parsed (with --force):                  0" in result.output
+    assert "Newly parsed:                              1" in result.output
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse — batch limit warning
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_max_batch_default_is_100(sqlite_env) -> None:
+    """The configured default is 100 — sanity check the env wiring."""
+    from doc3gpp.config import get_settings
+
+    settings = get_settings()
+    assert settings.tdoc_parse.max_batch == 100
+
+
+def test_tdoc_parse_max_batch_env_override(sqlite_env, monkeypatch) -> None:
+    """``DOC3GPP_TDOC_PARSE__MAX_BATCH`` overrides the default."""
+    from doc3gpp.config import get_settings
+
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "5")
+    get_settings.cache_clear()
+    try:
+        assert get_settings().tdoc_parse.max_batch == 5
+    finally:
+        get_settings.cache_clear()
+
+
+def test_tdoc_parse_batch_limit_warning_when_under_max(sqlite_env, monkeypatch) -> None:
+    """When the *actual work* count exceeds max_batch but the repo
+    already capped the result, the warning is suppressed — the operator
+    can only see what was returned. (We simulate this by returning 5
+    rows with max_batch=5 so the warning never fires.)"""
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id=f"R5s26000{i}", type="CR") for i in range(1, 6)]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={tdoc.tdoc_id: _make_result(tdoc.tdoc_id) for tdoc in cr_tdocs},
+    )
+    _patch_service(monkeypatch, fake)
+
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "5")
+    from doc3gpp.config import get_settings
+    get_settings.cache_clear()
+    try:
+        result = runner.invoke(
+            app, ["tdoc", "parse", "--tdoc", "R5s26%", "--yes"],
+        )
+        assert result.exit_code == 0, result.output
+        # No warning text — the repo returned <= max_batch.
+        assert "exceeds max_batch" not in result.output
+    finally:
+        get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# tdoc show (unchanged)
 # ---------------------------------------------------------------------------
 
 
@@ -1023,33 +1498,20 @@ def test_tdoc_show_unknown_tdoc_raises_bad_parameter(sqlite_env) -> None:
 def test_tdoc_parse_canonicalises_input(
     sqlite_env, monkeypatch, raw_input: str, expected_canonical: str
 ) -> None:
-    """``--tdoc r5s260213`` must flow into ``extract_many`` as ``R5s260213``
-    so the DB lookup against the canonical PK succeeds."""
+    """``--tdoc r5s260213`` flows into the repo as ``R5s260213`` (the
+    LIKE pattern) so the DB lookup against the canonical PK matches."""
     runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id=expected_canonical, type="CR")]
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
     fake = _FakeCrService(
         results={expected_canonical: _make_result(expected_canonical)},
     )
     _patch_service(monkeypatch, fake)
 
-    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", raw_input])
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", raw_input, "--yes"])
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [([expected_canonical], False, False)]
-    assert f"{expected_canonical}: spec=" in result.output
-
-
-def test_tdoc_parse_non_cr_shape_passes_through(sqlite_env, monkeypatch) -> None:
-    """Non-CR shapes (e.g. LS) have no canonical mapping; the input is
-    stripped of whitespace and forwarded verbatim — the DB lookup
-    succeeds iff the user typed it exactly as stored."""
-    runner = CliRunner()
-    fake = _FakeCrService(results={"LS-260001": _make_result("LS-260001")})
-    _patch_service(monkeypatch, fake)
-
-    result = runner.invoke(
-        app, ["tdoc", "parse", "--tdoc", "  LS-260001  "],
-    )
-    assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["LS-260001"], False, False)]
+    assert repo.list_with_meeting_calls[0]["tdoc_id"] == expected_canonical
 
 
 def test_tdoc_show_lowercase_input_resolves_canonical_row(

@@ -612,13 +612,13 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
     monkeypatch.setattr("doc3gpp.services.factory.ScraperClient", lambda: dummy)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009", "--yes"])
 
     # 1. CLI exited cleanly and the per-id line carries the parsed fields.
     assert result.exit_code == 0, result.output
     assert "R5s260009: spec=38.523-3" in result.output
     assert "cr_num=3790" in result.output
-    assert "Extracted 1/1 TDocs (0 failures)" in result.output
+    assert "Newly parsed:                              1" in result.output
     assert dummy.calls, "ScraperClient.get_bytes was never invoked"
 
     # 2. The DB now has the persisted tdoc_cr_details + tdoc_extracts rows.
@@ -1024,3 +1024,206 @@ def test_extract_repository_rejects_blank_url(sqlite_env) -> None:
     )
     with pytest.raises(ValueError, match="non-empty ftp_url"):
         cr_repo.upsert(details, meta)
+
+
+# ---------------------------------------------------------------------------
+# 12. CLI integration: filter combinations + batch truncation summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_parse_with_combined_filters_against_sqlite(
+    sqlite_env, monkeypatch, tmp_path
+) -> None:
+    """The CLI accepts ``--meeting-id N --meeting PATTERN --cr-cat F`` as
+    filter combinations and routes them through the real SQLite-backed
+    TDocRepository. End-to-end: CliRunner → factory → SQL repo → service
+    → DB. The completion summary reports the right number of newly
+    parsed rows; the already-parsed row is skipped (counted as Skipped)."""
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.meeting_sql import (
+        SQLAlchemyMeetingRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_cr_sql import (
+        SQLAlchemyTDocCrRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+
+    # Seed a parent meeting + five CR-type TDocs.
+    meeting_id = 9001
+    SQLAlchemyMeetingRepository().upsert_many([
+        Meeting(
+            meeting_id=meeting_id,
+            name="RAN5#111",
+            title="RAN WG5 #111",
+            location="Online",
+        ),
+    ])
+    tdoc_repo = SQLAlchemyTDocRepository()
+    cr_tdocs = [
+        TDoc(tdoc_id=f"R5s2600{i:02d}", type="CR", meeting_id=meeting_id, cr_cat="F")
+        for i in range(1, 6)
+    ]
+    tdoc_repo.upsert_many(cr_tdocs)
+
+    # Mark R5s260001 as already parsed so the completion summary has
+    # both Skipped and Newly parsed buckets.
+    cr_repo = SQLAlchemyTDocCrRepository()
+    cr_repo.upsert(
+        TDocCRDetails(tdoc_id="R5s260001", spec="38.523-3", cr_num="3790", ftp_url="stored/R5s260001.zip"),
+        TDocExtractMeta(
+            ftp_url="stored/R5s260001.zip",
+            tdoc_id="R5s260001",
+            zip_path="/tmp/z",
+            markdown_path="/tmp/m",
+            doc_filename="R5s260001.docx",
+        ),
+    )
+
+    # Swap the production ScraperClient class for our dummy.
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+    dummy = _DummyScraperClient()
+    dummy._payload = fixture.read_bytes()  # type: ignore[attr-defined]
+    monkeypatch.setattr("doc3gpp.services.factory.ScraperClient", lambda: dummy)
+
+    # Root the disk cache under tmp_path.
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    from doc3gpp.settings.loader import get_settings
+    get_settings.cache_clear()
+
+    runner = CliRunner()
+    # --meeting-id N --meeting PATTERN --cr-cat F all combine as filters.
+    # R5s260001 is already parsed (Skipped); the other four are dispatched.
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--meeting", "%RAN5%",
+            "--cr-cat", "F",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    # Two groups were printed.
+    assert "To parse [count=4]:" in result.output
+    assert "Already parsed in tdoc_cr_details [count=1]:" in result.output
+    # The completion summary reports one Skipped, zero Re-parsed (no --force),
+    # four Newly parsed, zero Failures.
+    assert "Skipped (already parsed before this run): 1" in result.output
+    assert "Re-parsed (with --force):                  0" in result.output
+    assert "Newly parsed:                              4" in result.output
+    assert "Failures:                                  0" in result.output
+
+    # Persisted: four new tdoc_cr_details rows + the pre-seeded one.
+    cr_repo = SQLAlchemyTDocCrRepository()
+    for tid in ("R5s260002", "R5s260003", "R5s260004", "R5s260005"):
+        assert cr_repo.get(tid), f"{tid} should have a persisted CR detail row"
+    # The pre-seeded row is untouched (still single-URL).
+    assert len(cr_repo.get("R5s260001")) == 1
+
+
+def test_parse_batch_limit_truncates_with_remaining_summary(
+    sqlite_env, monkeypatch
+) -> None:
+    """With ``max_batch=2`` and five matches, the CLI extracts only the
+    first two, reports ``Remaining: 3`` in the completion summary, and
+    suggests re-running without ``--force`` to continue."""
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.meeting_sql import (
+        SQLAlchemyMeetingRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+
+    # Override max_batch to 2 via env (do not rely on config file).
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "2")
+    from doc3gpp.settings.loader import get_settings
+    get_settings.cache_clear()
+    try:
+        assert get_settings().tdoc_parse.max_batch == 2
+
+        # Seed a meeting + five matching TDocs (without actually parsing
+        # them via python-docx — we replace the CR service with a fake).
+        meeting_id = 8001
+        SQLAlchemyMeetingRepository().upsert_many([
+            Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#111",
+                title="RAN WG5 #111",
+                location="Online",
+            ),
+        ])
+        tdoc_repo = SQLAlchemyTDocRepository()
+        tdoc_repo.upsert_many([
+            TDoc(tdoc_id=f"R5s2600{i:02d}", type="CR", meeting_id=meeting_id, cr_cat="F")
+            for i in range(1, 6)
+        ])
+
+        # Stub the CR service to a no-op fake that records calls.
+        class _StubCrService:
+            def __init__(self) -> None:
+                self.many_calls: list[list[str]] = []
+
+            def extract_many(self, tdoc_ids, *, force=False, full=False):
+                from doc3gpp.services.tdoc_cr_service import BatchExtractResult
+                from doc3gpp.models.tdoc_cr import TDocCRDetails
+                ids = list(tdoc_ids)
+                self.many_calls.append(ids)
+                return BatchExtractResult(
+                    successes={
+                        tid: type(
+                            "R",
+                            (),
+                            {"details": TDocCRDetails(tdoc_id=tid, spec=None, cr_num=None, title=None)},
+                        )()
+                        for tid in ids
+                    },
+                    failures={},
+                )
+
+        stub = _StubCrService()
+        monkeypatch.setattr(
+            "doc3gpp.cli.build_tdoc_cr_service", lambda: stub,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "tdoc", "parse",
+                "--meeting-id", str(meeting_id),
+                "--yes",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        # The repo returns at most max_batch=2 rows (SQLite LIMIT 2);
+        # extract_many was dispatched once with 2 ids.
+        assert len(stub.many_calls) == 1
+        assert len(stub.many_calls[0]) == 2
+        # The completion summary signals truncation and the continuation hint.
+        assert "Remaining (truncated by max_batch=2): at least 1" in result.output
+        assert (
+            "re-run the same command (without --force) to continue"
+            in result.output.lower()
+        )
+        # The to-parse group was truncated to 2 ids.
+        assert "To parse [count=2]:" in result.output
+    finally:
+        get_settings.cache_clear()

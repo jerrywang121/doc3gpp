@@ -42,6 +42,7 @@ class TDocRepository(Protocol):
         self,
         limit: int = 20,
         tsg: str | None = None,
+        tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
@@ -61,6 +62,13 @@ class TDocRepository(Protocol):
 
         Optional filters:
         - ``tsg``: TSG prefix matched against the TDoc identifier.
+        - ``tdoc_id``: SQL ``LIKE`` pattern matched against the
+          ``tdocs.tdoc_id`` column. Accepts the rich filter syntax
+          described in :mod:`doc3gpp.cli_filters` (``null`` /
+          ``not-null`` / ``!pattern`` / plain LIKE). Lets the
+          ``tdoc parse`` CLI expose ``--tdoc`` as a filter rather than
+          a per-id selector — combined with ``--meeting-id`` or any
+          text filter it narrows the candidate set before extraction.
         - ``meeting_like``: SQL ``LIKE`` pattern applied to the parent
           meeting's name (joins the ``meetings`` table).
         - ``meeting_id``: exact match against ``tdocs.meeting_id``. Can
@@ -94,6 +102,7 @@ class TDocRepository(Protocol):
         self,
         limit: int = 20,
         tsg: str | None = None,
+        tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
         year: int | None = None,
@@ -114,7 +123,7 @@ class TDocRepository(Protocol):
         Equivalent to ``list(...)`` plus a ``meetings`` JOIN to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
         the meeting name alongside TDoc fields. Accepts the same filters as
-        :meth:`list`.
+        :meth:`list`` (including the new ``tdoc_id`` LIKE pattern).
         """
         ...
 

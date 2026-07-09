@@ -75,3 +75,14 @@ future_years = 1     # default; CLI flag --future-years overrides
 # dir = "~/.cache/doc3gpp/tdocs"   # XDG default; created on first write
 # size_limit_mb = 1024             # 0 = unlimited
 # purge_confirm = true             # CLI guard for `doc3gpp cache purge`
+
+# ── `tdoc parse` batch limit ────────────────────────────────────────────────
+# Caps how many TDocs a single `tdoc parse` invocation will actually
+# process when its filter set resolves to a larger candidate pool.
+# Matches above the cap are truncated and reported as `Remaining` in
+# the completion summary — re-run the same command without `--force`
+# to pick up the next batch. Raise this for big-batch sweeps; lower it
+# to keep confirmation prompts short.
+
+# [tdoc_parse]
+# max_batch = 100

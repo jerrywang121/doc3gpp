@@ -301,9 +301,12 @@ seventeen commands):
     - `init` — also seeds the `tsgs` reference table
 - `meeting`:
     - `sync` — validates `--tsg` against the reference table
-    - `list` — filters by `--tsg`, `--meeting`, `--location`,
-      `--start-date`, `--end-date`, `--limit`, `--offset`; auto-wraps
-      like patterns
+    - `list` — filters by `--tsg`, `--name`, `--location`, `--year`,
+      `--tdoc`, `--limit`, `--offset`; auto-wraps like patterns.
+      `--tdoc` accepts a 9-character CR-shape id (e.g. `R5-260013`,
+      `R5s260009`, `R5w260013`) and resolves to the meeting whose
+      `start_doc` / `end_doc` range brackets the TDoc; prefix match
+      is case-insensitive.
 - `tdoc`:
     - `sync` — `--meeting-id` or `--meeting`; delegates to
       `TDocSyncCoordinator`

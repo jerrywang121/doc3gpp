@@ -84,12 +84,16 @@ class MeetingService:
         name_like: str | None = None,
         location_like: str | None = None,
         year: int | None = None,
+        tdoc_id: tuple[str, int] | None = None,
     ) -> list[Meeting]:
         """Return recent meetings from storage, optionally filtered and paginated.
 
         Filters and pagination are passed down to the repository for efficient
         SQL execution. ``offset`` is applied first, then ``limit`` caps the
         returned rows; use it to page past earlier rows in CLI listings.
+        ``tdoc_id`` is the ``(prefix, number)`` tuple produced by
+        :func:`doc3gpp.cli_filters.parse_tdoc_id` and narrows the result to
+        meetings whose ``start_doc`` / ``end_doc`` range brackets the TDoc.
         """
         return self._repository.list(
             limit=limit,
@@ -98,6 +102,7 @@ class MeetingService:
             name_like=name_like,
             location_like=location_like,
             year=year,
+            tdoc_id=tdoc_id,
         )
 
     def get_by_id(self, meeting_id: int) -> Meeting | None:

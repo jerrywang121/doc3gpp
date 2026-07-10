@@ -125,3 +125,215 @@ def test_list_filters_by_tsg_and_year_and_like():
     w = repo.list(limit=10, name_like="%Workshop%")
     assert len(w) == 1
     assert w[0].meeting_id == 3
+
+
+def _insert_doc_range_rows(session):
+    """Seed a fixture covering every branch of the ``--tdoc`` range check."""
+    session.add_all(
+        [
+            TsgORM(
+                tsg_name="RAN WG5",
+                short_name="R5",
+                description="Mobile terminal conformance testing",
+                url=None,
+            ),
+        ]
+    )
+    session.flush()
+    session.add_all(
+        [
+            MeetingORM(
+                meeting_id=100,
+                name="M100-bracketed",
+                title="M100",
+                location="Online",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 1, 5),
+                start_doc="R5-260001",
+                end_doc="R5-260050",
+                tsg="R5",
+            ),
+            MeetingORM(
+                meeting_id=101,
+                name="M101-open-ended",
+                title="M101",
+                location="Online",
+                start_date=date(2025, 2, 1),
+                end_date=date(2025, 2, 5),
+                start_doc="R5-260040",
+                end_doc=None,
+                tsg="R5",
+            ),
+            MeetingORM(
+                meeting_id=102,
+                name="M102-no-start-doc",
+                title="M102",
+                location="Online",
+                start_date=date(2025, 3, 1),
+                end_date=date(2025, 3, 5),
+                start_doc=None,
+                end_doc="R5-260050",
+                tsg="R5",
+            ),
+            MeetingORM(
+                meeting_id=103,
+                name="M103-prefix-mismatch",
+                title="M103",
+                location="Online",
+                start_date=date(2025, 4, 1),
+                end_date=date(2025, 4, 5),
+                start_doc="R5s260001",
+                end_doc="R5s260050",
+                tsg="R5",
+            ),
+            MeetingORM(
+                meeting_id=104,
+                name="M104-end-prefix-mismatch",
+                title="M104",
+                location="Online",
+                start_date=date(2025, 5, 1),
+                end_date=date(2025, 5, 5),
+                start_doc="R5-260040",
+                end_doc="C6-260050",
+                tsg="R5",
+            ),
+            MeetingORM(
+                meeting_id=105,
+                name="M105-malformed",
+                title="M105",
+                location="Online",
+                start_date=date(2025, 6, 1),
+                end_date=date(2025, 6, 5),
+                start_doc="garbage",
+                end_doc="also-garbage",
+                tsg="R5",
+            ),
+        ]
+    )
+    session.commit()
+
+
+def test_list_tdoc_id_in_closed_range():
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        _insert_doc_range_rows(s)
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    matches = repo.list(limit=20, tdoc_id=("R5-", 260025))
+    assert {m.meeting_id for m in matches} == {100}
+
+    upper = repo.list(limit=20, tdoc_id=("R5-", 260050))
+    assert {m.meeting_id for m in upper} == {100, 101}
+
+    lower = repo.list(limit=20, tdoc_id=("R5-", 260001))
+    assert {m.meeting_id for m in lower} == {100}
+
+
+def test_list_tdoc_id_excludes_out_of_range_and_other_branches():
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        _insert_doc_range_rows(s)
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    below = repo.list(limit=20, tdoc_id=("R5-", 260000))
+    assert below == []
+
+    no_start = repo.list(limit=20, tdoc_id=("R5-", 260025))
+    assert {m.meeting_id for m in no_start} == {100}
+
+    cross_prefix = repo.list(limit=20, tdoc_id=("R5-", 260025))
+    assert 103 not in {m.meeting_id for m in cross_prefix}
+    assert 104 not in {m.meeting_id for m in cross_prefix}
+
+    repo.list(limit=20, tdoc_id=("R5-", 260025))
+
+
+def test_list_tdoc_id_open_ended_range_matches_when_number_in_start():
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        _insert_doc_range_rows(s)
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    # M101 has start_doc=R5-260040, no end_doc. Query 260050 must match.
+    matches = repo.list(limit=20, tdoc_id=("R5-", 260050))
+    assert 101 in {m.meeting_id for m in matches}
+
+    # Query 260039 (just below start) must NOT match M101 (>= rule on start_doc).
+    below_start = repo.list(limit=20, tdoc_id=("R5-", 260039))
+    assert 101 not in {m.meeting_id for m in below_start}
+
+
+def test_list_tdoc_id_combines_with_other_filters():
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        _insert_doc_range_rows(s)
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    # Combine tdoc_id with tsg: only M100..M105 carry tsg=R5, so the
+    # intersection still comes from the doc-range rows. Adding a foreign
+    # TSG with a matching prefix must not leak in (no such row exists
+    # here, but the combination exercises the AND logic).
+    matches = repo.list(limit=20, tdoc_id=("R5-", 260025), tsg="R5")
+    assert {m.meeting_id for m in matches} == {100}
+
+    # Wrong TSG -> no rows even when the doc range would match.
+    matches_none = repo.list(limit=20, tdoc_id=("R5-", 260025), tsg="C6")
+    assert matches_none == []
+
+
+def test_list_tdoc_id_prefix_match_is_case_insensitive():
+    """``r5s``, ``R5S``, ``r5S`` must all match a stored ``R5s...`` row."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker as sm
+
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sm(bind=engine)
+    with Session() as s:
+        s.add(
+            TsgORM(
+                tsg_name="RAN WG5",
+                short_name="R5",
+                description="Mobile terminal conformance testing",
+                url=None,
+            )
+        )
+        s.flush()
+        # Stored in mixed case on purpose.
+        s.add(
+            MeetingORM(
+                meeting_id=200,
+                name="M200-mixed-case",
+                title="M200",
+                location="Online",
+                start_date=date(2025, 7, 1),
+                end_date=date(2025, 7, 5),
+                start_doc="R5s260001",
+                end_doc="R5s260050",
+                tsg="R5",
+            )
+        )
+        s.commit()
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    for prefix in ("r5s", "R5S", "r5S", "R5s"):
+        matches = repo.list(limit=20, tdoc_id=(prefix, 260025))
+        assert {m.meeting_id for m in matches} == {200}, prefix

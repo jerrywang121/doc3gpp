@@ -22,6 +22,13 @@ strings whose semantics differ by column type:
       comparison. The date literal is bound by SQLAlchemy (no string
       interpolation into the SQL), so injection is impossible.
 
+- **TDoc identifiers** (used by ``meeting list --tdoc``): a 9-character
+  CR-shape id matching :data:`TDOC_ID_RE`, e.g. ``R5-260013`` (canonical
+  form), ``R5s260009`` (TTCN), or ``R5w260013`` (workshop). The
+  helper :func:`validate_tdoc_id` parses the value into a
+  ``(prefix, number)`` tuple for the repository to consume; any other
+  shape is rejected at the CLI boundary with a clear error message.
+
 Anything else on a date field is rejected at the CLI boundary with a
 :class:`ValueError` carrying the exact list of accepted forms. The
 text columns do not raise — a typo'd ``status`` falls through to
@@ -58,6 +65,12 @@ DATE_FILTER_RE = re.compile(
         \s*$""",
     re.VERBOSE,
 )
+
+
+# CR-shape TDoc identifier: ``[RSC][1-9][-sw]\d{6}`` — TSG group
+# initial (R/S/C), non-zero TSG digit, shape marker (- / s / w for
+# canonical / TTCN / workshop), 6-digit number.
+TDOC_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6}", re.IGNORECASE)
 
 
 def is_null_token(value: str) -> bool:
@@ -106,3 +119,37 @@ def validate_date_filter(value: str) -> None:
         f"or an expression like \">= 'YYYY-MM-DD'\" with one of "
         f"=, !=, <, <=, >, >=."
     )
+
+
+def parse_tdoc_id(value: str) -> tuple[str, int]:
+    """Return ``(prefix, number)`` for a canonical CR-shape ``value``.
+
+    ``prefix`` is the first three characters (e.g. ``R5-`` / ``R5s`` /
+    ``R5w``); ``number`` is the trailing 6-digit integer (e.g. ``260013``).
+    Case-insensitive: ``r5-260013`` parses the same as ``R5-260013``.
+
+    Raises :class:`ValueError` when ``value`` does not match
+    :data:`TDOC_ID_RE`; the message lists the expected shape so the
+    operator can fix the typo without reading the docs.
+    """
+    stripped = value.strip()
+    match = TDOC_ID_RE.fullmatch(stripped)
+    if match is None:
+        raise ValueError(
+            f"Invalid TDoc id {value!r}. Expected a 9-character CR-shape id "
+            f"like 'R5-260013', 'R5s260009', or 'R5w260013' — TSG group "
+            f"initial (R/S/C), non-zero TSG digit, shape marker (-/s/w), "
+            f"then 6 decimal digits."
+        )
+    return stripped[:3], int(stripped[3:])
+
+
+def validate_tdoc_id(value: str) -> None:
+    """Raise :class:`ValueError` if ``value`` is not a CR-shape TDoc id.
+
+    Thin wrapper over :func:`parse_tdoc_id` that exists so the CLI
+    boundary can reject malformed ``--tdoc`` arguments without the
+    caller having to unpack the parsed tuple. The error message is the
+    same as the one raised by :func:`parse_tdoc_id`.
+    """
+    parse_tdoc_id(value)

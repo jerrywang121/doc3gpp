@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import delete, select, extract
+from sqlalchemy import delete, func, select, extract
 from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.models.meeting import Meeting
@@ -50,6 +50,7 @@ class SQLAlchemyMeetingRepository:
         name_like: str | None = None,
         location_like: str | None = None,
         year: int | None = None,
+        tdoc_id: tuple[str, int] | None = None,
     ) -> list[Meeting]:
         """List the most recent meeting records, ordered by start date.
 
@@ -59,6 +60,9 @@ class SQLAlchemyMeetingRepository:
         - `name_like`: SQL LIKE pattern to apply to the `name` column
         - `location_like`: SQL LIKE pattern to apply to the `location` column
         - `year`: integer year to match the `end_date`
+        - `tdoc_id`: ``(prefix, number)`` tuple; narrows to meetings whose
+          ``start_doc`` / ``end_doc`` range brackets the TDoc. See
+          :meth:`MeetingRepository.list` for the matching semantics.
         - `offset`: number of rows to skip before applying `limit` (pagination)
         """
         with self._session_factory() as session:
@@ -77,11 +81,31 @@ class SQLAlchemyMeetingRepository:
             if year is not None:
                 stmt = stmt.where(extract("year", MeetingORM.end_date) == year)
 
+            if tdoc_id is not None:
+                prefix, number = tdoc_id
+                canonical_prefix = prefix.upper()
+                # Prefix-only predicate in SQL so the numeric range
+                # comparison can stay in Python (avoids dialect-specific
+                # text→int CAST). UPPER makes the prefix match case-
+                # insensitive on every dialect.
+                stmt = stmt.where(
+                    MeetingORM.start_doc.isnot(None),
+                    func.upper(func.substr(MeetingORM.start_doc, 1, 3))
+                    == canonical_prefix,
+                )
+
             stmt = stmt.order_by(
                 MeetingORM.start_date.desc(),
                 MeetingORM.meeting_id.desc(),
             ).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()
+
+        if tdoc_id is not None:
+            prefix, number = tdoc_id
+            rows = [
+                row for row in rows
+                if _tdoc_id_in_range(row, prefix.upper(), number)
+            ]
 
         return [_orm_to_domain(row) for row in rows]
 
@@ -128,6 +152,38 @@ def _orm_to_domain(row: MeetingORM) -> Meeting:
         end_doc=row.end_doc,
         tsg=row.tsg,
     )
+
+
+def _tdoc_id_in_range(row: MeetingORM, prefix: str, number: int) -> bool:
+    """Return True iff ``row`` brackets the TDoc identified by ``(prefix, number)``.
+
+    ``prefix`` must already be upper-cased (the caller is responsible
+    for canonicalisation). The stored prefix side is upper-cased here
+    so a stored ``r5s...`` row still matches a ``R5S`` query.
+    See :meth:`MeetingRepository.list` for the matching contract.
+    Returns ``False`` (rather than raising) on malformed stored values
+    so a stray scraper artifact never breaks a list query.
+    """
+    start_doc = row.start_doc
+    if start_doc is None or len(start_doc) != 9 or start_doc[:3].upper() != prefix:
+        return False
+    try:
+        start_num = int(start_doc[3:])
+    except ValueError:
+        return False
+    if start_num > number:
+        return False
+
+    end_doc = row.end_doc
+    if end_doc is None:
+        return True
+    if len(end_doc) != 9 or end_doc[:3].upper() != prefix:
+        return False
+    try:
+        end_num = int(end_doc[3:])
+    except ValueError:
+        return False
+    return end_num >= number
 
 
 def _persist(session: Session, meetings: list[Meeting]) -> None:

@@ -9,7 +9,7 @@ def test_cli_passes_combined_filters(monkeypatch):
 
     captured = {}
 
-    def fake_list_recent(self, limit=20, offset=0, tsg=None, name_like=None, location_like=None, year=None):
+    def fake_list_recent(self, limit=20, offset=0, tsg=None, name_like=None, location_like=None, year=None, tdoc_id=None):
         captured['limit'] = limit
         captured['offset'] = offset
         captured['tsg'] = tsg

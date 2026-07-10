@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 
 from doc3gpp.config import get_settings
-from doc3gpp.cli_filters import validate_date_filter
+from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
@@ -577,6 +577,10 @@ def meeting_list(
     name: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting name (supports % and _)") ,
     location: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting location (supports % and _)") ,
     year: int | None = typer.Option(None, help="Filter meetings by end_date year"),
+    tdoc: str | None = typer.Option(
+        None,
+        help="Find the meeting containing this TDoc (e.g. 'R5-260013'). Prefix match is case-insensitive.",
+    ),
     fields: str | None = typer.Option(
         None,
         help="Comma-separated list of fields to include (or 'all' for all fields).",
@@ -601,6 +605,9 @@ def meeting_list(
     - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`).
     - `--location`: SQL LIKE pattern to filter `location` (supports `%` and `_`).
     - `--year`: filter by the end_date year.
+    - `--tdoc`: find the meeting whose ``start_doc`` / ``end_doc`` range
+      brackets the given TDoc id (e.g. ``--tdoc R5-260013``). The flag is
+      rejected with a clear error if the value is not a CR-shape id.
     - `--limit` / `--offset`: pagination. ``--offset`` is applied first, then
       ``--limit`` caps the returned rows. Use ``--offset`` to page past
       earlier rows without re-running the filters.
@@ -639,6 +646,15 @@ def meeting_list(
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
     fmt = _resolve_format(fmt, default=settings.output.format)
 
+    # Validate --tdoc against the CR-shape regex before the database is
+    # touched so the operator sees a clear error at the CLI boundary.
+    parsed_tdoc_id: tuple[str, int] | None = None
+    if tdoc is not None:
+        try:
+            parsed_tdoc_id = parse_tdoc_id(tdoc)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from None
+
     # Validate --tsg against the reference table (matches `meeting sync`).
     # The table is auto-seeded on a fresh DB so this is safe without `db init`.
     if tsg is not None:
@@ -646,12 +662,19 @@ def meeting_list(
         tsg = _validate_tsg_short_name(tsg, tsg_service)
 
     logger.info(
-        "Listing meetings limit=%s offset=%s tsg=%s name=%s location=%s year=%s",
-        limit, offset, tsg, name, location, year,
+        "Listing meetings limit=%s offset=%s tsg=%s name=%s location=%s "
+        "year=%s tdoc=%s",
+        limit, offset, tsg, name, location, year, tdoc,
     )
     service = build_meeting_service()
     records = service.list_recent(
-        limit=limit, offset=offset, tsg=tsg, name_like=name, location_like=location, year=year,
+        limit=limit,
+        offset=offset,
+        tsg=tsg,
+        name_like=name,
+        location_like=location,
+        year=year,
+        tdoc_id=parsed_tdoc_id,
     )
 
     rows: list[list[str]] = []

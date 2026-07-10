@@ -80,8 +80,9 @@ The current implementation extracts these fields into the `Meeting` domain model
   - The second document identifier from the document range text.
   - Example: `R5-200050`.
 
-- `updated_at` (datetime | None)
-  - Set by persistence when the row is inserted or updated.
+- `tsg` (str | None)
+  - Canonical TSG short name stamped by `meeting sync --tsg` and stored as
+    a nullable foreign key into `tsgs.short_name`.
 
 ### Parsing rules
 
@@ -98,21 +99,31 @@ Important behavior:
 
 ### TDoc records
 
-TDocs are represented by the `TDoc` model with these extracted fields:
+TDocs are represented by the `TDoc` model with these fields:
 
 - `tdoc_id` (str)
-  - The 3GPP document identifier, typically formatted like `R1-000001`.
+  - The 3GPP document identifier, typically formatted like `R1-000001`,
+    `R5s260009`, or `R5w260045`.
 
-- `title` (str)
+- `title` (str | None)
   - The document title.
 
-- `meeting` (str | None)
-  - Optional meeting identifier associated with the document.
-  - Example: `RAN3#100`.
+- `meeting_id` (int | None)
+  - Optional foreign key into `meetings.meeting_id`. The CLI joins this to
+    `meetings.name` when it needs the presentation-only
+    `TDocWithMeeting.meeting_name` field.
 
 - `ftp_url` (str | None)
   - Optional relative URL for the document, stored as a path relative
     to the canonical 3GPP FTP root (`https://www.3gpp.org/ftp/`).
+
+- `source`, `type`, `status`, `cr_cat`, `is_revision_of`, `revised_to`,
+  `release`, `spec`, `version`, `related_wis`, `cr_num`, `cr_pack`
+  (str | None)
+  - Metadata extracted from the TDoc list XLSX.
+
+- `reservation_date`, `uploaded_date` (date | None)
+  - Dates parsed from the TDoc list XLSX when present.
 
 ### TDocFile records (auxiliary attachments)
 
@@ -136,8 +147,9 @@ The `TDocFile` model captures auxiliary files attached to a TDoc: revisions, rev
     path relative to the FTP root. Unique across the table; serves as
     the upsert key.
 
-- `updated_at` (datetime | None)
-  - Stamped by the persistence layer on every insert/update.
+- `uploaded_date` (date | None)
+  - Date the attachment was uploaded to the 3GPP FTP, parsed from the
+    directory listing when available.
 
 ### Where auxiliary TDoc files live
 
@@ -175,16 +187,14 @@ The filename parser in `src/doc3gpp/parsers/tdoc_file_parser.py` classifies each
 
 A file whose TDoc ID is not in the local `tdocs` table is silently dropped — auxiliary-file sync runs after the TDoc sync so the parser can match against the freshly-persisted TDoc IDs.
 
-### Planned TDoc sources
+### Additional TDoc sources
 
-The project currently has a placeholder for additional TDoc extraction.
-
-Typical TDoc source candidates include:
+The implemented TDoc sync path reads FTP `TDoc_List_Meeting_*.xlsx` files
+from stored meeting FTP folders. Additional sources are still planned, not
+implemented:
 
 - `GenerateDocumentList.aspx` pages from the 3GPP site.
-- FTP `tdoc_list` files inside meeting-specific subfolders.
-
-These sources are noted in `docs/implementation-status.md` and are not yet fully implemented.
+- Expanded metadata beyond the current FTP Excel-list columns.
 
 ## Work Item (WI) Source URLs
 
@@ -253,10 +263,6 @@ The current implementation extracts these fields into the `Wi` domain model:
     foreign key into `tsgs.short_name`. The `tsgs` table is auto-seeded
     on first sync so this FK is always satisfiable.
 
-- `updated_at` (datetime | None)
-  - Set by the persistence layer (`SQLAlchemyWiRepository.upsert_many`)
-    to the current UTC timestamp on every insert or update.
-
 ### Parsing rules
 
 The WI parser implementation is in `src/doc3gpp/parsers/wi_parser.py`.
@@ -319,8 +325,8 @@ The CLI uses TSG short names such as:
 
 - `R5` for RAN5
 - `R1` for RAN1
-- `CT1` for CT1
-- `SA1` for SA1
+- `C1` for CT1
+- `S1` for SA1
 
 TSG short names are normally derived from the 3GPP groups page:
 
@@ -425,14 +431,28 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 - `ftp_url`
 - `start_doc`
 - `end_doc`
-- `updated_at`
+- `tsg`
 
 ### TDocs
 
 - `tdoc_id`
 - `title`
-- `meeting`
+- `meeting_id`
 - `ftp_url`
+- `source`
+- `type`
+- `status`
+- `reservation_date`
+- `uploaded_date`
+- `cr_cat`
+- `is_revision_of`
+- `revised_to`
+- `release`
+- `spec`
+- `version`
+- `related_wis`
+- `cr_num`
+- `cr_pack`
 
 ### TDocFiles
 
@@ -441,7 +461,7 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 - `type`
 - `file`
 - `ftp_url`
-- `updated_at`
+- `uploaded_date`
 
 ### WIs
 
@@ -450,12 +470,15 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 - `release`
 - `name`
 - `tsg_short`
-- `updated_at`
 
 ## Notes
 
-- The current implementation focuses on meeting report scraping.
-- TDoc extraction is supported via manual CLI insertion and planned future automation.
+- The current implementation supports meeting report scraping, TDoc list sync
+  from meeting FTP Excel files, auxiliary TDoc file discovery, CR cover-page
+  extraction for synced CR TDocs, and WI DynaReport sync.
+- Additional TDoc source surfaces such as `GenerateDocumentList.aspx` remain
+  unimplemented; use `doc3gpp tdoc sync` against stored meeting FTP folders
+  for the implemented path.
 - Work Item extraction is fully automated: each TSG's `WI DynaReport` page
   is fetched on demand by `doc3gpp wi sync --tsg <short>` and persisted
   to the `wis` table with `(wi_id, tsg_short)` as the upsert key.

@@ -141,16 +141,22 @@ doc3gpp wi list --release "Rel-19" --limit 50
 
 Configuration is read from environment variables (and `.env`).
 
-| Variable                   | Purpose                                  |
-| -------------------------- | ---------------------------------------- |
-| `DOC3GPP_DATABASE_URL`     | SQLAlchemy URL (omit for default SQLite) |
-| `DOC3GPP_DB_ECHO`          | Echo SQL to stdout                       |
-| `DOC3GPP_DB_POOL_SIZE`     | Connection pool size                     |
-| `DOC3GPP_DB_AUTO_MIGRATE`  | Opt-in auto-migrate flag (no Alembic)    |
-| `DOC3GPP_LOG_LEVEL`        | Library log level                        |
-| `DOC3GPP_HTTP_VERIFY`      | TLS verification toggle                  |
-| `DOC3GPP_HTTP_MAX_RETRIES` | HTTP retry attempts                      |
-| `DOC3GPP_HTTP_RETRY_BACKOFF` | HTTP retry backoff base                |
+| Variable | Purpose |
+| --- | --- |
+| `DOC3GPP_DATABASE_URL` | SQLAlchemy URL (omit for default SQLite) |
+| `DOC3GPP_DB_ECHO` | Echo SQL to stdout |
+| `DOC3GPP_DB_POOL_SIZE` | Connection pool size |
+| `DOC3GPP_DB_AUTO_MIGRATE` | Compatibility flag; does not run Alembic migrations |
+| `DOC3GPP_LOG_LEVEL` | Library log level |
+| `DOC3GPP_HTTP_VERIFY` | TLS verification toggle |
+| `DOC3GPP_HTTP_MAX_RETRIES` | HTTP retry attempts |
+| `DOC3GPP_HTTP_RETRY_BACKOFF` | HTTP retry backoff base |
+| `DOC3GPP_MEETING_SYNC__CLOSED_YEARS` | Effective default for `meeting sync --closed-years` |
+| `DOC3GPP_MEETING_SYNC__FUTURE_YEARS` | Effective default for `meeting sync --future-years` |
+| `DOC3GPP_OUTPUT__FORMAT` | Default `* list --format` value (`table`, `json`, `markdown`) |
+| `DOC3GPP_CACHE__DIR` | TDoc extraction cache root |
+| `DOC3GPP_CACHE__SIZE_LIMIT_MB` | Combined `zips/` + `markdown/` cache size cap; `0` means unlimited |
+| `DOC3GPP_CACHE__PURGE_CONFIRM` | Whether `cache purge` prompts unless `--yes` is passed |
 | `DOC3GPP_TDOC_PARSE__MAX_BATCH` | Upper bound on TDocs per `tdoc parse` invocation (default `100`) |
 
 Nested settings can be overridden with the `__` delimiter, e.g.
@@ -193,9 +199,24 @@ future_years = 2        # default for `doc3gpp meeting sync --future-years`
 format = "json"         # default for every `* list --format`
 
 [output.fields]
-meeting = ["meeting_id", "name", "end_date"]  # default columns
-tdoc    = ["tdoc_id", "meeting_name", "title", "spec"]
-wi      = ["wi_id", "name"]
+meeting = [
+  "meeting_id", "name", "location", "start_date",
+  "end_date", "ftp_url", "start_doc", "end_doc",
+]
+tdoc = [
+  "tdoc_id", "meeting_name", "title", "source", "type",
+  "status", "cr_cat", "spec", "version", "related_wis",
+]
+tsg = ["tsg_name", "short_name", "description"]
+wi  = ["wi_id", "acronym", "release", "name"]
+
+[cache]
+dir = "~/.cache/doc3gpp/tdocs"
+size_limit_mb = 1024
+purge_confirm = true
+
+[tdoc_parse]
+max_batch = 100
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >
@@ -295,16 +316,16 @@ python -m pytest -m mysql
 
 ## Roadmap
 
-See [`docs/implementation-status.md`](docs/implementation-status.md) for the
-current status of TDoc extraction (`R5s` / `R5w` URL templates verified;
-`R5-` / `C6-` templates intentionally unresolved), the calendar parser's
-coupling to the current DynaReport layout, and other known constraints.
+Known constraints are documented in `AGENTS.md` §Known Constraints, and the
+TDoc extraction pipeline's current state (the `R5s` / `R5w` URL templates
+are verified; the `R5-` / `C6-` templates are intentionally unresolved)
+and the calendar parser's coupling to the current DynaReport layout are
+called out in `docs/architecture.md` §Out of scope (today).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [CLI reference](docs/cli.md)
-- [Implementation status](docs/implementation-status.md)
 - [3GPP knowledge base](docs/3gpp-knowledge.md)
 
 ## Contributing

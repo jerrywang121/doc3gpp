@@ -504,7 +504,7 @@ def meeting_sync(
         max=20,
         help=(
             "Years of closed meetings to keep. "
-            "Default: [meeting_sync].closed_years from config file or 2."
+            "Default: meeting_sync.closed_years from config file or 2."
         ),
     ),
     future_years: int | None = typer.Option(
@@ -513,7 +513,7 @@ def meeting_sync(
         max=10,
         help=(
             "Years of future meetings to keep. "
-            "Default: [meeting_sync].future_years from config file or 1."
+            "Default: meeting_sync.future_years from config file or 1."
         ),
     ),
 ) -> None:

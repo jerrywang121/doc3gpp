@@ -58,7 +58,7 @@ Per-layer modules:
 - `settings/` — schema and loader for environment-driven and TOML config;
   exposes `get_settings()` (cached) with `Settings` (root) +
   `MeetingSyncSettings` / `OutputSettings` / `OutputFieldsSettings` /
-  `CacheSettings` sub-models.
+  `CacheSettings` / `TDocParseSettings` sub-models.
     - `src/doc3gpp/settings/schema.py`
     - `src/doc3gpp/settings/loader.py`
     - `src/doc3gpp/settings/config_source.py` (TOML discovery)
@@ -163,9 +163,12 @@ and the TDoc CR extraction is the deepest.
 
 ### TDoc CR extraction
 
-1. `doc3gpp tdoc parse --tdoc <id>` (or `--tdoc-id N`) resolves the
-   id (via `TDocRepository.get_by_id`) and validates the row exists with
-   `type == "CR"` (raises `TDocTypeUnsupportedError` for non-CR ids).
+1. `doc3gpp tdoc parse` is filter-driven. At least one filter must be
+   supplied (`--tdoc` as a LIKE pattern, `--meeting-id`, `--meeting`, or
+   any text/date filter); the CLI validates `--meeting-id` when present,
+   applies `type == "CR"` by default when no explicit `--type` is
+   supplied, and partitions matches into already-parsed vs to-parse
+   groups before prompting.
 2. `TDocCrService.extract(tdoc_id, *, force=False)`:
     - Pre-resolves the candidate download URL(s) via
       `resolve_download_url(tdoc_id, build_ftp_url(tdocs.ftp_url))`
@@ -220,12 +223,12 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `ftp_url`, `source`, `type`, `status`, `reservation_date`,
       `uploaded_date`, `cr_cat`, `is_revision_of`, `revised_to`,
       `release`, `spec`, `version`, `related_wis`, `cr_num`,
-      `cr_pack`, `created_at`, `updated_at`.
+      `cr_pack`.
 - `tdoc_files`:
     - `id` (PK), `tdoc_id` (FK → `tdocs.tdoc_id`, no cascade),
       `type` (`revision` / `review` / `support`), `file`, `ftp_url`
       (unique, the upsert key; stored as a path relative to the
-      canonical 3GPP FTP root), `created_at`, `updated_at`.
+      canonical 3GPP FTP root), `uploaded_date`.
 - `tdoc_cr_details`:
     - `ftp_url` (PK, immutable download URL stored relative to the
       3GPP FTP root) + `tdoc_id` (non-PK FK → `tdocs.tdoc_id` with
@@ -237,8 +240,8 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `clauses_affected`, `other_comments`, `revision_history`,
       `ats_version`, `ttcn_release`, `test_case`, `test_suite`,
       `ue`, `ss`, `corrections` JSON blob, `year`, `tech`,
-      `extracted_tdoc_id`), `parser_version`, `extracted_at`,
-      `updated_at`. Identity is the URL because 3GPP assets are
+      `extracted_tdoc_id`), `parser_version`, `extracted_at`.
+      Identity is the URL because 3GPP assets are
       byte-for-byte identical for the lifetime of the URL while a
       single `tdoc_id` may map to multiple URLs across revisions —
       every revision's parsed record is preserved.
@@ -255,14 +258,16 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       cached zip/markdown.
 - `meetings`:
     - `meeting_id` (PK), `name`, `title`, `location`, `start_date`,
-      `end_date`, `ftp_url`, `start_doc`, `end_doc`, `updated_at`.
+      `end_date`, `ftp_url`, `start_doc`, `end_doc`, `tsg` (nullable
+      FK → `tsgs.short_name`, indexed for `meeting list --tsg`).
 - `tsgs`:
     - `short_name` (PK), `tsg_name` (unique), `description`, `url`.
-      Seeded on `db init`; validates `--tsg` in `meeting sync`.
+      Seeded on `db init`; validates `--tsg` in `meeting sync` and
+      `wi sync`.
 - `wis`:
-    - `(wi_id, tsg_short)` composite PK, `acronym`, `release`, `name`,
-      `updated_at`. `tsg_short` FK → `tsgs.short_name`; composite PK
-      keeps the natural identifier stable across multi-TSG ownership.
+    - `(wi_id, tsg_short)` composite PK, `acronym`, `release`, `name`.
+      `tsg_short` FK → `tsgs.short_name`; composite PK keeps the natural
+      identifier stable across multi-TSG ownership.
 
 Cascading FK deletes are deliberately inconsistent across the schema:
 `tdoc_cr_details` / `tdoc_extracts` cascade on `tdocs.tdoc_id`
@@ -294,26 +299,29 @@ Backend-specific engine kwargs are applied in
 ## CLI Surface
 
 Implemented command groups in `src/doc3gpp/cli.py` (seven groups,
-seventeen commands):
+eighteen commands):
 
 - `db`:
     - `check`
-    - `init` — also seeds the `tsgs` reference table
+    - `init` — creates the schema and seeds the `tsgs` reference table
+    - `reset` — SQLite-only destructive reset; deletes the DB file and
+      sidecars, clears the engine cache, recreates the schema, and re-seeds
+      `tsgs`
 - `meeting`:
     - `sync` — validates `--tsg` against the reference table
     - `list` — filters by `--tsg`, `--name`, `--location`, `--year`,
-      `--tdoc`, `--limit`, `--offset`; auto-wraps like patterns.
-      `--tdoc` accepts a 9-character CR-shape id (e.g. `R5-260013`,
-      `R5s260009`, `R5w260013`) and resolves to the meeting whose
-      `start_doc` / `end_doc` range brackets the TDoc; prefix match
-      is case-insensitive.
+      `--tdoc`, `--limit`, `--offset`. `--name` / `--location` are raw
+      SQL LIKE patterns (use `%` / `_` explicitly). `--tdoc` accepts a
+      9-character CR-shape id (e.g. `R5-260013`, `R5s260009`,
+      `R5w260013`) and resolves to the meeting whose `start_doc` /
+      `end_doc` range brackets the TDoc; prefix match is case-insensitive.
 - `tdoc`:
-    - `sync` — `--meeting-id` or `--meeting`; delegates to
+    - `sync` — exactly one of `--meeting-id` or `--meeting`; delegates to
       `TDocSyncCoordinator`
     - `list` — filters by `--tdoc`, `--meeting`, `--meeting-id`,
-      `--source`, `--spec`, `--wi`, `--title`, `--cat`, `--status`, `--type`,
-      `--revision-of`, `--revised-to`, `--ftp-url`, `--release`, `--version`,
-      `--cr-num`, `--cr-pack`, `--uploaded-date`.
+      `--source`, `--spec`, `--wi`, `--title`, `--cr-cat`, `--status`,
+      `--type`, `--revision-of`, `--revised-to`, `--ftp-url`, `--release`,
+      `--version`, `--cr-num`, `--cr-pack`, `--uploaded-date`.
       Text-column filters accept the rich grammar from
       `src/doc3gpp/cli_filters.py` (`null` / `not-null` / `!<pattern>` for
       `NOT LIKE` / SQL `LIKE`); `--uploaded-date` additionally accepts
@@ -331,7 +339,7 @@ seventeen commands):
     - `list`, `show`, `seed`
 - `wi`:
     - `sync` — `--tsg`
-    - `list` — filters by `--tsg`, `--release`
+    - `list` — filters by `--tsg`, `--name`, `--acronym`, `--release`
 - `config`:
     - `path` — which TOML file is in effect (or
       `"(no config file found)"`)
@@ -344,7 +352,9 @@ seventeen commands):
       `DOC3GPP_CACHE__PURGE_CONFIRM=false`
 
 Every `* list` command also accepts `--format table|json|markdown`
-and `-o/--output PATH`.
+and `-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list` also
+accept `--fields`; `wi list` uses the configured `output.fields.wi` list
+without a per-command `--fields` override.
 
 ## Composition
 
@@ -365,8 +375,8 @@ service stack.
 
 ## Testing Layout
 
-- `tests/unit/` — 53 files, 433 tests. Pure-Python unit tests; mock
-  external calls. Coverage is concentrated in:
+- `tests/unit/` — pure-Python unit tests that mock external calls. Coverage
+  is concentrated in:
     - parser fixtures (`test_calendar_parser.py`,
       `test_cr_parser.py`, `test_tdoc_parser.py`,
       `test_tdoc_file_parser.py`, `test_wi_parser.py`,
@@ -374,23 +384,24 @@ service stack.
     - scraping + cache contracts (`test_tdoc_cache.py`,
       `test_tdoc_zip_source.py`, `test_ftp_source.py`,
       `test_scraper_client.py`)
-    - repositories (CRUD + filter combinations; for each concrete
-      `SQLAlchemy*Repository`)
+    - repositories (CRUD + filter combinations for concrete
+      `SQLAlchemy*Repository` classes)
     - services (`test_meetings_service_sync.py`,
       `test_tdoc_service_sync.py`, `test_tdoc_sync_coordinator.py`)
     - CLI (`test_meeting_cli*`, `test_tdoc_cli_fields.py`,
       `test_tdoc_sync_cli.py`, `test_tdoc_parse_cli.py`,
-      `test_cache_cli.py`, `test_wi_cli.py`, `test_tsg_cli.py`)
+      `test_cache_cli.py`, `test_wi_cli.py`, `test_tsg_cli.py`,
+      `test_db_reset_cli.py`)
 - `tests/integration/` — sqlite-only by default; online + mysql
-  opt-in. 10 files, 53 tests:
-    - `test_sqlite_backend.py`, `test_sdk_integration.py`
+  opt-in. Coverage includes:
+    - `test_sqlite_backend.py`, `test_sdk_integration.py`,
+      `test_cli_sqlite.py`, `test_db_reset_sqlite.py`
     - `test_meeting_service_sqlite.py`,
       `test_tdoc_sqlite.py`, `test_tdoc_file_sqlite.py`,
-      `test_tdoc_cr_sqlite.py` (12 tests + 1 e2e Typer CLI test),
-      `test_tsg_sqlite.py`, `test_wi_sqlite.py`
-    - `test_online_3gpp_calendar.py`,
-      `test_online_tdoc_parse.py` (live `R5s260009` /
-      `R5w260009`, `@pytest.mark.online`)
+      `test_tdoc_cr_sqlite.py`, `test_tsg_sqlite.py`, `test_wi_sqlite.py`
+    - `test_online_3gpp_calendar.py`, `test_online_tdoc_parse.py`,
+      `test_online_tdoc_fetch_r5.py` (live 3GPP endpoints,
+      `@pytest.mark.online`)
     - `test_mysql_backend.py` (gated on
       `DOC3GPP_TEST_MYSQL_URL`)
 - `tests/fixtures/tdoc_cr_doc/` — 7 CR zip fixtures
@@ -398,7 +409,7 @@ service stack.
   `R5s260009.zip`, `R5s260051.zip`, `R5s260135.zip`,
   `R5s260176.zip`). Regression corpus for `cr_parser` and
   `tdoc_cr_service`.
-- Pytest markers: `online`, `mysql`. The default profile is
+- Pytest markers: `online`, `mysql`. The sqlite profile is
   `pytest -m "not mysql and not online"`; `./scripts/test_sqlite.sh`
   is the canonical wrapper.
 
@@ -411,10 +422,12 @@ readers:
 - **Ruff clean at every phase boundary** — `ruff check src/doc3gpp
   tests` before merging.
 - **No `as any` / `# type: ignore`** — use typed code paths instead.
-- **`db init` is the single schema boundary** — services never call
-  `create_schema()`; if a table is missing, the SQL repo raises
-  `OperationalError` and the CLI translates to a friendly
-  `typer.BadParameter` ("run `doc3gpp db init` first").
+- **Schema bootstrap is create-all, not versioned migrations.** `db init`
+  is the intended schema boundary for normal use, while `meeting sync`,
+  `wi sync`, and `tsg seed` still call `create_schema()` idempotently for
+  fresh-database ergonomics. `tdoc sync` and `tdoc parse` assume the schema
+  already exists. Existing installs need `doc3gpp db reset --yes` (SQLite)
+  or a backend-native migration/reset after ORM shape changes.
 - **Protocol ↔ impl signature parity** — when changing a filter
   signature on any repo, update both the Protocol and the impl.
 - **CLI depends on `services/factory.py` only** — never instantiate a
@@ -424,22 +437,17 @@ readers:
   `cache_clear()` on both in teardown (the `sqlite_env` fixture is the
   canonical pattern).
 
-## Open issues carried over
-
-These are actively tracked; see `docs/implementation-status.md`
-§Current Known Constraints for the full list and severity. Summary
-of the open items:
-
-- `ScraperClient.get_text` uses a broad `except Exception`; programming
-  errors look identical to network errors in logs.
-- `get_settings`' `@lru_cache` plus `ScraperClient.__init__` reading
-  settings once means env changes mid-process don't propagate.
-- `https://www.3gpp.org/ftp/` is hardcoded; if 3GPP moves the assets
-  to a CDN, scraping silently returns empty for `meeting sync`.
-- `R5-` and `C6-` URL templates return `None` until exercised against
-  the live site (only `R5s` and `R5w` are locked in).
-
 ## Out of scope (today)
+
+The full list of open constraints — schema bootstrap policy, settings
+caching, hardcoded FTP root, calendar-parser coupling, TDoc source
+coverage, R5-/C6- URL-template status, `python-docx` opt-in, and the
+test-surface limits — lives in
+[`docs/known-constraints.md`](known-constraints.md). That file is the
+single source of truth; update it in the same change set when a
+constraint is lifted.
+
+Out-of-scope features that have not been implemented yet:
 
 - TDoc types other than CR (LS, DRAFT, BB, etc.).
 - Workplan / spec status extraction.

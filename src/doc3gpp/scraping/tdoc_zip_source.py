@@ -1,15 +1,12 @@
 """Resolve a 3GPP TDoc identifier to its canonical zip URL and download it.
 
 Pure network + cache layer — no parsing. The URL templates are derived from
-``docs/ttcn_cr_cli_example.py:build_tdoc_zip_url`` and locked in by the
-TDoc Extraction Pipeline design (see ``docs/implementation-status.md``
-§Scraping and Parsing).
+the 3GPP directory layout and verified against offline fixtures for the
+``R5s`` (TTCN email CR) and ``R5w`` (TTCN workshop CR) branches.
 
 The ``R5-`` and ``C6-`` URL templates are intentionally unresolved (return
 ``None``) until exercised against the live site; callers should
-treat ``None`` as "not yet supported" rather than an error. The
-known-constraints list in ``docs/implementation-status.md`` tracks
-which URL branches are still pending verification.
+treat ``None`` as "not yet supported" rather than an error.
 """
 
 from __future__ import annotations
@@ -27,8 +24,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Pattern source of truth: ``docs/ttcn_cr_cli_example.py:29``.
-# Matches ``R5s260009``, ``R5w260009``, ``R5-227476``, ``C6-250028`` (and
+# CR-shape TDoc identifier. Shared with ``cli_filters.TDOC_ID_RE``; keep
+# in sync. Matches ``R5s260009``, ``R5w260009``, ``R5-227476``, ``C6-250028`` (and
 # the lower-case variants). The first char is the meeting family (``R``,
 # ``S``, ``C``), the second is the working group digit ``[1-9]``,
 # position 2 is the subtype separator (``-``, ``s``, or ``w``), and the
@@ -89,9 +86,8 @@ class TDocCacheLike(Protocol):
 def tsg_meeting_year_for(tdoc: str) -> tuple[str, int | None]:
     """Return the (tsg_short_name, four-digit-year) derived from a TDoc id.
 
-    The shape comes from ``docs/ttcn_cr_cli_example.py:build_tdoc_zip_url``:
-    positions 0-1 = TSG short name (uppercased), 3-4 = two-digit year
-    (``20xx``).
+    The shape comes from ``_CR_ID_RE`` above: positions 0-1 = TSG short name
+    (uppercased), 3-4 = two-digit year (``20xx``).
 
     Examples:
         ``R5s260009`` -> ``('R5', 2026)``

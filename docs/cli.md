@@ -601,6 +601,146 @@ doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'
 doc3gpp tdoc parse --meeting-id 85434 --yes
 ```
 
+### doc3gpp tdoc parse (direct mode)
+
+Purpose:
+
+- Parse a single `.docx` (or a zip-wrapped `.docx`) from a local path
+  or a web URL — without going through the `tdocs` row / meeting /
+  batch plumbing. The command takes the direct-parse branch when
+  **either** `--from-file` **or** `--from-url` is supplied; all other
+  filter arguments are silently ignored with a warning (they have no
+  meaning in single-source mode).
+
+Options:
+
+- `--from-file PATH`: parse a local `.docx` (or a `.zip` containing a
+  `.docx`). The path is read with `Path.read_bytes()`; the cache and
+  database are never touched.
+- `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.
+  When the URL is on the canonical 3GPP FTP root
+  (`https://www.3gpp.org/ftp/...`) the result is cached on disk and
+  written to `tdoc_extracts` + `tdoc_cr_details` (subject to the FK
+  matrix below); any other URL is parsed in-memory only. Schemes
+  other than `http(s)` (e.g. `ftp://`, `file://`) are rejected —
+  download out of band and use `--from-file` instead.
+- `--format {table,markdown,json,raw}`: output format. Default
+  `table` (tab-separated header + single data row, matching
+  `tdoc list --format table`). `markdown` writes a single-row GFM
+  table, `json` writes a single JSON object via `dataclasses.asdict`,
+  `raw` writes the converted markdown verbatim and skips the parser
+  entirely. The set is wider than the regular
+  `* list --format` literal (`raw` is direct-parse-only) so the CLI
+  rejects unknown values at the boundary.
+- `-o PATH`, `--output PATH`: write the result to `PATH` instead of
+  stdout. Pass `-` for stdout (the default). The file is opened in
+  text mode with `newline=""` so the markdown emitter's line endings
+  round-trip cleanly.
+
+Mutual exclusivity:
+
+- Exactly one of `--from-file` / `--from-url` is allowed. Setting
+  both surfaces `BadParameter: --from-file and --from-url are
+  mutually exclusive`.
+
+Ignored / rejected flags in direct mode:
+
+- All filter flags (`--tdoc`, `--meeting-id`, `--meeting`, `--status`,
+  `--cr-cat`, `--spec`, `--wi`, `--revision-of`, `--revised-to`,
+  `--title`, `--ftp-url`, `--release`, `--version`, `--cr-num`,
+  `--cr-pack`, `--source`, `--type`, `--uploaded-date`) are silently
+  ignored with a stderr warning of the form
+  `warning: ignoring filter flag(s) in direct-parse mode: --tdoc, --spec`.
+  Per the plan, the warning fires when at least one filter is
+  supplied; pass-through output still proceeds.
+- `--force` is **rejected** with `BadParameter: --force is not
+  applicable in --from-file / --from-url mode` — there is no DB row
+  to force.
+- `--yes` is **rejected** with `BadParameter: --yes is not
+  applicable in --from-file / --from-url mode` — there is no batch
+  to confirm.
+
+FK-aware behaviour matrix (3GPP URL):
+
+| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_details` row? | Output? | Warning? |
+|---|---|---|---|---|---|
+| `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | always | no |
+| `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
+| No `tdoc_id` pattern in filename | no | no | no | always | yes — pattern-miss notice |
+
+Local files and non-3GPP URLs always emit output and never touch
+the cache or the database. The TDoc id is auto-extracted from the
+filename using the existing
+[`_TDOC_HEADER_PATTERN`](src/doc3gpp/parsers/cr_parser.py) (matches
+`R5s260009`, `R5-227476`, `C6-250028`, etc.). Files without a
+matching pattern get a synthetic `LOCAL-<stem>` id internally so
+the parser can still run, but no DB row is ever written under that
+synthetic id.
+
+Cache naming (D10 fix): the zip cache is keyed on the **original
+(sanitized) filename**, not the TDoc id. Multiple revisions of the
+same id (`R5s260008_MCC160Comments_r1.zip` vs `…_r2.zip`) land in
+distinct cache slots; the legacy tdoc-id key would have silently
+served the first downloaded file forever. The markdown cache stays
+keyed by sha256 of the docx bytes (content-addressed, already
+collision-free).
+
+Exit codes:
+
+- `0` — parsed record (or raw markdown) was emitted successfully
+  (this includes the FK-miss cells of the matrix: a warning is
+  printed, the output is still produced, exit 0).
+- `1` — file missing, permission denied, network failure, parser
+  error (`CRHeaderMissingError`), or `--force` / `--yes` rejection.
+
+Install the optional dependency before first use (same as the
+filter path):
+
+```bash
+pip install "doc3gpp[extract]"
+```
+
+Examples:
+
+```bash
+# Local docx → stdout as a tab-separated record.
+doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.docx
+
+# Local docx → JSON file.
+doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.docx \
+    --format json -o /tmp/r5s260009.json
+
+# Local zip containing a .docx.
+doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.zip \
+    --format markdown
+
+# 3GPP URL on the canonical FTP root — caches + writes both DB rows.
+doc3gpp tdoc parse --from-url \
+    https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip
+
+# 3GPP URL → emit the converted markdown verbatim, skip the parser.
+doc3gpp tdoc parse --from-url \
+    https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
+
+# Non-3GPP URL → in-memory parse only; never touches the cache or DB.
+doc3gpp tdoc parse --from-url https://example.com/some.zip \
+    --format json -o /tmp/result.json
+
+# 3GPP URL where the tdoc_id is missing from the `tdocs` table.
+# Output is still produced; a warning with the suggested
+# `meeting sync --tsg R5` recipe prints to stderr.
+doc3gpp tdoc parse --from-url \
+    https://www.3gpp.org/ftp/.../R5s260043_MCC160Comments_r1.zip
+# warning: extracted tdoc_id 'R5s260043' from filename '...'
+#          is not present in the 'tdocs' table; skipping cache and DB writes.
+#
+#   To add this TDoc to the database so the result can be persisted, run:
+#
+#       doc3gpp meeting sync --tsg R5
+#       doc3gpp meeting list --tdoc R5s260043
+#       doc3gpp tdoc sync --meeting-id <meeting_id_from_previous_step>
+```
+
 ## cache Commands
 
 The `cache` sub-app exposes the on-disk cache that backs the TDoc

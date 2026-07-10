@@ -207,6 +207,8 @@ def download_tdoc_zip(
     client: "ScraperClient",
     cache: TDocCacheLike,
     primary_url: str | None = None,
+    *,
+    cache_key_override: str | None = None,
 ) -> DownloadedZip:
     """Return a :class:`DownloadedZip` for the TDoc, downloading on cache miss.
 
@@ -217,7 +219,7 @@ def download_tdoc_zip(
     first successful download:
 
     1. ``primary_url`` (typically rebuilt from ``tdocs.ftp_url`` via
-   :func:`doc3gpp.parsers.normalizers.build_ftp_url`).
+    :func:`doc3gpp.parsers.normalizers.build_ftp_url`).
     2. The template-based URL from :func:`get_tdoc_zip_url`.
 
     The two are deduplicated, so a ``primary_url`` that matches the
@@ -231,6 +233,16 @@ def download_tdoc_zip(
     The returned ``url`` records the exact candidate that succeeded on a
     fresh download, so the caller can persist the download provenance
     alongside the extracted CR fields.
+
+    The ``cache_key_override`` keyword is a strict opt-in: when set, the
+    function uses the supplied string in place of the default
+    ``canonical.lower()`` for both the cache probe and the cache write.
+    The default ``None`` keeps the legacy tdoc_id-based key, so existing
+    callers stay byte-for-byte identical. Callers that need a filename-
+    keyed cache (the direct-parse path) pass a sanitised basename here;
+    the cache layer accepts the override as-is and applies its own key
+    validation, so a hostile value still fails the
+    ``[A-Za-z0-9._-]{1,128}`` check in :mod:`doc3gpp.scraping.cache`.
 
     Raises:
         ValueError: ``tdoc`` does not match the CR pattern (the cache and
@@ -247,7 +259,7 @@ def download_tdoc_zip(
     if canonical is None:
         raise ValueError(f"Invalid TDoc id shape: {tdoc!r}")
 
-    cache_key = canonical.lower()
+    cache_key = cache_key_override or canonical.lower()
 
     cached_bytes = cache.get_bytes(cache_key, "zips")
     if cached_bytes is not None:

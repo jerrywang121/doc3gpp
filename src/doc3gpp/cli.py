@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import sys
@@ -16,6 +17,7 @@ from doc3gpp.config import get_settings
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_cr import TDocCRDetails
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
@@ -1248,6 +1250,46 @@ def tdoc_parse(
         "-y",
         help="Skip the confirmation prompt before extracting.",
     ),
+    from_file: str | None = typer.Option(
+        None,
+        "--from-file",
+        help=(
+            "Parse a single local .docx or .zip containing a .docx without "
+            "going through the database. Filter flags are silently ignored "
+            "in this mode. Mutually exclusive with --from-url; --force / --yes "
+            "have no effect in direct mode (no batch to confirm)."
+        ),
+    ),
+    from_url: str | None = typer.Option(
+        None,
+        "--from-url",
+        help=(
+            "Download a single URL (.docx or .zip containing a .docx) and "
+            "parse it. When the URL is on the canonical 3GPP FTP root the "
+            "result is cached and persisted; other URLs are parsed in-memory "
+            "only. Filter flags are silently ignored in this mode. Mutually "
+            "exclusive with --from-file."
+        ),
+    ),
+    direct_format: str | None = typer.Option(
+        None,
+        "--format",
+        help=(
+            "Output format for --from-file / --from-url direct mode: "
+            "table (default, tab-separated), markdown, json, or raw "
+            "(emits the converted markdown verbatim, no parsing). "
+            "In filter mode the available formats are table|json|markdown."
+        ),
+    ),
+    direct_output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help=(
+            "Write direct-parse output to PATH instead of stdout. "
+            "Pass '-' for stdout."
+        ),
+    ),
 ) -> None:
     """Download and extract structured CR cover-page fields for one or more TDocs.
 
@@ -1305,6 +1347,38 @@ def tdoc_parse(
       batch could not even start, **or** no TDoc matched the filters,
       **or** an invalid ``--uploaded-date`` value was supplied.
     """
+    if from_file is not None or from_url is not None:
+        _validate_direct_mode_flags(from_file, from_url)
+        _warn_on_ignored_filter_flags(
+            tdoc=tdoc,
+            meeting_id=meeting_id,
+            meeting=meeting,
+            status=status,
+            cr_cat=cr_cat,
+            spec=spec,
+            wi=wi,
+            revision_of=revision_of,
+            revised_to=revised_to,
+            title=title_filter,
+            ftp_url=ftp_url,
+            release=release,
+            version=version,
+            cr_num=cr_num,
+            cr_pack=cr_pack,
+            source=source,
+            tdoc_type=tdoc_type,
+            uploaded_date=uploaded_date,
+            force=force,
+            yes=yes,
+        )
+        _tdoc_parse_direct(
+            from_file=from_file,
+            from_url=from_url,
+            fmt=direct_format,
+            output=direct_output,
+            full=full,
+        )
+        return
     filter_args: dict[str, object] = {
         "tdoc": tdoc,
         "meeting_id": meeting_id,
@@ -1483,6 +1557,324 @@ def _any_filter_set(filter_args: dict[str, object]) -> bool:
         value is not None and value != ""
         for value in filter_args.values()
     )
+
+
+# ---------------------------------------------------------------------------
+# Direct-mode helpers (tdoc parse --from-file / --from-url)
+# ---------------------------------------------------------------------------
+
+
+# Output formats accepted in direct mode. The literal is wider than
+# ``settings.schema.OutputFormat`` because direct mode adds ``raw``;
+# CSV / ``table`` is the default per the plan's D7 decision.
+DIRECT_FORMATS: tuple[str, ...] = ("table", "json", "markdown", "raw")
+
+
+# Field list for the structured emitters (table / markdown / json).
+# Mirrors every :class:`TDocCRDetails` attribute except
+# ``parser_version`` (bookkeeping) and ``corrections`` (serialised
+# separately as JSON in the table cell; left as the native list in
+# JSON). Defined as a module constant so the help text and the
+# emitters share the same ordered list.
+_DIRECT_PARSE_FIELDS: tuple[str, ...] = (
+    "tdoc_id",
+    "spec",
+    "cr_num",
+    "rev",
+    "version",
+    "title",
+    "source",
+    "tsg",
+    "related_wis",
+    "date",
+    "cr_cat",
+    "release",
+    "reason_for_change",
+    "consequences_if_not_approved",
+    "clauses_affected",
+    "other_comments",
+    "revision_history",
+    "ats_version",
+    "ttcn_release",
+    "test_case",
+    "test_suite",
+    "ue",
+    "ss",
+    "corrections",
+    "year",
+    "tech",
+    "extracted_tdoc_id",
+    "ftp_url",
+)
+
+
+def _validate_direct_mode_flags(from_file: str | None, from_url: str | None) -> None:
+    """Reject the use of both ``--from-file`` and ``--from-url`` together.
+
+    Raises:
+        typer.BadParameter: both flags are non-``None``.
+    """
+    if from_file is not None and from_url is not None:
+        raise typer.BadParameter(
+            "--from-file and --from-url are mutually exclusive; "
+            "specify exactly one of the two."
+        )
+
+
+def _warn_on_ignored_filter_flags(
+    *,
+    tdoc: str | None,
+    meeting_id: int | None,
+    meeting: str | None,
+    status: str | None,
+    cr_cat: str | None,
+    spec: str | None,
+    wi: str | None,
+    revision_of: str | None,
+    revised_to: str | None,
+    title: str | None,
+    ftp_url: str | None,
+    release: str | None,
+    version: str | None,
+    cr_num: str | None,
+    cr_pack: str | None,
+    source: str | None,
+    tdoc_type: str | None,
+    uploaded_date: str | None,
+    force: bool,
+    yes: bool,
+) -> None:
+    """Print a stderr warning when filter flags are set together with a direct flag.
+
+    Per the plan's D2 decision, filter flags are silently ignored in
+    direct mode (no error, just a warning) so existing scripts that
+    pass them continue to parse. ``--force`` and ``--yes`` are NOT
+    filter flags — they are explicitly rejected because there is no
+    batch to confirm / no DB row to force in direct mode.
+    """
+    if force:
+        raise typer.BadParameter(
+            "--force is not applicable in --from-file / --from-url mode; "
+            "remove --force or use the filter path."
+        )
+    if yes:
+        raise typer.BadParameter(
+            "--yes is not applicable in --from-file / --from-url mode; "
+            "remove --yes or use the filter path."
+        )
+
+    ignored: list[str] = []
+    for name, value in (
+        ("--tdoc", tdoc),
+        ("--meeting-id", meeting_id),
+        ("--meeting", meeting),
+        ("--status", status),
+        ("--cr-cat", cr_cat),
+        ("--spec", spec),
+        ("--wi", wi),
+        ("--revision-of", revision_of),
+        ("--revised-to", revised_to),
+        ("--title", title),
+        ("--ftp-url", ftp_url),
+        ("--release", release),
+        ("--version", version),
+        ("--cr-num", cr_num),
+        ("--cr-pack", cr_pack),
+        ("--source", source),
+        ("--type", tdoc_type),
+        ("--uploaded-date", uploaded_date),
+    ):
+        if value is not None and value != "":
+            ignored.append(name)
+    if ignored:
+        typer.echo(
+            f"warning: ignoring filter flag(s) in direct-parse mode: {', '.join(ignored)}",
+            err=True,
+        )
+
+
+def _resolve_direct_format(fmt: str | None) -> str:
+    """Resolve ``--format`` for direct mode, defaulting to ``"table"``."""
+    if fmt is None or fmt == "":
+        return "table"
+    normalised = fmt.strip().lower()
+    if normalised not in DIRECT_FORMATS:
+        valid = ", ".join(DIRECT_FORMATS)
+        raise typer.BadParameter(
+            f"Unknown --format {fmt!r} for direct mode. Choose from: {valid}."
+        )
+    return normalised
+
+
+def _tdoc_parse_direct(
+    *,
+    from_file: str | None,
+    from_url: str | None,
+    fmt: str | None,
+    output: str | None,
+    full: bool,
+) -> None:
+    """Dispatch a single ``--from-file`` or ``--from-url`` call.
+
+    Resolves the format, runs the appropriate service method, prints
+    the FK-miss warning when applicable, and emits the result in the
+    chosen format. Exit code is 0 on success (per the plan's D9
+    decision), 1 on every other failure (file missing, bad URL,
+    network error, parser error).
+    """
+    from doc3gpp.parsers.cr_parser import CRHeaderMissingError
+    from doc3gpp.parsers.direct_extractor import (
+        build_missing_tdoc_id_warning_message,
+        build_no_pattern_warning_message,
+    )
+    from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
+
+    resolved_format = _resolve_direct_format(fmt)
+    service = build_tdoc_cr_service()
+    raw = from_file if from_file is not None else from_url
+    assert raw is not None
+
+    try:
+        if from_file is not None:
+            payload = Path(from_file).read_bytes()
+            result = service.extract_from_bytes(
+                payload, from_file, force=False, full=full,
+            )
+        else:
+            result = service.extract_from_url(
+                raw, force=False, full=full,
+            )
+    except FileNotFoundError as exc:
+        typer.echo(f"FAILED - FileNotFoundError: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except IsADirectoryError as exc:
+        typer.echo(f"FAILED - IsADirectoryError: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except PermissionError as exc:
+        typer.echo(f"FAILED - PermissionError: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except TDocZipDownloadError as exc:
+        typer.echo(f"FAILED - TDocZipDownloadError: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except CRHeaderMissingError as exc:
+        typer.echo(f"FAILED - CRHeaderMissingError: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except ValueError as exc:
+        typer.echo(f"FAILED - ValueError: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"FAILED - {type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if (
+        result.source_kind == "url-3gpp"
+        and result.tdoc_id is not None
+        and not result.tdoc_id_in_tdocs
+    ):
+        typer.echo(
+            build_missing_tdoc_id_warning_message(result.tdoc_id, raw),
+            err=True,
+        )
+    elif result.source_kind == "url-3gpp" and result.tdoc_id is None:
+        typer.echo(build_no_pattern_warning_message(raw), err=True)
+
+    if resolved_format == "raw":
+        _emit_record_raw(result.markdown, output)
+    elif result.details is None:
+        typer.echo(
+            f"FAILED - ValueError: --format {resolved_format!r} requires parsed fields; "
+            "the parser did not run for this source.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    else:
+        _emit_record(result.details, resolved_format, output)
+
+
+def _emit_record(
+    record: TDocCRDetails,
+    fmt: str,
+    output: str | None,
+) -> None:
+    """Dispatch to the table / markdown / json emitter for a single parsed record."""
+    if fmt == "table":
+        _emit_record_table(record, output)
+    elif fmt == "markdown":
+        _emit_record_markdown(record, output)
+    elif fmt == "json":
+        _emit_record_json(record, output)
+    else:
+        raise typer.BadParameter(f"Unsupported direct-parse format: {fmt!r}")
+
+
+def _emit_record_table(record: TDocCRDetails, output: str | None) -> None:
+    """Emit a single record as a tab-separated header + data row."""
+    stream, close_after = _open_output(output)
+    try:
+        stream.write("\t".join(_DIRECT_PARSE_FIELDS))
+        stream.write("\n")
+        stream.write("\t".join(_serialise_cell(record, name) for name in _DIRECT_PARSE_FIELDS))
+        stream.write("\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _emit_record_markdown(record: TDocCRDetails, output: str | None) -> None:
+    """Emit a single record as a one-row GFM table."""
+    stream, close_after = _open_output(output)
+    try:
+        stream.write("| " + " | ".join(_md_cell(h) for h in _DIRECT_PARSE_FIELDS) + " |\n")
+        stream.write("|" + "|".join(["---"] * len(_DIRECT_PARSE_FIELDS)) + "|\n")
+        cells = [_md_cell(_serialise_cell(record, name)) for name in _DIRECT_PARSE_FIELDS]
+        stream.write("| " + " | ".join(cells) + " |\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _emit_record_json(record: TDocCRDetails, output: str | None) -> None:
+    """Emit a single record as a JSON object via ``dataclasses.asdict``."""
+    payload = dataclasses.asdict(record)
+    payload["date"] = record.date.isoformat() if record.date is not None else None
+    payload["corrections"] = list(record.corrections)
+    stream, close_after = _open_output(output)
+    try:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _emit_record_raw(markdown: str, output: str | None) -> None:
+    """Write the converted markdown bytes verbatim, no wrapping."""
+    stream, close_after = _open_output(output)
+    try:
+        stream.write(markdown)
+        if not markdown.endswith("\n"):
+            stream.write("\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _serialise_cell(record: TDocCRDetails, field_name: str) -> str:
+    """Render a single :class:`TDocCRDetails` field for the table emitters.
+
+    ``date`` becomes ``isoformat()`` (or empty string for ``None``);
+    ``corrections`` is JSON-encoded with ``ensure_ascii=False`` so the
+    cell stays a single tab-delimited token; everything else uses the
+    field's ``str()`` form, with ``None`` rendered as empty string.
+    """
+    value = getattr(record, field_name)
+    if value is None:
+        return ""
+    if field_name == "date":
+        return value.isoformat()
+    if field_name == "corrections":
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
 
 
 _BASE_PARSE_COLUMNS: tuple[str, ...] = ("tdoc_id", "title", "type", "cr_cat", "status")

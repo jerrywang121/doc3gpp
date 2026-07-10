@@ -49,11 +49,17 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from doc3gpp.models.tdoc import TDoc
-from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+from doc3gpp.models.tdoc_cr import DirectParseResult, TDocCRDetails, TDocExtractMeta
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
     extract_docx_from_zip,
     parse_cr_details,
+)
+from doc3gpp.parsers.direct_extractor import (
+    derive_zip_cache_key,
+    direct_parse_bytes,
+    extract_tdoc_id_from_filename,
+    is_3gpp_ftp_url,
 )
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.repository.protocols import (
@@ -402,6 +408,262 @@ class TDocCrService:
                 continue
             successes[result.details.tdoc_id] = result
         return BatchExtractResult(successes=successes, failures=failures)
+
+    # ------------------------------------------------------------------
+    # Direct-parse path: ``tdoc parse --from-file/--from-url``
+    # ------------------------------------------------------------------
+
+    def extract_from_url(
+        self,
+        url: str,
+        *,
+        force: bool = False,
+        full: bool = False,
+    ) -> DirectParseResult:
+        """Download ``url`` and return a :class:`DirectParseResult`.
+
+        Branches on :func:`is_3gpp_ftp_url`:
+
+        - **3GPP-URL path**: behaves like the regular
+          :meth:`extract` happy path (cache + DB writes) but uses
+          the URL-derived cache key (via
+          :func:`derive_zip_cache_key`) and a FK probe against
+          ``tdocs`` so the FK on ``tdoc_extracts`` / ``tdoc_cr_details``
+          is never violated. The ``force`` flag is forwarded to
+          :func:`download_tdoc_zip`; the per-TDoc id is auto-extracted
+          from the URL's basename. The ``--format raw`` branch
+          (downstream of this method) writes the ``tdoc_extracts``
+          row but skips the ``tdoc_cr_details`` row.
+        - **Other URL path**: in-memory parse only; the cache and the
+          database are never touched.
+
+        Args:
+            url: HTTP or HTTPS URL (other schemes raise ``ValueError``
+                — operators should use ``--from-file`` for
+                ``ftp://`` / ``file://`` sources).
+            force: When ``True``, bypass the on-disk zip cache (and
+                the markdown cache, in the 3GPP-URL path). The
+                ``tdoc_cr_details`` / ``tdoc_extracts`` rows are
+                always re-upserted on a 3GPP-URL call.
+            full: Forwarded to :func:`parse_cr_details` as
+                ``full=True`` for the TTCN corrections sub-parser.
+
+        Returns:
+            A :class:`DirectParseResult` describing which cache +
+            DB writes landed. Never raises for FK misses — the
+            caller is expected to print the warning and emit the
+            parsed record to stdout.
+        """
+        if not is_3gpp_ftp_url(url):
+            payload = self._scraper.get_bytes(url)
+            markdown, docx_filename, details = direct_parse_bytes(
+                payload, filename=url, full=full,
+            )
+            return DirectParseResult(
+                source_kind="url-other",
+                markdown=markdown,
+                details=details,
+                extract_meta=None,
+                from_cache=False,
+                persisted=False,
+                tdoc_id=details.tdoc_id,
+                tdoc_id_in_tdocs=False,
+            )
+
+        cache_key = derive_zip_cache_key(url)
+        stored_ftp_url = normalize_ftp_path(url)
+        extracted_id = extract_tdoc_id_from_filename(url)
+
+        if extracted_id is None:
+            payload = self._scraper.get_bytes(url)
+            markdown, docx_filename, details = direct_parse_bytes(
+                payload, filename=url, full=full,
+            )
+            logger.warning(
+                "Direct-parse URL %s has no TDoc id pattern; "
+                "skipping cache and DB writes",
+                url,
+            )
+            return DirectParseResult(
+                source_kind="url-3gpp",
+                markdown=markdown,
+                details=details,
+                extract_meta=None,
+                from_cache=False,
+                persisted=False,
+                tdoc_id=None,
+                tdoc_id_in_tdocs=False,
+            )
+
+        if not self._tdoc_in_tdocs(extracted_id):
+            payload = self._scraper.get_bytes(url)
+            markdown, docx_filename, details = direct_parse_bytes(
+                payload, filename=url, full=full,
+            )
+            logger.warning(
+                "Direct-parse URL %s has tdoc_id %s missing from tdocs; "
+                "skipping cache and DB writes",
+                url,
+                extracted_id,
+            )
+            return DirectParseResult(
+                source_kind="url-3gpp",
+                markdown=markdown,
+                details=details,
+                extract_meta=None,
+                from_cache=False,
+                persisted=False,
+                tdoc_id=extracted_id,
+                tdoc_id_in_tdocs=False,
+            )
+
+        # 3GPP URL + tdoc_id ∈ tdocs: full happy path.
+        return self._extract_from_3gpp_url(
+            url=url,
+            cache_key=cache_key,
+            stored_ftp_url=stored_ftp_url,
+            tdoc_id=extracted_id,
+            force=force,
+            full=full,
+        )
+
+    def extract_from_bytes(
+        self,
+        docx_bytes: bytes,
+        filename: str,
+        *,
+        force: bool = False,
+        full: bool = True,
+    ) -> DirectParseResult:
+        """Parse ``docx_bytes`` from a local source — never touches cache or DB.
+
+        Local files have no FK to satisfy, so the result is always
+        emitted (the caller writes the parsed record to stdout or
+        ``--output``) and the on-disk cache + database stay
+        untouched. The dataclass fields that describe cache hits or
+        persistence are therefore always ``False`` / ``None`` for
+        this code path.
+
+        Args:
+            docx_bytes: Raw bytes of the document. The helper
+                :func:`direct_parse_bytes` dispatches on the leading
+                ``b"PK"`` to handle both bare ``.docx`` and zip-
+                wrapped ``.docx`` inputs.
+            filename: Source filename; used to drive the docx
+                extension guard and to auto-extract the TDoc id.
+            force: Accepted for signature parity with
+                :meth:`extract_from_url`; local files always bypass
+                the cache so the flag is a no-op.
+            full: Forwarded to :func:`parse_cr_details` (the
+                default ``True`` mirrors the CLI default for direct
+                mode and surfaces TTCN ``before_change`` /
+                ``after_change`` content).
+
+        Returns:
+            A :class:`DirectParseResult` whose ``source_kind`` is
+            ``"local"`` and whose persistence fields are all false.
+        """
+        del force
+        markdown, docx_filename, details = direct_parse_bytes(
+            docx_bytes, filename=filename, full=full,
+        )
+        tdoc_id = extract_tdoc_id_from_filename(filename)
+        return DirectParseResult(
+            source_kind="local",
+            markdown=markdown,
+            details=details,
+            extract_meta=None,
+            from_cache=False,
+            persisted=False,
+            tdoc_id=tdoc_id,
+            tdoc_id_in_tdocs=False,
+        )
+
+    def _tdoc_in_tdocs(self, tdoc_id: str) -> bool:
+        """Return ``True`` when ``tdoc_id`` has a matching row in ``tdocs``.
+
+        Cheap single-row probe against the TDoc repository; the FK on
+        ``tdoc_extracts`` / ``tdoc_cr_details`` is non-nullable, so
+        the service layer must consult this before either
+        :meth:`_repo.upsert` is called from the direct path.
+        """
+        return self._tdoc_repo.get_by_id(tdoc_id) is not None
+
+    def _extract_from_3gpp_url(
+        self,
+        *,
+        url: str,
+        cache_key: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+        force: bool,
+        full: bool,
+    ) -> DirectParseResult:
+        """Run the full extract pipeline for a 3GPP URL whose FK target exists.
+
+        The 3GPP branch of :meth:`extract_from_url` delegates to this
+        helper so the in-memory parse path stays readable. The
+        helper reuses the on-disk zip + markdown caches (with
+        ``cache_key`` so distinct revisions of the same ``tdoc_id``
+        get distinct cache slots — the D10 fix) and writes both
+        :class:`TDocExtractMeta` + :class:`TDocCRDetails` rows on a
+        fresh extract.
+        """
+        if not force:
+            cached_details = self._repo.get_by_url(stored_ftp_url)
+            cached_meta = self._repo.get_extract_meta_by_url(stored_ftp_url)
+            if cached_details is not None and cached_meta is not None:
+                logger.debug(
+                    "DB cache hit for direct-parse URL %s", url,
+                )
+                return DirectParseResult(
+                    source_kind="url-3gpp",
+                    markdown="",
+                    details=cached_details,
+                    extract_meta=cached_meta,
+                    from_cache=True,
+                    persisted=False,
+                    tdoc_id=tdoc_id,
+                    tdoc_id_in_tdocs=True,
+                )
+
+        zip_payload = self._scraper.get_bytes(url)
+        self._cache.put_bytes(cache_key, zip_payload, "zips")
+        zip_path = self._cache.path_for(cache_key, "zips")
+
+        doc_filename, docx_bytes = extract_docx_from_zip(zip_payload)
+        doc_hash = hashlib.sha256(docx_bytes).hexdigest()
+        markdown = self._load_or_render_markdown(
+            doc_hash=doc_hash,
+            docx_bytes=docx_bytes,
+            doc_filename=doc_filename,
+            force=force,
+        )
+        details = parse_cr_details(markdown, tdoc_id=tdoc_id, full=full)
+        details = replace(details, ftp_url=stored_ftp_url)
+        meta = TDocExtractMeta(
+            ftp_url=stored_ftp_url,
+            tdoc_id=tdoc_id,
+            zip_path=str(zip_path),
+            markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
+            doc_filename=doc_filename,
+        )
+        self._repo.upsert(details, meta)
+        logger.info(
+            "Persisted direct-parse CR details for tdoc_id %s at %s",
+            tdoc_id,
+            stored_ftp_url,
+        )
+        return DirectParseResult(
+            source_kind="url-3gpp",
+            markdown=markdown,
+            details=details,
+            extract_meta=meta,
+            from_cache=False,
+            persisted=True,
+            tdoc_id=tdoc_id,
+            tdoc_id_in_tdocs=True,
+        )
 
     # ------------------------------------------------------------------
     # Internals

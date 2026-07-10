@@ -98,7 +98,18 @@ def build_tdoc_cr_service() -> TDocCrService:
     * :class:`~doc3gpp.storage.repositories.tdoc_cr_sql.SQLAlchemyTDocCrRepository`
       for the detail + extract-metadata tables.
     * :class:`~doc3gpp.storage.repositories.tdoc_sql.SQLAlchemyTDocRepository`
-      for read-only ``tdocs`` lookups (type guard).
+      for read-only ``tdocs`` lookups (type guard) and for the FK
+      probe that gates ``tdoc_extracts`` / ``tdoc_cr_details`` writes
+      in the ``--from-url`` direct-mode path.
+
+    The factory is shared by both the filter-based batch path
+    (existing ``tdoc parse --tdoc/--meeting-id`` flow) and the new
+    direct-mode path (``tdoc parse --from-file/--from-url``). The
+    service's two public entry points compose on the same wiring;
+    the only caller-side difference is whether the dispatch goes
+    through :meth:`TDocCrService.extract_many` or through
+    :meth:`TDocCrService.extract_from_url` /
+    :meth:`TDocCrService.extract_from_bytes`.
     """
     settings = get_settings()
     return TDocCrService(

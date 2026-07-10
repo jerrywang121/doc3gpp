@@ -86,3 +86,6 @@ future_years = 1     # default; CLI flag --future-years overrides
 
 # [tdoc_parse]
 # max_batch = 100
+# Direct-parse flags (`--from-file`, `--from-url`, `--format`, `--output`)
+# are CLI-only — no TOML equivalent is exposed for the
+# `tdoc parse --from-*` direct mode.

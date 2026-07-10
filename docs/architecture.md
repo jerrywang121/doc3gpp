@@ -439,18 +439,13 @@ readers:
 
 ## Out of scope (today)
 
-These are tracked as active constraints rather than a separate status
-document; see `AGENTS.md` §Known Constraints for the full list and
-severity. Summary:
-
-- `create_schema()` is still called by `meeting sync`, `wi sync`, and
-  `tsg seed`; idempotent but blurs the `db init` boundary.
-- `get_settings`' `@lru_cache` plus `ScraperClient.__init__` reading
-  settings once means env changes mid-process don't propagate.
-- `https://www.3gpp.org/ftp/` is hardcoded; if 3GPP moves the assets
-  to a CDN, scraping silently returns empty for `meeting sync`.
-- `R5-` and `C6-` URL templates return `None` until exercised against
-  the live site (only `R5s` and `R5w` are locked in).
+The full list of open constraints — schema bootstrap policy, settings
+caching, hardcoded FTP root, calendar-parser coupling, TDoc source
+coverage, R5-/C6- URL-template status, `python-docx` opt-in, and the
+test-surface limits — lives in
+[`docs/known-constraints.md`](known-constraints.md). That file is the
+single source of truth; update it in the same change set when a
+constraint is lifted.
 
 Out-of-scope features that have not been implemented yet:
 

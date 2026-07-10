@@ -5,7 +5,13 @@
 
 A Python CLI/library that scrapes 3GPP meeting calendars, TDoc lists, auxiliary TDoc files, CR cover pages, and WIs into SQL.
 
-## QUICK START
+This guide stays lean on purpose: it covers the **shape** of the
+codebase — layout, where to look for a change, architecture rules, and
+common commands. Everything that drifts easily (symbol tables, settings
+caching details, filter grammar, anti-patterns, known constraints) lives
+in [`docs/`](docs/) and is linked from the "Doc pointers" section below.
+
+## Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -15,96 +21,99 @@ doc3gpp db init
 doc3gpp db check
 ```
 
-Build system: **hatchling**. Stack: Python 3.10+, SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, httpx, BeautifulSoup4 + lxml, openpyxl, alembic (installed but not wired).
-Extras: `pip install -e ".[cli]"` (Typer CLI), `.[mysql]` (pymysql), `.[postgres]` (psycopg[binary]), `.[extract]` (`python-docx` for the TDoc extraction pipeline).
-`pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"` or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
-`references-external/` is gitignored local scratch — never commit changes there.
+Build system: **hatchling**. Stack: Python 3.10+, SQLAlchemy 2.0,
+Pydantic v2 + pydantic-settings, httpx, BeautifulSoup4 + lxml, openpyxl,
+alembic (installed but not wired). Optional extras:
 
-## STRUCTURE
+- `.[cli]` — Typer CLI (also in `[dev]`).
+- `.[mysql]` / `.[postgres]` — DB drivers.
+- `.[extract]` — `python-docx` for the TDoc extraction pipeline.
+
+`pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"`
+or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
+`references-external/` is gitignored local scratch — never commit there.
+
+## Structure (high level)
 
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (7 groups): db, meetings, tdoc, tsg, wi, config, cache
-│   ├── config.py         # re-export shim (legacy)
-│   ├── models/           # Meeting, TDoc, Tsg, Wi dataclasses
-│   ├── parsers/          # HTML/Excel → domain objects (no network)
-│   ├── repository/       # Protocol contracts (abstract)
-│   ├── scraping/         # HTTP/FTP transport (no parsing)
-│   ├── services/         # orchestration: MeetingService, TDocService, TsgService, WiService
-│   ├── settings/         # pydantic-settings + TOML discovery (schema, config_source, loader)
-│   └── storage/          # persistence umbrella
-│       ├── backends/     # engine kwargs per dialect
-│       ├── db/           # ORM models, session, migrate, base
-│       │   └── migrations/   # placeholder for future Alembic
-│       └── repositories/ # SQLAlchemy impls of Protocols
+│   ├── cli.py            # Typer commands (7 groups, 18 commands)
+│   ├── models/           # domain dataclasses — never leak ORM attrs out
+│   ├── repository/       # abstract repo contracts (Protocols)
+│   ├── services/         # orchestration; CLI-injected via factory
+│   ├── scraping/         # HTTP / FTP transport — no parsing
+│   ├── parsers/          # HTML / Excel → domain objects — no network
+│   ├── settings/         # pydantic-settings + TOML discovery
+│   ├── storage/          # persistence umbrella (db/, backends/, repositories/)
+│   └── cli_filters.py    # shared filter / TDoc-id grammar
 ├── tests/
-│   ├── unit/             # 46 files (mock external calls)
-│   ├── integration/      # 14 files (sqlite + online + mysql)
+│   ├── unit/             # mock external calls
+│   ├── integration/      # sqlite by default; online + mysql opt-in
 │   └── fixtures/         # sample HTML + XLSX + zip docs
-├── docs/                 # architecture, CLI ref, implementation status
+├── docs/                 # architecture, CLI ref, conventions, code map, constraints
 └── scripts/              # test_sqlite.sh, dev_run.sh
 ```
 
-## WHERE TO LOOK
+For the full symbol-to-file table, see
+[`docs/code-map.md`](docs/code-map.md).
+
+## Where to look
 
 | Task | Location | Notes |
-|------|----------|-------|
-| Add a CLI command | `src/doc3gpp/cli.py` | Follow pattern: service → repo → CLI |
-| Add a data source | `src/doc3gpp/scraping/` + `src/doc3gpp/parsers/` | Network in scraping/, parsing in parsers/ |
-| Add a domain model | `src/doc3gpp/models/` | Pydantic dataclass, no ORM leak |
-| Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect |
-| Change filters for list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update BOTH protocol and impl |
-| Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only |
-| Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP |
+| --- | --- | --- |
+| Add a CLI command | `src/doc3gpp/cli.py` | Follow pattern: service → repo → CLI. |
+| Add a data source | `src/doc3gpp/scraping/` + `src/doc3gpp/parsers/` | Network in `scraping/`, parsing in `parsers/`. |
+| Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
+| Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
+| Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
+| Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. |
+| Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
 
-## CODE MAP
+For deeper conventions (filter grammar, settings caching, anti-patterns,
+commit policy), see [`docs/conventions.md`](docs/conventions.md).
 
-| Symbol | Type | File | Role |
-|--------|------|------|------|
-| `Meeting` | dataclass | `models/meeting.py` | Domain model for meetings (`tsg` is the owning TSG FK; populated by `meeting sync --tsg`) |
-| `TDoc` | dataclass | `models/tdoc.py` | Domain model for TDocs |
-| `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, ...) |
-| `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar for an extracted TDoc (zip/markdown paths, doc_filename) |
-| `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records |
-| `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to tsg_short, updated_at) |
-| `MeetingRepository` | Protocol | `repository/protocols.py` | Contract for meeting storage |
-| `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage; `get_by_id` resolves canonical id strings |
-| `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_cr_details` + `tdoc_extracts` storage |
-| `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage |
-| `WiRepository` | Protocol | `repository/protocols.py` | Contract for WI storage; upsert keyed by `(wi_id, tsg_short)` |
-| `MeetingService` | class | `services/meetings_service.py` | Meeting sync + list orchestration |
-| `TDocService` | class | `services/tdoc_service.py` | TDoc sync + list orchestration |
-| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → python-docx → parse → persist) |
-| `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; also exposes `build_tsg_url` URL pattern |
-| `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters |
-| `ScraperClient` | class | `scraping/client.py` | HTTP transport with httpx |
-| `fetch_calendar` | function | `scraping/calendar_source.py` | Fetch DynaReport HTML |
-| `fetch_tdocs_from_meeting_ftp` | function | `scraping/ftp_source.py` | Discover + fetch TDoc XLSX from FTP |
-| `fetch_wis` | function | `scraping/wi_source.py` | Fetch DynaReport WI list HTML for a TSG |
-| `parse_3gpp_calendar` | function | `parsers/calendar_parser.py` | HTML→Meeting list |
-| `parse_3gpp_wis` | function | `parsers/wi_parser.py` | HTML→Wi list (extracts wi_id, acronym, release, name) |
-| `read_tdoc_sheet` | function | `parsers/tdoc_parser.py` | XLSX→TDoc list |
-| `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of MeetingRepository |
-| `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of TDocRepository; rich filter helpers `_apply_text_filter` / `_apply_date_filter` consume `cli_filters.DATE_FILTER_RE` to interpret `null` / `not-null` / `LIKE` / `OP 'YYYY-MM-DD'` filter values for both `tdoc list` and `tdoc parse` (now a pure-filter flow with no per-id selector) |
-| `validate_date_filter` | function | `cli_filters.py` | Boundary guard for `--uploaded-date`; rejects anything that doesn't match `null` / `not-null` / `"<op> 'YYYY-MM-DD'"` before the database is touched |
-| `TDOC_ID_RE` | regex | `cli_filters.py` | CR-shape TDoc id regex `[RSC][1-9][-sw]\d{6}` (case-insensitive); shared with `parsers/tdoc_parser.CR_ID_RE` for the same upstream convention |
-| `parse_tdoc_id` | function | `cli_filters.py` | Boundary guard for `meeting list --tdoc`; returns `(prefix, number)` or raises `ValueError` with the accepted shapes |
-| `validate_tdoc_id` | function | `cli_filters.py` | `parse_tdoc_id` wrapper that raises on bad input without returning the tuple — used by the CLI boundary for early rejection |
-| `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of TDocCrDetailRepository |
-| `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of TsgRepository |
-| `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of WiRepository |
-| `get_engine` | function | `storage/db/session.py` | Cached engine factory |
-| `create_schema` | function | `storage/db/migrate.py` | Base.metadata.create_all |
-| `get_settings` | function | `settings/loader.py` | Cached settings loader (env + TOML file) |
-| `Settings` | model | `settings/schema.py` | Root pydantic-settings (flat DOC3GPP_* + nested sub-models) |
-| `MeetingSyncSettings` | model | `settings/schema.py` | Fetch knobs (`closed_years`, `future_years`) |
-| `OutputSettings` | model | `settings/schema.py` | Default `format` + per-command field lists |
-| `OutputFieldsSettings` | model | `settings/schema.py` | Per-list-command `default_fields` lists |
-| `find_config_file` | function | `settings/config_source.py` | TOML discovery (DOC3GPP_CONFIG → ./doc3gpp.toml → XDG) |
-| `load_config_data` | function | `settings/config_source.py` | Returns `(path, dict)` for the active TOML file |
+## Architecture boundaries
 
-## COMMANDS
+Strict layered separation in `src/doc3gpp/`. Each layer depends only on
+the layer below it; services reach down into storage through the
+`repository/` Protocols rather than touching the concrete ORM. See
+[`docs/architecture.md`](docs/architecture.md) for the layered diagram,
+runtime data flow, and ORM schema.
+
+| Layer | Rule |
+| --- | --- |
+| `models/` | pass between layers; **never leak ORM attributes** |
+| `repository/` (abstract) | Protocol contracts only |
+| `services/` | orchestration; injected with a repo impl via `services/factory.build_*` |
+| `scraping/` | HTTP / FTP transport only — **no HTML parsing** |
+| `parsers/` | HTML / Excel → domain only — **no network** |
+| `storage/db/` | ORM models, engine factory, `create_schema` bootstrap |
+| `storage/repositories/` | SQL impls of the `repository/` Protocols |
+| `settings/` | env + TOML config (pydantic-settings; precedence: CLI > env > file > defaults) |
+| `cli.py` | thin Typer commands; never instantiate SQL repos directly |
+
+Workflows in one line (full prose in `docs/architecture.md`):
+
+- `doc3gpp meeting sync --tsg <s>` → `MeetingService.sync` → DynaReport
+  HTML → `parse_3gpp_calendar` → stamp `Meeting.tsg` →
+  `SQLAlchemyMeetingRepository.upsert_many`.
+- `doc3gpp tdoc sync --meeting-id <id>` → `TDocSyncCoordinator`
+  → `TDocService` + `TDocFileService` → stored meeting row's FTP URL
+  → `TDoc_List_Meeting_*.xlsx`. **No meeting row → no TDoc sync.**
+- `doc3gpp wi sync --tsg <s>` → `WiService.sync` → `fetch_wis` →
+  `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many` (composite
+  PK `(wi_id, tsg_short)`; `tsgs` table is auto-seeded so the FK
+  validates).
+- `doc3gpp tdoc parse <filters>` is end-to-end filter-driven — every
+  flag is a filter, capped by `Settings.tdoc_parse.max_batch`.
+  Full grammar and prompt-completion semantics in
+  [`docs/conventions.md`](docs/conventions.md) and
+  [`docs/cli.md`](docs/cli.md).
+- `doc3gpp config path` / `doc3gpp config show` dump the resolved
+  TOML + env settings for diffing against `doc3gpp.toml.example`.
+
+## Common commands
 
 ```bash
 # Lint (ruff is the only configured tool)
@@ -113,7 +122,7 @@ ruff check .
 # Full sqlite test suite (unit + integration, excludes online + mysql)
 ./scripts/test_sqlite.sh
 
-# Online tests (opt-in, hits live 3gpp.org + FTP)
+# Online tests (opt-in, hits live 3gpp.org and FTP)
 python -m pytest -m online -rs
 
 # MySQL tests (needs DOC3GPP_TEST_MYSQL_URL)
@@ -123,106 +132,25 @@ python -m pytest -m mysql
 ./scripts/dev_run.sh
 ```
 
-- `pyproject.toml [tool.pytest.ini_options]` sets `pythonpath = ["src"]`, so tests resolve `doc3gpp.*` without editable install.
-- Default `pytest` excludes both `online` and `mysql` markers. New tests stay in the default pool unless they need network or a MySQL server.
-- **No CI pipeline exists.** The project relies on local `scripts/test_sqlite.sh` runs. No `.github/workflows/`, no Makefile, no Dockerfile.
+`pyproject.toml [tool.pytest.ini_options]` sets `pythonpath = ["src"]`,
+so tests resolve `doc3gpp.*` without an editable install.
 
-## ARCHITECTURE BOUNDARIES
+## Doc pointers
 
-`src/doc3gpp/` — strict layer separation:
+| Topic | Doc |
+| --- | --- |
+| Layered diagram, runtime data flow, ORM schema, CLI inventory, testing layout, design rules | [`docs/architecture.md`](docs/architecture.md) |
+| Per-command CLI reference (every flag, default, example) | [`docs/cli.md`](docs/cli.md) |
+| 3GPP URL conventions, naming conventions, parser field semantics | [`docs/3gpp-knowledge.md`](docs/3gpp-knowledge.md) |
+| Where each public symbol lives (symbol → file reference) | [`docs/code-map.md`](docs/code-map.md) |
+| Filter grammar, settings caching, commit policy, anti-patterns, unique styles | [`docs/conventions.md`](docs/conventions.md) |
+| Open limitations (schema bootstrap, hardcoded FTP URL, R5-/C6- URL templates, test surface, …) | [`docs/known-constraints.md`](docs/known-constraints.md) |
+| Per-knob TOML schema reference | [`doc3gpp.toml.example`](doc3gpp.toml.example) |
 
-| Layer | Path | Rule |
-|---|---|---|
-| `models/` | `Meeting`, `TDoc`, `Wi` | pass between layers; **never leak ORM attributes** |
-| `repository/` | `protocols.py` | abstract repo contracts only |
-| `services/` | `meetings_service.py`, `tdoc_service.py`, `wi_service.py` | orchestration; injected with a repo impl |
-| `scraping/` | `client.py`, `calendar_source.py`, `ftp_source.py`, `wi_source.py` | network/HTTP only — **no HTML parsing** |
-| `parsers/` | `calendar_parser.py`, `html_parsers.py`, `tdoc_parser.py`, `normalizers.py`, `wi_parser.py` | HTML/Excel → domain only — **no network** |
-| `storage/` | `db/`, `backends/`, `repositories/` | persistence only — **no business logic** |
-| `settings/` | `schema.py`, `loader.py` | env-driven config |
-| `cli.py` | Typer commands | thin: build service, call it, format output |
-
-Flow:
-- `doc3gpp meeting sync` → `MeetingService.sync` → fetch DynaReport HTML → `parse_3gpp_calendar` → stamp `Meeting.tsg` from validated `--tsg` → `SQLAlchemyMeetingRepository.upsert_many`
-- `doc3gpp tdoc sync --meeting-id <id>` resolves stored `Meeting.ftp_url` from DB, fetches `TDoc_List_Meeting_*.xlsx` from FTP. **No meeting row → no TDoc sync.**
-- `doc3gpp wi sync --tsg <short>` → `WiService.sync` → `fetch_wis` → `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many`. The `wis.tsg_short` column is a foreign key into `tsgs.short_name`, so the `tsgs` table is auto-seeded and `--tsg` is validated against it.
-- `doc3gpp db init` calls `create_schema()` and then `TsgService.seed_defaults()` to populate the `tsgs` reference table.
-- `doc3gpp db reset [--yes]` is the destructive recovery path: delete the SQLite file (plus WAL/SHM/journal sidecars), clear the cached engine, then re-run `create_schema()` + `seed_defaults()`. Refuses non-SQLite URLs. Use after an ORM change leaves the live schema out of sync (no Alembic is wired up).
-- `doc3gpp meeting sync --tsg <short>` validates `<short>` against the `tsgs` table (auto-seeded if empty); an unknown value raises `typer.BadParameter` listing the known short names.
-- `doc3gpp tsg list` and `doc3gpp tsg show` read from the `tsgs` table via
-  `SQLAlchemyTsgRepository`. `doc3gpp tsg seed` upserts the canonical 16 rows.
-- `doc3gpp config path` reports which TOML file is in effect (or "(no
-  config file found)"); `doc3gpp config show` dumps the fully-resolved
-  settings as JSON for diffing against the schema in `doc3gpp.toml.example`.
-## SETTINGS CACHING — FLUSH IN TESTS
-
-Both loaders are `@lru_cache(maxsize=1)`:
-
-- `doc3gpp.settings.loader.get_settings`
-- `doc3gpp.storage.db.session.get_engine`
-
-If a test or fixture changes `DOC3GPP_*` env vars via `monkeypatch`, it
-**must** `cache_clear()` both. See the `sqlite_env` fixture in
-`tests/conftest.py` for the canonical pattern.
-
-Recognised env vars: `DOC3GPP_DATABASE_URL`, `DOC3GPP_DB_ECHO`, `DOC3GPP_DB_POOL_SIZE`, `DOC3GPP_DB_AUTO_MIGRATE`, `DOC3GPP_LOG_LEVEL`, `DOC3GPP_HTTP_VERIFY`, `DOC3GPP_HTTP_MAX_RETRIES`, `DOC3GPP_HTTP_RETRY_BACKOFF`. Nested settings are overridable via the `__` delimiter: `DOC3GPP_MEETING_SYNC__CLOSED_YEARS=5`, `DOC3GPP_OUTPUT__FORMAT=json`, `DOC3GPP_CACHE__DIR=~/.cache/doc3gpp/tdocs`, `DOC3GPP_CACHE__PURGE_CONFIRM=false`. MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
-
-## CONFIG FILE LAYER
-
-TOML configuration files are merged into `Settings` below env vars in
-precedence (CLI > env > file > defaults). Discovery order:
-
-1. `$DOC3GPP_CONFIG` (file or directory).
-2. `./doc3gpp.toml` (project-local).
-3. `~/.config/doc3gpp/config.toml` (XDG; honors `$XDG_CONFIG_HOME`).
-
-A missing file is silent (defaults are used); a malformed file raises
-`ValueError` pointing at the path. `Settings` uses `extra="ignore"` so
-unrelated keys in the file are dropped rather than rejected — keeps the
-file co-tenanted with third-party tooling metadata. See
-`doc3gpp.toml.example` for the full schema and `doc3gpp config path` /
-`doc3gpp config show` for inspection. The schema lives in
-`src/doc3gpp/settings/schema.py`; discovery in
-`src/doc3gpp/settings/config_source.py`; loader merge in
-`src/doc3gpp/settings/loader.py`.
-## CONVENTIONS
-
-- Static type hints on all new code (project targets py310, `ruff target-version = "py310"`).
-- New features ship with both a **unit test** (mock external calls) and an **integration test** against sqlite under `tests/integration/`.
-- Ruff only: `line-length = 100`, no custom rule selection (defaults). No mypy/pyright configured.
-- Keep `README.md`, `AGENTS.md`, and `docs/*.md` in sync when behaviour or CLI surface changes.
-- Do not auto-commit. Plan first, implement, run lint + the sqlite test profile, then hand off.
-- When instructed by the user to commit, do it in one commit. Only create new commit on next time the user instruct to commit.
-- Scripts in `scripts/` use `set -euo pipefail`.
-- **Filter values for `tdoc list` and `tdoc parse`** share a single grammar defined in `src/doc3gpp/cli_filters.py`: `null` / `not-null` select by nullability, `!<pattern>` (the `!` is consumed) emits `NOT LIKE <pattern>`, anything else is a SQL `LIKE` pattern, and `--uploaded-date` additionally accepts `"<op> 'YYYY-MM-DD'"` (op ∈ `= != < <= > >=`). Both CLIs validate with `validate_date_filter` before touching the DB; the repository's `_apply_*_filter` helpers emit SQLAlchemy parameter bindings — never string interpolation — so the surface is injection-safe. The text-column flags are now uniform across both commands (`--status`, `--cr-cat`, `--spec`, `--wi`, `--title`, `--source`, `--type`, `--revision-of`, `--revised-to`, `--ftp-url`, `--release`, `--version`, `--cr-num`, `--cr-pack`, `--uploaded-date`).
-- **`tdoc parse` is filter-driven end to end.** Every flag is a filter; `--tdoc` is a `LIKE` pattern on `tdoc_id` (singular, not repeatable) and combines freely with `--meeting-id`, `--meeting`, and every text/date filter. The earlier `--tdoc-id` integer PK selector and the mutual exclusivity with `--meeting-id` are removed. Before extraction the CLI partitions the matches into already-parsed vs to-parse, prints both with a base column set plus per-active-filter extras, and prompts (skip with `--yes` / `-y`). The candidate set is capped by `Settings.tdoc_parse.max_batch` (default `100`, configurable via `[tdoc_parse] max_batch` in TOML or `DOC3GPP_TDOC_PARSE__MAX_BATCH` env var); matches above the cap are reported as `Remaining` so the operator can re-run without `--force` to continue.
-- **`meeting list --tdoc <id>`** finds the meeting whose `start_doc` / `end_doc` range brackets the TDoc. The flag accepts a 9-character CR-shape id matching `TDOC_ID_RE` (e.g. `R5-260013`, `R5s260009`, `R5w260013`); validation happens at the CLI boundary via `parse_tdoc_id` and the parsed `(prefix, number)` tuple is forwarded to the repo. Matching rules: `start_doc` prefix must equal the TDoc prefix (case-insensitive) and the 6-digit `start_doc` number must be `≤` the TDoc number; if `end_doc` is non-null its prefix and number must also bracket the TDoc. Meetings without a `start_doc` never match. Prefix matching is implemented with `func.upper(func.substr(...)) == prefix.upper()` so it works on SQLite / MySQL / Postgres without dialect-specific `ILIKE`.
-
-## ANTI-PATTERNS (THIS PROJECT)
-
-- **Protocol ↔ Impl signature drift.** Previously: `MeetingRepository.list` declared only `limit`, but `SQLAlchemyMeetingRepository.list` took `limit, tsg, name_like, location_like, year`. Resolved 2026-07-02 (M2). When changing filter signatures for any other repo, keep the Protocol and impl in sync.
-- **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` and `tdoc parse` already drop it.)
-- **Cross-service orchestration in CLI.** Mostly addressed: `tdoc sync` delegates to `TDocSyncCoordinator`. Other commands still construct their own services via `services.factory.build_*` helpers.
-- **Doc drift.** The earlier `docs/architecture.md` listed a `tdoc add` command that didn't exist; the current revision documents the actual filter-driven `tdoc parse` flow. Keep docs in sync when CLI surface changes.
-- **Acknowledged `# noqa: F401`.** Four in `storage/db/migrate.py` — side-effect imports required for SQLAlchemy `Base.metadata` registration. Do not remove.
-- **Retryable error surface.** `ScraperClient._is_retryable_exception` deliberately treats only transient `httpx` subclasses as retryable. Programming errors (e.g. `InvalidURL`) raise immediately — do not broaden the catch.
-
-## UNIQUE STYLES
-
-- **`repository/` (abstract) and `storage/repositories/` (concrete) are separate packages.** Abstractions live in `src/doc3gpp/repository/`, implementations in `src/doc3gpp/storage/repositories/`. This split means a reader follows two paths to trace a repo from contract to SQL.
-- **`config.py` is a re-export shim** for backwards compatibility. New imports should go to `doc3gpp.settings` directly.
-- **`cache.py` and `export.py` sit at `storage/` root**, not in a subpackage. Mildly unconventional but stable.
-- **MySQL tests double-gated**: `pytestmark` marker + `@pytest.mark.skipif` on env var.
-
-## KNOWN CONSTRAINTS
-
-- **No Alembic.** Schema bootstrap is `Base.metadata.create_all` via `storage/db/migrate.py`. `DOC3GPP_DB_AUTO_MIGRATE` is a flag only — does not run migrations. **Existing SQLite installs must run `doc3gpp db reset --yes` after pulling a change that adds a column (e.g. `meetings.tsg`).**
-- Calendar parser coupled to **current 3GPP DynaReport table layout** — upstream changes will break `meetings sync`.
-- TDoc extraction covers **FTP Excel lists only**. `GenerateDocumentList.aspx` and expanded metadata columns are unimplemented.
-- TDoc CR extraction covers the `R5s` (TTCN) and `R5w` (Workshop) URL templates verified against offline fixtures; the `R5-` and `C6-` templates are intentionally unresolved until exercised against the live site.
-- `python-docx` is an opt-in extra; without it the `tdoc parse` CLI prints a friendly install hint and exits 1.
-- Online tests access live `3gpp.org` + FTP — flaky; run with `-rs` to surface skip reasons.
-
+Update `README.md`, `AGENTS.md`, and the relevant `docs/*.md` in the
+same change set when CLI surface or behaviour changes — see
+[`docs/conventions.md`](docs/conventions.md) §"Documentation sync" for
+the convention.
 
 <!-- headroom:rtk-instructions -->
 # RTK (Rust Token Killer) - Token-Optimized Commands

@@ -1,9 +1,9 @@
 # doc3gpp Agent Guide
 
-**Generated:** 2026-06-30
+**Generated:** 2026-07-10
 **Branch:** main
 
-A Python CLI/library that scrapes 3GPP meeting calendars and TDocs and stores them in SQL.
+A Python CLI/library that scrapes 3GPP meeting calendars, TDoc lists, auxiliary TDoc files, CR cover pages, and WIs into SQL.
 
 ## QUICK START
 
@@ -39,8 +39,8 @@ doc3gpp/
 │       │   └── migrations/   # placeholder for future Alembic
 │       └── repositories/ # SQLAlchemy impls of Protocols
 ├── tests/
-│   ├── unit/             # 24 files (mock external calls)
-│   ├── integration/      # 10 files (sqlite + online + mysql)
+│   ├── unit/             # 46 files (mock external calls)
+│   ├── integration/      # 14 files (sqlite + online + mysql)
 │   └── fixtures/         # sample HTML + XLSX + zip docs
 ├── docs/                 # architecture, CLI ref, implementation status
 └── scripts/              # test_sqlite.sh, dev_run.sh
@@ -192,6 +192,7 @@ file co-tenanted with third-party tooling metadata. See
 - Ruff only: `line-length = 100`, no custom rule selection (defaults). No mypy/pyright configured.
 - Keep `README.md`, `AGENTS.md`, and `docs/*.md` in sync when behaviour or CLI surface changes.
 - Do not auto-commit. Plan first, implement, run lint + the sqlite test profile, then hand off.
+- When instructed by the user to commit, do it in one commit. Only create new commit on next time the user instruct to commit.
 - Scripts in `scripts/` use `set -euo pipefail`.
 - **Filter values for `tdoc list` and `tdoc parse`** share a single grammar defined in `src/doc3gpp/cli_filters.py`: `null` / `not-null` select by nullability, `!<pattern>` (the `!` is consumed) emits `NOT LIKE <pattern>`, anything else is a SQL `LIKE` pattern, and `--uploaded-date` additionally accepts `"<op> 'YYYY-MM-DD'"` (op ∈ `= != < <= > >=`). Both CLIs validate with `validate_date_filter` before touching the DB; the repository's `_apply_*_filter` helpers emit SQLAlchemy parameter bindings — never string interpolation — so the surface is injection-safe. The text-column flags are now uniform across both commands (`--status`, `--cr-cat`, `--spec`, `--wi`, `--title`, `--source`, `--type`, `--revision-of`, `--revised-to`, `--ftp-url`, `--release`, `--version`, `--cr-num`, `--cr-pack`, `--uploaded-date`).
 - **`tdoc parse` is filter-driven end to end.** Every flag is a filter; `--tdoc` is a `LIKE` pattern on `tdoc_id` (singular, not repeatable) and combines freely with `--meeting-id`, `--meeting`, and every text/date filter. The earlier `--tdoc-id` integer PK selector and the mutual exclusivity with `--meeting-id` are removed. Before extraction the CLI partitions the matches into already-parsed vs to-parse, prints both with a base column set plus per-active-filter extras, and prompts (skip with `--yes` / `-y`). The candidate set is capped by `Settings.tdoc_parse.max_batch` (default `100`, configurable via `[tdoc_parse] max_batch` in TOML or `DOC3GPP_TDOC_PARSE__MAX_BATCH` env var); matches above the cap are reported as `Remaining` so the operator can re-run without `--force` to continue.
@@ -202,7 +203,7 @@ file co-tenanted with third-party tooling metadata. See
 - **Protocol ↔ Impl signature drift.** Previously: `MeetingRepository.list` declared only `limit`, but `SQLAlchemyMeetingRepository.list` took `limit, tsg, name_like, location_like, year`. Resolved 2026-07-02 (M2). When changing filter signatures for any other repo, keep the Protocol and impl in sync.
 - **`create_schema()` called redundantly.** `meetings sync`, `wi sync`, and `tsg seed` still call `create_schema()` — idempotent but blurs the `db init` boundary. (`tdoc sync` and `tdoc parse` already drop it.)
 - **Cross-service orchestration in CLI.** Mostly addressed: `tdoc sync` delegates to `TDocSyncCoordinator`. Other commands still construct their own services via `services.factory.build_*` helpers.
-- **Doc drift.** `docs/architecture.md` lists a `tdoc add` command that doesn't exist. Keep docs in sync when CLI surface changes.
+- **Doc drift.** The earlier `docs/architecture.md` listed a `tdoc add` command that didn't exist; the current revision documents the actual filter-driven `tdoc parse` flow. Keep docs in sync when CLI surface changes.
 - **Acknowledged `# noqa: F401`.** Four in `storage/db/migrate.py` — side-effect imports required for SQLAlchemy `Base.metadata` registration. Do not remove.
 - **Retryable error surface.** `ScraperClient._is_retryable_exception` deliberately treats only transient `httpx` subclasses as retryable. Programming errors (e.g. `InvalidURL`) raise immediately — do not broaden the catch.
 

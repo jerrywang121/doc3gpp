@@ -125,6 +125,8 @@ Options:
 
 - --limit: number of rows.
   - default: 20
+- --offset: number of rows to skip before applying `--limit` (pagination).
+  - default: 0
 - --tsg: only list meetings for the given TSG short name.
   - default: none
   - exact-match on the `meetings.tsg` FK (case-insensitive on input;
@@ -153,11 +155,11 @@ Additional options:
 
 Default output fields:
 
-- `meeting_id`, `name`, `location`, `start_date`, `end_date`, `start_doc`, `end_doc`
+- `meeting_id`, `name`, `location`, `start_date`, `end_date`, `ftp_url`, `start_doc`, `end_doc`
 
-Note: by default `title`, `updated_at`, `ftp_url`, and `tsg` are excluded
-to keep the listing compact; use `--fields all` to include every
-available column (or `--fields tsg` to add just the owning TSG).
+Note: by default `title` and `tsg` are excluded to keep the listing
+compact; use `--fields all` to include every available column (or
+`--fields tsg` to add just the owning TSG).
 
 Examples:
 
@@ -252,7 +254,7 @@ Options:
 - --spec: filter by technical specification.
 - --wi: filter by related work items.
 - --title: filter by TDoc title.
-- --cat: filter by CR category (`cr_cat`).
+- --cr-cat: filter by CR category (`cr_cat`).
 - --status: filter by TDoc status.
 - --type: filter by TDoc type.
 - --revision-of: filter by `is_revision_of`.
@@ -901,7 +903,9 @@ doc3gpp tsg list
 doc3gpp meeting sync --tsg r5
 doc3gpp meeting list --limit 20
 doc3gpp meeting list --tdoc R5-260013
-doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
+doc3gpp tdoc sync --meeting-id 85434
+# or resolve by exact meeting name:
+doc3gpp tdoc sync --meeting "R5#74"
 doc3gpp tdoc list --limit 10
 doc3gpp tdoc parse --tdoc R5s260009
 doc3gpp tdoc show --tdoc R5s260009
@@ -919,5 +923,5 @@ doc3gpp wi list --format markdown -o wis.md
 
 # Inspect the resolved configuration
 doc3gpp config path
-doc3gpp config show | jq '.meeting_sync, .output'
+doc3gpp config show
 ```

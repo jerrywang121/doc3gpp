@@ -110,6 +110,14 @@ Workflows in one line (full prose in `docs/architecture.md`):
   Full grammar and prompt-completion semantics in
   [`docs/conventions.md`](docs/conventions.md) and
   [`docs/cli.md`](docs/cli.md).
+- `doc3gpp tdoc parse --from-file PATH` / `--from-url URL` is a
+  direct-mode alternative that bypasses the database filters. Local
+  files parse in-memory only; 3GPP-URL downloads follow the
+  FK-aware behaviour matrix in `docs/cli.md` (cache + DB writes
+  land when the filename's tdoc_id is present in `tdocs`; otherwise
+  the result is still emitted with a warning). The zip cache is
+  keyed on the **original (sanitized) filename** (D10 fix) so
+  multiple revisions of the same tdoc_id never collide.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
 

@@ -27,7 +27,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import date
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 
 _PARSER_VERSION = "1.0.0"
@@ -249,3 +249,66 @@ class TDocExtractMeta:
             raise ValueError("TDocExtractMeta requires a non-empty tdoc_id")
         if stripped_id != self.tdoc_id:
             object.__setattr__(self, "tdoc_id", stripped_id)
+
+
+# Allowed values for ``DirectParseResult.source_kind``. Stored as a
+# module-level literal so callers (CLI, tests) can exhaustively match
+# without hard-coding strings. ``"local"`` and the two URL variants
+# cover every behaviour matrix cell in the direct-parse plan.
+DirectSourceKind = Literal["local", "url-3gpp", "url-other"]
+
+
+@dataclass(slots=True, frozen=True)
+class DirectParseResult:
+    """Outcome of a single ``tdoc parse --from-file/--from-url`` call.
+
+    The dataclass bundles every value the CLI dispatcher needs to
+    decide what to write to disk, the database, and stdout — keeping
+    the service-layer return type a single value object avoids a
+    multi-return tuple at the CLI boundary.
+
+    Attributes:
+        source_kind: Where the bytes came from. One of ``"local"``
+            (file on disk), ``"url-3gpp"`` (HTTP(S) URL on the
+            canonical 3GPP FTP root), or ``"url-other"`` (any other
+            HTTP(S) URL). Mutually exclusive; the dispatcher picks
+            exactly one per call.
+        markdown: The converted markdown, always populated. For
+            ``--format raw`` this is what the CLI emits verbatim; for
+            the structured formats it feeds ``parse_cr_details``.
+        details: The parsed CR fields. ``None`` when ``--format raw``
+            was selected (the raw converter never calls the parser).
+        extract_meta: Cache-extract metadata sidecar. ``None`` when
+            the call did not write to the on-disk cache (local files,
+            non-3GPP URLs, and 3GPP URLs whose FK target is missing
+            from ``tdocs``).
+        from_cache: ``True`` when the call hit a previously persisted
+            ``tdoc_cr_details`` row and short-circuited the network
+            and parser paths. Only ever set for 3GPP-URL happy-path
+            cells.
+        persisted: ``True`` when this call wrote both a
+            ``tdoc_extracts`` row and, unless ``--format raw``, a
+            ``tdoc_cr_details`` row. False for local files,
+            non-3GPP URLs, the FK-miss cells, and cache hits (which
+            do not re-write the rows).
+        tdoc_id: The 3GPP TDoc id extracted from the source
+            filename when the pattern matches; ``None`` when the
+            filename has no 3GPP id (a synthetic ``LOCAL-<stem>``
+            is used internally by the parser but is *not* surfaced
+            here so the caller can branch on "did the filename
+            match?" without recomputing the synthetic id).
+        tdoc_id_in_tdocs: ``True`` when the extracted ``tdoc_id``
+            has a matching row in the ``tdocs`` table — i.e. when
+            the FK target for the DB writes exists. Always
+            ``False`` for local files and non-3GPP URLs; only the
+            3GPP-URL branch consults the ``tdocs`` table.
+    """
+
+    source_kind: DirectSourceKind
+    markdown: str
+    details: TDocCRDetails | None
+    extract_meta: TDocExtractMeta | None
+    from_cache: bool
+    persisted: bool
+    tdoc_id: str | None
+    tdoc_id_in_tdocs: bool

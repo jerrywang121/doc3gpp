@@ -969,3 +969,401 @@ def test_cli_from_url_3gpp_no_pattern_emits_warning(
     combined = (result.stdout or "") + (result.stderr or "")
     assert "does not match the 3GPP TDoc id" in combined
     assert "meeting_minutes.docx" in combined
+
+
+# ---------------------------------------------------------------------------
+# CLI dispatch: local batch parse (--from-path)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_from_path_requires_output(tmp_path: Path, monkeypatch) -> None:
+    """``--from-path`` without ``--output`` raises BadParameter."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--from-path", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "--output is required when --from-path is used" in (result.output or "")
+
+
+def test_cli_from_path_rejects_yes(tmp_path: Path, monkeypatch) -> None:
+    """``--from-path ... --yes`` is rejected — no DB batch to confirm."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(tmp_path),
+            "--output", str(tmp_path / "out"),
+            "--yes",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--yes is not applicable" in (result.output or "")
+
+
+def test_cli_from_path_missing_input_exits_1(tmp_path: Path, monkeypatch) -> None:
+    """A missing ``--from-path`` folder produces a clear error and exit 1."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(tmp_path / "missing"),
+            "--output", str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "FAILED - FileNotFoundError" in (result.output or "")
+
+
+def test_cli_from_path_no_targets_exits_0(tmp_path: Path, monkeypatch) -> None:
+    """An empty input folder prints a friendly message and exits 0."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    out = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "No legitimate .docx/.zip files found" in (result.output or "")
+
+
+def test_cli_from_path_single_file_writes_output(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--from-path`` writes one tab-separated file per input .docx."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    source = in_dir / "R5s260009.docx"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out"
+
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    out_file = out / "R5s260009.tsv"
+    assert out_file.exists()
+    body = out_file.read_text()
+    lines = body.rstrip().split("\n")
+    assert len(lines) == 2
+    assert lines[0].startswith("tdoc_id\t")
+    assert "R5s260009" in lines[1]
+    assert "Newly parsed:                    1" in result.output
+
+
+def test_cli_from_path_respects_format_extension(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--format json`` produces ``.json`` output files."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    source = in_dir / "R5s260009.zip"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out"
+
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    out_file = out / "R5s260009.json"
+    assert out_file.exists()
+    payload = json.loads(out_file.read_text())
+    assert payload["tdoc_id"] == "R5s260009"
+
+
+def test_cli_from_path_skips_existing_without_force(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Without ``--force`` an existing output file is skipped."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    source = in_dir / "R5s260009.docx"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = out / "R5s260009.tsv"
+    existing.write_text("stay")
+
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert existing.read_text() == "stay"
+    assert "Skipped (output already exists): 1" in result.output
+    assert "Newly parsed:                    0" in result.output
+
+
+def test_cli_from_path_force_overwrites_existing(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """With ``--force`` an existing output file is overwritten."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    source = in_dir / "R5s260009.docx"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = out / "R5s260009.tsv"
+    existing.write_text("stay")
+
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+            "--force",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "R5s260009" in existing.read_text()
+    assert "Re-parsed (with --force):        1" in result.output
+
+
+def test_cli_from_path_recursive_mirrors_subfolders(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--recursive`` mirrors the input subfolder tree under ``--output``."""
+    in_dir = tmp_path / "in"
+    (in_dir / "a").mkdir(parents=True)
+    (in_dir / "b").mkdir(parents=True)
+    (in_dir / "a" / "R5s260001.docx").write_bytes(b"dummy")
+    (in_dir / "b" / "R5s260002.zip").write_bytes(b"dummy")
+    out = tmp_path / "out"
+
+    call_count = {"n": 0}
+
+    class _CountingFakeService(_FakeService):
+        def extract_from_bytes(
+            self, payload: bytes, filename: str, *, force: bool, full: bool,
+        ) -> DirectParseResult:
+            call_count["n"] += 1
+            tdoc_id = extract_tdoc_id_from_filename(filename) or "R5s260009"
+            return DirectParseResult(
+                source_kind="local",
+                markdown="3GPP TSG- blah",
+                details=_dummy_details(tdoc_id),
+                extract_meta=None,
+                from_cache=False,
+                persisted=False,
+                tdoc_id=tdoc_id,
+                tdoc_id_in_tdocs=False,
+            )
+
+    _build_service_factory(monkeypatch, _CountingFakeService(None))  # type: ignore[arg-type]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+            "--recursive",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert call_count["n"] == 2
+    assert (out / "a" / "R5s260001.tsv").exists()
+    assert (out / "b" / "R5s260002.tsv").exists()
+    assert "Newly parsed:                    2" in result.output
+
+
+def test_cli_from_path_failure_counts_and_continues(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """One failed file is counted; the batch continues and exits 1."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    (in_dir / "R5s260001.docx").write_bytes(b"dummy")
+    (in_dir / "R5s260002.docx").write_bytes(b"dummy")
+    out = tmp_path / "out"
+
+    fake = _FakeService(CRHeaderMissingError("no header", snippet="x"))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert "Failures:                        2" in result.output
+    assert "Newly parsed:                    0" in result.output
+
+
+def test_cli_from_path_skips_files_without_tdoc_pattern(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Files without a TDoc id pattern in the name are ignored."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    (in_dir / "random.docx").write_bytes(b"dummy")
+    (in_dir / "notes.txt").write_bytes(b"dummy")
+    (in_dir / "R5s260009.docx").write_bytes(b"dummy")
+    out = tmp_path / "out"
+
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / "R5s260009.tsv").exists()
+    assert not (out / "random.tsv").exists()
+    assert "Newly parsed:                    1" in result.output
+    assert "No legitimate" not in result.output
+
+
+def test_cli_from_path_and_from_file_are_mutually_exclusive(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Both ``--from-path`` and ``--from-file`` set → BadParameter."""
+    source = tmp_path / "a.docx"
+    source.write_bytes(b"x")
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-file", str(source),
+            "--from-path", str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "mutually exclusive" in (result.output or "")
+
+
+def test_cli_from_path_ignores_filter_flags_with_warning(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A filter flag set with ``--from-path`` warns on stderr and continues."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    (in_dir / "R5s260009.docx").write_bytes(b"dummy")
+    out = tmp_path / "out"
+
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--output", str(out),
+            "--tdoc", "R5s260009",
+            "--spec", "38.523",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "ignoring filter flag(s) in local-batch mode" in combined
+    assert "--tdoc" in combined
+    assert "--spec" in combined

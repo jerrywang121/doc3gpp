@@ -610,7 +610,8 @@ Purpose:
   batch plumbing. The command takes the direct-parse branch when
   **either** `--from-file` **or** `--from-url` is supplied; all other
   filter arguments are silently ignored with a warning (they have no
-  meaning in single-source mode).
+  meaning in single-source mode). For parsing an entire folder tree
+  see the local batch mode section below.
 
 Options:
 
@@ -639,9 +640,9 @@ Options:
 
 Mutual exclusivity:
 
-- Exactly one of `--from-file` / `--from-url` is allowed. Setting
-  both surfaces `BadParameter: --from-file and --from-url are
-  mutually exclusive`.
+- `--from-file`, `--from-url`, and `--from-path` are mutually
+  exclusive. Setting more than one surfaces
+  `BadParameter: ... are mutually exclusive; specify exactly one source`.
 
 Ignored / rejected flags in direct mode:
 
@@ -739,6 +740,76 @@ doc3gpp tdoc parse --from-url \
 #       doc3gpp meeting sync --tsg R5
 #       doc3gpp meeting list --tdoc R5s260043
 #       doc3gpp tdoc sync --meeting-id <meeting_id_from_previous_step>
+```
+
+### doc3gpp tdoc parse (local batch mode)
+
+Purpose:
+
+- Parse every `.docx` and `.zip` under a local folder in one run,
+  writing one output file per input file. No database or cache writes
+  occur; this mode is useful for bulk-converting locally stored TDocs.
+
+Options:
+
+- `--from-path PATH`: input folder to scan. Required in this mode.
+- `--output PATH`: output folder. Required with `--from-path`;
+  created if it does not exist.
+- `--recursive`, `-r`: descend into subfolders. When targets are found
+  in subfolders, the output folder mirrors the input subfolder
+  structure relative to `--from-path`.
+- `--force`: overwrite existing output files. Without this flag an
+  existing output file is skipped.
+- `--format {table,markdown,json,raw}`: same formats as direct mode.
+  The output extension is chosen from the format:
+  `table` -> `.tsv`, `markdown` -> `.md`, `json` -> `.json`,
+  `raw` -> `.md`. Default: `table`.
+- `--full`: forward `full=True` to the parser (TTCN corrections).
+
+Behaviour:
+
+- Only filenames ending in `.docx` or `.zip` (case-insensitive) are
+  considered.
+- The output filename keeps the input stem and changes the extension
+  according to `--format`.
+- Per-file parse failures are logged and counted; the batch continues
+  so one bad file does not abort the run.
+- No per-file output is printed to stdout. Instead a summary reports:
+  `Skipped (output already exists)`, `Re-parsed (with --force)`,
+  `Newly parsed`, and `Failures`.
+
+Mutual exclusivity:
+
+- `--from-path` cannot be combined with `--from-file` or `--from-url`.
+
+Ignored / rejected flags in local batch mode:
+
+- Filter flags are silently ignored with a stderr warning of the form
+  `warning: ignoring filter flag(s) in local-batch mode: --tdoc, --spec`.
+- `--yes` is rejected -- there is no DB batch to confirm.
+- `--force` is allowed and means "overwrite existing outputs".
+
+Exit codes:
+
+- `0` -- at least one file was parsed successfully, **or** every file
+  was skipped because its output already existed.
+- `1` -- the input folder does not exist, `--output` was omitted, every
+  file failed to parse, or `--yes` was supplied.
+
+Examples:
+
+```bash
+# Parse every .docx/.zip in ./tdocs and write .tsv files under ./parsed.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed
+
+# Recurse into subfolders and produce JSON.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json
+
+# Overwrite any existing outputs.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --force
+
+# Emit converted markdown for every file.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --format raw
 ```
 
 ## cache Commands

@@ -17,10 +17,13 @@ from doc3gpp.cli_filters import (
     NOT_LIKE_PREFIX,
     NOT_NULL_TOKEN,
     NULL_TOKEN,
+    TDOC_ID_RE,
     is_not_null_token,
     is_null_token,
+    parse_tdoc_id,
     split_not_like_prefix,
     validate_date_filter,
+    validate_tdoc_id,
 )
 
 
@@ -179,3 +182,62 @@ class TestNotLikePrefix:
         negated, actual = split_not_like_prefix(value)
         assert negated is False
         assert actual == value
+
+
+class TestParseTdocId:
+    """``parse_tdoc_id`` is the boundary guard for ``meeting list --tdoc``."""
+
+    @pytest.mark.parametrize(
+        "value,prefix,number",
+        [
+            ("R5-260013", "R5-", 260013),
+            ("R5s260009", "R5s", 260009),
+            ("R5w260013", "R5w", 260013),
+            ("C6-250028", "C6-", 250028),
+            ("S2-150000", "S2-", 150000),
+            ("r5-260013", "r5-", 260013),
+            ("  R5-260013  ", "R5-", 260013),
+        ],
+    )
+    def test_accepts_valid_shapes(self, value: str, prefix: str, number: int) -> None:
+        assert parse_tdoc_id(value) == (prefix, number)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "",
+            "   ",
+            "R5-26001",
+            "R5-2600133",
+            "A5-260013",
+            "X5-260013",
+            "R0-260013",
+            "R5x260013",
+            "R5.260013",
+            "R5-abcdef",
+            "R5-260013r1",
+            "LS-260001",
+        ],
+    )
+    def test_rejects_invalid_shapes(self, value: str) -> None:
+        with pytest.raises(ValueError, match="Invalid TDoc id"):
+            parse_tdoc_id(value)
+
+    def test_error_message_lists_expected_shape(self) -> None:
+        with pytest.raises(ValueError) as excinfo:
+            parse_tdoc_id("bogus")
+        msg = str(excinfo.value)
+        assert "R5-260013" in msg
+        assert "R5s260009" in msg
+        assert "R5w260013" in msg
+
+    def test_validate_tdoc_id_is_parse_tdoc_id_without_return(self) -> None:
+        validate_tdoc_id("R5-260013")
+        with pytest.raises(ValueError, match="Invalid TDoc id"):
+            validate_tdoc_id("not-a-tdoc")
+
+    def test_tdoc_id_regex_is_full_shape(self) -> None:
+        assert TDOC_ID_RE.fullmatch("R5-260013") is not None
+        assert TDOC_ID_RE.fullmatch(" R5-260013") is None
+        assert TDOC_ID_RE.fullmatch("R5-260013 ") is None
+        assert TDOC_ID_RE.fullmatch("R5-260013X") is None

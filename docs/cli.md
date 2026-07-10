@@ -135,9 +135,18 @@ Options:
 Additional options:
 
 - --name: SQL LIKE pattern to filter meeting `name` (supports `%` and `_`).
-- --name: SQL LIKE pattern to filter meeting `name` (supports `%` and `_`).
 - --location: SQL LIKE pattern to filter meeting `location` (supports `%` and `_`).
 - --year: filter meetings by the year of the `end_date`.
+- --tdoc: find the meeting containing the given TDoc. Accepts a
+  9-character CR-shape id (`R5-260013`, `R5s260009`, `R5w260013`,
+  etc.); the value is validated against
+  `cli_filters.TDOC_ID_RE` (`[RSC][1-9][-sw]\d{6}`) before any
+  database lookup and rejected with a clear error on bad shape.
+  A meeting matches when its `start_doc` 3-char prefix equals the
+  TDoc's prefix and its 6-digit `start_doc` number is `≤` the
+  TDoc number; if `end_doc` is non-null the same prefix + number
+  `≥` rule applies. Meetings without a `start_doc` never match.
+  Prefix match is case-insensitive (`r5s`, `R5S`, `r5S` all match).
 - --fields: comma-separated list of fields to include in output, or `all`.
 - --format: see "Common list output options" below (table | json | markdown).
 - -o, --output: write the result to a file instead of stdout.
@@ -186,6 +195,12 @@ doc3gpp meeting list --fields meeting_id,name,tsg --tsg r5
 
 ```bash
 doc3gpp meeting list --fields all
+```
+
+- Find the meeting containing a given TDoc:
+
+```bash
+doc3gpp meeting list --tdoc R5-260013
 ```
 
 ## tdoc Commands
@@ -885,6 +900,7 @@ doc3gpp db reset --yes           # destructive: wipe + recreate SQLite schema
 doc3gpp tsg list
 doc3gpp meeting sync --tsg r5
 doc3gpp meeting list --limit 20
+doc3gpp meeting list --tdoc R5-260013
 doc3gpp tdoc sync --meeting-id 85434 --meeting "R5#74"
 doc3gpp tdoc list --limit 10
 doc3gpp tdoc parse --tdoc R5s260009

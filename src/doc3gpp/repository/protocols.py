@@ -150,6 +150,7 @@ class MeetingRepository(Protocol):
         name_like: str | None = None,
         location_like: str | None = None,
         year: int | None = None,
+        tdoc_id: tuple[str, int] | None = None,
     ) -> list[Meeting]:
         """Return a list of meeting records, optionally filtered and paginated.
 
@@ -162,6 +163,17 @@ class MeetingRepository(Protocol):
             location_like: SQL ``LIKE`` pattern applied to the meeting
                 location column.
             year: integer year to match against ``end_date``.
+            tdoc_id: ``(prefix, number)`` tuple (e.g. ``("R5-", 260013)``)
+                identifying the TDoc to find a containing meeting for.
+                A meeting matches when its ``start_doc`` prefix equals
+                ``prefix`` and its 6-digit ``start_doc`` number is ``<=
+                number``; if ``end_doc`` is non-null its prefix must also
+                equal ``prefix`` and its 6-digit number must be ``>=
+                number``. Prefix match is case-insensitive (``r5s``,
+                ``R5S`` and ``r5S`` all match a stored ``R5s…`` row).
+                Meetings without a ``start_doc`` never match. The tuple
+                is produced by :func:`cli_filters.parse_tdoc_id` so
+                callers don't need to re-validate the input shape.
         Pagination:
             offset: rows to skip before applying ``limit``. Combined with
                 ``limit`` this enables CLI pagination without re-running

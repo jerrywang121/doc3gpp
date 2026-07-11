@@ -626,7 +626,10 @@ Options:
   written to `tdoc_extracts` + `tdoc_cr_details` (subject to the FK
   matrix below); any other URL is parsed in-memory only. Schemes
   other than `http(s)` (e.g. `ftp://`, `file://`) are rejected —
-  download out of band and use `--from-path` instead.
+  download out of band and use `--from-path` instead. A URL ending
+  in `/` is treated as a 3GPP FTP folder and processed as a batch;
+  URLs ending in `.docx`/`.zip` are treated as single files;
+  ambiguous URLs are probed once and routed accordingly.
 - `--format {table,markdown,json,raw}`: output format. Default
   `table` (tab-separated header + single data row, matching
   `tdoc list --format table`). `markdown` writes a single-row GFM
@@ -637,13 +640,20 @@ Options:
   rejects unknown values at the boundary.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Required when `--from-path` is a directory; optional when
-  `--from-path` is a single file. The file is opened in text mode with
+  `--from-path` is a single file or `--from-url` is a folder. In batch
+  modes the path must be a directory and the upstream folder structure
+  is mirrored underneath it. The file is opened in text mode with
   `newline=""` so the markdown emitter's line endings round-trip
   cleanly.
-- `--recursive`, `-r`: descend into subfolders when `--from-path` is a
-  directory. Silently ignored when `--from-path` is a single file.
-- `--force`: when `--from-path` is a directory, overwrite existing
-  output files. Rejected when `--from-path` is a single file.
+- `--recursive`, `-r`: descend into subfolders when `--from-path` or
+  `--from-url` (folder batch) is used. Silently ignored for single
+  file sources.
+- `--max-depth INT`: override the configured `tdoc_parse.max_ftp_depth`
+  for a `--from-url` folder batch. Implies `--recursive`. Values must
+  be between `0` and `10`; `0` scans the root folder only.
+- `--force`: when `--from-path` is a directory or `--from-url` is a
+  folder, overwrite existing output files. Rejected for single file
+  sources.
 - `--full`: forward `full=True` to the parser (TTCN corrections).
 
 Mutual exclusivity:
@@ -685,21 +695,26 @@ Single-file behaviour:
   successfully; `1` on file missing, permission denied, parser error
   (`CRHeaderMissingError`), or rejected flags.
 
-Directory (batch) behaviour:
+Directory (batch) behaviour (local or 3GPP URL folder):
 
 - Only filenames ending in `.docx` or `.zip` (case-insensitive) whose
   name contains a 3GPP TDoc id pattern are considered.
 - One output file is written per input file; the output filename keeps
   the input stem and changes the extension according to `--format`.
+  For URL folder batches the FTP folder structure is mirrored under
+  `--output`.
 - Per-file parse failures are logged and counted; the batch continues
   so one bad file does not abort the run.
 - No per-file output is printed to stdout. Instead a summary reports:
   `Skipped (output already exists)`, `Re-parsed (with --force)`,
-  `Newly parsed`, and `Failures`.
+  `Newly parsed`, `Cache hits`, and `Failures` for URL batches.
+- DB/cache writes happen automatically for 3GPP URL folder batches
+  when the extracted TDoc id exists in `tdocs`; missing ids are parsed
+  in-memory and warned per file.
 - Exit code `0` when at least one file was parsed successfully, **or**
   every file was skipped because its output already existed; `1` when
-  the input folder does not exist, `--output` was omitted, every file
-  failed to parse, or `--yes` was supplied.
+  the input folder does not exist, `--output` was omitted for a local
+  directory batch, every file failed to parse, or `--yes` was supplied.
 
 FK-aware behaviour matrix (3GPP URL):
 
@@ -764,6 +779,21 @@ doc3gpp tdoc parse --from-url \
 # Non-3GPP URL → in-memory parse only; never touches the cache or DB.
 doc3gpp tdoc parse --from-url https://example.com/some.zip \
     --format json -o /tmp/result.json
+
+# 3GPP FTP folder batch — scan root only, write cache/DB for FK hits.
+doc3gpp tdoc parse --from-url \
+    https://www.3gpp.org/ftp/tsg_ran/WG5_Test_2026/Docs/
+
+# 3GPP FTP folder batch — recurse up to 2 levels (default) and mirror
+# results under ./parsed.
+doc3gpp tdoc parse --from-url \
+    https://www.3gpp.org/ftp/tsg_ran/WG5_Test_2026/Docs/ \
+    --recursive --output ./parsed --format json
+
+# 3GPP FTP folder batch — recurse exactly 1 level.
+doc3gpp tdoc parse --from-url \
+    https://www.3gpp.org/ftp/tsg_ran/WG5_Test_2026/Docs/ \
+    --recursive --max-depth 1
 
 # 3GPP URL where the tdoc_id is missing from the `tdocs` table.
 # Output is still produced; a warning with the suggested

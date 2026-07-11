@@ -49,17 +49,24 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from doc3gpp.models.tdoc import TDoc
-from doc3gpp.models.tdoc_cr import DirectParseResult, TDocCRDetails, TDocExtractMeta
+from doc3gpp.models.tdoc_cr import (
+    DirectParseBatchResult,
+    DirectParseResult,
+    TDocCRDetails,
+    TDocExtractMeta,
+)
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
     extract_docx_from_zip,
     parse_cr_details,
 )
 from doc3gpp.parsers.direct_extractor import (
+    NotAFolderError,
     derive_zip_cache_key,
     direct_parse_bytes,
     extract_tdoc_id_from_filename,
     is_3gpp_ftp_url,
+    list_3gpp_directory,
 )
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.repository.protocols import (
@@ -468,6 +475,7 @@ class TDocCrService:
                 persisted=False,
                 tdoc_id=details.tdoc_id,
                 tdoc_id_in_tdocs=False,
+                source_url=url,
             )
 
         cache_key = derive_zip_cache_key(url)
@@ -493,6 +501,7 @@ class TDocCrService:
                 persisted=False,
                 tdoc_id=None,
                 tdoc_id_in_tdocs=False,
+                source_url=url,
             )
 
         if not self._tdoc_in_tdocs(extracted_id):
@@ -515,6 +524,7 @@ class TDocCrService:
                 persisted=False,
                 tdoc_id=extracted_id,
                 tdoc_id_in_tdocs=False,
+                source_url=url,
             )
 
         # 3GPP URL + tdoc_id ∈ tdocs: full happy path.
@@ -526,6 +536,99 @@ class TDocCrService:
             force=force,
             full=full,
         )
+
+    def extract_from_url_batch(
+        self,
+        url: str,
+        *,
+        max_depth: int = 2,
+        force: bool = False,
+        full: bool = False,
+    ) -> DirectParseBatchResult:
+        """Batch-parse every matching ``.docx``/``.zip`` under a 3GPP FTP folder.
+
+        The URL is probed once. If it points to a single file,
+        :class:`NotAFolderError` is raised and the caller should fall back
+        to :meth:`extract_from_url`. If it is a folder, the listing is
+        scanned breadth-first up to ``max_depth`` levels and each matching
+        file URL is handed to :meth:`extract_from_url`, preserving the
+        existing DB/cache behavior for FK hits and the in-memory warning
+        path for FK misses.
+
+        Args:
+            url: A URL that passes :func:`is_3gpp_ftp_url`.
+            max_depth: Maximum folder levels to descend. ``0`` means the
+                root folder only.
+            force: Forwarded to :meth:`extract_from_url` for every file.
+            full: Forwarded to :meth:`extract_from_url` for every file.
+
+        Returns:
+            A :class:`DirectParseBatchResult` with per-file results and a
+            failure map keyed by file URL.
+
+        Raises:
+            ValueError: ``url`` is not a 3GPP FTP URL.
+            NotAFolderError: ``url`` resolves to a single file rather than
+                a folder listing.
+        """
+        if not is_3gpp_ftp_url(url):
+            raise ValueError(f"URL is not a 3GPP FTP URL: {url}")
+
+        file_urls = self._collect_3gpp_file_urls(url, max_depth=max_depth)
+
+        results: list[DirectParseResult] = []
+        failures: dict[str, str] = {}
+        for file_url in file_urls:
+            try:
+                result = self.extract_from_url(file_url, force=force, full=full)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to parse %s: %s", file_url, exc, exc_info=True,
+                )
+                failures[file_url] = f"{type(exc).__name__}: {exc}"
+                continue
+            results.append(result)
+
+        return DirectParseBatchResult(results=results, failures=failures)
+
+    def _collect_3gpp_file_urls(
+        self,
+        root_url: str,
+        *,
+        max_depth: int,
+    ) -> list[str]:
+        """BFS over ``root_url`` and return matching file URLs in visit order."""
+        visited: set[str] = set()
+        file_urls: list[str] = []
+        queue: list[tuple[str, int]] = [(root_url, 0)]
+
+        while queue:
+            folder_url, depth = queue.pop(0)
+            if folder_url in visited:
+                continue
+            visited.add(folder_url)
+
+            try:
+                listing = list_3gpp_directory(folder_url, client=self._scraper)
+            except NotAFolderError:
+                if depth == 0:
+                    raise
+                logger.warning("Skipping non-folder URL %s", folder_url)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to list %s: %s", folder_url, exc, exc_info=True,
+                )
+                continue
+
+            file_urls.extend(listing.file_urls)
+
+            if depth < max_depth:
+                for subfolder_url in listing.subfolder_urls:
+                    if subfolder_url not in visited:
+                        queue.append((subfolder_url, depth + 1))
+
+        return file_urls
 
     def extract_from_bytes(
         self,
@@ -625,6 +728,7 @@ class TDocCrService:
                     persisted=False,
                     tdoc_id=tdoc_id,
                     tdoc_id_in_tdocs=True,
+                    source_url=url,
                 )
 
         zip_payload = self._scraper.get_bytes(url)
@@ -663,6 +767,7 @@ class TDocCrService:
             persisted=True,
             tdoc_id=tdoc_id,
             tdoc_id_in_tdocs=True,
+            source_url=url,
         )
 
     # ------------------------------------------------------------------

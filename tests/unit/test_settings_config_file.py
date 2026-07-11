@@ -34,6 +34,7 @@ from doc3gpp.settings.schema import (
     OutputFieldsSettings,
     OutputSettings,
     Settings,
+    TDocParseSettings,
 )
 
 
@@ -125,6 +126,22 @@ def test_meeting_sync_validation_bounds(clean_settings) -> None:
         MeetingSyncSettings(closed_years=99)
     with pytest.raises(ValidationError):
         MeetingSyncSettings(future_years=99)
+
+
+def test_tdoc_parse_defaults_and_bounds(clean_settings) -> None:
+    """``tdoc_parse`` defaults and validation rules are enforced."""
+    from pydantic import ValidationError
+
+    s = get_settings()
+    assert s.tdoc_parse.max_batch == 100
+    assert s.tdoc_parse.max_ftp_depth == 2
+
+    TDocParseSettings(max_ftp_depth=0)
+    TDocParseSettings(max_ftp_depth=10)
+    with pytest.raises(ValidationError):
+        TDocParseSettings(max_ftp_depth=-1)
+    with pytest.raises(ValidationError):
+        TDocParseSettings(max_ftp_depth=11)
 
 
 def test_output_format_is_literal(clean_settings) -> None:
@@ -319,6 +336,21 @@ def test_env_overrides_toml_for_output_format(
     get_settings.cache_clear()
     s = get_settings()
     assert s.output.format == "markdown"  # env wins
+
+
+def test_tdoc_parse_max_ftp_depth_overrides(clean_settings, write_toml, monkeypatch) -> None:
+    """TOML and env both override ``max_ftp_depth`` with the usual precedence."""
+    cfg = write_toml("c.toml", "[tdoc_parse]\nmax_ftp_depth = 5\n")
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.tdoc_parse.max_ftp_depth == 5
+
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_FTP_DEPTH", "3")
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.tdoc_parse.max_ftp_depth == 3  # env wins
+    assert s.tdoc_parse.max_batch == 100
 
 
 def test_env_overrides_toml_for_flat_fields(

@@ -108,9 +108,15 @@ class TDocParseSettings(BaseModel):
     Operators can raise it for big-batch sweeps via the TOML
     ``[tdoc_parse] max_batch`` key or the
     ``DOC3GPP_TDOC_PARSE__MAX_BATCH`` env var.
+
+    :attr:`max_ftp_depth` controls how many folder levels
+    ``tdoc parse --from-url <3gpp-folder> --recursive`` will descend.
+    A value of ``0`` means only the root folder is scanned; the
+    default of ``2`` scans the root plus two levels of subfolders.
     """
 
     max_batch: int = Field(default=100, ge=1)
+    max_ftp_depth: int = Field(default=2, ge=0, le=10)
 
 
 class CacheSettings(BaseModel):

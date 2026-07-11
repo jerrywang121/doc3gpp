@@ -302,6 +302,9 @@ class DirectParseResult:
             the FK target for the DB writes exists. Always
             ``False`` for local files and non-3GPP URLs; only the
             3GPP-URL branch consults the ``tdocs`` table.
+        source_url: The original file or folder URL supplied to the
+            direct-parse call. Populated for URL sources so batch
+            emitters can mirror the upstream folder structure.
     """
 
     source_kind: DirectSourceKind
@@ -312,3 +315,16 @@ class DirectParseResult:
     persisted: bool
     tdoc_id: str | None
     tdoc_id_in_tdocs: bool
+    source_url: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class DirectParseBatchResult:
+    """Outcome of a batch ``tdoc parse --from-url <folder>`` run.
+
+    Bundles every per-file :class:`DirectParseResult` with a failure map
+    so the CLI can emit a summary without recomputing visit order.
+    """
+
+    results: list[DirectParseResult]
+    failures: dict[str, str]

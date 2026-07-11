@@ -158,6 +158,7 @@ Configuration is read from environment variables (and `.env`).
 | `DOC3GPP_CACHE__SIZE_LIMIT_MB` | Combined `zips/` + `markdown/` cache size cap; `0` means unlimited |
 | `DOC3GPP_CACHE__PURGE_CONFIRM` | Whether `cache purge` prompts unless `--yes` is passed |
 | `DOC3GPP_TDOC_PARSE__MAX_BATCH` | Upper bound on TDocs per `tdoc parse` invocation (default `100`) |
+| `DOC3GPP_TDOC_PARSE__MAX_FTP_DEPTH` | Default recursion depth for `tdoc parse --from-url <3gpp-folder> --recursive` (default `2`) |
 
 Nested settings can be overridden with the `__` delimiter, e.g.
 `DOC3GPP_OUTPUT__FORMAT=json`,
@@ -217,6 +218,7 @@ purge_confirm = true
 
 [tdoc_parse]
 max_batch = 100
+max_ftp_depth = 2
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >
@@ -259,6 +261,9 @@ doc3gpp tdoc parse --from-url https://example.com/some.zip --format json -o /tmp
 
 # Local batch parse — folder tree, no DB/cache writes
 doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json
+
+# Online batch parse — 3GPP FTP folder, cache + DB writes for FK hits
+doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --output ./parsed
 doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
 doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100

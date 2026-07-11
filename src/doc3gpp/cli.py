@@ -14,15 +14,21 @@ from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 
 from doc3gpp.config import get_settings
+from doc3gpp.settings.schema import Settings
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.models.tdoc_cr import TDocCRDetails
+from doc3gpp.models.tdoc_cr import DirectParseBatchResult, TDocCRDetails
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
-from doc3gpp.parsers.direct_extractor import extract_tdoc_id_from_filename
+from doc3gpp.parsers.direct_extractor import (
+    NotAFolderError,
+    extract_tdoc_id_from_filename,
+    is_3gpp_ftp_url,
+)
+from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
@@ -1069,6 +1075,30 @@ def _normalise_cli_tdoc_id(raw: str) -> str:
     return canonical if canonical is not None else raw.strip()
 
 
+def _resolve_url_batch_depth(
+    *,
+    recursive: bool,
+    max_depth: int | None,
+    settings: "Settings",
+) -> int:
+    """Return the effective recursion depth for a URL-folder batch parse."""
+    if max_depth is not None:
+        return max_depth
+    if recursive:
+        return settings.tdoc_parse.max_ftp_depth
+    return 0
+
+
+def _looks_like_3gpp_folder_url(url: str) -> bool:
+    """Return True when ``url`` is unambiguously a folder path."""
+    return url.endswith("/")
+
+
+def _looks_like_3gpp_file_url(url: str) -> bool:
+    """Return True when ``url`` ends with a known file extension."""
+    return url.lower().endswith((".docx", ".zip"))
+
+
 @tdoc_app.command("parse")
 def tdoc_parse(
     tdoc: str | None = typer.Option(
@@ -1184,7 +1214,7 @@ def tdoc_parse(
     from_url: str | None = typer.Option(
         None,
         "--from-url",
-        help="Download and parse a single URL (3GPP URLs may write cache/DB).",
+        help="Download and parse a URL (3GPP file or folder; folder batch writes cache/DB).",
     ),
     from_path: str | None = typer.Option(
         None,
@@ -1195,7 +1225,14 @@ def tdoc_parse(
         False,
         "--recursive",
         "-r",
-        help="Descend into subfolders (mirror structure under --output).",
+        help="Descend into subfolders for --from-path or --from-url folder batch.",
+    ),
+    max_depth: int | None = typer.Option(
+        None,
+        "--max-depth",
+        min=0,
+        max=10,
+        help="Override tdoc_parse.max_ftp_depth for --from-url folder batch (implies --recursive).",
     ),
     direct_format: str | None = typer.Option(
         None,
@@ -1206,7 +1243,7 @@ def tdoc_parse(
         None,
         "--output",
         "-o",
-        help="Write output to PATH (file when --from-path is a file, folder when it is a directory). Default stdout",
+        help="Write output to PATH (file when source is a file, folder in batch mode). Default stdout",
     ),
 ) -> None:
     """Parse Tdoc from the DB table, online file, a local file, or a folder tree.
@@ -1231,6 +1268,9 @@ def tdoc_parse(
 
     Online TDoc parse:
       --from-url URL [--output PATH] [--format table|json|markdown|raw] [--full]
+      (URL may be a single 3GPP .docx/.zip file or a 3GPP FTP folder; folder
+      batch scans .docx/.zip files, recurses with --recursive, and always
+      writes cache/DB for matching TDoc ids)
     """
     if from_url is not None or from_path is not None:
         _validate_source_mode_flags(from_url, from_path)
@@ -1288,13 +1328,52 @@ def tdoc_parse(
                     f"--from-path is neither a file nor a directory: {from_path}"
                 )
         else:
-            _tdoc_parse_direct(
-                from_path=None,
-                from_url=from_url,
-                fmt=direct_format,
-                output=direct_output,
-                full=full,
+            effective_depth = _resolve_url_batch_depth(
+                recursive=recursive,
+                max_depth=max_depth,
+                settings=get_settings(),
             )
+            if not is_3gpp_ftp_url(from_url) or _looks_like_3gpp_file_url(from_url):
+                _tdoc_parse_direct(
+                    from_path=None,
+                    from_url=from_url,
+                    fmt=direct_format,
+                    output=direct_output,
+                    full=full,
+                )
+            elif _looks_like_3gpp_folder_url(from_url):
+                _tdoc_parse_url_batch(
+                    from_url=from_url,
+                    output=direct_output,
+                    fmt=direct_format,
+                    max_depth=effective_depth,
+                    force=force,
+                    full=full,
+                )
+            else:
+                service = build_tdoc_cr_service()
+                try:
+                    batch = service.extract_from_url_batch(
+                        from_url,
+                        max_depth=effective_depth,
+                        force=force,
+                        full=full,
+                    )
+                except NotAFolderError:
+                    _tdoc_parse_direct(
+                        from_path=None,
+                        from_url=from_url,
+                        fmt=direct_format,
+                        output=direct_output,
+                        full=full,
+                    )
+                else:
+                    _emit_url_batch_results(
+                        batch=batch,
+                        root_url=from_url,
+                        output=direct_output,
+                        fmt=direct_format,
+                    )
         return
     filter_args: dict[str, object] = {
         "tdoc": tdoc,
@@ -1946,6 +2025,143 @@ def _tdoc_parse_local_batch(
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Failures:                        {failures}")
     if failures > 0 and newly_parsed + re_parsed == 0:
+        raise typer.Exit(code=1)
+
+
+def _resolve_url_batch_output_path(
+    file_url: str,
+    output_dir: Path,
+    fmt: str,
+) -> Path:
+    """Compute the mirrored output path for a URL-folder batch result."""
+    relative = normalize_ftp_path(file_url)
+    input_path = Path(relative)
+    extension = _DIRECT_FORMAT_EXTENSIONS[fmt]
+    target_dir = output_dir / input_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir / (input_path.stem + extension)
+
+
+def _tdoc_parse_url_batch(
+    *,
+    from_url: str,
+    output: str | None,
+    fmt: str | None,
+    max_depth: int,
+    force: bool,
+    full: bool,
+) -> None:
+    """Batch-parse every matching file under a 3GPP FTP folder URL.
+
+    DB/cache writes happen inside the service for FK hits. Per-file
+    results are written to ``--output`` when it is provided and mirrored
+    under the FTP folder structure; otherwise only a summary is printed.
+    """
+    resolved_format = _resolve_direct_format(fmt)
+    service = build_tdoc_cr_service()
+    batch = service.extract_from_url_batch(
+        from_url,
+        max_depth=max_depth,
+        force=force,
+        full=full,
+    )
+    if not batch.results and not batch.failures and max_depth == 0:
+        typer.echo(
+            "No matching files found at the root level. "
+            "Use --recursive to scan subfolders.",
+            err=True,
+        )
+    _emit_url_batch_results(
+        batch=batch,
+        root_url=from_url,
+        output=output,
+        fmt=resolved_format,
+    )
+
+
+def _emit_url_batch_results(
+    *,
+    batch: "DirectParseBatchResult",
+    root_url: str,
+    output: str | None,
+    fmt: str,
+) -> None:
+    """Emit a URL batch result to disk and/or summary."""
+    from doc3gpp.parsers.direct_extractor import (
+        build_missing_tdoc_id_warning_message,
+        build_no_pattern_warning_message,
+    )
+
+    output_dir = Path(output) if output is not None else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if not output_dir.is_dir():
+            raise typer.BadParameter(
+                f"--output must be a directory in URL batch mode: {output}"
+            )
+
+    skipped = 0
+    cache_hits = 0
+    newly_parsed = 0
+    failures = len(batch.failures)
+
+    for result in batch.results:
+        if (
+            result.source_kind == "url-3gpp"
+            and result.tdoc_id is not None
+            and not result.tdoc_id_in_tdocs
+        ):
+            file_url = result.source_url or root_url
+            typer.echo(
+                build_missing_tdoc_id_warning_message(result.tdoc_id, file_url),
+                err=True,
+            )
+        elif result.source_kind == "url-3gpp" and result.tdoc_id is None:
+            file_url = result.source_url or root_url
+            typer.echo(build_no_pattern_warning_message(file_url), err=True)
+
+        if output_dir is not None:
+            assert result.tdoc_id is not None
+            file_url = result.source_url or root_url
+            out_path = _resolve_url_batch_output_path(
+                file_url=file_url,
+                output_dir=output_dir,
+                fmt=fmt,
+            )
+            if out_path.exists() and not result.persisted and not result.from_cache:
+                skipped += 1
+                logger.debug("Skipping %s because output already exists: %s", result.tdoc_id, out_path)
+                continue
+
+            try:
+                if fmt == "raw":
+                    _emit_record_raw(result.markdown, str(out_path))
+                else:
+                    if result.details is None:
+                        logger.warning(
+                            "No parsed details for %s; skipping output.", result.tdoc_id
+                        )
+                        failures += 1
+                        continue
+                    _emit_record(result.details, fmt, str(out_path))
+            except OSError as exc:
+                logger.warning("Failed to write %s: %s", out_path, exc)
+                failures += 1
+                continue
+
+        if result.from_cache:
+            cache_hits += 1
+        else:
+            newly_parsed += 1
+
+    typer.echo("---")
+    typer.echo(f"Scanned:                         {len(batch.results) + failures}")
+    if output_dir is not None:
+        typer.echo(f"Skipped (output already exists): {skipped}")
+    typer.echo(f"Newly parsed:                    {newly_parsed}")
+    typer.echo(f"Cache hits:                      {cache_hits}")
+    typer.echo(f"Failures:                        {failures}")
+    if failures > 0 and newly_parsed + cache_hits == 0:
         raise typer.Exit(code=1)
 
 def _serialise_cell(record: TDocCRDetails, field_name: str) -> str:

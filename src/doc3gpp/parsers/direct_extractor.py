@@ -34,8 +34,12 @@ codes without inspecting exception hierarchies.
 from __future__ import annotations
 
 import re
+import typing
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
+
+from bs4 import BeautifulSoup
 
 from doc3gpp.parsers.cr_parser import (
     _TDOC_HEADER_PATTERN,
@@ -44,6 +48,9 @@ from doc3gpp.parsers.cr_parser import (
 )
 from doc3gpp.parsers.docx_converter import convert_document_to_markdown
 from doc3gpp.parsers.normalizers import FTP_BASE_URL
+
+if typing.TYPE_CHECKING:
+    from doc3gpp.scraping.client import ScraperClient
 
 
 #: Maximum filename length accepted for the zip-cache key. Matches
@@ -89,6 +96,131 @@ def is_3gpp_ftp_url(url: str) -> bool:
     host_path = (parsed.netloc + parsed.path).lower()
     ftp_host_path = ftp_root[len("https://"):]
     return host_path.startswith(ftp_host_path)
+
+
+@dataclass(slots=True, frozen=True)
+class FtpListing:
+    """Result of probing a 3GPP FTP directory listing."""
+
+    folder_url: str
+    file_urls: tuple[str, ...]
+    subfolder_urls: tuple[str, ...]
+
+
+class NotAFolderError(ValueError):
+    """Raised when a URL expected to be a 3GPP FTP folder is not a folder."""
+
+
+def list_3gpp_directory(url: str, *, client: "ScraperClient") -> FtpListing:
+    """Probe ``url`` and return a structured 3GPP FTP folder listing.
+
+    The function fetches ``url`` as text via the injected ``client``. If
+    the response is HTML and contains anchor tags, it classifies each
+    anchor:
+
+    - ``<a class="file" href="...">`` pointing to a ``.docx`` or ``.zip``
+      whose basename contains a 3GPP TDoc id pattern → ``file_urls``.
+    - Other anchors that resolve to folders (trailing slash, no file
+      extension, or a folder icon) → ``subfolder_urls``.
+
+    Parent-directory links, breadcrumb ancestors, sort links, and
+    duplicate URLs are skipped. Non-3GPP URLs are rejected immediately.
+    If the response is not parseable HTML, :class:`NotAFolderError` is
+    raised so callers can fall back to treating the URL as a single file.
+
+    Args:
+        url: Absolute HTTP(S) URL under ``https://www.3gpp.org/ftp/``.
+        client: Injected scraper client; ``get_text`` is used for the
+            probe and for resolving relative hrefs.
+
+    Returns:
+        An :class:`FtpListing` with absolute file and subfolder URLs.
+
+    Raises:
+        ValueError: ``url`` is not a 3GPP FTP URL.
+        NotAFolderError: the response is not an HTML directory listing.
+    """
+    if not is_3gpp_ftp_url(url):
+        raise ValueError(f"URL is not a 3GPP FTP URL: {url}")
+
+    try:
+        html = client.get_text(url)
+    except Exception as exc:
+        raise NotAFolderError(
+            f"URL does not appear to be a folder: {url}"
+        ) from exc
+
+    stripped = html.lstrip()
+    if not stripped.startswith(("<", "<!")):
+        raise NotAFolderError(f"URL does not appear to be a folder: {url}")
+
+    soup = BeautifulSoup(html, "lxml")
+    anchors = soup.find_all("a", href=True)
+    if not anchors:
+        raise NotAFolderError(f"URL does not appear to be a folder: {url}")
+
+    file_urls: list[str] = []
+    subfolder_urls: list[str] = []
+    seen: set[str] = set()
+
+    for anchor in anchors:
+        href = str(anchor["href"])
+        abs_url = urljoin(url, href)
+        if abs_url in seen:
+            continue
+        seen.add(abs_url)
+
+        if href.startswith("?"):
+            continue
+        if href in ("..", "../") or href.rstrip("/").endswith(".."):
+            continue
+        if _is_ancestor_or_self(abs_url, url):
+            continue
+
+        anchor_classes = set(anchor.get("class") or [])
+        if "file" in anchor_classes:
+            basename = abs_url.rsplit("/", 1)[-1]
+            lower_name = basename.lower()
+            if lower_name.endswith((".docx", ".zip")):
+                if extract_tdoc_id_from_filename(basename) is not None:
+                    file_urls.append(abs_url)
+        elif _looks_like_folder(anchor, href):
+            subfolder_urls.append(abs_url)
+
+    return FtpListing(
+        folder_url=url,
+        file_urls=tuple(file_urls),
+        subfolder_urls=tuple(subfolder_urls),
+    )
+
+
+def _is_ancestor_or_self(candidate: str, current: str) -> bool:
+    """Return True when ``candidate`` points to ``current`` or an ancestor folder."""
+    c = candidate.rstrip("/") + "/"
+    cur = current.rstrip("/") + "/"
+    return c == cur or cur.startswith(c)
+
+
+def _looks_like_folder(anchor, href: str) -> bool:
+    """Classify a directory-listing anchor as a folder.
+
+    3GPP FTP folder links may omit the trailing slash (e.g. ``Docs``),
+    so the trailing-slash test alone misses content subfolders. The
+    fallback chain is: trailing slash → folder icon → no file extension.
+    """
+    if href.endswith("/"):
+        return True
+
+    tr = anchor.find_parent("tr")
+    if tr is not None:
+        img = tr.find("img", class_="icon")
+        if img is not None:
+            src = str(img.get("src", ""))
+            if src.endswith("?file="):
+                return True
+
+    basename = href.rstrip("/").rsplit("/", 1)[-1]
+    return basename != "" and "." not in basename
 
 
 def read_source_bytes(source: Path | str) -> tuple[bytes, str]:

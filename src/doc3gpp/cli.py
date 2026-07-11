@@ -1181,11 +1181,6 @@ def tdoc_parse(
         "-y",
         help="Skip the batch parse confirmation prompt.",
     ),
-    from_file: str | None = typer.Option(
-        None,
-        "--from-file",
-        help="Parse a single local .docx or .zip (no DB/cache writes).",
-    ),
     from_url: str | None = typer.Option(
         None,
         "--from-url",
@@ -1194,7 +1189,7 @@ def tdoc_parse(
     from_path: str | None = typer.Option(
         None,
         "--from-path",
-        help="Parse every .docx/.zip under PATH (requires --output).",
+        help="Parse a local .docx/.zip file, or every .docx/.zip under a directory tree.",
     ),
     recursive: bool = typer.Option(
         False,
@@ -1211,7 +1206,7 @@ def tdoc_parse(
         None,
         "--output",
         "-o",
-        help="Write output to PATH (file for --from-file, folder for --from-path). Default stdout",
+        help="Write output to PATH (file when --from-path is a file, folder when it is a directory). Default stdout",
     ),
 ) -> None:
     """Parse Tdoc from the DB table, online file, a local file, or a folder tree.
@@ -1231,17 +1226,14 @@ def tdoc_parse(
       --cr-num, --cr-pack, --source, --type, --uploaded-date
 
     Local TDoc parse:
-      --from-file PATH [--output PATH] [--format table|json|markdown|raw] [--full]
-
-    Local TDoc batch parse:
-      --from-path PATH --output PATH [--recursive] [--force]
-      [--format table|json|markdown|raw] [--full]
+      --from-path PATH [--output PATH] [--format table|json|markdown|raw] [--full]
+      (PATH may be a single .docx/.zip file or a directory of them)
 
     Online TDoc parse:
       --from-url URL [--output PATH] [--format table|json|markdown|raw] [--full]
     """
-    if from_file is not None or from_url is not None or from_path is not None:
-        _validate_source_mode_flags(from_file, from_url, from_path)
+    if from_url is not None or from_path is not None:
+        _validate_source_mode_flags(from_url, from_path)
         _warn_on_ignored_filter_flags(
             tdoc=tdoc,
             meeting_id=meeting_id,
@@ -1264,23 +1256,40 @@ def tdoc_parse(
             force=force,
             yes=yes,
             from_path=from_path,
+            from_path_is_file=Path(from_path).is_file() if from_path else False,
         )
         if from_path is not None:
-            if direct_output is None:
-                raise typer.BadParameter(
-                    "--output is required when --from-path is used."
+            input_path = Path(from_path)
+            if not input_path.exists():
+                raise typer.BadParameter(f"--from-path does not exist: {from_path}")
+            if input_path.is_file():
+                _tdoc_parse_direct(
+                    from_path=str(input_path),
+                    from_url=None,
+                    fmt=direct_format,
+                    output=direct_output,
+                    full=full,
                 )
-            _tdoc_parse_local_batch(
-                from_path=from_path,
-                output=direct_output,
-                fmt=direct_format,
-                recursive=recursive,
-                force=force,
-                full=full,
-            )
+            elif input_path.is_dir():
+                if direct_output is None:
+                    raise typer.BadParameter(
+                        "--output is required when --from-path is a directory."
+                    )
+                _tdoc_parse_local_batch(
+                    from_path=str(input_path),
+                    output=direct_output,
+                    fmt=direct_format,
+                    recursive=recursive,
+                    force=force,
+                    full=full,
+                )
+            else:
+                raise typer.BadParameter(
+                    f"--from-path is neither a file nor a directory: {from_path}"
+                )
         else:
             _tdoc_parse_direct(
-                from_file=from_file,
+                from_path=None,
                 from_url=from_url,
                 fmt=direct_format,
                 output=direct_output,
@@ -1468,7 +1477,7 @@ def _any_filter_set(filter_args: dict[str, object]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Direct-mode helpers (tdoc parse --from-file / --from-url)
+# Direct-mode helpers (tdoc parse --from-path / --from-url)
 # ---------------------------------------------------------------------------
 
 
@@ -1517,17 +1526,15 @@ _DIRECT_PARSE_FIELDS: tuple[str, ...] = (
 
 
 def _validate_source_mode_flags(
-    from_file: str | None,
     from_url: str | None,
     from_path: str | None,
 ) -> None:
-    """Enforce mutual exclusivity of ``--from-file``, ``--from-url``, ``--from-path``.
+    """Enforce mutual exclusivity of ``--from-url`` and ``--from-path``.
 
     Raises:
         typer.BadParameter: more than one source flag is non-``None``.
     """
     sources = [
-        ("--from-file", from_file),
         ("--from-url", from_url),
         ("--from-path", from_path),
     ]
@@ -1562,24 +1569,25 @@ def _warn_on_ignored_filter_flags(
     force: bool,
     yes: bool,
     from_path: str | None,
+    from_path_is_file: bool,
 ) -> None:
     """Print a stderr warning when filter flags are set together with a direct/local-batch flag.
 
     Filter flags are silently ignored in direct/local-batch mode (no
     error, just a warning) so existing scripts that pass them continue
     to parse. ``--yes`` is rejected in both modes because there is no
-    DB batch to confirm. ``--force`` is rejected in single-source
+    DB batch to confirm. ``--force`` is rejected in single-file
     direct mode; in local-batch mode it means "overwrite existing
     output files" and is therefore allowed.
     """
-    if from_path is None and force:
+    if from_path is not None and from_path_is_file and force:
         raise typer.BadParameter(
-            "--force is not applicable in --from-file / --from-url mode; "
-            "remove --force or use the filter path."
+            "--force is not applicable when --from-path points to a single file; "
+            "remove --force or point --from-path to a directory."
         )
     if yes:
         raise typer.BadParameter(
-            "--yes is not applicable in --from-file / --from-url / --from-path mode; "
+            "--yes is not applicable in --from-url / --from-path mode; "
             "remove --yes or use the filter path."
         )
 
@@ -1607,7 +1615,12 @@ def _warn_on_ignored_filter_flags(
         if value is not None and value != "":
             ignored.append(name)
     if ignored:
-        mode_label = "local-batch mode" if from_path is not None else "direct-parse mode"
+        if from_path is None:
+            mode_label = "direct-parse mode"
+        elif from_path_is_file:
+            mode_label = "direct-parse mode"
+        else:
+            mode_label = "local-batch mode"
         typer.echo(
             f"warning: ignoring filter flag(s) in {mode_label}: {', '.join(ignored)}",
             err=True,
@@ -1629,13 +1642,13 @@ def _resolve_direct_format(fmt: str | None) -> str:
 
 def _tdoc_parse_direct(
     *,
-    from_file: str | None,
+    from_path: str | None,
     from_url: str | None,
     fmt: str | None,
     output: str | None,
     full: bool,
 ) -> None:
-    """Dispatch a single ``--from-file`` or ``--from-url`` call.
+    """Dispatch a single ``--from-path`` (file) or ``--from-url`` call.
 
     Resolves the format, runs the appropriate service method, prints
     the FK-miss warning when applicable, and emits the result in the
@@ -1652,14 +1665,14 @@ def _tdoc_parse_direct(
 
     resolved_format = _resolve_direct_format(fmt)
     service = build_tdoc_cr_service()
-    raw = from_file if from_file is not None else from_url
+    raw = from_path if from_path is not None else from_url
     assert raw is not None
 
     try:
-        if from_file is not None:
-            payload = Path(from_file).read_bytes()
+        if from_path is not None:
+            payload = Path(from_path).read_bytes()
             result = service.extract_from_bytes(
-                payload, from_file, force=False, full=full,
+                payload, from_path, force=False, full=full,
             )
         else:
             result = service.extract_from_url(

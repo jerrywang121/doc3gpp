@@ -260,7 +260,7 @@ DirectSourceKind = Literal["local", "url-3gpp", "url-other"]
 
 @dataclass(slots=True, frozen=True)
 class DirectParseResult:
-    """Outcome of a single ``tdoc parse --from-file/--from-url`` call.
+    """Outcome of a single ``tdoc parse --from-path/--from-url`` call.
 
     The dataclass bundles every value the CLI dispatcher needs to
     decide what to write to disk, the database, and stdout — keeping

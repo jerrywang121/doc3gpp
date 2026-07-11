@@ -601,82 +601,116 @@ doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'
 doc3gpp tdoc parse --meeting-id 85434 --yes
 ```
 
-### doc3gpp tdoc parse (direct mode)
+### doc3gpp tdoc parse (local mode)
 
 Purpose:
 
-- Parse a single `.docx` (or a zip-wrapped `.docx`) from a local path
-  or a web URL — without going through the `tdocs` row / meeting /
-  batch plumbing. The command takes the direct-parse branch when
-  **either** `--from-file` **or** `--from-url` is supplied; all other
-  filter arguments are silently ignored with a warning (they have no
-  meaning in single-source mode). For parsing an entire folder tree
-  see the local batch mode section below.
+- Parse a local `.docx` (or a zip-wrapped `.docx`) from a single file
+  or an entire folder tree — without going through the `tdocs` row /
+  meeting / batch plumbing. The command takes the local-mode branch
+  when `--from-path` is supplied; `--from-url` is the online
+  equivalent. All filter arguments are silently ignored with a warning
+  in these modes (they have no meaning outside the DB-driven batch
+  path).
 
 Options:
 
-- `--from-file PATH`: parse a local `.docx` (or a `.zip` containing a
-  `.docx`). The path is read with `Path.read_bytes()`; the cache and
-  database are never touched.
+- `--from-path PATH`: parse a local `.docx`/`.zip` file, or parse
+  every `.docx`/`.zip` under a directory tree. The path type is auto-
+  detected: a file is parsed as a single source, a directory is
+  processed as a batch. The cache and database are never touched for
+  local files.
 - `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.
   When the URL is on the canonical 3GPP FTP root
   (`https://www.3gpp.org/ftp/...`) the result is cached on disk and
   written to `tdoc_extracts` + `tdoc_cr_details` (subject to the FK
   matrix below); any other URL is parsed in-memory only. Schemes
   other than `http(s)` (e.g. `ftp://`, `file://`) are rejected —
-  download out of band and use `--from-file` instead.
+  download out of band and use `--from-path` instead.
 - `--format {table,markdown,json,raw}`: output format. Default
   `table` (tab-separated header + single data row, matching
   `tdoc list --format table`). `markdown` writes a single-row GFM
   table, `json` writes a single JSON object via `dataclasses.asdict`,
   `raw` writes the converted markdown verbatim and skips the parser
   entirely. The set is wider than the regular
-  `* list --format` literal (`raw` is direct-parse-only) so the CLI
+  `* list --format` literal (`raw` is local-mode-only) so the CLI
   rejects unknown values at the boundary.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
-  stdout. Pass `-` for stdout (the default). The file is opened in
-  text mode with `newline=""` so the markdown emitter's line endings
-  round-trip cleanly.
+  stdout. Required when `--from-path` is a directory; optional when
+  `--from-path` is a single file. The file is opened in text mode with
+  `newline=""` so the markdown emitter's line endings round-trip
+  cleanly.
+- `--recursive`, `-r`: descend into subfolders when `--from-path` is a
+  directory. Silently ignored when `--from-path` is a single file.
+- `--force`: when `--from-path` is a directory, overwrite existing
+  output files. Rejected when `--from-path` is a single file.
+- `--full`: forward `full=True` to the parser (TTCN corrections).
 
 Mutual exclusivity:
 
-- `--from-file`, `--from-url`, and `--from-path` are mutually
-  exclusive. Setting more than one surfaces
-  `BadParameter: ... are mutually exclusive; specify exactly one source`.
+- `--from-url` and `--from-path` are mutually exclusive. Setting both
+  surfaces
+  `BadParameter: --from-url, --from-path are mutually exclusive; specify exactly one source`.
 
-Ignored / rejected flags in direct mode:
+Ignored / rejected flags in local mode:
 
 - All filter flags (`--tdoc`, `--meeting-id`, `--meeting`, `--status`,
   `--cr-cat`, `--spec`, `--wi`, `--revision-of`, `--revised-to`,
   `--title`, `--ftp-url`, `--release`, `--version`, `--cr-num`,
   `--cr-pack`, `--source`, `--type`, `--uploaded-date`) are silently
   ignored with a stderr warning of the form
-  `warning: ignoring filter flag(s) in direct-parse mode: --tdoc, --spec`.
-  Per the plan, the warning fires when at least one filter is
-  supplied; pass-through output still proceeds.
-- `--force` is **rejected** with `BadParameter: --force is not
-  applicable in --from-file / --from-url mode` — there is no DB row
-  to force.
-- `--yes` is **rejected** with `BadParameter: --yes is not
-  applicable in --from-file / --from-url mode` — there is no batch
-  to confirm.
+  `warning: ignoring filter flag(s) in direct-parse mode: --tdoc, --spec`
+  for a single file, or
+  `warning: ignoring filter flag(s) in local-batch mode: --tdoc, --spec`
+  for a directory. Per the plan, the warning fires when at least one
+  filter is supplied; pass-through output still proceeds.
+- `--force` is **rejected** when `--from-path` points to a single file
+  (`BadParameter: --force is not applicable when --from-path points to a
+  single file`). It is allowed for directories, where it means
+  "overwrite existing outputs".
+- `--yes` is **rejected** in all local/online modes — there is no DB
+  batch to confirm.
+
+Single-file behaviour:
+
+- The file is read with `Path.read_bytes()`.
+- The TDoc id is auto-extracted from the filename using the existing
+  [`_TDOC_HEADER_PATTERN`](src/doc3gpp/parsers/cr_parser.py) (matches
+  `R5s260009`, `R5-227476`, `C6-250028`, etc.). Files without a
+  matching pattern get a synthetic `LOCAL-<stem>` id internally so
+  the parser can still run, but no DB row is ever written under that
+  synthetic id.
+- No cache or database writes occur.
+- Exit code `0` when the parsed record (or raw markdown) is emitted
+  successfully; `1` on file missing, permission denied, parser error
+  (`CRHeaderMissingError`), or rejected flags.
+
+Directory (batch) behaviour:
+
+- Only filenames ending in `.docx` or `.zip` (case-insensitive) whose
+  name contains a 3GPP TDoc id pattern are considered.
+- One output file is written per input file; the output filename keeps
+  the input stem and changes the extension according to `--format`.
+- Per-file parse failures are logged and counted; the batch continues
+  so one bad file does not abort the run.
+- No per-file output is printed to stdout. Instead a summary reports:
+  `Skipped (output already exists)`, `Re-parsed (with --force)`,
+  `Newly parsed`, and `Failures`.
+- Exit code `0` when at least one file was parsed successfully, **or**
+  every file was skipped because its output already existed; `1` when
+  the input folder does not exist, `--output` was omitted, every file
+  failed to parse, or `--yes` was supplied.
 
 FK-aware behaviour matrix (3GPP URL):
 
 | Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_details` row? | Output? | Warning? |
-|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | always | no |
 | `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
 | No `tdoc_id` pattern in filename | no | no | no | always | yes — pattern-miss notice |
 
 Local files and non-3GPP URLs always emit output and never touch
-the cache or the database. The TDoc id is auto-extracted from the
-filename using the existing
-[`_TDOC_HEADER_PATTERN`](src/doc3gpp/parsers/cr_parser.py) (matches
-`R5s260009`, `R5-227476`, `C6-250028`, etc.). Files without a
-matching pattern get a synthetic `LOCAL-<stem>` id internally so
-the parser can still run, but no DB row is ever written under that
-synthetic id.
+the cache or the database.
 
 Cache naming (D10 fix): the zip cache is keyed on the **original
 (sanitized) filename**, not the TDoc id. Multiple revisions of the
@@ -685,14 +719,6 @@ distinct cache slots; the legacy tdoc-id key would have silently
 served the first downloaded file forever. The markdown cache stays
 keyed by sha256 of the docx bytes (content-addressed, already
 collision-free).
-
-Exit codes:
-
-- `0` — parsed record (or raw markdown) was emitted successfully
-  (this includes the FK-miss cells of the matrix: a warning is
-  printed, the output is still produced, exit 0).
-- `1` — file missing, permission denied, network failure, parser
-  error (`CRHeaderMissingError`), or `--force` / `--yes` rejection.
 
 Install the optional dependency before first use (same as the
 filter path):
@@ -705,15 +731,27 @@ Examples:
 
 ```bash
 # Local docx → stdout as a tab-separated record.
-doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.docx
+doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx
 
 # Local docx → JSON file.
-doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.docx \
+doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx \
     --format json -o /tmp/r5s260009.json
 
 # Local zip containing a .docx.
-doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.zip \
+doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.zip \
     --format markdown
+
+# Parse every .docx/.zip in ./tdocs and write .tsv files under ./parsed.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed
+
+# Recurse into subfolders and produce JSON.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json
+
+# Overwrite any existing outputs.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --force
+
+# Emit converted markdown for every file.
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --format raw
 
 # 3GPP URL on the canonical FTP root — caches + writes both DB rows.
 doc3gpp tdoc parse --from-url \
@@ -740,76 +778,6 @@ doc3gpp tdoc parse --from-url \
 #       doc3gpp meeting sync --tsg R5
 #       doc3gpp meeting list --tdoc R5s260043
 #       doc3gpp tdoc sync --meeting-id <meeting_id_from_previous_step>
-```
-
-### doc3gpp tdoc parse (local batch mode)
-
-Purpose:
-
-- Parse every `.docx` and `.zip` under a local folder in one run,
-  writing one output file per input file. No database or cache writes
-  occur; this mode is useful for bulk-converting locally stored TDocs.
-
-Options:
-
-- `--from-path PATH`: input folder to scan. Required in this mode.
-- `--output PATH`: output folder. Required with `--from-path`;
-  created if it does not exist.
-- `--recursive`, `-r`: descend into subfolders. When targets are found
-  in subfolders, the output folder mirrors the input subfolder
-  structure relative to `--from-path`.
-- `--force`: overwrite existing output files. Without this flag an
-  existing output file is skipped.
-- `--format {table,markdown,json,raw}`: same formats as direct mode.
-  The output extension is chosen from the format:
-  `table` -> `.tsv`, `markdown` -> `.md`, `json` -> `.json`,
-  `raw` -> `.md`. Default: `table`.
-- `--full`: forward `full=True` to the parser (TTCN corrections).
-
-Behaviour:
-
-- Only filenames ending in `.docx` or `.zip` (case-insensitive) are
-  considered.
-- The output filename keeps the input stem and changes the extension
-  according to `--format`.
-- Per-file parse failures are logged and counted; the batch continues
-  so one bad file does not abort the run.
-- No per-file output is printed to stdout. Instead a summary reports:
-  `Skipped (output already exists)`, `Re-parsed (with --force)`,
-  `Newly parsed`, and `Failures`.
-
-Mutual exclusivity:
-
-- `--from-path` cannot be combined with `--from-file` or `--from-url`.
-
-Ignored / rejected flags in local batch mode:
-
-- Filter flags are silently ignored with a stderr warning of the form
-  `warning: ignoring filter flag(s) in local-batch mode: --tdoc, --spec`.
-- `--yes` is rejected -- there is no DB batch to confirm.
-- `--force` is allowed and means "overwrite existing outputs".
-
-Exit codes:
-
-- `0` -- at least one file was parsed successfully, **or** every file
-  was skipped because its output already existed.
-- `1` -- the input folder does not exist, `--output` was omitted, every
-  file failed to parse, or `--yes` was supplied.
-
-Examples:
-
-```bash
-# Parse every .docx/.zip in ./tdocs and write .tsv files under ./parsed.
-doc3gpp tdoc parse --from-path ./tdocs --output ./parsed
-
-# Recurse into subfolders and produce JSON.
-doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json
-
-# Overwrite any existing outputs.
-doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --force
-
-# Emit converted markdown for every file.
-doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --format raw
 ```
 
 ## cache Commands

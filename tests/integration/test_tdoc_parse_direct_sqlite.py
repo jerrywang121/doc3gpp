@@ -1,4 +1,4 @@
-"""Integration tests for the ``tdoc parse --from-file/--from-url`` direct path.
+"""Integration tests for the ``tdoc parse --from-path/--from-url`` local path.
 
 End-to-end coverage of the behaviour matrix against a real SQLite
 database. The CLI is exercised via Typer's ``CliRunner``; the
@@ -299,7 +299,7 @@ def test_direct_non_3gpp_url_skips_cache_and_db(
 def test_direct_from_local_file_emits_output_without_db(
     sqlite_env, monkeypatch, tmp_path,
 ) -> None:
-    """``--from-file`` produces output and never touches the cache or DB."""
+    """``--from-path`` produces output and never touches the cache or DB."""
     create_schema()
 
     fixture = FIXTURES_DIR / "R5s260009.zip"
@@ -313,7 +313,7 @@ def test_direct_from_local_file_emits_output_without_db(
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(fixture),
+            "--from-path", str(fixture),
         ],
     )
     assert result.exit_code == 0, result.output

@@ -410,7 +410,7 @@ class TDocCrService:
         return BatchExtractResult(successes=successes, failures=failures)
 
     # ------------------------------------------------------------------
-    # Direct-parse path: ``tdoc parse --from-file/--from-url``
+    # Direct-parse path: ``tdoc parse --from-path/--from-url``
     # ------------------------------------------------------------------
 
     def extract_from_url(
@@ -439,7 +439,7 @@ class TDocCrService:
 
         Args:
             url: HTTP or HTTPS URL (other schemes raise ``ValueError``
-                — operators should use ``--from-file`` for
+                — operators should use ``--from-path`` for
                 ``ftp://`` / ``file://`` sources).
             force: When ``True``, bypass the on-disk zip cache (and
                 the markdown cache, in the 3GPP-URL path). The

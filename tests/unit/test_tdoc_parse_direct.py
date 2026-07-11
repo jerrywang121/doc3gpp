@@ -1,4 +1,4 @@
-"""Unit tests for the ``tdoc parse --from-file/--from-url`` direct path.
+"""Unit tests for the ``tdoc parse --from-path/--from-url`` local path.
 
 Covers the parser / helper layer (``parsers/direct_extractor``), the
 service-layer branches (``TDocCrService.extract_from_url`` /
@@ -88,12 +88,12 @@ def test_is_3gpp_ftp_url_returns_false_for_unrelated_domain() -> None:
 
 
 def test_is_3gpp_ftp_url_rejects_ftp_scheme() -> None:
-    """ftp:// is rejected — operators should use --from-file for ftp."""
+    """ftp:// is rejected — operators should use --from-path for ftp."""
     assert is_3gpp_ftp_url("ftp://www.3gpp.org/ftp/foo.zip") is False
 
 
 def test_is_3gpp_ftp_url_rejects_file_scheme() -> None:
-    """file:// is rejected — operators should use --from-file for local files."""
+    """file:// is rejected — operators should use --from-path for local files."""
     assert is_3gpp_ftp_url("file:///tmp/foo.docx") is False
 
 
@@ -636,8 +636,8 @@ def _build_service_factory(monkeypatch, service: TDocCrService) -> None:
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: service)
 
 
-def test_cli_from_file_table_format_emits_single_row(tmp_path: Path, monkeypatch) -> None:
-    """``--from-file foo.docx --format table`` writes header + 1 data row."""
+def test_cli_from_path_file_table_format_emits_single_row(tmp_path: Path, monkeypatch) -> None:
+    """``--from-path foo.docx --format table`` writes header + 1 data row."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out.tsv"
@@ -657,7 +657,7 @@ def test_cli_from_file_table_format_emits_single_row(tmp_path: Path, monkeypatch
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
             "--format", "table",
             "--output", str(out),
         ],
@@ -672,7 +672,7 @@ def test_cli_from_file_table_format_emits_single_row(tmp_path: Path, monkeypatch
     assert fake.bytes_calls, "extract_from_bytes was not called"
 
 
-def test_cli_from_file_markdown_format_emits_gfm_table(tmp_path: Path, monkeypatch) -> None:
+def test_cli_from_path_file_markdown_format_emits_gfm_table(tmp_path: Path, monkeypatch) -> None:
     """``--format markdown`` writes a header + separator + 1-row GFM table."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
@@ -693,7 +693,7 @@ def test_cli_from_file_markdown_format_emits_gfm_table(tmp_path: Path, monkeypat
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
             "--format", "markdown",
             "--output", str(out),
         ],
@@ -707,7 +707,7 @@ def test_cli_from_file_markdown_format_emits_gfm_table(tmp_path: Path, monkeypat
     assert "38.523-3" in lines[2]
 
 
-def test_cli_from_file_json_format_emits_object(tmp_path: Path, monkeypatch) -> None:
+def test_cli_from_path_file_json_format_emits_object(tmp_path: Path, monkeypatch) -> None:
     """``--format json`` writes a single JSON object."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
@@ -728,7 +728,7 @@ def test_cli_from_file_json_format_emits_object(tmp_path: Path, monkeypatch) -> 
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
             "--format", "json",
             "--output", str(out),
         ],
@@ -740,7 +740,7 @@ def test_cli_from_file_json_format_emits_object(tmp_path: Path, monkeypatch) -> 
     assert payload["corrections"] == []
 
 
-def test_cli_from_file_raw_format_writes_markdown_verbatim(
+def test_cli_from_path_file_raw_format_writes_markdown_verbatim(
     tmp_path: Path, monkeypatch,
 ) -> None:
     """``--format raw`` writes the converted markdown and never calls the parser."""
@@ -762,7 +762,7 @@ def test_cli_from_file_raw_format_writes_markdown_verbatim(
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
             "--format", "raw",
         ],
     )
@@ -770,7 +770,7 @@ def test_cli_from_file_raw_format_writes_markdown_verbatim(
     assert "raw markdown body" in result.output
 
 
-def test_cli_from_file_and_from_url_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
+def test_cli_from_path_file_and_from_url_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
     """Both flags set → BadParameter."""
     a = tmp_path / "a.docx"
     a.write_bytes(b"x")
@@ -778,7 +778,7 @@ def test_cli_from_file_and_from_url_are_mutually_exclusive(tmp_path: Path, monke
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(a),
+            "--from-path", str(a),
             "--from-url", "https://example.com/b.zip",
         ],
     )
@@ -786,10 +786,10 @@ def test_cli_from_file_and_from_url_are_mutually_exclusive(tmp_path: Path, monke
     assert "mutually exclusive" in (result.output or "")
 
 
-def test_cli_from_file_with_filter_flag_warns_and_proceeds(
+def test_cli_from_path_file_with_filter_flag_warns_and_proceeds(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """A filter flag set with ``--from-file`` warns on stderr and continues."""
+    """A filter flag set with ``--from-path`` warns on stderr and continues."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
     fake = _FakeService(DirectParseResult(
@@ -808,27 +808,27 @@ def test_cli_from_file_with_filter_flag_warns_and_proceeds(
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
             "--tdoc", "R5s260009",
             "--spec", "38.523",
         ],
     )
     assert result.exit_code == 0
     combined = (result.stdout or "") + (result.stderr or "")
-    assert "ignoring filter flag" in combined
+    assert "ignoring filter flag(s) in direct-parse mode" in combined
     assert "--tdoc" in combined
     assert "--spec" in combined
 
 
-def test_cli_from_file_with_force_is_rejected(tmp_path: Path, monkeypatch) -> None:
-    """``--from-file --force`` is rejected — no DB row to force."""
+def test_cli_from_path_file_with_force_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    """``--from-path --force`` is rejected — no DB row to force."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"x")
     runner = CliRunner()
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
             "--force",
         ],
     )
@@ -836,15 +836,15 @@ def test_cli_from_file_with_force_is_rejected(tmp_path: Path, monkeypatch) -> No
     assert "--force is not applicable" in (result.output or "")
 
 
-def test_cli_from_file_with_yes_is_rejected(tmp_path: Path, monkeypatch) -> None:
-    """``--from-file --yes`` is rejected — no batch to confirm."""
+def test_cli_from_path_file_with_yes_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    """``--from-path --yes`` is rejected — no batch to confirm."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"x")
     runner = CliRunner()
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
             "--yes",
         ],
     )
@@ -852,20 +852,20 @@ def test_cli_from_file_with_yes_is_rejected(tmp_path: Path, monkeypatch) -> None
     assert "--yes is not applicable" in (result.output or "")
 
 
-def test_cli_from_file_missing_file_exits_1(monkeypatch) -> None:
-    """A missing ``--from-file`` path produces a clear error and exit 1."""
+def test_cli_from_path_file_missing_file_exits_2(monkeypatch) -> None:
+    """A missing ``--from-path`` file surfaces a BadParameter and exits 2."""
     runner = CliRunner()
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", "/tmp/definitely-not-here-xyz.docx",
+            "--from-path", "/tmp/definitely-not-here-xyz.docx",
         ],
     )
-    assert result.exit_code == 1
-    assert "FAILED" in (result.output or "")
+    assert result.exit_code == 2
+    assert "--from-path does not exist" in (result.output or "")
 
 
-def test_cli_from_file_non_cr_raises_cr_header_missing(
+def test_cli_from_path_file_non_cr_raises_cr_header_missing(
     tmp_path: Path, monkeypatch,
 ) -> None:
     """``CRHeaderMissingError`` formats as ``FAILED - CRHeaderMissingError: ...`` and exits 1."""
@@ -881,7 +881,7 @@ def test_cli_from_file_non_cr_raises_cr_header_missing(
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-file", str(source),
+            "--from-path", str(source),
         ],
     )
     assert result.exit_code == 1
@@ -977,13 +977,13 @@ def test_cli_from_url_3gpp_no_pattern_emits_warning(
 
 
 def test_cli_from_path_requires_output(tmp_path: Path, monkeypatch) -> None:
-    """``--from-path`` without ``--output`` raises BadParameter."""
+    """``--from-path`` directory without ``--output`` raises BadParameter."""
     runner = CliRunner()
     result = runner.invoke(
         app, ["tdoc", "parse", "--from-path", str(tmp_path)],
     )
     assert result.exit_code != 0
-    assert "--output is required when --from-path is used" in (result.output or "")
+    assert "--output is required when --from-path is a directory" in (result.output or "")
 
 
 def test_cli_from_path_rejects_yes(tmp_path: Path, monkeypatch) -> None:
@@ -1002,8 +1002,8 @@ def test_cli_from_path_rejects_yes(tmp_path: Path, monkeypatch) -> None:
     assert "--yes is not applicable" in (result.output or "")
 
 
-def test_cli_from_path_missing_input_exits_1(tmp_path: Path, monkeypatch) -> None:
-    """A missing ``--from-path`` folder produces a clear error and exit 1."""
+def test_cli_from_path_missing_input_exits_2(tmp_path: Path, monkeypatch) -> None:
+    """A missing ``--from-path`` folder surfaces a BadParameter and exits 2."""
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -1013,8 +1013,8 @@ def test_cli_from_path_missing_input_exits_1(tmp_path: Path, monkeypatch) -> Non
             "--output", str(tmp_path / "out"),
         ],
     )
-    assert result.exit_code == 1
-    assert "FAILED - FileNotFoundError" in (result.output or "")
+    assert result.exit_code == 2
+    assert "--from-path does not exist" in (result.output or "")
 
 
 def test_cli_from_path_no_targets_exits_0(tmp_path: Path, monkeypatch) -> None:
@@ -1311,19 +1311,19 @@ def test_cli_from_path_skips_files_without_tdoc_pattern(
     assert "No legitimate" not in result.output
 
 
-def test_cli_from_path_and_from_file_are_mutually_exclusive(
+def test_cli_from_path_directory_and_from_url_are_mutually_exclusive(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """Both ``--from-path`` and ``--from-file`` set → BadParameter."""
-    source = tmp_path / "a.docx"
-    source.write_bytes(b"x")
+    """Both ``--from-path`` (directory) and ``--from-url`` set → BadParameter."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
     runner = CliRunner()
     result = runner.invoke(
         app,
         [
             "tdoc", "parse",
-            "--from-file", str(source),
-            "--from-path", str(tmp_path),
+            "--from-path", str(in_dir),
+            "--from-url", "https://example.com/b.zip",
         ],
     )
     assert result.exit_code != 0
@@ -1367,3 +1367,99 @@ def test_cli_from_path_ignores_filter_flags_with_warning(
     assert "ignoring filter flag(s) in local-batch mode" in combined
     assert "--tdoc" in combined
     assert "--spec" in combined
+
+
+def test_cli_from_path_auto_detects_file_routes_to_single_parse(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A file path passed to ``--from-path`` is parsed as a single source."""
+    source = tmp_path / "R5s260009.docx"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out.tsv"
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, [
+            "tdoc", "parse",
+            "--from-path", str(source),
+            "--format", "table",
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    assert fake.bytes_calls, "extract_from_bytes was not called"
+
+
+def test_cli_from_path_directory_requires_output(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A directory path passed to ``--from-path`` requires ``--output``."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(
+        app, [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--output is required when --from-path is a directory" in (result.output or "")
+
+
+def test_cli_from_path_file_silently_ignores_recursive(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--recursive`` is ignored when ``--from-path`` points to a single file."""
+    source = tmp_path / "R5s260009.docx"
+    source.write_bytes(b"dummy")
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, [
+            "tdoc", "parse",
+            "--from-path", str(source),
+            "--recursive",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert fake.bytes_calls, "extract_from_bytes was not called"
+
+
+def test_cli_from_path_nonexistent_path_raises_bad_parameter(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A ``--from-path`` value that does not exist surfaces a clear error."""
+    missing = tmp_path / "does-not-exist"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, [
+            "tdoc", "parse",
+            "--from-path", str(missing),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--from-path does not exist" in (result.output or "")

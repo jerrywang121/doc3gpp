@@ -253,7 +253,7 @@ doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'  # NOT LIKE
 doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
 doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything under the meeting
 # Direct parse — single source, no DB filters
-doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.docx                # local .docx → stdout
+doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx                # local .docx → stdout
 doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../R5s260009.zip # 3GPP URL → cache + DB
 doc3gpp tdoc parse --from-url https://example.com/some.zip --format json -o /tmp/out.json  # non-3GPP URL → in-memory only
 

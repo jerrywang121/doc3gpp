@@ -15,7 +15,7 @@ table below is for navigation only.
 | `TDocFile` | dataclass | `models/tdoc_file.py` | Auxiliary file attached to a TDoc (revision / review / support). |
 | `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …). |
 | `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar (zip / markdown paths, `doc_filename`). |
-| `DirectParseResult` | dataclass | `models/tdoc_cr.py` | Outcome of `tdoc parse --from-file/--from-url` (source kind, markdown, details, persistence flags). |
+| `DirectParseResult` | dataclass | `models/tdoc_cr.py` | Outcome of `tdoc parse --from-path/--from-url` (source kind, markdown, details, persistence flags). |
 | `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records. |
 | `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to `tsg_short`). |
 
@@ -38,7 +38,7 @@ table below is for navigation only.
 | `TDocService` | class | `services/tdoc_service.py` | TDoc sync + list orchestration. |
 | `TDocSyncCoordinator` | class | `services/tdoc_sync_coordinator.py` | Cross-service orchestration for `tdoc sync`. |
 | `TDocFileService` | class | `services/tdoc_file_service.py` | Auxiliary TDoc-file sync. |
-| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → python-docx → parse → persist). Also exposes `extract_from_url` / `extract_from_bytes` for the `tdoc parse --from-file/--from-url` direct-mode path. |
+| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → python-docx → parse → persist). Also exposes `extract_from_url` / `extract_from_bytes` for the `tdoc parse --from-path/--from-url` direct-mode path. |
 | `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; exposes `build_tsg_url`. |
 | `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters. |
 | `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. |
@@ -58,7 +58,7 @@ table below is for navigation only.
 | `parse_3gpp_wis` | function | `parsers/wi_parser.py` | WI DynaReport HTML → `Wi` list (extracts `wi_id`, `acronym`, `release`, `name`). |
 | `convert_document_to_markdown` / `extract_docx_from_zip` | functions | `parsers/docx_converter.py` | python-docx conversion (`.docx` only; legacy `.doc` is rejected). |
 | `parse_cr_details` | function | `parsers/cr_parser.py` | Markdown → `TDocCRDetails` (cover-page, optional TTCN overview, optional corrections). |
-| `is_3gpp_ftp_url` / `direct_parse_bytes` / `derive_zip_cache_key` / `extract_tdoc_id_from_filename` | functions | `parsers/direct_extractor.py` | Helpers for the `tdoc parse --from-file/--from-url` direct path. `is_3gpp_ftp_url` is the 3GPP-FTP detection rule; `direct_parse_bytes` glues docx conversion + cover-page parsing. |
+| `is_3gpp_ftp_url` / `direct_parse_bytes` / `derive_zip_cache_key` / `extract_tdoc_id_from_filename` | functions | `parsers/direct_extractor.py` | Helpers for the `tdoc parse --from-path/--from-url` direct path. `is_3gpp_ftp_url` is the 3GPP-FTP detection rule; `direct_parse_bytes` glues docx conversion + cover-page parsing. |
 
 ## Storage (`src/doc3gpp/storage/`)
 

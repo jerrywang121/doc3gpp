@@ -22,6 +22,7 @@ from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
+from doc3gpp.parsers.direct_extractor import extract_tdoc_id_from_filename
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
@@ -1073,282 +1074,166 @@ def tdoc_parse(
     tdoc: str | None = typer.Option(
         None,
         "--tdoc",
-        help=(
-            "TDoc identifier pattern. SQL LIKE — pass a literal id "
-            "(e.g. 'R5s260009') for an exact match, or a pattern with "
-            "%/_ wildcards (e.g. 'R5s26%', 'R5_260001') to widen. "
-            "Also accepts the rich filter tokens 'null' / 'not-null' / "
-            "'!pattern'. The flag is singular — passing it more than "
-            "once silently keeps the last value (Click's default for "
-            "non-multi options); build the pattern with LIKE wildcards "
-            "to match multiple ids."
-        ),
+        help="SQL LIKE pattern on tdoc_id (or null/not-null/!pattern).",
     ),
     meeting_id: int | None = typer.Option(
         None,
         "--meeting-id",
-        help=(
-            "Exact match on the numeric meeting ID (see "
-            "`doc3gpp meeting list`). Combinable with every other "
-            "filter — TDocs must satisfy all predicates."
-        ),
+        help="Exact numeric meeting ID; combinable with every filter.",
     ),
     meeting: str | None = typer.Option(
         None,
         "--meeting",
-        help=(
-            "Filter by parent meeting name (SQL LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL rows; "
-            "prefix with '!' (e.g. '!%RAN5%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on meeting name (or null/not-null/!pattern).",
     ),
     status: str | None = typer.Option(
         None,
         "--status",
-        help=(
-            "Filter by status (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL status rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on status (or null/not-null/!pattern).",
     ),
     cr_cat: str | None = typer.Option(
         None,
         "--cr-cat",
-        help=(
-            "Filter by CR category / `cr_cat` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_cat rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on cr_cat (or null/not-null/!pattern).",
     ),
     spec: str | None = typer.Option(
         None,
         "--spec",
-        help=(
-            "Filter by technical specification (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL spec rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on spec (or null/not-null/!pattern).",
     ),
     wi: str | None = typer.Option(
         None,
         "--wi",
-        help=(
-            "Filter by `related_wis` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL related_wis rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on related_wis (or null/not-null/!pattern).",
     ),
     revision_of: str | None = typer.Option(
         None,
         "--revision-of",
-        help=(
-            "Filter by `is_revision_of` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on is_revision_of (or null/not-null/!pattern).",
     ),
     revised_to: str | None = typer.Option(
         None,
         "--revised-to",
-        help=(
-            "Filter by `revised_to` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on revised_to (or null/not-null/!pattern).",
     ),
     title_filter: str | None = typer.Option(
         None,
         "--title",
-        help=(
-            "Filter by title (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL title rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on title (or null/not-null/!pattern).",
     ),
     ftp_url: str | None = typer.Option(
         None,
         "--ftp-url",
-        help=(
-            "Filter by `ftp_url` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL ftp_url rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on ftp_url (or null/not-null/!pattern).",
     ),
     release: str | None = typer.Option(
         None,
         "--release",
-        help=(
-            "Filter by `release` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL release rows; prefix with '!' (e.g. '!%Rel-18%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on release (or null/not-null/!pattern).",
     ),
     version: str | None = typer.Option(
         None,
         "--version",
-        help=(
-            "Filter by `version` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL version rows; prefix with '!' (e.g. '!18.%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on version (or null/not-null/!pattern).",
     ),
     cr_num: str | None = typer.Option(
         None,
         "--cr-num",
-        help=(
-            "Filter by `cr_num` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_num rows; prefix with '!' (e.g. '!%3790%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on cr_num (or null/not-null/!pattern).",
     ),
     cr_pack: str | None = typer.Option(
         None,
         "--cr-pack",
-        help=(
-            "Filter by `cr_pack` (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL cr_pack rows; prefix with '!' (e.g. '!%RP-%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on cr_pack (or null/not-null/!pattern).",
     ),
     source: str | None = typer.Option(
         None,
         "--source",
-        help=(
-            "Filter by source / contributor (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL source rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE."
-        ),
+        help="SQL LIKE pattern on source (or null/not-null/!pattern).",
     ),
     tdoc_type: str | None = typer.Option(
         None,
         "--type",
-        help=(
-            "Filter by document type (LIKE pattern). "
-            "Pass 'null' or 'not-null' to match NULL / NOT NULL type rows; prefix with '!' (e.g. '!%foo%') to negate as NOT LIKE. "
-            "Defaults to 'CR' (only CR-type TDocs are extractable) "
-            "when no type filter is supplied."
-        ),
+        help="SQL LIKE pattern on type (defaults to 'CR'; null/not-null/!pattern).",
     ),
     uploaded_date: str | None = typer.Option(
         None,
         "--uploaded-date",
-        help=(
-            "Filter by `uploaded_date`. Accepts:\n\n"
-            "- 'null' / 'not-null' to match NULL / NOT NULL rows;\n"
-            "- an SQL comparison like \">= '2026-02-31'\", "
-            "\"< '2026-01-01'\", \"= '2026-03-15'\", etc. — the operator "
-            "(=, !=, <, <=, >, >=) is bound as a parameter so injection "
-            "is impossible."
-        ),
+        help="Filter on uploaded_date: null/not-null or '<op> YYYY-MM-DD'.",
     ),
     force: bool = typer.Option(
         False,
         "--force",
-        help="Skip both the on-disk zip/markdown cache and the persisted tdoc_cr_details row.",
+        "-f",
+        help=(
+            "DB parse: re-fetch and re-parse every match. "
+            "Local batch parse: overwrite existing output files."
+        ),
     ),
     full: bool = typer.Option(
         False,
         "--full",
-        help=(
-            "Reserved for forward-compatibility with the parser's "
-            "`full=True` mode (pulls in before_change / after_change "
-            "per correction). The current service does not yet wire "
-            "this through; accepted silently so existing scripts "
-            "keep parsing."
-        ),
+        help="Forward full=True to the parser (parser to extract info beyond cover page, e.g. TTCN corrections).",
     ),
     yes: bool = typer.Option(
         False,
         "--yes",
         "-y",
-        help="Skip the confirmation prompt before extracting.",
-    ),
-    from_file: str | None = typer.Option(
-        None,
-        "--from-file",
-        help=(
-            "Parse a single local .docx or .zip containing a .docx without "
-            "going through the database. Filter flags are silently ignored "
-            "in this mode. Mutually exclusive with --from-url; --force / --yes "
-            "have no effect in direct mode (no batch to confirm)."
-        ),
+        help="Skip the batch parse confirmation prompt.",
     ),
     from_url: str | None = typer.Option(
         None,
         "--from-url",
-        help=(
-            "Download a single URL (.docx or .zip containing a .docx) and "
-            "parse it. When the URL is on the canonical 3GPP FTP root the "
-            "result is cached and persisted; other URLs are parsed in-memory "
-            "only. Filter flags are silently ignored in this mode. Mutually "
-            "exclusive with --from-file."
-        ),
+        help="Download and parse a single URL (3GPP URLs may write cache/DB).",
+    ),
+    from_path: str | None = typer.Option(
+        None,
+        "--from-path",
+        help="Parse a local .docx/.zip file, or every .docx/.zip under a directory tree.",
+    ),
+    recursive: bool = typer.Option(
+        False,
+        "--recursive",
+        "-r",
+        help="Descend into subfolders (mirror structure under --output).",
     ),
     direct_format: str | None = typer.Option(
         None,
         "--format",
-        help=(
-            "Output format for --from-file / --from-url direct mode: "
-            "table (default, tab-separated), markdown, json, or raw "
-            "(emits the converted markdown verbatim, no parsing). "
-            "In filter mode the available formats are table|json|markdown."
-        ),
+        help="Output format for direct/local-batch mode: table|json|markdown|raw.",
     ),
     direct_output: str | None = typer.Option(
         None,
         "--output",
         "-o",
-        help=(
-            "Write direct-parse output to PATH instead of stdout. "
-            "Pass '-' for stdout."
-        ),
+        help="Write output to PATH (file when --from-path is a file, folder when it is a directory). Default stdout",
     ),
 ) -> None:
-    """Download and extract structured CR cover-page fields for one or more TDocs.
+    """Parse Tdoc from the DB table, online file, a local file, or a folder tree.
 
-    Every flag is a **filter** — the candidate set is the intersection
-    of every supplied predicate, and CR-type is the implicit default
-    (the extractor only handles CR TDocs). The two batch-style
-    selectors from earlier releases (``--tdoc-id`` as an integer PK
-    and the mutual exclusivity with ``--meeting-id``) have been
-    removed; ``--tdoc`` is now a LIKE pattern on ``tdoc_id`` that
-    can be freely combined with ``--meeting-id`` and every text or
-    date filter.
+    The command has five modes; See docs/cli.md for full semantics and examples.
 
-    Filter values follow the grammar defined in
-    :mod:`doc3gpp.cli_filters`: ``null`` / ``not-null`` test column
-    nullability; a leading ``!`` flips the comparison to ``NOT LIKE``
-    (the bang is consumed); anything else is a SQL ``LIKE`` pattern.
-    ``--uploaded-date`` additionally accepts ``"<op> 'YYYY-MM-DD'"``
-    with ``<op>`` in ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``.
-    The operator and date literal are bound as parameters — the date
-    string is never string-interpolated into the SQL, so injection is
-    impossible. Invalid date inputs are rejected at the CLI boundary
-    with a clear error before the database is touched.
+    General TDoc parse output options:
+      --force (re-fetch/re-parse/over-write every match), 
+      --yes (skip confirmation prompt),
+      --format table|json|markdown|raw 
+        (raw output covered markdown of the Tdoc, without extracting fields),
+      --full (extracting full Tdoc, otherwise only extracting cover page fields)
 
-    Before any extraction runs, the CLI partitions the matches into
-    two groups (already parsed vs. new) using
-    :class:`TDocCrDetailRepository`, prints both with a base column
-    set (tdoc_id, title, type, cr_cat, status) plus any extra column
-    that corresponds to an active filter, and asks for confirmation
-    unless ``--yes`` is passed. With ``--force`` the second group
-    becomes "to parse (with --force)" and includes every match.
+    DB TDoc parse filters options (for selecting which TDocs to parse):
+      --tdoc, --meeting-id, --meeting, --status, --cr-cat, --spec, --wi,
+      --revision-of, --revised-to, --title, --ftp-url, --release, --version,
+      --cr-num, --cr-pack, --source, --type, --uploaded-date
 
-    The candidate set is capped by
-    ``Settings.tdoc_parse.max_batch`` (default 100, override via
-    ``[tdoc_parse] max_batch`` in TOML or ``DOC3GPP_TDOC_PARSE__MAX_BATCH``
-    in env). When the filter result exceeds the cap, a warning
-    describes the continuation flow — re-run the same command without
-    ``--force`` to process the next batch.
+    Local TDoc parse:
+      --from-path PATH [--output PATH] [--format table|json|markdown|raw] [--full]
+      (PATH may be a single .docx/.zip file or a directory of them)
 
-    The service :meth:`TDocCrService.extract_many` catches the
-    following per-id exception types internally and skips the broken
-    id: ``TDocZipDownloadError``, ``TDocTypeUnsupportedError``,
-    ``TDocNotFoundError``, ``CRHeaderMissingError``, plus the
-    ``ValueError`` raised by the tdoc_id shape guard. The CLI prints
-    one ``FAILED - {ExceptionClassName}: {message}`` line per broken
-    id so the operator can tell *which* step failed (download, parse,
-    type guard) without tailing the log file. A full traceback is
-    still written to the logs for debugging.
-
-    Exit code:
-
-    - ``0`` — at least one TDoc extracted successfully, **or** every
-      match was already parsed and there was nothing to do, **or** the
-      confirmation prompt was declined before any work started.
-    - ``1`` — every TDoc failed, **or** python-docx is missing and the
-      batch could not even start, **or** no TDoc matched the filters,
-      **or** an invalid ``--uploaded-date`` value was supplied.
+    Online TDoc parse:
+      --from-url URL [--output PATH] [--format table|json|markdown|raw] [--full]
     """
-    if from_file is not None or from_url is not None:
-        _validate_direct_mode_flags(from_file, from_url)
+    if from_url is not None or from_path is not None:
+        _validate_source_mode_flags(from_url, from_path)
         _warn_on_ignored_filter_flags(
             tdoc=tdoc,
             meeting_id=meeting_id,
@@ -1370,14 +1255,46 @@ def tdoc_parse(
             uploaded_date=uploaded_date,
             force=force,
             yes=yes,
+            from_path=from_path,
+            from_path_is_file=Path(from_path).is_file() if from_path else False,
         )
-        _tdoc_parse_direct(
-            from_file=from_file,
-            from_url=from_url,
-            fmt=direct_format,
-            output=direct_output,
-            full=full,
-        )
+        if from_path is not None:
+            input_path = Path(from_path)
+            if not input_path.exists():
+                raise typer.BadParameter(f"--from-path does not exist: {from_path}")
+            if input_path.is_file():
+                _tdoc_parse_direct(
+                    from_path=str(input_path),
+                    from_url=None,
+                    fmt=direct_format,
+                    output=direct_output,
+                    full=full,
+                )
+            elif input_path.is_dir():
+                if direct_output is None:
+                    raise typer.BadParameter(
+                        "--output is required when --from-path is a directory."
+                    )
+                _tdoc_parse_local_batch(
+                    from_path=str(input_path),
+                    output=direct_output,
+                    fmt=direct_format,
+                    recursive=recursive,
+                    force=force,
+                    full=full,
+                )
+            else:
+                raise typer.BadParameter(
+                    f"--from-path is neither a file nor a directory: {from_path}"
+                )
+        else:
+            _tdoc_parse_direct(
+                from_path=None,
+                from_url=from_url,
+                fmt=direct_format,
+                output=direct_output,
+                full=full,
+            )
         return
     filter_args: dict[str, object] = {
         "tdoc": tdoc,
@@ -1560,7 +1477,7 @@ def _any_filter_set(filter_args: dict[str, object]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Direct-mode helpers (tdoc parse --from-file / --from-url)
+# Direct-mode helpers (tdoc parse --from-path / --from-url)
 # ---------------------------------------------------------------------------
 
 
@@ -1608,16 +1525,24 @@ _DIRECT_PARSE_FIELDS: tuple[str, ...] = (
 )
 
 
-def _validate_direct_mode_flags(from_file: str | None, from_url: str | None) -> None:
-    """Reject the use of both ``--from-file`` and ``--from-url`` together.
+def _validate_source_mode_flags(
+    from_url: str | None,
+    from_path: str | None,
+) -> None:
+    """Enforce mutual exclusivity of ``--from-url`` and ``--from-path``.
 
     Raises:
-        typer.BadParameter: both flags are non-``None``.
+        typer.BadParameter: more than one source flag is non-``None``.
     """
-    if from_file is not None and from_url is not None:
+    sources = [
+        ("--from-url", from_url),
+        ("--from-path", from_path),
+    ]
+    set_sources = [name for name, value in sources if value is not None]
+    if len(set_sources) > 1:
+        names = ", ".join(set_sources)
         raise typer.BadParameter(
-            "--from-file and --from-url are mutually exclusive; "
-            "specify exactly one of the two."
+            f"{names} are mutually exclusive; specify exactly one source."
         )
 
 
@@ -1643,23 +1568,26 @@ def _warn_on_ignored_filter_flags(
     uploaded_date: str | None,
     force: bool,
     yes: bool,
+    from_path: str | None,
+    from_path_is_file: bool,
 ) -> None:
-    """Print a stderr warning when filter flags are set together with a direct flag.
+    """Print a stderr warning when filter flags are set together with a direct/local-batch flag.
 
-    Per the plan's D2 decision, filter flags are silently ignored in
-    direct mode (no error, just a warning) so existing scripts that
-    pass them continue to parse. ``--force`` and ``--yes`` are NOT
-    filter flags — they are explicitly rejected because there is no
-    batch to confirm / no DB row to force in direct mode.
+    Filter flags are silently ignored in direct/local-batch mode (no
+    error, just a warning) so existing scripts that pass them continue
+    to parse. ``--yes`` is rejected in both modes because there is no
+    DB batch to confirm. ``--force`` is rejected in single-file
+    direct mode; in local-batch mode it means "overwrite existing
+    output files" and is therefore allowed.
     """
-    if force:
+    if from_path is not None and from_path_is_file and force:
         raise typer.BadParameter(
-            "--force is not applicable in --from-file / --from-url mode; "
-            "remove --force or use the filter path."
+            "--force is not applicable when --from-path points to a single file; "
+            "remove --force or point --from-path to a directory."
         )
     if yes:
         raise typer.BadParameter(
-            "--yes is not applicable in --from-file / --from-url mode; "
+            "--yes is not applicable in --from-url / --from-path mode; "
             "remove --yes or use the filter path."
         )
 
@@ -1687,8 +1615,14 @@ def _warn_on_ignored_filter_flags(
         if value is not None and value != "":
             ignored.append(name)
     if ignored:
+        if from_path is None:
+            mode_label = "direct-parse mode"
+        elif from_path_is_file:
+            mode_label = "direct-parse mode"
+        else:
+            mode_label = "local-batch mode"
         typer.echo(
-            f"warning: ignoring filter flag(s) in direct-parse mode: {', '.join(ignored)}",
+            f"warning: ignoring filter flag(s) in {mode_label}: {', '.join(ignored)}",
             err=True,
         )
 
@@ -1708,13 +1642,13 @@ def _resolve_direct_format(fmt: str | None) -> str:
 
 def _tdoc_parse_direct(
     *,
-    from_file: str | None,
+    from_path: str | None,
     from_url: str | None,
     fmt: str | None,
     output: str | None,
     full: bool,
 ) -> None:
-    """Dispatch a single ``--from-file`` or ``--from-url`` call.
+    """Dispatch a single ``--from-path`` (file) or ``--from-url`` call.
 
     Resolves the format, runs the appropriate service method, prints
     the FK-miss warning when applicable, and emits the result in the
@@ -1731,14 +1665,14 @@ def _tdoc_parse_direct(
 
     resolved_format = _resolve_direct_format(fmt)
     service = build_tdoc_cr_service()
-    raw = from_file if from_file is not None else from_url
+    raw = from_path if from_path is not None else from_url
     assert raw is not None
 
     try:
-        if from_file is not None:
-            payload = Path(from_file).read_bytes()
+        if from_path is not None:
+            payload = Path(from_path).read_bytes()
             result = service.extract_from_bytes(
-                payload, from_file, force=False, full=full,
+                payload, from_path, force=False, full=full,
             )
         else:
             result = service.extract_from_url(
@@ -1858,6 +1792,161 @@ def _emit_record_raw(markdown: str, output: str | None) -> None:
         if close_after:
             stream.close()
 
+
+
+
+_DIRECT_FORMAT_EXTENSIONS: dict[str, str] = {
+    "table": ".tsv",
+    "markdown": ".md",
+    "json": ".json",
+    "raw": ".md",
+}
+
+
+def _resolve_batch_output_path(
+    input_path: Path,
+    output_dir: Path,
+    fmt: str,
+) -> Path:
+    """Compute the output file path for a local batch parse input.
+
+    The filename stem is preserved from ``input_path`` and the suffix
+    is replaced with the extension that matches ``fmt``. When the input
+    lives inside a sub-tree scanned with ``--recursive``, the relative
+    parent directories are recreated under ``output_dir``.
+    """
+    extension = _DIRECT_FORMAT_EXTENSIONS[fmt]
+    relative = input_path.parent
+    target_dir = output_dir / relative
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir / (input_path.stem + extension)
+
+
+def _collect_local_parse_targets(from_path: Path, recursive: bool) -> list[Path]:
+    """Return every legitimate ``.docx`` / ``.zip`` under ``from_path`` in sorted order.
+
+    A file is legitimate when:
+
+    - its extension is ``.docx`` or ``.zip`` (case-insensitive), and
+    - its filename contains a 3GPP TDoc id pattern.
+
+    When ``recursive`` is ``False`` only immediate children are considered.
+    """
+    iterator = from_path.rglob("*") if recursive else from_path.iterdir()
+    targets = [
+        p
+        for p in iterator
+        if p.is_file()
+        and p.suffix.lower() in (".docx", ".zip")
+        and extract_tdoc_id_from_filename(p.name) is not None
+    ]
+    return sorted(targets)
+
+
+def _tdoc_parse_local_batch(
+    *,
+    from_path: str,
+    output: str,
+    fmt: str | None,
+    recursive: bool,
+    force: bool,
+    full: bool,
+) -> None:
+    """Parse every ``.docx`` / ``.zip`` under ``from_path`` and write one output file each.
+
+    No cache or DB writes occur. Failures per file are logged and
+    counted; the run continues so one bad file does not abort the
+    whole batch. A summary is printed to stdout after all files are
+    processed.
+    """
+    from doc3gpp.parsers.cr_parser import CRHeaderMissingError
+    from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
+
+    resolved_format = _resolve_direct_format(fmt)
+    input_dir = Path(from_path)
+    if not input_dir.exists():
+        typer.echo(f"FAILED - FileNotFoundError: {input_dir}", err=True)
+        raise typer.Exit(code=1) from None
+    if not input_dir.is_dir():
+        raise typer.BadParameter(f"--from-path must be a directory: {from_path}")
+
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not output_dir.is_dir():
+        raise typer.BadParameter(f"--output must be a directory in batch mode: {output}")
+
+    targets = _collect_local_parse_targets(input_dir, recursive)
+    if not targets:
+        typer.echo(
+            "No legitimate .docx/.zip files found under the input path. "
+            "Each file must have a .docx or .zip extension and its name "
+            "must contain a 3GPP TDoc id pattern."
+        )
+        raise typer.Exit(code=0)
+
+    service = build_tdoc_cr_service()
+    skipped = 0
+    re_parsed = 0
+    newly_parsed = 0
+    failures = 0
+
+    for input_path in targets:
+        rel = input_path.relative_to(input_dir)
+        out_path = _resolve_batch_output_path(rel, output_dir, resolved_format)
+
+        if out_path.exists() and not force:
+            skipped += 1
+            logger.debug("Skipping %s because output already exists: %s", input_path, out_path)
+            continue
+
+        try:
+            payload = input_path.read_bytes()
+            result = service.extract_from_bytes(
+                payload, str(input_path), force=False, full=full,
+            )
+        except (FileNotFoundError, IsADirectoryError, PermissionError) as exc:
+            logger.warning("Failed to read %s: %s", input_path, exc)
+            failures += 1
+            continue
+        except (TDocZipDownloadError, CRHeaderMissingError, ValueError) as exc:
+            logger.warning("Failed to parse %s: %s", input_path, exc)
+            failures += 1
+            continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to parse %s: %s: %s", input_path, type(exc).__name__, exc
+            )
+            failures += 1
+            continue
+
+        try:
+            if resolved_format == "raw":
+                _emit_record_raw(result.markdown, str(out_path))
+            else:
+                if result.details is None:
+                    logger.warning(
+                        "No parsed details for %s; skipping output.", input_path
+                    )
+                    failures += 1
+                    continue
+                _emit_record(result.details, resolved_format, str(out_path))
+        except OSError as exc:
+            logger.warning("Failed to write %s: %s", out_path, exc)
+            failures += 1
+            continue
+
+        if out_path.exists() and force:
+            re_parsed += 1
+        else:
+            newly_parsed += 1
+
+    typer.echo("---")
+    typer.echo(f"Skipped (output already exists): {skipped}")
+    typer.echo(f"Re-parsed (with --force):        {re_parsed}")
+    typer.echo(f"Newly parsed:                    {newly_parsed}")
+    typer.echo(f"Failures:                        {failures}")
+    if failures > 0 and newly_parsed + re_parsed == 0:
+        raise typer.Exit(code=1)
 
 def _serialise_cell(record: TDocCRDetails, field_name: str) -> str:
     """Render a single :class:`TDocCRDetails` field for the table emitters.

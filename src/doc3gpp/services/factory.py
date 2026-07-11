@@ -104,7 +104,7 @@ def build_tdoc_cr_service() -> TDocCrService:
 
     The factory is shared by both the filter-based batch path
     (existing ``tdoc parse --tdoc/--meeting-id`` flow) and the new
-    direct-mode path (``tdoc parse --from-file/--from-url``). The
+    direct-mode path (``tdoc parse --from-path/--from-url``). The
     service's two public entry points compose on the same wiring;
     the only caller-side difference is whether the dispatch goes
     through :meth:`TDocCrService.extract_many` or through

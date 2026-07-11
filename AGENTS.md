@@ -110,7 +110,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   Full grammar and prompt-completion semantics in
   [`docs/conventions.md`](docs/conventions.md) and
   [`docs/cli.md`](docs/cli.md).
-- `doc3gpp tdoc parse --from-file PATH` / `--from-url URL` is a
+- `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a
   direct-mode alternative that bypasses the database filters. Local
   files parse in-memory only; 3GPP-URL downloads follow the
   FK-aware behaviour matrix in `docs/cli.md` (cache + DB writes

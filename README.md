@@ -253,9 +253,12 @@ doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'  # NOT LIKE
 doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
 doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything under the meeting
 # Direct parse — single source, no DB filters
-doc3gpp tdoc parse --from-file ~/Downloads/R5s260009.docx                # local .docx → stdout
+doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx                # local .docx → stdout
 doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../R5s260009.zip # 3GPP URL → cache + DB
 doc3gpp tdoc parse --from-url https://example.com/some.zip --format json -o /tmp/out.json  # non-3GPP URL → in-memory only
+
+# Local batch parse — folder tree, no DB/cache writes
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json
 doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
 doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100

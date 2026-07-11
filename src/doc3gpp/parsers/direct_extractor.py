@@ -1,4 +1,4 @@
-"""Helpers for the ``tdoc parse --from-file/--from-url`` direct path.
+"""Helpers for the ``tdoc parse --from-path/--from-url`` direct path.
 
 Pure parsers + tiny I/O shims — no network fetch, no database access.
 The CLI dispatcher composes on these primitives together with the
@@ -65,7 +65,7 @@ def is_3gpp_ftp_url(url: str) -> bool:
     ``https://www.3gpp.org/ftp/...`` both pass, while
     ``https://example.com/...`` is rejected regardless of scheme. Other
     schemes — ``ftp``, ``sftp``, ``file`` — are rejected; operators
-    should download those out-of-band and use ``--from-file``.
+    should download those out-of-band and use ``--from-path``.
 
     Args:
         url: The URL to test. Strings that don't parse return ``False``

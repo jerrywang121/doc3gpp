@@ -142,9 +142,9 @@ and the TDoc CR extraction is the deepest.
    step 1 is a hard prerequisite.
 3. `SQLAlchemyMeetingRepository.upsert_many` writes the rows; a final
    `delete_with_end_before(cutoff)` pass trims out-of-window rows.
-4. `doc3gpp meeting list --tsg <short>` is an FK-equality lookup on the
-   indexed `meetings.tsg` column (case-insensitive on input). Rows
-   without an owning TSG are excluded.
+4. `doc3gpp meeting list --tsg <pattern>` is a SQL ``LIKE`` lookup on
+    the indexed `meetings.tsg` column (case-insensitive on input). Rows
+    without an owning TSG are excluded.
 
 ### TDoc list sync (per meeting)
 
@@ -259,7 +259,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
 - `meetings`:
     - `meeting_id` (PK), `name`, `title`, `location`, `start_date`,
       `end_date`, `ftp_url`, `start_doc`, `end_doc`, `tsg` (nullable
-      FK → `tsgs.short_name`, indexed for `meeting list --tsg`).
+      FK → `tsgs.short_name`, indexed for the `meeting list --tsg` filter).
 - `tsgs`:
     - `short_name` (PK), `tsg_name` (unique), `description`, `url`.
       Seeded on `db init`; validates `--tsg` in `meeting sync` and

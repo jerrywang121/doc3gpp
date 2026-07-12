@@ -348,18 +348,10 @@ def _emit_records(
 
 @cache_app.command("status")
 def cache_status() -> None:
-    """Print cache file count, total bytes, limit, and per-subdir breakdown.
+    """Print cache size, file count, limit, and per-subdir breakdown.
 
-    Walks both the ``zips/`` and ``markdown/`` subtrees under the
-    configured cache directory and reports their combined size and file
-    counts. The output is a fixed plain-text table; no ``--format``
-    flag is exposed in this initial cut because the table is short and
-    machine-friendly enough to grep / awk.
-
-    The status command is a pure read — it does **not** trigger FIFO
-    eviction, even if the cache is currently over the configured size
-    limit. Use ``doc3gpp cache purge`` (or the next ``tdoc parse``
-    call) to evict.
+    Read-only: does not trigger eviction even when over the configured
+    limit. Use ``doc3gpp cache purge`` to free space.
     """
     cache = _build_cache()
     snapshot = cache.status()
@@ -375,19 +367,11 @@ def cache_purge(
         help="Skip the confirmation prompt.",
     ),
 ) -> None:
-    """Delete every cached zip and markdown file.
+    """Delete all cached zip and markdown files.
 
-    The ``zips/`` and ``markdown/`` subtrees are wiped and recreated
-    empty so the cache remains usable for subsequent ``tdoc parse``
-    calls. On-disk artefacts referenced from the
-    ``tdoc_extracts.markdown_path`` and ``tdoc_extracts.zip_path``
-    columns become stale — the next extract will repopulate them.
-
-    By default the command prompts for confirmation; pass ``--yes`` to
-    skip the prompt. The default is also overridable via the TOML
-    config file or the ``DOC3GPP_CACHE__PURGE_CONFIRM=false`` env var
-    — set to ``false`` to skip the prompt globally (CI / scripted
-    use).
+    Prompts for confirmation by default; pass ``--yes`` to skip. The
+    prompt can also be disabled globally via ``cache.purge_confirm``
+    in config or the ``DOC3GPP_CACHE__PURGE_CONFIRM=false`` env var.
     """
     settings = get_settings()
     if settings.cache.purge_confirm and not yes:
@@ -435,27 +419,11 @@ def db_reset(
         help="Skip the confirmation prompt.",
     ),
 ) -> None:
-    """Delete the SQLite database file and recreate the schema from scratch.
+    """Delete the SQLite database file and recreate the schema.
 
-    Intended for recovering from schema drift after an ORM change — Alembic is
-    not wired up in this project, so manual migrations are the norm and a
-    mismatched schema can leave the DB unusable. This command is destructive:
-    every row in every table is wiped.
-
-    Only file-based SQLite URLs are supported:
-
-    - ``sqlite:///...`` / ``sqlite+pysqlite:///...`` — the on-disk file is
-      deleted and recreated.
-    - ``sqlite:///:memory:`` — there is nothing to delete; the schema is
-      re-applied to the (transient) in-memory database.
-
-    MySQL and PostgreSQL URLs are rejected with an explicit error — use the
-    backend-native ``DROP DATABASE`` / ``CREATE DATABASE`` workflow instead.
-
-    By default the command prompts for confirmation; pass ``--yes`` to skip
-    the prompt. After deletion the SQLAlchemy engine cache is cleared so the
-    subsequent ``create_schema()`` opens a fresh connection to the (now
-    empty) file. The ``tsgs`` reference table is then re-seeded.
+    Destructive: all data is wiped. SQLite URLs only; MySQL/PostgreSQL are
+    rejected. Prompts for confirmation unless ``--yes`` is passed. After
+    reset the ``tsgs`` reference table is re-seeded.
     """
 
     settings = get_settings()
@@ -2129,22 +2097,12 @@ def tdoc_show(
         ),
     ),
 ) -> None:
-    """Show TDoc details, including extracted CR fields if available.
+    """Show a stored TDoc and any extracted CR cover-page details.
 
-    Looks up the TDoc row in the ``tdocs`` table and prints every
-    :class:`TDoc` field under a ``[TDoc]`` section. When one or more
-    matching ``tdoc_cr_details`` rows exist (i.e. ``tdoc parse`` has
-    been run for this id at least once) the parsed cover-page fields
-    are printed under one ``[Extracted Details]`` block **per revision**
-    (each revision is keyed by the immutable download URL — multiple
-    URLs share the same ``tdoc_id`` across revisions). The
-    ``corrections`` list is JSON-dumped for full fidelity.
-
-    The ``--tdoc`` argument is case-insensitive for CR-shape IDs (so
-    ``r5s260213`` and ``R5s260213`` resolve the same row); the DB still
-    stores the canonical form.
-
-    Raises a ``BadParameter`` when the requested TDoc is not stored.
+    Prints the TDoc record and, if ``tdoc parse`` has been run for this
+    id, one ``[Extracted Details]`` block per revision. ``--tdoc`` is
+    case-insensitive for CR-shape IDs. Raises ``BadParameter`` if the
+    TDoc is not stored.
     """
     repo = build_tdoc_repository()
     record = repo.get_by_id(_normalise_cli_tdoc_id(tdoc))
@@ -2314,14 +2272,12 @@ def wi_sync(
         help="TSG short name (e.g. R5) for the WI DynaReport page to sync.",
     ),
 ) -> None:
-    """Fetch and store the active WIs for one TSG from 3gpp.org.
+    """Fetch and store active WIs for a TSG from 3gpp.org.
 
-    The ``--tsg`` value is validated against the ``tsgs`` reference table
-    (see ``doc3gpp tsg list``). On a fresh database the reference table is
-    auto-seeded so this command is safe to run without an explicit
-    ``db init`` first. Existing rows for the same ``(wi_id, tsg_short)``
-    pair are updated in place, so re-running this command refreshes the
-    acronym, release and name fields without duplication.
+    Valid --tsg value are:                                                                                                                                                          
+    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`,                                                                                                                                             
+    `C1`, `C3`, `C4`, `C6`,                                                                                                                                                         
+    `S1`, `S2`, `S3`, `S4`, `S5`, `S6`
     """
     logger.info("Starting WI sync for TSG %s", tsg)
     create_schema()
@@ -2364,24 +2320,12 @@ def wi_list(
         help="Write results to FILE instead of stdout. Pass '-' for stdout.",
     ),
 ) -> None:
-    """List stored WIs matching the filters (default output: wi_id, acronym, release, name).
+    """List stored WIs matching optional filters.
 
-    The command exposes four optional SQL ``LIKE`` filters:
-
-    - ``--tsg``: restrict results to a single TSG short name (case-insensitive).
-    - ``--name``: SQL ``LIKE`` pattern to filter the WI title.
-    - ``--acronym``: SQL ``LIKE`` pattern to filter the WI acronym.
-    - ``--release``: SQL ``LIKE`` pattern to filter the release marker
-      (e.g. ``Rel-19``).
-
-    By default the output prints four columns: ``wi_id``, ``acronym``,
-    ``release`` and ``name``. Each value is rendered as a plain string,
-    ``-`` when the underlying field is missing.
-
-    Output routing:
-    - `-o, --output PATH`: write results to PATH instead of stdout.
-    - `--format`: ``table`` (legacy tab-separated, default), ``json`` (array of
-      objects), or ``markdown`` (GitHub-flavored table).
+    Filters ``--name``, ``--acronym``, and ``--release`` accept SQL
+    ``LIKE`` patterns. Output columns default to wi_id, acronym,
+    release, and name; use ``--format`` and ``--output`` to control
+    formatting and destination.
     """
     logger.info(
         "Listing %s recent WIs with filters tsg=%s name=%s acronym=%s release=%s",

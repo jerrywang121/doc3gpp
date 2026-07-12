@@ -151,8 +151,6 @@ Configuration is read from environment variables (and `.env`).
 | `DOC3GPP_HTTP_VERIFY` | TLS verification toggle |
 | `DOC3GPP_HTTP_MAX_RETRIES` | HTTP retry attempts |
 | `DOC3GPP_HTTP_RETRY_BACKOFF` | HTTP retry backoff base |
-| `DOC3GPP_MEETING_SYNC__CLOSED_YEARS` | Effective default for `meeting sync --closed-years` |
-| `DOC3GPP_MEETING_SYNC__FUTURE_YEARS` | Effective default for `meeting sync --future-years` |
 | `DOC3GPP_OUTPUT__FORMAT` | Default `* list --format` value (`table`, `json`, `markdown`) |
 | `DOC3GPP_CACHE__DIR` | TDoc extraction cache root |
 | `DOC3GPP_CACHE__SIZE_LIMIT_MB` | Combined `zips/` + `markdown/` cache size cap; `0` means unlimited |
@@ -192,10 +190,6 @@ See [`doc3gpp.toml.example`](./doc3gpp.toml.example) for the full schema.
 Highlights:
 
 ```toml
-[meeting_sync]
-closed_years = 5        # default for `doc3gpp meeting sync --closed-years`
-future_years = 2        # default for `doc3gpp meeting sync --future-years`
-
 [output]
 format = "json"         # default for every `* list --format`
 

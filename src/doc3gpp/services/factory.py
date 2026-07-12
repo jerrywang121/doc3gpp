@@ -25,8 +25,11 @@ from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
 
 
 def build_meeting_service() -> MeetingService:
-    """Construct a :class:`MeetingService` backed by the configured repo."""
-    return MeetingService(SQLAlchemyMeetingRepository())
+    """Construct a :class:`MeetingService` backed by the configured repos."""
+    return MeetingService(
+        SQLAlchemyMeetingRepository(),
+        SQLAlchemyTsgRepository(),
+    )
 
 
 def build_tdoc_service() -> TDocService:

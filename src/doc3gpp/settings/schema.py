@@ -5,12 +5,11 @@ Two layers of settings are exposed:
 * :class:`Settings` is the top-level :class:`pydantic_settings.BaseSettings`.
   It reads ``DOC3GPP_*`` environment variables (and the optional ``.env``)
   for backward compatibility with the original CLI surface.
-* Nested sub-models (:class:`MeetingSyncSettings`,
-  :class:`OutputSettings`, :class:`OutputFieldsSettings`,
-  :class:`CacheSettings`) carry values that are most naturally configured
-  from a TOML file rather than env vars. They can still be overridden by
-  env vars via the ``__`` delimiter
-  (``DOC3GPP_MEETING_SYNC__CLOSED_YEARS=5``).
+* Nested sub-models (:class:`OutputSettings`, :class:`OutputFieldsSettings`,
+  :class:`CacheSettings`, :class:`TDocParseSettings`) carry values that are
+  most naturally configured from a TOML file rather than env vars. They can
+  still be overridden by env vars via the ``__`` delimiter
+  (``DOC3GPP_OUTPUT__FORMAT=json``).
 
 Precedence (highest wins)::
 
@@ -31,17 +30,6 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 # Output formats accepted by every ``* list`` command. Mirrored in
 # ``doc3gpp.cli.VALID_FORMATS`` so a typo in one place fails fast.
 OutputFormat = Literal["table", "json", "markdown"]
-
-
-class MeetingSyncSettings(BaseModel):
-    """Fetch-side knobs for ``doc3gpp meeting sync``.
-
-    Mirrors the CLI ``--closed-years`` / ``--future-years`` flags. When the
-    CLI flags are not passed, these values are used as the default.
-    """
-
-    closed_years: int = Field(default=2, ge=0, le=20)
-    future_years: int = Field(default=1, ge=0, le=10)
 
 
 class OutputFieldsSettings(BaseModel):
@@ -145,8 +133,8 @@ class Settings(BaseSettings):
 
     The flat fields at the root (``database_url``, ``db_echo``, ...) are
     populated from ``DOC3GPP_*`` env vars to preserve backward
-    compatibility. Nested sub-models (``meeting_sync``, ``output``,
-    ``cache``) are populated from a TOML config file via
+    compatibility. Nested sub-models (``output``, ``cache``,
+    ``tdoc_parse``) are populated from a TOML config file via
     :func:`doc3gpp.settings.loader.get_settings`; the ``env_nested_delimiter``
     in :attr:`model_config` lets env vars override nested values too
     (``DOC3GPP_OUTPUT__FORMAT=json``).
@@ -169,7 +157,6 @@ class Settings(BaseSettings):
     )
 
     # Nested config (config-file-driven, env-overridable via '__' delimiter).
-    meeting_sync: MeetingSyncSettings = Field(default_factory=MeetingSyncSettings)
     output: OutputSettings = Field(default_factory=OutputSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)

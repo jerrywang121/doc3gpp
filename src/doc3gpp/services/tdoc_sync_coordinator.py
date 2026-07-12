@@ -10,6 +10,8 @@ callers.
 
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timezone
 import logging
 
 from doc3gpp.models.meeting import Meeting
@@ -45,6 +47,8 @@ class TDocSyncCoordinator:
     meeting via :class:`MeetingService`, validates its FTP URL, and
     dispatches the TDoc and auxiliary-file syncs through
     :class:`TDocService` and :class:`TDocFileService` respectively.
+    After a successful TDoc list sync, the meeting's
+    ``tdoc_list_last_sync`` timestamp is updated.
     """
 
     def __init__(
@@ -53,6 +57,7 @@ class TDocSyncCoordinator:
         tdoc_repository: TDocRepository,
         tdoc_file_repository: TDocFileRepository,
     ) -> None:
+        self._meeting_repository = meeting_repository
         self._meetings = MeetingService(meeting_repository)
         self._repository = tdoc_repository
         self._tdocs = TDocService(tdoc_repository)
@@ -103,6 +108,9 @@ class TDocSyncCoordinator:
         file_count = self._tdoc_files.sync_from_meeting_ftp(
             ftp_url=meeting.ftp_url,
             tdoc_ids=tdoc_ids,
+        )
+        self._meeting_repository.update_tdoc_list_last_sync(
+            meeting.meeting_id, datetime.now(timezone.utc)
         )
         return (
             f"TDoc sync complete: {tdoc_count} TDoc row(s) and "

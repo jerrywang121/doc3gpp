@@ -82,7 +82,6 @@ table below is for navigation only.
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
 | `Settings` | pydantic-settings | `settings/schema.py` | Root config: flat `DOC3GPP_*` + nested sub-models. |
-| `MeetingSyncSettings` | model | `settings/schema.py` | Fetch knobs (`closed_years`, `future_years`). |
 | `OutputSettings` | model | `settings/schema.py` | Default `format` + per-command field lists. |
 | `OutputFieldsSettings` | model | `settings/schema.py` | Per-list-command `default_fields` lists. |
 | `CacheSettings` | model | `settings/schema.py` | Disk cache (`dir`, `size_limit_mb`, `purge_confirm`). |

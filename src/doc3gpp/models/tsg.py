@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(slots=True)
@@ -14,9 +15,13 @@ class Tsg:
             user input such as ``--tsg``.
         description: Plain-text description of the group's scope.
         url: Optional URL to the 3GPP group page.
+        meeting_last_sync: UTC timestamp of the last successful
+            ``doc3gpp meeting sync`` for this TSG, or ``None`` if the
+            calendar has never been synced.
     """
 
     tsg_name: str
     short_name: str
     description: str
     url: str | None = None
+    meeting_last_sync: datetime | None = None

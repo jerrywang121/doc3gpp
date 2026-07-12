@@ -52,7 +52,7 @@ def test_meeting_sync_accepts_known_short_name(monkeypatch) -> None:
 
     sync_called_with: list[dict] = []
 
-    def fake_sync(self, url, max_year_closed=2, max_year_future=1, tsg=None):
+    def fake_sync(self, url, tsg=None):
         sync_called_with.append({"url": url, "tsg": tsg})
         return 0
 
@@ -89,7 +89,7 @@ def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
 
     captured: list[dict] = []
 
-    def fake_sync(self, url, max_year_closed=2, max_year_future=1, tsg=None):
+    def fake_sync(self, url, tsg=None):
         captured.append({"url": url, "tsg": tsg})
         return 0
 
@@ -117,7 +117,7 @@ def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
         lambda self: (seed_calls.update(count=seed_calls["count"] + 1) or 16),
     )
 
-    def fake_sync(self, url, max_year_closed=2, max_year_future=1, tsg=None):
+    def fake_sync(self, url, tsg=None):
         return 0
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)

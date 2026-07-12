@@ -71,6 +71,9 @@ class MeetingORM(Base):
         nullable=True,
         index=True,
     )
+    tdoc_list_last_sync: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class TsgORM(Base):
@@ -88,6 +91,9 @@ class TsgORM(Base):
     short_name: Mapped[str] = mapped_column(String(16), primary_key=True)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meeting_last_sync: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class WiORM(Base):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 
 from doc3gpp.services.meetings_service import MeetingService
@@ -31,20 +30,15 @@ def test_calendar_service_persists_to_sqlite(tmp_path, monkeypatch) -> None:
 
     create_schema()
     service = MeetingService(SQLAlchemyMeetingRepository())
-    inserted = service.sync(
-        "https://example.invalid",
-        max_year_closed=10,
-        max_year_future=2,
-        today=date(2026, 7, 2),
-    )
+    inserted = service.sync("https://example.invalid")
     rows = service.list_recent(limit=10)
 
-    assert inserted == 4
-    assert len(rows) == 4
-    # SQL repo orders by start_date DESC, meeting_id DESC; R5-116 (2027) is
+    assert inserted == 6
+    assert len(rows) == 6
+    # SQL repo orders by start_date DESC, meeting_id DESC; R5-121 (2028) is
     # therefore the first row in the listing.
-    assert rows[0].meeting_id == 82711
-    assert {m.meeting_id for m in rows} == {82711, 85434, 60240, 18788}
+    assert rows[0].meeting_id == 85637
+    assert {m.meeting_id for m in rows} == {85637, 82711, 85434, 60240, 18788, 11017}
 
 
 def test_sync_populates_tsg_fk_and_list_filters_by_it(tmp_path, monkeypatch) -> None:
@@ -84,21 +78,15 @@ def test_sync_populates_tsg_fk_and_list_filters_by_it(tmp_path, monkeypatch) -> 
         )
 
     service = MeetingService(SQLAlchemyMeetingRepository())
-    inserted = service.sync(
-        "https://example.invalid",
-        max_year_closed=10,
-        max_year_future=2,
-        today=date(2026, 7, 2),
-        tsg="r5",
-    )
-    assert inserted == 4
+    inserted = service.sync("https://example.invalid", tsg="r5")
+    assert inserted == 6
 
     all_rows = service.list_recent(limit=10)
-    assert {m.meeting_id for m in all_rows} == {82711, 85434, 60240, 18788}
+    assert {m.meeting_id for m in all_rows} == {85637, 82711, 85434, 60240, 18788, 11017}
     assert all(m.tsg == "R5" for m in all_rows)
 
     r5_rows = service.list_recent(limit=10, tsg="r5")
-    assert {m.meeting_id for m in r5_rows} == {82711, 85434, 60240, 18788}
+    assert {m.meeting_id for m in r5_rows} == {85637, 82711, 85434, 60240, 18788, 11017}
 
     s2_rows = service.list_recent(limit=10, tsg="s2")
     assert s2_rows == []

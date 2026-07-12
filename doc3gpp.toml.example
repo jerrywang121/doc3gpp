@@ -29,15 +29,6 @@
 # http_max_retries = 3
 # http_retry_backoff = 0.5      # seconds; doubles per attempt
 
-# ── Fetch-side knobs for `doc3gpp meeting sync` ─────────────────────────────
-# Both flags default to these values when not passed on the CLI.
-# `closed_years`: keep meetings whose end_date is within this many years back.
-# `future_years`: keep meetings whose start_date is within this many years ahead.
-
-[meeting_sync]
-closed_years = 2     # default; CLI flag --closed-years overrides
-future_years = 1     # default; CLI flag --future-years overrides
-
 # ── Output defaults for every `* list` command ──────────────────────────────
 # `format` becomes the default for --format on meeting/tdoc/tsg/wi list.
 # CLI flags --format and --fields always win over this file.

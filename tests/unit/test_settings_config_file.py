@@ -30,7 +30,6 @@ from doc3gpp.settings.config_source import (
 )
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import (
-    MeetingSyncSettings,
     OutputFieldsSettings,
     OutputSettings,
     Settings,
@@ -87,8 +86,6 @@ def test_built_in_defaults_match_previously_hardcoded_values(
     create a config file would see different output than before.
     """
     s = get_settings()
-    assert s.meeting_sync.closed_years == 2
-    assert s.meeting_sync.future_years == 1
     assert s.output.format == "table"
     assert s.output.fields.meeting == [
         "meeting_id",
@@ -114,18 +111,6 @@ def test_built_in_defaults_match_previously_hardcoded_values(
     ]
     assert s.output.fields.tsg == ["tsg_name", "short_name", "description"]
     assert s.output.fields.wi == ["wi_id", "acronym", "release", "name"]
-
-
-def test_meeting_sync_validation_bounds(clean_settings) -> None:
-    """``closed_years`` and ``future_years`` are bounded; out-of-range
-    values must raise rather than silently truncating.
-    """
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        MeetingSyncSettings(closed_years=99)
-    with pytest.raises(ValidationError):
-        MeetingSyncSettings(future_years=99)
 
 
 def test_tdoc_parse_defaults_and_bounds(clean_settings) -> None:
@@ -159,9 +144,9 @@ def test_settings_nested_default_factories(clean_settings) -> None:
     factories so every list-command still has a ``default_fields`` list.
     """
     s = get_settings()
-    assert isinstance(s.meeting_sync, MeetingSyncSettings)
     assert isinstance(s.output, OutputSettings)
     assert isinstance(s.output.fields, OutputFieldsSettings)
+    assert isinstance(s.tdoc_parse, TDocParseSettings)
     assert len(s.output.fields.tdoc) > 0
     assert len(s.output.fields.wi) > 0
 
@@ -188,7 +173,7 @@ def test_find_returns_none_when_no_config_exists(
 def test_find_returns_explicit_env_var(
     clean_settings, write_toml, monkeypatch,
 ) -> None:
-    cfg = write_toml("custom.toml", "[meeting_sync]\nclosed_years = 7\n")
+    cfg = write_toml("custom.toml", "[output]\\nformat = \"json\"\\n")
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
     assert find_config_file() == cfg
 
@@ -199,7 +184,7 @@ def test_find_explicit_env_var_accepts_directory(
     """Passing a *directory* resolves to ``<dir>/config.toml`` so users
     can choose between pointing at the file directly or at its folder.
     """
-    cfg = write_toml("config.toml", "[meeting_sync]\nclosed_years = 7\n")
+    cfg = write_toml("config.toml", "[output]\\nformat = \"json\"\\n")
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg.parent))
     assert find_config_file() == cfg
 
@@ -221,11 +206,11 @@ def test_find_project_local_beats_xdg(
     """``./doc3gpp.toml`` wins over the XDG user-wide file when both
     exist — project-local defaults should override user preferences.
     """
-    project_cfg = write_toml("doc3gpp.toml", "[meeting_sync]\nclosed_years = 4\n")
+    project_cfg = write_toml("doc3gpp.toml", "[output]\\nformat = \"json\"\\n")
     user_dir = tmp_path / "user-cfg"
     user_dir.mkdir()
     (user_dir / "config.toml").write_text(
-        "[meeting_sync]\nclosed_years = 9\n", encoding="utf-8"
+        "[output]\\nformat = \"json\"\\n", encoding="utf-8"
     )
     monkeypatch.setenv("HOME", str(user_dir.parent))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(user_dir.parent))
@@ -239,7 +224,7 @@ def test_find_project_local_beats_xdg(
 def test_find_xdg_default_when_no_project_local(
     clean_settings, write_toml, monkeypatch, tmp_path,
 ) -> None:
-    user_cfg = write_toml("config.toml", "[meeting_sync]\nclosed_years = 9\n")
+    user_cfg = write_toml("config.toml", "[output]\\nformat = \"json\"\\n")
     # Layout the file at the canonical XDG location.
     xdg_root = tmp_path / "xdg"
     xdg_doc = xdg_root / "doc3gpp"
@@ -266,14 +251,14 @@ def test_load_returns_empty_when_no_config(clean_settings, monkeypatch, tmp_path
 def test_load_parses_top_level_table(clean_settings, write_toml, monkeypatch) -> None:
     cfg = write_toml(
         "c.toml",
-        "[meeting_sync]\nclosed_years = 4\n[output]\nformat = 'json'\n",
+        "[output]\nformat = 'json'\n[cache]\nsize_limit_mb = 512\n",
     )
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
     path, data = load_config_data()
     assert path == cfg
     assert data == {
-        "meeting_sync": {"closed_years": 4},
         "output": {"format": "json"},
+        "cache": {"size_limit_mb": 512},
     }
 
 
@@ -293,38 +278,15 @@ def test_settings_drops_unknown_top_level_keys(
     metadata in the same file. Unknown keys must be dropped, not raised.
     """
     s = Settings(
-        meeting_sync={"closed_years": 4},
+        output={"format": "json"},
         unknown_section={"foo": "bar"},
     )
-    assert s.meeting_sync.closed_years == 4
+    assert s.output.format == "json"
 
 
 # ---------------------------------------------------------------------------
 # Loader precedence (env > file > defaults)
 # ---------------------------------------------------------------------------
-
-
-def test_toml_overrides_defaults(clean_settings, write_toml, monkeypatch) -> None:
-    cfg = write_toml("c.toml", "[meeting_sync]\nclosed_years = 7\n")
-    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    get_settings.cache_clear()
-    s = get_settings()
-    assert s.meeting_sync.closed_years == 7
-    # Future years not set in TOML -> still default 1.
-    assert s.meeting_sync.future_years == 1
-
-
-def test_env_overrides_toml(clean_settings, write_toml, monkeypatch) -> None:
-    cfg = write_toml(
-        "c.toml",
-        "[meeting_sync]\nclosed_years = 7\nfuture_years = 4\n",
-    )
-    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    monkeypatch.setenv("DOC3GPP_MEETING_SYNC__CLOSED_YEARS", "15")
-    get_settings.cache_clear()
-    s = get_settings()
-    assert s.meeting_sync.closed_years == 15  # env wins
-    assert s.meeting_sync.future_years == 4   # TOML still wins over default
 
 
 def test_env_overrides_toml_for_output_format(
@@ -369,25 +331,6 @@ def test_env_overrides_toml_for_flat_fields(
     assert s.log_level == "ERROR"
 
 
-def test_env_overrides_only_set_keys(
-    clean_settings, write_toml, monkeypatch,
-) -> None:
-    """A partial TOML + a partial env together produce a merged result
-    where each key is resolved independently against its highest source.
-    """
-    cfg = write_toml(
-        "c.toml",
-        "[meeting_sync]\nclosed_years = 7\nfuture_years = 4\n[output]\nformat = 'json'\n",
-    )
-    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    monkeypatch.setenv("DOC3GPP_MEETING_SYNC__FUTURE_YEARS", "9")
-    get_settings.cache_clear()
-    s = get_settings()
-    assert s.meeting_sync.closed_years == 7   # only TOML set
-    assert s.meeting_sync.future_years == 9   # env wins
-    assert s.output.format == "json"          # only TOML set
-
-
 def test_cache_clear_picks_up_new_env(clean_settings, monkeypatch) -> None:
     """The ``lru_cache`` wrapper must yield fresh values once a test
     mutates the env — the canonical pattern documented for
@@ -405,73 +348,6 @@ def test_cache_clear_picks_up_new_env(clean_settings, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------
-
-
-def test_meeting_sync_uses_settings_defaults(
-    clean_settings, write_toml, monkeypatch,
-) -> None:
-    """When neither ``--closed-years`` nor ``--future-years`` is given,
-    the values come from ``settings.meeting_sync.*``.
-    """
-    cfg = write_toml(
-        "c.toml",
-        "[meeting_sync]\nclosed_years = 5\nfuture_years = 3\n",
-    )
-    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    monkeypatch.setenv("DOC3GPP_DATABASE_URL", "sqlite+pysqlite:///:memory:")
-    get_settings.cache_clear()
-
-    captured: dict = {}
-
-    def fake_sync(self, meetings_url, max_year_closed, max_year_future, today=None, tsg=None):
-        captured["closed"] = max_year_closed
-        captured["future"] = max_year_future
-        return 0
-
-    from doc3gpp.services import meetings_service
-
-    monkeypatch.setattr(meetings_service.MeetingService, "sync", fake_sync)
-    # Auto-seed TSG table on demand.
-    from doc3gpp.services.tsg_service import TsgService
-
-    monkeypatch.setattr(TsgService, "count", lambda self: 16)
-    monkeypatch.setattr(TsgService, "seed_defaults", lambda self: 16)
-    monkeypatch.setattr(TsgService, "is_known_short_name", lambda self, name: True)
-    monkeypatch.setattr(TsgService, "known_short_names", lambda self: ["R5"])
-
-    result = Runner().invoke(app, ["meeting", "sync", "--tsg", "R5"])
-    assert result.exit_code == 0, result.output
-    assert captured == {"closed": 5, "future": 3}
-
-
-def test_meeting_sync_cli_flag_overrides_settings(
-    clean_settings, write_toml, monkeypatch,
-) -> None:
-    cfg = write_toml("c.toml", "[meeting_sync]\nclosed_years = 5\n")
-    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    monkeypatch.setenv("DOC3GPP_DATABASE_URL", "sqlite+pysqlite:///:memory:")
-    get_settings.cache_clear()
-
-    captured: dict = {}
-
-    def fake_sync(self, meetings_url, max_year_closed, max_year_future, today=None, tsg=None):
-        captured["closed"] = max_year_closed
-        captured["future"] = max_year_future
-        return 0
-
-    from doc3gpp.services import meetings_service
-    from doc3gpp.services.tsg_service import TsgService
-
-    monkeypatch.setattr(meetings_service.MeetingService, "sync", fake_sync)
-    monkeypatch.setattr(TsgService, "count", lambda self: 16)
-    monkeypatch.setattr(TsgService, "is_known_short_name", lambda self, name: True)
-
-    result = Runner().invoke(
-        app, ["meeting", "sync", "--tsg", "R5", "--closed-years", "1"]
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["closed"] == 1        # CLI flag wins over TOML 5
-    assert captured["future"] == 1       # default (TOML only set closed_years)
 
 
 def test_meeting_list_uses_settings_default_fields(
@@ -606,8 +482,8 @@ def test_config_show_emits_json(clean_settings, monkeypatch, tmp_path) -> None:
     lines = result.output.splitlines()
     assert lines[0].startswith("# config source:")
     body = json.loads("\n".join(lines[1:]))
-    assert body["meeting_sync"]["closed_years"] == 2
     assert body["output"]["format"] == "table"
+    assert body["tdoc_parse"]["max_batch"] == 100
 
 
 # ---------------------------------------------------------------------------

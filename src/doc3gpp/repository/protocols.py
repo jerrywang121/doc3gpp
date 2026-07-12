@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date
+from datetime import datetime
 from typing import Protocol
 
 from doc3gpp.models.meeting import Meeting
@@ -189,11 +189,11 @@ class MeetingRepository(Protocol):
         """Return a meeting record by its exact meeting name."""
         ...
 
-    def delete_with_end_before(self, cutoff: date) -> int:
-        """Delete persisted meetings whose ``end_date`` is strictly before ``cutoff``.
+    def update_tdoc_list_last_sync(self, meeting_id: int, synced_at: datetime) -> bool:
+        """Record when the TDoc list was last synced for a meeting.
 
-        Used by the sync pipeline to trim out-of-window rows after re-syncing
-        with a narrower year window. Returns the number of rows deleted.
+        Returns ``True`` when a matching row existed and was updated,
+        ``False`` otherwise.
         """
         ...
 
@@ -219,6 +219,14 @@ class TsgRepository(Protocol):
 
     def count(self) -> int:
         """Return the number of stored TSG records."""
+        ...
+
+    def update_meeting_last_sync(self, short_name: str, synced_at: datetime) -> bool:
+        """Record when the meeting calendar was last synced for a TSG.
+
+        Returns ``True`` when a matching row existed and was updated,
+        ``False`` otherwise.
+        """
         ...
 
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
 from dataclasses import dataclass
+from datetime import date
+from datetime import datetime
 
 
 @dataclass(slots=True)
@@ -23,6 +24,9 @@ class Meeting:
             ``tsgs.short_name`` at the persistence layer; ``None`` for
             rows inserted before the column was added or for meetings
             imported without a known owning TSG.
+        tdoc_list_last_sync: UTC timestamp of the last successful TDoc
+            list sync for this meeting, or ``None`` if the TDoc list has
+            never been synced.
     """
 
     meeting_id: int
@@ -35,3 +39,4 @@ class Meeting:
     start_doc: str | None = None
     end_doc: str | None = None
     tsg: str | None = None
+    tdoc_list_last_sync: datetime | None = None

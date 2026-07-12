@@ -63,7 +63,7 @@ def test_tsg_list_with_all_fields(monkeypatch) -> None:
     lines = [line for line in result.output.splitlines() if line and not line.startswith("Listing")]
     assert len(lines) == 3
     for line in lines:
-        assert len(line.split("\t")) == 4
+        assert len(line.split("\t")) == 5
     assert "ran-ah1" in lines[1]
 
 

@@ -41,14 +41,10 @@ def test_cli_meeting_sync_and_list(sqlite_env, monkeypatch) -> None:
             "sync",
             "--tsg",
             "r5",
-            "--closed-years",
-            "10",
-            "--future-years",
-            "2",
         ],
     )
     assert sync_res.exit_code == 0
-    assert "Meeting sync complete: 4 meeting rows stored" in sync_res.stdout
+    assert "Meeting sync complete: 6 meeting rows stored" in sync_res.stdout
 
     list_res = runner.invoke(
         app,

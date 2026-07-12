@@ -507,66 +507,22 @@ def db_reset(
 @meeting_app.command("sync")
 def meeting_sync(
     tsg: str = typer.Option(DEFAULT_TSG, help="TSG short name for 3GPP meeting report"),
-    closed_years: int | None = typer.Option(
-        None,
-        min=0,
-        max=20,
-        help=(
-            "Years of closed meetings to keep. "
-            "Default: meeting_sync.closed_years from config file or 2."
-        ),
-    ),
-    future_years: int | None = typer.Option(
-        None,
-        min=0,
-        max=10,
-        help=(
-            "Years of future meetings to keep. "
-            "Default: meeting_sync.future_years from config file or 1."
-        ),
-    ),
 ) -> None:
     """Fetch and store meetings from 3GPP site.
 
-    The ``--tsg`` value is validated against the ``tsgs`` reference table
-    (see ``doc3gpp tsg list``). On a fresh database the reference table is
-    auto-seeded with the canonical 3GPP TSG list, so this command is safe to
-    run without an explicit ``db init`` first.
+    Valid --tsg value are:
+    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`,
+    `C1`, `C3`, `C4`, `C6`,
+    `S1`, `S2`, `S3`, `S4`, `S5`, `S6`
 
-    The year window defined by ``--closed-years`` and ``--future-years`` is
-    *additive*: after upserting the freshly scraped meetings, the sync
-    deletes any previously stored meeting whose ``end_date`` falls strictly
-    before today minus ``--closed-years`` years. Re-running with a narrower
-    ``--closed-years`` therefore trims older rows; widening it does not
-    resurrect already-deleted rows (run a fresh sync from the source instead).
-
-    When neither ``--closed-years`` nor ``--future-years`` is passed, the
-    values come from the ``[meeting_sync]`` section of the config file
-    (``closed_years`` / ``future_years``), or the built-in defaults
-    (``2`` / ``1``) when no config file is present.
     """
-    settings = get_settings()
-    effective_closed = (
-        closed_years if closed_years is not None else settings.meeting_sync.closed_years
-    )
-    effective_future = (
-        future_years if future_years is not None else settings.meeting_sync.future_years
-    )
-    logger.info(
-        "Starting meeting sync for TSG %s (closed_years=%s future_years=%s)",
-        tsg, effective_closed, effective_future,
-    )
+    logger.info("Starting meeting sync for TSG %s", tsg)
     create_schema()
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = build_meeting_service()
     meeting_url = _build_meeting_url(tsg)
-    count = service.sync(
-        meeting_url,
-        max_year_closed=effective_closed,
-        max_year_future=effective_future,
-        tsg=tsg,
-    )
+    count = service.sync(meeting_url, tsg=tsg)
     typer.echo(f"Meeting sync complete: {count} meeting rows stored")
 
 

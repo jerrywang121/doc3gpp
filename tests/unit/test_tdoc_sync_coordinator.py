@@ -29,6 +29,7 @@ class _FakeMeetingRepository:
 
     def __init__(self, meetings: dict[int, Meeting] | None = None) -> None:
         self._meetings = meetings or {}
+        self._last_sync_calls: list[tuple[int, object]] = []
 
     def upsert_many(self, meetings):  # pragma: no cover - not exercised here
         return 0
@@ -44,6 +45,10 @@ class _FakeMeetingRepository:
             if m.name == meeting_name:
                 return m
         return None
+
+    def update_tdoc_list_last_sync(self, meeting_id: int, synced_at) -> bool:
+        self._last_sync_calls.append((meeting_id, synced_at))
+        return meeting_id in self._meetings
 
 
 class _FakeTDocRepository:

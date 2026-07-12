@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from datetime import datetime
+
+from sqlalchemy import func, select, update
 
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.storage.db.models import TsgORM
@@ -22,6 +24,8 @@ class SQLAlchemyTsgRepository:
 
         Existing records (matched by ``tsg_name``, case-insensitive) are updated
         in place so callers can use this method to refresh descriptions or URLs.
+        ``meeting_last_sync`` is intentionally preserved on update; it is
+        managed exclusively by :meth:`update_meeting_last_sync`.
         """
         with self._session_factory() as session:
             for item in tsgs:
@@ -41,6 +45,7 @@ class SQLAlchemyTsgRepository:
                             short_name=item.short_name,
                             description=item.description,
                             url=item.url,
+                            meeting_last_sync=item.meeting_last_sync,
                         )
                     )
             session.commit()
@@ -51,15 +56,7 @@ class SQLAlchemyTsgRepository:
         with self._session_factory() as session:
             stmt = select(TsgORM).order_by(TsgORM.tsg_name)
             rows = session.scalars(stmt).all()
-        return [
-            Tsg(
-                tsg_name=row.tsg_name,
-                short_name=row.short_name,
-                description=row.description,
-                url=row.url,
-            )
-            for row in rows
-        ]
+        return [_orm_to_domain(row) for row in rows]
 
     def get_by_short_name(self, short_name: str) -> Tsg | None:
         """Return a TSG by its short name, matching case-insensitively."""
@@ -70,12 +67,7 @@ class SQLAlchemyTsgRepository:
             row = session.scalar(stmt)
             if row is None:
                 return None
-            return Tsg(
-                tsg_name=row.tsg_name,
-                short_name=row.short_name,
-                description=row.description,
-                url=row.url,
-            )
+            return _orm_to_domain(row)
 
     def get_by_tsg_name(self, tsg_name: str) -> Tsg | None:
         """Return a TSG by its full ``tsg_name``, matching case-insensitively."""
@@ -84,15 +76,36 @@ class SQLAlchemyTsgRepository:
             row = session.scalar(stmt)
             if row is None:
                 return None
-            return Tsg(
-                tsg_name=row.tsg_name,
-                short_name=row.short_name,
-                description=row.description,
-                url=row.url,
-            )
+            return _orm_to_domain(row)
 
     def count(self) -> int:
         """Return the number of stored TSG records."""
         with self._session_factory() as session:
             stmt = select(func.count()).select_from(TsgORM)
             return int(session.scalar(stmt) or 0)
+
+    def update_meeting_last_sync(self, short_name: str, synced_at: datetime) -> bool:
+        """Record when the meeting calendar was last synced for a TSG.
+
+        Returns ``True`` when a matching row existed and was updated,
+        ``False`` otherwise.
+        """
+        with self._session_factory() as session:
+            stmt = (
+                update(TsgORM)
+                .where(func.lower(TsgORM.short_name) == short_name.lower())
+                .values(meeting_last_sync=synced_at)
+            )
+            result = session.execute(stmt)
+            session.commit()
+        return int(result.rowcount or 0) > 0
+
+def _orm_to_domain(row: TsgORM) -> Tsg:
+    """Map a TsgORM row into a Tsg dataclass."""
+    return Tsg(
+        tsg_name=row.tsg_name,
+        short_name=row.short_name,
+        description=row.description,
+        url=row.url,
+        meeting_last_sync=row.meeting_last_sync,
+    )

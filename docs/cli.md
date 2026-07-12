@@ -96,23 +96,18 @@ Options:
     error listing the known short names and pointing to `doc3gpp tsg list`.
   - if the `tsgs` table is empty (fresh install), it is auto-seeded before
     validation runs.
-- --closed-years: number of historical years to keep.
-  - default: 2
-- --future-years: number of future years to keep.
-  - default: 1
 
 Behavior:
 
 - Builds the 3GPP meeting report URL from the TSG short name.
-- Fetches HTML page.
-- Parses meeting rows.
-- Filters by date window.
+- Fetches the full HTML calendar page without date-window filtering.
+- Parses every meeting row and upserts it into the `meetings` table.
 - Stamps the canonical (`--tsg` upper-cased) short name onto every
   parsed `Meeting` so the persisted `meetings.tsg` FK column is
   populated. The parent row in `tsgs` must exist (auto-seeded on a
   fresh install); sync without a matching `tsgs` row will fail the FK
   constraint.
-- Upserts records into meetings table.
+- Updates `tsgs.meeting_last_sync` for the synced TSG.
 - Prints inserted/updated row count.
 
 ### doc3gpp meeting list

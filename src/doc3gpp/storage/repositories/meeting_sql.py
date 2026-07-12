@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime
 
-from sqlalchemy import delete, func, select, extract
+from sqlalchemy import func, select, extract, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.models.meeting import Meeting
@@ -128,16 +128,21 @@ class SQLAlchemyMeetingRepository:
                 return None
             return _orm_to_domain(row)
 
-    def delete_with_end_before(self, cutoff: date) -> int:
-        """Delete meetings whose ``end_date`` is strictly before ``cutoff``.
+    def update_tdoc_list_last_sync(self, meeting_id: int, synced_at: datetime) -> bool:
+        """Record when the TDoc list was last synced for a meeting.
 
-        Returns the number of rows deleted.
+        Returns ``True`` when a matching row existed and was updated,
+        ``False`` otherwise.
         """
         with self._session_factory() as session:
-            stmt = delete(MeetingORM).where(MeetingORM.end_date < cutoff)
+            stmt = (
+                update(MeetingORM)
+                .where(MeetingORM.meeting_id == meeting_id)
+                .values(tdoc_list_last_sync=synced_at)
+            )
             result = session.execute(stmt)
             session.commit()
-        return int(result.rowcount or 0)
+        return int(result.rowcount or 0) > 0
 
 
 def _orm_to_domain(row: MeetingORM) -> Meeting:
@@ -153,6 +158,7 @@ def _orm_to_domain(row: MeetingORM) -> Meeting:
         start_doc=row.start_doc,
         end_doc=row.end_doc,
         tsg=row.tsg,
+        tdoc_list_last_sync=row.tdoc_list_last_sync,
     )
 
 
@@ -197,6 +203,8 @@ def _persist(session: Session, meetings: list[Meeting]) -> None:
     ``tsg`` is written as-is from the domain object; the service layer is
     responsible for stamping the canonical short name before calling
     ``upsert_many`` so callers can update the owning TSG on a re-sync.
+    ``tdoc_list_last_sync`` is preserved on existing rows because it is
+    managed exclusively by :meth:`update_tdoc_list_last_sync`.
     """
     ids = [item.meeting_id for item in meetings]
     existing_rows = session.scalars(select(MeetingORM).where(MeetingORM.meeting_id.in_(ids))).all()
@@ -227,5 +235,6 @@ def _persist(session: Session, meetings: list[Meeting]) -> None:
                     start_doc=item.start_doc,
                     end_doc=item.end_doc,
                     tsg=item.tsg,
+                    tdoc_list_last_sync=item.tdoc_list_last_sync,
                 )
             )

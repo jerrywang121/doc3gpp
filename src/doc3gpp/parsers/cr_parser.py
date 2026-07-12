@@ -88,25 +88,32 @@ _TTCN_TDOC_PATTERN = re.compile(r"R5s\d{6}", re.IGNORECASE)
 _COVER_SPEC_RE = re.compile(
     r"\|\s*\b(\d{2}\.\d{3}(?:-\d)?)\b\s*\|\s*CR\s*\|"
     r"\s*([\d\w-]+)\s*\|\s*rev\s*\|\s*([\d\w-]+)\s*\|"
-    r"\s*Current version:\s*\|\s*(\d{1,2}\.\d{1,2}\.\d{1,2})\s*\|"
+    r"\s*Current version:\s*\|\s*(\d{1,2}\.\d{1,2}\.\d{1,2})\s*\|",
+    re.IGNORECASE,
 )
-_COVER_TITLE_RE = re.compile(r"\|\s*Title:\s*\|\s*(.*?)\s*\|")
-_COVER_SOURCE_RE = re.compile(r"\|\s*Source to WG:\s*\|\s*(.*?)\s*\|")
-_COVER_TSG_RE = re.compile(r"\|\s*Source to TSG:\s*\|\s*(.*?)\s*\|")
-_COVER_WI_DATE_RE = re.compile(r"\|\s*Work item code:\s*\|\s*(.*?)\s*\|(?:\s+\|)*\s*Date:\s*\|\s*([\d\\-]+)\s*\|")
+_COVER_TITLE_RE = re.compile(r"\|\s*Title:\s*\|\s*(.*?)\s*\|", re.IGNORECASE)
+_COVER_SOURCE_RE = re.compile(r"\|\s*Source to WG:\s*\|\s*(.*?)\s*\|", re.IGNORECASE)
+_COVER_TSG_RE = re.compile(r"\|\s*Source to TSG:\s*\|\s*(.*?)\s*\|", re.IGNORECASE)
+_COVER_WI_DATE_RE = re.compile(
+    r"\|\s*Work item code:\s*\|\s*(.*?)\s*\|(?:\s+\|)*\s*Date:\s*\|\s*([\d\\-]+)\s*\|",
+    re.IGNORECASE,
+)
 # Category + Release on the same line.
 _COVER_CATREL_RE = re.compile(
     r"\|\s*Category:\s*\|\s*([^\s|]+)(?:\s*\|)+"
-    r"\s*Release:(?:\s*\|)*\s*([^\s|]+)\s*\|"
+    r"\s*Release:(?:\s*\|)*\s*([^\s|]+)\s*\|",
+    re.IGNORECASE,
 )
-_COVER_REASON_RE = re.compile(r"\|\s*Reason for change:(?:\s*\|)+\s*(.*?)\s*\|")
+_COVER_REASON_RE = re.compile(r"\|\s*Reason for change:(?:\s*\|)+\s*(.*?)\s*\|", re.IGNORECASE)
 _COVER_CONSEQUENCES_RE = re.compile(
-    r"\|\s*Consequences if not approved:(?:\s*\|)+\s*(.*?)\s*\|"
+    r"\|\s*Consequences if not approved:(?:\s*\|)+\s*(.*?)\s*\|",
+    re.IGNORECASE,
 )
-_COVER_CLAUSES_RE = re.compile(r"\|\s*Clauses affected:(?:\s*\|)+\s*(.*?)\s*\|")
-_COVER_OTHER_RE = re.compile(r"\|\s*Other comments:(?:\s*\|)+\s*(.*?)\s*\|")
+_COVER_CLAUSES_RE = re.compile(r"\|\s*Clauses affected:(?:\s*\|)+\s*(.*?)\s*\|", re.IGNORECASE)
+_COVER_OTHER_RE = re.compile(r"\|\s*Other comments:(?:\s*\|)+\s*(.*?)\s*\|", re.IGNORECASE)
 _COVER_REVHIST_RE = re.compile(
-    r"\|\s*This CR's revision history:(?:\s*\|)+\s*(.*?)\s*\|"
+    r"\|\s*This CR's revision history:(?:\s*\|)+\s*(.*?)\s*\|",
+    re.IGNORECASE,
 )
 
 # TTCN overview fields.

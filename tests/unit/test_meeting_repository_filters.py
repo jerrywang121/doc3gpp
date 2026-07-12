@@ -109,7 +109,7 @@ def test_list_filters_by_tsg_and_year_and_like():
     # inject our session factory
     repo._session_factory = Session
 
-    # FK equality; SA WG2 row and legacy null-tsg row must be excluded.
+    # FK LIKE filter; SA WG2 row and legacy null-tsg row must be excluded.
     r5 = repo.list(limit=10, tsg="r5")
     assert {m.meeting_id for m in r5} == {1, 2, 3, 4}
 
@@ -125,6 +125,39 @@ def test_list_filters_by_tsg_and_year_and_like():
     w = repo.list(limit=10, name_like="%Workshop%")
     assert len(w) == 1
     assert w[0].meeting_id == 3
+
+
+def test_list_filters_by_tsg_like_pattern():
+    """``tsg`` is a SQL LIKE pattern, not an exact equality."""
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    with Session() as s:
+        insert_rows(s)
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    # Prefix wildcard: every R* TSG (fixture only has R5 rows).
+    r_prefix = repo.list(limit=10, tsg="R%")
+    assert {m.meeting_id for m in r_prefix} == {1, 2, 3, 4}
+
+    # Single-character wildcard matches S2.
+    s_wildcard = repo.list(limit=10, tsg="S_")
+    assert {m.meeting_id for m in s_wildcard} == {5}
+
+    # Match-all pattern returns every row that owns a TSG; NULL is excluded.
+    all_tsgs = repo.list(limit=10, tsg="%")
+    assert {m.meeting_id for m in all_tsgs} == {1, 2, 3, 4, 5}
+
+    # Pattern that matches nothing.
+    none = repo.list(limit=10, tsg="X%")
+    assert none == []
+
+    # Lowercase input is upper-cased before the lookup.
+    r_lower = repo.list(limit=10, tsg="r%")
+    assert {m.meeting_id for m in r_lower} == {1, 2, 3, 4}
 
 
 def _insert_doc_range_rows(session):

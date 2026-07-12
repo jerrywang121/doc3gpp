@@ -55,8 +55,10 @@ class SQLAlchemyMeetingRepository:
         """List the most recent meeting records, ordered by start date.
 
         Optional filters:
-        - `tsg`: exact-match on the ``meetings.tsg`` FK (case-insensitive
-          via upper-case canonical form, populated by ``meeting sync --tsg``).
+        - `tsg`: SQL ``LIKE`` pattern applied to the ``meetings.tsg`` FK
+          (case-insensitive via upper-case canonical form, populated by
+          ``meeting sync --tsg``). Use ``%`` / ``_`` wildcards; a plain
+          value with no wildcards still matches exactly.
         - `name_like`: SQL LIKE pattern to apply to the `name` column
         - `location_like`: SQL LIKE pattern to apply to the `location` column
         - `year`: integer year to match the `end_date`
@@ -69,8 +71,8 @@ class SQLAlchemyMeetingRepository:
             stmt = select(MeetingORM)
 
             if tsg:
-                # FK equality on meetings.tsg; stored upper-case by sync so callers may pass any case
-                stmt = stmt.where(MeetingORM.tsg == tsg.upper())
+                # LIKE on meetings.tsg; stored upper-case by sync so callers may pass any case.
+                stmt = stmt.where(MeetingORM.tsg.like(tsg.upper()))
 
             if name_like:
                 stmt = stmt.where(MeetingORM.name.like(name_like))

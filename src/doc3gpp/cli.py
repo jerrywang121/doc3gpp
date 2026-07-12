@@ -582,13 +582,16 @@ def meeting_list(
     offset: int = typer.Option(
         0, min=0, help="Number of rows to skip before applying --limit (pagination)."
     ),
-    tsg: str | None = typer.Option(None, help="Only list meetings for the given TSG short name"),
+    tsg: str | None = typer.Option(
+        None,
+        help="SQL LIKE pattern to filter meeting TSG short name (supports % and _)",
+    ),
     name: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting name (supports % and _)") ,
     location: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting location (supports % and _)") ,
     year: int | None = typer.Option(None, help="Filter meetings by end_date year"),
     tdoc: str | None = typer.Option(
         None,
-        help="Find the meeting containing this TDoc (e.g. 'R5-260013'). Prefix match is case-insensitive.",
+        help="Find the meeting containing this TDoc (e.g. 'R5-260013'), case-insensitive.",
     ),
     fields: str | None = typer.Option(
         None,
@@ -608,33 +611,14 @@ def meeting_list(
 ) -> None:
     """List meetings from database with optional filtering and pagination.
 
-    The command supports filtering, pagination, and field selection:
-    - `--tsg`: optional TSG short name to restrict results (validated against
-      the ``tsgs`` reference table; matches the ``meetings.tsg`` FK exactly).
-    - `--name`: SQL LIKE pattern to filter `name` (supports `%` and `_`).
-    - `--location`: SQL LIKE pattern to filter `location` (supports `%` and `_`).
-    - `--year`: filter by the end_date year.
-    - `--tdoc`: find the meeting whose ``start_doc`` / ``end_doc`` range
-      brackets the given TDoc id (e.g. ``--tdoc R5-260013``). The flag is
-      rejected with a clear error if the value is not a CR-shape id.
-    - `--limit` / `--offset`: pagination. ``--offset`` is applied first, then
-      ``--limit`` caps the returned rows. Use ``--offset`` to page past
-      earlier rows without re-running the filters.
-    - `--fields`: comma-separated list of fields to include, or `all`.
+    Filter optional flags are combinable; the query is ANDed together:
+      --tsg, --name, --location, --year, --tdoc
+    See docs/cli.md for full semantics and examples.
 
-    By default, the output includes the most useful columns for planning
-    further commands (``meeting_id``, ``name``, ``location``, ``start_date``,
-    ``end_date``, ``ftp_url``, ``start_doc``, ``end_doc``); pass
-    ``--fields all`` for the full schema including ``title`` and ``tsg``.
+    Output fields can be selected with ``--fields``. Defaults are
+    ``meeting_id, name, location, start_date, end_date, ftp_url,
+    start_doc, end_doc``; ``title`` and ``tsg`` are also available.
 
-    Available fields for selection:
-    meeting_id, name, title, location, start_date, end_date, ftp_url,
-    start_doc, end_doc, tsg
-
-    Output routing:
-    - `-o, --output PATH`: write results to PATH instead of stdout.
-    - `--format`: ``table`` (legacy tab-separated, default), ``json`` (array of
-      objects), or ``markdown`` (GitHub-flavored table).
     """
     allowed_fields = [
         "meeting_id",
@@ -664,11 +648,10 @@ def meeting_list(
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from None
 
-    # Validate --tsg against the reference table (matches `meeting sync`).
-    # The table is auto-seeded on a fresh DB so this is safe without `db init`.
+    # Canonicalise the TSG pattern to upper case so it matches the
+    # upper-case values stored by `meeting sync --tsg`.
     if tsg is not None:
-        tsg_service = _ensure_tsg_ready(build_tsg_service())
-        tsg = _validate_tsg_short_name(tsg, tsg_service)
+        tsg = tsg.upper()
 
     logger.info(
         "Listing meetings limit=%s offset=%s tsg=%s name=%s location=%s "

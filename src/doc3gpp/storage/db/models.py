@@ -50,7 +50,7 @@ class MeetingORM(Base):
     CLI passes ``--tsg`` to ``doc3gpp meeting sync``. Nullable so rows
     imported from older schemas (where the column did not exist) or
     scraped without a known owning TSG can still be persisted.
-    Indexed because the ``meeting list --tsg`` filter runs an equality
+    Indexed because the ``meeting list --tsg`` filter runs a ``LIKE``
     lookup on every call.
     """
 

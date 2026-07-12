@@ -127,12 +127,12 @@ Options:
   - default: 20
 - --offset: number of rows to skip before applying `--limit` (pagination).
   - default: 0
-- --tsg: only list meetings for the given TSG short name.
+- --tsg: SQL LIKE pattern to filter the `meetings.tsg` FK.
   - default: none
-  - exact-match on the `meetings.tsg` FK (case-insensitive on input;
-    stored canonicalised to upper case by `meeting sync`). Rows whose
-    `tsg` is `NULL` (e.g. imported before the column was added) are
-    excluded.
+  - supports `%` and `_` wildcards; input is upper-cased before the
+    lookup so lowercase patterns match the canonical stored values.
+    Rows whose `tsg` is `NULL` (e.g. imported before the column was
+    added) are excluded.
 
 Additional options:
 
@@ -167,6 +167,12 @@ Examples:
 
 ```bash
 doc3gpp meeting list --tsg r5
+```
+
+- Match every TSG short name starting with `R` using SQL LIKE:
+
+```bash
+doc3gpp meeting list --tsg 'R%'
 ```
 
 - Match names containing "TTCN" using SQL LIKE (% wildcard):

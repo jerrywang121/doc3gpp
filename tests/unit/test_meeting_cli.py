@@ -99,3 +99,35 @@ def test_cli_tdoc_filter_not_passed_when_absent(monkeypatch):
     result = runner.invoke(app, ["meeting", "list"])
     assert result.exit_code == 0, result.output
     assert captured["tdoc_id"] is None
+
+
+def test_cli_tsg_filter_uppercases_like_pattern(monkeypatch):
+    """``--tsg`` is treated as a SQL LIKE pattern and upper-cased."""
+    runner = CliRunner()
+    captured: dict = {}
+
+    def fake_list_recent(self, limit=20, offset=0, tsg=None, name_like=None, location_like=None, year=None, tdoc_id=None):
+        captured["tsg"] = tsg
+        return []
+
+    monkeypatch.setattr(MeetingService, "list_recent", fake_list_recent)
+
+    result = runner.invoke(app, ["meeting", "list", "--tsg", "r%"])
+    assert result.exit_code == 0, result.output
+    assert captured["tsg"] == "R%"
+
+
+def test_cli_tsg_filter_accepts_unknown_pattern_without_validation_error(monkeypatch):
+    """Wildcard patterns must not be rejected by the TSG reference lookup."""
+    runner = CliRunner()
+    captured: dict = {}
+
+    def fake_list_recent(self, limit=20, offset=0, tsg=None, name_like=None, location_like=None, year=None, tdoc_id=None):
+        captured["tsg"] = tsg
+        return []
+
+    monkeypatch.setattr(MeetingService, "list_recent", fake_list_recent)
+
+    result = runner.invoke(app, ["meeting", "list", "--tsg", "XYZ%"])
+    assert result.exit_code == 0, result.output
+    assert captured["tsg"] == "XYZ%"

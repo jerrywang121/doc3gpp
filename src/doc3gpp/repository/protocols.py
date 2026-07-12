@@ -155,10 +155,10 @@ class MeetingRepository(Protocol):
         """Return a list of meeting records, optionally filtered and paginated.
 
         Optional filters:
-            tsg: exact-match on the ``meetings.tsg`` FK (case-insensitive
-                on input, stored canonicalised in upper-case by sync).
-                Rows whose ``tsg`` is ``NULL`` (e.g. imported before the
-                column was added) are excluded.
+            tsg: SQL ``LIKE`` pattern applied to the ``meetings.tsg`` FK
+                (case-insensitive on input, stored canonicalised in upper-case
+                by sync). Rows whose ``tsg`` is ``NULL`` (e.g. imported before
+                the column was added) are excluded.
             name_like: SQL ``LIKE`` pattern applied to the meeting name column.
             location_like: SQL ``LIKE`` pattern applied to the meeting
                 location column.

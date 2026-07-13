@@ -203,7 +203,12 @@ and the TDoc CR extraction is the deepest.
       `sha256(docx_bytes)` in `TDocCache.get_bytes(sha, "markdown")`;
       on miss, `convert_document_to_markdown` runs (raises
       `PythonDocxNotInstalledError` if `python-docx` is not installed)
-      and the result is written to `markdown/<sha>.md`.
+      and the result is written to `markdown/<sha>` as
+      **gzip-compressed UTF-8** (the cache layer stays format-agnostic;
+      the gzip wrapping is applied in `tdoc_cr_service._load_or_render_markdown`
+      via `_compress_markdown`). The reader (`_decompress_markdown`)
+      magic-byte-sniffs the on-disk bytes, so legacy plain UTF-8 cache
+      files written before this change are still decoded transparently.
     - `parse_cr_details(markdown, tdoc_id=...)` returns a typed
       `TDocCRDetails` (cover-page; TTCN overview + corrections only
       when `tdoc_id` matches `R5s\d{6}`).

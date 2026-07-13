@@ -158,14 +158,26 @@ class TDocParseSettings(BaseModel):
 
 
 class SyncSettings(BaseModel):
-    """Sync intervals and skip-rule windows.
+    """Sync intervals, skip-rule windows, and auto-sync behavior.
 
     These values gate the ``meeting sync`` and ``tdoc sync`` commands
     so repeated invocations do not re-scrape unchanged upstream data.
     Durations may be written in TOML/env as human strings (``24h``,
     ``30m``, ``90d``) or ISO 8601 durations (``P1D``, ``PT30M``).
+
+    When ``auto_sync`` is enabled, the read commands ``meeting list``,
+    ``tdoc list``, ``tdoc show``, and DB-mode ``tdoc parse`` will
+    internally trigger meeting and TDoc list syncs before querying.
+    The same skip rules still apply.
     """
 
+    auto_sync: bool = Field(
+        default=False,
+        description=(
+            "Automatically sync meeting calendars and TDoc lists when "
+            "running list/show/parse commands."
+        ),
+    )
     meeting_sync_interval: timedelta = Field(
         default=timedelta(hours=24),
         description="Minimum time between meeting calendar syncs for the same TSG.",

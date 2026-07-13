@@ -25,6 +25,38 @@ pip install -e ".[dev]"
 - Command: doc3gpp
 - Python entrypoint: doc3gpp.cli:main
 
+## Auto-sync behavior
+
+The read commands `meeting list`, `tdoc list`, `tdoc show`, and database-mode
+`tdoc parse` can automatically trigger internal syncs before querying. This is
+controlled by the `sync.auto_sync` setting:
+
+```toml
+[sync]
+auto_sync = false   # default; set to true to enable
+```
+
+When enabled:
+
+- `meeting list` may internally call the equivalent of `meeting sync --tsg`
+  for the candidate TSG(s) inferred from `--tsg` or `--tdoc`.
+- `tdoc list` may internally call both `meeting sync` (for inferred TSGs) and
+  `tdoc sync --meeting-id` (for inferred meeting IDs).
+- `tdoc show` delegates to the same auto-sync logic as `tdoc list --tdoc`.
+- `tdoc parse` (without `--from-path` or `--from-url`) delegates to the same
+  auto-sync logic as `tdoc list` with the same filters.
+
+The internal sync calls always respect the existing skip rules
+(`meeting_sync_interval`, `tdoc_list_closed_window`, `tdoc_list_sync_interval`,
+and upstream XLSX mtime). They never bypass those rules and they cannot be
+forced from the read commands. When a sync actually runs, the command prints
+`[auto-sync] <reason>`; when it is skipped, the skip reason is also printed
+with the same prefix. Sync failures are logged as warnings and do not abort
+the parent read command.
+
+Direct-mode `tdoc parse` (`--from-path` or `--from-url`) never triggers
+auto-sync.
+
 ## db Commands
 
 ### doc3gpp db check
@@ -159,6 +191,10 @@ Default output fields:
 Note: by default `title` and `tsg` are excluded to keep the listing
 compact; use `--fields all` to include every available column (or
 `--fields tsg` to add just the owning TSG).
+
+Auto-sync: when `sync.auto_sync` is enabled, `meeting list` may internally
+sync the meeting calendar for the TSG derived from `--tsg` or `--tdoc`
+before listing. See [Auto-sync behavior](#auto-sync-behavior) above.
 
 Examples:
 
@@ -336,6 +372,11 @@ Default output fields:
 
 - `tdoc_id`, `meeting_name`, `title`, `source`, `type`, `status`, `cr_cat`, `spec`, `version`, `related_wis`
 
+Auto-sync: when `sync.auto_sync` is enabled, `tdoc list` may internally sync
+meeting calendars and TDoc lists for the TSG(s) and meeting ID(s) inferred
+from `--tdoc`, `--meeting`, and `--meeting-id` before listing. See
+[Auto-sync behavior](#auto-sync-behavior) above.
+
 Examples:
 
 - Match every RAN5 2026 TDoc (`--tdoc` LIKE pattern):
@@ -405,6 +446,8 @@ Options:
 
 Behavior:
 
+- When `sync.auto_sync` is enabled, runs the same internal sync logic as
+  `tdoc list --tdoc <id>` before the lookup.
 - Looks up the row in the `tdocs` table via a PK lookup.
 - On miss: raises `BadParameter` listing the requested id and pointing
   to `doc3gpp tdoc sync` / `doc3gpp tdoc list`.
@@ -442,6 +485,12 @@ exclusivity with `--meeting-id`) have been removed; `--tdoc` is now a
 LIKE pattern on `tdoc_id` that can be freely combined with
 `--meeting-id` and every text or date filter. At least one filter is
 required — an empty call exits non-zero before any DB lookup.
+
+Auto-sync: when `sync.auto_sync` is enabled, the database-mode path
+(without `--from-path` or `--from-url`) triggers the same internal sync
+logic as `tdoc list` with the same filters before building the candidate
+set. Direct-mode parse (`--from-path` or `--from-url`) never triggers
+auto-sync. See [Auto-sync behavior](#auto-sync-behavior) above.
 
 Options:
 

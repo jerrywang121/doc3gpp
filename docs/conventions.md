@@ -79,6 +79,34 @@ Rules are evaluated in the order listed. `--force` / `-f` bypasses all
 skip checks for a single invocation. Skip outcomes are normal no-ops:
 the CLI exits `0` and prints a human-readable reason.
 
+## Internal auto-sync helpers
+
+The read commands (`meeting list`, `tdoc list`, `tdoc show`, database-mode
+`tdoc parse`) use helpers in `src/doc3gpp/cli_auto_sync.py` to trigger
+internal syncs before querying. Contract:
+
+- Helpers are **orchestration only** — they call the existing
+  `MeetingService.sync` and `TDocSyncCoordinator.sync_for_meeting_id`
+  paths, so every skip rule above is preserved.
+- Internal sync calls are **never forced**; they respect the same
+  interval/window/mtime checks as explicit sync commands.
+- Return value is a boolean: `True` only when the sync actually ran
+  (`SyncOutcome.status == "synced"`); `False` for skipped or failed syncs.
+- Sync failures are caught, logged as warnings, and must not propagate
+  out of the helper. The parent read command continues.
+- When a sync runs or is skipped, the reason is echoed with an
+  `[auto-sync]` prefix so the operator can distinguish it from an
+  explicit `meeting sync` / `tdoc sync` invocation.
+- Candidate extraction is narrow:
+  - TSG comes from `--tsg`, from a full CR-shape TDoc id (`R5-260013` →
+    `R5`), or from a LIKE pattern that starts with a TSG prefix (`R5%` →
+    `R5`). Ambiguous patterns like `R%` contribute no TSG.
+  - Meeting IDs come from `--meeting-id`, from meetings whose name
+    matches `--meeting`, or from resolving a full TDoc id through the
+    existing `meeting list --tdoc` range logic.
+- Auto-sync is gated by `Settings.sync.auto_sync` and is **disabled by
+  default**.
+
 ## Settings caching — flush in tests
 
 Both loaders are `@lru_cache(maxsize=1)`:

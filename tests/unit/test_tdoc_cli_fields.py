@@ -163,6 +163,25 @@ def test_cli_tdoc_list_forwards_tdoc_pattern(monkeypatch):
     assert observed["status"] == "Agreed"
 
 
+def test_cli_tdoc_list_forwards_offset(monkeypatch):
+    """``--offset`` is forwarded to ``TDocService.list_recent_with_meeting``."""
+    runner = CliRunner()
+    observed: dict = {}
+
+    def fake_list_recent_with_meeting(self, **_kwargs):
+        observed.update(_kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.list_recent_with_meeting",
+        fake_list_recent_with_meeting,
+    )
+
+    result = runner.invoke(app, ["tdoc", "list", "--offset", "10"])
+    assert result.exit_code == 0, result.output
+    assert observed["offset"] == 10
+
+
 def test_cli_tdoc_list_passes_not_like_prefix_unchanged(monkeypatch):
     """`-prefixed values are forwarded to the repo verbatim; the bang
     is consumed by the repository's ``_apply_text_filter`` to emit

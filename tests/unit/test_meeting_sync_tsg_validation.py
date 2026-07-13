@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -9,8 +11,8 @@ from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tsg_service import TsgService
 
 
-_KNOWN_SHORT = ["C1", "C3", "C4", "C6", "R1", "R2", "R3", "R4", "R5", "RT",
-                "S1", "S2", "S3", "S4", "S5", "S6"]
+_KNOWN_SHORT = ["C1", "C3", "C4", "C6", "CP", "R1", "R2", "R3", "R4", "R5",
+                "RP", "RT", "S1", "S2", "S3", "S4", "S5", "S6", "SP"]
 
 
 class _StaticRepo:
@@ -48,7 +50,7 @@ def test_meeting_sync_accepts_known_short_name(monkeypatch) -> None:
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
     monkeypatch.setattr(
-        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
 
     sync_called_with: list[dict] = []
@@ -71,13 +73,15 @@ def test_meeting_sync_rejects_unknown_short_name(monkeypatch) -> None:
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
     monkeypatch.setattr(
-        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
 
     result = runner.invoke(app, ["meeting", "sync", "--tsg", "r99"])
     assert result.exit_code != 0
     assert "Unknown TSG short name 'r99'" in result.output
-    assert "Run 'doc3gpp tsg list'" in result.output
+    # Typer may wrap the error message at the terminal width; allow the wrap
+    # (a line break plus box-drawing `│`) between "doc3gpp" and "tsg list".
+    assert re.search(r"Run 'doc3gpp[\s│]+tsg list'", result.output) is not None
 
 
 def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
@@ -85,7 +89,7 @@ def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
     monkeypatch.setattr(
-        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
 
     captured: list[dict] = []
@@ -107,7 +111,7 @@ def test_meeting_sync_force_flag_is_forwarded(monkeypatch) -> None:
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
     monkeypatch.setattr(
-        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
 
     captured: list[dict] = []
@@ -136,7 +140,7 @@ def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
     monkeypatch.setattr(
         TsgService,
         "seed_defaults",
-        lambda self: (seed_calls.update(count=seed_calls["count"] + 1) or 16),
+        lambda self: (seed_calls.update(count=seed_calls["count"] + 1) or 19),
     )
 
     def fake_sync(self, url, tsg=None, force=False):

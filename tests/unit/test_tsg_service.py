@@ -40,16 +40,17 @@ class _FakeTsgRepository:
         return len(self.rows)
 
 
-def test_seed_defaults_populates_all_sixteen() -> None:
+def test_seed_defaults_populates_all_nineteen() -> None:
     repo = _FakeTsgRepository()
     service = TsgService(repo)  # type: ignore[arg-type]
 
     seeded = service.seed_defaults()
-    assert seeded == 16
-    assert repo.count() == 16
+    assert seeded == 19
+    assert repo.count() == 19
     short_names = {t.short_name for t in service.list_all()}
     assert short_names == {"R1", "R2", "R3", "R4", "R5", "RT", "S1", "S2", "S3",
-                           "S4", "S5", "S6", "C1", "C3", "C4", "C6"}
+                           "S4", "S5", "S6", "C1", "C3", "C4", "C6",
+                           "RP", "SP", "CP"}
 
 
 def test_seed_defaults_assigns_urls_from_pattern() -> None:
@@ -77,13 +78,48 @@ def test_seed_defaults_assigns_urls_from_pattern() -> None:
     )
 
 
+def test_seed_defaults_assigns_plenary_urls_from_pattern() -> None:
+    """Plenary TSGs get a family-root URL with a trailing slash (no subgroup
+    suffix), unlike WG/AH URLs which end without a slash.
+    """
+    repo = _FakeTsgRepository()
+    service = TsgService(repo)  # type: ignore[arg-type]
+
+    service.seed_defaults()
+    by_name = {t.tsg_name: t for t in service.list_all()}
+
+    ran = by_name["RAN Plenary"]
+    assert ran.short_name == "RP"
+    assert (
+        ran.url
+        == "https://www.3gpp.org/3gpp-groups/radio-access-networks-ran/"
+    )
+    assert ran.url.endswith("/")
+
+    sa = by_name["SA Plenary"]
+    assert sa.short_name == "SP"
+    assert (
+        sa.url
+        == "https://www.3gpp.org/3gpp-groups/service-system-aspects-sa/"
+    )
+    assert sa.url.endswith("/")
+
+    ct = by_name["CT Plenary"]
+    assert ct.short_name == "CP"
+    assert (
+        ct.url
+        == "https://www.3gpp.org/3gpp-groups/core-network-terminals-ct/"
+    )
+    assert ct.url.endswith("/")
+
+
 def test_seed_defaults_is_idempotent() -> None:
     repo = _FakeTsgRepository()
     service = TsgService(repo)  # type: ignore[arg-type]
 
     service.seed_defaults()
     service.seed_defaults()
-    assert repo.count() == 16
+    assert repo.count() == 19
 
 
 def test_seed_defaults_refreshes_url_from_pattern() -> None:

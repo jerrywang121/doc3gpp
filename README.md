@@ -45,7 +45,7 @@ PostgreSQL available via configuration.
   (`tdoc_cr_details` + `tdoc_extracts`).
 - **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
   SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
-- **TSG reference data** — seeded with the canonical 16 3GPP TSGs and used to
+- **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to
   validate `--tsg` flags across `meeting sync` and `wi sync`.
 - **Multi-backend storage** — SQLite (default), MySQL, and PostgreSQL via
   SQLAlchemy 2.0.

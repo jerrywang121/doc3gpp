@@ -23,10 +23,13 @@ logger = logging.getLogger(__name__)
 # The 3GPP group page URL is derived from the TSG family and number using the
 # pattern documented for this project:
 #
+#   RAN Plenary:  https://www.3gpp.org/3gpp-groups/radio-access-networks-ran/
 #   RAN WG{#}:  https://www.3gpp.org/3gpp-groups/radio-access-networks-ran/ran-wg{#}
-#   SA  WG{#}:  https://www.3gpp.org/3gpp-groups/service-system-aspects-sa/sa-wg{#}
-#   CT  WG{#}:  https://www.3gpp.org/3gpp-groups/core-network-terminals-ct/ct-wg{#}
 #   RAN AH1:    https://www.3gpp.org/3gpp-groups/radio-access-networks-ran/ran-ah1
+#   SA Plenary:  https://www.3gpp.org/3gpp-groups/service-system-aspects-sa/
+#   SA  WG{#}:  https://www.3gpp.org/3gpp-groups/service-system-aspects-sa/sa-wg{#}
+#   CT Plenary:  https://www.3gpp.org/3gpp-groups/core-network-terminals-ct/
+#   CT  WG{#}:  https://www.3gpp.org/3gpp-groups/core-network-terminals-ct/ct-wg{#}
 #
 _TSG_URL_BASE: Final[str] = "https://www.3gpp.org/3gpp-groups"
 
@@ -41,6 +44,8 @@ _FAMILY_PATHS: Final[dict[str, str]] = {
 
 # ``tsg_name`` shape: ``"<FAMILY> <KIND><#>"`` where KIND is "WG" or "AH".
 _TSG_NAME_RE: Final[re.Pattern[str]] = re.compile(r"^(?P<family>RAN|SA|CT)\s+(?P<kind>WG|AH)(?P<num>\d+)$")
+# ``tsg_name`` shape: ``"<FAMILY> Plenary"``.
+_TSG_PLENARY_NAME_RE: Final[re.Pattern[str]] = re.compile(r"^(?P<family>RAN|SA|CT)\s+Plenary$")
 
 
 def build_tsg_url(tsg_name: str) -> str | None:
@@ -50,18 +55,23 @@ def build_tsg_url(tsg_name: str) -> str | None:
     persist a TSG record without a URL.
     """
     match = _TSG_NAME_RE.match(tsg_name.strip())
-    if not match:
+    if match:
+
+        family = match.group("family")
+        kind = match.group("kind").lower()
+        num = match.group("num")
+        family_path = _FAMILY_PATHS.get(family)
+        if family_path is None:
+            return None
+        return f"{_TSG_URL_BASE}/{family_path}/{family.lower()}-{kind}{num}"
+    elif _TSG_PLENARY_NAME_RE.match(tsg_name.strip()):
+        family = _TSG_PLENARY_NAME_RE.match(tsg_name.strip()).group("family")
+        family_path = _FAMILY_PATHS.get(family)
+        if family_path is None:
+            return None
+        return f"{_TSG_URL_BASE}/{family_path}/"
+    else:
         return None
-
-    family = match.group("family")
-    kind = match.group("kind").lower()
-    num = match.group("num")
-    family_path = _FAMILY_PATHS.get(family)
-    if family_path is None:
-        return None
-
-    return f"{_TSG_URL_BASE}/{family_path}/{family.lower()}-{kind}{num}"
-
 
 # ---------------------------------------------------------------------------
 # Canonical seed data
@@ -71,6 +81,11 @@ def build_tsg_url(tsg_name: str) -> str | None:
 # uppercase form (e.g. ``"R1"``) and matched case-insensitively at the
 # repository layer so user input such as ``--tsg r5`` resolves correctly.
 _DEFAULT_TSGS: Final[tuple[Tsg, ...]] = (
+    Tsg(
+        tsg_name="RAN Plenary",
+        short_name="RP",
+        description="Radio Access Network Plenary",
+    ),
     Tsg(
         tsg_name="RAN WG1",
         short_name="R1",
@@ -102,6 +117,11 @@ _DEFAULT_TSGS: Final[tuple[Tsg, ...]] = (
         description="ITU-R Ad Hoc",
     ),
     Tsg(
+        tsg_name="SA Plenary",
+        short_name="SP",
+        description="Service and System Aspects Plenary",
+    ),
+    Tsg(
         tsg_name="SA WG1",
         short_name="S1",
         description="Services",
@@ -130,6 +150,11 @@ _DEFAULT_TSGS: Final[tuple[Tsg, ...]] = (
         tsg_name="SA WG6",
         short_name="S6",
         description="Application Enablement and Critical Communication Applications",
+    ),
+    Tsg(
+        tsg_name="CT Plenary",
+        short_name="CP",
+        description="Core Network and Terminals Plenary",
     ),
     Tsg(
         tsg_name="CT WG1",

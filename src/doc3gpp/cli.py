@@ -485,9 +485,9 @@ def meeting_sync(
     """Fetch and store meetings from 3GPP site.
 
     Valid --tsg value are:
-    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`,
-    `C1`, `C3`, `C4`, `C6`,
-    `S1`, `S2`, `S3`, `S4`, `S5`, `S6`
+    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`, `RP`,
+    `C1`, `C3`, `C4`, `C6`, `CP`,
+    `S1`, `S2`, `S3`, `S4`, `S5`, `S6`, `SP`
 
     """
     logger.info("Starting meeting sync for TSG %s", tsg)

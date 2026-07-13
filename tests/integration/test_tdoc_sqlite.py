@@ -73,6 +73,41 @@ def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
     assert by_id["R1-000002"].source is None
 
 
+def test_tdoc_repository_list_distinct_meeting_ids(sqlite_env) -> None:
+    create_schema()
+    repo = SQLAlchemyTDocRepository()
+    meeting_repo = SQLAlchemyMeetingRepository()
+    from datetime import date
+
+    meeting_repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=100,
+                name="RAN1#100",
+                title="RAN1 meeting 100",
+                location="Online",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 1, 2),
+            ),
+            Meeting(
+                meeting_id=101,
+                name="RAN1#101",
+                title="RAN1 meeting 101",
+                location="Online",
+                start_date=date(2026, 2, 1),
+                end_date=date(2026, 2, 2),
+            ),
+        ]
+    )
+
+    repo.upsert(TDoc(tdoc_id="R1-000001", title="First", meeting_id=100))
+    repo.upsert(TDoc(tdoc_id="R1-000002", title="Second", meeting_id=101))
+    repo.upsert(TDoc(tdoc_id="R1-000003", title="Third", meeting_id=101))
+    repo.upsert(TDoc(tdoc_id="R1-000004", title="Orphan"))
+
+    assert repo.list_distinct_meeting_ids() == [100, 101]
+
+
 def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())

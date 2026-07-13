@@ -138,6 +138,10 @@ class MeetingService:
         logger.debug("Retrieving meeting by name %s", meeting_name)
         return self._repository.get_by_name(meeting_name)
 
+    def list_distinct_tsgs(self) -> list[str]:
+        """Return the distinct TSG short names currently stored in meetings."""
+        return self._repository.list_distinct_tsgs()
+
 
 def _format_duration(delta: timedelta) -> str:
     """Return a concise human-readable representation of a timedelta."""

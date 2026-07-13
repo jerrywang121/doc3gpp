@@ -204,6 +204,15 @@ class MeetingRepository(Protocol):
         """
         ...
 
+    def list_distinct_tsgs(self) -> list[str]:
+        """Return the distinct, non-null TSG short names stored in meetings.
+
+        Values are returned in ascending lexical order so callers can
+        iterate deterministically. Used by ``meeting sync`` when no
+        explicit ``--tsg`` is supplied.
+        """
+        ...
+
 
 class TsgRepository(Protocol):
     """Storage operations for 3GPP TSG reference records."""

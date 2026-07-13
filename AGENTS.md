@@ -131,6 +131,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   multiple revisions of the same tdoc_id never collide.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
+- When `Settings.sync.auto_sync` is enabled, `meeting list`, `tdoc list`,
+  `tdoc show`, and database-mode `tdoc parse` internally trigger the
+  same meeting-calendar and TDoc-list sync paths used by explicit
+  `meeting sync` / `tdoc sync`. The same skip rules apply and are never
+  bypassed; failures are logged as warnings and do not abort the read
+  command. Direct-mode `tdoc parse --from-path` / `--from-url` never
+  triggers auto-sync.
 
 ## Common commands
 

@@ -15,6 +15,7 @@ from sqlalchemy.engine.url import make_url
 
 from doc3gpp.config import get_settings
 from doc3gpp.settings.schema import Settings
+from doc3gpp.cli_auto_sync import _build_meeting_url, trigger_auto_sync
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
@@ -87,19 +88,6 @@ def main_callback(ctx: typer.Context) -> None:
     _configure_logging()
     if ctx.invoked_subcommand is None:
         typer.echo(app.get_help(ctx))
-
-
-def _build_meeting_url(tsg: str, ext: str = "htm") -> str:
-    """Compose the 3GPP DynaReport meeting-calendar URL for ``tsg``.
-
-    The default ``ext="htm"`` matches the canonical 3GPP filename. Pass
-    ``"html"`` if the upstream ever switches the suffix (the ``tsg_service``
-    page already serves ``.html`` for some links, so callers can request the
-    alternate suffix without patching this helper).
-    """
-    if ext not in ("htm", "html"):
-        raise ValueError(f"Unsupported meeting URL extension: {ext!r}")
-    return f"https://www.3gpp.org/dynareport?code=Meetings-{tsg.upper()}.{ext}"
 
 
 def _ensure_tsg_ready(tsg_service: TsgService) -> TsgService:
@@ -612,6 +600,13 @@ def meeting_list(
         limit, offset, tsg, name, location, year, tdoc,
     )
     service = build_meeting_service()
+    trigger_auto_sync(
+        auto_sync_enabled=settings.sync.auto_sync,
+        meeting_service=service,
+        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+        tsg=tsg,
+        tdoc=tdoc,
+    )
     records = service.list_recent(
         limit=limit,
         offset=offset,
@@ -891,6 +886,14 @@ def tdoc_list(
     )
 
     service = build_tdoc_service()
+    trigger_auto_sync(
+        auto_sync_enabled=settings.sync.auto_sync,
+        meeting_service=build_meeting_service(),
+        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+        meeting_id=meeting_id,
+        meeting_name=meeting,
+        tdoc=tdoc,
+    )
     records = service.list_recent_with_meeting(
         limit=limit,
         offset=offset,
@@ -1270,6 +1273,16 @@ def tdoc_parse(
                         fmt=direct_format,
                     )
         return
+
+    trigger_auto_sync(
+        auto_sync_enabled=get_settings().sync.auto_sync,
+        meeting_service=build_meeting_service(),
+        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+        meeting_id=meeting_id,
+        meeting_name=meeting,
+        tdoc=tdoc,
+    )
+
     filter_args: dict[str, object] = {
         "tdoc": tdoc,
         "meeting_id": meeting_id,
@@ -2181,6 +2194,12 @@ def tdoc_show(
     case-insensitive for CR-shape IDs. Raises ``BadParameter`` if the
     TDoc is not stored.
     """
+    trigger_auto_sync(
+        auto_sync_enabled=get_settings().sync.auto_sync,
+        meeting_service=build_meeting_service(),
+        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+        tdoc=tdoc,
+    )
     repo = build_tdoc_repository()
     record = repo.get_by_id(_normalise_cli_tdoc_id(tdoc))
     if record is None:

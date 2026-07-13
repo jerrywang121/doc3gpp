@@ -185,5 +185,5 @@ def test_tsg_seed_calls_service(monkeypatch) -> None:
 
     result = runner.invoke(app, ["tsg", "seed"])
     assert result.exit_code == 0
-    assert "Seeded 16" in result.output
-    assert calls["upsert_many"] == 16
+    assert "Seeded 19" in result.output
+    assert calls["upsert_many"] == 19

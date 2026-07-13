@@ -36,7 +36,7 @@ def test_db_reset_full_lifecycle(sqlite_env) -> None:
     # 1. Fresh init.
     res = runner.invoke(app, ["db", "init"])
     assert res.exit_code == 0, res.output
-    assert _row_count("tsgs") == 16
+    assert _row_count("tsgs") == 19
     assert _row_count("meetings") == 0
 
     # 2. Populate meetings + a couple of WIs so the post-reset counts are
@@ -74,7 +74,7 @@ def test_db_reset_full_lifecycle(sqlite_env) -> None:
     # 4. Schema is back, user data is gone, TSGs are re-seeded.
     assert db_path.exists()
     assert _row_count("meetings") == 0
-    assert _row_count("tsgs") == 16
+    assert _row_count("tsgs") == 19
 
     # 5. The file was actually replaced — inode recycled (or filesystem
     #    chose to keep it; either way the reset succeeded and the data
@@ -88,11 +88,12 @@ def test_db_reset_full_lifecycle(sqlite_env) -> None:
     #    was properly cleared and create_schema ran end-to-end).
     service = TsgService(SQLAlchemyTsgRepository())
     rows = service.list_all()
-    assert len(rows) == 16
+    assert len(rows) == 19
     assert {t.short_name for t in rows} == {
         "R1", "R2", "R3", "R4", "R5", "RT",
         "S1", "S2", "S3", "S4", "S5", "S6",
         "C1", "C3", "C4", "C6",
+        "RP", "SP", "CP",
     }
 
 
@@ -181,5 +182,5 @@ def test_db_reset_round_trip_is_safe(sqlite_env) -> None:
     for _ in range(3):
         res = runner.invoke(app, ["db", "reset", "--yes"])
         assert res.exit_code == 0, res.output
-        assert _row_count("tsgs") == 16
+        assert _row_count("tsgs") == 19
         assert _row_count("meetings") == 0

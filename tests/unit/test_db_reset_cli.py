@@ -27,7 +27,7 @@ from doc3gpp.storage.db.session import get_engine
 
 
 def test_db_reset_deletes_file_and_recreates_schema(sqlite_env) -> None:
-    """A populated DB is wiped and re-bootstrapped: empty schema + 16 TSGs."""
+    """A populated DB is wiped and re-bootstrapped: empty schema + 19 TSGs."""
     db_path = sqlite_env
     runner = CliRunner()
 
@@ -68,7 +68,7 @@ def test_db_reset_deletes_file_and_recreates_schema(sqlite_env) -> None:
     # data is gone.
     assert db_path.exists()
     assert _count_meetings() == 0
-    assert _count_tsgs() == 16
+    assert _count_tsgs() == 19
 
     # File was actually rewritten — mtime advanced (or at least the
     # inode was recycled, which is enough on filesystems without
@@ -85,7 +85,7 @@ def test_db_reset_with_yes_skips_confirmation(sqlite_env) -> None:
     result = runner.invoke(app, ["db", "reset", "--yes"])
     assert result.exit_code == 0, result.output
     assert "Database reset complete" in result.output
-    assert "seeded 16 TSG records" in result.output
+    assert "seeded 19 TSG records" in result.output
 
 
 def test_db_reset_aborts_when_prompt_declined(sqlite_env) -> None:
@@ -99,8 +99,8 @@ def test_db_reset_aborts_when_prompt_declined(sqlite_env) -> None:
 
     assert result.exit_code != 0
     assert sqlite_env.exists()
-    # Init seeded 16 TSGs; they should still be present.
-    assert _count_tsgs() == 16
+    # Init seeded 19 TSGs; they should still be present.
+    assert _count_tsgs() == 19
 
 
 def test_db_reset_accepts_confirmation_and_runs(sqlite_env) -> None:
@@ -112,7 +112,7 @@ def test_db_reset_accepts_confirmation_and_runs(sqlite_env) -> None:
 
     assert result.exit_code == 0, result.output
     assert "Database reset complete" in result.output
-    assert _count_tsgs() == 16
+    assert _count_tsgs() == 19
 
 
 def test_db_reset_refuses_mysql_url(monkeypatch, tmp_path) -> None:
@@ -164,7 +164,7 @@ def test_db_reset_in_memory_sqlite_just_reinits(monkeypatch) -> None:
         assert result.exit_code == 0, result.output
         assert "No existing SQLite file to delete" in result.output
         assert "Database reset complete" in result.output
-        assert _count_tsgs() == 16
+        assert _count_tsgs() == 19
     finally:
         get_engine.cache_clear()
         get_settings.cache_clear()
@@ -183,7 +183,7 @@ def test_db_reset_handles_missing_file(sqlite_env) -> None:
     assert result.exit_code == 0, result.output
     assert "No existing SQLite file to delete" in result.output
     assert db_path.exists()
-    assert _count_tsgs() == 16
+    assert _count_tsgs() == 19
 
 
 def test_db_reset_removes_wal_sidecar_files(sqlite_env) -> None:
@@ -228,7 +228,7 @@ def test_db_reset_clears_engine_cache(sqlite_env) -> None:
         from sqlalchemy import text
 
         rows = conn.execute(text("SELECT count(*) FROM tsgs")).scalar_one()
-    assert rows == 16
+    assert rows == 19
 
     # The two engines are distinct objects (the cache was cleared).
     assert engine_before is not engine_after

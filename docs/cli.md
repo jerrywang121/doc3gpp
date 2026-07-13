@@ -49,7 +49,7 @@ Behavior:
 
 - Calls create_schema.
 - Creates currently defined ORM tables if they do not exist.
-- Seeds the `tsgs` table with the canonical 3GPP TSG list (16 rows). Existing
+- Seeds the `tsgs` table with the canonical 3GPP TSG list (19 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
 
 ### doc3gpp db reset
@@ -899,7 +899,7 @@ doc3gpp cache purge --yes
 
 The `tsg` sub-app exposes the canonical 3GPP TSG reference table. The table
 is created and seeded automatically by `doc3gpp db init`, and the canonical
-short names (R1..R5, RT, S1..S6, C1, C3, C4, C6) are used to validate the
+short names (R1..R5, RT, RP, S1..S6, SP, C1, C3, C4, C6, CP) are used to validate the
 `--tsg` option on `doc3gpp meeting sync`.
 
 ### doc3gpp tsg list
@@ -969,7 +969,7 @@ Purpose:
 Behavior:
 
 - Creates the schema (idempotent).
-- Upserts the 16 canonical rows; existing rows are updated in place rather
+- Upserts the 19 canonical rows; existing rows are updated in place rather
   than duplicated. URLs are composed from the project URL pattern.
 
 Examples:

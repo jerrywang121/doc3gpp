@@ -6,18 +6,19 @@ from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 
 
-def test_db_init_seeds_sixteen_tsgs(sqlite_env) -> None:
+def test_db_init_seeds_nineteen_tsgs(sqlite_env) -> None:
     create_schema()
     service = TsgService(SQLAlchemyTsgRepository())
     seeded = service.seed_defaults()
-    assert seeded == 16
+    assert seeded == 19
 
     rows = service.list_all()
-    assert len(rows) == 16
+    assert len(rows) == 19
 
     short_names = {t.short_name for t in rows}
     assert short_names == {"R1", "R2", "R3", "R4", "R5", "RT", "S1", "S2", "S3",
-                           "S4", "S5", "S6", "C1", "C3", "C4", "C6"}
+                           "S4", "S5", "S6", "C1", "C3", "C4", "C6",
+                           "RP", "SP", "CP"}
 
     # Spot-check: RAN AH1 maps to RT and the URL follows the AH family pattern
     rt = service.get_by_short_name("RT")
@@ -25,7 +26,7 @@ def test_db_init_seeds_sixteen_tsgs(sqlite_env) -> None:
     assert rt.tsg_name == "RAN AH1"
     assert rt.url == "https://www.3gpp.org/3gpp-groups/radio-access-networks-ran/ran-ah1"
 
-    # All 16 rows have URLs composed from the project pattern
+    # All 19 rows have URLs composed from the project pattern
     for row in rows:
         assert row.url is not None
         assert row.url.startswith("https://www.3gpp.org/3gpp-groups/")
@@ -35,7 +36,7 @@ def test_db_init_seeds_sixteen_tsgs(sqlite_env) -> None:
     with engine.connect() as conn:
         from sqlalchemy import text
         db_count = conn.execute(text("SELECT COUNT(*) FROM tsgs")).scalar()
-    assert db_count == 16
+    assert db_count == 19
 
 
 def test_seed_is_idempotent(sqlite_env) -> None:
@@ -43,7 +44,7 @@ def test_seed_is_idempotent(sqlite_env) -> None:
     service = TsgService(SQLAlchemyTsgRepository())
     service.seed_defaults()
     service.seed_defaults()  # second call should not duplicate rows
-    assert service.list_all() and len(service.list_all()) == 16
+    assert service.list_all() and len(service.list_all()) == 19
 
 
 def test_get_by_short_name_handles_lowercase(sqlite_env) -> None:
@@ -64,7 +65,7 @@ def test_known_short_names_returns_all_canonical_codes(sqlite_env) -> None:
     service.seed_defaults()
 
     names = service.known_short_names()
-    assert len(names) == 16
+    assert len(names) == 19
     # All returned names are uppercased canonical codes
     for name in names:
         assert name == name.upper()
@@ -90,8 +91,8 @@ def test_upsert_updates_existing_row_description(sqlite_env) -> None:
 
     refreshed = service.get_by_short_name("R5")
     assert refreshed.description.endswith("(updated)")
-    # Still 16 rows, not 17
-    assert len(service.list_all()) == 16
+    # Still 19 rows, not 20
+    assert len(service.list_all()) == 19
 
 
 def test_tsgorm_metadata_registered(sqlite_env) -> None:

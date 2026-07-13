@@ -85,6 +85,7 @@ class SQLAlchemyTDocRepository:
     def list(
         self,
         limit: int = 20,
+        offset: int = 0,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
@@ -136,6 +137,9 @@ class SQLAlchemyTDocRepository:
         - ``uploaded_date`` additionally accepts ``"<op> 'YYYY-MM-DD'"``
           with ``<op>`` in ``=`` / ``!=`` / ``<`` / ``<=`` / ``>`` / ``>=``,
           producing a parameterised column comparison.
+
+        Pagination:
+        - ``offset``: number of rows to skip before applying ``limit``.
         """
         with self._session_factory() as session:
             stmt = select(TDocORM)
@@ -166,7 +170,7 @@ class SQLAlchemyTDocRepository:
             stmt = _apply_text_filter(stmt, TDocORM.cr_pack, cr_pack)
             stmt = _apply_date_filter(stmt, TDocORM.uploaded_date, uploaded_date)
 
-            stmt = stmt.order_by(TDocORM.tdoc_id.desc()).limit(limit)
+            stmt = stmt.order_by(TDocORM.tdoc_id.desc()).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()
 
         return [_orm_to_domain(row) for row in rows]
@@ -194,6 +198,7 @@ class SQLAlchemyTDocRepository:
     def list_with_meeting(
         self,
         limit: int = 20,
+        offset: int = 0,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
@@ -217,10 +222,11 @@ class SQLAlchemyTDocRepository:
 
         Performs an extra batched lookup against ``meetings`` to populate
         ``TDocWithMeeting.meeting_name``. Used by the CLI / export code paths.
-        Accepts the same rich filters as :meth:`list`.
+        Accepts the same rich filters and pagination as :meth:`list`.
         """
         tdocs = self.list(
             limit=limit,
+            offset=offset,
             tdoc_id=tdoc_id,
             meeting_like=meeting_like,
             meeting_id=meeting_id,

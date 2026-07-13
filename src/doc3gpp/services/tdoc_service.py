@@ -19,6 +19,7 @@ class TDocService:
     def list_recent_with_meeting(
         self,
         limit: int = 20,
+        offset: int = 0,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
@@ -55,9 +56,12 @@ class TDocService:
 
         ``tdoc_id`` is the LIKE pattern against ``tdocs.tdoc_id`` and
         mirrors the ``--tdoc`` flag on ``tdoc parse`` / ``tdoc list``.
+
+        ``offset`` is applied before ``limit`` to support CLI pagination.
         """
         return self._repository.list_with_meeting(
             limit=limit,
+            offset=offset,
             tdoc_id=tdoc_id,
             meeting_like=meeting_like,
             meeting_id=meeting_id,

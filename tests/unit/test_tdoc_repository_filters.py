@@ -158,6 +158,26 @@ def test_list_filter_meeting_id_with_meeting_like(repo):
     assert len(res) == 0
 
 
+def test_list_offset_skips_rows(repo):
+    """``offset`` skips the first N rows in the descending ``tdoc_id`` order."""
+    res = repo.list(offset=1)
+    assert len(res) == 2
+    assert res[0].tdoc_id == "R5-260002"
+
+    res = repo.list(offset=2)
+    assert len(res) == 1
+    assert res[0].tdoc_id == "R5-260001"
+
+    assert repo.list(offset=3) == []
+
+
+def test_list_offset_combined_with_limit(repo):
+    """``offset`` and ``limit`` compose for pagination."""
+    res = repo.list(offset=1, limit=1)
+    assert len(res) == 1
+    assert res[0].tdoc_id == "R5-260002"
+
+
 def test_list_filter_meeting_id_no_match(repo):
     assert repo.list(meeting_id=999) == []
 

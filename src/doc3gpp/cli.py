@@ -667,6 +667,9 @@ def tdoc_sync(
 @tdoc_app.command("list")
 def tdoc_list(
     limit: int = typer.Option(20, min=1, max=500),
+    offset: int = typer.Option(
+        0, min=0, help="Number of rows to skip before applying --limit (pagination)."
+    ),
     tdoc: str | None = typer.Option(
         None,
         "--tdoc",
@@ -802,11 +805,12 @@ def tdoc_list(
     fmt = _resolve_format(fmt, default=settings.output.format)
 
     logger.info(
-        "Listing %s recent TDocs with filters tdoc=%s meeting=%s meeting_id=%s "
-        "source=%s spec=%s wi=%s title=%s cr_cat=%s status=%s type=%s "
-        "revision_of=%s revised_to=%s ftp_url=%s release=%s version=%s "
+        "Listing %s recent TDocs (offset=%s) with filters tdoc=%s meeting=%s "
+        "meeting_id=%s source=%s spec=%s wi=%s title=%s cr_cat=%s status=%s "
+        "type=%s revision_of=%s revised_to=%s ftp_url=%s release=%s version=%s "
         "cr_num=%s cr_pack=%s uploaded_date=%s",
         limit,
+        offset,
         tdoc,
         meeting,
         meeting_id,
@@ -830,6 +834,7 @@ def tdoc_list(
     service = build_tdoc_service()
     records = service.list_recent_with_meeting(
         limit=limit,
+        offset=offset,
         tdoc_id=tdoc,
         meeting_like=_auto_wrap_like(meeting) if meeting else None,
         meeting_id=meeting_id,
@@ -1253,6 +1258,7 @@ def tdoc_parse(
     normalised_tdoc = _normalise_cli_tdoc_id(tdoc) if tdoc else None
     matches = tdoc_repo.list_with_meeting(
         limit=max_batch,
+        offset=0,
         tdoc_id=normalised_tdoc,
         meeting_like=meeting,
         meeting_id=meeting_id,

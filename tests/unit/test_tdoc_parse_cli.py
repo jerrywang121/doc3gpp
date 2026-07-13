@@ -546,6 +546,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
     # The CLI asked for CR-type TDocs under the meeting with a positive limit.
     assert repo.list_with_meeting_calls[0] == {
         "limit": 100,  # default max_batch
+        "offset": 0,
         "tdoc_id": None,
         "meeting_like": None,
         "meeting_id": meeting_id,

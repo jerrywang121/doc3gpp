@@ -41,6 +41,7 @@ class TDocRepository(Protocol):
     def list(
         self,
         limit: int = 20,
+        offset: int = 0,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
@@ -88,6 +89,11 @@ class TDocRepository(Protocol):
           ``null`` / ``not-null`` / ``!pattern`` / plain LIKE grammar
           as the other text columns.
 
+        Pagination:
+        - ``offset``: rows to skip before applying ``limit``. Combined
+          with ``limit`` this enables CLI pagination without re-running
+          the filters.
+
         Pure persistence shape — no joined meeting metadata. Callers that
         need a human-readable meeting name should use :meth:`list_with_meeting`.
         """
@@ -106,6 +112,7 @@ class TDocRepository(Protocol):
     def list_with_meeting(
         self,
         limit: int = 20,
+        offset: int = 0,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
         meeting_id: int | None = None,
@@ -129,8 +136,8 @@ class TDocRepository(Protocol):
 
         Equivalent to ``list(...)`` plus a ``meetings`` JOIN to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
-        the meeting name alongside TDoc fields. Accepts the same filters as
-        :meth:`list``.
+        the meeting name alongside TDoc fields. Accepts the same filters and
+        pagination as :meth:`list`.
         """
         ...
 

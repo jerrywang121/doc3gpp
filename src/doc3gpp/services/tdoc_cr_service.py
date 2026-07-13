@@ -25,10 +25,11 @@ The service owns three caching layers:
 * **Zip cache** (``<root>/zips/<tdoc>.bin``) — keyed by the lower-cased
   TDoc id; bypassed on network miss by
   :func:`doc3gpp.scraping.tdoc_zip_source.download_tdoc_zip`.
-* **Markdown cache** (``<root>/markdown/<sha256>.bin``) — keyed by the
-  sha256 of the docx bytes; skipped when the zip cache is already
-  populated (i.e. we have the docx on disk, so we can re-derive the
-  cache key cheaply).
+* **Markdown cache** (``<root>/markdown/<sha256>``) — keyed by the
+  sha256 of the docx bytes; on-disk bytes are gzip-compressed UTF-8
+  (legacy plain UTF-8 files are still decoded transparently via magic-
+  byte sniffing). Skipped when the zip cache is already populated (i.e.
+  we have the docx on disk, so we can re-derive the cache key cheaply).
 * **Database cache** — the ``tdoc_cr_details`` / ``tdoc_extracts``
   rows; a hit short-circuits the entire pipeline and returns the
   persisted ``TDocCRDetails`` with ``from_cache=True``.
@@ -41,11 +42,13 @@ against the latest parser regexes.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from doc3gpp.models.tdoc import TDoc
@@ -95,6 +98,54 @@ _CR_TDOC_TYPE = "CR"
 # enforces a stricter regex internally; this is a *fast-fail* so a
 # garbage id never touches the cache root, the network, or the DB.
 _TDOC_ID_RE = re.compile(r"[A-Za-z0-9-]{1,32}")
+
+
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _compress_markdown(text: str) -> bytes:
+    """gzip-compress UTF-8 markdown for on-disk storage."""
+    return gzip.compress(text.encode("utf-8"))
+
+
+def _decompress_markdown(raw: bytes) -> str:
+    """Decode cached markdown bytes, gunzipping if gzipped.
+
+    Magic-byte sniff (1f 8b) supports legacy unzipped cache files written
+    before this change: gzip.compress() output starts with the same two bytes
+    as the gzip format, so the sniff is unambiguous. Non-gzip bytes are
+    decoded as UTF-8 (the pre-change format).
+
+    Raises:
+        OSError: gzip decompression failed (corrupt cache file)
+        UnicodeDecodeError: legacy file isn't valid UTF-8 either
+    """
+    if raw[:2] == _GZIP_MAGIC:
+        return gzip.decompress(raw).decode("utf-8")
+    return raw.decode("utf-8")
+
+
+def _read_cached_markdown_path(path: Path) -> str:
+    """Load markdown from an on-disk cache path, returning empty on any error.
+
+    The path is trusted to be a previously persisted ``markdown_path`` from
+    a :class:`TDocExtractMeta` row. If the file has been purged, is corrupt,
+    or fails to decode, the failure is logged at WARNING and an empty string
+    is returned so that callers (including ``--format raw``) degrade safely
+    while still benefiting from the DB cache hit for other formats.
+    """
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return ""
+    except OSError as exc:
+        logger.warning("Failed to read cached markdown at %s: %s", path, exc)
+        return ""
+    try:
+        return _decompress_markdown(raw)
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("Failed to decode cached markdown at %s: %s", path, exc)
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -719,9 +770,12 @@ class TDocCrService:
                 logger.debug(
                     "DB cache hit for direct-parse URL %s", url,
                 )
+                cached_markdown = _read_cached_markdown_path(
+                    Path(cached_meta.markdown_path)
+                )
                 return DirectParseResult(
                     source_kind="url-3gpp",
-                    markdown="",
+                    markdown=cached_markdown,
                     details=cached_details,
                     extract_meta=cached_meta,
                     from_cache=True,
@@ -823,9 +877,11 @@ class TDocCrService:
         """Return markdown for ``docx_bytes``, hitting the cache when possible.
 
         Cache key is the sha256 of the docx bytes — a tweaked upstream
-        document invalidates cleanly. ``force=True`` bypasses the
-        markdown cache too (the zip is also re-downloaded upstream
-        via :func:`download_tdoc_zip`).
+        document invalidates cleanly. On-disk bytes are gzip-compressed
+        UTF-8; legacy plain UTF-8 cache files are still decoded
+        transparently. ``force=True`` bypasses the markdown cache too
+        (the zip is also re-downloaded upstream via
+        :func:`download_tdoc_zip`).
         """
         if not force:
             cached = self._cache.get_bytes(doc_hash, "markdown")
@@ -835,7 +891,7 @@ class TDocCrService:
                     doc_filename,
                     doc_hash,
                 )
-                return cached.decode("utf-8")
+                return _decompress_markdown(cached)
 
         from doc3gpp.parsers.docx_converter import (
             convert_document_to_markdown,
@@ -844,7 +900,7 @@ class TDocCrService:
         markdown = convert_document_to_markdown(docx_bytes, doc_filename)
         self._cache.put_bytes(
             doc_hash,
-            markdown.encode("utf-8"),
+            _compress_markdown(markdown),
             "markdown",
         )
         return markdown

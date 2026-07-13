@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select, extract, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -158,8 +158,17 @@ def _orm_to_domain(row: MeetingORM) -> Meeting:
         start_doc=row.start_doc,
         end_doc=row.end_doc,
         tsg=row.tsg,
-        tdoc_list_last_sync=row.tdoc_list_last_sync,
+        tdoc_list_last_sync=_as_utc(row.tdoc_list_last_sync),
     )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Return ``value`` normalized to UTC, handling naive SQLite returns."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _tdoc_id_in_range(row: MeetingORM, prefix: str, number: int) -> bool:

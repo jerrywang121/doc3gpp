@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 
 import httpx
 
@@ -50,7 +51,7 @@ class ScraperClient:
         ``httpx.HTTPError`` (and its subclasses) on terminal failure.
         """
         logger.debug("Fetching text URL: %s", url)
-        response = self._request_with_retry(url)
+        response = self._request_with_retry(url, lambda: self._client.get(url))
         return response.text
 
     def get_bytes(self, url: str) -> bytes:
@@ -60,11 +61,28 @@ class ScraperClient:
         ``httpx.HTTPError`` (and its subclasses) on terminal failure.
         """
         logger.debug("Fetching bytes URL: %s", url)
-        response = self._request_with_retry(url)
+        response = self._request_with_retry(url, lambda: self._client.get(url))
         return response.content
 
-    def _request_with_retry(self, url: str) -> httpx.Response:
-        """Issue a GET request, retrying on transient failures.
+    def head(self, url: str) -> httpx.Response:
+        """Issue a HEAD request and return the response.
+
+        Reuses the same retry/backoff policy as GET requests. HEAD is used
+        to read headers (e.g. ``Last-Modified``) without downloading the
+        response body.
+        """
+        logger.debug("Fetching HEAD URL: %s", url)
+        return self._request_with_retry(url, lambda: self._client.head(url))
+
+    def _request_with_retry(
+        self, url: str, request_fn: Callable[[], httpx.Response]
+    ) -> httpx.Response:
+        """Issue an HTTP request, retrying on transient failures.
+
+        Args:
+            url: Target URL (used only for logging).
+            request_fn: Zero-argument callable that performs one HTTP
+                request and returns the response.
 
         Returns the response on success. Raises the last ``httpx.HTTPError``
         if all retries are exhausted or the error is non-retryable.
@@ -73,7 +91,7 @@ class ScraperClient:
         last_exc: httpx.HTTPError | None = None
         while attempt <= self._max_retries:
             try:
-                response = self._client.get(url)
+                response = request_fn()
             except httpx.HTTPError as exc:
                 last_exc = exc
                 if not self._is_retryable_exception(exc) or attempt == self._max_retries:

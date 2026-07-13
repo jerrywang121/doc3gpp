@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from doc3gpp.scraping.ftp_source import fetch_tdocs_from_meeting_ftp
+from doc3gpp.scraping.ftp_source import fetch_tdocs_from_meeting_ftp, get_tdoc_list_mtime
 
 
 def _mock_client_with_errors() -> MagicMock:
@@ -123,3 +124,73 @@ def test_directory_has_no_tdoc_list_file_returns_empty() -> None:
     assert tdocs == []
     # All three subfolders should have been tried.
     assert client.get_text.call_count == 3
+
+
+def _mtime_client(*, header: str | None = "Mon, 01 Jul 2026 09:00:00 GMT") -> MagicMock:
+    """Build a ScraperClient mock that discovers a TDoc list file and returns
+    the configured ``Last-Modified`` header from ``head``.
+    """
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    client.get_text.return_value = (
+        '<html><body><a href="TDoc_List_Meeting_X.xlsx">xlsx</a></body></html>'
+    )
+
+    response = MagicMock()
+    response.headers = {"Last-Modified": header} if header else {}
+    client.head.return_value = response
+    return client
+
+
+def test_get_tdoc_list_mtime_parses_last_modified_header() -> None:
+    client = _mtime_client()
+
+    with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
+        mtime = get_tdoc_list_mtime("ftp://example.com/tsg_ran/WG5_111/")
+
+    assert mtime == datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc)
+    client.head.assert_called_once()
+
+
+def test_get_tdoc_list_mtime_returns_none_when_header_missing() -> None:
+    client = _mtime_client(header=None)
+
+    with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
+        mtime = get_tdoc_list_mtime("ftp://example.com/tsg_ran/WG5_111/")
+
+    assert mtime is None
+
+
+def test_get_tdoc_list_mtime_returns_none_when_head_fails() -> None:
+    client = _mtime_client()
+    client.head.side_effect = httpx.HTTPError("head refused")
+
+    with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
+        mtime = get_tdoc_list_mtime("ftp://example.com/tsg_ran/WG5_111/")
+
+    assert mtime is None
+
+
+def test_get_tdoc_list_mtime_returns_none_when_unparseable_header() -> None:
+    client = _mtime_client(header="not-a-date")
+
+    with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
+        mtime = get_tdoc_list_mtime("ftp://example.com/tsg_ran/WG5_111/")
+
+    assert mtime is None
+
+
+def test_get_tdoc_list_mtime_returns_none_when_no_tdoc_list_file() -> None:
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    client.get_text.return_value = (
+        '<html><body><a href="readme.txt">readme</a></body></html>'
+    )
+
+    with patch("doc3gpp.scraping.ftp_source.ScraperClient", return_value=client):
+        mtime = get_tdoc_list_mtime("ftp://example.com/tsg_ran/WG5_111/")
+
+    assert mtime is None
+    client.head.assert_not_called()

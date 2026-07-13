@@ -52,6 +52,11 @@ change set so the docs stay honest.
 - **Covers FTP Excel lists only.** `GenerateDocumentList.aspx` and
   expanded metadata columns beyond what the
   `TDoc_List_Meeting_*.xlsx` exposes are **not** implemented.
+- **The FTP mtime skip rule depends on the `Last-Modified` HTTP header**
+  returned by `HEAD` on the `TDoc_List_Meeting_*.xlsx` URL. If 3GPP
+  omits the header or returns an unparseable value, the coordinator
+  logs a warning and proceeds to sync rather than skip — a missing
+  signal is treated as "upstream may have changed".
 - **TDoc date parsing** accepts both ISO (`YYYY-MM-DD`) and the
   `DD/MM/YYYY HH:MM:SS` shape used upstream; both are stored as
   `Date`. Anything outside these shapes falls through to `NULL`.

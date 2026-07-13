@@ -157,6 +157,9 @@ Configuration is read from environment variables (and `.env`).
 | `DOC3GPP_CACHE__PURGE_CONFIRM` | Whether `cache purge` prompts unless `--yes` is passed |
 | `DOC3GPP_TDOC_PARSE__MAX_BATCH` | Upper bound on TDocs per `tdoc parse` invocation (default `100`) |
 | `DOC3GPP_TDOC_PARSE__MAX_FTP_DEPTH` | Default recursion depth for `tdoc parse --from-url <3gpp-folder> --recursive` (default `2`) |
+| `DOC3GPP_SYNC__MEETING_SYNC_INTERVAL` | Minimum time between `meeting sync` runs for the same TSG (default `24h`) |
+| `DOC3GPP_SYNC__TDOC_LIST_SYNC_INTERVAL` | Minimum time between `tdoc sync` runs for the same meeting (default `30m`) |
+| `DOC3GPP_SYNC__TDOC_LIST_CLOSED_WINDOW` | Skip `tdoc sync` when the meeting `end_date` is older than this (default `90d`) |
 
 Nested settings can be overridden with the `__` delimiter, e.g.
 `DOC3GPP_OUTPUT__FORMAT=json`,

@@ -29,10 +29,12 @@ from doc3gpp.settings.config_source import (
     load_config_data,
 )
 from doc3gpp.settings.loader import get_settings
+from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.settings.schema import (
     OutputFieldsSettings,
     OutputSettings,
     Settings,
+    SyncSettings,
     TDocParseSettings,
 )
 
@@ -147,8 +149,66 @@ def test_settings_nested_default_factories(clean_settings) -> None:
     assert isinstance(s.output, OutputSettings)
     assert isinstance(s.output.fields, OutputFieldsSettings)
     assert isinstance(s.tdoc_parse, TDocParseSettings)
+    assert isinstance(s.sync, SyncSettings)
     assert len(s.output.fields.tdoc) > 0
     assert len(s.output.fields.wi) > 0
+
+
+def test_sync_settings_defaults(clean_settings) -> None:
+    """Default sync intervals match the documented values."""
+    from datetime import timedelta
+
+    s = get_settings()
+    assert s.sync.meeting_sync_interval == timedelta(hours=24)
+    assert s.sync.tdoc_list_sync_interval == timedelta(minutes=30)
+    assert s.sync.tdoc_list_closed_window == timedelta(days=90)
+
+
+def test_sync_settings_accepts_human_durations(clean_settings) -> None:
+    """Durations may be supplied as human strings in code or config."""
+    from datetime import timedelta
+
+    settings = SyncSettings(
+        meeting_sync_interval="12h",
+        tdoc_list_sync_interval="45m",
+        tdoc_list_closed_window="120d",
+    )
+    assert settings.meeting_sync_interval == timedelta(hours=12)
+    assert settings.tdoc_list_sync_interval == timedelta(minutes=45)
+    assert settings.tdoc_list_closed_window == timedelta(days=120)
+
+
+def test_sync_settings_accepts_iso_durations(clean_settings) -> None:
+    """Durations may be supplied as ISO 8601 strings."""
+    from datetime import timedelta
+
+    settings = SyncSettings(
+        meeting_sync_interval="P1D",
+        tdoc_list_sync_interval="PT30M",
+        tdoc_list_closed_window="P90D",
+    )
+    assert settings.meeting_sync_interval == timedelta(days=1)
+    assert settings.tdoc_list_sync_interval == timedelta(minutes=30)
+    assert settings.tdoc_list_closed_window == timedelta(days=90)
+
+
+def test_sync_settings_rejects_bad_durations(clean_settings) -> None:
+    """Invalid duration strings raise a clear validation error."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SyncSettings(meeting_sync_interval="banana")
+    with pytest.raises(ValidationError):
+        SyncSettings(tdoc_list_sync_interval="-1h")
+
+
+def test_sync_outcome_equality() -> None:
+    """SyncOutcome is a frozen value object."""
+    a = SyncOutcome(status="synced", reason="ok", synced_count=5)
+    b = SyncOutcome(status="synced", reason="ok", synced_count=5)
+    c = SyncOutcome(status="skipped", reason="too soon")
+    assert a == b
+    assert a != c
 
 
 # ---------------------------------------------------------------------------

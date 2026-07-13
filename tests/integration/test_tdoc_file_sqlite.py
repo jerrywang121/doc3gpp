@@ -352,8 +352,8 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
                 name="R5--TTCN e-mail 999",
                 title="TTCN e-mail meeting",
                 location="Online",
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 1, 2),
+                start_date=date(2026, 6, 1),
+                end_date=date(2026, 6, 2),
                 ftp_url="tsg_ran/WG5/email/",
             )
         ]
@@ -402,7 +402,7 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
         SQLAlchemyTDocRepository(),
         SQLAlchemyTDocFileRepository(),
     )
-    summary = coord.sync_for_meeting_id(1)
+    outcome = coord.sync_for_meeting_id(1)
 
     tdocs = SQLAlchemyTDocRepository().list(limit=10)
     tdoc_files = SQLAlchemyTDocFileRepository().list(limit=10)
@@ -412,4 +412,5 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
         SQLAlchemyTDocRepository().list_tdoc_ids_for_meeting(1)
     )
     assert all(f.tdoc_id in meeting_tdoc_ids for f in tdoc_files)
-    assert "TDoc sync complete:" in summary
+    assert outcome.status == "synced"
+    assert "TDoc sync complete:" in outcome.reason

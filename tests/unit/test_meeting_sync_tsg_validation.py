@@ -3,6 +3,7 @@ from __future__ import annotations
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
+from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tsg_service import TsgService
@@ -52,9 +53,9 @@ def test_meeting_sync_accepts_known_short_name(monkeypatch) -> None:
 
     sync_called_with: list[dict] = []
 
-    def fake_sync(self, url, tsg=None):
-        sync_called_with.append({"url": url, "tsg": tsg})
-        return 0
+    def fake_sync(self, url, tsg=None, force=False):
+        sync_called_with.append({"url": url, "tsg": tsg, "force": force})
+        return SyncOutcome(status="synced", reason="ok", synced_count=0)
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 
@@ -89,9 +90,9 @@ def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
 
     captured: list[dict] = []
 
-    def fake_sync(self, url, tsg=None):
-        captured.append({"url": url, "tsg": tsg})
-        return 0
+    def fake_sync(self, url, tsg=None, force=False):
+        captured.append({"url": url, "tsg": tsg, "force": force})
+        return SyncOutcome(status="synced", reason="ok", synced_count=0)
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 
@@ -99,6 +100,27 @@ def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "Meetings-S2.htm" in captured[0]["url"]
     assert captured[0]["tsg"] == "S2"
+
+
+def test_meeting_sync_force_flag_is_forwarded(monkeypatch) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(16))
+    )
+
+    captured: list[dict] = []
+
+    def fake_sync(self, url, tsg=None, force=False):
+        captured.append({"url": url, "tsg": tsg, "force": force})
+        return SyncOutcome(status="synced", reason="ok", synced_count=0)
+
+    monkeypatch.setattr(MeetingService, "sync", fake_sync)
+
+    result = runner.invoke(app, ["meeting", "sync", "--tsg", "r5", "--force"])
+    assert result.exit_code == 0, result.output
+    assert captured[0]["force"] is True
 
 
 def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
@@ -117,8 +139,8 @@ def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
         lambda self: (seed_calls.update(count=seed_calls["count"] + 1) or 16),
     )
 
-    def fake_sync(self, url, tsg=None):
-        return 0
+    def fake_sync(self, url, tsg=None, force=False):
+        return SyncOutcome(status="synced", reason="ok", synced_count=0)
 
     monkeypatch.setattr(MeetingService, "sync", fake_sync)
 

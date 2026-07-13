@@ -96,6 +96,7 @@ Options:
     error listing the known short names and pointing to `doc3gpp tsg list`.
   - if the `tsgs` table is empty (fresh install), it is auto-seeded before
     validation runs.
+- --force / -f: bypass the sync interval skip rule.
 
 Behavior:
 
@@ -108,7 +109,10 @@ Behavior:
   fresh install); sync without a matching `tsgs` row will fail the FK
   constraint.
 - Updates `tsgs.meeting_last_sync` for the synced TSG.
-- Prints inserted/updated row count.
+- Skips the sync when `tsgs.meeting_last_sync` is newer than
+  `Settings.sync.meeting_sync_interval` (default `24h`).
+- Prints `Meeting sync complete: N meeting row(s) stored` or a skip
+  reason; exits `0` on skip.
 
 ### doc3gpp meeting list
 
@@ -218,6 +222,7 @@ Options:
 
 - --meeting-id: numeric meeting ID from the meetings database (see `doc3gpp meeting sync`).
 - --meeting: exact meeting name from the meetings database (see `doc3gpp meeting sync`).
+- --force / -f: bypass the sync skip rules.
 
 Notes:
 
@@ -227,8 +232,18 @@ Behavior:
 
 - Loads the meeting record from storage.
 - Resolves the stored FTP URL from that meeting.
-- Discovers the matching `TDoc_List_Meeting_*.xlsx` file on 3GPP FTP.
-- Parses and persists TDoc rows.
+- Skips the sync when any of the following is true (checked in order):
+  1. `meetings.end_date` is older than
+     `Settings.sync.tdoc_list_closed_window` (default `90d`).
+  2. `meetings.tdoc_list_last_sync` is newer than
+     `Settings.sync.tdoc_list_sync_interval` (default `30m`).
+  3. The upstream `TDoc_List_Meeting_*.xlsx` `Last-Modified` time is not
+     newer than `meetings.tdoc_list_last_sync`.
+- If none of the skip rules apply, discovers the matching
+  `TDoc_List_Meeting_*.xlsx` file on 3GPP FTP, parses and persists TDoc
+  rows, then updates `meetings.tdoc_list_last_sync`.
+- Prints `TDoc sync complete: N TDoc row(s) and M auxiliary TDoc file(s) stored`
+  or a skip reason; exits `0` on skip.
 
 ### doc3gpp tdoc list
 

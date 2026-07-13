@@ -80,6 +80,24 @@ def test_get_bytes_retries_on_timeout() -> None:
     assert http_client.get.call_count == 2
 
 
+def test_head_uses_retry_policy_and_returns_response() -> None:
+    request = httpx.Request("HEAD", "https://example.com/x")
+    success_response = httpx.Response(200, request=request)
+    http_client = MagicMock()
+    http_client.head.side_effect = [
+        httpx.ConnectError("conn refused"),
+        success_response,
+    ]
+
+    client = _client_with_http_client(http_client)
+
+    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)):
+        response = client.head("https://example.com/x")
+
+    assert response is success_response
+    assert http_client.head.call_count == 2
+
+
 # ---------------------------------------------------------------------------
 # #5 give up after max_retries and re-raise
 # ---------------------------------------------------------------------------

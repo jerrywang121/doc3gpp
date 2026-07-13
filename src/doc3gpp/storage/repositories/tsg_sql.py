@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select, update
 
@@ -107,5 +107,14 @@ def _orm_to_domain(row: TsgORM) -> Tsg:
         short_name=row.short_name,
         description=row.description,
         url=row.url,
-        meeting_last_sync=row.meeting_last_sync,
+        meeting_last_sync=_as_utc(row.meeting_last_sync),
     )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Return ``value`` normalized to UTC, handling naive SQLite returns."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

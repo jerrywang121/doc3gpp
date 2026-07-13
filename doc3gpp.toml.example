@@ -81,3 +81,14 @@
 # Direct-parse flags (`--from-path`, `--from-url`, `--format`, `--output`)
 # are CLI-only — no TOML equivalent is exposed for the
 # `tdoc parse --from-*` direct mode.
+
+# ── Sync intervals ──────────────────────────────────────────────────────────
+# Gate how often `doc3gpp meeting sync` and `doc3gpp tdoc sync` re-scrape
+# unchanged upstream data. Durations may be written as human strings (`24h`,
+# `30m`, `90d`) or ISO 8601 durations (`P1D`, `PT30M`). Pass `--force` to
+# either command to bypass the skip rules for a single invocation.
+
+# [sync]
+# meeting_sync_interval = "24h"   # skip meeting calendar sync if last sync is newer than this
+# tdoc_list_sync_interval = "30m" # skip TDoc list sync if last sync is newer than this
+# tdoc_list_closed_window = "90d" # skip TDoc list sync when meeting end_date is older than this

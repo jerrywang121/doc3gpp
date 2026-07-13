@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 import logging
 
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.repository.protocols import MeetingRepository
 from doc3gpp.repository.protocols import TsgRepository
 from doc3gpp.scraping.calendar_source import fetch_calendar
@@ -24,16 +26,29 @@ class MeetingService:
         self,
         repository: MeetingRepository,
         tsg_repository: TsgRepository | None = None,
+        sync_interval: timedelta = timedelta(hours=24),
     ) -> None:
-        """Initialize the service with a repository backing the meeting storage."""
+        """Initialize the service with a repository backing the meeting storage.
+
+        Args:
+            repository: Repository used to persist and query meetings.
+            tsg_repository: Optional repository for TSG reference records;
+                required when ``sync`` needs to read or update
+                ``tsgs.meeting_last_sync``.
+            sync_interval: Minimum time between meeting calendar syncs
+                for the same TSG. Syncs requested within this interval are
+                skipped unless ``force=True`` is passed.
+        """
         self._repository = repository
         self._tsg_repository = tsg_repository
+        self._sync_interval = sync_interval
 
     def sync(
         self,
         meetings_url: str,
         tsg: str | None = None,
-    ) -> int:
+        force: bool = False,
+    ) -> SyncOutcome:
         """Fetch meetings from the 3GPP calendar URL and persist all results.
 
         Args:
@@ -44,23 +59,45 @@ class MeetingService:
                 FK is populated and downstream ``meeting list --tsg``
                 filters can scope by owning group. ``None`` leaves the
                 field un-stamped (useful for tests / bulk imports).
+            force: When ``True``, bypass the sync interval check.
 
         Returns:
-            The number of meeting rows written (insert or update).
+            A :class:`SyncOutcome` describing whether the sync ran and how
+            many rows were written.
         """
+        canonical_tsg = tsg.upper() if tsg is not None else None
+        if canonical_tsg is not None and not force and self._tsg_repository is not None:
+            tsg_record = self._tsg_repository.get_by_short_name(canonical_tsg)
+            last_sync = tsg_record.meeting_last_sync if tsg_record is not None else None
+            now = datetime.now(timezone.utc)
+            if last_sync is not None and (now - last_sync) < self._sync_interval:
+                ago = now - last_sync
+                return SyncOutcome(
+                    status="skipped",
+                    reason=(
+                        f"Meeting sync skipped for TSG {canonical_tsg}: "
+                        f"last sync {_format_duration(ago)} ago "
+                        f"(sync interval {_format_duration(self._sync_interval)}). "
+                        f"Use --force to override."
+                    ),
+                )
+
         logger.info("Syncing meetings from %s", meetings_url)
         meetings = fetch_calendar(meetings_url)
         logger.debug("Fetched %s meetings from calendar", len(meetings))
-        if tsg is not None:
-            canonical_tsg = tsg.upper()
+        if canonical_tsg is not None:
             meetings = [replace(m, tsg=canonical_tsg) for m in meetings]
         written = self._repository.upsert_many(meetings)
 
-        if tsg is not None and self._tsg_repository is not None:
+        if canonical_tsg is not None and self._tsg_repository is not None:
             self._tsg_repository.update_meeting_last_sync(
-                tsg.upper(), datetime.now(timezone.utc)
+                canonical_tsg, datetime.now(timezone.utc)
             )
-        return written
+        return SyncOutcome(
+            status="synced",
+            reason=f"Meeting sync complete: {written} meeting rows stored",
+            synced_count=written,
+        )
 
     def list_recent(
         self,
@@ -101,5 +138,24 @@ class MeetingService:
         logger.debug("Retrieving meeting by name %s", meeting_name)
         return self._repository.get_by_name(meeting_name)
 
+
+def _format_duration(delta: timedelta) -> str:
+    """Return a concise human-readable representation of a timedelta."""
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+    if total_seconds < 3600:
+        return f"{total_seconds // 60}m"
+    if total_seconds < 86400:
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        if minutes:
+            return f"{hours}h {minutes}m"
+        return f"{hours}h"
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    if hours:
+        return f"{days}d {hours}h"
+    return f"{days}d"
 
 

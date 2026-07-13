@@ -60,6 +60,25 @@ gets updated alongside the fix.
   [`docs/conventions.md`](conventions.md) — this file.
   [`docs/known-constraints.md`](known-constraints.md) — open issues.
 
+## Meeting and TDoc sync skip rules
+
+`doc3gpp meeting sync` and `doc3gpp tdoc sync` are gated by configurable
+intervals to avoid re-scraping unchanged upstream data:
+
+- `meeting sync --tsg <S>` skips when `tsgs.meeting_last_sync` is newer than
+  `Settings.sync.meeting_sync_interval` (default `24h`).
+- `tdoc sync --meeting-id <id>` / `--meeting <name>` skips when any of:
+  1. `meetings.end_date` is older than
+     `Settings.sync.tdoc_list_closed_window` (default `90d`).
+  2. `meetings.tdoc_list_last_sync` is newer than
+     `Settings.sync.tdoc_list_sync_interval` (default `30m`).
+  3. The upstream `TDoc_List_Meeting_*.xlsx` `Last-Modified` header is not
+     newer than `meetings.tdoc_list_last_sync`.
+
+Rules are evaluated in the order listed. `--force` / `-f` bypasses all
+skip checks for a single invocation. Skip outcomes are normal no-ops:
+the CLI exits `0` and prints a human-readable reason.
+
 ## Settings caching — flush in tests
 
 Both loaders are `@lru_cache(maxsize=1)`:

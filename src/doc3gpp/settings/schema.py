@@ -21,11 +21,61 @@ non-flag defaults, so the same precedence applies transparently.
 
 from __future__ import annotations
 
+import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+
+_HUMAN_DELTA_RE = re.compile(r"^(?P<value>[+-]?\d+(?:\.\d+)?)(?P<unit>[smhd])$", re.IGNORECASE)
+
+
+def _parse_timedelta(value: object) -> timedelta:
+    """Parse a non-negative timedelta from a human or ISO 8601 duration.
+
+    Accepts:
+        - human: ``24h``, ``30m``, ``90d``, ``15s`` (case-insensitive)
+        - ISO 8601: ``P1D``, ``PT24H``, ``PT30M`` (also accepts lower-case ``pt24h``)
+        - ``timedelta`` instances pass through unchanged
+
+    Negative durations are rejected because these fields represent intervals
+    and closed windows that must be non-negative.
+    """
+    parsed: timedelta
+    if isinstance(value, timedelta):
+        parsed = value
+    elif not isinstance(value, str):
+        raise TypeError(f"expected str or timedelta, got {type(value).__name__}")
+    else:
+        text = value.strip()
+        if not text:
+            raise ValueError("duration must not be empty")
+        match = _HUMAN_DELTA_RE.match(text)
+        if match:
+            numeric = float(match.group("value"))
+            unit = match.group("unit").lower()
+            multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+            parsed = timedelta(seconds=numeric * multipliers[unit])
+        else:
+            # Pydantic v2 already accepts ISO 8601 durations for timedelta
+            # fields, but normalize through its parser for consistent error
+            # messages.
+            from pydantic import TypeAdapter
+
+            try:
+                parsed = TypeAdapter(timedelta).validate_strings(text)
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid duration {value!r}; expected a human duration "
+                    f"(e.g. 24h, 30m, 90d), an ISO 8601 duration (e.g. PT24H, P90D), "
+                    f"or a timedelta object"
+                ) from exc
+    if parsed.total_seconds() < 0:
+        raise ValueError(f"duration {value!r} must not be negative")
+    return parsed
 
 # Output formats accepted by every ``* list`` command. Mirrored in
 # ``doc3gpp.cli.VALID_FORMATS`` so a typo in one place fails fast.
@@ -107,6 +157,34 @@ class TDocParseSettings(BaseModel):
     max_ftp_depth: int = Field(default=2, ge=0, le=10)
 
 
+class SyncSettings(BaseModel):
+    """Sync intervals and skip-rule windows.
+
+    These values gate the ``meeting sync`` and ``tdoc sync`` commands
+    so repeated invocations do not re-scrape unchanged upstream data.
+    Durations may be written in TOML/env as human strings (``24h``,
+    ``30m``, ``90d``) or ISO 8601 durations (``P1D``, ``PT30M``).
+    """
+
+    meeting_sync_interval: timedelta = Field(
+        default=timedelta(hours=24),
+        description="Minimum time between meeting calendar syncs for the same TSG.",
+    )
+    tdoc_list_sync_interval: timedelta = Field(
+        default=timedelta(minutes=30),
+        description="Minimum time between TDoc list syncs for the same meeting.",
+    )
+    tdoc_list_closed_window: timedelta = Field(
+        default=timedelta(days=90),
+        description="Meetings whose end date is older than this window are skipped.",
+    )
+
+    @field_validator("meeting_sync_interval", "tdoc_list_sync_interval", "tdoc_list_closed_window", mode="before")
+    @classmethod
+    def _validate_durations(cls, value: object) -> timedelta:
+        return _parse_timedelta(value)
+
+
 class CacheSettings(BaseModel):
     """Disk cache configuration for TDoc extraction artifacts.
 
@@ -160,6 +238,7 @@ class Settings(BaseSettings):
     output: OutputSettings = Field(default_factory=OutputSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)
+    sync: SyncSettings = Field(default_factory=SyncSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="DOC3GPP_",

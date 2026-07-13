@@ -129,36 +129,28 @@ SQLAlchemy session. There are four primary end-to-end flows; the
 "meeting-based TDoc sync" flow is itself composed of two sub-flows,
 and the TDoc CR extraction is the deepest.
 
-### Meetings sync
-
-1. `doc3gpp meeting sync --tsg <short>` validates `<short>` against
-   the `tsgs` table (auto-seeded if empty).
-2. `MeetingService.sync` → `fetch_calendar` (DynaReport HTML) →
-   `parse_3gpp_calendar` (HTML → `Meeting` list). Every parsed
-   `Meeting` is then stamped with `Meeting.tsg = <short>` (canonicalised
-   to upper case) before being handed to
-   `SQLAlchemyMeetingRepository.upsert_many`. The FK constraint
-   requires the parent row to exist in `tsgs`, so the auto-seed in
-   step 1 is a hard prerequisite.
-3. `SQLAlchemyMeetingRepository.upsert_many` writes the rows; a final
-   `delete_with_end_before(cutoff)` pass trims out-of-window rows.
-4. `doc3gpp meeting list --tsg <pattern>` is a SQL ``LIKE`` lookup on
-    the indexed `meetings.tsg` column (case-insensitive on input). Rows
-    without an owning TSG are excluded.
+### Meetings sync\n\n1. `doc3gpp meeting sync --tsg <short>` validates `<short>` against\n   the `tsgs` table (auto-seeded if empty).\n2. `MeetingService.sync` checks `tsgs.meeting_last_sync` against\n   `Settings.sync.meeting_sync_interval` (default `24h`) and skips\n   the upstream fetch when the last sync is still fresh. `--force`\n   bypasses this check.\n3. On a non-skipped run: `fetch_calendar` (DynaReport HTML) →\n   `parse_3gpp_calendar` (HTML → `Meeting` list). Every parsed\n   `Meeting` is then stamped with `Meeting.tsg = <short>` (canonicalised\n   to upper case) before being handed to\n   `SQLAlchemyMeetingRepository.upsert_many`. The FK constraint\n   requires the parent row to exist in `tsgs`, so the auto-seed in\n   step 1 is a hard prerequisite.\n4. `SQLAlchemyMeetingRepository.upsert_many` writes the rows; a final\n   `delete_with_end_before(cutoff)` pass trims out-of-window rows.\n5. `doc3gpp meeting list --tsg <pattern>` is a SQL ``LIKE`` lookup on\n     the indexed `meetings.tsg` column (case-insensitive on input). Rows\n     without an owning TSG are excluded.
 
 ### TDoc list sync (per meeting)
 
 1. `doc3gpp tdoc sync --meeting-id <id>` (or `--meeting <name>`)
    resolves the meeting and reads its stored `ftp_url`.
-2. `TDocSyncCoordinator.sync_for_meeting_id` orchestrates:
-    - `TDocService.sync_from_meeting_ftp` →
-      `fetch_tdocs_from_meeting_ftp` →
-      `read_tdoc_sheet` (XLSX → `TDoc` list) →
-      `SQLAlchemyTDocRepository.upsert_many`.
-    - `TDocFileService.sync_from_meeting_ftp` uses the freshly-persisted
-      TDoc IDs as the prefix list to recognise attachments under
-      `Inbox/`, `Docs/`, `Tdocs/`, `Review/`.
-3. `SQLAlchemyTDocFileRepository.upsert_many` persists revision / review
+2. `TDocSyncCoordinator.sync_for_meeting_id` applies three skip rules
+   in order: closed window (`meetings.end_date` older than
+   `Settings.sync.tdoc_list_closed_window`, default `90d`), recent local
+   sync (`meetings.tdoc_list_last_sync` newer than
+   `Settings.sync.tdoc_list_sync_interval`, default `30m`), and
+   stale upstream XLSX (`Last-Modified` not newer than the local
+   `tdoc_list_last_sync`). `--force` bypasses all three rules.
+3. On a non-skipped run, the coordinator orchestrates:
+     - `TDocService.sync_from_meeting_ftp` →
+       `fetch_tdocs_from_meeting_ftp` →
+       `read_tdoc_sheet` (XLSX → `TDoc` list) →
+       `SQLAlchemyTDocRepository.upsert_many`.
+     - `TDocFileService.sync_from_meeting_ftp` uses the freshly-persisted
+       TDoc IDs as the prefix list to recognise attachments under
+       `Inbox/`, `Docs/`, `Tdocs/`, `Review/`.
+4. `SQLAlchemyTDocFileRepository.upsert_many` persists revision / review
    / support files keyed by the unique `ftp_url`.
 
 ### TDoc CR extraction

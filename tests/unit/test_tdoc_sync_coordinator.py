@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -102,11 +102,22 @@ def _make_coordinator(
     meeting_repo: _FakeMeetingRepository,
     tdoc_repo: _FakeTDocRepository,
     tdoc_file_repo: _FakeTDocFileRepository | None = None,
+    *,
+    tdoc_list_sync_interval=timedelta(minutes=30),
+    tdoc_list_closed_window=timedelta(days=90),
+    mtime_resolver=None,
 ) -> TDocSyncCoordinator:
+    kwargs: dict = {
+        "tdoc_list_sync_interval": tdoc_list_sync_interval,
+        "tdoc_list_closed_window": tdoc_list_closed_window,
+    }
+    if mtime_resolver is not None:
+        kwargs["mtime_resolver"] = mtime_resolver
     return TDocSyncCoordinator(
         meeting_repo,  # type: ignore[arg-type]
         tdoc_repo,  # type: ignore[arg-type]
         tdoc_file_repo or _FakeTDocFileRepository(),  # type: ignore[arg-type]
+        **kwargs,
     )
 
 
@@ -160,12 +171,13 @@ def test_sync_for_meeting_id_dispatches_ftp_sync(monkeypatch) -> None:
     monkeypatch.setattr(TDocService, "sync_from_meeting_ftp", fake_sync)
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
-    summary = coord.sync_for_meeting_id(42)
+    outcome = coord.sync_for_meeting_id(42)
 
     assert captured == {"ftp_url": "tsg_ran/WG5_111/", "meeting_id": 42}
-    assert "2 TDoc row(s)" in summary
+    assert outcome.status == "synced"
+    assert "2 TDoc row(s)" in outcome.reason
     # File sync still runs even with no matching files.
-    assert "0 auxiliary TDoc file(s)" in summary
+    assert "0 auxiliary TDoc file(s)" in outcome.reason
 
 
 def test_sync_for_meeting_name_dispatches_ftp_sync(monkeypatch) -> None:
@@ -194,11 +206,12 @@ def test_sync_for_meeting_name_dispatches_ftp_sync(monkeypatch) -> None:
     monkeypatch.setattr(TDocService, "sync_from_meeting_ftp", fake_sync)
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
-    summary = coord.sync_for_meeting_name("SA2#150")
+    outcome = coord.sync_for_meeting_name("SA2#150")
 
     assert captured == {"ftp_url": "tsg_sa/WG2_150/", "meeting_id": 99}
-    assert summary.startswith("TDoc sync complete:")
-    assert "3 TDoc row(s)" in summary
+    assert outcome.status == "synced"
+    assert outcome.reason.startswith("TDoc sync complete:")
+    assert "3 TDoc row(s)" in outcome.reason
 
 
 # ---------------------------------------------------------------------------
@@ -243,13 +256,14 @@ def test_sync_chains_into_tdoc_file_service(monkeypatch) -> None:
     monkeypatch.setattr(TDocFileService, "sync_from_meeting_ftp", fake_file_sync)
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
-    summary = coord.sync_for_meeting_id(1)
+    outcome = coord.sync_for_meeting_id(1)
 
     assert captured["ftp_url"] == meeting.ftp_url
     # The file sync should see the TDoc IDs the TDoc sync just upserted.
     assert sorted(captured["tdoc_ids"]) == ["R5w260200", "R5w260201"]
-    assert "2 TDoc row(s)" in summary
-    assert "4 auxiliary TDoc file(s)" in summary
+    assert outcome.status == "synced"
+    assert "2 TDoc row(s)" in outcome.reason
+    assert "4 auxiliary TDoc file(s)" in outcome.reason
 
 
 def test_file_sync_receives_no_tdoc_ids_when_tdoc_sync_writes_none(
@@ -260,8 +274,8 @@ def test_file_sync_receives_no_tdoc_ids_when_tdoc_sync_writes_none(
         name="empty",
         title="empty",
         location="Online",
-        start_date=date(2026, 1, 1),
-        end_date=date(2026, 1, 2),
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 2),
         ftp_url="tsg_ran/WG5/",
     )
     meeting_repo = _FakeMeetingRepository({1: meeting})
@@ -286,11 +300,160 @@ def test_file_sync_receives_no_tdoc_ids_when_tdoc_sync_writes_none(
     )
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
-    summary = coord.sync_for_meeting_id(1)
+    outcome = coord.sync_for_meeting_id(1)
 
     assert captured["tdoc_ids"] == []
-    assert "0 TDoc row(s)" in summary
-    assert "0 auxiliary TDoc file(s)" in summary
+    assert outcome.status == "synced"
+    assert "0 TDoc row(s)" in outcome.reason
+    assert "0 auxiliary TDoc file(s)" in outcome.reason
+
+
+# ---------------------------------------------------------------------------
+# Skip rules
+# ---------------------------------------------------------------------------
+
+
+def test_skip_when_never_synced_runs(monkeypatch) -> None:
+    meeting = Meeting(
+        meeting_id=1,
+        name="R5#1",
+        title="R5 1",
+        location="Online",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 5),
+        ftp_url="tsg_ran/WG5_1/",
+        tdoc_list_last_sync=None,
+    )
+    meeting_repo = _FakeMeetingRepository({1: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.sync_from_meeting_ftp",
+        lambda self, ftp_url, meeting_id=None: 0,
+    )
+
+    coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
+    outcome = coord.sync_for_meeting_id(1)
+
+    assert outcome.status == "synced"
+
+
+def test_skip_when_closed_window() -> None:
+    meeting = Meeting(
+        meeting_id=1,
+        name="R5#1",
+        title="R5 1",
+        location="Online",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 2),
+        ftp_url="tsg_ran/WG5_1/",
+        tdoc_list_last_sync=None,
+    )
+    meeting_repo = _FakeMeetingRepository({1: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    coord = _make_coordinator(
+        meeting_repo,
+        tdoc_repo,
+        tdoc_file_repo,
+        tdoc_list_closed_window=timedelta(days=90),
+    )
+    outcome = coord.sync_for_meeting_id(1)
+
+    assert outcome.status == "skipped"
+    assert "closed window" in outcome.reason
+
+
+def test_skip_when_within_auto_sync_interval() -> None:
+    meeting = Meeting(
+        meeting_id=1,
+        name="R5#1",
+        title="R5 1",
+        location="Online",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 5),
+        ftp_url="tsg_ran/WG5_1/",
+        tdoc_list_last_sync=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    meeting_repo = _FakeMeetingRepository({1: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    coord = _make_coordinator(
+        meeting_repo,
+        tdoc_repo,
+        tdoc_file_repo,
+        tdoc_list_sync_interval=timedelta(minutes=30),
+    )
+    outcome = coord.sync_for_meeting_id(1)
+
+    assert outcome.status == "skipped"
+    assert "last sync" in outcome.reason
+
+
+def test_skip_when_ftp_mtime_older_than_last_sync() -> None:
+    last_sync = datetime.now(timezone.utc) - timedelta(hours=1)
+    meeting = Meeting(
+        meeting_id=1,
+        name="R5#1",
+        title="R5 1",
+        location="Online",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 5),
+        ftp_url="tsg_ran/WG5_1/",
+        tdoc_list_last_sync=last_sync,
+    )
+    meeting_repo = _FakeMeetingRepository({1: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    coord = _make_coordinator(
+        meeting_repo,
+        tdoc_repo,
+        tdoc_file_repo,
+        tdoc_list_sync_interval=timedelta(minutes=30),
+        mtime_resolver=lambda _: last_sync - timedelta(minutes=5),
+    )
+    outcome = coord.sync_for_meeting_id(1)
+
+    assert outcome.status == "skipped"
+    assert "FTP" in outcome.reason
+
+
+def test_force_bypasses_all_skip_rules(monkeypatch) -> None:
+    last_sync = datetime.now(timezone.utc) - timedelta(minutes=5)
+    meeting = Meeting(
+        meeting_id=1,
+        name="R5#1",
+        title="R5 1",
+        location="Online",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 5),
+        ftp_url="tsg_ran/WG5_1/",
+        tdoc_list_last_sync=last_sync,
+    )
+    meeting_repo = _FakeMeetingRepository({1: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    from doc3gpp.services.tdoc_service import TDocService
+
+    monkeypatch.setattr(
+        TDocService, "sync_from_meeting_ftp", lambda self, ftp_url, meeting_id=None: 1
+    )
+
+    coord = _make_coordinator(
+        meeting_repo,
+        tdoc_repo,
+        tdoc_file_repo,
+        tdoc_list_sync_interval=timedelta(minutes=30),
+        mtime_resolver=lambda _: last_sync - timedelta(minutes=5),
+    )
+    outcome = coord.sync_for_meeting_id(1, force=True)
+
+    assert outcome.status == "synced"
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ table below is for navigation only.
 | `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …). |
 | `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar (zip / markdown paths, `doc_filename`). |
 | `DirectParseResult` | dataclass | `models/tdoc_cr.py` | Outcome of `tdoc parse --from-path/--from-url` (source kind, markdown, details, persistence flags). |
+| `SyncOutcome` | dataclass | `models/sync.py` | Result of `meeting sync` / `tdoc sync`: synced/skipped status, reason, and counts. |
 | `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records. |
 | `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to `tsg_short`). |
 
@@ -50,6 +51,7 @@ table below is for navigation only.
 | `ScraperClient` | class | `scraping/client.py` | HTTP transport with retry / backoff via `httpx`. |
 | `fetch_calendar` | function | `scraping/calendar_source.py` | Fetch DynaReport meeting HTML. |
 | `fetch_tdocs_from_meeting_ftp` | function | `scraping/ftp_source.py` | Discover + fetch the meeting's TDoc-list XLSX. |
+| `get_tdoc_list_mtime` | function | `scraping/ftp_source.py` | HEAD the meeting's TDoc-list XLSX and parse `Last-Modified` as UTC. |
 | `fetch_wis` | function | `scraping/wi_source.py` | Fetch DynaReport WI list HTML for a TSG. |
 | `download_tdoc_zip` / `get_tdoc_zip_url` | functions | `scraping/tdoc_zip_source.py` | Resolve TDoc id → 3GPP URL + on-disk zip via `TDocCache`. `download_tdoc_zip` accepts an optional `cache_key_override` so the direct-parse path can key the zip cache on the original filename (D10 fix). |
 | `TDocCache` / `CacheStatus` | class | `scraping/cache.py` | On-disk `zips/` + `markdown/` cache with FIFO eviction. |

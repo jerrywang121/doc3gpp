@@ -26,9 +26,11 @@ from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
 
 def build_meeting_service() -> MeetingService:
     """Construct a :class:`MeetingService` backed by the configured repos."""
+    settings = get_settings()
     return MeetingService(
         SQLAlchemyMeetingRepository(),
         SQLAlchemyTsgRepository(),
+        sync_interval=settings.sync.meeting_sync_interval,
     )
 
 
@@ -81,10 +83,13 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
     TDocs → fetch auxiliary TDoc files) so callers don't have to import
     meeting, TDoc and TDocFile repositories directly.
     """
+    settings = get_settings()
     return TDocSyncCoordinator(
         SQLAlchemyMeetingRepository(),
         SQLAlchemyTDocRepository(),
         SQLAlchemyTDocFileRepository(),
+        tdoc_list_sync_interval=settings.sync.tdoc_list_sync_interval,
+        tdoc_list_closed_window=settings.sync.tdoc_list_closed_window,
     )
 
 

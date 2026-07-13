@@ -475,6 +475,12 @@ def db_reset(
 @meeting_app.command("sync")
 def meeting_sync(
     tsg: str = typer.Option(DEFAULT_TSG, help="TSG short name for 3GPP meeting report"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Bypass the sync interval skip rule.",
+    ),
 ) -> None:
     """Fetch and store meetings from 3GPP site.
 
@@ -490,8 +496,8 @@ def meeting_sync(
     tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = build_meeting_service()
     meeting_url = _build_meeting_url(tsg)
-    count = service.sync(meeting_url, tsg=tsg)
-    typer.echo(f"Meeting sync complete: {count} meeting rows stored")
+    outcome = service.sync(meeting_url, tsg=tsg, force=force)
+    typer.echo(outcome.reason)
 
 
 def _fmt_dt(value: datetime | None) -> str:
@@ -628,6 +634,12 @@ def tdoc_sync(
         None,
         help="Meeting name from the meeting database (see `doc3gpp meeting sync`) to resolve the FTP URL",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Bypass the sync interval skip rules (closed window, interval, FTP mtime).",
+    ),
 ) -> None:
     """Fetch TDocs from a stored meeting record and store them."""
 
@@ -638,10 +650,10 @@ def tdoc_sync(
     try:
         if meeting_id is not None:
             logger.info("Starting TDoc sync for meeting ID %s", meeting_id)
-            summary = coordinator.sync_for_meeting_id(meeting_id)
+            outcome = coordinator.sync_for_meeting_id(meeting_id, force=force)
         else:
             logger.info("Starting TDoc sync for meeting name %s", meeting)
-            summary = coordinator.sync_for_meeting_name(meeting)
+            outcome = coordinator.sync_for_meeting_name(meeting, force=force)
     except MeetingNotFoundError as exc:
         logger.error("Meeting not found: %s", exc)
         raise typer.BadParameter(str(exc)) from None
@@ -649,7 +661,7 @@ def tdoc_sync(
         logger.error("Meeting has no FTP URL stored: %s", exc)
         raise typer.BadParameter(str(exc)) from None
 
-    typer.echo(summary)
+    typer.echo(outcome.reason)
 
 
 @tdoc_app.command("list")

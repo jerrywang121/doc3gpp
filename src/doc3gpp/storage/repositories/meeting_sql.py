@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, extract, update
+from sqlalchemy import distinct, func, select, extract, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.models.meeting import Meeting
@@ -143,6 +143,21 @@ class SQLAlchemyMeetingRepository:
             result = session.execute(stmt)
             session.commit()
         return int(result.rowcount or 0) > 0
+
+    def list_distinct_tsgs(self) -> list[str]:
+        """Return distinct, non-null TSG short names stored in ``meetings.tsg``.
+
+        Results are ordered alphabetically so iteration is deterministic.
+        Rows with a ``NULL`` ``tsg`` are ignored.
+        """
+        with self._session_factory() as session:
+            stmt = (
+                select(distinct(MeetingORM.tsg))
+                .where(MeetingORM.tsg.isnot(None))
+                .order_by(MeetingORM.tsg)
+            )
+            rows = session.scalars(stmt).all()
+        return [str(row) for row in rows]
 
 
 def _orm_to_domain(row: MeetingORM) -> Meeting:

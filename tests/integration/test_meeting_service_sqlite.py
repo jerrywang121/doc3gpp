@@ -8,7 +8,7 @@ from doc3gpp.services import meetings_service as meetings_service_module
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.models import TsgORM
+from doc3gpp.storage.db.models import MeetingORM, TsgORM
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
@@ -176,3 +176,38 @@ def test_meeting_sync_force_bypasses_interval(tmp_path, monkeypatch) -> None:
 
     assert outcome.status == "synced"
     assert outcome.synced_count == 6
+
+
+def test_list_distinct_tsgs_excludes_null_and_returns_sorted_unique_values(
+    tmp_path, monkeypatch
+) -> None:
+    """list_distinct_tsgs returns sorted, non-null TSGs from the meetings table."""
+    db_path = tmp_path / "meetings.db"
+    monkeypatch.setenv("DOC3GPP_DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+
+    create_schema()
+
+    with get_engine().begin() as conn:
+        conn.execute(
+            TsgORM.__table__.insert().values(
+                [
+                    {"tsg_name": "RAN WG5", "short_name": "R5", "description": "x", "url": None},
+                    {"tsg_name": "SA WG2", "short_name": "S2", "description": "x", "url": None},
+                ]
+            )
+        )
+        conn.execute(
+            MeetingORM.__table__.insert().values(
+                [
+                    {"meeting_id": 1, "name": "R5 #1", "title": "R5 mtg", "location": "x", "tsg": "R5"},
+                    {"meeting_id": 2, "name": "R5 #2", "title": "R5 mtg", "location": "x", "tsg": "R5"},
+                    {"meeting_id": 3, "name": "S2 #1", "title": "S2 mtg", "location": "x", "tsg": "S2"},
+                    {"meeting_id": 4, "name": "legacy", "title": "old", "location": "x", "tsg": None},
+                ]
+            )
+        )
+
+    service = MeetingService(SQLAlchemyMeetingRepository())
+    assert service.list_distinct_tsgs() == ["R5", "S2"]

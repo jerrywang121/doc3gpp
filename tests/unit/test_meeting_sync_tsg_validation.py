@@ -151,3 +151,77 @@ def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
     result = runner.invoke(app, ["meeting", "sync", "--tsg", "r1"])
     assert result.exit_code == 0, result.output
     assert seed_calls["count"] == 1
+
+
+def test_meeting_sync_without_tsg_syncs_all_stored_tsgs(monkeypatch) -> None:
+    """When --tsg is omitted, sync every distinct TSG found in meetings."""
+    runner = CliRunner()
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
+    )
+
+    sync_called_with: list[dict] = []
+
+    def fake_sync(self, url, tsg=None, force=False):
+        sync_called_with.append({"url": url, "tsg": tsg, "force": force})
+        return SyncOutcome(status="synced", reason=f"ok {tsg}", synced_count=0)
+
+    monkeypatch.setattr(MeetingService, "sync", fake_sync)
+    monkeypatch.setattr(MeetingService, "list_distinct_tsgs", lambda self: ["R5", "S2"])
+
+    result = runner.invoke(app, ["meeting", "sync"])
+    assert result.exit_code == 0, result.output
+    assert len(sync_called_with) == 2
+    assert {c["tsg"] for c in sync_called_with} == {"R5", "S2"}
+    assert all("Meetings-" in c["url"] for c in sync_called_with)
+
+
+def test_meeting_sync_without_tsg_reports_nothing_when_no_stored_tsgs(monkeypatch) -> None:
+    """When --tsg is omitted and meetings is empty, report no work."""
+    runner = CliRunner()
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
+    )
+
+    sync_called_with: list[dict] = []
+
+    def fake_sync(self, url, tsg=None, force=False):
+        sync_called_with.append({"url": url, "tsg": tsg, "force": force})
+        return SyncOutcome(status="synced", reason="ok", synced_count=0)
+
+    monkeypatch.setattr(MeetingService, "sync", fake_sync)
+    monkeypatch.setattr(MeetingService, "list_distinct_tsgs", lambda self: [])
+
+    result = runner.invoke(app, ["meeting", "sync"])
+    assert result.exit_code == 0, result.output
+    assert sync_called_with == []
+    assert "No stored meetings with a TSG found" in result.output
+
+
+def test_meeting_sync_without_tsg_skips_unknown_stored_tsgs(monkeypatch) -> None:
+    """Discovered TSGs that are not in the reference table are skipped."""
+    runner = CliRunner()
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
+    )
+
+    sync_called_with: list[dict] = []
+
+    def fake_sync(self, url, tsg=None, force=False):
+        sync_called_with.append({"url": url, "tsg": tsg, "force": force})
+        return SyncOutcome(status="synced", reason=f"ok {tsg}", synced_count=0)
+
+    monkeypatch.setattr(MeetingService, "sync", fake_sync)
+    monkeypatch.setattr(MeetingService, "list_distinct_tsgs", lambda self: ["R5", "R99"])
+
+    result = runner.invoke(app, ["meeting", "sync"])
+    assert result.exit_code == 0, result.output
+    assert len(sync_called_with) == 1
+    assert sync_called_with[0]["tsg"] == "R5"
+    assert "Skipping unknown TSG 'R99'" in result.output

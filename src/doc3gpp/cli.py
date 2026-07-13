@@ -18,6 +18,7 @@ from doc3gpp.settings.schema import Settings
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.sync import BulkSyncOutcome
 from doc3gpp.models.tdoc_cr import DirectParseBatchResult, TDocCRDetails
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -647,6 +648,29 @@ def meeting_list(
     )
 
 
+def _echo_bulk_sync_outcome(outcome: BulkSyncOutcome) -> None:
+    """Render a bulk TDoc sync result and exit non-zero if every meeting failed."""
+    if outcome.total == 0:
+        typer.echo("No stored meetings with TDocs found; nothing to sync.")
+        return
+
+    typer.echo(f"TDoc bulk sync: {outcome.total} meeting(s) processed")
+    typer.echo(f"  Synced:  {outcome.synced_count}")
+    typer.echo(f"  Skipped: {outcome.skipped_count}")
+    typer.echo(f"  Failed:  {outcome.failed_count}")
+
+    if outcome.failures:
+        typer.echo("Failed meetings:")
+        for failure in outcome.failures:
+            typer.echo(
+                f"  meeting_id={failure.meeting_id}  "
+                f"{failure.error}  {failure.reason}"
+            )
+
+    if outcome.failed_count == outcome.total:
+        raise typer.Exit(code=1)
+
+
 @tdoc_app.command("sync")
 def tdoc_sync(
     meeting_id: int | None = typer.Option(
@@ -663,12 +687,25 @@ def tdoc_sync(
         help="Bypass the sync interval skip rules (closed window, interval, FTP mtime).",
     ),
 ) -> None:
-    """Fetch TDocs from a stored meeting record and store them."""
+    """Fetch TDocs List for a 3GPP meeting and store them in DB.
 
-    if (meeting_id is None) == (meeting is None):
-        raise typer.BadParameter("Specify exactly one of --meeting-id or --meeting.")
+    When neither ``--meeting-id`` nor ``--meeting`` is given, every
+    distinct ``meeting_id`` currently stored in the ``tdocs`` table is
+    synced individually. The existing per-meeting guard rules still
+    apply, and ``--force`` bypasses them for every meeting in the run.
+    """
 
     coordinator = build_tdoc_sync_coordinator()
+
+    if meeting_id is not None and meeting is not None:
+        raise typer.BadParameter("Specify exactly one of --meeting-id or --meeting.")
+
+    if meeting_id is None and meeting is None:
+        logger.info("Starting bulk TDoc sync for all tracked meetings")
+        outcome = coordinator.sync_all_tracked_meetings(force=force)
+        _echo_bulk_sync_outcome(outcome)
+        return
+
     try:
         if meeting_id is not None:
             logger.info("Starting TDoc sync for meeting ID %s", meeting_id)

@@ -17,6 +17,8 @@ from datetime import timezone
 import logging
 
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.models.sync import BulkSyncFailure
+from doc3gpp.models.sync import BulkSyncOutcome
 from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.repository.protocols import (
     MeetingRepository,
@@ -44,7 +46,7 @@ class MeetingMissingFtpUrlError(ValueError):
 
 
 class TDocSyncCoordinator:
-    """Coordinates the full TDoc sync flow for a meeting.
+    """Coordinates the full TDoc sync flow for one or many meetings.
 
     The CLI calls ``sync_for_meeting_id`` or ``sync_for_meeting_name``
     with the user-supplied selector; the coordinator looks up the
@@ -53,6 +55,11 @@ class TDocSyncCoordinator:
     :class:`TDocService` and :class:`TDocFileService` respectively.
     After a successful TDoc list sync, the meeting's
     ``tdoc_list_last_sync`` timestamp is updated.
+
+    ``sync_all_tracked_meetings`` discovers every distinct meeting ID
+    stored in the ``tdocs`` table and runs the same per-meeting sync
+    path for each one, collecting skipped, synced, and failed results
+    without aborting the sweep.
     """
 
     def __init__(
@@ -96,6 +103,43 @@ class TDocSyncCoordinator:
         if meeting is None:
             raise MeetingNotFoundError(f"Meeting not found with name {meeting_name}")
         return self._sync_for_meeting(meeting, force=force)
+
+    def sync_all_tracked_meetings(self, force: bool = False) -> BulkSyncOutcome:
+        """Sync TDocs and auxiliary TDoc files for every tracked meeting.
+
+        Discovers all distinct ``meeting_id`` values currently stored in
+        the ``tdocs`` table and runs the per-meeting sync path for each
+        one. The existing closed-window, sync-interval, and upstream
+        XLSX-mtime skip rules still apply per meeting; ``force`` bypasses
+        all three for every meeting in the run.
+
+        A single meeting failure is recorded in the returned
+        :class:`BulkSyncOutcome` and does not abort the sweep.
+        """
+        meeting_ids = self._repository.list_distinct_meeting_ids()
+        outcome = BulkSyncOutcome()
+
+        for meeting_id in meeting_ids:
+            logger.info("Bulk TDoc sync: processing meeting %s", meeting_id)
+            try:
+                meeting = self._meetings.get_by_id(meeting_id)
+                if meeting is None:
+                    raise MeetingNotFoundError(
+                        f"Meeting not found with id {meeting_id}"
+                    )
+                result = self._sync_for_meeting(meeting, force=force)
+            except (MeetingNotFoundError, MeetingMissingFtpUrlError) as exc:
+                outcome = outcome.add_failure(
+                    BulkSyncFailure(
+                        meeting_id=meeting_id,
+                        error=exc.__class__.__name__,
+                        reason=str(exc),
+                    )
+                )
+            else:
+                outcome = outcome.add_outcome(result)
+
+        return outcome
 
     def _sync_for_meeting(self, meeting: Meeting, force: bool) -> SyncOutcome:
         if not meeting.ftp_url:

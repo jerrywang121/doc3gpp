@@ -130,6 +130,7 @@ doc3gpp meeting sync --tsg r5              # scrape DynaReport, validate --tsg
 doc3gpp meeting list --limit 5
 doc3gpp meeting list --tdoc R5-260013       # find the meeting containing a TDoc
 doc3gpp tdoc sync --meeting-id 85434       # requires a stored meeting row
+doc3gpp tdoc sync                          # sync every tracked meeting_id in tdocs
 doc3gpp tdoc list --tdoc 'R5%'
 doc3gpp tdoc parse --meeting-id 85434      # extract CR cover pages; prompts before batch
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes   # pattern match, skip confirmation
@@ -238,6 +239,7 @@ doc3gpp tsg seed                # re-seed the TSG reference table
 doc3gpp meeting sync --tsg r5   # --tsg is validated against the tsg table
 doc3gpp meeting list --limit 20
 doc3gpp meeting list --tdoc R5-260013  # find the meeting whose start_doc/end_doc range brackets the TDoc
+doc3gpp tdoc sync                          # sync every tracked meeting_id in tdocs
 doc3gpp tdoc sync --meeting-id 85434
 doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
 doc3gpp tdoc list --limit 10

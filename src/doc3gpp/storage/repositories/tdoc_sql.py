@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Select, select
+from sqlalchemy import ColumnElement, Select, distinct, select
 
 from doc3gpp.cli_filters import (
     DATE_FILTER_RE,
@@ -179,6 +179,16 @@ class SQLAlchemyTDocRepository:
         """Return the TDoc IDs currently stored for ``meeting_id``."""
         with self._session_factory() as session:
             stmt = select(TDocORM.tdoc_id).where(TDocORM.meeting_id == meeting_id)
+            return list(session.scalars(stmt).all())
+
+    def list_distinct_meeting_ids(self) -> list[int]:
+        """Return the distinct, non-null meeting IDs stored in ``tdocs``."""
+        with self._session_factory() as session:
+            stmt = (
+                select(distinct(TDocORM.meeting_id))
+                .where(TDocORM.meeting_id.isnot(None))
+                .order_by(TDocORM.meeting_id)
+            )
             return list(session.scalars(stmt).all())
 
     def get_by_id(self, tdoc_id: str) -> TDoc | None:

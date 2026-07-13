@@ -15,6 +15,9 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.models.sync import BulkSyncFailure
+from doc3gpp.models.sync import BulkSyncOutcome
+from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.services.tdoc_sync_coordinator import (
@@ -54,9 +57,10 @@ class _FakeMeetingRepository:
 class _FakeTDocRepository:
     """In-memory TDocRepository double that records upsert calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, distinct_meeting_ids: list[int] | None = None) -> None:
         self.upsert_calls: list[tuple[str, int | None]] = []
         self._tdoc_ids_by_meeting: dict[int, list[str]] = {}
+        self._distinct_meeting_ids = distinct_meeting_ids or []
 
     def upsert(self, tdoc):  # pragma: no cover - delegated below
         self.upsert_many([tdoc])
@@ -75,6 +79,9 @@ class _FakeTDocRepository:
 
     def list_tdoc_ids_for_meeting(self, meeting_id: int) -> list[str]:
         return list(self._tdoc_ids_by_meeting.get(meeting_id, []))
+
+    def list_distinct_meeting_ids(self) -> list[int]:
+        return list(self._distinct_meeting_ids)
 
 
 class _FakeTDocFileRepository:
@@ -493,3 +500,173 @@ def test_sync_raises_when_meeting_has_no_ftp_url() -> None:
     )
     with pytest.raises(MeetingMissingFtpUrlError, match="10"):
         coord.sync_for_meeting_id(10)
+
+
+# ---------------------------------------------------------------------------
+# Bulk sync: sync_all_tracked_meetings
+# ---------------------------------------------------------------------------
+
+
+def test_sync_all_tracked_meetings_returns_empty_when_no_tdocs() -> None:
+    coord = _make_coordinator(
+        _FakeMeetingRepository(),
+        _FakeTDocRepository(distinct_meeting_ids=[]),
+        _FakeTDocFileRepository(),
+    )
+    outcome = coord.sync_all_tracked_meetings()
+
+    assert outcome == BulkSyncOutcome()
+    assert outcome.total == 0
+
+
+def test_sync_all_tracked_meetings_iterates_each_id(monkeypatch) -> None:
+    meetings = {
+        1: Meeting(
+            meeting_id=1,
+            name="R5#1",
+            title="R5 1",
+            location="Online",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 5),
+            ftp_url="tsg_ran/WG5_1/",
+        ),
+        2: Meeting(
+            meeting_id=2,
+            name="R5#2",
+            title="R5 2",
+            location="Online",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 5),
+            ftp_url="tsg_ran/WG5_2/",
+        ),
+    }
+    tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[1, 2])
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.sync_from_meeting_ftp",
+        lambda self, ftp_url, meeting_id=None: 1,
+    )
+
+    coord = _make_coordinator(
+        _FakeMeetingRepository(meetings), tdoc_repo, _FakeTDocFileRepository()
+    )
+    outcome = coord.sync_all_tracked_meetings()
+
+    assert outcome.total == 2
+    assert outcome.synced_count == 2
+    assert outcome.failed_count == 0
+
+
+def test_sync_all_tracked_meetings_collects_missing_meeting_failure() -> None:
+    tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[99])
+    coord = _make_coordinator(
+        _FakeMeetingRepository(), tdoc_repo, _FakeTDocFileRepository()
+    )
+    outcome = coord.sync_all_tracked_meetings()
+
+    assert outcome.total == 1
+    assert outcome.synced_count == 0
+    assert outcome.failed_count == 1
+    assert outcome.failures == (
+        BulkSyncFailure(
+            meeting_id=99,
+            error="MeetingNotFoundError",
+            reason="Meeting not found with id 99",
+        ),
+    )
+
+
+def test_sync_all_tracked_meetings_collects_missing_ftp_url_failure() -> None:
+    meeting = Meeting(
+        meeting_id=5,
+        name="R5#5",
+        title="R5 5",
+        location="Online",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 5),
+        ftp_url=None,
+    )
+    tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[5])
+    coord = _make_coordinator(
+        _FakeMeetingRepository({5: meeting}),
+        tdoc_repo,
+        _FakeTDocFileRepository(),
+    )
+    outcome = coord.sync_all_tracked_meetings()
+
+    assert outcome.total == 1
+    assert outcome.failed_count == 1
+    assert outcome.failures[0].error == "MeetingMissingFtpUrlError"
+    assert "5" in outcome.failures[0].reason
+
+
+def test_sync_all_tracked_meetings_force_flag_is_forwarded(monkeypatch) -> None:
+    meeting = Meeting(
+        meeting_id=1,
+        name="R5#1",
+        title="R5 1",
+        location="Online",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 5),
+        ftp_url="tsg_ran/WG5_1/",
+    )
+    tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[1])
+    captured: list[bool] = []
+
+    def fake_sync_for_meeting(self, meeting, force):
+        captured.append(force)
+        return SyncOutcome(status="synced", reason="ok")
+
+    monkeypatch.setattr(
+        TDocSyncCoordinator, "_sync_for_meeting", fake_sync_for_meeting
+    )
+
+    coord = _make_coordinator(
+        _FakeMeetingRepository({1: meeting}), tdoc_repo, _FakeTDocFileRepository()
+    )
+    coord.sync_all_tracked_meetings(force=True)
+
+    assert captured == [True]
+
+
+def test_sync_all_tracked_meetings_counts_synced_and_skipped(monkeypatch) -> None:
+    meetings = {
+        1: Meeting(
+            meeting_id=1,
+            name="R5#1",
+            title="R5 1",
+            location="Online",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 5),
+            ftp_url="tsg_ran/WG5_1/",
+        ),
+        2: Meeting(
+            meeting_id=2,
+            name="R5#2",
+            title="R5 2",
+            location="Online",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 5),
+            ftp_url="tsg_ran/WG5_2/",
+        ),
+    }
+    tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[1, 2])
+
+    def fake_sync_for_meeting(self, meeting, force):
+        if meeting.meeting_id == 1:
+            return SyncOutcome(status="synced", reason="synced 1")
+        return SyncOutcome(status="skipped", reason="skipped 2")
+
+    monkeypatch.setattr(
+        TDocSyncCoordinator, "_sync_for_meeting", fake_sync_for_meeting
+    )
+
+    coord = _make_coordinator(
+        _FakeMeetingRepository(meetings), tdoc_repo, _FakeTDocFileRepository()
+    )
+    outcome = coord.sync_all_tracked_meetings()
+
+    assert outcome.total == 2
+    assert outcome.synced_count == 1
+    assert outcome.skipped_count == 1
+    assert outcome.failed_count == 0

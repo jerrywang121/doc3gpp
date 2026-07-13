@@ -153,6 +153,28 @@ and the TDoc CR extraction is the deepest.
 4. `SQLAlchemyTDocFileRepository.upsert_many` persists revision / review
    / support files keyed by the unique `ftp_url`.
 
+### TDoc list sync (bulk / no selector)
+
+1. `doc3gpp tdoc sync` (no `--meeting-id` and no `--meeting`) calls
+   `TDocSyncCoordinator.sync_all_tracked_meetings`.
+2. The coordinator reads the distinct non-null `meeting_id` values from
+   the `tdocs` table via
+   `SQLAlchemyTDocRepository.list_distinct_meeting_ids` (sorted ascending,
+   orphaned TDocs excluded).
+3. For each meeting ID, it resolves the record via
+   `MeetingService.get_by_id` and runs the same per-meeting sync path as
+   the single-meeting flow above (closed window, sync interval, and
+   upstream XLSX mtime checks all apply individually). `--force`
+   bypasses all three checks for every meeting in the run.
+4. A single meeting failure (`MeetingNotFoundError` /
+   `MeetingMissingFtpUrlError`) is recorded in `BulkSyncOutcome.failures`
+   and does not abort the sweep; iteration continues so a partial sweep
+   still completes.
+5. The CLI prints a single summary block (no per-meeting lines):
+   `TDoc bulk sync: N meeting(s) processed / Synced / Skipped / Failed`
+   plus the per-failure detail. Exit code is `1` only when every meeting
+   failed; otherwise `0`.
+
 ### TDoc CR extraction
 
 1. `doc3gpp tdoc parse` is filter-driven. At least one filter must be

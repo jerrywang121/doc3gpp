@@ -216,19 +216,25 @@ doc3gpp meeting list --tdoc R5-260013
 
 Purpose:
 
-- Discover and persist TDoc records by looking up a stored meeting's FTP path.
+- Discover and persist TDoc records by looking up a stored meeting's FTP
+  path. With no selector, refresh every meeting currently tracked in the
+  `tdocs` table.
 
 Options:
 
 - --meeting-id: numeric meeting ID from the meetings database (see `doc3gpp meeting sync`).
 - --meeting: exact meeting name from the meetings database (see `doc3gpp meeting sync`).
-- --force / -f: bypass the sync skip rules.
+- --force / -f: bypass the sync skip rules for every meeting in the run.
 
 Notes:
 
-- Exactly one of `--meeting-id` or `--meeting` must be provided.
+- Exactly one of `--meeting-id` or `--meeting` may be provided. Passing
+  both is a `BadParameter` error.
+- When **neither** selector is provided, every distinct non-null
+  `meeting_id` currently stored in the `tdocs` table is synced
+  individually. This is the "bulk" mode.
 
-Behavior:
+Behavior (single-meeting: `--meeting-id` or `--meeting`):
 
 - Loads the meeting record from storage.
 - Resolves the stored FTP URL from that meeting.
@@ -244,6 +250,44 @@ Behavior:
   rows, then updates `meetings.tdoc_list_last_sync`.
 - Prints `TDoc sync complete: N TDoc row(s) and M auxiliary TDoc file(s) stored`
   or a skip reason; exits `0` on skip.
+- `MeetingNotFoundError` and `MeetingMissingFtpUrlError` are converted to
+  `BadParameter` with the original message preserved.
+
+Behavior (bulk: no selector):
+
+- Reads the distinct `meeting_id` values from the `tdocs` table
+  (orphaned TDocs with `meeting_id IS NULL` are excluded).
+- For each meeting, resolves the record via `MeetingService.get_by_id` and
+  runs the same per-meeting sync path — closed window, sync interval, and
+  upstream XLSX mtime checks all apply individually. `--force` bypasses
+  all three for every meeting in the run.
+- Prints a single summary block (no per-meeting lines):
+  ```
+  TDoc bulk sync: <N> meeting(s) processed
+    Synced:  <S>
+    Skipped: <K>
+    Failed:  <F>
+  Failed meetings:
+    meeting_id=<id>  <ErrorClass>  <message>
+  ```
+- A missing meeting row or missing FTP URL is recorded in the `Failed`
+  section and does not abort the sweep. Iteration continues so a partial
+  sweep still completes.
+- Empty discovery (no tracked meetings) prints
+  `No stored meetings with TDocs found; nothing to sync.` and exits `0`.
+- Exit code is `1` only when **every** meeting failed (`F == N`); otherwise `0`.
+
+Examples:
+
+```bash
+# Bulk: refresh every tracked meeting
+doc3gpp tdoc sync
+doc3gpp tdoc sync --force              # ignore the per-meeting skip rules
+
+# Single-meeting: unchanged behaviour
+doc3gpp tdoc sync --meeting-id 85434
+doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
+```
 
 ### doc3gpp tdoc list
 

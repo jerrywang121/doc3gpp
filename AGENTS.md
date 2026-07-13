@@ -99,13 +99,19 @@ Workflows in one line (full prose in `docs/architecture.md`):
   HTML → `parse_3gpp_calendar` → stamp `Meeting.tsg` →
   `SQLAlchemyMeetingRepository.upsert_many`. Skips when the TSG was synced
   within `Settings.sync.meeting_sync_interval` unless `--force` is used.
-- `doc3gpp tdoc sync --meeting-id <id>` → `TDocSyncCoordinator`
-  → `TDocService` + `TDocFileService` → stored meeting row's FTP URL
-  → `TDoc_List_Meeting_*.xlsx`. **No meeting row → no TDoc sync.**
-  Skips when the meeting is outside `Settings.sync.tdoc_list_closed_window`,
-  was synced within `Settings.sync.tdoc_list_sync_interval`, or the
-  upstream TDoc list XLSX is older than the last local sync; `--force`
-  bypasses all three checks.
+- `doc3gpp tdoc sync --meeting-id <id>` / `--meeting <name>` →
+  `TDocSyncCoordinator.sync_for_meeting_id` /
+  `sync_for_meeting_name` → `TDocService` + `TDocFileService` → stored
+  meeting row's FTP URL → `TDoc_List_Meeting_*.xlsx`. **No meeting row →
+  no TDoc sync.** Skips when the meeting is outside
+  `Settings.sync.tdoc_list_closed_window`, was synced within
+  `Settings.sync.tdoc_list_sync_interval`, or the upstream TDoc list
+  XLSX is older than the last local sync; `--force` bypasses all three
+  checks.
+- `doc3gpp tdoc sync` (no selector) →
+  `TDocSyncCoordinator.sync_all_tracked_meetings` → every distinct
+  ``meeting_id`` in the ``tdocs`` table is synced individually with the
+  same three skip rules applied per meeting.
 - `doc3gpp wi sync --tsg <s>` → `WiService.sync` → `fetch_wis` →
   `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many` (composite
   PK `(wi_id, tsg_short)`; `tsgs` table is auto-seeded so the FK

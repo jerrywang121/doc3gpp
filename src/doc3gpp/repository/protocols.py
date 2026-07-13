@@ -109,6 +109,16 @@ class TDocRepository(Protocol):
         """
         ...
 
+    def list_distinct_meeting_ids(self) -> list[int]:
+        """Return the distinct, non-null meeting IDs stored in ``tdocs``.
+
+        Values are returned in ascending order so iteration is deterministic.
+        Used by ``tdoc sync`` when no explicit ``--meeting-id`` or
+        ``--meeting`` is supplied. Orphaned TDocs (``meeting_id IS NULL``)
+        are excluded.
+        """
+        ...
+
     def list_with_meeting(
         self,
         limit: int = 20,

@@ -255,6 +255,7 @@ Options:
 
 - --limit: maximum number of rows.
   - default: 20
+- --offset: number of rows to skip before applying `--limit` (pagination).
 - --tdoc: SQL `LIKE` pattern on `tdoc_id` (e.g. `R5s26%` for every TDoc
   in the RAN5 2026 cycle, or `R5s260009` for an exact id). Accepts the
   same value grammar as `tdoc parse --tdoc` (see

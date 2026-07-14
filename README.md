@@ -152,7 +152,7 @@ Configuration is read from environment variables (and `.env`).
 | `DOC3GPP_HTTP_VERIFY` | TLS verification toggle |
 | `DOC3GPP_HTTP_MAX_RETRIES` | HTTP retry attempts |
 | `DOC3GPP_HTTP_RETRY_BACKOFF` | HTTP retry backoff base |
-| `DOC3GPP_OUTPUT__FORMAT` | Default `* list --format` value (`table`, `json`, `markdown`) |
+| `DOC3GPP_OUTPUT__FORMAT` | Default `--format` value for `* list` and `tdoc show` (`table`, `json`, `markdown`; `raw` is also accepted on `tdoc show`) |
 | `DOC3GPP_CACHE__DIR` | TDoc extraction cache root |
 | `DOC3GPP_CACHE__SIZE_LIMIT_MB` | Combined `zips/` + `markdown/` cache size cap; `0` means unlimited |
 | `DOC3GPP_CACHE__PURGE_CONFIRM` | Whether `cache purge` prompts unless `--yes` is passed |
@@ -273,6 +273,11 @@ doc3gpp tdoc list --format json -o tdocs.json
 doc3gpp meeting list --format markdown -o meetings.md
 doc3gpp tsg list --format json
 doc3gpp wi list --format markdown
+
+# `tdoc show` accepts the same `--format` + `-o/--output` pair, plus
+# `--format raw` to emit the converted .docx markdown:
+doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
+doc3gpp tdoc show --tdoc R5s260009 --format raw -o r5s260009.md
 ```
 
 Full command reference: [`docs/cli.md`](docs/cli.md).

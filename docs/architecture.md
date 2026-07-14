@@ -228,6 +228,11 @@ and the TDoc CR extraction is the deepest.
    row (one per URL/revision), printing each under its own
    `[Extracted Details]` block with the URL as a header. The
    `corrections` list of every block is JSON-dumped for full fidelity.
+   Output is controlled by `--format` (`table` / `json` / `markdown`
+   / `raw`) and `--output` / `-o` (PATH or `-` for stdout); `raw`
+   delegates to `TDocCrService.extract()` and writes the converted
+   `.docx` markdown (DB-cache short-circuit, otherwise download +
+   render + persist).
 
 ### Cache + CLI
 

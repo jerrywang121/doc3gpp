@@ -5,7 +5,7 @@ import json
 import logging
 import sys
 from dataclasses import fields as dataclass_fields
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import TextIO
 
@@ -20,7 +20,7 @@ from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.sync import BulkSyncOutcome
-from doc3gpp.models.tdoc_cr import DirectParseBatchResult, TDocCRDetails
+from doc3gpp.models.tdoc_cr import DirectParseBatchResult, TDocCRDetails, TDocExtractMeta
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
@@ -41,6 +41,12 @@ from doc3gpp.services.factory import (
     build_tdoc_sync_coordinator,
     build_tsg_service,
     build_wi_service,
+)
+from doc3gpp.services.tdoc_cr_service import (
+    TDocNotFoundError,
+    TDocTypeUnsupportedError,
+    TDocZipDownloadError,
+    _read_cached_markdown_path,
 )
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingMissingFtpUrlError,
@@ -185,6 +191,32 @@ def _resolve_format(fmt: str | None, default: str = "table") -> str:
     normalized = fmt.strip().lower()
     if normalized not in VALID_FORMATS:
         valid = ", ".join(VALID_FORMATS)
+        raise typer.BadParameter(
+            f"Unknown format {fmt!r}. Choose from: {valid}."
+        )
+    return normalized
+
+
+# ``tdoc show`` adds ``raw`` to the standard set because it can emit the
+# converted .docx markdown (the artefact the parser otherwise consumes).
+# Keeping the constant local to this command avoids leaking the option
+# onto ``* list`` where it doesn't make sense.
+_TDOC_SHOW_FORMATS: tuple[str, ...] = ("table", "json", "markdown", "raw")
+
+
+def _resolve_tdoc_show_format(fmt: str | None, default: str = "table") -> str:
+    """Resolve ``--format`` for ``tdoc show``.
+
+    Mirrors :func:`_resolve_format` but accepts ``"raw"`` as well. The
+    default still flows from :attr:`Settings.output.format` so a user
+    who configures ``DOC3GPP_OUTPUT__FORMAT=json`` gets JSON from this
+    command too.
+    """
+    if fmt is None or fmt == "":
+        return default
+    normalized = fmt.strip().lower()
+    if normalized not in _TDOC_SHOW_FORMATS:
+        valid = ", ".join(_TDOC_SHOW_FORMATS)
         raise typer.BadParameter(
             f"Unknown format {fmt!r}. Choose from: {valid}."
         )
@@ -1788,6 +1820,251 @@ def _emit_record_raw(markdown: str, output: str | None) -> None:
             stream.close()
 
 
+# ---------------------------------------------------------------------------
+# tdoc show --format renderers
+# ---------------------------------------------------------------------------
+
+
+def _serialise_show_value(value: object) -> object:
+    """Normalise ``date`` / ``datetime`` / ``None`` for JSON / Markdown output.
+
+    ``date`` and ``datetime`` are not natively JSON-serialisable, and
+    naive ``str(value)`` formats ``datetime`` with a space separator
+    while ``isoformat()`` produces strict ISO-8601. Markdown rendering
+    only needs the formatted string.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    # ``datetime`` is a subclass of ``date`` so the order matters here.
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _render_tdoc_show_json(
+    record: TDoc,
+    details_list: list[TDocCRDetails],
+    meta_list: list[TDocExtractMeta],
+    output: str | None,
+) -> None:
+    """Emit ``tdoc show --format json``.
+
+    The payload is a single object with two top-level keys:
+
+    - ``tdoc``: every :class:`TDoc` field, normalised via
+      :func:`_serialise_show_value` so ``date``/``datetime`` come out as
+      ISO-8601 strings.
+    - ``details``: one element per stored revision, mirroring the
+      printed block plus an ``extract_meta`` sub-object when the row
+      has a matching :class:`TDocExtractMeta`.
+    """
+    tdoc_obj = {
+        f.name: _serialise_show_value(getattr(record, f.name))
+        for f in dataclass_fields(record)
+    }
+    meta_by_url = {meta.ftp_url: meta for meta in meta_list}
+    details_objs: list[dict[str, object]] = []
+    for details in details_list:
+        obj = {
+            f.name: _serialise_show_value(getattr(details, f.name))
+            for f in dataclass_fields(details)
+        }
+        meta = meta_by_url.get(details.ftp_url or "")
+        if meta is not None:
+            obj["extract_meta"] = {
+                "ftp_url": meta.ftp_url,
+                "tdoc_id": meta.tdoc_id,
+                "zip_path": meta.zip_path,
+                "markdown_path": meta.markdown_path,
+                "doc_filename": meta.doc_filename,
+                "extracted_at": _serialise_show_value(meta.extracted_at),
+                "parser_version": meta.parser_version,
+            }
+        else:
+            obj["extract_meta"] = None
+        details_objs.append(obj)
+
+    payload: dict[str, object] = {"tdoc": tdoc_obj, "details": details_objs}
+    stream, close_after = _open_output(output)
+    try:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _render_tdoc_show_markdown(
+    record: TDoc,
+    details_list: list[TDocCRDetails],
+    meta_list: list[TDocExtractMeta],
+    output: str | None,
+) -> None:
+    """Emit ``tdoc show --format markdown``.
+
+    The TDoc row becomes a bullet list under a ``Metadata`` heading;
+    each detail row becomes its own ``Extracted Details #N`` section.
+    The nested ``details`` dict is rendered as a JSON fenced block so
+    it round-trips through any Markdown viewer. Long free-text fields
+    are **not** truncated in this mode (callers using Markdown for
+    archival want the full text).
+    """
+    stream, close_after = _open_output(output)
+    try:
+        stream.write(f"# TDoc `{record.tdoc_id}`\n\n")
+        stream.write("## Metadata\n\n")
+        for f in dataclass_fields(record):
+            value = _serialise_show_value(getattr(record, f.name))
+            if value is None:
+                rendered = "—"
+            else:
+                rendered = str(value)
+            stream.write(f"- **{f.name}**: {rendered}\n")
+
+        if not details_list and not meta_list:
+            stream.write("\n## Extracted Details\n\n")
+            stream.write(
+                "_No extracted details; run "
+                "`doc3gpp tdoc parse --tdoc <id>` first._\n"
+            )
+            return
+
+        meta_by_url = {meta.ftp_url: meta for meta in meta_list}
+        for idx, details in enumerate(details_list, start=1):
+            stream.write(f"\n## Extracted Details #{idx}\n\n")
+            for f in dataclass_fields(details):
+                value = getattr(details, f.name)
+                if f.name == "details" and isinstance(value, dict):
+                    stream.write(f"- **{f.name}**:\n\n```json\n")
+                    stream.write(
+                        json.dumps(value, ensure_ascii=False, indent=2)
+                    )
+                    stream.write("\n```\n")
+                    continue
+                formatted = _serialise_show_value(value)
+                rendered = "—" if formatted is None else str(formatted)
+                stream.write(f"- **{f.name}**: {rendered}\n")
+            meta = meta_by_url.get(details.ftp_url or "")
+            if meta is not None:
+                stream.write(
+                    f"  - **extracted_at**: {_fmt_dt(meta.extracted_at)}\n"
+                )
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _render_tdoc_show_table(
+    record: TDoc,
+    details_list: list[TDocCRDetails],
+    meta_list: list[TDocExtractMeta],
+    output: str | None,
+) -> None:
+    """Emit ``tdoc show --format table`` (the default).
+
+    Preserves the historical line-oriented output exactly so operator
+    muscle memory and existing shell scripts keep working. The only
+    addition is honouring ``--output`` / ``-o``: previously the
+    command always wrote to stdout via ``typer.echo``.
+    """
+    stream, close_after = _open_output(output)
+    try:
+        stream.write("[TDoc]\n")
+        for f in dataclass_fields(record):
+            value = getattr(record, f.name)
+            if value is None:
+                value = "-"
+            elif hasattr(value, "isoformat"):
+                value = value.isoformat()
+            else:
+                value = str(value)
+            stream.write(f"{f.name}: {value}\n")
+
+        if not details_list and not meta_list:
+            stream.write("[Extracted Details]\n")
+            stream.write(
+                "No extracted details; run `doc3gpp tdoc parse --tdoc <id>` first.\n"
+            )
+            return
+
+        meta_by_url = {meta.ftp_url: meta for meta in meta_list}
+        for details in details_list:
+            stream.write("[Extracted Details]\n")
+            if details.ftp_url:
+                stream.write(f"ftp_url: {details.ftp_url}\n")
+            stream.write(f"spec: {details.spec or '-'}\n")
+            stream.write(f"cr_num: {details.cr_num or '-'}\n")
+            stream.write(f"rev: {details.rev or '-'}\n")
+            stream.write(f"version: {details.version or '-'}\n")
+            stream.write(f"title: {details.title or '-'}\n")
+            stream.write(f"source: {details.source or '-'}\n")
+            stream.write(f"tsg: {details.tsg or '-'}\n")
+            stream.write(f"related_wis: {details.related_wis or '-'}\n")
+            stream.write(f"date: {details.date or '-'}\n")
+            stream.write(f"cr_cat: {details.cr_cat or '-'}\n")
+            stream.write(f"release: {details.release or '-'}\n")
+            stream.write(
+                "reason_for_change: "
+                f"{_truncate_for_display(details.reason_for_change)}\n"
+            )
+            stream.write(
+                "consequences_if_not_approved: "
+                f"{_truncate_for_display(details.consequences_if_not_approved)}\n"
+            )
+            stream.write(f"clauses_affected: {details.clauses_affected or '-'}\n")
+            stream.write(f"parser_version: {details.parser_version}\n")
+            stream.write(
+                f"details: {json.dumps(details.details, ensure_ascii=False, indent=2)}\n"
+            )
+            meta = meta_by_url.get(details.ftp_url or "")
+            if meta is not None:
+                stream.write(f"extracted_at: {_fmt_dt(meta.extracted_at)}\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _render_tdoc_show_raw(tdoc_id: str, output: str | None) -> None:
+    """Emit ``tdoc show --format raw``.
+
+    Delegates to :class:`TDocCrService.extract`, which short-circuits
+    on a DB cache hit (no network / no conversion) and otherwise
+    downloads the zip, renders the markdown and persists the row. The
+    rendered markdown is then read back from the cache path the
+    service populated. Service-level exceptions are translated into
+    friendly CLI errors so the operator never sees a raw traceback.
+    """
+    try:
+        service = build_tdoc_cr_service()
+        result = service.extract(tdoc_id)
+    except TDocNotFoundError:
+        raise typer.BadParameter(
+            f"Unknown TDoc '{tdoc_id}'. Run 'doc3gpp tdoc list' to see "
+            f"stored TDocs, or 'doc3gpp tdoc sync' to ingest a "
+            f"meeting's TDocs first."
+        ) from None
+    except TDocTypeUnsupportedError as exc:
+        raise typer.BadParameter(
+            f"TDoc {tdoc_id!r} has type {exc.observed_type!r}; "
+            f"--format raw is only available for CR-type TDocs"
+        ) from None
+    except TDocZipDownloadError as exc:
+        raise typer.BadParameter(
+            f"Failed to download TDoc '{tdoc_id}' for raw rendering: {exc}"
+        ) from None
+    except PythonDocxNotInstalledError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+    markdown_path = Path(result.extract_meta.markdown_path)
+    markdown = _read_cached_markdown_path(markdown_path)
+    if not markdown:
+        raise typer.BadParameter(
+            f"Markdown cache for TDoc '{tdoc_id}' is empty or unreadable "
+            f"(path: {markdown_path})"
+        )
+    _emit_record_raw(markdown, output)
 
 
 _DIRECT_FORMAT_EXTENSIONS: dict[str, str] = {
@@ -2193,16 +2470,39 @@ def tdoc_show(
             "Case-insensitive for CR-shape IDs."
         ),
     ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help=(
+            "Output format: table (default), json, markdown, or raw "
+            "(the converted .docx markdown for CR-type TDocs)."
+        ),
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help=(
+            "Write output to PATH instead of stdout. Pass '-' for stdout."
+        ),
+    ),
 ) -> None:
     """Show a stored TDoc and any extracted CR cover-page details.
 
     Prints the TDoc record and, if ``tdoc parse`` has been run for this
     id, one ``[Extracted Details]`` block per revision. ``--tdoc`` is
-    case-insensitive for CR-shape IDs. Raises ``BadParameter`` if the
-    TDoc is not stored.
+    case-insensitive for CR-shape IDs. ``--format`` controls the output
+    representation; ``raw`` emits the converted .docx markdown instead
+    of the extracted cover-page fields and triggers a fresh extract
+    when the cache is cold. ``--output`` / ``-o`` writes the result to
+    a file instead of stdout. Raises ``BadParameter`` if the TDoc is
+    not stored.
     """
+    settings = get_settings()
+    fmt = _resolve_tdoc_show_format(fmt, default=settings.output.format)
+
     trigger_auto_sync(
-        auto_sync_enabled=get_settings().sync.auto_sync,
+        auto_sync_enabled=settings.sync.auto_sync,
         meeting_service=build_meeting_service(),
         tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
         tdoc=tdoc,
@@ -2215,54 +2515,23 @@ def tdoc_show(
             f"or 'doc3gpp tdoc sync' to ingest a meeting's TDocs first."
         )
 
-    typer.echo("[TDoc]")
-    for f in dataclass_fields(record):
-        value = getattr(record, f.name)
-        if value is None:
-            value = "-"
-        elif hasattr(value, "isoformat"):
-            value = value.isoformat()
-        else:
-            value = str(value)
-        typer.echo(f"{f.name}: {value}")
+    # Raw format takes a separate path: it doesn't render the DB rows,
+    # it pulls the converted markdown from the cache (populating it via
+    # a fresh extract when the cache is cold).
+    if fmt == "raw":
+        _render_tdoc_show_raw(record.tdoc_id, output)
+        return
 
     cr_repo = build_tdoc_cr_repository()
     details_list = cr_repo.get(tdoc)
     meta_list = cr_repo.get_extract_meta(tdoc)
-    if not details_list and not meta_list:
-        typer.echo("[Extracted Details]")
-        typer.echo("No extracted details; run `doc3gpp tdoc parse --tdoc <id>` first.")
-        return
 
-    meta_by_url = {meta.ftp_url: meta for meta in meta_list}
-    for details in details_list:
-        typer.echo("[Extracted Details]")
-        if details.ftp_url:
-            typer.echo(f"ftp_url: {details.ftp_url}")
-        typer.echo(f"spec: {details.spec or '-'}")
-        typer.echo(f"cr_num: {details.cr_num or '-'}")
-        typer.echo(f"rev: {details.rev or '-'}")
-        typer.echo(f"version: {details.version or '-'}")
-        typer.echo(f"title: {details.title or '-'}")
-        typer.echo(f"source: {details.source or '-'}")
-        typer.echo(f"tsg: {details.tsg or '-'}")
-        typer.echo(f"related_wis: {details.related_wis or '-'}")
-        typer.echo(f"date: {details.date or '-'}")
-        typer.echo(f"cr_cat: {details.cr_cat or '-'}")
-        typer.echo(f"release: {details.release or '-'}")
-        typer.echo(f"reason_for_change: {_truncate_for_display(details.reason_for_change)}")
-        typer.echo(
-            "consequences_if_not_approved: "
-            f"{_truncate_for_display(details.consequences_if_not_approved)}"
-        )
-        typer.echo(f"clauses_affected: {details.clauses_affected or '-'}")
-        typer.echo(f"parser_version: {details.parser_version}")
-        typer.echo(
-            f"details: {json.dumps(details.details, ensure_ascii=False, indent=2)}"
-        )
-        meta = meta_by_url.get(details.ftp_url or "")
-        if meta is not None:
-            typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")
+    if fmt == "json":
+        _render_tdoc_show_json(record, details_list, meta_list, output)
+    elif fmt == "markdown":
+        _render_tdoc_show_markdown(record, details_list, meta_list, output)
+    else:
+        _render_tdoc_show_table(record, details_list, meta_list, output)
 
 
 @tsg_app.command("list")

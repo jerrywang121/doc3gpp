@@ -9,6 +9,7 @@ resets the settings/engine caches via ``conftest.sqlite_env``.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
@@ -60,11 +61,14 @@ class _FakeCrService:
         results: dict[str, ExtractResult] | None = None,
         failures: dict[str, str] | None = None,
         raise_from_many: Exception | None = None,
+        raise_from_extract: Exception | None = None,
     ) -> None:
         self._results = results or {}
         self._failures = failures or {}
         self._raise_from_many = raise_from_many
+        self._raise_from_extract = raise_from_extract
         self.many_calls: list[tuple[list[str], bool, bool]] = []
+        self.extract_calls: list[str] = []
 
     def extract_many(
         self, tdoc_ids, *, force: bool = False, full: bool = False,
@@ -76,6 +80,14 @@ class _FakeCrService:
             successes=dict(self._results),
             failures=dict(self._failures),
         )
+
+    def extract(self, tdoc_id, *, force: bool = False) -> ExtractResult:
+        self.extract_calls.append(tdoc_id)
+        if self._raise_from_extract is not None:
+            raise self._raise_from_extract
+        if tdoc_id not in self._results:
+            raise TDocNotFoundError(tdoc_id)
+        return self._results[tdoc_id]
 
 
 class _FakeTDocRepoList:
@@ -1721,3 +1733,277 @@ def test_tdoc_show_renders_multiple_revisions(sqlite_env) -> None:
     assert "R5s260009.zip" in result.output
     assert "R5s260009_rev2.zip" in result.output
     assert result.output.count("[Extracted Details]") == 2
+
+
+# ---------------------------------------------------------------------------
+# tdoc show --format / --output
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_show_format_json_happy_path(sqlite_env) -> None:
+    """``--format json`` emits one JSON object with ``tdoc`` and ``details``."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["tdoc"]["tdoc_id"] == "R5s260009"
+    assert payload["tdoc"]["type"] == "CR"
+    assert payload["tdoc"]["reservation_date"] in (None, "-") or isinstance(
+        payload["tdoc"]["reservation_date"], str
+    )
+    assert isinstance(payload["details"], list)
+    assert len(payload["details"]) == 1
+    detail = payload["details"][0]
+    assert detail["tdoc_id"] == "R5s260009"
+    assert detail["spec"] == "38.523-3"
+    assert detail["cr_num"] == "3790"
+    assert detail["date"] == "2026-06-12"
+    assert detail["details"]["overview"]["ats_version"] == "iwd-TTCN3-B2512-260-eng"
+    assert detail["extract_meta"] is not None
+    assert detail["extract_meta"]["tdoc_id"] == "R5s260009"
+
+
+def test_tdoc_show_format_markdown_happy_path(sqlite_env) -> None:
+    """``--format markdown`` emits a Markdown document with per-revision sections."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "markdown"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "# TDoc `R5s260009`" in result.output
+    assert "## Metadata" in result.output
+    assert "## Extracted Details #1" in result.output
+    assert "```json" in result.output
+    assert "iwd-TTCN3-B2512-260-eng" in result.output
+    assert "38.523-3" in result.output
+    assert "3790" in result.output
+
+
+def test_tdoc_show_format_markdown_no_extract_row(sqlite_env) -> None:
+    """``--format markdown`` on a TDoc without extracted details emits a friendly hint."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260010", type="CR"))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260010", "--format", "markdown"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "# TDoc `R5s260010`" in result.output
+    assert "No extracted details" in result.output
+
+
+def test_tdoc_show_output_writes_to_file(sqlite_env, tmp_path) -> None:
+    """``--output PATH`` redirects the default table output to a file."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+
+    out_path = tmp_path / "show.txt"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "show",
+            "--tdoc", "R5s260009",
+            "--output", str(out_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.exists()
+    contents = out_path.read_text()
+    assert "[TDoc]" in contents
+    assert "tdoc_id: R5s260009" in contents
+    assert "[Extracted Details]" in contents
+
+
+def test_tdoc_show_format_json_output_writes_to_file(sqlite_env, tmp_path) -> None:
+    """``--format json --output PATH`` round-trips a parseable JSON file."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+
+    out_path = tmp_path / "show.json"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "show",
+            "--tdoc", "R5s260009",
+            "--format", "json",
+            "--output", str(out_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(out_path.read_text())
+    assert payload["tdoc"]["tdoc_id"] == "R5s260009"
+    assert payload["details"][0]["cr_num"] == "3790"
+
+
+def test_tdoc_show_format_raw_emits_cached_markdown(
+    sqlite_env, tmp_path, monkeypatch
+) -> None:
+    """``--format raw`` writes the converted markdown from the cache."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+
+    cached_md = "# Heading\n\nbody paragraph\n"
+    monkeypatch.setattr(
+        "doc3gpp.cli._read_cached_markdown_path",
+        lambda path: cached_md,
+    )
+    _patch_service(monkeypatch, _FakeCrService(results={
+        "R5s260009": _make_result("R5s260009"),
+    }))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output == cached_md
+
+
+def test_tdoc_show_format_raw_output_writes_to_file(
+    sqlite_env, tmp_path, monkeypatch
+) -> None:
+    """``--format raw --output PATH`` writes the converted markdown to a file."""
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+
+    cached_md = "raw body\n"
+    monkeypatch.setattr(
+        "doc3gpp.cli._read_cached_markdown_path",
+        lambda path: cached_md,
+    )
+    _patch_service(monkeypatch, _FakeCrService(results={
+        "R5s260009": _make_result("R5s260009"),
+    }))
+
+    out_path = tmp_path / "raw.md"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "show",
+            "--tdoc", "R5s260009",
+            "--format", "raw",
+            "--output", str(out_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.read_text() == cached_md
+
+
+def test_tdoc_show_format_raw_non_cr_tdoc_raises_bad_parameter(
+    sqlite_env, monkeypatch
+) -> None:
+    """``--format raw`` on a non-CR TDoc surfaces a friendly error."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260020", type="LS"))
+
+    class _RaisingCrService:
+        def extract(self, tdoc_id):
+            raise TDocTypeUnsupportedError(tdoc_id, observed_type="LS")
+
+    _patch_service(monkeypatch, _RaisingCrService())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5-260020", "--format", "raw"]
+    )
+    assert result.exit_code != 0
+    assert "R5-260020" in result.output
+    assert "type" in result.output.lower()
+    assert "CR-type" in result.output or "CR" in result.output
+
+
+def test_tdoc_show_format_raw_python_docx_missing_raises_bad_parameter(
+    sqlite_env, monkeypatch
+) -> None:
+    """A missing ``[extract]`` extra surfaces a friendly install hint."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    class _RaisingCrService:
+        def extract(self, tdoc_id):
+            raise PythonDocxNotInstalledError()
+
+    _patch_service(monkeypatch, _RaisingCrService())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
+    )
+    assert result.exit_code != 0
+    assert "python-docx" in result.output
+    assert "doc3gpp[extract]" in result.output
+
+
+def test_tdoc_show_format_raw_zip_download_failure_raises_bad_parameter(
+    sqlite_env, monkeypatch
+) -> None:
+    """A TDocZipDownloadError becomes a friendly BadParameter on raw."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    class _RaisingCrService:
+        def extract(self, tdoc_id):
+            raise TDocZipDownloadError(
+                url="https://example/missing.zip",
+                original=RuntimeError("boom"),
+            )
+
+    _patch_service(monkeypatch, _RaisingCrService())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
+    )
+    assert result.exit_code != 0
+    assert "Failed to download" in result.output
+
+
+def test_tdoc_show_format_raw_empty_cache_raises_bad_parameter(
+    sqlite_env, tmp_path, monkeypatch
+) -> None:
+    """A non-empty extract_meta path that reads to empty raises BadParameter."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    monkeypatch.setattr(
+        "doc3gpp.cli._read_cached_markdown_path",
+        lambda path: "",
+    )
+    _patch_service(monkeypatch, _FakeCrService(results={
+        "R5s260009": _make_result("R5s260009"),
+    }))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
+    )
+    assert result.exit_code != 0
+    assert "empty or unreadable" in result.output
+
+
+def test_tdoc_show_format_invalid_raises_bad_parameter(sqlite_env) -> None:
+    """An unknown --format value exits non-zero with a helpful message."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--tdoc", "R5s260009", "--format", "yaml"],
+    )
+    assert result.exit_code != 0
+    assert "yaml" in result.output
+    assert "table" in result.output and "json" in result.output
+    assert "raw" in result.output

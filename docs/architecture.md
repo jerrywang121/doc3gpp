@@ -8,7 +8,9 @@ Current scope:
 
 - Configurable SQL backends (sqlite default, mysql, postgres).
 - Calendar scraping from the 3GPP DynaReport meetings pages.
-- TDoc list scraping from per-meeting FTP folders.
+- TDoc list scraping from the 3GPP portal
+  (`GenerateDocumentList.aspx?meetingId={meeting_id}`); auxiliary TDoc
+  files still come from the per-meeting FTP folders.
 - Work-item (WI) scraping from the per-TSG DynaReport WI pages.
 - TDoc CR extraction pipeline (download zip → on-disk cache → python-docx
   render → markdown cache → cover-page parser → persist).
@@ -66,7 +68,8 @@ Per-layer modules:
   parses content.
     - `scraping/client.py` — `ScraperClient` (retry/backoff, UA, `httpx`)
     - `scraping/calendar_source.py` — DynaReport meetings HTML
-    - `scraping/ftp_source.py` — FTP-directory listings + TDoc-list XLSX
+    - `scraping/ftp_source.py` — FTP-directory listings for auxiliary TDoc files
+    - `scraping/portal_source.py` — `GenerateDocumentList.aspx` TDoc-list XLSX
     - `scraping/wi_source.py` — DynaReport WI list HTML per TSG
     - `scraping/tdoc_zip_source.py` — TDoc zip URL builder + downloader
       (`R5s` TTCN + `R5w` Workshop branches)
@@ -134,22 +137,21 @@ and the TDoc CR extraction is the deepest.
 ### TDoc list sync (per meeting)
 
 1. `doc3gpp tdoc sync --meeting-id <id>` (or `--meeting <name>`)
-   resolves the meeting and reads its stored `ftp_url`.
-2. `TDocSyncCoordinator.sync_for_meeting_id` applies three skip rules
+   resolves the meeting and reads its stored `meeting_id` and `ftp_url`.
+2. `TDocSyncCoordinator.sync_for_meeting_id` applies two skip rules
    in order: closed window (`meetings.end_date` older than
-   `Settings.sync.tdoc_list_closed_window`, default `90d`), recent local
+   `Settings.sync.tdoc_list_closed_window`, default `90d`) and recent local
    sync (`meetings.tdoc_list_last_sync` newer than
-   `Settings.sync.tdoc_list_sync_interval`, default `30m`), and
-   stale upstream XLSX (`Last-Modified` not newer than the local
-   `tdoc_list_last_sync`). `--force` bypasses all three rules.
+   `Settings.sync.tdoc_list_sync_interval`, default `30m`). `--force`
+   bypasses both rules.
 3. On a non-skipped run, the coordinator orchestrates:
-     - `TDocService.sync_from_meeting_ftp` →
-       `fetch_tdocs_from_meeting_ftp` →
-       `read_tdoc_sheet` (XLSX → `TDoc` list) →
-       `SQLAlchemyTDocRepository.upsert_many`.
-     - `TDocFileService.sync_from_meeting_ftp` uses the freshly-persisted
-       TDoc IDs as the prefix list to recognise attachments under
-       `Inbox/`, `Docs/`, `Tdocs/`, `Review/`.
+      - `TDocService.sync_tdoc_list` →
+        `fetch_tdocs_from_portal` →
+        `read_tdoc_sheet` (XLSX → `TDoc` list) →
+        `SQLAlchemyTDocRepository.upsert_many`.
+      - `TDocFileService.sync_from_meeting_ftp` uses the freshly-persisted
+        TDoc IDs as the prefix list to recognise attachments under
+        `Inbox/`, `Docs/`, `Tdocs/`, `Review/`.
 4. `SQLAlchemyTDocFileRepository.upsert_many` persists revision / review
    / support files keyed by the unique `ftp_url`.
 
@@ -163,9 +165,9 @@ and the TDoc CR extraction is the deepest.
    orphaned TDocs excluded).
 3. For each meeting ID, it resolves the record via
    `MeetingService.get_by_id` and runs the same per-meeting sync path as
-   the single-meeting flow above (closed window, sync interval, and
-   upstream XLSX mtime checks all apply individually). `--force`
-   bypasses all three checks for every meeting in the run.
+   the single-meeting flow above (closed window and sync interval checks
+   apply individually). `--force` bypasses both checks for every meeting
+   in the run.
 4. A single meeting failure (`MeetingNotFoundError` /
    `MeetingMissingFtpUrlError`) is recorded in `BulkSyncOutcome.failures`
    and does not abort the sweep; iteration continues so a partial sweep

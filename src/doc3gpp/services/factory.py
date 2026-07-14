@@ -90,6 +90,7 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
         SQLAlchemyTDocFileRepository(),
         tdoc_list_sync_interval=settings.sync.tdoc_list_sync_interval,
         tdoc_list_closed_window=settings.sync.tdoc_list_closed_window,
+        tdoc_list_url_template=settings.sync.tdoc_list_url_template,
     )
 
 

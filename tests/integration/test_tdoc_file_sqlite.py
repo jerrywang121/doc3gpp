@@ -395,7 +395,11 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
         def get_bytes(self, url: str) -> bytes:
             return xlsx_bytes
 
+        def close(self) -> None:
+            return None
+
     monkeypatch.setattr("doc3gpp.scraping.ftp_source.ScraperClient", _DummyClient)
+    monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", _DummyClient)
 
     coord = TDocSyncCoordinator(
         SQLAlchemyMeetingRepository(),

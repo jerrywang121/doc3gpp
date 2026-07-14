@@ -38,8 +38,9 @@ PostgreSQL available via configuration.
   persist it to your store of choice. The `--tsg` flag is stamped onto every
   row as a foreign key into `tsgs.short_name`, powering the `meeting list
   --tsg` filter.
-- **TDoc sync** — discover and fetch `TDoc_List_Meeting_*.xlsx` from the 3GPP
-  FTP for a stored meeting.
+- **TDoc sync** — download a meeting's TDoc-list XLSX from the 3GPP portal
+  (`GenerateDocumentList.aspx?meetingId={meeting_id}`) and persist the rows.
+  Auxiliary TDoc files are still scanned from the meeting's FTP folders.
 - **TDoc CR extraction** — optional `python-docx` pipeline that downloads,
   caches, and parses CR cover pages into structured records
   (`tdoc_cr_details` + `tdoc_extracts`).
@@ -161,6 +162,7 @@ Configuration is read from environment variables (and `.env`).
 | `DOC3GPP_SYNC__MEETING_SYNC_INTERVAL` | Minimum time between `meeting sync` runs for the same TSG (default `24h`) |
 | `DOC3GPP_SYNC__TDOC_LIST_SYNC_INTERVAL` | Minimum time between `tdoc sync` runs for the same meeting (default `30m`) |
 | `DOC3GPP_SYNC__TDOC_LIST_CLOSED_WINDOW` | Skip `tdoc sync` when the meeting `end_date` is older than this (default `90d`) |
+| `DOC3GPP_SYNC__TDOC_LIST_URL_TEMPLATE` | Portal URL template for downloading a meeting's TDoc-list XLSX (default includes `{meeting_id}`) |
 
 Nested settings can be overridden with the `__` delimiter, e.g.
 `DOC3GPP_OUTPUT__FORMAT=json`,

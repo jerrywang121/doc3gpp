@@ -112,7 +112,7 @@ def test_tdoc_repository_list_distinct_meeting_ids(sqlite_env) -> None:
     assert repo.list_distinct_meeting_ids() == [100, 101]
 
 
-def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
+def test_tdoc_service_sync_tdoc_list(monkeypatch, sqlite_env) -> None:
     create_schema()
     service = TDocService(SQLAlchemyTDocRepository())
     meeting_repo = SQLAlchemyMeetingRepository()
@@ -150,11 +150,11 @@ def test_tdoc_service_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("doc3gpp.scraping.ftp_source.ScraperClient", DummyClient)
+    monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", DummyClient)
 
-    count = service.sync_from_meeting_ftp(
-        ftp_url="tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs/",
+    count = service.sync_tdoc_list(
         meeting_id=1,
+        url_template="https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}",
     )
     assert count >= 1
 
@@ -209,11 +209,14 @@ def test_tdoc_sync_stores_per_tdoc_zip_url_not_xlsx_url(monkeypatch, sqlite_env)
         def get_bytes(self, url: str) -> bytes:
             return xlsx_bytes
 
-    monkeypatch.setattr("doc3gpp.scraping.ftp_source.ScraperClient", DummyClient)
+        def close(self) -> None:
+            return None
 
-    count = service.sync_from_meeting_ftp(
-        ftp_url="tsg_ran/WG5_Test_ex-T1/TSGR5__111_Dalian/",
+    monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", DummyClient)
+
+    count = service.sync_tdoc_list(
         meeting_id=1,
+        url_template="https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}",
     )
     assert count >= 1
 
@@ -236,7 +239,7 @@ def test_tdoc_sync_stores_per_tdoc_zip_url_not_xlsx_url(monkeypatch, sqlite_env)
             )
 
 
-def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
+def test_cli_tdoc_sync_from_meeting_name(monkeypatch, sqlite_env) -> None:
     runner = CliRunner()
     assert runner.invoke(app, ["db", "init"]).exit_code == 0
     # Use local fixtures: meeting HTML and TDoc XLSX
@@ -264,7 +267,11 @@ def test_cli_tdoc_sync_from_meeting_ftp(monkeypatch, sqlite_env) -> None:
         def get_bytes(self, url: str) -> bytes:
             return xlsx_bytes
 
+        def close(self) -> None:
+            return None
+
     monkeypatch.setattr("doc3gpp.scraping.client.ScraperClient", DummyClient)
+    monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", DummyClient)
 
     # sync meetings into the DB using the local HTML fixture
     res = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])
@@ -310,7 +317,11 @@ def test_cli_tdoc_sync_from_meeting_id(monkeypatch, sqlite_env) -> None:
         def get_bytes(self, url: str) -> bytes:
             return xlsx_bytes
 
+        def close(self) -> None:
+            return None
+
     monkeypatch.setattr("doc3gpp.scraping.client.ScraperClient", DummyClient)
+    monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", DummyClient)
 
     # sync meetings into DB
     res = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])

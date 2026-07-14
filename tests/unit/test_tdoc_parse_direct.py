@@ -737,7 +737,7 @@ def test_cli_from_path_file_json_format_emits_object(tmp_path: Path, monkeypatch
     payload = json.loads(out.read_text())
     assert payload["tdoc_id"] == "R5s260009"
     assert payload["spec"] == "38.523-3"
-    assert payload["corrections"] == []
+    assert payload["details"] == {}
 
 
 def test_cli_from_path_file_raw_format_writes_markdown_verbatim(

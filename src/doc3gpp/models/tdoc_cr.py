@@ -10,15 +10,14 @@ Design notes:
 * ``@dataclass(slots=True, frozen=True)`` keeps the object immutable
   and hashable — service / repo code can use it as a dict key or in a
   set without surprises.
-* ``corrections`` is a ``list[dict]`` (one entry per metadata table)
-  rather than a single blob; the service layer JSON-serialises it on
-  demand via :meth:`TDocCRDetails.to_persisted`.
+* ``details`` is a ``dict[str, Any]`` that holds variant-specific
+  payload sections (e.g. ``overview`` and ``corrections`` for TTCN CRs).
+  The service layer JSON-serialises it on demand and the repository
+  compresses the JSON into a single binary blob.
 * ``extracted_tdoc_id`` records what the header parser actually found
   in the document. It may diverge from the caller's input ``tdoc_id``
   when the document uses docx field codes that python-docx does not
   render — that's a diagnostic signal, not a hard error.
-* ``tech`` and ``year`` are derived fields rather than parsed; the
-  caller can verify them independently or override them downstream.
 """
 
 from __future__ import annotations
@@ -70,22 +69,9 @@ class TDocCRDetails:
         clauses_affected: Clauses-affected cell text.
         other_comments: Other-comments cell text.
         revision_history: Revision-history cell text.
-        ats_version: TTCN ATS version identifier (e.g.
-            ``"iwd-TTCN3-B2512-..."``); ``None`` for non-TTCN CRs.
-        ttcn_release: Last six chars of ``ats_version``.
-        test_case: TTCN test-case name (e.g. ``"7.1.3.5.3"``).
-        test_suite: TTCN test-suite label (e.g. ``"NR5GC"``).
-        ue: TTCN UE-used entry.
-        ss: TTCN SS-used entry.
-        corrections: List of per-correction metadata dicts. Each
-            entry holds ``function_name``, ``reason_for_change``,
-            ``summary_of_change``, ``ttcn_module``, ``mcc160_comment``,
-            plus ``before_change`` / ``after_change`` / ``new_change``
-            when ``full=True``.
-        year: Four-digit year derived from ``tdoc_id`` (positions
-            3–4 → ``"20YY"``); matches 3GPP meeting numbering.
-        tech: Technology label derived from ``spec`` (e.g.
-            ``"5G"`` / ``"LTE"``).
+        details: Variant-specific detail sections. For TTCN CRs this
+            contains ``overview`` and ``corrections`` keys; for non-TTCN
+            CRs it is empty.
         extracted_tdoc_id: What the header parser actually found in
             the document (may differ from ``tdoc_id`` when the docx
             uses field codes that python-docx does not render).
@@ -115,18 +101,7 @@ class TDocCRDetails:
     clauses_affected: str | None = None
     other_comments: str | None = None
     revision_history: str | None = None
-    # TTCN-only fields
-    ats_version: str | None = None
-    ttcn_release: str | None = None
-    test_case: str | None = None
-    test_suite: str | None = None
-    ue: str | None = None
-    ss: str | None = None
-    # Corrections (TTCN-only; list of per-correction metadata)
-    corrections: list[dict[str, str]] = field(default_factory=list)
-    # Derived
-    year: int | None = None
-    tech: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
     extracted_tdoc_id: str | None = None
     # Download provenance (None on cache hits; otherwise the relative URL
     # path, relative to https://www.3gpp.org/ftp/, that supplied the cached
@@ -149,14 +124,14 @@ class TDocCRDetails:
     def to_persisted(self) -> dict[str, Any]:
         """Return a copy shaped for SQL persistence.
 
-        The SQL schema stores ``corrections`` as a JSON ``TEXT`` blob
+        The SQL schema stores ``details`` as a compressed binary blob
         rather than a relation, so the service layer converts the
-        list-of-dicts in this dataclass into a single string. Other
-        fields pass through unchanged.
+        in-memory ``details`` dict in this dataclass into a single JSON
+        string. Other fields pass through unchanged.
 
         Returns:
-            Dict keyed by SQL column name with ``corrections_json``
-            replacing the in-memory ``corrections`` list.
+            Dict keyed by SQL column name with ``details_json``
+            replacing the in-memory ``details`` dict.
         """
         payload: dict[str, Any] = {
             "tdoc_id": self.tdoc_id,
@@ -176,20 +151,10 @@ class TDocCRDetails:
             "clauses_affected": self.clauses_affected,
             "other_comments": self.other_comments,
             "revision_history": self.revision_history,
-            "ats_version": self.ats_version,
-            "ttcn_release": self.ttcn_release,
-            "test_case": self.test_case,
-            "test_suite": self.test_suite,
-            "ue": self.ue,
-            "ss": self.ss,
-            "year": self.year,
-            "tech": self.tech,
             "extracted_tdoc_id": self.extracted_tdoc_id,
             "ftp_url": self.ftp_url,
             "parser_version": self.parser_version,
-            "corrections_json": json.dumps(
-                self.corrections, ensure_ascii=False
-            ),
+            "details_json": json.dumps(self.details, ensure_ascii=False),
         }
         return payload
 

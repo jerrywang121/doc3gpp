@@ -44,10 +44,10 @@ from bs4 import BeautifulSoup
 from doc3gpp.parsers.cr_parser import (
     _TDOC_HEADER_PATTERN,
     extract_docx_from_zip,
-    parse_cr_details,
 )
 from doc3gpp.parsers.docx_converter import convert_document_to_markdown
 from doc3gpp.parsers.normalizers import FTP_BASE_URL
+from doc3gpp.parsers.tdoc_parsers import build_default_registry
 
 if typing.TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
@@ -412,7 +412,8 @@ def direct_parse_bytes(
     markdown = convert_document_to_markdown(docx_bytes, docx_filename)
 
     tdoc_id = extract_tdoc_id_from_filename(filename) or _synthetic_tdoc_id(filename)
-    details = parse_cr_details(markdown, tdoc_id=tdoc_id, full=full)
+    parser = build_default_registry().resolve(tdoc_id, tdoc_type="CR")
+    details = parser.parse(markdown, tdoc_id=tdoc_id, full=full)
     return markdown, docx_filename, details
 
 

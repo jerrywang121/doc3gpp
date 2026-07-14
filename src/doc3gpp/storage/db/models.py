@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     func,
@@ -163,13 +164,12 @@ class TDocCrDetailOrm(Base):
     ``tdoc_id`` coexist: a fresh extract at a new URL writes a new
     row instead of clobbering the parsed record for the previous one.
 
-    Carries the cover-page fields (spec, cr_num, title, ...) and the
-    TTCN-only fields (ats_version, ttcn_release, test_case, ...) plus
-    the full ``corrections`` list serialised as a single JSON string
-    in the ``corrections`` ``TEXT`` column. See
-    :class:`doc3gpp.models.tdoc_cr.TDocCRDetails` for the in-memory
-    shape; :py:meth:`TDocCRDetails.to_persisted` produces the dict
-    this table persists.
+    Carries the cover-page fields (spec, cr_num, title, ...) plus a
+    single ``details`` column that stores the variant-specific payload
+    (TTCN overview + corrections, etc.) as gzip-compressed UTF-8 JSON.
+    See :class:`doc3gpp.models.tdoc_cr.TDocCRDetails` for the
+    in-memory shape; the repository compresses/decompresses the
+    ``details`` blob on write/read.
 
     ``ftp_url`` is the primary key — the same URL serves the same bytes
     forever, so re-extracting at the same URL is idempotent. ``tdoc_id``
@@ -211,15 +211,9 @@ class TDocCrDetailOrm(Base):
     clauses_affected: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
     revision_history: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ats_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    ttcn_release: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    test_case: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    test_suite: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    ue: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    ss: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    corrections: Mapped[str | None] = mapped_column(Text, nullable=True)
-    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    tech: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    details: Mapped[bytes | None] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=True,
+    )
     extracted_tdoc_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     parser_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="1.0.0"

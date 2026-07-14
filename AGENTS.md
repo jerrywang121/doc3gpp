@@ -117,9 +117,12 @@ Workflows in one line (full prose in `docs/architecture.md`):
   PK `(wi_id, tsg_short)`; `tsgs` table is auto-seeded so the FK
   validates).
 - `doc3gpp tdoc parse <filters>` is end-to-end filter-driven — every
-  flag is a filter, capped by `Settings.tdoc_parse.max_batch`.
-  Full grammar and prompt-completion semantics in
-  [`docs/conventions.md`](docs/conventions.md) and
+  flag is a filter, capped by `Settings.tdoc_parse.max_batch`. In normal
+  mode the SQL query excludes rows already present in `tdoc_cr_details`,
+  so the batch cap applies only to pending TDocs; the preview and
+  confirmation list only pending rows. `--force` explicitly includes and
+  re-parses already-parsed matches. Full grammar and prompt-completion
+  semantics in [`docs/conventions.md`](docs/conventions.md) and
   [`docs/cli.md`](docs/cli.md).
 - `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a
   direct-mode alternative that bypasses the database filters. Local

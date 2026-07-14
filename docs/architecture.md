@@ -181,8 +181,13 @@ and the TDoc CR extraction is the deepest.
    supplied (`--tdoc` as a LIKE pattern, `--meeting-id`, `--meeting`, or
    any text/date filter); the CLI validates `--meeting-id` when present,
    applies `type == "CR"` by default when no explicit `--type` is
-   supplied, and partitions matches into already-parsed vs to-parse
-   groups before prompting.
+   supplied, and in normal mode the SQL query excludes rows already
+   present in `tdoc_cr_details` before applying the batch cap, so the
+   preview and confirmation list only pending TDocs. With `--force`, the
+   exclusion is disabled and every match (including already-parsed rows)
+   becomes a candidate. If the pending set is empty, the CLI prints
+   `Nothing to extract — every match is already parsed.` and exits `0`
+   (successful no-op).
 2. `TDocCrService.extract(tdoc_id, *, force=False)`:
     - Pre-resolves the candidate download URL(s) via
       `resolve_download_url(tdoc_id, build_ftp_url(tdocs.ftp_url))`

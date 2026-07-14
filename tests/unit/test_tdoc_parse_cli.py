@@ -86,11 +86,23 @@ class _FakeTDocRepoList:
     the same fixture. Records every call's kwargs so the test can
     assert the CLI asked for ``tdoc_type="CR"`` with the right
     ``meeting_id`` and the configured ``max_batch``.
+
+    When ``parsed_ids`` is supplied, the fake models the contract the
+    production SQL repo must satisfy once pending selection is pushed
+    to SQL: passing ``exclude_parsed=True`` causes parsed rows to be
+    filtered *before* ``limit`` is applied. Without the flag, ``limit``
+    is applied to the raw match set (the current behaviour).
     """
 
-    def __init__(self, list_tdocs: list[TDoc], meeting_names: dict[int, str] | None = None) -> None:
+    def __init__(
+        self,
+        list_tdocs: list[TDoc],
+        meeting_names: dict[int, str] | None = None,
+        parsed_ids: set[str] | None = None,
+    ) -> None:
         self._list_tdocs = list_tdocs
         self._meeting_names = meeting_names or {}
+        self._parsed_ids = parsed_ids or set()
         self.list_calls: list[dict] = []
         self.list_with_meeting_calls: list[dict] = []
 
@@ -105,12 +117,18 @@ class _FakeTDocRepoList:
         from doc3gpp.models.tdoc import TDocWithMeeting
 
         self.list_with_meeting_calls.append(kwargs)
+        rows = list(self._list_tdocs)
+        if kwargs.get("exclude_parsed"):
+            rows = [t for t in rows if t.tdoc_id not in self._parsed_ids]
+        limit = kwargs.get("limit")
+        if limit is not None:
+            rows = rows[:limit]
         return [
             TDocWithMeeting(
                 tdoc=tdoc,
                 meeting_name=self._meeting_names.get(tdoc.meeting_id) if tdoc.meeting_id else None,
             )
-            for tdoc in self._list_tdocs
+            for tdoc in rows
         ]
 
 
@@ -158,6 +176,7 @@ def _patch_tdoc_repo_for_listing(
     monkeypatch,
     list_tdocs: list[TDoc],
     meeting_names: dict[int, str] | None = None,
+    parsed_ids: set[str] | None = None,
 ) -> "_FakeTDocRepoList":
     """Stub ``build_tdoc_repository`` so ``tdoc parse`` can call ``list_with_meeting``.
 
@@ -166,8 +185,15 @@ def _patch_tdoc_repo_for_listing(
     ``meeting_id`` and ``limit=max_batch``. Only ``list_with_meeting``
     and ``list`` are exercised; ``get_by_id`` returns ``None`` so a
     stray lookup surfaces as a miss.
+
+    When ``parsed_ids`` is supplied, the fake filters them out of
+    ``list_with_meeting`` whenever the caller passes
+    ``exclude_parsed=True`` (the SQL-level pending-selection contract
+    under test).
     """
-    fake = _FakeTDocRepoList(list_tdocs, meeting_names=meeting_names)
+    fake = _FakeTDocRepoList(
+        list_tdocs, meeting_names=meeting_names, parsed_ids=parsed_ids,
+    )
 
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_repository",
@@ -507,9 +533,9 @@ def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) 
 def test_tdoc_parse_meeting_id_parses_new_only(
     sqlite_env, monkeypatch
 ) -> None:
-    """``--meeting-id`` queries for CR-type TDocs under the meeting,
-    filters out any that already have a ``tdoc_cr_details`` row, and
-    dispatches the rest to ``extract_many``."""
+    """``--meeting-id`` asks the repo to exclude already-parsed rows so
+    only pending ones reach ``extract_many``; the parsed id is filtered
+    at the SQL layer and is not surfaced in the confirmation preview."""
     runner = CliRunner()
     meeting_id = 42
     cr_tdocs = [
@@ -531,7 +557,9 @@ def test_tdoc_parse_meeting_id_parses_new_only(
             ),
         },
     )
-    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    repo = _patch_tdoc_repo_for_listing(
+        monkeypatch, cr_tdocs, parsed_ids=parsed,
+    )
     _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={
@@ -543,7 +571,6 @@ def test_tdoc_parse_meeting_id_parses_new_only(
 
     result = runner.invoke(app, ["tdoc", "parse", "--meeting-id", str(meeting_id), "--yes"])
     assert result.exit_code == 0, result.output
-    # The CLI asked for CR-type TDocs under the meeting with a positive limit.
     assert repo.list_with_meeting_calls[0] == {
         "limit": 100,  # default max_batch
         "offset": 0,
@@ -565,13 +592,14 @@ def test_tdoc_parse_meeting_id_parses_new_only(
         "cr_pack": None,
         "source": None,
         "uploaded_date": None,
+        "exclude_parsed": True,
     }
-    # The to-parse group should be only the new ones; already-parsed are listed
-    # separately and never dispatched.
     assert fake.many_calls == [(["R5s260009", "R5s260011"], False, False)]
     assert "R5s260009" in result.output
     assert "R5s260011" in result.output
-    assert "Already parsed in tdoc_cr_details" in result.output
+    # Normal mode never renders the already-parsed table.
+    assert "Already parsed in tdoc_cr_details" not in result.output
+    assert "R5s260010" not in result.output
     assert "Newly parsed:                              2" in result.output
 
 
@@ -671,8 +699,10 @@ def test_tdoc_parse_meeting_id_no_matches_exits_1(sqlite_env, monkeypatch) -> No
 
 def test_tdoc_parse_all_already_parsed_exits_0(sqlite_env, monkeypatch) -> None:
     """When every match is already parsed and ``--force`` is *not* set,
-    the CLI prints the group, exits 0 with "Nothing to extract", and
-    never dispatches ``extract_many``."""
+    the pending query returns nothing but a raw ``limit=1`` probe
+    confirms the filters still match. The CLI prints
+    "Nothing to extract", exits 0, and never dispatches
+    ``extract_many``."""
     runner = CliRunner()
     meeting_id = 5
     cr_tdocs = [
@@ -692,7 +722,7 @@ def test_tdoc_parse_all_already_parsed_exits_0(sqlite_env, monkeypatch) -> None:
             ),
         },
     )
-    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs, parsed_ids=parsed)
     _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(results={})
     _patch_service(monkeypatch, fake)
@@ -701,10 +731,16 @@ def test_tdoc_parse_all_already_parsed_exits_0(sqlite_env, monkeypatch) -> None:
         app,
         ["tdoc", "parse", "--meeting-id", str(meeting_id), "--yes"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "Nothing to extract" in result.output
-    # Nothing reached extract_many — the CLI exited before dispatching.
     assert fake.many_calls == []
+    # First call: pending query with exclude_parsed=True.
+    # Second call: raw existence probe with exclude_parsed=False, limit=1.
+    assert len(repo.list_with_meeting_calls) == 2
+    assert repo.list_with_meeting_calls[0]["exclude_parsed"] is True
+    assert repo.list_with_meeting_calls[0]["limit"] == 100  # default max_batch
+    assert repo.list_with_meeting_calls[1]["exclude_parsed"] is False
+    assert repo.list_with_meeting_calls[1]["limit"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1149,8 +1185,8 @@ def test_tdoc_parse_yes_short_alias_works(sqlite_env, monkeypatch) -> None:
 
 
 def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> None:
-    """When some matches are already parsed, both groups are printed
-    with a base column set + per-filter extras."""
+    """Under ``--force`` the preview prints both groups: "To parse" plus
+    "Already parsed ... (with --force, these will be re-extracted)"."""
     runner = CliRunner()
     meeting_id = 33
     cr_tdocs = [
@@ -1195,24 +1231,21 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
             "tdoc", "parse",
             "--meeting-id", str(meeting_id),
             "--spec", "38.331",
+            "--force",
             "--yes",
         ],
     )
     assert result.exit_code == 0, result.output
-    # Both groups are present.
-    assert "To parse [count=1]:" in result.output
-    assert "Already parsed in tdoc_cr_details [count=1]:" in result.output
-    # The active --spec filter pulls in the spec column.
+    assert "To parse [count=2]:" in result.output
+    assert (
+        "Already parsed in tdoc_cr_details "
+        "(with --force, these will be re-extracted) [count=1]:"
+    ) in result.output
     assert "spec" in result.output
-    # Each id appears in the output at least once.
     assert "R5s260009" in result.output
     assert "R5s260010" in result.output
-    # Base columns header is rendered.
-    assert "tdoc_id" in result.output
-    assert "title" in result.output
-    assert "type" in result.output
-    assert "cr_cat" in result.output
-    assert "status" in result.output
+    for header in ("tdoc_id", "title", "type", "cr_cat", "status"):
+        assert header in result.output
 
 
 def test_tdoc_parse_meeting_filter_adds_meeting_name_column(
@@ -1322,8 +1355,9 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
 def test_tdoc_parse_summary_without_force_dispatches_only_new(
     sqlite_env, monkeypatch
 ) -> None:
-    """Without ``--force``, the previously-parsed row is skipped entirely
-    and counted as ``Skipped`` (not as Newly parsed or Re-parsed)."""
+    """Without ``--force`` only the pending id reaches ``extract_many``;
+    the parsed id is dropped by SQL, so it is not counted as
+    ``Skipped``."""
     runner = CliRunner()
     meeting_id = 78
     cr_tdocs = [
@@ -1340,7 +1374,7 @@ def test_tdoc_parse_summary_without_force_dispatches_only_new(
             location="Online",
         )},
     )
-    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs, parsed_ids=parsed)
     _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={"R5s260002": _make_result("R5s260002")},
@@ -1357,7 +1391,7 @@ def test_tdoc_parse_summary_without_force_dispatches_only_new(
     )
     assert result.exit_code == 0, result.output
     assert fake.many_calls == [(["R5s260002"], False, False)]
-    assert "Skipped (already parsed before this run): 1" in result.output
+    assert "Skipped (already parsed before this run): 0" in result.output
     assert "Re-parsed (with --force):                  0" in result.output
     assert "Newly parsed:                              1" in result.output
 
@@ -1411,6 +1445,82 @@ def test_tdoc_parse_batch_limit_warning_when_under_max(sqlite_env, monkeypatch) 
         assert result.exit_code == 0, result.output
         # No warning text — the repo returned <= max_batch.
         assert "exceeds max_batch" not in result.output
+    finally:
+        get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse — max_batch applied after excluding already-parsed rows
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_max_batch_applies_after_excluding_parsed(
+    sqlite_env, monkeypatch,
+) -> None:
+    """``max_batch`` must cap *pending* matches, not raw matches.
+
+    Given 3 already-parsed + 5 pending CR TDocs (DESC order) and
+    ``max_batch=3``, the CLI must dispatch exactly 3 pending ids to
+    ``extract_many`` and the "To parse" preview must list only
+    pending ids.
+
+    Current code omits the ``exclude_parsed`` kwarg, so the
+    repository returns the first 3 raw matches (all already-parsed)
+    and the Python-level filter strips them — leaving 0 ids
+    dispatched. Fixed code will pass ``exclude_parsed=True``, so
+    the repository filters parsed rows before applying the limit
+    and returns the first 3 pending ids.
+    """
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "3")
+    from doc3gpp.config import get_settings
+    get_settings.cache_clear()
+    try:
+        meeting_id = 21
+        parsed_ids = {"R5s260008", "R5s260007", "R5s260006"}
+        universe = [
+            TDoc(tdoc_id=f"R5s26000{i}", type="CR", meeting_id=meeting_id)
+            for i in (8, 7, 6, 5, 4, 3, 2, 1)
+        ]
+        _patch_meeting_service(
+            monkeypatch,
+            {meeting_id: Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#111",
+                title="RAN WG5 #111",
+                location="Online",
+            )},
+        )
+        _patch_tdoc_repo_for_listing(
+            monkeypatch, universe, parsed_ids=parsed_ids,
+        )
+        _patch_cr_repo(monkeypatch, parsed_ids)
+        fake = _FakeCrService(
+            results={
+                "R5s260005": _make_result("R5s260005"),
+                "R5s260004": _make_result("R5s260004"),
+                "R5s260003": _make_result("R5s260003"),
+            },
+        )
+        _patch_service(monkeypatch, fake)
+
+        result = CliRunner().invoke(
+            app,
+            ["tdoc", "parse", "--meeting-id", str(meeting_id), "--yes"],
+        )
+
+        # Given: 3 already-parsed + 5 pending, max_batch=3.
+        # When: the operator runs `tdoc parse` without --force.
+        # Then: extract_many receives exactly max_batch pending ids
+        # and the "To parse" preview contains only pending ids.
+        assert result.exit_code == 0, result.output
+        assert fake.many_calls == [
+            (["R5s260005", "R5s260004", "R5s260003"], False, False),
+        ]
+        to_parse_section = result.output.split("To parse [count=3]:", 1)[1]
+        for parsed_id in parsed_ids:
+            assert parsed_id not in to_parse_section, (
+                f"Parsed id {parsed_id!r} appeared in the 'To parse' preview"
+            )
     finally:
         get_settings.cache_clear()
 

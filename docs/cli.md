@@ -443,6 +443,31 @@ Purpose:
 Options:
 
 - `--tdoc TDOC`: canonical TDoc identifier (e.g. `R5s260009`). Required.
+- `--format {table,json,markdown,raw}`: output format. Default
+  `table`, unless overridden by `[output].format` in the resolved
+  config (`DOC3GPP_OUTPUT__FORMAT=...`).
+  - `table` (default): the historical line-oriented dump — `[TDoc]`
+    section followed by one `[Extracted Details]` block per revision.
+    Long free-text fields are truncated to 200 characters with an
+    ellipsis. Matches every prior release.
+  - `json`: one JSON object with `tdoc` (every TDoc field) and
+    `details` (one element per stored revision, with an
+    `extract_meta` sub-object when the row has matching
+    `tdoc_extracts` data). `date` / `datetime` fields are
+    ISO-8601-encoded.
+  - `markdown`: a Markdown document — `# TDoc` heading, bullet list
+    of TDoc fields, then one `## Extracted Details #N` section per
+    revision. The nested `details` dict is rendered as a JSON fenced
+    block. Long fields are **not** truncated in this mode.
+  - `raw`: the converted `.docx` markdown body (the artefact the CR
+    parser consumes) for CR-type TDocs. Requires `python-docx`
+    (`pip install doc3gpp[extract]`) when the cache is cold;
+    surfaces a friendly error otherwise. When no cached markdown
+    exists, this format triggers a fresh `TDocCrService.extract()`
+    to populate the cache + DB. Non-CR-type TDocs are rejected
+    with a friendly error.
+- `-o PATH`, `--output PATH`: write the result to `PATH` instead of
+  stdout. Pass `-` for stdout (the historical default).
 
 Behavior:
 
@@ -451,21 +476,31 @@ Behavior:
 - Looks up the row in the `tdocs` table via a PK lookup.
 - On miss: raises `BadParameter` listing the requested id and pointing
   to `doc3gpp tdoc sync` / `doc3gpp tdoc list`.
-- On hit: prints a `[TDoc]` section (every `TDoc` field) followed by
-  one `[Extracted Details]` block **per revision** when one or more
-  matching `tdoc_cr_details` rows exist (a single `tdoc_id` may have
-  multiple revisions at distinct URLs; the CLI renders one block per
-  URL with `extracted_at` newest first). The `corrections` list of
-  every block is rendered as pretty-printed JSON.
-- Long free-text fields (`reason_for_change`,
-  `consequences_if_not_approved`) are truncated to 200 characters with
-  an ellipsis.
+- On hit, `table` (default) prints a `[TDoc]` section (every `TDoc`
+  field) followed by one `[Extracted Details]` block **per revision**
+  when one or more matching `tdoc_cr_details` rows exist (a single
+  `tdoc_id` may have multiple revisions at distinct URLs; the CLI
+  renders one block per URL with `extracted_at` newest first). The
+  `details` dict of every block is rendered as pretty-printed JSON.
+- `raw` bypasses the DB-row render entirely and reads the converted
+  markdown from the cache. When the cache is cold, the extract
+  pipeline runs (download zip, render markdown, persist to
+  `tdoc_cr_details` + `tdoc_extracts`) before the result is emitted.
 
 Examples:
 
 ```bash
-# Show the TDoc + any extracted CR cover-page fields.
+# Show the TDoc + any extracted CR cover-page fields (default table).
 doc3gpp tdoc show --tdoc R5s260009
+
+# JSON for downstream tooling.
+doc3gpp tdoc show --tdoc R5s260009 --format json
+
+# Markdown for archival / review.
+doc3gpp tdoc show --tdoc R5s260009 --format markdown -o R5s260009.md
+
+# Converted .docx markdown (raw). Triggers an extract on cache miss.
+doc3gpp tdoc show --tdoc R5s260009 --format raw -o R5s260009.md
 ```
 
 ### doc3gpp tdoc parse

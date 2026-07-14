@@ -189,12 +189,19 @@ A file whose TDoc ID is not in the local `tdocs` table is silently dropped — a
 
 ### Additional TDoc sources
 
-The implemented TDoc sync path reads FTP `TDoc_List_Meeting_*.xlsx` files
-from stored meeting FTP folders. Additional sources are still planned, not
-implemented:
+The implemented TDoc sync path downloads each meeting's TDoc-list XLSX
+from the 3GPP portal via `GenerateDocumentList.aspx?meetingId={meeting_id}`.
+The sheet format is identical to the legacy FTP `TDoc_List_Meeting_*.xlsx`
+files, so the same parser produces the `TDoc` rows.
 
-- `GenerateDocumentList.aspx` pages from the 3GPP site.
-- Expanded metadata beyond the current FTP Excel-list columns.
+Auxiliary TDoc files (revisions, review packs, supporting documents) are
+still discovered by scanning the meeting's FTP subfolders after the TDoc
+list sync, because those artifacts are not exposed through the portal
+XLSX endpoint.
+
+Future sources still planned:
+
+- Expanded metadata beyond the current Excel-list columns.
 
 ## Work Item (WI) Source URLs
 
@@ -474,11 +481,12 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 ## Notes
 
 - The current implementation supports meeting report scraping, TDoc list sync
-  from meeting FTP Excel files, auxiliary TDoc file discovery, CR cover-page
-  extraction for synced CR TDocs, and WI DynaReport sync.
-- Additional TDoc source surfaces such as `GenerateDocumentList.aspx` remain
-  unimplemented; use `doc3gpp tdoc sync` against stored meeting FTP folders
-  for the implemented path.
+  from the 3GPP portal `GenerateDocumentList.aspx` endpoint, auxiliary TDoc
+  file discovery on the meeting FTP folders, CR cover-page extraction for
+  synced CR TDocs, and WI DynaReport sync.
+- `doc3gpp tdoc sync` uses the stored `Meeting.meeting_id` as the portal
+  `meetingId` parameter and falls back to the configured
+  `sync.tdoc_list_url_template` when the default endpoint changes.
 - Work Item extraction is fully automated: each TSG's `WI DynaReport` page
   is fetched on demand by `doc3gpp wi sync --tsg <short>` and persisted
   to the `wis` table with `(wi_id, tsg_short)` as the upsert key.

@@ -4,7 +4,7 @@ import logging
 
 from doc3gpp.models.tdoc import TDocWithMeeting
 from doc3gpp.repository.protocols import TDocRepository
-from doc3gpp.scraping.ftp_source import fetch_tdocs_from_meeting_ftp
+from doc3gpp.scraping.portal_source import fetch_tdocs_from_portal
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +82,15 @@ class TDocService:
             cr_pack=cr_pack,
         )
 
-    def sync_from_meeting_ftp(self, ftp_url: str, meeting_id: int | None = None) -> int:
-        logger.info("Syncing TDocs from FTP %s for meeting_id %s", ftp_url, meeting_id)
-        tdocs = fetch_tdocs_from_meeting_ftp(ftp_url=ftp_url, meeting_id=meeting_id)
+    def sync_tdoc_list(self, meeting_id: int, url_template: str) -> int:
+        logger.info(
+            "Syncing TDoc list for meeting_id %s from portal template %s",
+            meeting_id,
+            url_template,
+        )
+        tdocs = fetch_tdocs_from_portal(
+            meeting_id=meeting_id, url_template=url_template
+        )
         stored = self._repository.upsert_many(tdocs)
         logger.info("Stored %s TDoc records", stored)
         return stored

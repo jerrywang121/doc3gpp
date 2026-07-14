@@ -10,7 +10,6 @@ callers.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -25,7 +24,6 @@ from doc3gpp.repository.protocols import (
     TDocFileRepository,
     TDocRepository,
 )
-from doc3gpp.scraping.ftp_source import get_tdoc_list_mtime
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_file_service import TDocFileService
 from doc3gpp.services.tdoc_service import TDocService
@@ -69,7 +67,7 @@ class TDocSyncCoordinator:
         tdoc_file_repository: TDocFileRepository,
         tdoc_list_sync_interval: timedelta = timedelta(minutes=30),
         tdoc_list_closed_window: timedelta = timedelta(days=90),
-        mtime_resolver: Callable[[str], datetime | None] = get_tdoc_list_mtime,
+        tdoc_list_url_template: str = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}",
     ) -> None:
         self._meeting_repository = meeting_repository
         self._meetings = MeetingService(meeting_repository)
@@ -78,14 +76,13 @@ class TDocSyncCoordinator:
         self._tdoc_files = TDocFileService(tdoc_file_repository)
         self._tdoc_list_sync_interval = tdoc_list_sync_interval
         self._tdoc_list_closed_window = tdoc_list_closed_window
-        self._mtime_resolver = mtime_resolver
+        self._tdoc_list_url_template = tdoc_list_url_template
 
     def sync_for_meeting_id(self, meeting_id: int, force: bool = False) -> SyncOutcome:
         """Sync TDocs and auxiliary TDoc files for the meeting with the given numeric ID.
 
         Returns a :class:`SyncOutcome` because the coordinator may skip the
-        sync based on the meeting's age, the local last-sync timestamp, or
-        the upstream TDoc list modification time.
+        sync based on the meeting's age or the local last-sync timestamp.
         """
         logger.debug("Resolving meeting by id %s", meeting_id)
         meeting = self._meetings.get_by_id(meeting_id)
@@ -109,9 +106,9 @@ class TDocSyncCoordinator:
 
         Discovers all distinct ``meeting_id`` values currently stored in
         the ``tdocs`` table and runs the per-meeting sync path for each
-        one. The existing closed-window, sync-interval, and upstream
-        XLSX-mtime skip rules still apply per meeting; ``force`` bypasses
-        all three for every meeting in the run.
+        one.         The existing closed-window and sync-interval skip rules still
+        apply per meeting; ``force`` bypasses both for every meeting in
+        the run.
 
         A single meeting failure is recorded in the returned
         :class:`BulkSyncOutcome` and does not abort the sweep.
@@ -175,36 +172,15 @@ class TDocSyncCoordinator:
                         ),
                     )
 
-                upstream_mtime = self._mtime_resolver(meeting.ftp_url)
-                if (
-                    upstream_mtime is not None
-                    and upstream_mtime <= meeting.tdoc_list_last_sync
-                ):
-                    return SyncOutcome(
-                        status="skipped",
-                        reason=(
-                            f"TDoc sync skipped for meeting {meeting.meeting_id} "
-                            f"({meeting.name}): TDoc list on FTP "
-                            f"({upstream_mtime.strftime('%Y-%m-%d %H:%M UTC')}) is older "
-                            f"than last sync "
-                            f"({meeting.tdoc_list_last_sync.strftime('%Y-%m-%d %H:%M UTC')})."
-                        ),
-                    )
-                if upstream_mtime is None:
-                    logger.warning(
-                        "Could not determine TDoc list mtime for meeting %s; proceeding with sync",
-                        meeting.meeting_id,
-                    )
-
         logger.info(
             "Starting TDoc sync for meeting %s (id=%s, ftp=%s)",
             meeting.name,
             meeting.meeting_id,
             meeting.ftp_url,
         )
-        tdoc_count = self._tdocs.sync_from_meeting_ftp(
-            ftp_url=meeting.ftp_url,
+        tdoc_count = self._tdocs.sync_tdoc_list(
             meeting_id=meeting.meeting_id,
+            url_template=self._tdoc_list_url_template,
         )
         tdoc_ids = self._repository.list_tdoc_ids_for_meeting(meeting.meeting_id)
         file_count = self._tdoc_files.sync_from_meeting_ftp(

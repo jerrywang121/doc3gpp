@@ -47,9 +47,9 @@ When enabled:
   auto-sync logic as `tdoc list` with the same filters.
 
 The internal sync calls always respect the existing skip rules
-(`meeting_sync_interval`, `tdoc_list_closed_window`, `tdoc_list_sync_interval`,
-and upstream XLSX mtime). They never bypass those rules and they cannot be
-forced from the read commands. When a sync actually runs, the command prints
+(`meeting_sync_interval`, `tdoc_list_closed_window`, `tdoc_list_sync_interval`).
+They never bypass those rules and they cannot be forced from the read
+commands. When a sync actually runs, the command prints
 `[auto-sync] <reason>`; when it is skipped, the skip reason is also printed
 with the same prefix. Sync failures are logged as warnings and do not abort
 the parent read command.
@@ -252,9 +252,12 @@ doc3gpp meeting list --tdoc R5-260013
 
 Purpose:
 
-- Discover and persist TDoc records by looking up a stored meeting's FTP
-  path. With no selector, refresh every meeting currently tracked in the
-  `tdocs` table.
+- Download each meeting's TDoc-list XLSX from the 3GPP portal
+  (`GenerateDocumentList.aspx?meetingId={meeting_id}`) and persist the
+  rows. Auxiliary TDoc files (revisions, review packs, supporting
+  documents) are still scanned from the meeting's FTP folders. With no
+  selector, refresh every meeting currently tracked in the `tdocs`
+  table.
 
 Options:
 
@@ -279,11 +282,11 @@ Behavior (single-meeting: `--meeting-id` or `--meeting`):
      `Settings.sync.tdoc_list_closed_window` (default `90d`).
   2. `meetings.tdoc_list_last_sync` is newer than
      `Settings.sync.tdoc_list_sync_interval` (default `30m`).
-  3. The upstream `TDoc_List_Meeting_*.xlsx` `Last-Modified` time is not
-     newer than `meetings.tdoc_list_last_sync`.
-- If none of the skip rules apply, discovers the matching
-  `TDoc_List_Meeting_*.xlsx` file on 3GPP FTP, parses and persists TDoc
-  rows, then updates `meetings.tdoc_list_last_sync`.
+- If none of the skip rules apply, downloads the meeting's TDoc-list XLSX
+  from the URL built by `Settings.sync.tdoc_list_url_template` (default
+  `https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}`),
+  parses and persists TDoc rows, then updates
+  `meetings.tdoc_list_last_sync`.
 - Prints `TDoc sync complete: N TDoc row(s) and M auxiliary TDoc file(s) stored`
   or a skip reason; exits `0` on skip.
 - `MeetingNotFoundError` and `MeetingMissingFtpUrlError` are converted to
@@ -294,9 +297,9 @@ Behavior (bulk: no selector):
 - Reads the distinct `meeting_id` values from the `tdocs` table
   (orphaned TDocs with `meeting_id IS NULL` are excluded).
 - For each meeting, resolves the record via `MeetingService.get_by_id` and
-  runs the same per-meeting sync path — closed window, sync interval, and
-  upstream XLSX mtime checks all apply individually. `--force` bypasses
-  all three for every meeting in the run.
+  runs the same per-meeting sync path — closed window and sync interval
+  checks apply individually. `--force` bypasses both for every meeting
+  in the run.
 - Prints a single summary block (no per-meeting lines):
   ```
   TDoc bulk sync: <N> meeting(s) processed

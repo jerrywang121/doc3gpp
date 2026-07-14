@@ -105,6 +105,9 @@ class _FakeTDocFileRepository:
         return 0
 
 
+DEFAULT_TEMPLATE = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}"
+
+
 def _make_coordinator(
     meeting_repo: _FakeMeetingRepository,
     tdoc_repo: _FakeTDocRepository,
@@ -112,19 +115,15 @@ def _make_coordinator(
     *,
     tdoc_list_sync_interval=timedelta(minutes=30),
     tdoc_list_closed_window=timedelta(days=90),
-    mtime_resolver=None,
+    tdoc_list_url_template: str = DEFAULT_TEMPLATE,
 ) -> TDocSyncCoordinator:
-    kwargs: dict = {
-        "tdoc_list_sync_interval": tdoc_list_sync_interval,
-        "tdoc_list_closed_window": tdoc_list_closed_window,
-    }
-    if mtime_resolver is not None:
-        kwargs["mtime_resolver"] = mtime_resolver
     return TDocSyncCoordinator(
         meeting_repo,  # type: ignore[arg-type]
         tdoc_repo,  # type: ignore[arg-type]
         tdoc_file_repo or _FakeTDocFileRepository(),  # type: ignore[arg-type]
-        **kwargs,
+        tdoc_list_sync_interval=tdoc_list_sync_interval,
+        tdoc_list_closed_window=tdoc_list_closed_window,
+        tdoc_list_url_template=tdoc_list_url_template,
     )
 
 
@@ -145,7 +144,7 @@ def test_coordinator_accepts_protocol_typed_repos() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_sync_for_meeting_id_dispatches_ftp_sync(monkeypatch) -> None:
+def test_sync_for_meeting_id_dispatches_tdoc_list_sync(monkeypatch) -> None:
     meeting = Meeting(
         meeting_id=42,
         name="RAN5#111",
@@ -161,9 +160,9 @@ def test_sync_for_meeting_id_dispatches_ftp_sync(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def fake_sync(self, ftp_url, meeting_id=None):
-        captured["ftp_url"] = ftp_url
+    def fake_sync(self, meeting_id, url_template):
         captured["meeting_id"] = meeting_id
+        captured["url_template"] = url_template
         # Simulate that the TDoc sync wrote two rows.
         self._repository.upsert_many(
             [
@@ -175,19 +174,19 @@ def test_sync_for_meeting_id_dispatches_ftp_sync(monkeypatch) -> None:
 
     from doc3gpp.services.tdoc_service import TDocService
 
-    monkeypatch.setattr(TDocService, "sync_from_meeting_ftp", fake_sync)
+    monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_sync)
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
     outcome = coord.sync_for_meeting_id(42)
 
-    assert captured == {"ftp_url": "tsg_ran/WG5_111/", "meeting_id": 42}
+    assert captured == {"meeting_id": 42, "url_template": DEFAULT_TEMPLATE}
     assert outcome.status == "synced"
     assert "2 TDoc row(s)" in outcome.reason
     # File sync still runs even with no matching files.
     assert "0 auxiliary TDoc file(s)" in outcome.reason
 
 
-def test_sync_for_meeting_name_dispatches_ftp_sync(monkeypatch) -> None:
+def test_sync_for_meeting_name_dispatches_tdoc_list_sync(monkeypatch) -> None:
     meeting = Meeting(
         meeting_id=99,
         name="SA2#150",
@@ -203,19 +202,19 @@ def test_sync_for_meeting_name_dispatches_ftp_sync(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def fake_sync(self, ftp_url, meeting_id=None):
-        captured["ftp_url"] = ftp_url
+    def fake_sync(self, meeting_id, url_template):
         captured["meeting_id"] = meeting_id
+        captured["url_template"] = url_template
         return 3
 
     from doc3gpp.services.tdoc_service import TDocService
 
-    monkeypatch.setattr(TDocService, "sync_from_meeting_ftp", fake_sync)
+    monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_sync)
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
     outcome = coord.sync_for_meeting_name("SA2#150")
 
-    assert captured == {"ftp_url": "tsg_sa/WG2_150/", "meeting_id": 99}
+    assert captured == {"meeting_id": 99, "url_template": DEFAULT_TEMPLATE}
     assert outcome.status == "synced"
     assert outcome.reason.startswith("TDoc sync complete:")
     assert "3 TDoc row(s)" in outcome.reason
@@ -240,7 +239,7 @@ def test_sync_chains_into_tdoc_file_service(monkeypatch) -> None:
     tdoc_repo = _FakeTDocRepository()
     tdoc_file_repo = _FakeTDocFileRepository()
 
-    def fake_tdoc_sync(self, ftp_url, meeting_id=None):
+    def fake_tdoc_sync(self, meeting_id, url_template):
         tdoc_repo.upsert_many(
             [
                 TDoc(tdoc_id="R5w260200", meeting_id=meeting_id),
@@ -259,7 +258,7 @@ def test_sync_chains_into_tdoc_file_service(monkeypatch) -> None:
     from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_file_service import TDocFileService
 
-    monkeypatch.setattr(TDocService, "sync_from_meeting_ftp", fake_tdoc_sync)
+    monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_tdoc_sync)
     monkeypatch.setattr(TDocFileService, "sync_from_meeting_ftp", fake_file_sync)
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
@@ -290,8 +289,8 @@ def test_file_sync_receives_no_tdoc_ids_when_tdoc_sync_writes_none(
     tdoc_file_repo = _FakeTDocFileRepository()
 
     monkeypatch.setattr(
-        "doc3gpp.services.tdoc_service.TDocService.sync_from_meeting_ftp",
-        lambda self, ftp_url, meeting_id=None: 0,
+        "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
+        lambda self, meeting_id, url_template: 0,
     )
 
     captured: dict = {}
@@ -336,8 +335,8 @@ def test_skip_when_never_synced_runs(monkeypatch) -> None:
     tdoc_file_repo = _FakeTDocFileRepository()
 
     monkeypatch.setattr(
-        "doc3gpp.services.tdoc_service.TDocService.sync_from_meeting_ftp",
-        lambda self, ftp_url, meeting_id=None: 0,
+        "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
+        lambda self, meeting_id, url_template: 0,
     )
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
@@ -400,35 +399,6 @@ def test_skip_when_within_auto_sync_interval() -> None:
     assert "last sync" in outcome.reason
 
 
-def test_skip_when_ftp_mtime_older_than_last_sync() -> None:
-    last_sync = datetime.now(timezone.utc) - timedelta(hours=1)
-    meeting = Meeting(
-        meeting_id=1,
-        name="R5#1",
-        title="R5 1",
-        location="Online",
-        start_date=date(2026, 6, 1),
-        end_date=date(2026, 6, 5),
-        ftp_url="tsg_ran/WG5_1/",
-        tdoc_list_last_sync=last_sync,
-    )
-    meeting_repo = _FakeMeetingRepository({1: meeting})
-    tdoc_repo = _FakeTDocRepository()
-    tdoc_file_repo = _FakeTDocFileRepository()
-
-    coord = _make_coordinator(
-        meeting_repo,
-        tdoc_repo,
-        tdoc_file_repo,
-        tdoc_list_sync_interval=timedelta(minutes=30),
-        mtime_resolver=lambda _: last_sync - timedelta(minutes=5),
-    )
-    outcome = coord.sync_for_meeting_id(1)
-
-    assert outcome.status == "skipped"
-    assert "FTP" in outcome.reason
-
-
 def test_force_bypasses_all_skip_rules(monkeypatch) -> None:
     last_sync = datetime.now(timezone.utc) - timedelta(minutes=5)
     meeting = Meeting(
@@ -448,7 +418,7 @@ def test_force_bypasses_all_skip_rules(monkeypatch) -> None:
     from doc3gpp.services.tdoc_service import TDocService
 
     monkeypatch.setattr(
-        TDocService, "sync_from_meeting_ftp", lambda self, ftp_url, meeting_id=None: 1
+        TDocService, "sync_tdoc_list", lambda self, meeting_id, url_template: 1
     )
 
     coord = _make_coordinator(
@@ -456,7 +426,6 @@ def test_force_bypasses_all_skip_rules(monkeypatch) -> None:
         tdoc_repo,
         tdoc_file_repo,
         tdoc_list_sync_interval=timedelta(minutes=30),
-        mtime_resolver=lambda _: last_sync - timedelta(minutes=5),
     )
     outcome = coord.sync_for_meeting_id(1, force=True)
 
@@ -543,8 +512,8 @@ def test_sync_all_tracked_meetings_iterates_each_id(monkeypatch) -> None:
     tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[1, 2])
 
     monkeypatch.setattr(
-        "doc3gpp.services.tdoc_service.TDocService.sync_from_meeting_ftp",
-        lambda self, ftp_url, meeting_id=None: 1,
+        "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
+        lambda self, meeting_id, url_template: 1,
     )
 
     coord = _make_coordinator(

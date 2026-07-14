@@ -190,6 +190,13 @@ class SyncSettings(BaseModel):
         default=timedelta(days=90),
         description="Meetings whose end date is older than this window are skipped.",
     )
+    tdoc_list_url_template: str = Field(
+        default="https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}",
+        description=(
+            "Portal URL template used to download a meeting's TDoc list XLSX. "
+            "Must contain the '{meeting_id}' placeholder."
+        ),
+    )
 
     @field_validator("meeting_sync_interval", "tdoc_list_sync_interval", "tdoc_list_closed_window", mode="before")
     @classmethod

@@ -72,8 +72,11 @@ intervals to avoid re-scraping unchanged upstream data:
      `Settings.sync.tdoc_list_closed_window` (default `90d`).
   2. `meetings.tdoc_list_last_sync` is newer than
      `Settings.sync.tdoc_list_sync_interval` (default `30m`).
-  3. The upstream `TDoc_List_Meeting_*.xlsx` `Last-Modified` header is not
-     newer than `meetings.tdoc_list_last_sync`.
+
+The legacy upstream-`Last-Modified` rule was retired when TDoc lists
+moved off FTP and onto the 3GPP portal
+(`GenerateDocumentList.aspx?meetingId={meeting_id}`); the portal does
+not return a usable `Last-Modified` header.
 
 Rules are evaluated in the order listed. `--force` / `-f` bypasses all
 skip checks for a single invocation. Skip outcomes are normal no-ops:
@@ -89,7 +92,7 @@ internal syncs before querying. Contract:
   `MeetingService.sync` and `TDocSyncCoordinator.sync_for_meeting_id`
   paths, so every skip rule above is preserved.
 - Internal sync calls are **never forced**; they respect the same
-  interval/window/mtime checks as explicit sync commands.
+  closed-window / sync-interval checks as explicit sync commands.
 - Return value is a boolean: `True` only when the sync actually ran
   (`SyncOutcome.status == "synced"`); `False` for skipped or failed syncs.
 - Sync failures are caught, logged as warnings, and must not propagate

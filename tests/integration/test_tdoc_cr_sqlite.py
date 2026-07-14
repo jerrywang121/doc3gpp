@@ -146,8 +146,6 @@ def test_extract_happy_path(sqlite_env, tmp_path) -> None:
     assert result.details.cr_num == "3790"
     assert result.details.rev == "0"
     assert result.details.release == "Rel-18"
-    assert result.details.year == 2026
-    assert result.details.tech == "5G"
     # Both DB rows landed.
     details_list = cr_repo.get("R5s260009")
     assert len(details_list) == 1

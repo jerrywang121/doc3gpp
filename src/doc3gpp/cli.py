@@ -1475,12 +1475,6 @@ def _any_filter_set(filter_args: dict[str, object]) -> bool:
 DIRECT_FORMATS: tuple[str, ...] = ("table", "json", "markdown", "raw")
 
 
-# Field list for the structured emitters (table / markdown / json).
-# Mirrors every :class:`TDocCRDetails` attribute except
-# ``parser_version`` (bookkeeping) and ``corrections`` (serialised
-# separately as JSON in the table cell; left as the native list in
-# JSON). Defined as a module constant so the help text and the
-# emitters share the same ordered list.
 _DIRECT_PARSE_FIELDS: tuple[str, ...] = (
     "tdoc_id",
     "spec",
@@ -1499,15 +1493,7 @@ _DIRECT_PARSE_FIELDS: tuple[str, ...] = (
     "clauses_affected",
     "other_comments",
     "revision_history",
-    "ats_version",
-    "ttcn_release",
-    "test_case",
-    "test_suite",
-    "ue",
-    "ss",
-    "corrections",
-    "year",
-    "tech",
+    "details",
     "extracted_tdoc_id",
     "ftp_url",
 )
@@ -1759,7 +1745,6 @@ def _emit_record_json(record: TDocCRDetails, output: str | None) -> None:
     """Emit a single record as a JSON object via ``dataclasses.asdict``."""
     payload = dataclasses.asdict(record)
     payload["date"] = record.date.isoformat() if record.date is not None else None
-    payload["corrections"] = list(record.corrections)
     stream, close_after = _open_output(output)
     try:
         json.dump(payload, stream, ensure_ascii=False, indent=2)
@@ -2077,7 +2062,7 @@ def _serialise_cell(record: TDocCRDetails, field_name: str) -> str:
     """Render a single :class:`TDocCRDetails` field for the table emitters.
 
     ``date`` becomes ``isoformat()`` (or empty string for ``None``);
-    ``corrections`` is JSON-encoded with ``ensure_ascii=False`` so the
+    ``details`` is JSON-encoded with ``ensure_ascii=False`` so the
     cell stays a single tab-delimited token; everything else uses the
     field's ``str()`` form, with ``None`` rendered as empty string.
     """
@@ -2086,7 +2071,7 @@ def _serialise_cell(record: TDocCRDetails, field_name: str) -> str:
         return ""
     if field_name == "date":
         return value.isoformat()
-    if field_name == "corrections":
+    if field_name == "details":
         return json.dumps(value, ensure_ascii=False)
     return str(value)
 
@@ -2249,16 +2234,10 @@ def tdoc_show(
             f"{_truncate_for_display(details.consequences_if_not_approved)}"
         )
         typer.echo(f"clauses_affected: {details.clauses_affected or '-'}")
-        typer.echo(f"ats_version: {details.ats_version or '-'}")
-        typer.echo(f"ttcn_release: {details.ttcn_release or '-'}")
-        typer.echo(f"test_case: {details.test_case or '-'}")
-        typer.echo(f"test_suite: {details.test_suite or '-'}")
-        typer.echo(f"ue: {details.ue or '-'}")
-        typer.echo(f"ss: {details.ss or '-'}")
-        typer.echo(f"year: {details.year if details.year is not None else '-'}")
-        typer.echo(f"tech: {details.tech or '-'}")
         typer.echo(f"parser_version: {details.parser_version}")
-        typer.echo(f"corrections: {json.dumps(details.corrections, ensure_ascii=False, indent=2)}")
+        typer.echo(
+            f"details: {json.dumps(details.details, ensure_ascii=False, indent=2)}"
+        )
         meta = meta_by_url.get(details.ftp_url or "")
         if meta is not None:
             typer.echo(f"extracted_at: {_fmt_dt(meta.extracted_at)}")

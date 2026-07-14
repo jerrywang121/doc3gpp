@@ -61,7 +61,6 @@ from doc3gpp.models.tdoc_cr import (
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
     extract_docx_from_zip,
-    parse_cr_details,
 )
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
@@ -72,6 +71,11 @@ from doc3gpp.parsers.direct_extractor import (
     list_3gpp_directory,
 )
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
+from doc3gpp.parsers.tdoc_parsers import (
+    TDocParser,
+    TDocParserRegistry,
+    build_default_registry,
+)
 from doc3gpp.repository.protocols import (
     TDocCrDetailRepository,
     TDocRepository,
@@ -265,11 +269,28 @@ class TDocCrService:
         scraper_client: "ScraperClient",
         cr_repository: TDocCrDetailRepository,
         tdoc_repository: TDocRepository,
+        parser: TDocParser | None = None,
+        parser_registry: TDocParserRegistry | None = None,
     ) -> None:
         self._cache = cache
         self._scraper = scraper_client
         self._repo = cr_repository
         self._tdoc_repo = tdoc_repository
+        self._parser = parser
+        self._parser_registry = parser_registry
+
+    def _resolve_parser(self, tdoc_id: str) -> TDocParser:
+        """Return the parser to use for ``tdoc_id``.
+
+        When a single parser was injected at construction, it is used
+        for every call. Otherwise the registry resolves a parser per
+        ``tdoc_id`` so TTCN ids route to :class:`TTCNCRParser` and
+        other ids fall back to the generic :class:`CRParser`.
+        """
+        if self._parser is not None:
+            return self._parser
+        registry = self._parser_registry or build_default_registry()
+        return registry.resolve(tdoc_id, tdoc_type="CR")
 
     # ------------------------------------------------------------------
     # Public API
@@ -398,7 +419,9 @@ class TDocCrService:
             stored_ftp_url = normalize_ftp_path(candidates[0])
 
         details = replace(
-            parse_cr_details(markdown, tdoc_id=normalised),
+            self._resolve_parser(normalised).parse(
+                markdown, tdoc_id=normalised, full=False,
+            ),
             ftp_url=stored_ftp_url,
         )
         meta = TDocExtractMeta(
@@ -797,7 +820,9 @@ class TDocCrService:
             doc_filename=doc_filename,
             force=force,
         )
-        details = parse_cr_details(markdown, tdoc_id=tdoc_id, full=full)
+        details = self._resolve_parser(tdoc_id).parse(
+            markdown, tdoc_id=tdoc_id, full=full,
+        )
         details = replace(details, ftp_url=stored_ftp_url)
         meta = TDocExtractMeta(
             ftp_url=stored_ftp_url,

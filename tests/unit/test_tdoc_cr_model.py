@@ -35,12 +35,11 @@ from doc3gpp.storage.db.models import TDocExtractOrm
 from doc3gpp.storage.db.models import TDocORM
 
 
-def test_default_construction_is_non_empty_corrections_list() -> None:
-    """A blank ``TDocCRDetails`` (just a tdoc_id) has ``corrections == []``."""
+def test_default_construction_has_empty_details_dict() -> None:
+    """A blank ``TDocCRDetails`` (just a tdoc_id) has ``details == {}``."""
     details = TDocCRDetails(tdoc_id="R5s260009")
     assert details.tdoc_id == "R5s260009"
-    assert details.corrections == []
-    # All other fields default to None.
+    assert details.details == {}
     for field_name in (
         "spec",
         "cr_num",
@@ -53,14 +52,6 @@ def test_default_construction_is_non_empty_corrections_list() -> None:
         "date",
         "cr_cat",
         "release",
-        "ats_version",
-        "ttcn_release",
-        "test_case",
-        "test_suite",
-        "ue",
-        "ss",
-        "year",
-        "tech",
         "extracted_tdoc_id",
     ):
         assert getattr(details, field_name) is None, f"{field_name} should be None"
@@ -84,8 +75,8 @@ def test_post_init_strips_tdoc_id_whitespace() -> None:
     assert details.tdoc_id == "R5s260009"
 
 
-def test_to_persisted_serialises_corrections_to_json_string() -> None:
-    """``to_persisted`` joins corrections into a JSON string column."""
+def test_to_persisted_serialises_details_to_json_string() -> None:
+    """``to_persisted`` serialises ``details`` into a JSON string."""
     details = TDocCRDetails(
         tdoc_id="R5s260176",
         spec="36.523-3",
@@ -96,47 +87,46 @@ def test_to_persisted_serialises_corrections_to_json_string() -> None:
         tsg="R5",
         cr_cat="B",
         release="Rel-18",
-        year=2026,
-        tech="LTE",
-        ats_version="iwd-TTCN3-B2026-03_D26wk18",
-        ttcn_release="26wk18",
-        test_case="11.3.9",
-        test_suite="IMS_EUTRA",
-        corrections=[
-            {
-                "function_name": "fl_TC_11_3_9_Body",
-                "reason_for_change": "not in line with NW behaviour",
-                "summary_of_change": "called new function instead",
-                "ttcn_module": "LTEIMS_Test.ttcn",
+        details={
+            "overview": {
+                "ats_version": "iwd-TTCN3-B2026-03_D26wk18",
+                "ttcn_release": "26wk18",
+                "test_case": "11.3.9",
+                "test_suite": "IMS_EUTRA",
             },
-            {
-                "function_name": "f_TC_11_3_9_IMS2",
-                "summary_of_change": "split into Step1 / Step2 functions",
-            },
-        ],
+            "corrections": [
+                {
+                    "function_name": "fl_TC_11_3_9_Body",
+                    "reason_for_change": "not in line with NW behaviour",
+                    "summary_of_change": "called new function instead",
+                    "ttcn_module": "LTEIMS_Test.ttcn",
+                },
+                {
+                    "function_name": "f_TC_11_3_9_IMS2",
+                    "summary_of_change": "split into Step1 / Step2 functions",
+                },
+            ],
+        },
     )
 
     payload = details.to_persisted()
     assert payload["tdoc_id"] == "R5s260176"
     assert payload["spec"] == "36.523-3"
-    assert payload["year"] == 2026
-    assert payload["tech"] == "LTE"
-    # ``corrections`` is replaced by a JSON string under
-    # ``corrections_json``.
-    assert "corrections" not in payload
-    assert "corrections_json" in payload
-    decoded = json.loads(payload["corrections_json"])
-    assert decoded == details.corrections
-    assert len(decoded) == 2
-    assert decoded[0]["function_name"] == "fl_TC_11_3_9_Body"
+    assert "year" not in payload
+    assert "tech" not in payload
+    assert "details_json" in payload
+    decoded = json.loads(payload["details_json"])
+    assert decoded == details.details
+    assert len(decoded["corrections"]) == 2
+    assert decoded["corrections"][0]["function_name"] == "fl_TC_11_3_9_Body"
 
 
-def test_to_persisted_serialises_empty_corrections_list() -> None:
-    """An empty corrections list serialises to ``"[]"`` rather than null."""
+def test_to_persisted_serialises_empty_details_dict() -> None:
+    """An empty details dict serialises to ``"{}"`` rather than null."""
     details = TDocCRDetails(tdoc_id="R5-227476")
     payload = details.to_persisted()
-    assert payload["corrections_json"] == "[]"
-    assert details.corrections == []
+    assert payload["details_json"] == "{}"
+    assert details.details == {}
 
 
 def test_to_persisted_preserves_parser_version() -> None:
@@ -256,16 +246,23 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
 
-    corrections_payload = json.dumps(
-        [
+    from doc3gpp.storage.repositories.tdoc_cr_sql import (
+        _compress_details,
+        _decompress_details,
+    )
+
+    details_payload = {
+        "overview": {"ats_version": "iwd-TTCN3-B2026-03_D26wk18"},
+        "corrections": [
             {
                 "function_name": "fl_TC_11_3_9_Body",
                 "reason_for_change": "not in line with NW behaviour",
                 "summary_of_change": "called new function instead",
                 "ttcn_module": "LTEIMS_Test.ttcn",
             }
-        ]
-    )
+        ],
+    }
+    details_blob = _compress_details(details_payload)
 
     url = "stored/R5s260176.zip"
     with Session() as session:
@@ -289,15 +286,7 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
             clauses_affected="11.3.9",
             other_comments="none",
             revision_history="rev0: initial",
-            ats_version="iwd-TTCN3-B2026-03_D26wk18",
-            ttcn_release="26wk18",
-            test_case="11.3.9",
-            test_suite="IMS_EUTRA",
-            ue="UE-1",
-            ss="SS-1",
-            corrections=corrections_payload,
-            year=2026,
-            tech="LTE",
+            details=details_blob,
             extracted_tdoc_id="R5s260176",
         )
         session.add(row)
@@ -324,21 +313,11 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
         assert loaded.clauses_affected == "11.3.9"
         assert loaded.other_comments == "none"
         assert loaded.revision_history == "rev0: initial"
-        assert loaded.ats_version == "iwd-TTCN3-B2026-03_D26wk18"
-        assert loaded.ttcn_release == "26wk18"
-        assert loaded.test_case == "11.3.9"
-        assert loaded.test_suite == "IMS_EUTRA"
-        assert loaded.ue == "UE-1"
-        assert loaded.ss == "SS-1"
-        assert loaded.year == 2026
-        assert loaded.tech == "LTE"
         assert loaded.extracted_tdoc_id == "R5s260176"
         assert loaded.parser_version == "1.0.0"
-        # ``corrections`` must round-trip as a JSON string at the
-        # storage layer, not a parsed object — that is the contract
-        # the dataclass's ``to_persisted`` honours.
-        assert isinstance(loaded.corrections, str)
-        assert json.loads(loaded.corrections) == json.loads(corrections_payload)
+        assert isinstance(loaded.details, bytes)
+        assert loaded.details[:2] == b"\x1f\x8b"
+        assert _decompress_details(loaded.details) == details_payload
         assert loaded.extracted_at is not None
 
 
@@ -401,9 +380,7 @@ def test_tdoc_cr_detail_orm_minimal() -> None:
         assert loaded.spec is None
         assert loaded.cr_num is None
         assert loaded.title is None
-        assert loaded.corrections is None
-        assert loaded.year is None
-        assert loaded.tech is None
+        assert loaded.details is None
         assert loaded.extracted_at is not None
 
 

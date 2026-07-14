@@ -1449,14 +1449,19 @@ def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
         reason_for_change="Some long reason " * 20,
         consequences_if_not_approved="Consequence text " * 15,
         clauses_affected="5.3.4.2",
-        ats_version="iwd-TTCN3-B2512-260-eng",
-        ttcn_release="B2512",
-        test_case="7.1.3.5.3",
-        test_suite="NR5GC",
-        ue="UE1",
-        ss="SS_NR5G",
-        year=2026,
-        tech="5G",
+        details={
+            "overview": {
+                "ats_version": "iwd-TTCN3-B2512-260-eng",
+                "ttcn_release": "B2512",
+                "testcase": "7.1.3.5.3",
+                "test_suite": "NR5GC",
+                "ue": "UE1",
+                "ss": "SS_NR5G",
+            },
+            "corrections": [
+                {"function_name": "fl_TC_7_1_3_5_3_Body"},
+            ],
+        },
         ftp_url=resolved_url,
         parser_version="1.0.0",
     )
@@ -1485,8 +1490,7 @@ def test_tdoc_show_happy_path(sqlite_env, monkeypatch) -> None:
     assert "spec: 38.523-3" in result.output
     assert "cr_num: 3790" in result.output
     assert "title: Example CR for tests" in result.output
-    assert "corrections:" in result.output
-    # The 200-char truncation helper kicks in on these long fields.
+    assert "details:" in result.output
     assert "reason_for_change:" in result.output
     assert "..." in result.output  # truncation ellipsis
 

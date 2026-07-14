@@ -48,6 +48,7 @@ from doc3gpp.parsers.cr_parser import (
     extract_docx_from_zip,
     parse_cr_details,
 )
+from doc3gpp.parsers.cr.helpers import _year_from_tdoc_id
 
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
@@ -196,19 +197,12 @@ def test_parse_cr_details_raises_on_completely_empty_markdown() -> None:
         ("C6-250028", 2025),
     ],
 )
-def test_year_derivation_for_each_id_style(
+def test_year_from_tdoc_id(
     tdoc_id: str, expected_year: int, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Year is always parsed from positions 3–4 of the tdoc id."""
-    md = "\n".join(
-        list(_HEADER_LINES)[:5] + list(_TTCN_OVERVIEW_LINES)
-    )
-    # _year_from_tdoc_id isn't exported, but we exercise it via
-    # parse_cr_details (full=False so no TTCN corrections toggle):
-    details = parse_cr_details(md, tdoc_id=tdoc_id)
-    assert details.year == expected_year
-    # Echo findings for the test log; pytest capsys suppresses by default.
-    print(f"tdoc={tdoc_id} -> year={details.year}")
+    """``_year_from_tdoc_id`` derives year from positions 3–4."""
+    assert _year_from_tdoc_id(tdoc_id) == expected_year
+    print(f"tdoc={tdoc_id} -> year={_year_from_tdoc_id(tdoc_id)}")
 
 
 @pytest.mark.parametrize(
@@ -268,13 +262,7 @@ def test_non_ttcn_cr_skips_overview_and_corrections() -> None:
     assert details.rev == "1"
     assert details.cr_cat == "F"
     assert details.release == "Rel-17"
-    assert details.year == 2022
-    # TTCN-only fields stay None for non-TTCN ids.
-    assert details.corrections == []
-    assert details.ats_version is None
-    assert details.ttcn_release is None
-    assert details.test_case is None
-    assert details.test_suite is None
+    assert details.details == {}
 
 
 def test_ttcn_cr_invokes_overview_and_corrections_parsers() -> None:
@@ -287,16 +275,13 @@ def test_ttcn_cr_invokes_overview_and_corrections_parsers() -> None:
     assert details.rev == "0"
     assert details.cr_cat == "F"
     assert details.release == "Rel-18"
-    assert details.year == 2026
-    assert details.tech == "5G"
-    # Overview fields populated.
-    assert details.test_case == "7.1.3.5.3"
-    assert details.test_suite == "NR5GC"
-    # One correction found.
-    assert len(details.corrections) == 1
-    change = details.corrections[0]
-    # Markdown formatting is no longer stripped, so inner underscores
-    # in identifiers (e.g. ``fl_TC_7_1_3_5_3_Body``) survive verbatim.
+    overview = details.details["overview"]
+    assert overview["testcase"] == "7.1.3.5.3"
+    assert overview["test_suite"] == "NR5GC"
+    assert overview["ue"] == "MTK MT6986D and Qualcomm X105 5G Modem-RF"
+    assert overview["ss"] == "Anritsu Protocol Conformance Test System"
+    assert len(details.details["corrections"]) == 1
+    change = details.details["corrections"][0]
     assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
     assert change["reason_for_change"] == "Change due to MCX feature addition."
     assert change["summary_of_change"] == "Use new PDCP function."
@@ -330,8 +315,8 @@ def test_ttcn_cr_extracts_function_name_from_template_name_row() -> None:
         list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_TEMPLATE_CORRECTION_LINES)
     )
     details = parse_cr_details(md, tdoc_id="R5s260009")
-    assert len(details.corrections) == 1
-    change = details.corrections[0]
+    assert len(details.details["corrections"]) == 1
+    change = details.details["corrections"][0]
     assert change["function_name"] == "tr_CommonPart_Template"
     assert change["reason_for_change"] == "New template for MCX."
     assert change["summary_of_change"] == "Add template body."
@@ -671,19 +656,20 @@ def test_fixture_extraction_matches_snapshot(
         assert details.cr_cat == expected["cr_cat"], f"{fixture_name} cr_cat"
     if "release" in expected:
         assert details.release == expected["release"], f"{fixture_name} release"
-    assert details.year == expected["year"], f"{fixture_name} year"
     assert details.tsg == expected["tsg"], f"{fixture_name} tsg"
     if expected.get("non_ttcn"):
-        assert details.corrections == [], "non-TTCN CR must have empty corrections"
-        assert details.ats_version is None, "non-TTCN CR must not have ats_version"
+        assert details.details == {}, f"{fixture_name} non-TTCN details must be empty"
     else:
-        assert details.ats_version is not None, "TTCN CR must have ats_version"
+        assert "overview" in details.details, (
+            f"{fixture_name} TTCN CR must have details.overview"
+        )
+        ats_version = details.details["overview"]["ats_version"]
         if expected.get("ats_version_starts_with"):
-            assert details.ats_version.startswith(
+            assert ats_version.startswith(
                 expected["ats_version_starts_with"]
             ), (
                 f"{fixture_name} ats_version starts with "
-                f"{expected['ats_version_starts_with']!r}, got {details.ats_version!r}"
+                f"{expected['ats_version_starts_with']!r}, got {ats_version!r}"
             )
 
 
@@ -793,8 +779,6 @@ def test_parse_cr_details_logs_warning_on_header_divergence(
     with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr_parser"):
         details = parse_cr_details(md, tdoc_id="C6-250028")
     assert details.tdoc_id == "C6-250028"
-    assert details.year == 2025
-    # TSG fallback kicks in because Source to TSG is populated.
     assert details.tsg == "C6"
 
 
@@ -825,14 +809,14 @@ def test_to_persisted_then_json_round_trip() -> None:
         version="18.4.0",
         cr_cat="F",
         release="Rel-18",
-        year=2026,
-        tech="5G",
-        corrections=[{"function_name": "f"}],
+        details={"corrections": [{"function_name": "f"}]},
     )
     payload = details.to_persisted()
     encoded = json.dumps(payload)
     decoded = json.loads(encoded)
     assert decoded["tdoc_id"] == "R5s260009"
-    assert decoded["year"] == 2026
-    assert decoded["tech"] == "5G"
-    assert json.loads(decoded["corrections_json"]) == [{"function_name": "f"}]
+    assert "year" not in decoded
+    assert "tech" not in decoded
+    assert json.loads(decoded["details_json"]) == {
+        "corrections": [{"function_name": "f"}]
+    }

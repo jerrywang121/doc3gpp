@@ -15,17 +15,19 @@ distinct URLs and occupy distinct rows. ``tdoc_id`` is a non-PK FK into
 ``ondelete="CASCADE"`` so deleting a parent TDoc still cleans up every
 revision's detail rows.
 
-The ``corrections`` list of dicts on :class:`TDocCRDetails` is
-serialised to a single ``TEXT`` column (``corrections``) via
-:func:`json.dumps`. Reads use a tolerant decoder that falls back to
-``[]`` on a ``None`` / empty / unparseable blob so a corrupt row never
-breaks an unrelated read.
+The ``details`` dict on :class:`TDocCRDetails` is JSON-serialised and
+gzip-compressed before being stored in the ``details`` ``LargeBinary``
+column. Reads decompress transparently; a legacy uncompressed payload
+or corrupt blob falls back to an empty dict so a bad row never breaks
+a read.
 """
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
+from typing import Any
 
 from sqlalchemy import select
 
@@ -34,6 +36,38 @@ from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocExtractOrm
 from doc3gpp.storage.db.session import get_session_factory
 
 logger = logging.getLogger(__name__)
+
+
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _compress_details(details: dict[str, Any]) -> bytes:
+    """gzip-compress UTF-8 JSON for the ``details`` blob."""
+    payload = json.dumps(details, ensure_ascii=False).encode("utf-8")
+    return gzip.compress(payload, compresslevel=9)
+
+
+def _decompress_details(blob: bytes | None) -> dict[str, Any]:
+    """Decode the ``details`` blob back to a dict.
+
+    Tolerant by design: ``None``, empty bytes, gzip decompression
+    errors, JSON decode errors, and non-dict results all fall back to
+    an empty dict so a corrupt row never breaks the read path. Legacy
+    uncompressed payloads (no gzip magic) are still parsed so a manual
+    ``UPDATE`` survives a round-trip.
+    """
+    if not blob:
+        return {}
+    try:
+        raw = gzip.decompress(blob) if blob[:2] == _GZIP_MAGIC else blob
+        decoded = json.loads(raw.decode("utf-8"))
+    except (gzip.BadGzipFile, json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning(
+            "Could not decode details blob (length=%d); falling back to {}",
+            len(blob),
+        )
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 class SQLAlchemyTDocCrRepository:
@@ -190,6 +224,7 @@ class SQLAlchemyTDocCrRepository:
         Excludes ``ftp_url`` (PK, never overwritten after construction),
         ``tdoc_id`` (handled by :meth:`upsert` because it is the FK),
         and ``extracted_at`` (stamped by the server-side default).
+        The ``details`` blob is gzip-compressed JSON.
         """
         target.spec = details.spec
         target.cr_num = details.cr_num
@@ -207,17 +242,9 @@ class SQLAlchemyTDocCrRepository:
         target.clauses_affected = details.clauses_affected
         target.other_comments = details.other_comments
         target.revision_history = details.revision_history
-        target.ats_version = details.ats_version
-        target.ttcn_release = details.ttcn_release
-        target.test_case = details.test_case
-        target.test_suite = details.test_suite
-        target.ue = details.ue
-        target.ss = details.ss
-        target.year = details.year
-        target.tech = details.tech
+        target.details = _compress_details(details.details)
         target.extracted_tdoc_id = details.extracted_tdoc_id
         target.parser_version = details.parser_version
-        target.corrections = json.dumps(details.corrections, ensure_ascii=False)
 
     @staticmethod
     def _meta_to_orm(target: TDocExtractOrm, meta: TDocExtractMeta) -> None:
@@ -237,10 +264,9 @@ class SQLAlchemyTDocCrRepository:
 def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
     """Reconstruct a :class:`TDocCRDetails` from an ORM row.
 
-    The ``corrections`` ``TEXT`` column is decoded with a tolerant
-    fallback to ``[]`` so a ``None`` / empty / unparseable blob never
-    breaks a read. ``ftp_url`` is read straight from the row — the
-    URL is now the PK rather than a nullable provenance column.
+    The ``details`` blob is decoded with a tolerant fallback to ``{}``
+    so a ``None`` / empty / unparseable blob never breaks a read.
+    ``ftp_url`` is read straight from the row — the URL is the PK.
     """
     return TDocCRDetails(
         tdoc_id=row.tdoc_id,
@@ -260,15 +286,7 @@ def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
         clauses_affected=row.clauses_affected,
         other_comments=row.other_comments,
         revision_history=row.revision_history,
-        ats_version=row.ats_version,
-        ttcn_release=row.ttcn_release,
-        test_case=row.test_case,
-        test_suite=row.test_suite,
-        ue=row.ue,
-        ss=row.ss,
-        corrections=_decode_corrections(row.corrections),
-        year=row.year,
-        tech=row.tech,
+        details=_decompress_details(row.details),
         extracted_tdoc_id=row.extracted_tdoc_id,
         ftp_url=row.ftp_url,
         parser_version=row.parser_version,
@@ -286,30 +304,3 @@ def _orm_to_meta(row: TDocExtractOrm) -> TDocExtractMeta:
         extracted_at=row.extracted_at,
         parser_version=row.parser_version,
     )
-
-
-def _decode_corrections(blob: str | None) -> list[dict[str, str]]:
-    """Decode the ``corrections`` TEXT column back to a list of dicts.
-
-    Tolerant by design: ``None``, empty strings, and JSON decode errors
-    all fall back to an empty list so a corrupt row doesn't break the
-    read path. The dataclass field defaults to ``[]`` already; this
-    helper exists so the round-trip is explicit and testable.
-    """
-    if not blob:
-        return []
-    try:
-        decoded = json.loads(blob)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        logger.warning(
-            "Could not decode corrections blob (length=%d); falling back to []",
-            len(blob),
-        )
-        return []
-    if not isinstance(decoded, list):
-        logger.warning(
-            "Decoded corrections is not a list (type=%s); falling back to []",
-            type(decoded).__name__,
-        )
-        return []
-    return [item for item in decoded if isinstance(item, dict)]

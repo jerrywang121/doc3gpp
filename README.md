@@ -247,12 +247,12 @@ doc3gpp tdoc list --limit 10
 doc3gpp tdoc list --tdoc 'R5%' --meeting "%RAN3%"
 doc3gpp tdoc list --meeting-id 85434             # scope to a single meeting by ID
 # TDoc extraction — every flag is a filter; combine freely
-doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts to confirm
+doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts to confirm (pending only)
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes         # LIKE pattern on tdoc_id; non-interactive
 doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --cr-cat F
 doc3gpp tdoc parse --meeting-id 85434 --title '!%Sidelink%'  # NOT LIKE
 doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
-doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything under the meeting
+doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything under the meeting (includes already-parsed)
 # Direct parse — single source, no DB filters
 doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx                # local .docx → stdout
 doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../R5s260009.zip # 3GPP URL → cache + DB

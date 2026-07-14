@@ -214,19 +214,22 @@ text/date filter. The earlier `--tdoc-id` integer PK selector and the
 mutual exclusivity with `--meeting-id` are gone — pick the filter
 combination that targets the intended subset.
 
-Before extraction the CLI partitions the matches into already-parsed
-vs to-parse groups, prints both with a base column set (`tdoc_id`,
-`title`, `type`, `cr_cat`, `status`) plus one extra column per active
-filter (see `docs/cli.md` for the table), and prompts unless
-`--yes` / `-y` is passed.
+In normal mode the SQL query excludes rows already present in
+`tdoc_cr_details` before applying the batch cap, so the preview and
+confirmation list only **pending** TDocs. With `--force`, the exclusion
+is disabled and every match (including already-parsed rows) becomes a
+candidate. If the pending set is empty, the CLI prints
+`Nothing to extract — every match is already parsed.` and exits `0`
+(successful no-op).
 
 The candidate set is capped by `Settings.tdoc_parse.max_batch`
 (default `100`, configurable via `[tdoc_parse] max_batch` in TOML or
-`DOC3GPP_TDOC_PARSE__MAX_BATCH` in env). When the filter result
-exceeds the cap, a warning is printed with a `Remaining` counter;
-re-run the same command **without** `--force` to continue where the
-previous invocation stopped (already-parsed rows are skipped, so the
-second run picks up the next batch).
+`DOC3GPP_TDOC_PARSE__MAX_BATCH` in env). In normal mode the cap applies
+only to pending work. When the pending candidate set exceeds the cap, a
+warning is printed with a `Remaining` counter; re-run the same command
+**without** `--force` to continue where the previous invocation stopped
+(already-parsed rows are excluded at the SQL level, so the second run
+picks up the next batch of pending rows).
 
 ## meeting list --tdoc flow
 

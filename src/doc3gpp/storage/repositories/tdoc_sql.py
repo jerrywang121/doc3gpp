@@ -9,7 +9,7 @@ from doc3gpp.cli_filters import (
     split_not_like_prefix,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.storage.db.models import TDocORM, MeetingORM
+from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocORM, MeetingORM
 from doc3gpp.storage.db.session import get_session_factory
 
 
@@ -104,6 +104,7 @@ class SQLAlchemyTDocRepository:
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        exclude_parsed: bool = False,
     ) -> list[TDoc]:
         """Return recent TDoc records ordered by descending ``tdoc_id``.
 
@@ -170,6 +171,13 @@ class SQLAlchemyTDocRepository:
             stmt = _apply_text_filter(stmt, TDocORM.cr_pack, cr_pack)
             stmt = _apply_date_filter(stmt, TDocORM.uploaded_date, uploaded_date)
 
+            if exclude_parsed:
+                stmt = stmt.where(
+                    ~select(TDocCrDetailOrm.tdoc_id)
+                    .where(TDocCrDetailOrm.tdoc_id == TDocORM.tdoc_id)
+                    .exists()
+                )
+
             stmt = stmt.order_by(TDocORM.tdoc_id.desc()).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()
 
@@ -227,12 +235,14 @@ class SQLAlchemyTDocRepository:
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        exclude_parsed: bool = False,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its parent meeting's name.
 
         Performs an extra batched lookup against ``meetings`` to populate
         ``TDocWithMeeting.meeting_name``. Used by the CLI / export code paths.
-        Accepts the same rich filters and pagination as :meth:`list`.
+        Accepts the same rich filters and pagination as :meth:`list`,
+        including ``exclude_parsed``.
         """
         tdocs = self.list(
             limit=limit,
@@ -255,6 +265,7 @@ class SQLAlchemyTDocRepository:
             version=version,
             cr_num=cr_num,
             cr_pack=cr_pack,
+            exclude_parsed=exclude_parsed,
         )
         if not tdocs:
             return []

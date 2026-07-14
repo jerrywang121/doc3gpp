@@ -601,12 +601,13 @@ table is truncated to the first 20 rows per group with an explicit
 
 After filters resolve, the CLI:
 
-1. Splits the matches into an **already-parsed** group (rows that
-   already have a `tdoc_cr_details` entry) and a **to-parse** group
-   (rows that do not). With `--force`, every match goes into the
-   to-parse group regardless of parsed status.
-2. Prints both groups with the column set above. A group with no
-   rows prints `(none)`.
+1. In normal mode, the SQL query already excludes rows that have a
+   `tdoc_cr_details` entry, so the candidate set consists only of
+   **pending** TDocs. With `--force`, the exclusion is disabled and
+   every match (including already-parsed rows) becomes a candidate.
+2. Prints the candidate table with the column set above. If the
+   candidate set is empty, prints `Nothing to extract — every match is
+   already parsed.` and exits `0` (successful no-op).
 3. Unless `--yes` / `-y` was passed, prompts with `Extract N TDoc(s)?`
    (`y/N`, default `N`). A declined prompt exits 0 with `Aborted.`
    — no work happened, so non-zero is misleading.
@@ -618,20 +619,24 @@ After filters resolve, the CLI:
    - `Failures: N`
    When the filter result exceeded `max_batch`, a `Remaining
    (truncated by max_batch=…): N` line is appended with a hint to
-   re-run the same command without `--force` to continue.
+   re-run the same command **without** `--force` to continue with the
+   next batch of pending rows.
 
 #### Batch limits
 
 The candidate set is capped by `Settings.tdoc_parse.max_batch`
 (default `100`, override via `[tdoc_parse] max_batch` in TOML or
-`DOC3GPP_TDOC_PARSE__MAX_BATCH` in env). When the filter result
-exceeds the cap, a warning describes the continuation flow:
+`DOC3GPP_TDOC_PARSE__MAX_BATCH` in env). In normal mode the cap is
+applied **after** the SQL-level exclusion of already-parsed rows, so
+it limits only pending work. When the pending candidate set exceeds
+the cap, a warning describes the continuation flow:
 
 - Raise the cap (`DOC3GPP_TDOC_PARSE__MAX_BATCH=500` or the TOML
   equivalent) to ingest everything in one go;
 - Re-run the same command **without** `--force` to pick up the
-  next batch — already-parsed rows are skipped so the second run
-  continues exactly where the first stopped.
+  next batch of pending rows — already-parsed rows are excluded at
+  the SQL level so the second run continues exactly where the first
+  stopped.
 
 The cap is checked against **actual work** (`total` when `--force`
 is set, otherwise `total - already-parsed`), so a flag combination

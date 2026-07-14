@@ -1039,8 +1039,11 @@ def test_parse_with_combined_filters_against_sqlite(
     """The CLI accepts ``--meeting-id N --meeting PATTERN --cr-cat F`` as
     filter combinations and routes them through the real SQLite-backed
     TDocRepository. End-to-end: CliRunner → factory → SQL repo → service
-    → DB. The completion summary reports the right number of newly
-    parsed rows; the already-parsed row is skipped (counted as Skipped)."""
+    → DB. In normal mode the SQL repo drops already-parsed rows before
+    the limit (``exclude_parsed=not force``), so the pre-parsed id never
+    surfaces in the dispatch path or in the completion summary. The
+    summary reports only the four newly parsed rows; ``Skipped`` is 0
+    because nothing parsed was withheld from the dispatch."""
     from typer.testing import CliRunner
 
     from doc3gpp.cli import app
@@ -1073,8 +1076,9 @@ def test_parse_with_combined_filters_against_sqlite(
     ]
     tdoc_repo.upsert_many(cr_tdocs)
 
-    # Mark R5s260001 as already parsed so the completion summary has
-    # both Skipped and Newly parsed buckets.
+    # Mark R5s260001 as already parsed. In normal mode the SQL filter
+    # excludes it before the limit, so it never reaches the dispatch
+    # and the summary's "Skipped" bucket stays empty.
     cr_repo = SQLAlchemyTDocCrRepository()
     cr_repo.upsert(
         TDocCRDetails(tdoc_id="R5s260001", spec="38.523-3", cr_num="3790", ftp_url="stored/R5s260001.zip"),
@@ -1101,7 +1105,8 @@ def test_parse_with_combined_filters_against_sqlite(
 
     runner = CliRunner()
     # --meeting-id N --meeting PATTERN --cr-cat F all combine as filters.
-    # R5s260001 is already parsed (Skipped); the other four are dispatched.
+    # Normal mode (no --force): the SQL filter drops R5s260001
+    # (already parsed), so only the other four are dispatched.
     result = runner.invoke(
         app,
         [
@@ -1114,12 +1119,15 @@ def test_parse_with_combined_filters_against_sqlite(
     )
     assert result.exit_code == 0, result.output
 
-    # Two groups were printed.
+    # Normal mode: SQL excluded the pre-parsed id, so only the
+    # "To parse" group is rendered — the "Already parsed" preview is
+    # force-mode-only.
     assert "To parse [count=4]:" in result.output
-    assert "Already parsed in tdoc_cr_details [count=1]:" in result.output
-    # The completion summary reports one Skipped, zero Re-parsed (no --force),
-    # four Newly parsed, zero Failures.
-    assert "Skipped (already parsed before this run): 1" in result.output
+    assert "Already parsed in tdoc_cr_details" not in result.output
+    # The completion summary reports zero Skipped (the parsed id never
+    # reached dispatch), zero Re-parsed (no --force), four Newly
+    # parsed, zero Failures.
+    assert "Skipped (already parsed before this run): 0" in result.output
     assert "Re-parsed (with --force):                  0" in result.output
     assert "Newly parsed:                              4" in result.output
     assert "Failures:                                  0" in result.output

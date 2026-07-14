@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
+
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -8,6 +10,8 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.db.models import TDocCrDetailOrm
+from doc3gpp.storage.db.session import get_session_factory
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -497,3 +501,37 @@ def test_tdoc_repository_full_schema(sqlite_env) -> None:
     assert stored.tdoc.related_wis == tdoc.related_wis
     assert stored.tdoc.cr_num == tdoc.cr_num
     assert stored.tdoc.cr_pack == tdoc.cr_pack
+
+
+def test_list_with_meeting_exclude_parsed_filters_before_limit(sqlite_env) -> None:
+    """Parsed TDocs at the top of the descending order must not consume the
+    ``limit`` batch slots. ``exclude_parsed=True`` drops them in SQL before
+    ``ORDER BY/OFFSET/LIMIT``; default and ``exclude_parsed=False`` keep
+    the raw top rows so ``--force`` callers still see every match.
+    """
+    create_schema()
+    repo = SQLAlchemyTDocRepository()
+    meeting_repo = SQLAlchemyMeetingRepository()
+    meeting_repo.upsert_many(
+        [Meeting(meeting_id=300, name="RAN5#300", title="m", location="Online",
+                 start_date=date(2026, 1, 1), end_date=date(2026, 1, 2))]
+    )
+    repo.upsert_many([
+        TDoc(tdoc_id="R5-260010", meeting_id=300, ftp_url="x/10"),
+        TDoc(tdoc_id="R5-260009", meeting_id=300, ftp_url="x/09"),
+        TDoc(tdoc_id="R5-260008", meeting_id=300, ftp_url="x/08"),
+        TDoc(tdoc_id="R5-260007", meeting_id=300, ftp_url="x/07"),
+    ])
+    with get_session_factory()() as session:
+        session.add(TDocCrDetailOrm(ftp_url="x/10", tdoc_id="R5-260010"))
+        session.add(TDocCrDetailOrm(ftp_url="x/09", tdoc_id="R5-260009"))
+        session.commit()
+
+    pending = repo.list_with_meeting(limit=2, meeting_id=300, exclude_parsed=True)
+    assert [r.tdoc.tdoc_id for r in pending] == ["R5-260008", "R5-260007"]
+    assert all(r.meeting_name == "RAN5#300" for r in pending)
+
+    raw = repo.list_with_meeting(limit=2, meeting_id=300)
+    assert [r.tdoc.tdoc_id for r in raw] == ["R5-260010", "R5-260009"]
+    raw_explicit = repo.list_with_meeting(limit=2, meeting_id=300, exclude_parsed=False)
+    assert [r.tdoc.tdoc_id for r in raw_explicit] == ["R5-260010", "R5-260009"]

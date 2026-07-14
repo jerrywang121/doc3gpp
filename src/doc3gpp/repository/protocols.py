@@ -60,6 +60,7 @@ class TDocRepository(Protocol):
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        exclude_parsed: bool = False,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
 
@@ -88,6 +89,11 @@ class TDocRepository(Protocol):
           ``tdoc list`` and ``tdoc parse`` — they accept the same
           ``null`` / ``not-null`` / ``!pattern`` / plain LIKE grammar
           as the other text columns.
+        - ``exclude_parsed``: when ``True``, drop every TDoc whose
+          ``tdoc_id`` already has a row in ``tdoc_cr_details`` —
+          applied in SQL *before* ``ORDER BY ... OFFSET ... LIMIT`` so
+          the limit reflects the un-parsed candidate set. Default
+          ``False`` keeps the raw match set.
 
         Pagination:
         - ``offset``: rows to skip before applying ``limit``. Combined
@@ -141,13 +147,14 @@ class TDocRepository(Protocol):
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        exclude_parsed: bool = False,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its meeting's display name.
 
-        Equivalent to ``list(...)`` plus a ``meetings`` JOIN to populate
+        Equivalent to ``list(...)`` plus a ``meetings`` lookup to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
-        the meeting name alongside TDoc fields. Accepts the same filters and
-        pagination as :meth:`list`.
+        the meeting name alongside TDoc fields. Accepts the same filters
+        and pagination as :meth:`list` (including ``exclude_parsed``).
         """
         ...
 

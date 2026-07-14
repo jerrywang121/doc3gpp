@@ -1328,41 +1328,63 @@ def tdoc_parse(
     max_batch = get_settings().tdoc_parse.max_batch
     tdoc_repo = build_tdoc_repository()
     normalised_tdoc = _normalise_cli_tdoc_id(tdoc) if tdoc else None
+    list_kwargs: dict[str, object] = {
+        "tdoc_id": normalised_tdoc,
+        "meeting_like": meeting,
+        "meeting_id": meeting_id,
+        "tdoc_type": tdoc_type or "CR",
+        "status": status,
+        "cr_cat": cr_cat,
+        "spec": spec,
+        "wi": wi,
+        "revision_of": revision_of,
+        "revised_to": revised_to,
+        "title": title_filter,
+        "ftp_url": ftp_url,
+        "release": release,
+        "version": version,
+        "cr_num": cr_num,
+        "cr_pack": cr_pack,
+        "source": source,
+        "uploaded_date": uploaded_date,
+    }
     matches = tdoc_repo.list_with_meeting(
         limit=max_batch,
         offset=0,
-        tdoc_id=normalised_tdoc,
-        meeting_like=meeting,
-        meeting_id=meeting_id,
-        tdoc_type=tdoc_type or "CR",
-        status=status,
-        cr_cat=cr_cat,
-        spec=spec,
-        wi=wi,
-        revision_of=revision_of,
-        revised_to=revised_to,
-        title=title_filter,
-        ftp_url=ftp_url,
-        release=release,
-        version=version,
-        cr_num=cr_num,
-        cr_pack=cr_pack,
-        source=source,
-        uploaded_date=uploaded_date,
+        exclude_parsed=not force,
+        **list_kwargs,
     )
     if not matches:
+        if not force:
+            # Normal mode dropped parsed rows before the limit; an empty
+            # pending result may still mean "every raw match is already
+            # parsed". Probe the raw set with limit=1 to disambiguate.
+            raw_exists = tdoc_repo.list_with_meeting(
+                limit=1, offset=0, exclude_parsed=False, **list_kwargs,
+            )
+            if raw_exists:
+                typer.echo("Nothing to extract — every match is already parsed.")
+                raise typer.Exit(code=0)
         typer.echo("No TDoc matched the provided filters.")
         raise typer.Exit(code=1)
 
     columns = _BASE_PARSE_COLUMNS + _active_extra_columns(filter_args)
     cr_repo = build_tdoc_cr_repository()
-    parsed_ids = {
-        m.tdoc.tdoc_id
-        for m in matches
-        if cr_repo.get(m.tdoc.tdoc_id)
-    }
-    already_parsed = [m for m in matches if m.tdoc.tdoc_id in parsed_ids]
-    to_parse = list(matches) if force else [m for m in matches if m.tdoc.tdoc_id not in parsed_ids]
+    if force:
+        # Force mode: SQL returns every match, so we probe parsed status
+        # per id to feed the reparse / newly-parsed summary math and to
+        # render the "Already parsed" preview group.
+        parsed_ids = {
+            m.tdoc.tdoc_id for m in matches if cr_repo.get(m.tdoc.tdoc_id)
+        }
+        already_parsed = [m for m in matches if m.tdoc.tdoc_id in parsed_ids]
+        to_parse = list(matches)
+    else:
+        # Normal mode: SQL excluded already-parsed rows before the limit,
+        # so every returned row is guaranteed pending. No N+1 lookups.
+        parsed_ids = set()
+        already_parsed = []
+        to_parse = list(matches)
 
     truncated = len(matches) == max_batch
     if truncated:

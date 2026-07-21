@@ -3,13 +3,20 @@
 Two layers of settings are exposed:
 
 * :class:`Settings` is the top-level :class:`pydantic_settings.BaseSettings`.
-  It reads ``DOC3GPP_*`` environment variables (and the optional ``.env``)
-  for backward compatibility with the original CLI surface.
+  It reads environment variables from a **closed allowlist** —
+  :data:`ALLOWED_ENV_VARS` — plus the optional ``.env`` file. Anything
+  outside the allowlist is ignored, even when the framework's
+  ``env_prefix`` / ``env_nested_delimiter`` would otherwise match it.
 * Nested sub-models (:class:`OutputSettings`, :class:`OutputFieldsSettings`,
-  :class:`CacheSettings`, :class:`TDocParseSettings`) carry values that are
-  most naturally configured from a TOML file rather than env vars. They can
-  still be overridden by env vars via the ``__`` delimiter
-  (``DOC3GPP_OUTPUT__FORMAT=json``).
+  :class:`CacheSettings`, :class:`TDocParseSettings`,
+  :class:`SyncSettings`) carry values that are most naturally configured
+  from a TOML file. They are **not** env-overridable; the TOML config
+  file is the single source of truth for them.
+
+The TOML config file discovery layer lives in
+:mod:`doc3gpp.settings.config_source`; the ``$DOC3GPP_CONFIG`` env var
+pinning that file is independent of :data:`ALLOWED_ENV_VARS` and remains
+the only way to override the config file location from the environment.
 
 Precedence (highest wins)::
 
@@ -24,13 +31,84 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 
 _HUMAN_DELTA_RE = re.compile(r"^(?P<value>[+-]?\d+(?:\.\d+)?)(?P<unit>[smhd])$", re.IGNORECASE)
+
+
+#: Closed allowlist of ``DOC3GPP_*`` environment variables that
+#: :class:`Settings` will honour. Anything outside this set is silently
+#: ignored by the env source — operators must use the TOML config file
+#: (``doc3gpp config set ...`` or a hand-edited ``doc3gpp.toml``) for
+#: the remaining fields.
+#:
+#: ``DOC3GPP_CONFIG`` (TOML config file location pin) and
+#: ``DOC3GPP_TEST_MYSQL_URL`` (test-only MySQL URL) are read directly
+#: by :mod:`doc3gpp.settings.config_source` and the test fixtures,
+#: respectively, and are intentionally **not** part of this allowlist.
+ALLOWED_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "DOC3GPP_DATABASE_URL",
+        "DOC3GPP_DB_ECHO",
+        "DOC3GPP_LOG_LEVEL",
+        "DOC3GPP_HTTP_VERIFY",
+        "DOC3GPP_CACHE__DIR",
+        "DOC3GPP_SYNC__AUTO_SYNC",
+    }
+)
+
+
+class FilteredEnvSettingsSource(EnvSettingsSource):
+    """:class:`EnvSettingsSource` that only honours allowlisted env vars.
+
+    The base class already filters by ``env_prefix`` (so only
+    ``DOC3GPP_*`` is considered) and then maps each field to its
+    env-var name via ``env_nested_delimiter`` (``__``). On top of that,
+    this subclass drops every key that is not in
+    :data:`ALLOWED_ENV_VARS`. The result: any ``DOC3GPP_*`` env var that
+    is not on the allowlist is read as if it were unset, and the field
+    falls back to whatever the TOML config file (or default factory)
+    supplies.
+
+    Keys in :attr:`env_vars` are lowercase (the parent class applies
+    ``case_sensitive=False``), so the filter compares against
+    :data:`ALLOWED_ENV_VARS` in lowercase form.
+    """
+
+    def __init__(self, settings_cls: type[BaseSettings], **kwargs: Any) -> None:
+        super().__init__(settings_cls, **kwargs)
+        # Parent populates ``self.env_vars`` with lowercase keys when
+        # ``case_sensitive=False``; normalise both sides for comparison.
+        allowed_lower = frozenset(name.lower() for name in ALLOWED_ENV_VARS)
+        self.env_vars = {
+            key: value for key, value in self.env_vars.items() if key in allowed_lower
+        }
+
+
+def env_var_for_dotted_key(key: str) -> str | None:
+    """Render the ``DOC3GPP_*`` env-var name for a dotted ``key``.
+
+    Returns ``None`` when ``key`` does not correspond to an allowlisted
+    binding, so callers can detect "TOML-only" keys and skip the
+    env-override hint. Shared between :mod:`doc3gpp.cli` and tests.
+    """
+    parts = key.split(".")
+    if len(parts) == 1:
+        name = f"DOC3GPP_{parts[0].upper()}"
+    else:
+        head = parts[0].upper()
+        tail = "_".join(parts[1:]).upper()
+        name = f"DOC3GPP_{head}__{tail}"
+    return name if name in ALLOWED_ENV_VARS else None
 
 
 def _parse_timedelta(value: object) -> timedelta:
@@ -228,13 +306,15 @@ class CacheSettings(BaseModel):
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
-    The flat fields at the root (``database_url``, ``db_echo``, ...) are
-    populated from ``DOC3GPP_*`` env vars to preserve backward
-    compatibility. Nested sub-models (``output``, ``cache``,
-    ``tdoc_parse``) are populated from a TOML config file via
-    :func:`doc3gpp.settings.loader.get_settings`; the ``env_nested_delimiter``
-    in :attr:`model_config` lets env vars override nested values too
-    (``DOC3GPP_OUTPUT__FORMAT=json``).
+    The flat fields at the root (``database_url``, ``db_echo``,
+    ``log_level``, ``http_verify``) are populated from the
+    :data:`ALLOWED_ENV_VARS` subset of ``DOC3GPP_*`` env vars.
+    Nested sub-models (``output``, ``cache``, ``tdoc_parse``,
+    ``sync``) come exclusively from the TOML config file via
+    :func:`doc3gpp.settings.loader.get_settings`; the only nested
+    env-override is ``DOC3GPP_CACHE__DIR`` (allowed) and
+    ``DOC3GPP_SYNC__AUTO_SYNC`` (allowed). All other nested fields
+    are TOML-only.
     """
 
     database_url: str = Field(
@@ -242,18 +322,13 @@ class Settings(BaseSettings):
         validation_alias="DOC3GPP_DATABASE_URL",
     )
     db_echo: bool = Field(default=False, validation_alias="DOC3GPP_DB_ECHO")
-    db_pool_size: int = Field(default=5, validation_alias="DOC3GPP_DB_POOL_SIZE")
-    db_auto_migrate: bool = Field(default=True, validation_alias="DOC3GPP_DB_AUTO_MIGRATE")
+    db_pool_size: int = Field(default=5)
+    db_auto_migrate: bool = Field(default=True)
     log_level: str = Field(default="INFO", validation_alias="DOC3GPP_LOG_LEVEL")
     http_verify: bool = Field(default=False, validation_alias="DOC3GPP_HTTP_VERIFY")
-    http_max_retries: int = Field(
-        default=3, ge=0, validation_alias="DOC3GPP_HTTP_MAX_RETRIES"
-    )
-    http_retry_backoff: float = Field(
-        default=0.5, ge=0.0, validation_alias="DOC3GPP_HTTP_RETRY_BACKOFF"
-    )
+    http_max_retries: int = Field(default=3, ge=0)
+    http_retry_backoff: float = Field(default=0.5, ge=0.0)
 
-    # Nested config (config-file-driven, env-overridable via '__' delimiter).
     output: OutputSettings = Field(default_factory=OutputSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)
@@ -277,17 +352,33 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """Reorder sources so env vars beat the TOML config file.
+        """Reorder sources so allowlisted env vars beat the TOML config file.
 
         pydantic-settings' default priority is ``init_args > env > .env >
         secrets > defaults``. We feed TOML data through ``init_settings``
         (in :func:`doc3gpp.settings.loader.get_settings`), so without this
         override the config file would shadow the env vars and silently
         break the documented ``CLI > env > file > defaults`` chain.
-        Returning ``(env, init, dotenv, secret)`` flips init below env.
+        Returning ``(filtered_env, init, dotenv, secret)`` flips init
+        below env.
+
+        The ``env_settings`` argument here is the framework-provided
+        :class:`EnvSettingsSource`; we wrap it in
+        :class:`FilteredEnvSettingsSource` so the allowlist
+        (:data:`ALLOWED_ENV_VARS`) is the single source of truth for
+        which env vars are honoured.
         """
+        _ = env_settings  # noqa: F841 - replaced by the filtered source below
+        filtered_env = FilteredEnvSettingsSource(
+            settings_cls,
+            case_sensitive=cls.model_config.get("case_sensitive"),
+            env_prefix=cls.model_config.get("env_prefix"),
+            env_nested_delimiter=cls.model_config.get("env_nested_delimiter"),
+            env_ignore_empty=cls.model_config.get("env_ignore_empty"),
+            env_parse_none_str=cls.model_config.get("env_parse_none_str"),
+        )
         return (
-            env_settings,
+            filtered_env,
             init_settings,
             dotenv_settings,
             file_secret_settings,

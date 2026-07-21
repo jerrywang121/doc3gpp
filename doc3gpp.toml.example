@@ -7,7 +7,10 @@
 #
 # Precedence (highest wins):
 #   1. CLI flags
-#   2. Environment variables (DOC3GPP_*)
+#   2. Environment variables — only the ALLOWED_ENV_VARS subset of
+#      DOC3GPP_* (see src/doc3gpp/settings/schema.py). Anything else is
+#      silently ignored, so this file is the single source of truth for
+#      every other setting.
 #   3. This file
 #   4. Built-in defaults
 #
@@ -17,8 +20,8 @@
 # hand-editing the TOML (`--init` to bootstrap a new file).
 
 # ── Database ─────────────────────────────────────────────────────────────────
-# Mirrors the DOC3GPP_DATABASE_URL / DOC3GPP_DB_* env vars. Either layer
-# works; env vars override this file when both are set.
+# Mirrors the DOC3GPP_DATABASE_URL / DOC3GPP_DB_ECHO env vars. Either layer
+# works; allowlisted env vars override this file when both are set.
 
 # database_url = "sqlite+pysqlite:////home/you/.local/share/doc3gpp/doc3gpp.db"
 # db_echo = false

@@ -349,60 +349,141 @@ def test_settings_drops_unknown_top_level_keys(
 # ---------------------------------------------------------------------------
 
 
-def test_env_overrides_toml_for_output_format(
+def test_env_overrides_toml_for_cache_dir(
     clean_settings, write_toml, monkeypatch,
 ) -> None:
-    cfg = write_toml("c.toml", '[output]\nformat = "json"\n')
+    """``DOC3GPP_CACHE__DIR`` is allowlisted and therefore overrides the
+    TOML value at runtime — same precedence chain as before, just for
+    the much smaller set of allowlisted env vars."""
+    cfg = write_toml("c.toml", '[cache]\ndir = "/tmp/from-toml"\n')
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    monkeypatch.setenv("DOC3GPP_OUTPUT__FORMAT", "markdown")
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", "/tmp/from-env")
     get_settings.cache_clear()
     s = get_settings()
-    assert s.output.format == "markdown"  # env wins
+    assert str(s.cache.dir) == "/tmp/from-env"  # env wins
 
 
-def test_tdoc_parse_max_ftp_depth_overrides(clean_settings, write_toml, monkeypatch) -> None:
-    """TOML and env both override ``max_ftp_depth`` with the usual precedence."""
+def test_tdoc_parse_max_ftp_depth_is_toml_only(
+    clean_settings, write_toml, monkeypatch,
+) -> None:
+    """``DOC3GPP_TDOC_PARSE__MAX_FTP_DEPTH`` is **not** allowlisted, so
+    setting it has no effect — the TOML value (or default) wins."""
     cfg = write_toml("c.toml", "[tdoc_parse]\nmax_ftp_depth = 5\n")
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    get_settings.cache_clear()
-    s = get_settings()
-    assert s.tdoc_parse.max_ftp_depth == 5
-
     monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_FTP_DEPTH", "3")
     get_settings.cache_clear()
     s = get_settings()
-    assert s.tdoc_parse.max_ftp_depth == 3  # env wins
+    assert s.tdoc_parse.max_ftp_depth == 5
     assert s.tdoc_parse.max_batch == 100
 
 
 def test_env_overrides_toml_for_flat_fields(
     clean_settings, write_toml, monkeypatch,
 ) -> None:
-    """Backward compat: existing DOC3GPP_* flat env vars still win over
-    any TOML value for the same field.
-    """
-    cfg = write_toml("c.toml", 'db_pool_size = 1\nlog_level = "WARNING"\n')
+    """Allowlisted flat env vars (``DOC3GPP_DATABASE_URL``,
+    ``DOC3GPP_LOG_LEVEL``) still beat TOML at runtime."""
+    cfg = write_toml(
+        "c.toml",
+        'database_url = "sqlite+pysqlite:////tmp/from-toml.db"\n'
+        'log_level = "WARNING"\n',
+    )
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    monkeypatch.setenv("DOC3GPP_DB_POOL_SIZE", "50")
+    monkeypatch.setenv(
+        "DOC3GPP_DATABASE_URL", "sqlite+pysqlite:////tmp/from-env.db"
+    )
     monkeypatch.setenv("DOC3GPP_LOG_LEVEL", "ERROR")
     get_settings.cache_clear()
     s = get_settings()
-    assert s.db_pool_size == 50
+    assert s.database_url == "sqlite+pysqlite:////tmp/from-env.db"
     assert s.log_level == "ERROR"
 
 
 def test_cache_clear_picks_up_new_env(clean_settings, monkeypatch) -> None:
     """The ``lru_cache`` wrapper must yield fresh values once a test
-    mutates the env — the canonical pattern documented for
-    ``sqlite_env``.
+    mutates an allowlisted env var — the canonical pattern documented
+    for ``sqlite_env``.
     """
     s1 = get_settings()
-    assert s1.db_pool_size == 5
-    monkeypatch.setenv("DOC3GPP_DB_POOL_SIZE", "42")
+    assert str(s1.cache.dir) != "/tmp/from-cache-clear-env"
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", "/tmp/from-cache-clear-env")
     # Without cache_clear the cached instance keeps the old value.
-    assert get_settings().db_pool_size == 5
+    assert str(get_settings().cache.dir) != "/tmp/from-cache-clear-env"
     get_settings.cache_clear()
-    assert get_settings().db_pool_size == 42
+    assert str(get_settings().cache.dir) == "/tmp/from-cache-clear-env"
+
+
+def test_non_allowlisted_env_vars_are_silently_ignored(
+    clean_settings, monkeypatch,
+) -> None:
+    """The closed :data:`ALLOWED_ENV_VARS` allowlist means setting a
+    ``DOC3GPP_*`` env var outside the allowset has no effect — the
+    field falls back to its default. This locks in the new policy so
+    regressions back to "any DOC3GPP_* works" are caught."""
+    from doc3gpp.settings.schema import ALLOWED_ENV_VARS
+
+    # Sanity check: every var below is outside the allowlist.
+    assert "DOC3GPP_OUTPUT__FORMAT" not in ALLOWED_ENV_VARS
+    assert "DOC3GPP_TDOC_PARSE__MAX_BATCH" not in ALLOWED_ENV_VARS
+    assert "DOC3GPP_DB_POOL_SIZE" not in ALLOWED_ENV_VARS
+
+    monkeypatch.setenv("DOC3GPP_OUTPUT__FORMAT", "json")
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "500")
+    monkeypatch.setenv("DOC3GPP_DB_POOL_SIZE", "99")
+    monkeypatch.setenv("DOC3GPP_HTTP_MAX_RETRIES", "7")
+    monkeypatch.setenv("DOC3GPP_CACHE__SIZE_LIMIT_MB", "999")
+    monkeypatch.setenv("DOC3GPP_CACHE__PURGE_CONFIRM", "false")
+    monkeypatch.setenv("DOC3GPP_DB_AUTO_MIGRATE", "false")
+    monkeypatch.setenv("DOC3GPP_HTTP_RETRY_BACKOFF", "2.5")
+
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.output.format == "table"
+    assert s.tdoc_parse.max_batch == 100
+    assert s.db_pool_size == 5
+    assert s.http_max_retries == 3
+    assert s.cache.size_limit_mb == 1024
+    assert s.cache.purge_confirm is True
+    assert s.db_auto_migrate is True
+    assert s.http_retry_backoff == 0.5
+
+
+def test_allowlisted_env_vars_override_toml(
+    clean_settings, write_toml, monkeypatch,
+) -> None:
+    """All six allowlisted vars take precedence over the TOML file
+    when both are set."""
+    from doc3gpp.settings.schema import ALLOWED_ENV_VARS
+
+    cfg = write_toml(
+        "c.toml",
+        'database_url = "sqlite+pysqlite:////tmp/toml.db"\n'
+        'db_echo = false\n'
+        'log_level = "INFO"\n'
+        'http_verify = false\n'
+        '[cache]\n'
+        'dir = "/tmp/toml-cache"\n'
+        '[sync]\n'
+        'auto_sync = false\n',
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
+    monkeypatch.setenv(
+        "DOC3GPP_DATABASE_URL", "sqlite+pysqlite:////tmp/env.db"
+    )
+    monkeypatch.setenv("DOC3GPP_DB_ECHO", "true")
+    monkeypatch.setenv("DOC3GPP_LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("DOC3GPP_HTTP_VERIFY", "true")
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", "/tmp/env-cache")
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "true")
+
+    get_settings.cache_clear()
+    s = get_settings()
+    assert len(ALLOWED_ENV_VARS) == 6
+    assert s.database_url == "sqlite+pysqlite:////tmp/env.db"
+    assert s.db_echo is True
+    assert s.log_level == "DEBUG"
+    assert s.http_verify is True
+    assert str(s.cache.dir) == "/tmp/env-cache"
+    assert s.sync.auto_sync is True
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
 from doc3gpp.config import get_settings
-from doc3gpp.settings.schema import Settings
+from doc3gpp.settings.schema import Settings, env_var_for_dotted_key
 from doc3gpp.cli_auto_sync import _build_meeting_url, trigger_auto_sync
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
@@ -2887,20 +2887,19 @@ def config_show() -> None:
     typer.echo(json.dumps(settings.model_dump(mode="json"), indent=2, sort_keys=True))
 
 
-def _env_var_for_key(key: str) -> str:
+def _env_var_for_key(key: str) -> str | None:
     """Render the pydantic-settings env-var name for ``key``.
 
     Single-segment keys map to ``DOC3GPP_<UPPER>``; dotted keys map to
     ``DOC3GPP_<UPPER_HEAD>__<UPPER_TAIL>`` where ``TAIL`` joins the
     remaining segments with underscores (matching pydantic-settings'
     ``env_nested_delimiter="__"`` convention).
+
+    Returns ``None`` when the rendered name is **not** on the closed
+    :data:`doc3gpp.settings.schema.ALLOWED_ENV_VARS` allowlist, so
+    callers can detect TOML-only keys and skip the env-override hint.
     """
-    parts = key.split(".")
-    if len(parts) == 1:
-        return f"DOC3GPP_{parts[0].upper()}"
-    head = parts[0].upper()
-    tail = "_".join(parts[1:]).upper()
-    return f"DOC3GPP_{head}__{tail}"
+    return env_var_for_dotted_key(key)
 
 
 @config_app.command("set")
@@ -3001,10 +3000,16 @@ def config_set(
         f"{json.dumps(resolve_echo_subtree(settings, key), indent=2, sort_keys=True, default=str)}"
         f" (written to {target})."
     )
-    typer.echo(
-        f"  Note: if {_env_var_for_key(key)} is set in the environment, "
-        f"it overrides this at runtime."
-    )
+    env_var = _env_var_for_key(key)
+    if env_var is None:
+        typer.echo(
+            "  Note: this setting is TOML-only"
+        )
+    else:
+        typer.echo(
+            f"  Note: if {env_var} is set in the environment, "
+            f"it overrides this at runtime."
+        )
     typer.echo("  Run 'doc3gpp config show' to verify the active value.")
 
 

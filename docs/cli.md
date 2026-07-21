@@ -448,7 +448,7 @@ Options:
 - `--tdoc TDOC`: canonical TDoc identifier (e.g. `R5s260009`). Required.
 - `--format {table,json,markdown,raw}`: output format. Default
   `table`, unless overridden by `[output].format` in the resolved
-  config (`DOC3GPP_OUTPUT__FORMAT=...`).
+  TOML config (`output.format`).
   - `table` (default): the historical line-oriented dump — `[TDoc]`
     section followed by a single `[Extracted Details]` block from
     `tdoc_cr_details` (URL-keyed on `tdoc.ftp_url`) and, when the
@@ -708,14 +708,15 @@ After filters resolve, the CLI:
 #### Batch limits
 
 The candidate set is capped by `Settings.tdoc_parse.max_batch`
-(default `100`, override via `[tdoc_parse] max_batch` in TOML or
-`DOC3GPP_TDOC_PARSE__MAX_BATCH` in env). In normal mode the cap is
-applied **after** the SQL-level exclusion of already-parsed rows, so
-it limits only pending work. When the pending candidate set exceeds
-the cap, a warning describes the continuation flow:
+(default `100`, use `[tdoc_parse] max_batch` in TOML or `doc3gpp 
+config set tdoc_parse.max_batch <value>` to override). In normal 
+mode the cap is applied **after** the SQL-level exclusion of 
+already-parsed rows, so it limits only pending work. When the 
+pending candidate set exceeds the cap, a warning describes the 
+continuation flow:
 
-- Raise the cap (`DOC3GPP_TDOC_PARSE__MAX_BATCH=500` or the TOML
-  equivalent) to ingest everything in one go;
+- Raise the cap via the TOML config (`tdoc_parse.max_batch = 500`) to
+  ingest everything in one go;
 - Re-run the same command **without** `--force` to pick up the
   next batch of pending rows — already-parsed rows are excluded at
   the SQL level so the second run continues exactly where the first
@@ -1062,9 +1063,8 @@ Behavior:
   `--yes` is **not** passed, the command prompts for confirmation
   (`typer.confirm(..., abort=True)`). In a non-interactive environment
   the prompt raises `Abort` and no files are deleted.
-- Set `DOC3GPP_CACHE__PURGE_CONFIRM=false` (env var) or `purge_confirm
-  = false` in the TOML config file to skip the prompt globally
-  (CI / scripted use).
+- Set `purge_confirm = false` in the TOML config file (the
+  `[cache]` table) to skip the prompt globally (CI / scripted use).
 - The on-disk artefacts referenced from
   `tdoc_extracts.markdown_path` and `tdoc_extracts.zip_path` become
   stale — the next `tdoc parse` will repopulate them.
@@ -1362,8 +1362,10 @@ Error: Invalid value: sync.meeting_sync_interval must be a valid duration
 The full set of accepted value shapes is the same as the schema
 declaration in [`doc3gpp.toml.example`](https://github.com/jerrywang121/doc3gpp/blob/main/doc3gpp.toml.example).
 
-If `DOC3GPP_<SECTION>__<FIELD>` is set in the environment, it overrides
-this value at runtime (precedence: CLI > env > file > defaults).
+Only the closed allowlist (`doc3gpp.settings.schema.ALLOWED_ENV_VARS`)
+of `DOC3GPP_*` env vars overrides TOML values at runtime. Any other
+`DOC3GPP_<SECTION>__<FIELD>` is silently ignored. Precedence:
+CLI > allowlisted env > file > defaults.
 
 ## Examples
 

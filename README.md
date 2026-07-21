@@ -147,32 +147,28 @@ doc3gpp wi list --release "Rel-19" --limit 50
 
 ## Database Configuration
 
-Configuration is read from environment variables (and `.env`).
+Configuration is read from a closed allowlist of environment variables
+(see [`ALLOWED_ENV_VARS`](src/doc3gpp/settings/schema.py) for the
+canonical list), the `.env` file (only the allowlisted vars are
+honoured), and the TOML config file (everything else).
 
 | Variable | Purpose |
 | --- | --- |
 | `DOC3GPP_DATABASE_URL` | SQLAlchemy URL (omit for default SQLite) |
 | `DOC3GPP_DB_ECHO` | Echo SQL to stdout |
-| `DOC3GPP_DB_POOL_SIZE` | Connection pool size |
-| `DOC3GPP_DB_AUTO_MIGRATE` | Compatibility flag; does not run Alembic migrations |
 | `DOC3GPP_LOG_LEVEL` | Library log level |
 | `DOC3GPP_HTTP_VERIFY` | TLS verification toggle |
-| `DOC3GPP_HTTP_MAX_RETRIES` | HTTP retry attempts |
-| `DOC3GPP_HTTP_RETRY_BACKOFF` | HTTP retry backoff base |
-| `DOC3GPP_OUTPUT__FORMAT` | Default `--format` value for `* list` and `tdoc show` (`table`, `json`, `markdown`; `raw` is also accepted on `tdoc show`) |
 | `DOC3GPP_CACHE__DIR` | TDoc extraction cache root |
-| `DOC3GPP_CACHE__SIZE_LIMIT_MB` | Combined `zips/` + `markdown/` cache size cap; `0` means unlimited |
-| `DOC3GPP_CACHE__PURGE_CONFIRM` | Whether `cache purge` prompts unless `--yes` is passed |
-| `DOC3GPP_TDOC_PARSE__MAX_BATCH` | Upper bound on TDocs per `tdoc parse` invocation (default `100`) |
-| `DOC3GPP_TDOC_PARSE__MAX_FTP_DEPTH` | Default recursion depth for `tdoc parse --from-url <3gpp-folder> --recursive` (default `2`) |
-| `DOC3GPP_SYNC__MEETING_SYNC_INTERVAL` | Minimum time between `meeting sync` runs for the same TSG (default `24h`) |
-| `DOC3GPP_SYNC__TDOC_LIST_SYNC_INTERVAL` | Minimum time between `tdoc sync` runs for the same meeting (default `30m`) |
-| `DOC3GPP_SYNC__TDOC_LIST_CLOSED_WINDOW` | Skip `tdoc sync` when the meeting `end_date` is older than this (default `90d`) |
-| `DOC3GPP_SYNC__TDOC_LIST_URL_TEMPLATE` | Portal URL template for downloading a meeting's TDoc-list XLSX (default includes `{meeting_id}`) |
+| `DOC3GPP_SYNC__AUTO_SYNC` | When true, `meeting list` / `tdoc list` / `tdoc show` / DB-mode `tdoc parse` internally trigger the same sync paths used by explicit `meeting sync` / `tdoc sync` |
 
-Nested settings can be overridden with the `__` delimiter, e.g.
-`DOC3GPP_OUTPUT__FORMAT=json`,
-`DOC3GPP_CACHE__DIR=~/.cache/doc3gpp/tdocs`.
+Plus the bootstrap var `DOC3GPP_CONFIG` (path to a TOML config file
+or directory) — see the TOML section below. Any other `DOC3GPP_*`
+env var is silently ignored; configure those values via TOML instead.
+
+The remaining settings (`cache.size_limit_mb`, `cache.purge_confirm`,
+`tdoc_parse.max_batch`, `tdoc_parse.max_ftp_depth`, `sync.*`,
+`output.*`, `db_pool_size`, `db_auto_migrate`, `http_max_retries`,
+`http_retry_backoff`, …) are TOML-only — see the example file.
 
 Examples:
 
@@ -194,7 +190,9 @@ For structured settings — DB URL plus fetch knobs and per-command output
 defaults — drop a TOML file at one of these locations (first hit wins):
 
 1. The path named by `DOC3GPP_CONFIG` (file or directory; absolute or
-   relative).
+   relative). `DOC3GPP_CONFIG` is independent of the
+   [`ALLOWED_ENV_VARS`](src/doc3gpp/settings/schema.py) allowlist and
+   is the canonical way to pin a config file location from the shell.
 2. `./doc3gpp.toml` (project-local — check into git for team defaults).
 3. `~/.config/doc3gpp/config.toml` (user-wide; honors `$XDG_CONFIG_HOME`).
 

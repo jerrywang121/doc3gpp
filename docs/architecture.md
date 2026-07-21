@@ -295,9 +295,10 @@ and the TDoc CR extraction is the deepest.
 
 - `doc3gpp cache status` → `TDocCache.status()` (file count, total
   bytes, limit, per-subdir breakdown; non-mutating).
-- `doc3gpp cache purge [--yes]` (with `DOC3GPP_CACHE__PURGE_CONFIRM`
-  gating the interactive prompt) → `TDocCache.purge()` clears both
-  subtrees and recreates them.
+- `doc3gpp cache purge [--yes]` (gated by
+  `CacheSettings.purge_confirm`, configurable only via TOML since
+  `DOC3GPP_CACHE__PURGE_CONFIRM` is outside the env-var allowlist) →
+  `TDocCache.purge()` clears both subtrees and recreates them.
 
 ## Database Schema
 
@@ -389,7 +390,8 @@ default is OFF).
 
 ## Backend Selection
 
-The active backend is selected from `DOC3GPP_DATABASE_URL`:
+The active backend is selected from the allowlisted
+`DOC3GPP_DATABASE_URL` env var (or its TOML counterpart):
 
 - sqlite default: `sqlite+pysqlite:///~/.local/share/doc3gpp/doc3gpp.db`
 - mysql example: `mysql+pymysql://user:pass@localhost:3306/doc3gpp`
@@ -460,8 +462,7 @@ eighteen commands):
 - `cache`:
     - `status` — file count, total bytes, limit, per-subdir breakdown
     - `purge` — `[--yes]` to skip the interactive confirm; gated by
-      `CacheSettings.purge_confirm` and overridable via
-      `DOC3GPP_CACHE__PURGE_CONFIRM=false`
+      `CacheSettings.purge_confirm` (TOML-only)
 
 Every `* list` command also accepts `--format table|json|markdown`
 and `-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list` also
@@ -475,7 +476,7 @@ directly; everything goes through `services/factory.py::build_*`. The
 factory wires:
 
 - `get_settings()` (cached; `cache_clear()` in tests that mutate
-  `DOC3GPP_*` env vars)
+  allowlisted `DOC3GPP_*` env vars)
 - `get_engine()` / `get_session_factory()` (cached; same clear
   contract)
 - `ScraperClient()` — single instance per CLI invocation
@@ -545,9 +546,9 @@ readers:
 - **CLI depends on `services/factory.py` only** — never instantiate a
   concrete `SQLAlchemy*Repository` from `cli.py`.
 - **Settings caching** — `get_settings` and `get_engine` are
-  `@lru_cache(maxsize=1)`; any test that mutates `DOC3GPP_*` must call
-  `cache_clear()` on both in teardown (the `sqlite_env` fixture is the
-  canonical pattern).
+  `@lru_cache(maxsize=1)`; any test that mutates an allowlisted
+  `DOC3GPP_*` env var must call `cache_clear()` on both in teardown
+  (the `sqlite_env` fixture is the canonical pattern).
 
 ## Out of scope (today)
 

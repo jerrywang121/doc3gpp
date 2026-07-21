@@ -33,10 +33,21 @@ def cache_env(tmp_path, monkeypatch) -> Iterator[Path]:
     each command runs. The settings + engine caches are cleared in the
     surrounding ``sqlite_env``-style teardown (here, manually, since
     these tests do not need a database).
+
+    Uses a pinned ``DOC3GPP_CONFIG`` TOML so the cache directory and
+    size limit are configurable (these fields are TOML-only — see
+    :data:`doc3gpp.settings.schema.ALLOWED_ENV_VARS`).
     """
     cache_root = tmp_path / "cache"
+    config_path = tmp_path / "cache-config.toml"
+    config_path.write_text(
+        f'[cache]\n'
+        f'dir = "{cache_root}"\n'
+        f'size_limit_mb = 16\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(cache_root))
-    monkeypatch.setenv("DOC3GPP_CACHE__SIZE_LIMIT_MB", "16")  # 16 MB ceiling
     get_settings.cache_clear()
     yield cache_root
     get_settings.cache_clear()
@@ -88,9 +99,16 @@ def test_cache_status_with_files(cache_env) -> None:
     assert "total_bytes: 128 B" in result.output
 
 
-def test_cache_status_unlimited_limit(cache_env, monkeypatch) -> None:
+def test_cache_status_unlimited_limit(cache_env, monkeypatch, tmp_path) -> None:
     """``size_limit_mb=0`` (unlimited) renders the friendly ``unlimited`` token."""
-    monkeypatch.setenv("DOC3GPP_CACHE__SIZE_LIMIT_MB", "0")
+    config_path = tmp_path / "unlimited-config.toml"
+    config_path.write_text(
+        f'[cache]\n'
+        f'dir = "{tmp_path / "cache"}"\n'
+        f'size_limit_mb = 0\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
     get_settings.cache_clear()
 
     runner = CliRunner()
@@ -121,11 +139,22 @@ def test_cache_purge_with_yes(cache_env) -> None:
     assert list((cache_env / "markdown").iterdir()) == []
 
 
-def test_cache_purge_without_yes_aborts_when_confirm_enabled(cache_env, monkeypatch) -> None:
-    """With ``purge_confirm=True`` and no ``--yes``, ``typer.confirm`` raises
-    ``Abort`` in the non-interactive CliRunner. The output contains the
-    abort marker and exit code is non-zero; no files are deleted."""
-    monkeypatch.setenv("DOC3GPP_CACHE__PURGE_CONFIRM", "true")
+def test_cache_purge_without_yes_aborts_when_confirm_enabled(
+    cache_env, monkeypatch, tmp_path,
+) -> None:
+    """With ``purge_confirm=true`` (via TOML) and no ``--yes``,
+    ``typer.confirm`` raises ``Abort`` in the non-interactive CliRunner.
+    The output contains the abort marker and exit code is non-zero;
+    no files are deleted."""
+    config_path = tmp_path / "confirm-on.toml"
+    config_path.write_text(
+        f'[cache]\n'
+        f'dir = "{tmp_path / "cache"}"\n'
+        f'size_limit_mb = 16\n'
+        f'purge_confirm = true\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
     get_settings.cache_clear()
     _populate_cache(cache_env, zips=2, markdown=1)
 
@@ -141,10 +170,20 @@ def test_cache_purge_without_yes_aborts_when_confirm_enabled(cache_env, monkeypa
     assert len(md_files) == 1
 
 
-def test_cache_purge_env_overrides_confirm(cache_env, monkeypatch) -> None:
-    """Setting ``DOC3GPP_CACHE__PURGE_CONFIRM=false`` makes the CLI skip
-    the prompt and proceed straight to deletion."""
-    monkeypatch.setenv("DOC3GPP_CACHE__PURGE_CONFIRM", "false")
+def test_cache_purge_toml_overrides_confirm(
+    cache_env, monkeypatch, tmp_path,
+) -> None:
+    """Setting ``purge_confirm = false`` in the TOML config makes the
+    CLI skip the prompt and proceed straight to deletion."""
+    config_path = tmp_path / "confirm-off.toml"
+    config_path.write_text(
+        f'[cache]\n'
+        f'dir = "{tmp_path / "cache"}"\n'
+        f'size_limit_mb = 16\n'
+        f'purge_confirm = false\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
     get_settings.cache_clear()
     _populate_cache(cache_env, zips=2, markdown=1)
 
@@ -158,10 +197,11 @@ def test_cache_purge_env_overrides_confirm(cache_env, monkeypatch) -> None:
 def test_cache_purge_size_limit_bytes_calculation(cache_env) -> None:
     """The ``_build_cache`` helper must translate ``size_limit_mb`` to bytes.
 
-    The test fixture sets ``DOC3GPP_CACHE__SIZE_LIMIT_MB=16``; the
-    resulting :class:`TDocCache` must report ``size_limit_bytes ==
-    16 * 1024 * 1024``. This guards against a future unit drift
-    (e.g. someone changing the helper to ``* 1000 * 1000``).
+    The test fixture pins ``cache.size_limit_mb = 16`` via the TOML
+    config; the resulting :class:`TDocCache` must report
+    ``size_limit_bytes == 16 * 1024 * 1024``. This guards against a
+    future unit drift (e.g. someone changing the helper to
+    ``* 1000 * 1000``).
     """
     cache = _build_cache()
     assert cache.size_limit_bytes == 16 * 1024 * 1024

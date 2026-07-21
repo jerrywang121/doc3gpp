@@ -11,7 +11,8 @@ change set so the docs stay honest.
 
 - **No Alembic migrations.** `Base.metadata.create_all` via
   `storage/db/migrate.py` (invoked by `db init`) is the only schema
-  bootstrap. `DOC3GPP_DB_AUTO_MIGRATE` is a flag that does **not** run
+  bootstrap. `db_auto_migrate` is a TOML-only field (see
+  `doc3gpp.settings.schema.ALLOWED_ENV_VARS`) that does **not** run
   migrations. After pulling an ORM shape change, **existing SQLite
   installs must run `doc3gpp db reset --yes`** (or a backend-native
   migration for MySQL / PostgreSQL) — otherwise the live schema stays
@@ -26,9 +27,11 @@ change set so the docs stay honest.
 - **`get_settings` is `@lru_cache(maxsize=1)`** and `ScraperClient`'s
   `__init__` reads settings once, so env changes mid-process do not
   propagate after the first call. Restart the process to pick up new
-  `DOC3GPP_*` values. Tests must `cache_clear()` both loaders when
-  mutating env via `monkeypatch` — see
-  [`docs/conventions.md`](conventions.md) for the canonical fixture.
+  `DOC3GPP_*` values (only the closed
+  `doc3gpp.settings.schema.ALLOWED_ENV_VARS` subset is honoured by
+  `Settings` — everything else is silently ignored). Tests must
+  `cache_clear()` both loaders when mutating env via `monkeypatch` —
+  see [`docs/conventions.md`](conventions.md) for the canonical fixture.
 
 ## Network / scraping
 

@@ -153,28 +153,28 @@ doc3gpp config show   # the fully-resolved settings, as JSON
 
 The full TOML schema lives in [`doc3gpp.toml.example`](../doc3gpp.toml.example).
 
-Recognised env vars (see `Settings` in `src/doc3gpp/settings/schema.py`
-for the full list):
+Recognised env vars (closed allowlist; see
+`doc3gpp.settings.schema.ALLOWED_ENV_VARS` for the canonical list):
 
 ```
 DOC3GPP_DATABASE_URL
 DOC3GPP_DB_ECHO
-DOC3GPP_DB_POOL_SIZE
-DOC3GPP_DB_AUTO_MIGRATE
 DOC3GPP_LOG_LEVEL
 DOC3GPP_HTTP_VERIFY
-DOC3GPP_HTTP_MAX_RETRIES
-DOC3GPP_HTTP_RETRY_BACKOFF
+DOC3GPP_CACHE__DIR
+DOC3GPP_SYNC__AUTO_SYNC
 ```
 
-Nested settings are overridable via the `__` delimiter:
+Any other `DOC3GPP_*` env var is silently ignored — those settings
+are configurable exclusively via the TOML config file (use
+`doc3gpp config set <key> <value>` or edit `doc3gpp.toml` directly).
+Bootstrap vars read directly by the config discovery layer and not
+governed by this allowlist:
 
 ```
-DOC3GPP_MEETING_SYNC__CLOSED_YEARS=5
-DOC3GPP_OUTPUT__FORMAT=json
-DOC3GPP_CACHE__DIR=~/.cache/doc3gpp/tdocs
-DOC3GPP_CACHE__PURGE_CONFIRM=false
-DOC3GPP_TDOC_PARSE__MAX_BATCH=200
+DOC3GPP_CONFIG             # pin a TOML config file or directory
+XDG_CONFIG_HOME            # XDG root for the user-wide config fallback
+DOC3GPP_TEST_MYSQL_URL     # MySQL integration test fixture (test-only)
 ```
 
 MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
@@ -226,13 +226,14 @@ candidate. If the pending set is empty, the CLI prints
 (successful no-op).
 
 The candidate set is capped by `Settings.tdoc_parse.max_batch`
-(default `100`, configurable via `[tdoc_parse] max_batch` in TOML or
-`DOC3GPP_TDOC_PARSE__MAX_BATCH` in env). In normal mode the cap applies
-only to pending work. When the pending candidate set exceeds the cap, a
-warning is printed with a `Remaining` counter; re-run the same command
-**without** `--force` to continue where the previous invocation stopped
-(already-parsed rows are excluded at the SQL level, so the second run
-picks up the next batch of pending rows).
+(default `100`, TOML-only — configure via `[tdoc_parse] max_batch` 
+in TOML or `doc3gpp config set tdoc_parse.max_batch <value>`). 
+In normal mode the cap applies only to pending work. When the pending 
+candidate set exceeds the cap, a warning is printed with a `Remaining` 
+counter; re-run the same command **without** `--force` to continue 
+where the previous invocation stopped (already-parsed rows are excluded 
+at the SQL level, so the second run picks up the next batch of pending 
+rows).
 
 ## meeting list --tdoc flow
 

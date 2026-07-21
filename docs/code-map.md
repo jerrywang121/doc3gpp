@@ -92,7 +92,10 @@ table below is for navigation only.
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
-| `Settings` | pydantic-settings | `settings/schema.py` | Root config: flat `DOC3GPP_*` + nested sub-models. |
+| `Settings` | pydantic-settings | `settings/schema.py` | Root config: allowlisted `DOC3GPP_*` env vars + nested sub-models. |
+| `ALLOWED_ENV_VARS` | frozenset | `settings/schema.py` | Closed allowlist of `DOC3GPP_*` env vars honoured by `Settings`. |
+| `FilteredEnvSettingsSource` | class | `settings/schema.py` | `EnvSettingsSource` subclass that filters to the allowlist. |
+| `env_var_for_dotted_key` | function | `settings/schema.py` | Render the `DOC3GPP_*` env-var name for a dotted key, or `None` if TOML-only. |
 | `OutputSettings` | model | `settings/schema.py` | Default `format` + per-command field lists. |
 | `OutputFieldsSettings` | model | `settings/schema.py` | Per-list-command `default_fields` lists. |
 | `CacheSettings` | model | `settings/schema.py` | Disk cache (`dir`, `size_limit_mb`, `purge_confirm`). |

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -32,6 +33,7 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocTypeUnsupportedError,
     TDocZipDownloadError,
 )
+from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
@@ -373,6 +375,28 @@ def _make_result(
         extract_meta=meta,
         from_cache=False,
     )
+
+
+def _pin_max_batch_via_toml(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    max_batch: int,
+) -> None:
+    """Set ``tdoc_parse.max_batch`` through a TOML config file.
+
+    Replaces the legacy ``DOC3GPP_TDOC_PARSE__MAX_BATCH`` env-var
+    override, which is now outside the
+    :data:`doc3gpp.settings.schema.ALLOWED_ENV_VARS` allowlist and
+    therefore silently ignored.
+    """
+    config_path = tmp_path / "tdoc-parse-config.toml"
+    config_path.write_text(
+        f"[tdoc_parse]\nmax_batch = {max_batch}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
+    get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -1542,30 +1566,47 @@ def test_tdoc_parse_summary_without_force_dispatches_only_new(
 
 
 def test_tdoc_parse_max_batch_default_is_100(sqlite_env) -> None:
-    """The configured default is 100 — sanity check the env wiring."""
+    """The configured default is 100 — sanity check the schema wiring."""
     from doc3gpp.config import get_settings
 
     settings = get_settings()
     assert settings.tdoc_parse.max_batch == 100
 
 
-def test_tdoc_parse_max_batch_env_override(sqlite_env, monkeypatch) -> None:
-    """``DOC3GPP_TDOC_PARSE__MAX_BATCH`` overrides the default."""
-    from doc3gpp.config import get_settings
-
-    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "5")
-    get_settings.cache_clear()
+def test_tdoc_parse_max_batch_toml_override(
+    sqlite_env, monkeypatch, tmp_path,
+) -> None:
+    """``tdoc_parse.max_batch`` is TOML-only since
+    ``DOC3GPP_TDOC_PARSE__MAX_BATCH`` is outside the env-var allowlist.
+    Pin a TOML config to override the default."""
+    _pin_max_batch_via_toml(monkeypatch, tmp_path, max_batch=5)
     try:
         assert get_settings().tdoc_parse.max_batch == 5
     finally:
         get_settings.cache_clear()
 
 
-def test_tdoc_parse_batch_limit_warning_when_under_max(sqlite_env, monkeypatch) -> None:
+def test_tdoc_parse_max_batch_env_var_is_ignored(
+    sqlite_env, monkeypatch,
+) -> None:
+    """``DOC3GPP_TDOC_PARSE__MAX_BATCH`` is outside the env-var allowlist
+    so setting it must have no effect — the default wins."""
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "5")
+    get_settings.cache_clear()
+    try:
+        assert get_settings().tdoc_parse.max_batch == 100
+    finally:
+        get_settings.cache_clear()
+
+
+def test_tdoc_parse_batch_limit_warning_when_under_max(
+    sqlite_env, monkeypatch, tmp_path,
+) -> None:
     """When the *actual work* count exceeds max_batch but the repo
     already capped the result, the warning is suppressed — the operator
     can only see what was returned. (We simulate this by returning 5
     rows with max_batch=5 so the warning never fires.)"""
+    _pin_max_batch_via_toml(monkeypatch, tmp_path, max_batch=5)
     runner = CliRunner()
     cr_tdocs = [TDoc(tdoc_id=f"R5s26000{i}", type="CR") for i in range(1, 6)]
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
@@ -1575,9 +1616,6 @@ def test_tdoc_parse_batch_limit_warning_when_under_max(sqlite_env, monkeypatch) 
     )
     _patch_service(monkeypatch, fake)
 
-    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "5")
-    from doc3gpp.config import get_settings
-    get_settings.cache_clear()
     try:
         result = runner.invoke(
             app, ["tdoc", "parse", "--tdoc", "R5s26%", "--yes"],
@@ -1595,7 +1633,7 @@ def test_tdoc_parse_batch_limit_warning_when_under_max(sqlite_env, monkeypatch) 
 
 
 def test_tdoc_parse_max_batch_applies_after_excluding_parsed(
-    sqlite_env, monkeypatch,
+    sqlite_env, monkeypatch, tmp_path,
 ) -> None:
     """``max_batch`` must cap *pending* matches, not raw matches.
 
@@ -1611,7 +1649,7 @@ def test_tdoc_parse_max_batch_applies_after_excluding_parsed(
     the repository filters parsed rows before applying the limit
     and returns the first 3 pending ids.
     """
-    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "3")
+    _pin_max_batch_via_toml(monkeypatch, tmp_path, max_batch=3)
     from doc3gpp.config import get_settings
     get_settings.cache_clear()
     try:

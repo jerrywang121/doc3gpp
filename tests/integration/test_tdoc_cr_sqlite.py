@@ -1198,7 +1198,7 @@ def test_parse_with_combined_filters_against_sqlite(
 
 
 def test_parse_batch_limit_truncates_with_remaining_summary(
-    sqlite_env, monkeypatch
+    sqlite_env, monkeypatch, tmp_path
 ) -> None:
     """With ``max_batch=2`` and five matches, the CLI extracts only the
     first two, reports ``Remaining: 3`` in the completion summary, and
@@ -1215,8 +1215,11 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
 
     create_schema()
 
-    # Override max_batch to 2 via env (do not rely on config file).
-    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "2")
+    # Override max_batch to 2 via TOML (DOC3GPP_TDOC_PARSE__MAX_BATCH is
+    # outside the env-var allowlist and is silently ignored).
+    config_path = tmp_path / "tdoc-parse-config.toml"
+    config_path.write_text("[tdoc_parse]\nmax_batch = 2\n", encoding="utf-8")
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
     from doc3gpp.settings.loader import get_settings
     get_settings.cache_clear()
     try:

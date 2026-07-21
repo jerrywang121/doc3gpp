@@ -1465,7 +1465,7 @@ def tdoc_parse(
     )
     service = build_tdoc_cr_service()
     try:
-        batch = service.extract_many(tdoc_ids, force=force)
+        batch = service.extract_many(tdoc_ids, force=force, full=full)
     except PythonDocxNotInstalledError as exc:
         typer.echo(
             "python-docx is not installed; install with `pip install doc3gpp[extract]`.",

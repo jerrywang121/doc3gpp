@@ -333,6 +333,112 @@ def test_ttcn_cr_extracts_function_name_from_template_name_row() -> None:
     assert change["mcc160_comment"] == "OK"
 
 
+_TTCN_CORRECTION_LINES_FULL = (
+    "",
+    "Changes provided in TTCN CR R5s260009 are required for the verification of NR5GC 7.1.3.5.3.",
+    "",
+    "| Function name | fl_TC_7_1_3_5_3_Body |",
+    "| Reason for change | Change due to MCX feature addition. |",
+    "| Summary of change | Use new PDCP function. |",
+    "| TTCN module | NR_DC_Testcases.ttcn |",
+    "| MCC160 Comment | OK |",
+    "",
+    "Before change",
+    "| fl_TC_7_1_3_5_3_Body ( msg ) { return old_value ; } |",
+    "",
+    "After change",
+    "| fl_TC_7_1_3_5_3_Body ( msg ) { return new_value ; } |",
+    "",
+    "### 3. Method of test",
+)
+
+
+def test_ttcn_cr_full_true_extracts_before_after_change_content() -> None:
+    """``parse(..., full=True)`` populates ``before_change`` and
+    ``after_change`` from the standalone ``Before change`` / ``After
+    change`` markers and their following content rows.
+
+    The TTCN corrections sub-parser only enters its before/after/new
+    extraction loop when ``full=True``. Locks the gate AND the slice
+    arithmetic — a previous off-by-one in
+    ``_extract_change_from_table`` call site caused an infinite loop
+    on realistic TTCN markdown layouts, silently dropping every
+    operator's ``--full`` invocation.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
+    assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
+    assert change["before_change"] == "fl_TC_7_1_3_5_3_Body ( msg ) { return old_value ; }"
+    assert change["after_change"] == "fl_TC_7_1_3_5_3_Body ( msg ) { return new_value ; }"
+    assert "new_change" not in change
+
+
+def test_ttcn_cr_full_false_omits_before_after_change_content() -> None:
+    """``parse(..., full=False)`` (the default) leaves
+    ``before_change`` / ``after_change`` / ``new_change`` unset even
+    when the source markdown carries them.
+
+    Metadata-only extraction is the default — that's the contract the
+    default ``tdoc parse`` flow depends on (small rows, fast parser).
+    Operators who need the change content must opt in with ``--full``;
+    this test pins that contract.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=False)
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
+    assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
+    assert "before_change" not in change
+    assert "after_change" not in change
+    assert "new_change" not in change
+
+
+def test_ttcn_cr_full_default_omits_before_after_change_content() -> None:
+    """Without ``full=`` (default ``False``), the before/after/new keys
+    are never present on the change dict.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    change = parsed.ttcn.required_changes[0]
+    assert "before_change" not in change
+    assert "after_change" not in change
+    assert "new_change" not in change
+
+
+def test_ttcn_cr_full_true_returns_within_bounded_time() -> None:
+    """Regression guard for the ``if full:`` infinite-loop bug.
+
+    Before the slice-index fix, a standalone ``Before change`` marker
+    followed by a content row sent the parser into an infinite loop on
+    the table-cell branch (the cell line was consumed, ``scan_idx`` did
+    not advance, and the next iteration re-matched the same cell).
+    This test runs the parser with a short wall-clock budget; if the
+    fix ever regresses the loop will spin past the budget and the test
+    fails.
+    """
+    import signal
+
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+
+    def _on_alarm(signum: int, frame: object) -> None:
+        raise TimeoutError("ttcn full=True parser hung")
+
+    handler = signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(5)
+    try:
+        parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, handler)
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert parsed.ttcn.required_changes
+
+
 # ---------------------------------------------------------------------------
 # _search_pattern_in_lines: contract
 # ---------------------------------------------------------------------------

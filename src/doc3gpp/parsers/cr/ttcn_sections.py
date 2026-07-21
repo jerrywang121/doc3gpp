@@ -320,11 +320,22 @@ def _parse_ttcn_cr_single_correction(
                     key = "new_change"
                     continue
                 if _TABLE_CELL_RE.match(text):
+                    # ``text`` is the cell line; ``scan_idx`` was just
+                    # incremented past it at the top of the loop.
+                    # Step back so ``scan_idx`` points at the cell
+                    # line, then extract content starting there
+                    # (``_extract_change_from_table`` skips empty /
+                    # separator rows like ``| --- |`` until the first
+                    # real content row). ``advancing2`` is the count of
+                    # rows consumed; if it is zero (the cell line did
+                    # not match inside the helper — defensive, should
+                    # not happen since we just matched it), advance by
+                    # one to avoid an infinite loop on the same cell.
                     scan_idx -= 1
                     advancing2, content = _extract_change_from_table(
-                        lines[scan_idx - 1 :], max_lines=5
+                        lines[scan_idx:], max_lines=5
                     )
-                    scan_idx += advancing2
+                    scan_idx += advancing2 if advancing2 > 0 else 1
                     if content:
                         if key is None:
                             key = "new_change"

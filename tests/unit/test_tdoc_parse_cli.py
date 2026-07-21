@@ -608,6 +608,44 @@ def test_tdoc_parse_force_passed_through(sqlite_env, monkeypatch) -> None:
     assert fake.many_calls == [(["R5s260009"], True, False)]
 
 
+def test_tdoc_parse_full_passed_through(sqlite_env, monkeypatch) -> None:
+    """``--full`` reaches ``extract_many`` so TTCN ``before_change`` /
+    ``after_change`` / ``new_change`` extraction fires for every id in
+    the batch. Locks the wiring that previously silently dropped the
+    flag in the DB-mode path.
+    """
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result()})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--tdoc", "R5s260009", "--full", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [(["R5s260009"], False, True)]
+
+
+def test_tdoc_parse_full_and_force_compose(sqlite_env, monkeypatch) -> None:
+    """``--full`` and ``--force`` both reach ``extract_many`` when combined."""
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(results={"R5s260009": _make_result()})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--tdoc", "R5s260009", "--full", "--force", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    assert fake.many_calls == [(["R5s260009"], True, True)]
+
+
 def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) -> None:
     """When ``extract_many`` raises :class:`PythonDocxNotInstalledError`,
     the CLI prints the install hint and exits 1 — the batch does not

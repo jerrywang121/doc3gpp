@@ -232,7 +232,7 @@ class _FakeParser:
 
     def __init__(self, result: TDocCRParseResult) -> None:
         self._result = result
-        self.calls: list[str] = []
+        self.calls: list[tuple[str, bool]] = []
 
     parser_version = "1.0.0"
 
@@ -249,7 +249,7 @@ class _FakeParser:
         max_text_length: int = 0,
         full: bool = False,
     ) -> TDocCRParseResult:
-        self.calls.append(tdoc_id)
+        self.calls.append((tdoc_id, full))
         return self._result
 
 
@@ -427,3 +427,131 @@ def test_extract_three_upserts_use_matching_ftp_url(tmp_path: Path) -> None:
     ttcn_ftp = cr_ttcn_repo.upsert.call_args.args[0].ftp_url
     meta_ftp = cr_repo.upsert_extract_meta.call_args.args[0].ftp_url
     assert cover_ftp == ttcn_ftp == meta_ftp == "stored/R5s260009.zip"
+
+
+# ---------------------------------------------------------------------------
+# ``full`` kwarg plumbing — TTCN ``before_change`` / ``after_change`` /
+# ``new_change`` extraction requires ``full=True`` end-to-end.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_forwards_full_true_to_parser(tmp_path: Path) -> None:
+    """``extract(..., full=True)`` propagates ``full=True`` to the parser.
+
+    Without this plumbing the TTCN corrections sub-parser skips the
+    ``before_change`` / ``after_change`` / ``new_change`` extraction
+    loop, even when the caller explicitly opts in via ``--full``.
+    Regression-locks the wiring added so ``tdoc parse --full`` in DB
+    mode produces TTCN sidecars with the change-content fields.
+    """
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    zip_bytes = fixture.read_bytes()
+
+    cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
+    parser = _FakeParser(TDocCRParseResult(cover=cover))
+
+    service, _, _, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=zip_bytes,
+    )
+    service._parser = parser  # type: ignore[attr-defined]
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009",
+        type="CR",
+        ftp_url="stored/R5s260009.zip",
+    )
+
+    service.extract("R5s260009", full=True)
+
+    assert parser.calls == [("R5s260009", True)]
+
+
+def test_extract_full_defaults_to_false(tmp_path: Path) -> None:
+    """``extract()`` without ``full=`` defaults to ``False`` (metadata only)."""
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    zip_bytes = fixture.read_bytes()
+
+    cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
+    parser = _FakeParser(TDocCRParseResult(cover=cover))
+
+    service, _, _, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=zip_bytes,
+    )
+    service._parser = parser  # type: ignore[attr-defined]
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009",
+        type="CR",
+        ftp_url="stored/R5s260009.zip",
+    )
+
+    service.extract("R5s260009")
+
+    assert parser.calls == [("R5s260009", False)]
+
+
+def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
+    """``extract_many(..., full=True)`` propagates ``full=True`` to every
+    :meth:`TDocCrService.extract` call in the batch.
+
+    A batch where ``full`` is silently dropped would re-parse every TDoc
+    in metadata-only mode, producing the same empty
+    ``before_change`` / ``after_change`` / ``new_change`` gap that the
+    DB-mode ``tdoc parse --full`` flow used to exhibit.
+    """
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    zip_bytes = fixture.read_bytes()
+
+    cover_a = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
+    cover_b = TDocCRDetails(tdoc_id="R5s260051", spec="38.523-3", cr_num="3806")
+
+    extract_full_calls: list[tuple[str, bool, bool]] = []
+
+    class _RecordingParser:
+        parser_version = "1.0.0"
+
+        def supports(
+            self, tdoc_id: str, *, tdoc_type: str | None = None, spec: str | None = None,
+        ) -> bool:
+            return True
+
+        def parse(
+            self,
+            markdown: str,
+            *,
+            tdoc_id: str,
+            max_text_length: int = 0,
+            full: bool = False,
+        ) -> TDocCRParseResult:
+            extract_full_calls.append((tdoc_id, full))
+            return TDocCRParseResult(
+                cover=cover_a if tdoc_id == "R5s260009" else cover_b,
+            )
+
+    service, _, _, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=zip_bytes,
+    )
+    service._parser = _RecordingParser()  # type: ignore[attr-defined]
+    tdoc_repo.get_by_id.side_effect = lambda tdoc_id: TDoc(
+        tdoc_id=tdoc_id,
+        type="CR",
+        ftp_url=f"stored/{tdoc_id}.zip",
+    )
+
+    service.extract_many(["R5s260009", "R5s260051"], full=True)
+
+    assert extract_full_calls == [
+        ("R5s260009", True),
+        ("R5s260051", True),
+    ]
+    extract_full_calls.clear()
+    service.extract_many(["R5s260009", "R5s260051"])
+
+    assert extract_full_calls == [
+        ("R5s260009", False),
+        ("R5s260051", False),
+    ]

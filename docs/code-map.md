@@ -100,6 +100,14 @@ table below is for navigation only.
 | `get_settings` | function | `settings/loader.py` | Cached settings loader (env + TOML file). |
 | `find_config_file` | function | `settings/config_source.py` | TOML discovery (`$DOC3GPP_CONFIG` → `./doc3gpp.toml` → XDG). |
 | `load_config_data` | function | `settings/config_source.py` | `(path, dict)` for the active TOML file. |
+| `parse_dotted_key` | function | `settings/config_writer.py` | Split `a.b.c` into `[a, b, c]` segments. |
+| `patch_dotted` | function | `settings/config_writer.py` | Apply one dotted-key value into a TOML dict (deep set). |
+| `prune_empty_tables` | function | `settings/config_writer.py` | Drop tables that became empty after `patch_dotted`. |
+| `validate_against_settings` | function | `settings/config_writer.py` | Build a `Settings` model from the in-memory dict to validate a candidate value. |
+| `walk_known_dotted_keys` | function | `settings/config_writer.py` | Collect every dotted key reachable from a `Settings` subclass. |
+| `resolve_echo_subtree` | function | `settings/config_writer.py` | Slice the resolved `Settings` back to the dotted-key's subtree for `--dry-run` output. |
+| `write_toml` | function | `settings/config_writer.py` | Persist the patched dict to disk via `tomli_w`. |
+| `resolve_init_target` | function | `settings/config_writer.py` | Resolve `--init-target` to a writable `Path` (project / user / auto). |
 
 ## Filter / ID helpers (`src/doc3gpp/cli_filters.py`)
 
@@ -113,4 +121,8 @@ table below is for navigation only.
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 
-Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `config` (`path` / `show`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
+Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `config` (`path` / `show` / `set`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
+
+| Symbol | Kind | File | Role |
+| --- | --- | --- | --- |
+| `config_set` | Typer command | `cli.py` | Write one dotted key into the active TOML config file (or bootstrap one with `--init`); clears the settings cache so the new value is visible in the same process. |

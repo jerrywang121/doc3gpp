@@ -1302,6 +1302,69 @@ chain (CLI flags > environment variables > config file > defaults).
 Use this command to verify which file is in effect and to diff your
 TOML overrides against the built-in defaults.
 
+### doc3gpp config set
+
+Synopsis:
+
+```
+doc3gpp config set [OPTIONS] KEY VALUE
+```
+
+Purpose:
+
+- Write a single dotted key (e.g. `sync.auto_sync`) into the active
+  TOML config file, creating it when none is in use. Pydantic coerces
+  `value` to the schema field type, so `24h` is accepted for `timedelta`
+  fields and `true` / `false` for booleans. The settings cache is
+  cleared so the new value is visible to subsequent commands in the
+  same process.
+
+Arguments:
+
+- `KEY`: dotted setting key (`sync.auto_sync`, `output.format`,
+  `tdoc_parse.max_batch`, …). Must match a field declared on
+  `doc3gpp.settings.schema.Settings` — run `doc3gpp config show` to
+  list valid keys.
+- `VALUE`: value as a string. Pydantic validates the coerced result
+  before the file is written.
+
+Options:
+
+- `--init`: create the config file when none is in use (one of the
+  search locations in `config path` must be writable). Refuses when
+  `DOC3GPP_CONFIG` is set in the environment.
+- `--init-target {project,user,auto}`: where `--init` writes the new
+  file — `project` for `./doc3gpp.toml`, `user` for
+  `~/.config/doc3gpp/config.toml`. `auto` (default) picks `project`
+  when run from a project root, `user` otherwise.
+- `--init-force`: with `--init`, overwrite an existing file at the
+  bootstrap target.
+- `--dry-run`: validate the key + value and print what would be
+  written, without touching the file.
+
+Examples:
+
+```bash
+doc3gpp config set sync.auto_sync true
+doc3gpp config set output.format json
+doc3gpp config set --init sync.auto_sync true   # bootstrap a new config
+```
+
+Failure (bad value — pydantic rejects the coerced value before the
+file is touched):
+
+```text
+$ doc3gpp config set sync.meeting_sync_interval not-a-duration
+Error: Invalid value: sync.meeting_sync_interval must be a valid duration
+  (e.g. '24h', '30m', '90d', or an ISO 8601 string)
+```
+
+The full set of accepted value shapes is the same as the schema
+declaration in [`doc3gpp.toml.example`](https://github.com/jerrywang121/doc3gpp/blob/main/doc3gpp.toml.example).
+
+If `DOC3GPP_<SECTION>__<FIELD>` is set in the environment, it overrides
+this value at runtime (precedence: CLI > env > file > defaults).
+
 ## Examples
 
 ```bash

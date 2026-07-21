@@ -13,6 +13,8 @@
 #
 # Run `doc3gpp config show` to inspect the resolved configuration,
 # and `doc3gpp config path` to see which file is in effect.
+# Or run `doc3gpp config set <key> <value>` to edit values without
+# hand-editing the TOML (`--init` to bootstrap a new file).
 
 # ── Database ─────────────────────────────────────────────────────────────────
 # Mirrors the DOC3GPP_DATABASE_URL / DOC3GPP_DB_* env vars. Either layer

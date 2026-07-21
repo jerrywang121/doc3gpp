@@ -54,6 +54,7 @@ class _FakeScraper:
 class _FakeCrRepo:
     def __init__(self) -> None:
         self.by_url: dict[str, Any] = {}
+        self.upsert_extract_meta_calls: list[Any] = []
 
     def get(self, tdoc_id: str) -> list[Any]:
         return []
@@ -61,14 +62,36 @@ class _FakeCrRepo:
     def get_by_url(self, url: str) -> Any | None:
         return self.by_url.get(url)
 
-    def upsert(self, details: Any, extract_meta: Any) -> None:
+    def upsert(self, details: Any) -> None:
         self.by_url[details.ftp_url] = details
+
+    def upsert_extract_meta(self, extract_meta: Any) -> None:
+        self.upsert_extract_meta_calls.append(extract_meta)
 
     def get_extract_meta(self, tdoc_id: str) -> list[Any]:
         return []
 
     def get_extract_meta_by_url(self, url: str) -> Any | None:
         return None
+
+    def list_all(self) -> list[Any]:
+        return []
+
+
+class _FakeCrTtcnRepo:
+    """In-memory :class:`TDocCrTTCNDetailRepository` double."""
+
+    def __init__(self) -> None:
+        self.by_url: dict[str, Any] = {}
+
+    def upsert(self, details: Any) -> None:
+        self.by_url[details.ftp_url] = details
+
+    def get_by_url(self, url: str) -> Any | None:
+        return self.by_url.get(url)
+
+    def get(self, tdoc_id: str) -> list[Any]:
+        return []
 
     def list_all(self) -> list[Any]:
         return []
@@ -105,6 +128,7 @@ def service(tmp_path: Path) -> TDocCrService:
         cache=_FakeCache(tmp_path),
         scraper_client=_FakeScraper({}),
         cr_repository=_FakeCrRepo(),
+        cr_ttcn_repository=_FakeCrTtcnRepo(),
         tdoc_repository=_FakeTDocRepo(),
     )
 

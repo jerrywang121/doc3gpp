@@ -4,7 +4,7 @@ import dataclasses
 import json
 import logging
 import sys
-from dataclasses import fields as dataclass_fields
+from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, datetime
 from pathlib import Path
 from typing import TextIO
@@ -20,7 +20,11 @@ from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.sync import BulkSyncOutcome
-from doc3gpp.models.tdoc_cr import DirectParseBatchResult, TDocCRDetails, TDocExtractMeta
+from doc3gpp.models.tdoc_cr import (
+    DirectParseBatchResult,
+    TDocCRDetails,
+    TDocCRTTCNDetails,
+)
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
@@ -30,12 +34,14 @@ from doc3gpp.parsers.direct_extractor import (
     extract_tdoc_id_from_filename,
     is_3gpp_ftp_url,
 )
+from doc3gpp.parsers.cr.header import is_ttcn_tdoc
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
     build_tdoc_cr_repository,
     build_tdoc_cr_service,
+    build_tdoc_cr_ttcn_repository,
     build_tdoc_repository,
     build_tdoc_service,
     build_tdoc_sync_coordinator,
@@ -1547,7 +1553,6 @@ _DIRECT_PARSE_FIELDS: tuple[str, ...] = (
     "clauses_affected",
     "other_comments",
     "revision_history",
-    "details",
     "extracted_tdoc_id",
     "ftp_url",
 )
@@ -1843,50 +1848,78 @@ def _serialise_show_value(value: object) -> object:
     return value
 
 
+@dataclass(slots=True, frozen=True)
+class TDocShowRecord:
+    """Bundled output of ``tdoc show`` for the JSON / markdown / table renderers.
+
+    Carries the parent :class:`TDoc`, the optional cover-page row keyed
+    by the stored ``tdoc.ftp_url`` (the slim ``TDocCRDetails`` shape),
+    the optional TTCN sidecar (only populated for TTCN CRs), and the
+    extract ``extracted_at`` timestamp derived from ``tdoc_extracts``.
+    Keys are omitted (not null) in renderers when the corresponding
+    value is absent.
+
+    Attributes:
+        tdoc: The resolved parent TDoc row from the ``tdocs`` table.
+        cover: Slim cover-page fields keyed by ``tdoc.ftp_url``;
+            ``None`` when no extract row exists for that URL.
+        ttcn: TTCN sidecar keyed by ``tdoc.ftp_url``; ``None`` when no
+            sidecar row exists for that URL or when the TDoc is not
+            a TTCN CR.
+        extracted_at: Cache-extract timestamp for ``tdoc.ftp_url``;
+            ``None`` when no ``tdoc_extracts`` row exists for that URL.
+    """
+
+    tdoc: TDoc
+    cover: TDocCRDetails | None = None
+    ttcn: TDocCRTTCNDetails | None = None
+    extracted_at: datetime | None = None
+
+
 def _render_tdoc_show_json(
-    record: TDoc,
-    details_list: list[TDocCRDetails],
-    meta_list: list[TDocExtractMeta],
+    record: TDocShowRecord,
     output: str | None,
 ) -> None:
     """Emit ``tdoc show --format json``.
 
-    The payload is a single object with two top-level keys:
+    The payload is a single object with the following top-level keys.
+    Each optional key is **omitted** (not emitted as ``null``) when no
+    corresponding row exists, so the JSON stays dense for hits and
+    sparse for misses:
 
     - ``tdoc``: every :class:`TDoc` field, normalised via
-      :func:`_serialise_show_value` so ``date``/``datetime`` come out as
-      ISO-8601 strings.
-    - ``details``: one element per stored revision, mirroring the
-      printed block plus an ``extract_meta`` sub-object when the row
-      has a matching :class:`TDocExtractMeta`.
+      :func:`_serialise_show_value` so ``date`` / ``datetime`` come out
+      as ISO-8601 strings.
+    - ``cover``: slim cover-page fields keyed by ``tdoc.ftp_url``;
+      every dataclass field of :class:`TDocCRDetails` is serialised.
+    - ``ttcn``: TTCN sidecar keyed by ``tdoc.ftp_url``; every
+      dataclass field of :class:`TDocCRTTCNDetails` is serialised. The
+      ``required_changes`` ``list[dict]`` falls through to the default
+      branch and serialises as a JSON array.
+    - ``extracted_at``: ISO-8601 string for the cache-extract
+      timestamp sourced from the ``tdoc_extracts`` row at
+      ``tdoc.ftp_url``. Lives at the top level rather than nested
+      under ``cover`` / ``ttcn`` because both detail rows no longer
+      carry their own timestamps after the slimming.
     """
-    tdoc_obj = {
-        f.name: _serialise_show_value(getattr(record, f.name))
-        for f in dataclass_fields(record)
+    payload: dict[str, object] = {
+        "tdoc": {
+            f.name: _serialise_show_value(getattr(record.tdoc, f.name))
+            for f in dataclass_fields(record.tdoc)
+        },
     }
-    meta_by_url = {meta.ftp_url: meta for meta in meta_list}
-    details_objs: list[dict[str, object]] = []
-    for details in details_list:
-        obj = {
-            f.name: _serialise_show_value(getattr(details, f.name))
-            for f in dataclass_fields(details)
+    if record.cover is not None:
+        payload["cover"] = {
+            f.name: _serialise_show_value(getattr(record.cover, f.name))
+            for f in dataclass_fields(record.cover)
         }
-        meta = meta_by_url.get(details.ftp_url or "")
-        if meta is not None:
-            obj["extract_meta"] = {
-                "ftp_url": meta.ftp_url,
-                "tdoc_id": meta.tdoc_id,
-                "zip_path": meta.zip_path,
-                "markdown_path": meta.markdown_path,
-                "doc_filename": meta.doc_filename,
-                "extracted_at": _serialise_show_value(meta.extracted_at),
-                "parser_version": meta.parser_version,
-            }
-        else:
-            obj["extract_meta"] = None
-        details_objs.append(obj)
-
-    payload: dict[str, object] = {"tdoc": tdoc_obj, "details": details_objs}
+    if record.ttcn is not None:
+        payload["ttcn"] = {
+            f.name: _serialise_show_value(getattr(record.ttcn, f.name))
+            for f in dataclass_fields(record.ttcn)
+        }
+    if record.extracted_at is not None:
+        payload["extracted_at"] = _serialise_show_value(record.extracted_at)
     stream, close_after = _open_output(output)
     try:
         json.dump(payload, stream, ensure_ascii=False, indent=2)
@@ -1897,33 +1930,44 @@ def _render_tdoc_show_json(
 
 
 def _render_tdoc_show_markdown(
-    record: TDoc,
-    details_list: list[TDocCRDetails],
-    meta_list: list[TDocExtractMeta],
+    record: TDocShowRecord,
     output: str | None,
 ) -> None:
     """Emit ``tdoc show --format markdown``.
 
-    The TDoc row becomes a bullet list under a ``Metadata`` heading;
-    each detail row becomes its own ``Extracted Details #N`` section.
-    The nested ``details`` dict is rendered as a JSON fenced block so
-    it round-trips through any Markdown viewer. Long free-text fields
-    are **not** truncated in this mode (callers using Markdown for
-    archival want the full text).
+    The TDoc row becomes a bullet list under a ``Metadata`` heading.
+    When a slim cover-page row exists for ``tdoc.ftp_url`` it renders
+    under ``## Extracted Cover Details``; when a TTCN sidecar exists it
+    renders under ``## TTCN Details``. When neither is present and no
+    ``extracted_at`` is known, a "_no extracted details_" placeholder
+    is emitted.
+
+    ``required_changes`` on the TTCN sidecar renders as a JSON fenced
+    block (matching the legacy ``details``-field rendering convention)
+    so the structured content round-trips through any Markdown viewer.
+    Long free-text fields are **not** truncated in this mode — callers
+    using Markdown for archival want the full text. ``extracted_at``
+    is sourced from the ``tdoc_extracts`` row and lives under the
+    ``Extracted Cover Details`` section (or as its own bullet when
+    only the timestamp is known).
     """
     stream, close_after = _open_output(output)
     try:
-        stream.write(f"# TDoc `{record.tdoc_id}`\n\n")
+        stream.write(f"# TDoc `{record.tdoc.tdoc_id}`\n\n")
         stream.write("## Metadata\n\n")
-        for f in dataclass_fields(record):
-            value = _serialise_show_value(getattr(record, f.name))
+        for f in dataclass_fields(record.tdoc):
+            value = _serialise_show_value(getattr(record.tdoc, f.name))
             if value is None:
                 rendered = "—"
             else:
                 rendered = str(value)
             stream.write(f"- **{f.name}**: {rendered}\n")
 
-        if not details_list and not meta_list:
+        if (
+            record.cover is None
+            and record.ttcn is None
+            and record.extracted_at is None
+        ):
             stream.write("\n## Extracted Details\n\n")
             stream.write(
                 "_No extracted details; run "
@@ -1931,12 +1975,26 @@ def _render_tdoc_show_markdown(
             )
             return
 
-        meta_by_url = {meta.ftp_url: meta for meta in meta_list}
-        for idx, details in enumerate(details_list, start=1):
-            stream.write(f"\n## Extracted Details #{idx}\n\n")
-            for f in dataclass_fields(details):
-                value = getattr(details, f.name)
-                if f.name == "details" and isinstance(value, dict):
+        if record.cover is not None:
+            stream.write("\n## Extracted Cover Details\n\n")
+            for f in dataclass_fields(record.cover):
+                # Defensive: the slim cover dataclass no longer carries
+                # ``details`` or ``parser_version``, but skip defensively in
+                # case a stale code path slips through.
+                if f.name in {"details", "parser_version"}:
+                    continue
+                value = getattr(record.cover, f.name)
+                formatted = _serialise_show_value(value)
+                rendered = "—" if formatted is None else str(formatted)
+                stream.write(f"- **{f.name}**: {rendered}\n")
+            if record.extracted_at is not None:
+                stream.write(f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n")
+
+        if record.ttcn is not None:
+            stream.write("\n## TTCN Details\n\n")
+            for f in dataclass_fields(record.ttcn):
+                value = getattr(record.ttcn, f.name)
+                if f.name == "required_changes" and isinstance(value, list):
                     stream.write(f"- **{f.name}**:\n\n```json\n")
                     stream.write(
                         json.dumps(value, ensure_ascii=False, indent=2)
@@ -1946,34 +2004,35 @@ def _render_tdoc_show_markdown(
                 formatted = _serialise_show_value(value)
                 rendered = "—" if formatted is None else str(formatted)
                 stream.write(f"- **{f.name}**: {rendered}\n")
-            meta = meta_by_url.get(details.ftp_url or "")
-            if meta is not None:
-                stream.write(
-                    f"  - **extracted_at**: {_fmt_dt(meta.extracted_at)}\n"
-                )
     finally:
         if close_after:
             stream.close()
 
 
 def _render_tdoc_show_table(
-    record: TDoc,
-    details_list: list[TDocCRDetails],
-    meta_list: list[TDocExtractMeta],
+    record: TDocShowRecord,
     output: str | None,
 ) -> None:
     """Emit ``tdoc show --format table`` (the default).
 
-    Preserves the historical line-oriented output exactly so operator
-    muscle memory and existing shell scripts keep working. The only
-    addition is honouring ``--output`` / ``-o``: previously the
-    command always wrote to stdout via ``typer.echo``.
+    Preserves the historical line-oriented output so operator muscle
+    memory and existing shell scripts keep working. The slim
+    ``TDocCRDetails`` dataclass no longer carries ``parser_version``
+    or ``details`` — those lines are dropped. ``extracted_at`` is
+    sourced from the ``tdoc_extracts`` row at ``tdoc.ftp_url`` and is
+    emitted on the same line-position as before; when no extract row
+    exists, ``extracted_at: -`` is rendered.
+
+    When the TTCN sidecar is also present the renderer emits an
+    extra ``[TTCN Details]`` block with the six overview fields and a
+    ``required_changes: <count> item(s)`` summary line, matching the
+    markdown renderer's convention.
     """
     stream, close_after = _open_output(output)
     try:
         stream.write("[TDoc]\n")
-        for f in dataclass_fields(record):
-            value = getattr(record, f.name)
+        for f in dataclass_fields(record.tdoc):
+            value = getattr(record.tdoc, f.name)
             if value is None:
                 value = "-"
             elif hasattr(value, "isoformat"):
@@ -1982,15 +2041,27 @@ def _render_tdoc_show_table(
                 value = str(value)
             stream.write(f"{f.name}: {value}\n")
 
-        if not details_list and not meta_list:
-            stream.write("[Extracted Details]\n")
+        if record.cover is None:
+            # No cover row exists for ``tdoc.ftp_url`` — skip the
+            # ``[Extracted Details]`` section header so the placeholder
+            # message is the only thing rendered under the ``[TDoc]``
+            # block. The header re-appears once a real cover row
+            # surfaces (see the ``record.cover is not None`` branch
+            # below).
             stream.write(
                 "No extracted details; run `doc3gpp tdoc parse --tdoc <id>` first.\n"
             )
-            return
+            if record.extracted_at is not None:
+                stream.write(
+                    f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+                )
+            else:
+                stream.write("extracted_at: -\n")
+            if record.ttcn is None:
+                return
 
-        meta_by_url = {meta.ftp_url: meta for meta in meta_list}
-        for details in details_list:
+        if record.cover is not None:
+            details = record.cover
             stream.write("[Extracted Details]\n")
             if details.ftp_url:
                 stream.write(f"ftp_url: {details.ftp_url}\n")
@@ -2013,14 +2084,27 @@ def _render_tdoc_show_table(
                 "consequences_if_not_approved: "
                 f"{_truncate_for_display(details.consequences_if_not_approved)}\n"
             )
-            stream.write(f"clauses_affected: {details.clauses_affected or '-'}\n")
-            stream.write(f"parser_version: {details.parser_version}\n")
             stream.write(
-                f"details: {json.dumps(details.details, ensure_ascii=False, indent=2)}\n"
+                f"clauses_affected: {details.clauses_affected or '-'}\n"
             )
-            meta = meta_by_url.get(details.ftp_url or "")
-            if meta is not None:
-                stream.write(f"extracted_at: {_fmt_dt(meta.extracted_at)}\n")
+            if record.extracted_at is not None:
+                stream.write(f"extracted_at: {_fmt_dt(record.extracted_at)}\n")
+            else:
+                stream.write("extracted_at: -\n")
+
+        if record.ttcn is not None:
+            ttcn = record.ttcn
+            stream.write("[TTCN Details]\n")
+            if ttcn.ftp_url:
+                stream.write(f"ftp_url: {ttcn.ftp_url}\n")
+            stream.write(f"testcase: {ttcn.testcase or '-'}\n")
+            stream.write(f"ue: {ttcn.ue or '-'}\n")
+            stream.write(f"ss: {ttcn.ss or '-'}\n")
+            stream.write(f"ats_version: {ttcn.ats_version or '-'}\n")
+            stream.write(f"ttcn_release: {ttcn.ttcn_release or '-'}\n")
+            stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
+            count = len(ttcn.required_changes)
+            stream.write(f"required_changes: {count} item(s)\n")
     finally:
         if close_after:
             stream.close()
@@ -2523,15 +2607,32 @@ def tdoc_show(
         return
 
     cr_repo = build_tdoc_cr_repository()
-    details_list = cr_repo.get(tdoc)
-    meta_list = cr_repo.get_extract_meta(tdoc)
+    cr_ttcn_repo = build_tdoc_cr_ttcn_repository()
+
+    cover: TDocCRDetails | None = None
+    extracted_at: datetime | None = None
+    ttcn: TDocCRTTCNDetails | None = None
+    if record.ftp_url:
+        cover = cr_repo.get_by_url(record.ftp_url)
+        meta = cr_repo.get_extract_meta_by_url(record.ftp_url)
+        if meta is not None:
+            extracted_at = meta.extracted_at
+        if is_ttcn_tdoc(record.tdoc_id):
+            ttcn = cr_ttcn_repo.get_by_url(record.ftp_url)
+
+    show_record = TDocShowRecord(
+        tdoc=record,
+        cover=cover,
+        ttcn=ttcn,
+        extracted_at=extracted_at,
+    )
 
     if fmt == "json":
-        _render_tdoc_show_json(record, details_list, meta_list, output)
+        _render_tdoc_show_json(show_record, output)
     elif fmt == "markdown":
-        _render_tdoc_show_markdown(record, details_list, meta_list, output)
+        _render_tdoc_show_markdown(show_record, output)
     else:
-        _render_tdoc_show_table(record, details_list, meta_list, output)
+        _render_tdoc_show_table(show_record, output)
 
 
 @tsg_app.command("list")

@@ -19,7 +19,11 @@ from typer.testing import CliRunner
 from doc3gpp.cli import app
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
-from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+from doc3gpp.models.tdoc_cr import (
+    TDocCRDetails,
+    TDocCRTTCNDetails,
+    TDocExtractMeta,
+)
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.services.tdoc_cr_service import (
     BatchExtractResult,
@@ -159,18 +163,76 @@ class _FakeMeetingService:
 class _FakeCrDetailRepo:
     """In-memory :class:`TDocCrDetailRepository` double that answers ``get(tdoc_id)``.
 
-    Only ``get`` is exercised by the ``tdoc parse`` filter branch; an
-    empty return list means "not parsed" and a one-element list means
-    "at least one detail row exists" (mirroring the real repo contract).
+    Mirrors the slim cover-page repo surface: ``get`` /
+    ``get_by_url`` for reads, ``upsert`` for cover-row writes, and
+    ``upsert_extract_meta`` for the extract-metadata sidecar. The
+    ``tdoc parse`` filter branch only exercises ``get``; the
+    ``tdoc show`` branch exercises ``get_by_url`` and
+    ``get_extract_meta_by_url``.
     """
 
-    def __init__(self, parsed_ids: set[str]) -> None:
-        self._parsed = parsed_ids
+    def __init__(
+        self,
+        parsed_ids: set[str] | None = None,
+        by_url: dict[str, TDocCRDetails] | None = None,
+        extract_meta_by_url: dict[str, TDocExtractMeta] | None = None,
+    ) -> None:
+        self._parsed = parsed_ids or set()
+        self._by_url = by_url or {}
+        self._extract_meta_by_url = extract_meta_by_url or {}
         self.get_calls: list[str] = []
+        self.get_by_url_calls: list[str] = []
+        self.upsert_calls: list[TDocCRDetails] = []
+        self.upsert_extract_meta_calls: list[TDocExtractMeta] = []
 
     def get(self, tdoc_id: str) -> list:
         self.get_calls.append(tdoc_id)
         return [] if tdoc_id not in self._parsed else [_SENTINEL_DETAIL]
+
+    def get_by_url(self, url: str) -> TDocCRDetails | None:
+        self.get_by_url_calls.append(url)
+        return self._by_url.get(url)
+
+    def upsert(self, details: TDocCRDetails) -> None:
+        self.upsert_calls.append(details)
+
+    def upsert_extract_meta(self, meta: TDocExtractMeta) -> None:
+        self.upsert_extract_meta_calls.append(meta)
+
+    def get_extract_meta(self, tdoc_id: str) -> list:
+        return []
+
+    def get_extract_meta_by_url(self, url: str) -> TDocExtractMeta | None:
+        return self._extract_meta_by_url.get(url)
+
+    def list_all(self) -> list:
+        return []
+
+
+class _FakeCrTtcnRepo:
+    """In-memory :class:`TDocCrTTCNDetailRepository` double.
+
+    Records every ``upsert`` / ``get_by_url`` call so tests can verify
+    that ``tdoc show`` only touches the TTCN table for TTCN-shape ids.
+    """
+
+    def __init__(self, by_url: dict[str, TDocCRTTCNDetails] | None = None) -> None:
+        self._by_url = by_url or {}
+        self.upsert_calls: list[TDocCRTTCNDetails] = []
+        self.get_by_url_calls: list[str] = []
+
+    def upsert(self, details: TDocCRTTCNDetails) -> None:
+        self.upsert_calls.append(details)
+
+    def get_by_url(self, url: str) -> TDocCRTTCNDetails | None:
+        self.get_by_url_calls.append(url)
+        return self._by_url.get(url)
+
+    def get(self, tdoc_id: str) -> list[TDocCRTTCNDetails]:
+        return []
+
+    def list_all(self) -> list[TDocCRTTCNDetails]:
+        return []
 
 
 _SENTINEL_DETAIL = object()
@@ -232,7 +294,11 @@ def _patch_meeting_service(
 
 
 def _patch_cr_repo(
-    monkeypatch, parsed_ids: set[str]
+    monkeypatch,
+    parsed_ids: set[str] | None = None,
+    *,
+    by_url: dict[str, TDocCRDetails] | None = None,
+    extract_meta_by_url: dict[str, TDocExtractMeta] | None = None,
 ) -> "_FakeCrDetailRepo":
     """Stub ``build_tdoc_cr_repository`` so ``tdoc parse`` can probe parsed status.
 
@@ -240,11 +306,35 @@ def _patch_cr_repo(
     (``get(tdoc_id)`` returns a non-empty list for these). Records
     every ``get`` call so the test can verify the CLI checked parsed
     status per row when ``force=False``.
+
+    Pass ``by_url`` / ``extract_meta_by_url`` to seed the URL-keyed
+    lookups used by ``tdoc show``.
     """
-    fake = _FakeCrDetailRepo(parsed_ids)
+    fake = _FakeCrDetailRepo(
+        parsed_ids=parsed_ids or set(),
+        by_url=by_url,
+        extract_meta_by_url=extract_meta_by_url,
+    )
 
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_cr_repository",
+        lambda: fake,
+    )
+    return fake
+
+
+def _patch_cr_ttcn_repo(
+    monkeypatch,
+    *,
+    by_url: dict[str, TDocCRTTCNDetails] | None = None,
+) -> "_FakeCrTtcnRepo":
+    """Stub ``build_tdoc_cr_ttcn_repository`` so ``tdoc show`` can probe the sidecar.
+
+    Pass ``by_url`` to seed TTCN detail rows keyed by ``ftp_url``.
+    """
+    fake = _FakeCrTtcnRepo(by_url=by_url)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_ttcn_repository",
         lambda: fake,
     )
     return fake
@@ -1543,18 +1633,22 @@ def test_tdoc_parse_max_batch_applies_after_excluding_parsed(
 
 
 def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
-    """Insert a parent TDoc + a populated CR detail row via the real repo.
+    """Insert a parent TDoc + a populated CR detail row + extract metadata.
 
     Uses the SQL repositories directly so the test exercises the same
     write path the production CLI relies on. The CR detail row carries
     enough fields to verify the ``[Extracted Details]`` block output.
     The URL defaults to a unique-per-call value so multiple seeds in
     the same test produce distinct (URL-keyed) detail rows.
+
+    The parent TDoc's ``ftp_url`` is also populated — the new
+    URL-keyed ``tdoc show`` lookup requires the TDoc row to carry
+    the same ``ftp_url`` the cover row was persisted under.
     """
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
-    tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR"))
     resolved_url = url or f"stored/{tdoc_id}.zip"
+    tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=resolved_url))
     details = TDocCRDetails(
         tdoc_id=tdoc_id,
         spec="38.523-3",
@@ -1571,21 +1665,7 @@ def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
         reason_for_change="Some long reason " * 20,
         consequences_if_not_approved="Consequence text " * 15,
         clauses_affected="5.3.4.2",
-        details={
-            "overview": {
-                "ats_version": "iwd-TTCN3-B2512-260-eng",
-                "ttcn_release": "B2512",
-                "testcase": "7.1.3.5.3",
-                "test_suite": "NR5GC",
-                "ue": "UE1",
-                "ss": "SS_NR5G",
-            },
-            "corrections": [
-                {"function_name": "fl_TC_7_1_3_5_3_Body"},
-            ],
-        },
         ftp_url=resolved_url,
-        parser_version="1.0.0",
     )
     meta = TDocExtractMeta(
         ftp_url=resolved_url,
@@ -1594,7 +1674,8 @@ def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
         markdown_path="/tmp/cache/markdown/R5s260009.md",
         doc_filename="R5s260009.docx",
     )
-    cr_repo.upsert(details, meta)
+    cr_repo.upsert(details)
+    cr_repo.upsert_extract_meta(meta)
 
 
 def test_tdoc_show_happy_path(sqlite_env, monkeypatch) -> None:
@@ -1612,9 +1693,9 @@ def test_tdoc_show_happy_path(sqlite_env, monkeypatch) -> None:
     assert "spec: 38.523-3" in result.output
     assert "cr_num: 3790" in result.output
     assert "title: Example CR for tests" in result.output
-    assert "details:" in result.output
     assert "reason_for_change:" in result.output
     assert "..." in result.output  # truncation ellipsis
+    assert "extracted_at:" in result.output
 
 
 def test_tdoc_show_no_extract_row(sqlite_env) -> None:
@@ -1630,6 +1711,7 @@ def test_tdoc_show_no_extract_row(sqlite_env) -> None:
     assert "tdoc_id: R5s260010" in result.output
     assert "No extracted details" in result.output
     assert "doc3gpp tdoc parse" in result.output
+    assert "extracted_at: -" in result.output
 
 
 def test_tdoc_show_unknown_tdoc_raises_bad_parameter(sqlite_env) -> None:
@@ -1639,6 +1721,39 @@ def test_tdoc_show_unknown_tdoc_raises_bad_parameter(sqlite_env) -> None:
     result = runner.invoke(app, ["tdoc", "show", "--tdoc", "bogus"])
     assert result.exit_code != 0
     assert "Unknown TDoc 'bogus'" in result.output
+
+
+def test_tdoc_show_no_ftp_url_skips_cover_and_ttcn(sqlite_env) -> None:
+    """A TDoc row without an ``ftp_url`` never touches the CR repos.
+
+    The CR detail / TTCN sidecar lookups are URL-keyed, so a TDoc
+    with no stored URL renders just the ``[TDoc]`` block plus the
+    ``extracted_at: -`` placeholder — no extracted detail / TTCN
+    section is emitted even when rows exist at other URLs.
+    """
+    create_schema()
+    # Seed two stored detail rows so the DB has matches at the same
+    # tdoc_id — the lookup still must not find them because there is
+    # no URL to probe with.
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260011", type="CR", ftp_url=None),
+    )
+    cr_repo = SQLAlchemyTDocCrRepository()
+    cr_repo.upsert(TDocCRDetails(
+        tdoc_id="R5s260011",
+        spec="38.523-3",
+        cr_num="3790",
+        ftp_url="stored/R5s260011_someremote.zip",
+    ))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260011"])
+    assert result.exit_code == 0, result.output
+    assert "[TDoc]" in result.output
+    assert "No extracted details" in result.output
+    assert "extracted_at: -" in result.output
+    assert "[Extracted Details]" not in result.output
+    assert "cr_num: 3790" not in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -1716,23 +1831,33 @@ def test_tdoc_show_missing_tdoc_option_is_required(sqlite_env) -> None:
     assert result.exit_code != 0
 
 
-def test_tdoc_show_renders_multiple_revisions(sqlite_env) -> None:
-    """Two distinct URLs for the same TDoc id render as separate
-    ``[Extracted Details]`` blocks (most recent first)."""
+def test_tdoc_show_renders_distinct_revisions(sqlite_env) -> None:
+    """Two distinct URLs for the same TDoc id show up at the URL-keyed output.
+
+    Under the slim URL-keyed lookup, ``tdoc show --tdoc R5s260009``
+    (which has ``ftp_url = stored/R5s260009.zip``) renders only that
+    specific revision's cover row. The second URL (``rev2``) is
+    persisted but not displayed unless the operator points
+    ``--tdoc`` at it specifically.
+    """
     create_schema()
+    # Seed two cover rows at distinct URLs, then pin the parent TDoc's
+    # ``ftp_url`` to the first URL so the URL-keyed lookup selects it.
     _seed_full_crdetail_row("R5s260009")
     _seed_full_crdetail_row(
         "R5s260009",
         url="stored/R5s260009_rev2.zip",
     )
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/R5s260009.zip"),
+    )
 
     runner = CliRunner()
     result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260009"])
     assert result.exit_code == 0, result.output
-    # Two distinct URLs surface as two ``[Extracted Details]`` blocks.
     assert "R5s260009.zip" in result.output
-    assert "R5s260009_rev2.zip" in result.output
-    assert result.output.count("[Extracted Details]") == 2
+    assert "R5s260009_rev2.zip" not in result.output
+    assert result.output.count("[Extracted Details]") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1741,7 +1866,7 @@ def test_tdoc_show_renders_multiple_revisions(sqlite_env) -> None:
 
 
 def test_tdoc_show_format_json_happy_path(sqlite_env) -> None:
-    """``--format json`` emits one JSON object with ``tdoc`` and ``details``."""
+    """``--format json`` emits one JSON object with ``tdoc`` + ``cover`` + ``extracted_at``."""
     create_schema()
     _seed_full_crdetail_row("R5s260009")
 
@@ -1756,20 +1881,115 @@ def test_tdoc_show_format_json_happy_path(sqlite_env) -> None:
     assert payload["tdoc"]["reservation_date"] in (None, "-") or isinstance(
         payload["tdoc"]["reservation_date"], str
     )
-    assert isinstance(payload["details"], list)
-    assert len(payload["details"]) == 1
-    detail = payload["details"][0]
-    assert detail["tdoc_id"] == "R5s260009"
-    assert detail["spec"] == "38.523-3"
-    assert detail["cr_num"] == "3790"
-    assert detail["date"] == "2026-06-12"
-    assert detail["details"]["overview"]["ats_version"] == "iwd-TTCN3-B2512-260-eng"
-    assert detail["extract_meta"] is not None
-    assert detail["extract_meta"]["tdoc_id"] == "R5s260009"
+    assert payload["cover"]["tdoc_id"] == "R5s260009"
+    assert payload["cover"]["spec"] == "38.523-3"
+    assert payload["cover"]["cr_num"] == "3790"
+    assert payload["cover"]["date"] == "2026-06-12"
+    assert "details" not in payload["cover"]
+    assert "parser_version" not in payload["cover"]
+    assert "extracted_at" in payload
+    assert isinstance(payload["extracted_at"], str)
+
+
+def test_tdoc_show_format_json_omits_ttcn_for_non_ttcn_tdoc(sqlite_env) -> None:
+    """A non-TTCN TDoc (e.g. ``R5-260020``) never emits a ``ttcn`` block even when rows exist for the same id."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260020", type="LS", ftp_url="stored/R5-260020.zip"),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5-260020", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["tdoc"]["tdoc_id"] == "R5-260020"
+    assert "cover" not in payload
+    assert "ttcn" not in payload
+
+
+def test_tdoc_show_format_json_includes_ttcn_block(sqlite_env) -> None:
+    """A TTCN TDoc (e.g. ``R5s260009``) emits a ``ttcn`` block when a sidecar row exists."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/R5s260009.zip"),
+    )
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260009",
+            ftp_url="stored/R5s260009.zip",
+            testcase="7.1.3.5.3",
+            ue="UE1",
+            ss="SS_NR5G",
+            ats_version="iwd-TTCN3-B2512-260-eng",
+            ttcn_release="B2512",
+            test_suite="NR5GC",
+            required_changes=[{"function_name": "fl_TC_7_1_3_5_3_Body"}],
+        ),
+    )
+    # Seed the extract metadata so the CLI can surface ``extracted_at``
+    # in the JSON payload (sourced from the ``tdoc_extracts`` row).
+    SQLAlchemyTDocCrRepository().upsert_extract_meta(
+        TDocExtractMeta(
+            ftp_url="stored/R5s260009.zip",
+            tdoc_id="R5s260009",
+            zip_path="/cache/zips/R5s260009.zip",
+            markdown_path="/cache/markdown/abc.bin",
+            doc_filename="R5s260009.docx",
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "ttcn" in payload
+    assert payload["ttcn"]["tdoc_id"] == "R5s260009"
+    assert payload["ttcn"]["testcase"] == "7.1.3.5.3"
+    assert payload["ttcn"]["ats_version"] == "iwd-TTCN3-B2512-260-eng"
+    assert payload["ttcn"]["required_changes"] == [
+        {"function_name": "fl_TC_7_1_3_5_3_Body"},
+    ]
+    assert "extracted_at" in payload
+
+
+def test_tdoc_show_format_json_skips_ttcn_for_non_ttcn_id(sqlite_env) -> None:
+    """The TTCN gate is structural: ``R5-260020`` never reads the TTCN sidecar even when rows exist."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260020", type="CR", ftp_url="stored/R5-260020.zip"),
+    )
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+
+    # Persist a sidecar row at the same URL — it must not surface in
+    # the CLI output because ``is_ttcn_tdoc(R5-260020)`` is False.
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5-260020",
+            ftp_url="stored/R5-260020.zip",
+            testcase="placeholder",
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5-260020", "--format", "json"]
+    )
+    payload = json.loads(result.output)
+    assert "ttcn" not in payload
 
 
 def test_tdoc_show_format_markdown_happy_path(sqlite_env) -> None:
-    """``--format markdown`` emits a Markdown document with per-revision sections."""
+    """``--format markdown`` emits a Markdown document with a cover section."""
     create_schema()
     _seed_full_crdetail_row("R5s260009")
 
@@ -1780,11 +2000,41 @@ def test_tdoc_show_format_markdown_happy_path(sqlite_env) -> None:
     assert result.exit_code == 0, result.output
     assert "# TDoc `R5s260009`" in result.output
     assert "## Metadata" in result.output
-    assert "## Extracted Details #1" in result.output
-    assert "```json" in result.output
-    assert "iwd-TTCN3-B2512-260-eng" in result.output
+    assert "## Extracted Cover Details" in result.output
     assert "38.523-3" in result.output
     assert "3790" in result.output
+    assert "## TTCN Details" not in result.output
+
+
+def test_tdoc_show_format_markdown_includes_ttcn_section_for_ttcn_tdoc(sqlite_env) -> None:
+    """A TTCN TDoc with a sidecar row gets a ``## TTCN Details`` markdown section."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/R5s260009.zip"),
+    )
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260009",
+            ftp_url="stored/R5s260009.zip",
+            testcase="7.1.3.5.3",
+            ue="UE1",
+            required_changes=[{"function_name": "fl_TC_7_1_3_5_3_Body"}],
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "markdown"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "## TTCN Details" in result.output
+    assert "**testcase**: 7.1.3.5.3" in result.output
+    assert "```json" in result.output
+    assert "fl_TC_7_1_3_5_3_Body" in result.output
 
 
 def test_tdoc_show_format_markdown_no_extract_row(sqlite_env) -> None:
@@ -1843,7 +2093,8 @@ def test_tdoc_show_format_json_output_writes_to_file(sqlite_env, tmp_path) -> No
     assert result.exit_code == 0, result.output
     payload = json.loads(out_path.read_text())
     assert payload["tdoc"]["tdoc_id"] == "R5s260009"
-    assert payload["details"][0]["cr_num"] == "3790"
+    assert payload["cover"]["cr_num"] == "3790"
+    assert "extracted_at" in payload
 
 
 def test_tdoc_show_format_raw_emits_cached_markdown(

@@ -6,6 +6,7 @@ letting callers depend only on the Protocol-typed service interface.
 
 from __future__ import annotations
 
+from doc3gpp.repository.protocols import TDocCrTTCNDetailRepository
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.services.meetings_service import MeetingService
@@ -18,6 +19,7 @@ from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
@@ -55,10 +57,18 @@ def build_tdoc_cr_repository() -> SQLAlchemyTDocCrRepository:
 
     Used by the Phase 7 ``tdoc show`` CLI command to surface a
     previously extracted ``tdoc_cr_details`` row next to its parent
-    ``TDoc`` without going through the full extraction service. Keeps
-    the existing :func:`build_tdoc_cr_service` factory untouched.
+    ``TDoc`` without going through the full extraction service.
     """
     return SQLAlchemyTDocCrRepository()
+
+
+def build_tdoc_cr_ttcn_repository() -> SQLAlchemyTDocCrTtcnRepository:
+    """Construct a :class:`SQLAlchemyTDocCrTtcnRepository` for direct lookups.
+
+    Used by the Phase 7 ``tdoc show`` CLI command to surface a
+    previously extracted ``tdoc_cr_ttcn_details`` row for TTCN CRs.
+    """
+    return SQLAlchemyTDocCrTtcnRepository()
 
 
 def build_tdoc_file_service() -> TDocFileService:
@@ -94,7 +104,9 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
     )
 
 
-def build_tdoc_cr_service() -> TDocCrService:
+def build_tdoc_cr_service(
+    cr_ttcn_repository: TDocCrTTCNDetailRepository | None = None,
+) -> TDocCrService:
     """Construct a :class:`TDocCrService` for the ``tdoc parse`` command.
 
     Wires together:
@@ -105,7 +117,9 @@ def build_tdoc_cr_service() -> TDocCrService:
     * A fresh :class:`~doc3gpp.scraping.client.ScraperClient` (the
       client reads its own settings via :func:`get_settings`).
     * :class:`~doc3gpp.storage.repositories.tdoc_cr_sql.SQLAlchemyTDocCrRepository`
-      for the detail + extract-metadata tables.
+      for the cover-page detail table.
+    * :class:`~doc3gpp.storage.repositories.tdoc_cr_ttcn_sql.SQLAlchemyTDocCrTtcnRepository`
+      for the TTCN sidecar table.
     * :class:`~doc3gpp.storage.repositories.tdoc_sql.SQLAlchemyTDocRepository`
       for read-only ``tdocs`` lookups (type guard) and for the FK
       probe that gates ``tdoc_extracts`` / ``tdoc_cr_details`` writes
@@ -128,5 +142,6 @@ def build_tdoc_cr_service() -> TDocCrService:
         ),
         scraper_client=ScraperClient(),
         cr_repository=SQLAlchemyTDocCrRepository(),
+        cr_ttcn_repository=cr_ttcn_repository or build_tdoc_cr_ttcn_repository(),  # type: ignore[call-arg]
         tdoc_repository=SQLAlchemyTDocRepository(),
     )

@@ -5,7 +5,7 @@ End-to-end coverage for the cross-layer round-trip: real subprocess
 :class:`doc3gpp.settings.loader.get_settings` cache, and the
 pydantic-settings precedence rules in
 :class:`doc3gpp.settings.schema.Settings`. Unit-level behaviour
-(parser, writer, ``--dry-run``, ``--init-force``, ``--init-target``)
+(parser, writer, ``--dry-run``, ``--force``, ``--target``)
 is locked down in ``tests/unit/test_config_set_cli.py``; the tests in
 this file focus on the cross-layer round-trip and the env-var
 precedence contract — not on writer internals.

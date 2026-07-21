@@ -107,7 +107,7 @@ table below is for navigation only.
 | `walk_known_dotted_keys` | function | `settings/config_writer.py` | Collect every dotted key reachable from a `Settings` subclass. |
 | `resolve_echo_subtree` | function | `settings/config_writer.py` | Slice the resolved `Settings` back to the dotted-key's subtree for `--dry-run` output. |
 | `write_toml` | function | `settings/config_writer.py` | Persist the patched dict to disk via `tomli_w`. |
-| `resolve_init_target` | function | `settings/config_writer.py` | Resolve `--init-target` to a writable `Path` (project / user / auto). |
+| `resolve_init_target` | function | `settings/config_writer.py` | Resolve `--target` to a writable `Path` (project / user / auto). |
 
 ## Filter / ID helpers (`src/doc3gpp/cli_filters.py`)
 

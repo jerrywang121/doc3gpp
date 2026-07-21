@@ -3,7 +3,7 @@
 These tests pin the behaviour of the new :func:`config_set` command:
 operator ergonomics (one key + one value per invocation), TOML emission
 shape (top-level vs nested table), pydantic coercion for non-string
-fields, the ``--init`` / ``--init-target`` / ``--init-force`` /
+fields, the ``--init`` / ``--target`` / ``--force`` /
 ``--dry-run`` flag surface, and the cache-invalidation contract that
 makes the new value visible to :func:`get_settings` in the same
 process. Every test uses an isolated ``tmp_path`` and pins the config
@@ -138,14 +138,14 @@ def test_config_set_coerces_timedelta_and_renders_p1d(
 
 
 # ---------------------------------------------------------------------------
-# Happy paths — --init / --init-target / --init-force / --dry-run
+# Happy paths — --init / --target / --force / --dry-run
 # ---------------------------------------------------------------------------
 
 
 def test_config_set_init_user_target_creates_file(
     clean_settings, monkeypatch, tmp_path,
 ) -> None:
-    """Given no config in use, ``--init --init-target user`` creates the
+    """Given no config in use, ``--init --target user`` creates the
     user config and writes the key. We override ``DEFAULT_USER_CONFIG``
     because it is bound at import time from ``Path.home()`` and because
     :func:`resolve_init_target` reads it from the ``config_writer``
@@ -160,7 +160,7 @@ def test_config_set_init_user_target_creates_file(
     )
 
     result = Runner().invoke(
-        app, ["config", "set", "--init", "--init-target", "user", "sync.auto_sync", "true"]
+        app, ["config", "set", "--init", "--target", "user", "sync.auto_sync", "true"]
     )
     assert result.exit_code == 0, result.output
     assert user_target.is_file()
@@ -171,7 +171,7 @@ def test_config_set_init_user_target_creates_file(
 def test_config_set_init_project_target_creates_file(
     clean_settings, monkeypatch, tmp_path,
 ) -> None:
-    """Given a cwd containing ``pyproject.toml``, ``--init --init-target
+    """Given a cwd containing ``pyproject.toml``, ``--init --target
     project`` writes ``./doc3gpp.toml`` (project-local) under cwd."""
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -179,7 +179,7 @@ def test_config_set_init_project_target_creates_file(
     monkeypatch.chdir(tmp_path)
 
     result = Runner().invoke(
-        app, ["config", "set", "--init", "--init-target", "project", "sync.auto_sync", "true"]
+        app, ["config", "set", "--init", "--target", "project", "sync.auto_sync", "true"]
     )
     assert result.exit_code == 0, result.output
 
@@ -293,7 +293,7 @@ def test_config_set_init_user_target_existing_file_needs_force(
     clean_settings, monkeypatch, tmp_path,
 ) -> None:
     """When the bootstrap target already exists, ``--init`` refuses and
-    points the operator at ``--init-force``."""
+    points the operator at ``--force``."""
     user_target = tmp_path / "user-config.toml"
     user_target.write_text("# pre-existing\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -305,10 +305,10 @@ def test_config_set_init_user_target_existing_file_needs_force(
     monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
 
     result = Runner().invoke(
-        app, ["config", "set", "--init", "--init-target", "user", "sync.auto_sync", "true"]
+        app, ["config", "set", "--init", "--target", "user", "sync.auto_sync", "true"]
     )
     assert result.exit_code != 0
-    assert "--init-force" in result.output
+    assert "--force" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +356,7 @@ def test_config_help_lists_set_subcommand() -> None:
 def test_default_user_config_path_is_distinct_from_project(
     clean_settings,
 ) -> None:
-    """Defensive sanity check that keeps ``--init --init-target user``
+    """Defensive sanity check that keeps ``--init --target user``
     from accidentally colliding with the project-local path in any
     future refactor."""
     assert DEFAULT_USER_CONFIG != DEFAULT_PROJECT_CONFIG

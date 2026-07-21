@@ -2910,15 +2910,17 @@ def config_set(
     init: bool = typer.Option(False, "--init", help="Create the config file if none is in use."),
     init_target: str = typer.Option(
         "auto",
-        "--init-target",
+        "--target",
         help="Where --init writes: 'project' (./doc3gpp.toml) or 'user' "
         "(~/.config/doc3gpp/config.toml). 'auto' (default) picks project "
         "when run from a project root.",
     ),
     init_force: bool = typer.Option(
         False,
-        "--init-force",
-        help="With --init, overwrite an existing file at the bootstrap target.",
+        "--force",
+        "-f",
+        help="With --init, overwrite an existing file at the bootstrap target. "
+        "Ignored when --init is not passed.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Validate + echo without writing."),
 ) -> None:
@@ -2935,7 +2937,7 @@ def config_set(
     if init and os.environ.get("DOC3GPP_CONFIG"):
         raise typer.BadParameter(
             "--init refuses when DOC3GPP_CONFIG is set; unset it or pass "
-            "--init-target explicitly."
+            "--target explicitly."
         )
 
     target: Path
@@ -2944,7 +2946,7 @@ def config_set(
         target = resolve_init_target(init_target)
         if target.exists() and not init_force:
             raise typer.BadParameter(
-                f"file exists at {target}; pass --init-force to overwrite"
+                f"file exists at {target}; pass --force to overwrite"
             )
         creating = True
     else:

@@ -1333,12 +1333,12 @@ Options:
 - `--init`: create the config file when none is in use (one of the
   search locations in `config path` must be writable). Refuses when
   `DOC3GPP_CONFIG` is set in the environment.
-- `--init-target {project,user,auto}`: where `--init` writes the new
+- `--target {project,user,auto}`: where `--init` writes the new
   file — `project` for `./doc3gpp.toml`, `user` for
   `~/.config/doc3gpp/config.toml`. `auto` (default) picks `project`
   when run from a project root, `user` otherwise.
-- `--init-force`: with `--init`, overwrite an existing file at the
-  bootstrap target.
+- `--force`, `-f`: with `--init`, overwrite an existing file at the
+  bootstrap target. Ignored when `--init` is not passed.
 - `--dry-run`: validate the key + value and print what would be
   written, without touching the file.
 

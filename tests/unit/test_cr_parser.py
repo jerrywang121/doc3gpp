@@ -38,7 +38,11 @@ from pathlib import Path
 
 import pytest
 
-from doc3gpp.models.tdoc_cr import TDocCRDetails
+from doc3gpp.models.tdoc_cr import (
+    TDocCRDetails,
+    TDocCRParseResult,
+    TDocCRTTCNDetails,
+)
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
     _collapse_whitespace,
@@ -253,35 +257,39 @@ _NON_TTCN_HEADER_LINES = (
 
 
 def test_non_ttcn_cr_skips_overview_and_corrections() -> None:
-    """A ``R5-227476`` (non-TTCN) document skips the TTCN sub-parsers."""
+    """A ``R5-227476`` (non-TTCN) document emits a bare cover (no TTCN sidecar)."""
     md = "\n".join(_NON_TTCN_HEADER_LINES)
-    details = parse_cr_details(md, tdoc_id="R5-227476")
-    assert details.tdoc_id == "R5-227476"
-    assert details.spec == "38.508-1"
-    assert details.cr_num == "2678"
-    assert details.rev == "1"
-    assert details.cr_cat == "F"
-    assert details.release == "Rel-17"
-    assert details.details == {}
+    parsed = parse_cr_details(md, tdoc_id="R5-227476")
+    assert isinstance(parsed, TDocCRParseResult)
+    assert parsed.ttcn is None
+    cover = parsed.cover
+    assert cover.tdoc_id == "R5-227476"
+    assert cover.spec == "38.508-1"
+    assert cover.cr_num == "2678"
+    assert cover.rev == "1"
+    assert cover.cr_cat == "F"
+    assert cover.release == "Rel-17"
 
 
 def test_ttcn_cr_invokes_overview_and_corrections_parsers() -> None:
     """A ``R5s260009`` document routes through the TTCN-only sub-parsers."""
     md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES))
-    details = parse_cr_details(md, tdoc_id="R5s260009")
-    assert details.tdoc_id == "R5s260009"
-    assert details.spec == "38.523-3"
-    assert details.cr_num == "3790"
-    assert details.rev == "0"
-    assert details.cr_cat == "F"
-    assert details.release == "Rel-18"
-    overview = details.details["overview"]
-    assert overview["testcase"] == "7.1.3.5.3"
-    assert overview["test_suite"] == "NR5GC"
-    assert overview["ue"] == "MTK MT6986D and Qualcomm X105 5G Modem-RF"
-    assert overview["ss"] == "Anritsu Protocol Conformance Test System"
-    assert len(details.details["corrections"]) == 1
-    change = details.details["corrections"][0]
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert isinstance(parsed, TDocCRParseResult)
+    cover = parsed.cover
+    assert cover.tdoc_id == "R5s260009"
+    assert cover.spec == "38.523-3"
+    assert cover.cr_num == "3790"
+    assert cover.rev == "0"
+    assert cover.cr_cat == "F"
+    assert cover.release == "Rel-18"
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert parsed.ttcn.testcase == "7.1.3.5.3"
+    assert parsed.ttcn.test_suite == "NR5GC"
+    assert parsed.ttcn.ue == "MTK MT6986D and Qualcomm X105 5G Modem-RF"
+    assert parsed.ttcn.ss == "Anritsu Protocol Conformance Test System"
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
     assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
     assert change["reason_for_change"] == "Change due to MCX feature addition."
     assert change["summary_of_change"] == "Use new PDCP function."
@@ -314,14 +322,121 @@ def test_ttcn_cr_extracts_function_name_from_template_name_row() -> None:
     md = "\n".join(
         list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_TEMPLATE_CORRECTION_LINES)
     )
-    details = parse_cr_details(md, tdoc_id="R5s260009")
-    assert len(details.details["corrections"]) == 1
-    change = details.details["corrections"][0]
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
     assert change["function_name"] == "tr_CommonPart_Template"
     assert change["reason_for_change"] == "New template for MCX."
     assert change["summary_of_change"] == "Add template body."
     assert change["ttcn_module"] == "NR_DC_Templates.ttcn"
     assert change["mcc160_comment"] == "OK"
+
+
+_TTCN_CORRECTION_LINES_FULL = (
+    "",
+    "Changes provided in TTCN CR R5s260009 are required for the verification of NR5GC 7.1.3.5.3.",
+    "",
+    "| Function name | fl_TC_7_1_3_5_3_Body |",
+    "| Reason for change | Change due to MCX feature addition. |",
+    "| Summary of change | Use new PDCP function. |",
+    "| TTCN module | NR_DC_Testcases.ttcn |",
+    "| MCC160 Comment | OK |",
+    "",
+    "Before change",
+    "| fl_TC_7_1_3_5_3_Body ( msg ) { return old_value ; } |",
+    "",
+    "After change",
+    "| fl_TC_7_1_3_5_3_Body ( msg ) { return new_value ; } |",
+    "",
+    "### 3. Method of test",
+)
+
+
+def test_ttcn_cr_full_true_extracts_before_after_change_content() -> None:
+    """``parse(..., full=True)`` populates ``before_change`` and
+    ``after_change`` from the standalone ``Before change`` / ``After
+    change`` markers and their following content rows.
+
+    The TTCN corrections sub-parser only enters its before/after/new
+    extraction loop when ``full=True``. Locks the gate AND the slice
+    arithmetic — a previous off-by-one in
+    ``_extract_change_from_table`` call site caused an infinite loop
+    on realistic TTCN markdown layouts, silently dropping every
+    operator's ``--full`` invocation.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
+    assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
+    assert change["before_change"] == "fl_TC_7_1_3_5_3_Body ( msg ) { return old_value ; }"
+    assert change["after_change"] == "fl_TC_7_1_3_5_3_Body ( msg ) { return new_value ; }"
+    assert "new_change" not in change
+
+
+def test_ttcn_cr_full_false_omits_before_after_change_content() -> None:
+    """``parse(..., full=False)`` (the default) leaves
+    ``before_change`` / ``after_change`` / ``new_change`` unset even
+    when the source markdown carries them.
+
+    Metadata-only extraction is the default — that's the contract the
+    default ``tdoc parse`` flow depends on (small rows, fast parser).
+    Operators who need the change content must opt in with ``--full``;
+    this test pins that contract.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=False)
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
+    assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
+    assert "before_change" not in change
+    assert "after_change" not in change
+    assert "new_change" not in change
+
+
+def test_ttcn_cr_full_default_omits_before_after_change_content() -> None:
+    """Without ``full=`` (default ``False``), the before/after/new keys
+    are never present on the change dict.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    change = parsed.ttcn.required_changes[0]
+    assert "before_change" not in change
+    assert "after_change" not in change
+    assert "new_change" not in change
+
+
+def test_ttcn_cr_full_true_returns_within_bounded_time() -> None:
+    """Regression guard for the ``if full:`` infinite-loop bug.
+
+    Before the slice-index fix, a standalone ``Before change`` marker
+    followed by a content row sent the parser into an infinite loop on
+    the table-cell branch (the cell line was consumed, ``scan_idx`` did
+    not advance, and the next iteration re-matched the same cell).
+    This test runs the parser with a short wall-clock budget; if the
+    fix ever regresses the loop will spin past the budget and the test
+    fails.
+    """
+    import signal
+
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+
+    def _on_alarm(signum: int, frame: object) -> None:
+        raise TimeoutError("ttcn full=True parser hung")
+
+    handler = signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(5)
+    try:
+        parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, handler)
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert parsed.ttcn.required_changes
 
 
 # ---------------------------------------------------------------------------
@@ -642,28 +757,30 @@ def test_fixture_extraction_matches_snapshot(
     )
     details = parse_cr_details(markdown, tdoc_id=fixture_name[:-4])
 
-    assert isinstance(details, TDocCRDetails)
-    assert details.tdoc_id == expected["tdoc_id"]
+    assert isinstance(details, TDocCRParseResult)
+    cover = details.cover
+    assert cover.tdoc_id == expected["tdoc_id"]
     if "spec" in expected:
-        assert details.spec == expected["spec"]
+        assert cover.spec == expected["spec"]
     if "cr_num" in expected:
-        assert details.cr_num == expected["cr_num"]
+        assert cover.cr_num == expected["cr_num"]
     if "rev" in expected:
-        assert details.rev == expected["rev"], f"{fixture_name} rev"
+        assert cover.rev == expected["rev"], f"{fixture_name} rev"
     if "version" in expected:
-        assert details.version == expected["version"], f"{fixture_name} version"
+        assert cover.version == expected["version"], f"{fixture_name} version"
     if "cr_cat" in expected:
-        assert details.cr_cat == expected["cr_cat"], f"{fixture_name} cr_cat"
+        assert cover.cr_cat == expected["cr_cat"], f"{fixture_name} cr_cat"
     if "release" in expected:
-        assert details.release == expected["release"], f"{fixture_name} release"
-    assert details.tsg == expected["tsg"], f"{fixture_name} tsg"
+        assert cover.release == expected["release"], f"{fixture_name} release"
+    assert cover.tsg == expected["tsg"], f"{fixture_name} tsg"
     if expected.get("non_ttcn"):
-        assert details.details == {}, f"{fixture_name} non-TTCN details must be empty"
+        assert details.ttcn is None, f"{fixture_name} non-TTCN details must be empty"
     else:
-        assert "overview" in details.details, (
-            f"{fixture_name} TTCN CR must have details.overview"
+        assert isinstance(details.ttcn, TDocCRTTCNDetails), (
+            f"{fixture_name} TTCN CR must have a TTCN sidecar"
         )
-        ats_version = details.details["overview"]["ats_version"]
+        assert details.ttcn.ats_version is not None
+        ats_version = details.ttcn.ats_version
         if expected.get("ats_version_starts_with"):
             assert ats_version.startswith(
                 expected["ats_version_starts_with"]
@@ -777,9 +894,9 @@ def test_parse_cr_details_logs_warning_on_header_divergence(
         "| Source to TSG: | C6 |\n"
     )
     with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr_parser"):
-        details = parse_cr_details(md, tdoc_id="C6-250028")
-    assert details.tdoc_id == "C6-250028"
-    assert details.tsg == "C6"
+        parsed = parse_cr_details(md, tdoc_id="C6-250028")
+    assert parsed.cover.tdoc_id == "C6-250028"
+    assert parsed.cover.tsg == "C6"
 
 
 def test_parse_cr_details_falls_back_to_id_for_tsg_when_cover_empty(
@@ -793,12 +910,12 @@ def test_parse_cr_details_falls_back_to_id_for_tsg_when_cover_empty(
         # Note: no Source to TSG row.
     )
     with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr_parser"):
-        details = parse_cr_details(md, tdoc_id="R5s260009")
-    assert details.tsg == "R5"
+        parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert parsed.cover.tsg == "R5"
 
 
 def test_to_persisted_then_json_round_trip() -> None:
-    """Round-trip TDocCRDetails → dict → JSON keeps information intact."""
+    """Round-trip TDocCRDetails → dict → JSON keeps cover-page information intact."""
     import json
 
     details = TDocCRDetails(
@@ -809,7 +926,6 @@ def test_to_persisted_then_json_round_trip() -> None:
         version="18.4.0",
         cr_cat="F",
         release="Rel-18",
-        details={"corrections": [{"function_name": "f"}]},
     )
     payload = details.to_persisted()
     encoded = json.dumps(payload)
@@ -817,6 +933,6 @@ def test_to_persisted_then_json_round_trip() -> None:
     assert decoded["tdoc_id"] == "R5s260009"
     assert "year" not in decoded
     assert "tech" not in decoded
-    assert json.loads(decoded["details_json"]) == {
-        "corrections": [{"function_name": "f"}]
-    }
+    assert "details_json" not in decoded
+    assert decoded["spec"] == "38.523-3"
+    assert decoded["cr_num"] == "3790"

@@ -13,7 +13,9 @@ table below is for navigation only.
 | `TDoc` | dataclass | `models/tdoc.py` | Domain model for TDocs. |
 | `TDocWithMeeting` | dataclass | `models/tdoc.py` | Presentation-time DTO: `TDoc` JOINed with `meetings.name`. |
 | `TDocFile` | dataclass | `models/tdoc_file.py` | Auxiliary file attached to a TDoc (revision / review / support). |
-| `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …). |
+| `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …) — slimmed: no `details` blob, no `parser_version` field. Mirrors the slim `tdoc_cr_details` table 1:1. |
+| `TDocCRTTCNDetails` | dataclass | `models/tdoc_cr.py` | TTCN sidecar (six overview fields + `required_changes` list). Mirrors the new `tdoc_cr_ttcn_details` table 1:1. |
+| `TDocCRParseResult` | dataclass | `models/tdoc_cr.py` | Parser bundle: `cover: TDocCRDetails` + `ttcn: TDocCRTTCNDetails | None`. The service fans each slice out to its own repo. |
 | `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar (zip / markdown paths, `doc_filename`). |
 | `DirectParseResult` | dataclass | `models/tdoc_cr.py` | Outcome of `tdoc parse --from-path/--from-url` (source kind, markdown, details, persistence flags). |
 | `SyncOutcome` | dataclass | `models/sync.py` | Result of `meeting sync` / `tdoc sync`: synced/skipped status, reason, and counts. |
@@ -29,7 +31,8 @@ table below is for navigation only.
 | `MeetingRepository` | Protocol | `repository/protocols.py` | Contract for meeting storage. |
 | `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage; `get_by_id` resolves canonical id strings. |
 | `TDocFileRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_files` storage. |
-| `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_cr_details` + `tdoc_extracts` storage. |
+| `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for the slim `tdoc_cr_details` table. `tdoc_extracts` reads are still exposed here for convenience but writes go through the separate `upsert_extract_meta` method. |
+| `TDocCrTTCNDetailRepository` | Protocol | `repository/protocols.py` | Contract for the new `tdoc_cr_ttcn_details` TTCN sidecar (one row per immutable `ftp_url`). |
 | `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage. |
 | `WiRepository` | Protocol | `repository/protocols.py` | Contract for WI storage; upsert keyed by `(wi_id, tsg_short)`. |
 
@@ -41,7 +44,7 @@ table below is for navigation only.
 | `TDocService` | class | `services/tdoc_service.py` | TDoc sync + list orchestration. |
 | `TDocSyncCoordinator` | class | `services/tdoc_sync_coordinator.py` | Cross-service orchestration for `tdoc sync`. Exposes `sync_for_meeting_id`, `sync_for_meeting_name`, and `sync_all_tracked_meetings` (bulk). |
 | `TDocFileService` | class | `services/tdoc_file_service.py` | Auxiliary TDoc-file sync. |
-| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → python-docx → parse → persist). Also exposes `extract_from_url` / `extract_from_bytes` for the `tdoc parse --from-path/--from-url` direct-mode path. |
+| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → python-docx → parse → persist). Constructor takes `cr_ttcn_repository`; fans `TDocCRParseResult(cover, ttcn)` out across the slim cover-page repo, the optional TTCN sidecar repo, and the `tdoc_extracts` repo in three independent upserts. Also exposes `extract_from_url` / `extract_from_bytes` for the `tdoc parse --from-path/--from-url` direct-mode path. |
 | `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; exposes `build_tsg_url`. |
 | `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters. |
 | `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. |
@@ -63,19 +66,23 @@ table below is for navigation only.
 | `convert_document_to_markdown` / `extract_docx_from_zip` | functions | `parsers/docx_converter.py` | python-docx conversion (`.docx` only; legacy `.doc` is rejected). |
 | `parse_cr_details` | function | `parsers/cr_parser.py` | Markdown → `TDocCRDetails` (cover-page, optional TTCN overview, optional corrections). |
 | `is_3gpp_ftp_url` / `direct_parse_bytes` / `derive_zip_cache_key` / `extract_tdoc_id_from_filename` | functions | `parsers/direct_extractor.py` | Helpers for the `tdoc parse --from-path/--from-url` direct path. `is_3gpp_ftp_url` is the 3GPP-FTP detection rule; `direct_parse_bytes` glues docx conversion + cover-page parsing. |
+| `TDocParser` Protocol / `TDocParserRegistry` / `build_default_registry` | Protocol / class / function | `parsers/tdoc_parsers.py` | `TDocParser.parse()` returns a `TDocCRParseResult` (cover + optional TTCN sidecar). `build_default_registry` registers `TTCNCRParser` before the generic `CRParser` so TTCN CRs route to the overview + corrections parser and everything else falls through. |
+| `CRParserBase` / `CRParser` / `TTCNCRParser` | classes | `parsers/cr/cr_parsers.py` | Concrete parser implementations. `CRParserBase.parse()` returns `TDocCRParseResult`; `TTCNCRParser` populates the sidecar from the TTCN overview + corrections section payloads; `CRParser` always emits `ttcn=None`. |
 
 ## Storage (`src/doc3gpp/storage/`)
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
 | `Base` | declarative base | `storage/db/base.py` | SQLAlchemy `DeclarativeBase`. |
-| ORM classes | `Mapped[]` | `storage/db/models.py` | `TDocORM`, `MeetingORM`, `TsgORM`, `WiORM`, `TDocFileORM`, `TDocCrDetailOrm`, `TDocExtractOrm`. |
+| ORM classes | `Mapped[]` | `storage/db/models.py` | `TDocORM`, `MeetingORM`, `TsgORM`, `WiORM`, `TDocFileORM`, slim `TDocCrDetailOrm` (cover-page only), `TDocCrTtcnDetailOrm` (TTCN sidecar), `TDocExtractOrm` (cache metadata). |
 | `get_engine` / `get_session_factory` | functions | `storage/db/session.py` | Cached engine + session factory. |
 | `create_schema` | function | `storage/db/migrate.py` | `Base.metadata.create_all` bootstrap. |
+| `compress_json` / `decompress_json` | functions | `storage/compression.py` | Shared gzip JSON helpers used by both `SQLAlchemyTDocCrRepository` and `SQLAlchemyTDocCrTtcnRepository` for any binary JSON detail column (currently the TTCN sidecar's `required_changes`). `decompress_json` is tolerant — `None` / empty / gzip / JSON / Unicode errors all resolve to `None` plus a warning; legacy uncompressed blobs decode transparently. |
 | `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of `MeetingRepository`. |
 | `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of `TDocRepository`. |
 | `SQLAlchemyTDocFileRepository` | class | `storage/repositories/tdoc_file_sql.py` | SQL impl of `TDocFileRepository`. |
-| `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of `TDocCrDetailRepository`. |
+| `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of `TDocCrDetailRepository`. Owns both the slim `tdoc_cr_details` cover-page table (`upsert(details)`) and the `tdoc_extracts` cache-pointer sidecar (`upsert_extract_meta(meta)`). Reads via `get_by_url`, `get`, `list_all`, `get_extract_meta`, `get_extract_meta_by_url`. |
+| `SQLAlchemyTDocCrTtcnRepository` | class | `storage/repositories/tdoc_cr_ttcn_sql.py` | SQL impl of `TDocCrTTCNDetailRepository` for the new `tdoc_cr_ttcn_details` sidecar. One row per immutable `ftp_url`; six overview columns + a gzip-compressed `required_changes` blob. Lazy-bootstrap (`_ensure_table_exists`) catches `OperationalError "no such table"` and runs `Base.metadata.create_all` once per process. |
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of `TsgRepository`. |
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of `WiRepository`. |
 | `_apply_text_filter` / `_apply_date_filter` | helpers | `storage/repositories/tdoc_sql.py` | SQLAlchemy helpers that consume `cli_filters.DATE_FILTER_RE` and the rich-filter grammar. |

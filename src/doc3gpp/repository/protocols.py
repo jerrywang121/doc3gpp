@@ -6,7 +6,11 @@ from typing import Protocol
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+from doc3gpp.models.tdoc_cr import (
+    TDocCRDetails,
+    TDocCRTTCNDetails,
+    TDocExtractMeta,
+)
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -337,30 +341,30 @@ class TDocFileRepository(Protocol):
 
 
 class TDocCrDetailRepository(Protocol):
-    """Storage operations for extracted CR details + cache-extract metadata.
+    """Storage operations for the slim ``tdoc_cr_details`` table.
 
-    Combines the ``tdoc_cr_details`` row (the parsed fields) with the
-    ``tdoc_extracts`` row (the paths to the cached zip / markdown on
-    disk). Folding both into one repository keeps the service-layer
-    surface narrow; both tables are owned by the same
-    :class:`doc3gpp.services.tdoc_cr_service.TDocCrService` and always
-    written together in a single transaction.
+    Owns the cover-page fields extracted from a CR document. The
+    companion ``tdoc_extracts`` table (cache paths + provenance) is still
+    queried through this repository for read convenience, but writes are
+    split into a separate :meth:`upsert_extract_meta` method so the
+    service layer can persist cover-page rows, TTCN sidecars, and
+    extract metadata independently.
 
-    Identity on both tables is the immutable download ``url`` —
-    3GPP zip assets are byte-for-byte identical for the lifetime of
-    a URL, while the logical ``tdoc_id`` may map to multiple URLs
-    across revisions. ``tdoc_id`` remains a non-PK FK into
-    ``tdocs.tdoc_id`` with ``ondelete="CASCADE"`` so deleting a
-    parent TDoc still cleans up every revision's detail rows.
+    Identity is the immutable download ``url`` — 3GPP zip assets are
+    byte-for-byte identical for the lifetime of a URL, while the logical
+    ``tdoc_id`` may map to multiple URLs across revisions. ``tdoc_id``
+    remains a non-PK FK into ``tdocs.tdoc_id`` with ``ondelete="CASCADE"``
+    so deleting a parent TDoc still cleans up every revision's detail rows.
     """
 
     def get(self, tdoc_id: str) -> list[TDocCRDetails]:
-        """Return every detail row for ``tdoc_id``, newest first.
+        """Return every detail row for ``tdoc_id``.
 
         The same ``tdoc_id`` may map to multiple URLs across revisions;
         callers (the ``tdoc show`` CLI, debugging scripts) want every
-        revision. Ordered by ``extracted_at`` descending so the most
-        recent extract is at index ``0``.
+        revision. Ordered by ``ftp_url`` ascending for a deterministic
+        result that no longer depends on the removed ``extracted_at``
+        column.
         """
         ...
 
@@ -372,19 +376,16 @@ class TDocCrDetailRepository(Protocol):
         """
         ...
 
-    def upsert(
-        self,
-        details: TDocCRDetails,
-        extract_meta: TDocExtractMeta,
-    ) -> None:
-        """Insert/update both rows in a single transaction.
+    def upsert(self, details: TDocCRDetails) -> None:
+        """Insert/update the cover-page row in ``tdoc_cr_details``.
 
-        Both tables are keyed by ``url`` (the immutable download URL), so
-        re-extracting the same URL is idempotent. ``extracted_at`` on the
-        detail row is set on first insert via the server-side default and
-        stays put for subsequent upserts (the column is not bumped on
-        re-extract).
+        Rows are keyed by ``url`` (the immutable download URL), so
+        re-extracting the same URL is idempotent.
         """
+        ...
+
+    def upsert_extract_meta(self, meta: TDocExtractMeta) -> None:
+        """Insert/update the cache-extract metadata row in ``tdoc_extracts``."""
         ...
 
     def get_extract_meta(self, tdoc_id: str) -> list[TDocExtractMeta]:
@@ -402,4 +403,16 @@ class TDocCrDetailRepository(Protocol):
 
     def list_all(self) -> list[TDocCRDetails]:
         """Return every persisted detail row (CLI / debugging)."""
+        ...
+
+
+class TDocCrTTCNDetailRepository(Protocol):
+    """Storage operations for the TTCN sidecar (one row per immutable ftp_url)."""
+
+    def upsert(self, details: TDocCRTTCNDetails) -> None:
+        """Insert/update the TTCN detail row in ``tdoc_cr_ttcn_details``."""
+        ...
+
+    def get_by_url(self, url: str) -> TDocCRTTCNDetails | None:
+        """Return the TTCN detail row for an immutable ``url``, or ``None``."""
         ...

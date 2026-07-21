@@ -1,45 +1,50 @@
-"""Unit tests for :class:`doc3gpp.models.tdoc_cr.TDocCRDetails`.
+"""Unit tests for the slim :class:`doc3gpp.models.tdoc_cr.TDocCRDetails`
+plus the new :class:`TDocCRTTCNDetails` / :class:`TDocCRParseResult`
+value objects.
 
-The dataclass is a frozen value object; the tests focus on the two
-non-trivial aspects of its contract:
+The dataclasses are frozen value objects; the tests focus on:
 
 * :py:meth:`TDocCRDetails.__post_init__` rejects blank ``tdoc_id``
   values (the parser always supplies one, but a stale bug check is
   cheap insurance against future regressions).
-* :py:meth:`TDocCRDetails.to_persisted` JSON-serialises the
-  ``corrections`` field into a single ``corrections_json`` string
-  suitable for the SQL ``TEXT`` column.
+* :py:meth:`TDocCRTTCNDetails.__post_init__` rejects blank ``tdoc_id``
+  (FK target must exist) and blank ``ftp_url`` when set.
+* :class:`TDocCRParseResult` bundles cover-page + optional TTCN
+  sidecar.
 
 The ORM tests at the bottom of the file exercise the persistence
 shape — :class:`TDocCrDetailOrm` and :class:`TDocExtractOrm` —
 against an in-memory sqlite engine to confirm the metadata-based
-``create_all`` registers the new tables and the column types match
-the dataclass's ``to_persisted()`` contract. Both ORM tables are
-keyed on the immutable download ``url`` so multiple revisions of the
-same ``tdoc_id`` live at distinct rows.
+``create_all`` registers the tables and the column types match the
+dataclass's ``to_persisted()`` contract. Both ORM tables are keyed
+on the immutable download ``url`` so multiple revisions of the same
+``tdoc_id`` live at distinct rows.
 """
 
 from __future__ import annotations
 
-import json
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine, event, inspect, select
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import sessionmaker
 
-from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+from doc3gpp.models.tdoc_cr import (
+    TDocCRDetails,
+    TDocCRParseResult,
+    TDocCRTTCNDetails,
+    TDocExtractMeta,
+)
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import TDocCrDetailOrm
 from doc3gpp.storage.db.models import TDocExtractOrm
 from doc3gpp.storage.db.models import TDocORM
 
 
-def test_default_construction_has_empty_details_dict() -> None:
-    """A blank ``TDocCRDetails`` (just a tdoc_id) has ``details == {}``."""
+def test_default_construction_has_none_fields() -> None:
+    """A blank ``TDocCRDetails`` (just a tdoc_id) has all optional fields None."""
     details = TDocCRDetails(tdoc_id="R5s260009")
     assert details.tdoc_id == "R5s260009"
-    assert details.details == {}
     for field_name in (
         "spec",
         "cr_num",
@@ -53,8 +58,20 @@ def test_default_construction_has_empty_details_dict() -> None:
         "cr_cat",
         "release",
         "extracted_tdoc_id",
+        "ftp_url",
     ):
         assert getattr(details, field_name) is None, f"{field_name} should be None"
+
+
+def test_details_has_no_blob_or_parser_version_fields() -> None:
+    """The slim dataclass no longer carries ``details`` or ``parser_version``."""
+    details = TDocCRDetails(tdoc_id="R5s260009")
+    # The legacy attributes must be gone — accessing them raises
+    # ``AttributeError`` on a ``slots=True`` dataclass.
+    with pytest.raises(AttributeError):
+        details.details  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):
+        details.parser_version  # type: ignore[attr-defined]
 
 
 def test_post_init_rejects_blank_tdoc_id() -> None:
@@ -75,8 +92,8 @@ def test_post_init_strips_tdoc_id_whitespace() -> None:
     assert details.tdoc_id == "R5s260009"
 
 
-def test_to_persisted_serialises_details_to_json_string() -> None:
-    """``to_persisted`` serialises ``details`` into a JSON string."""
+def test_to_persisted_omits_details_and_parser_version() -> None:
+    """``to_persisted`` shape carries cover-page columns only."""
     details = TDocCRDetails(
         tdoc_id="R5s260176",
         spec="36.523-3",
@@ -87,53 +104,15 @@ def test_to_persisted_serialises_details_to_json_string() -> None:
         tsg="R5",
         cr_cat="B",
         release="Rel-18",
-        details={
-            "overview": {
-                "ats_version": "iwd-TTCN3-B2026-03_D26wk18",
-                "ttcn_release": "26wk18",
-                "test_case": "11.3.9",
-                "test_suite": "IMS_EUTRA",
-            },
-            "corrections": [
-                {
-                    "function_name": "fl_TC_11_3_9_Body",
-                    "reason_for_change": "not in line with NW behaviour",
-                    "summary_of_change": "called new function instead",
-                    "ttcn_module": "LTEIMS_Test.ttcn",
-                },
-                {
-                    "function_name": "f_TC_11_3_9_IMS2",
-                    "summary_of_change": "split into Step1 / Step2 functions",
-                },
-            ],
-        },
     )
 
     payload = details.to_persisted()
     assert payload["tdoc_id"] == "R5s260176"
     assert payload["spec"] == "36.523-3"
-    assert "year" not in payload
-    assert "tech" not in payload
-    assert "details_json" in payload
-    decoded = json.loads(payload["details_json"])
-    assert decoded == details.details
-    assert len(decoded["corrections"]) == 2
-    assert decoded["corrections"][0]["function_name"] == "fl_TC_11_3_9_Body"
-
-
-def test_to_persisted_serialises_empty_details_dict() -> None:
-    """An empty details dict serialises to ``"{}"`` rather than null."""
-    details = TDocCRDetails(tdoc_id="R5-227476")
-    payload = details.to_persisted()
-    assert payload["details_json"] == "{}"
-    assert details.details == {}
-
-
-def test_to_persisted_preserves_parser_version() -> None:
-    """``parser_version`` is exposed in the persisted shape."""
-    details = TDocCRDetails(tdoc_id="R5s260009")
-    assert details.parser_version == "1.0.0"
-    assert details.to_persisted()["parser_version"] == "1.0.0"
+    # Legacy fields are gone from the persisted shape.
+    assert "details_json" not in payload
+    assert "details" not in payload
+    assert "parser_version" not in payload
 
 
 def test_dataclass_is_frozen() -> None:
@@ -141,6 +120,118 @@ def test_dataclass_is_frozen() -> None:
     details = TDocCRDetails(tdoc_id="R5s260009")
     with pytest.raises(Exception):  # FrozenInstanceError, not raised by us
         details.tdoc_id = "R5s260010"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# TDocCRTTCNDetails — slim sidecar dataclass.
+# ---------------------------------------------------------------------------
+
+
+def test_ttcn_details_default_construction() -> None:
+    """A blank :class:`TDocCRTTCNDetails` (just a tdoc_id) has empty optionals."""
+    ttcn = TDocCRTTCNDetails(tdoc_id="R5s260009")
+    assert ttcn.tdoc_id == "R5s260009"
+    assert ttcn.ftp_url is None
+    assert ttcn.testcase is None
+    assert ttcn.ue is None
+    assert ttcn.ss is None
+    assert ttcn.ats_version is None
+    assert ttcn.ttcn_release is None
+    assert ttcn.test_suite is None
+    assert ttcn.required_changes == []
+
+
+def test_ttcn_details_carries_overview_fields_and_corrections() -> None:
+    """All six overview fields and a populated corrections list round-trip."""
+    changes = [
+        {
+            "function_name": "fl_TC_11_3_9_Body",
+            "reason_for_change": "not in line with NW behaviour",
+            "summary_of_change": "called new function instead",
+            "ttcn_module": "LTEIMS_Test.ttcn",
+        },
+    ]
+    ttcn = TDocCRTTCNDetails(
+        tdoc_id="R5s260176",
+        ftp_url="stored/R5s260176.zip",
+        testcase="11.3.9",
+        ue="UE1",
+        ss="Anritsu Protocol Conformance Test System",
+        ats_version="iwd-TTCN3-B2026-03_D26wk18",
+        ttcn_release="26wk18",
+        test_suite="IMS_EUTRA",
+        required_changes=changes,
+    )
+    assert ttcn.testcase == "11.3.9"
+    assert ttcn.required_changes == changes
+
+
+def test_ttcn_details_post_init_rejects_blank_tdoc_id() -> None:
+    """Blank ``tdoc_id`` raises (FK target must exist)."""
+    with pytest.raises(ValueError, match="non-empty tdoc_id"):
+        TDocCRTTCNDetails(tdoc_id="", ftp_url="stored/R5s260009.zip")
+
+
+def test_ttcn_details_post_init_strips_tdoc_id_whitespace() -> None:
+    """Leading/trailing whitespace around the id is stripped."""
+    ttcn = TDocCRTTCNDetails(tdoc_id="  R5s260009\n", ftp_url="stored/x.zip")
+    assert ttcn.tdoc_id == "R5s260009"
+
+
+def test_ttcn_details_post_init_rejects_blank_ftp_url() -> None:
+    """Setting ``ftp_url`` to an empty/whitespace string raises."""
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
+        TDocCRTTCNDetails(tdoc_id="R5s260009", ftp_url="")
+
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
+        TDocCRTTCNDetails(tdoc_id="R5s260009", ftp_url="   ")
+
+
+def test_ttcn_details_post_init_strips_ftp_url_whitespace() -> None:
+    """Setting ``ftp_url`` with surrounding whitespace normalises the value."""
+    ttcn = TDocCRTTCNDetails(
+        tdoc_id="R5s260009", ftp_url="  stored/R5s260009.zip\n",
+    )
+    assert ttcn.ftp_url == "stored/R5s260009.zip"
+
+
+def test_ttcn_details_allows_none_ftp_url() -> None:
+    """``ftp_url=None`` is the parser-side default; the URL is supplied
+    later by the service layer before persistence."""
+    ttcn = TDocCRTTCNDetails(tdoc_id="R5s260009", ftp_url=None)
+    assert ttcn.ftp_url is None
+
+
+# ---------------------------------------------------------------------------
+# TDocCRParseResult — cover + optional TTCN bundle.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_result_with_cover_only() -> None:
+    """``TDocCRParseResult`` accepts a bare cover when no TTCN slice applies."""
+    cover = TDocCRDetails(
+        tdoc_id="R5-227476",
+        spec="38.508-1",
+        cr_num="2678",
+        rev="1",
+    )
+    result = TDocCRParseResult(cover=cover, ttcn=None)
+    assert result.cover == cover
+    assert result.ttcn is None
+
+
+def test_parse_result_with_cover_and_ttcn() -> None:
+    """``TDocCRParseResult`` bundles cover + TTCN sidecar when the parser sees one."""
+    cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
+    ttcn = TDocCRTTCNDetails(tdoc_id="R5s260009", testcase="7.1.3.5.3")
+    result = TDocCRParseResult(cover=cover, ttcn=ttcn)
+    assert result.cover is cover
+    assert result.ttcn is ttcn
+
+
+# ---------------------------------------------------------------------------
+# TDocExtractMeta — unchanged shape (extract metadata + provenance).
+# ---------------------------------------------------------------------------
 
 
 def test_extract_meta_post_init_rejects_blank_url() -> None:
@@ -242,27 +333,13 @@ def test_metadata_creates_new_tables() -> None:
 
 
 def test_tdoc_cr_detail_orm_round_trip() -> None:
-    """Insert a fully-populated detail row, refresh, and assert equality."""
+    """Insert a fully-populated detail row, refresh, and assert equality.
+
+    The slimmed cover-page table no longer carries a ``details`` blob
+    or a ``parser_version`` column; only the cover-page fields survive.
+    """
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
-
-    from doc3gpp.storage.repositories.tdoc_cr_sql import (
-        _compress_details,
-        _decompress_details,
-    )
-
-    details_payload = {
-        "overview": {"ats_version": "iwd-TTCN3-B2026-03_D26wk18"},
-        "corrections": [
-            {
-                "function_name": "fl_TC_11_3_9_Body",
-                "reason_for_change": "not in line with NW behaviour",
-                "summary_of_change": "called new function instead",
-                "ttcn_module": "LTEIMS_Test.ttcn",
-            }
-        ],
-    }
-    details_blob = _compress_details(details_payload)
 
     url = "stored/R5s260176.zip"
     with Session() as session:
@@ -286,7 +363,6 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
             clauses_affected="11.3.9",
             other_comments="none",
             revision_history="rev0: initial",
-            details=details_blob,
             extracted_tdoc_id="R5s260176",
         )
         session.add(row)
@@ -314,11 +390,6 @@ def test_tdoc_cr_detail_orm_round_trip() -> None:
         assert loaded.other_comments == "none"
         assert loaded.revision_history == "rev0: initial"
         assert loaded.extracted_tdoc_id == "R5s260176"
-        assert loaded.parser_version == "1.0.0"
-        assert isinstance(loaded.details, bytes)
-        assert loaded.details[:2] == b"\x1f\x8b"
-        assert _decompress_details(loaded.details) == details_payload
-        assert loaded.extracted_at is not None
 
 
 def test_tdoc_extract_orm_round_trip() -> None:
@@ -366,7 +437,6 @@ def test_tdoc_cr_detail_orm_minimal() -> None:
         row = TDocCrDetailOrm(
             ftp_url=url,
             tdoc_id="R5-227476",
-            parser_version="1.0.0",
         )
         session.add(row)
         session.commit()
@@ -376,12 +446,9 @@ def test_tdoc_cr_detail_orm_minimal() -> None:
         assert loaded is not None
         assert loaded.ftp_url == url
         assert loaded.tdoc_id == "R5-227476"
-        assert loaded.parser_version == "1.0.0"
         assert loaded.spec is None
         assert loaded.cr_num is None
         assert loaded.title is None
-        assert loaded.details is None
-        assert loaded.extracted_at is not None
 
 
 def test_multiple_revisions_for_same_tdoc_id() -> None:
@@ -411,21 +478,6 @@ def test_multiple_revisions_for_same_tdoc_id() -> None:
             )
         )
         session.commit()
-
-    with Session() as session:
-        rows = (
-            session.scalars(
-                select(TDocCrDetailOrm).where(
-                    TDocCrDetailOrm.tdoc_id == "R5s260009"
-                )
-            )
-            .all()
-        )
-        assert len(rows) == 2
-        urls = {row.ftp_url for row in rows}
-        assert urls == {url_a, url_b}
-        revs = {row.rev for row in rows}
-        assert revs == {"0", "2"}
 
 
 def test_cascade_delete_via_fk() -> None:

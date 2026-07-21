@@ -384,6 +384,41 @@ RP-260123
 
 Meeting pages and document listings may use FTP-style links containing `ftp/` or `\ftp\` paths. The parser normalizes these to forward slashes.
 
+## TTCN CR sidecar fields
+
+R5 TTCN CR documents (`R5s\d{6}`) carry an additional overview + corrections
+section on top of the standard CR cover page. The cover-page fields (spec,
+cr_num, release, etc.) flow through the slim `tdoc_cr_details` table; the
+TTCN-specific slice lands in a dedicated sidecar.
+
+The TTCN sidecar (`tdoc_cr_ttcn_details`) is keyed by the immutable
+download `ftp_url` (one row per URL, FK `tdoc_id` → `tdocs.tdoc_id`,
+`ON DELETE CASCADE`) and carries six overview columns plus a structured
+corrections list:
+
+| Column | Type | Source |
+| --- | --- | --- |
+| `testcase` | `String(256)` | Overview section, `Test case:` field. |
+| `ue` | `String(256)` | Overview section, `UE:` field. |
+| `ss` | `String(256)` | Overview section, `SS:` field. |
+| `ats_version` | `String(64)` | Overview section, `ATS version:` field. |
+| `ttcn_release` | `String(16)` | Derived from the `ats_version` prefix. |
+| `test_suite` | `String(256)` | Overview section, `Test suite:` field. |
+| `required_changes` | `LargeBinary(16 MB)` — gzip-compressed UTF-8 JSON | Corrections table: list of correction dicts (one per row). |
+
+TTCN detection happens automatically in the parser. The structural
+helper `is_ttcn_tdoc(tdoc_id)` (in `src/doc3gpp/parsers/cr/header.py`)
+gates `TTCNCRParser` registration in the default parser registry
+(`TTCNCRParser` is registered before the generic `CRParser`), so a TDoc
+id matching `R5s\d{6}` routes to the TTCN-aware parser while every other
+CR id falls through to the generic parser. Non-TTCN CRs produce no
+`tdoc_cr_ttcn_details` row — the parser returns
+`TDocCRParseResult(cover, ttcn=None)` and the service skips the sidecar
+upsert. Existing installs gain the table lazily: the
+`SQLAlchemyTDocCrTtcnRepository` catches the first
+`OperationalError("no such table")` from a TTCN write and runs
+`Base.metadata.create_all` to bring the DB into shape before the retry.
+
 ## Source file references
 
 - `src/doc3gpp/cli.py`
@@ -424,6 +459,26 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 - `src/doc3gpp/models/wi.py`
   - WI domain fields (`wi_id`, `acronym`, `release`, `name`,
     `tsg_short`, `updated_at`).
+
+- `src/doc3gpp/models/tdoc_cr.py`
+  - Domain dataclasses for the CR extraction pipeline: slim
+    `TDocCRDetails` (cover-page only), `TDocCRTTCNDetails` (TTCN
+    sidecar), `TDocCRParseResult` (parser bundle), `TDocExtractMeta`
+    (cache-pointer sidecar), `DirectParseResult` /
+    `DirectParseBatchResult` (direct-mode outcomes).
+
+- `src/doc3gpp/storage/compression.py`
+  - Shared gzip JSON helpers (`compress_json` / `decompress_json`)
+    used by the cover-page repo and the TTCN sidecar repo for any
+    binary JSON detail column.
+
+- `src/doc3gpp/storage/repositories/tdoc_cr_ttcn_sql.py`
+  - `SQLAlchemyTDocCrTtcnRepository` — SQL impl for the
+    `tdoc_cr_ttcn_details` sidecar. Six overview columns + a
+    gzip-compressed `required_changes` blob; one row per immutable
+    `ftp_url`. Lazy bootstrap catches `OperationalError("no such
+    table")` on the first public method and runs
+    `Base.metadata.create_all` before the retry.
 
 ## Extracted field summary
 

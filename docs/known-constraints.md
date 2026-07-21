@@ -75,6 +75,25 @@ change set so the docs stay honest.
 - **`TDoc` types other than CR (LS, DRAFT, BB, …) are not handled.**
   The extractor's type guard raises `TDocTypeUnsupportedError` for
   non-CR ids; future expansion is a separate change.
+- **`tdoc_cr_ttcn_details` is created lazily on first write, not on
+  `doc3gpp db init`.** `TDocCrTtcnDetailOrm` is registered with
+  `Base.metadata` so a fresh install picks it up via the standard
+  `create_schema()` call, but existing installs that pre-date the
+  sidecar gain the table only when `TDocCrService` writes the first
+  TTCN row. Each repo implements `_ensure_table_exists()`: a
+  `SELECT 1 FROM tdoc_cr_ttcn_details LIMIT 0` is attempted, and an
+  `OperationalError("no such table")` triggers an idempotent
+  `Base.metadata.create_all()` followed by a retry. The same lazy
+  bootstrap covers `tdoc_cr_details` on legacy DBs.
+- **`direct_parse_bytes` returns a loosely-typed tuple.**
+  The helper exposes the third element of its return tuple as
+  `object` (`tuple[str, str, object]`) to keep `parsers/`
+  independent of the `models/` import cycle; the call sites that
+  assign to `DirectParseResult.details` rely on a runtime
+  `isinstance` check rather than a typed assignment. Pyright will
+  flag the assignment as a soft error (`reportArgumentType` /
+  `reportAssignmentType`) until the return type is tightened. The
+  trade-off is intentional today — the wider fix is a follow-up.
 
 ## Test surface
 

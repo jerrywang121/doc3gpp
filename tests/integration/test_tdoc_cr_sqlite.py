@@ -39,6 +39,9 @@ from doc3gpp.services.tdoc_cr_service import (
 )
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+    SQLAlchemyTDocCrTtcnRepository,
+)
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 
@@ -72,12 +75,19 @@ def _build_service(
     tmp_path: Path,
     *,
     zip_bytes: bytes | Exception | None = None,
-) -> tuple[TDocCrService, MagicMock, TDocCache, SQLAlchemyTDocCrRepository, SQLAlchemyTDocRepository]:
+) -> tuple[
+    TDocCrService,
+    MagicMock,
+    TDocCache,
+    SQLAlchemyTDocCrRepository,
+    SQLAlchemyTDocCrTtcnRepository,
+    SQLAlchemyTDocRepository,
+]:
     """Construct a fully-wired :class:`TDocCrService` against tmp dirs.
 
-    Returns ``(service, scraper_mock, cache, cr_repo, tdoc_repo)`` so
-    each test can inspect call counts, cache contents, and DB rows
-    without rebuilding the wiring.
+    Returns ``(service, scraper_mock, cache, cr_repo, cr_ttcn_repo,
+    tdoc_repo)`` so each test can inspect call counts, cache
+    contents, and DB rows without rebuilding the wiring.
 
     Args:
         tmp_path: Per-test root used for both the cache directory and
@@ -99,14 +109,16 @@ def _build_service(
         scraper_mock.get_bytes.return_value = zip_bytes
 
     cr_repo = SQLAlchemyTDocCrRepository()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     tdoc_repo = SQLAlchemyTDocRepository()
     service = TDocCrService(
         cache=cache,
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
+        cr_ttcn_repository=cr_ttcn_repo,
         tdoc_repository=tdoc_repo,
     )
-    return service, scraper_mock, cache, cr_repo, tdoc_repo
+    return service, scraper_mock, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
 
 def _seed_cr_tdoc(tdoc_repo: SQLAlchemyTDocRepository, tdoc_id: str) -> None:
@@ -130,7 +142,7 @@ def test_extract_happy_path(sqlite_env, tmp_path) -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+    service, scraper_mock, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_payload(fixture)
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
@@ -178,7 +190,7 @@ def test_extract_db_cache_hit_skips_network(sqlite_env, tmp_path) -> None:
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
 
-    service, scraper_mock, _, _, tdoc_repo = _build_service(
+    service, scraper_mock, _, _, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_payload(fixture)
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
@@ -214,7 +226,7 @@ def test_extract_markdown_cache_hit_when_zip_purged(
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
 
-    service, scraper_mock, cache, _, tdoc_repo = _build_service(
+    service, scraper_mock, cache, _, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_payload(fixture)
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
@@ -291,7 +303,7 @@ def test_extract_force_bypasses_caches(sqlite_env, tmp_path) -> None:
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
 
-    service, scraper_mock, cache, _, tdoc_repo = _build_service(
+    service, scraper_mock, cache, _, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_payload(fixture)
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
@@ -355,7 +367,7 @@ def test_extract_zip_cache_hit_persists_with_candidate_url(
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
 
-    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+    service, scraper_mock, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_payload(fixture)
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
@@ -409,7 +421,7 @@ def test_extract_zip_cache_hit_persists_with_candidate_url(
 def test_extract_non_cr_tdoc_raises_type_unsupported(sqlite_env, tmp_path) -> None:
     """A TDoc row with ``type='LS'`` must raise ``TDocTypeUnsupportedError``."""
     create_schema()
-    service, _, _, _, tdoc_repo = _build_service(tmp_path, zip_bytes=b"unused")
+    service, _, _, _, _cr_ttcn_repo, tdoc_repo = _build_service(tmp_path, zip_bytes=b"unused")
     tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="LS")])
 
     with pytest.raises(TDocTypeUnsupportedError) as excinfo:
@@ -426,7 +438,7 @@ def test_extract_non_cr_tdoc_raises_type_unsupported(sqlite_env, tmp_path) -> No
 def test_extract_unknown_tdoc_raises_not_found(sqlite_env, tmp_path) -> None:
     """A TDoc id with no row in ``tdocs`` must raise ``TDocNotFoundError``."""
     create_schema()
-    service, _, _, _, _ = _build_service(tmp_path, zip_bytes=b"unused")
+    service, _, _, _, _cr_ttcn_repo, _ = _build_service(tmp_path, zip_bytes=b"unused")
 
     with pytest.raises(TDocNotFoundError) as excinfo:
         service.extract("R5s260009")
@@ -444,7 +456,7 @@ def test_extract_network_failure_no_partial_cache(sqlite_env, tmp_path) -> None:
     the DB.
     """
     create_schema()
-    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+    service, scraper_mock, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path,
         zip_bytes=httpx.ConnectError("network unreachable"),
     )
@@ -474,7 +486,7 @@ def test_extract_invalid_tdoc_id_raises_value_error(
 ) -> None:
     """A garbage id must raise ``ValueError`` before any I/O happens."""
     create_schema()
-    service, scraper_mock, cache, cr_repo, tdoc_repo = _build_service(
+    service, scraper_mock, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=b"unused"
     )
     # No tdoc seed — but the shape check fires first.
@@ -508,7 +520,7 @@ def test_extract_many_skips_failures(sqlite_env, tmp_path) -> None:
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
 
-    service, _, _, _, tdoc_repo = _build_service(
+    service, _, _, _, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_payload(fixture)
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
@@ -635,6 +647,12 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
     assert meta.ftp_url and details.ftp_url == meta.ftp_url
 
     # 3. A follow-up `tdoc show` invocation surfaces the persisted block.
+    # The new URL-keyed lookup requires the parent TDoc row to carry
+    # the same ``ftp_url`` the service persisted under; mirror the
+    # cover row's URL back into the TDoc so the CLI can resolve it.
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url=details.ftp_url)
+    )
     show_result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260009"])
     assert show_result.exit_code == 0, show_result.output
     assert "[TDoc]" in show_result.output
@@ -688,6 +706,7 @@ def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None
         cache=cache,
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
+        cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
@@ -744,6 +763,7 @@ def test_extract_falls_back_to_template_when_primary_url_fails(
         cache=cache,
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
+        cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
@@ -787,6 +807,7 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
         cache=cache,
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
+        cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="CR")])
@@ -840,6 +861,7 @@ def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> No
         cache=cache,
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
+        cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
@@ -898,6 +920,7 @@ def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> N
         cache=cache,
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
+        cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
@@ -919,7 +942,9 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
     """The ``url`` column on ``TDocCrDetailOrm`` must survive a
     write-then-read round trip; URL is the primary key in the new
     schema, so an upsert at the same URL replaces the row in place
-    while a fresh URL creates a second revision row.
+    while a fresh URL creates a second revision row. The cover-page
+    write and the extract-metadata write are independent under the
+    slim schema, so this test exercises both upsert methods.
     """
     create_schema()
     cr_repo = SQLAlchemyTDocCrRepository()
@@ -940,16 +965,20 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
         cr_num="3790",
         ftp_url=url,
     )
-    cr_repo.upsert(with_url, meta)
+    cr_repo.upsert(with_url)
+    cr_repo.upsert_extract_meta(meta)
     loaded = cr_repo.get_by_url(url)
     assert loaded is not None
     assert loaded.ftp_url == url
     assert loaded.tdoc_id == "R5s260009"
+    meta_loaded = cr_repo.get_extract_meta_by_url(url)
+    assert meta_loaded is not None
+    assert meta_loaded.ftp_url == url
+    assert meta_loaded.tdoc_id == "R5s260009"
 
     # Same URL updates in place rather than creating a duplicate row.
     cr_repo.upsert(
         TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3791", ftp_url=url),
-        meta,
     )
     rows = cr_repo.get("R5s260009")
     assert len(rows) == 1
@@ -965,45 +994,17 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
             rev="2",
             ftp_url=url_b,
         ),
-        replace(meta, ftp_url=url_b),
     )
+    cr_repo.upsert_extract_meta(replace(meta, ftp_url=url_b))
     rows = cr_repo.get("R5s260009")
     urls = {row.ftp_url for row in rows}
     assert urls == {url, url_b}
-
-
-def test_extract_repository_rejects_mismatched_urls(sqlite_env) -> None:
-    """``upsert`` rejects a details/meta pair whose URLs disagree.
-
-    The two child tables share the URL as their primary key and are
-    written in one transaction; a divergent ``url`` would let the
-    tables disagree, which the read contract forbids.
-    """
-    create_schema()
-    cr_repo = SQLAlchemyTDocCrRepository()
-    SQLAlchemyTDocRepository().upsert_many(
-        [TDoc(tdoc_id="R5s260009", type="CR")]
-    )
-
-    details = TDocCRDetails(
-        tdoc_id="R5s260009",
-        spec="38.523-3",
-        cr_num="3790",
-        ftp_url="stored/R5s260009.zip",
-    )
-    meta = TDocExtractMeta(
-        ftp_url="stored/R5s260009_v2.zip",
-        tdoc_id="R5s260009",
-        zip_path="/tmp/z",
-        markdown_path="/tmp/m",
-        doc_filename="R5s260009.docx",
-    )
-    with pytest.raises(ValueError, match="must match"):
-        cr_repo.upsert(details, meta)
+    meta_rows = cr_repo.get_extract_meta("R5s260009")
+    assert {row.ftp_url for row in meta_rows} == {url, url_b}
 
 
 def test_extract_repository_rejects_blank_url(sqlite_env) -> None:
-    """``upsert`` rejects an empty ``ftp_url`` on either side."""
+    """``upsert`` rejects an empty ``ftp_url`` on the cover page row."""
     create_schema()
     cr_repo = SQLAlchemyTDocCrRepository()
     SQLAlchemyTDocRepository().upsert_many(
@@ -1013,15 +1014,64 @@ def test_extract_repository_rejects_blank_url(sqlite_env) -> None:
     details = TDocCRDetails(
         tdoc_id="R5s260009", spec="38.523-3", cr_num="3790", ftp_url=""
     )
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
+        cr_repo.upsert(details)
+
+
+def test_extract_upsert_extract_meta_round_trips(sqlite_env) -> None:
+    """``upsert_extract_meta`` writes and reads the metadata row by URL.
+
+    Validates the new ``tdoc_extracts`` write path end-to-end:
+    insert, fetch by URL, fetch by ``tdoc_id``, update with a fresh
+    ``extracted_at`` timestamp. The slim cover-page table is
+    independently written; this test focuses on the metadata surface
+    only.
+    """
+    create_schema()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id="R5s260009", type="CR")]
+    )
+
+    url = "stored/R5s260009.zip"
     meta = TDocExtractMeta(
-        ftp_url="stored/R5s260009.zip",
+        ftp_url=url,
         tdoc_id="R5s260009",
-        zip_path="/tmp/z",
-        markdown_path="/tmp/m",
+        zip_path="/cache/zips/R5s260009.zip",
+        markdown_path="/cache/markdown/abc.bin",
         doc_filename="R5s260009.docx",
     )
-    with pytest.raises(ValueError, match="non-empty ftp_url"):
-        cr_repo.upsert(details, meta)
+    cr_repo.upsert_extract_meta(meta)
+
+    by_url = cr_repo.get_extract_meta_by_url(url)
+    assert by_url is not None
+    assert by_url.tdoc_id == "R5s260009"
+    assert by_url.ftp_url == url
+    assert by_url.doc_filename == "R5s260009.docx"
+    assert by_url.zip_path == "/cache/zips/R5s260009.zip"
+    assert by_url.markdown_path == "/cache/markdown/abc.bin"
+    assert by_url.extracted_at is not None
+    first_extracted_at = by_url.extracted_at
+
+    by_tdoc = cr_repo.get_extract_meta("R5s260009")
+    assert len(by_tdoc) == 1
+    assert by_tdoc[0].ftp_url == url
+
+    # Update with new ``extracted_at`` — a re-extract that replaces the row.
+    later_meta = TDocExtractMeta(
+        ftp_url=url,
+        tdoc_id="R5s260009",
+        zip_path="/cache/zips/R5s260009.zip",
+        markdown_path="/cache/markdown/def.bin",
+        doc_filename="R5s260009.docx",
+    )
+    cr_repo.upsert_extract_meta(later_meta)
+    refreshed = cr_repo.get_extract_meta_by_url(url)
+    assert refreshed is not None
+    assert refreshed.markdown_path == "/cache/markdown/def.bin"
+    assert len(cr_repo.get_extract_meta("R5s260009")) == 1
+    assert refreshed.extracted_at is not None
+    assert refreshed.extracted_at >= first_extracted_at
 
 
 # ---------------------------------------------------------------------------
@@ -1081,7 +1131,14 @@ def test_parse_with_combined_filters_against_sqlite(
     # and the summary's "Skipped" bucket stays empty.
     cr_repo = SQLAlchemyTDocCrRepository()
     cr_repo.upsert(
-        TDocCRDetails(tdoc_id="R5s260001", spec="38.523-3", cr_num="3790", ftp_url="stored/R5s260001.zip"),
+        TDocCRDetails(
+            tdoc_id="R5s260001",
+            spec="38.523-3",
+            cr_num="3790",
+            ftp_url="stored/R5s260001.zip",
+        ),
+    )
+    cr_repo.upsert_extract_meta(
         TDocExtractMeta(
             ftp_url="stored/R5s260001.zip",
             tdoc_id="R5s260001",

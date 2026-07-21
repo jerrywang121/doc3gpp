@@ -38,6 +38,16 @@ The ``from_cache`` flag on :class:`ExtractResult` refers to the DB
 cache — it does NOT fire when only the markdown cache is hot. A hot
 markdown cache still means we re-parsed and re-validated the document
 against the latest parser regexes.
+
+The parsed :class:`TDocCRParseResult` is fanned out across three
+independent writes: the slim ``tdoc_cr_details`` cover row, an
+optional ``tdoc_cr_ttcn_details`` sidecar (only present for TTCN
+CRs), and the ``tdoc_extracts`` cache-metadata row. Each write goes
+through its own repository (cover via the slim CR repo, TTCN
+sidecar via the dedicated TTCN repo, extract metadata via
+``upsert_extract_meta``) so the storage surface mirrors the
+slimmed cover dataclass and the new sidecar table without leaking
+either parser payload back into the in-memory ``ExtractResult``.
 """
 
 from __future__ import annotations
@@ -56,6 +66,8 @@ from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     DirectParseResult,
     TDocCRDetails,
+    TDocCRParseResult,
+    TDocCRTTCNDetails,
     TDocExtractMeta,
 )
 from doc3gpp.parsers.cr_parser import (
@@ -78,6 +90,7 @@ from doc3gpp.parsers.tdoc_parsers import (
 )
 from doc3gpp.repository.protocols import (
     TDocCrDetailRepository,
+    TDocCrTTCNDetailRepository,
     TDocRepository,
 )
 from doc3gpp.scraping.tdoc_zip_source import (
@@ -268,6 +281,7 @@ class TDocCrService:
         cache: TDocCacheLike,
         scraper_client: "ScraperClient",
         cr_repository: TDocCrDetailRepository,
+        cr_ttcn_repository: TDocCrTTCNDetailRepository,
         tdoc_repository: TDocRepository,
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
@@ -275,6 +289,7 @@ class TDocCrService:
         self._cache = cache
         self._scraper = scraper_client
         self._repo = cr_repository
+        self._cr_ttcn_repo = cr_ttcn_repository
         self._tdoc_repo = tdoc_repository
         self._parser = parser
         self._parser_registry = parser_registry
@@ -296,7 +311,13 @@ class TDocCrService:
     # Public API
     # ------------------------------------------------------------------
 
-    def extract(self, tdoc_id: str, *, force: bool = False) -> ExtractResult:
+    def extract(
+        self,
+        tdoc_id: str,
+        *,
+        force: bool = False,
+        full: bool = False,
+    ) -> ExtractResult:
         """Return parsed CR details + extract metadata for ``tdoc_id``.
 
         Sequence:
@@ -327,6 +348,20 @@ class TDocCrService:
            originally populated the cache is not tracked); fall back
            to the first candidate the resolver would currently try
            so persistence still has a non-empty identity URL.
+
+        Args:
+            tdoc_id: Canonical TDoc identifier.
+            force: Bypass the on-disk zip cache and the markdown cache
+                on a fresh parse. The ``tdoc_cr_details`` /
+                ``tdoc_extracts`` rows are always re-upserted.
+            full: Forwarded to the parser as ``full=True``. For TTCN
+                CRs this enables extraction of the per-correction
+                ``before_change`` / ``after_change`` / ``new_change``
+                content alongside the metadata fields; without it, only
+                the metadata (``function_name``, ``reason_for_change``,
+                ``summary_of_change``, ``ttcn_module``, ``mcc160_comment``)
+                is captured. Safe to flip on for non-TTCN CRs — the
+                generic :class:`CRParser` ignores the flag.
         """
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
@@ -418,11 +453,18 @@ class TDocCrService:
         else:
             stored_ftp_url = normalize_ftp_path(candidates[0])
 
-        details = replace(
-            self._resolve_parser(normalised).parse(
-                markdown, tdoc_id=normalised, full=False,
-            ),
-            ftp_url=stored_ftp_url,
+        parsed: TDocCRParseResult = self._resolve_parser(normalised).parse(
+            markdown, tdoc_id=normalised, full=full,
+        )
+        cover = replace(parsed.cover, ftp_url=stored_ftp_url)
+        ttcn: TDocCRTTCNDetails | None = (
+            replace(
+                parsed.ttcn,
+                ftp_url=stored_ftp_url,
+                tdoc_id=normalised,
+            )
+            if parsed.ttcn is not None
+            else None
         )
         meta = TDocExtractMeta(
             ftp_url=stored_ftp_url or "",
@@ -431,16 +473,19 @@ class TDocCrService:
             markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
             doc_filename=doc_filename,
         )
-        self._repo.upsert(details, meta)
+        self._repo.upsert(cover)
+        if ttcn is not None:
+            self._cr_ttcn_repo.upsert(ttcn)
+        self._repo.upsert_extract_meta(meta)
         logger.info(
             "Persisted CR details for TDoc %s at ftp_url %s (spec=%s cr_num=%s)",
             normalised,
             stored_ftp_url,
-            details.spec,
-            details.cr_num,
+            cover.spec,
+            cover.cr_num,
         )
         return ExtractResult(
-            details=details,
+            details=cover,
             extract_meta=meta,
             from_cache=False,
         )
@@ -450,6 +495,7 @@ class TDocCrService:
         tdoc_ids: Iterable[str],
         *,
         force: bool = False,
+        full: bool = False,
     ) -> BatchExtractResult:
         """Extract a batch of TDocs and bundle successes with per-id failure reasons.
 
@@ -466,6 +512,10 @@ class TDocCrService:
                 table, or aren't CR type are logged and skipped.
             force: Forwarded to :meth:`extract`. When ``True`` every
                 TDoc is re-fetched and re-parsed from scratch.
+            full: Forwarded to :meth:`extract` for every id in the
+                batch. See :meth:`extract` for the TTCN
+                ``before_change`` / ``after_change`` / ``new_change``
+                semantics.
 
         Returns:
             A :class:`BatchExtractResult` whose ``successes`` dict maps
@@ -477,7 +527,7 @@ class TDocCrService:
         failures: dict[str, str] = {}
         for raw_id in tdoc_ids:
             try:
-                result = self.extract(raw_id, force=force)
+                result = self.extract(raw_id, force=force, full=full)
             except (ValueError, LookupError, TDocZipDownloadError) as exc:
                 logger.warning(
                     "Failed to extract TDoc %r: %s",
@@ -537,17 +587,17 @@ class TDocCrService:
         """
         if not is_3gpp_ftp_url(url):
             payload = self._scraper.get_bytes(url)
-            markdown, docx_filename, details = direct_parse_bytes(
+            markdown, docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
             )
             return DirectParseResult(
                 source_kind="url-other",
                 markdown=markdown,
-                details=details,
+                details=parsed.cover,
                 extract_meta=None,
                 from_cache=False,
                 persisted=False,
-                tdoc_id=details.tdoc_id,
+                tdoc_id=parsed.cover.tdoc_id,
                 tdoc_id_in_tdocs=False,
                 source_url=url,
             )
@@ -558,7 +608,7 @@ class TDocCrService:
 
         if extracted_id is None:
             payload = self._scraper.get_bytes(url)
-            markdown, docx_filename, details = direct_parse_bytes(
+            markdown, docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
             )
             logger.warning(
@@ -569,7 +619,7 @@ class TDocCrService:
             return DirectParseResult(
                 source_kind="url-3gpp",
                 markdown=markdown,
-                details=details,
+                details=parsed.cover,
                 extract_meta=None,
                 from_cache=False,
                 persisted=False,
@@ -580,7 +630,7 @@ class TDocCrService:
 
         if not self._tdoc_in_tdocs(extracted_id):
             payload = self._scraper.get_bytes(url)
-            markdown, docx_filename, details = direct_parse_bytes(
+            markdown, docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
             )
             logger.warning(
@@ -592,7 +642,7 @@ class TDocCrService:
             return DirectParseResult(
                 source_kind="url-3gpp",
                 markdown=markdown,
-                details=details,
+                details=parsed.cover,
                 extract_meta=None,
                 from_cache=False,
                 persisted=False,
@@ -741,14 +791,14 @@ class TDocCrService:
             ``"local"`` and whose persistence fields are all false.
         """
         del force
-        markdown, docx_filename, details = direct_parse_bytes(
+        markdown, docx_filename, parsed = direct_parse_bytes(
             docx_bytes, filename=filename, full=full,
         )
         tdoc_id = extract_tdoc_id_from_filename(filename)
         return DirectParseResult(
             source_kind="local",
             markdown=markdown,
-            details=details,
+            details=parsed.cover,
             extract_meta=None,
             from_cache=False,
             persisted=False,
@@ -820,10 +870,19 @@ class TDocCrService:
             doc_filename=doc_filename,
             force=force,
         )
-        details = self._resolve_parser(tdoc_id).parse(
+        parsed: TDocCRParseResult = self._resolve_parser(tdoc_id).parse(
             markdown, tdoc_id=tdoc_id, full=full,
         )
-        details = replace(details, ftp_url=stored_ftp_url)
+        cover = replace(parsed.cover, ftp_url=stored_ftp_url)
+        ttcn: TDocCRTTCNDetails | None = (
+            replace(
+                parsed.ttcn,
+                ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+            )
+            if parsed.ttcn is not None
+            else None
+        )
         meta = TDocExtractMeta(
             ftp_url=stored_ftp_url,
             tdoc_id=tdoc_id,
@@ -831,7 +890,10 @@ class TDocCrService:
             markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
             doc_filename=doc_filename,
         )
-        self._repo.upsert(details, meta)
+        self._repo.upsert(cover)
+        if ttcn is not None:
+            self._cr_ttcn_repo.upsert(ttcn)
+        self._repo.upsert_extract_meta(meta)
         logger.info(
             "Persisted direct-parse CR details for tdoc_id %s at %s",
             tdoc_id,
@@ -840,7 +902,7 @@ class TDocCrService:
         return DirectParseResult(
             source_kind="url-3gpp",
             markdown=markdown,
-            details=details,
+            details=cover,
             extract_meta=meta,
             from_cache=False,
             persisted=True,

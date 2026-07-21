@@ -1,9 +1,10 @@
 """SQLAlchemy-backed implementation of :class:`TDocCrDetailRepository`.
 
-Stores both the parsed CR detail row (``tdoc_cr_details``) and the
+Stores the parsed CR cover-page row (``tdoc_cr_details``) and the
 cache-extract metadata sidecar (``tdoc_extracts``) that point at the
-on-disk artefacts under :mod:`doc3gpp.scraping.cache`. ``upsert`` writes
-both rows inside a single transaction so the two tables never disagree.
+on-disk artefacts under :mod:`doc3gpp.scraping.cache`. Both tables are
+owned by this repository, but writes are split into two upsert methods
+so callers can update each table independently.
 
 Both tables are keyed by the immutable download ``ftp_url`` — a path
 relative to the canonical 3GPP FTP root (``https://www.3gpp.org/ftp/``)
@@ -14,22 +15,14 @@ distinct URLs and occupy distinct rows. ``tdoc_id`` is a non-PK FK into
 ``tdocs.tdoc_id`` (indexed for the per-tdoc lookup) with
 ``ondelete="CASCADE"`` so deleting a parent TDoc still cleans up every
 revision's detail rows.
-
-The ``details`` dict on :class:`TDocCRDetails` is JSON-serialised and
-gzip-compressed before being stored in the ``details`` ``LargeBinary``
-column. Reads decompress transparently; a legacy uncompressed payload
-or corrupt blob falls back to an empty dict so a bad row never breaks
-a read.
 """
 
 from __future__ import annotations
 
-import gzip
-import json
 import logging
-from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocExtractOrm
@@ -38,45 +31,13 @@ from doc3gpp.storage.db.session import get_session_factory
 logger = logging.getLogger(__name__)
 
 
-_GZIP_MAGIC = b"\x1f\x8b"
-
-
-def _compress_details(details: dict[str, Any]) -> bytes:
-    """gzip-compress UTF-8 JSON for the ``details`` blob."""
-    payload = json.dumps(details, ensure_ascii=False).encode("utf-8")
-    return gzip.compress(payload, compresslevel=9)
-
-
-def _decompress_details(blob: bytes | None) -> dict[str, Any]:
-    """Decode the ``details`` blob back to a dict.
-
-    Tolerant by design: ``None``, empty bytes, gzip decompression
-    errors, JSON decode errors, and non-dict results all fall back to
-    an empty dict so a corrupt row never breaks the read path. Legacy
-    uncompressed payloads (no gzip magic) are still parsed so a manual
-    ``UPDATE`` survives a round-trip.
-    """
-    if not blob:
-        return {}
-    try:
-        raw = gzip.decompress(blob) if blob[:2] == _GZIP_MAGIC else blob
-        decoded = json.loads(raw.decode("utf-8"))
-    except (gzip.BadGzipFile, json.JSONDecodeError, UnicodeDecodeError):
-        logger.warning(
-            "Could not decode details blob (length=%d); falling back to {}",
-            len(blob),
-        )
-        return {}
-    return decoded if isinstance(decoded, dict) else {}
-
-
 class SQLAlchemyTDocCrRepository:
     """SQLAlchemy implementation of :class:`TDocCrDetailRepository`.
 
-    Persists two tables — ``tdoc_cr_details`` (parsed fields) and
-    ``tdoc_extracts`` (paths to cached zip / markdown) — both keyed by
-    the immutable download ``ftp_url``. The ``upsert`` call writes both
-    rows inside a single transaction.
+    Persists two tables — ``tdoc_cr_details`` (parsed cover-page fields)
+    and ``tdoc_extracts`` (paths to cached zip / markdown) — both keyed
+    by the immutable download ``ftp_url``. Cover-page rows and extract
+    metadata rows are written through separate upsert methods.
     """
 
     def __init__(self, session_factory=None) -> None:
@@ -91,23 +52,36 @@ class SQLAlchemyTDocCrRepository:
                 :func:`get_settings`.
         """
         self._session_factory = session_factory or get_session_factory()
+        self._ensured = False
+
+    def _ensure_table_exists(self) -> None:
+        if self._ensured:
+            return
+        from doc3gpp.storage.db.base import Base
+        from doc3gpp.storage.db.session import get_engine
+
+        try:
+            with self._session_factory() as session:
+                session.execute(text("SELECT 1 FROM tdoc_cr_details LIMIT 0"))
+        except OperationalError as exc:
+            msg = str(exc).lower()
+            if "no such table" in msg or "doesn't exist" in msg:
+                Base.metadata.create_all(bind=get_engine())
+                with self._session_factory() as session:
+                    session.execute(text("SELECT 1 FROM tdoc_cr_details LIMIT 0"))
+            else:
+                raise
+        self._ensured = True
 
     def get(self, tdoc_id: str) -> list[TDocCRDetails]:
-        """Return every detail row for ``tdoc_id``, newest first.
-
-        Newest first means highest ``extracted_at``; ties (multiple
-        upserts in the same second) break on the ``ftp_url`` so the
-        order is deterministic across runs.
-        """
+        """Return every detail row for ``tdoc_id``, ordered by ``ftp_url`` ASC."""
+        self._ensure_table_exists()
         with self._session_factory() as session:
             rows = (
                 session.scalars(
                     select(TDocCrDetailOrm)
                     .where(TDocCrDetailOrm.tdoc_id == tdoc_id)
-                    .order_by(
-                        TDocCrDetailOrm.extracted_at.desc(),
-                        TDocCrDetailOrm.ftp_url.asc(),
-                    )
+                    .order_by(TDocCrDetailOrm.ftp_url.asc())
                 )
                 .all()
             )
@@ -120,43 +94,19 @@ class SQLAlchemyTDocCrRepository:
         hold a full upstream URL must normalise via
         :func:`doc3gpp.scraping.ftp_source.normalize_ftp_path` first.
         """
+        self._ensure_table_exists()
         with self._session_factory() as session:
             row = session.get(TDocCrDetailOrm, url)
         if row is None:
             return None
         return _orm_to_details(row)
 
-    def upsert(
-        self,
-        details: TDocCRDetails,
-        extract_meta: TDocExtractMeta,
-    ) -> None:
-        """Insert/update both rows in a single transaction.
-
-        ``upsert`` requires that ``details.ftp_url`` and
-        ``extract_meta.ftp_url`` agree (and both be non-empty) — the
-        two tables share the URL as their primary key and a
-        transactional write that put one row in one table and a
-        different row in the other would corrupt the read contract.
-        The guard here is the only place that assertion is centralised.
-        """
+    def upsert(self, details: TDocCRDetails) -> None:
+        """Insert/update the cover-page row for ``details.ftp_url``."""
+        self._ensure_table_exists()
         if not details.ftp_url:
             raise ValueError(
                 "TDocCRDetails requires a non-empty ftp_url for URL-keyed upsert"
-            )
-        if not extract_meta.ftp_url:
-            raise ValueError(
-                "TDocExtractMeta requires a non-empty ftp_url for URL-keyed upsert"
-            )
-        if details.ftp_url != extract_meta.ftp_url:
-            raise ValueError(
-                "details.ftp_url and extract_meta.ftp_url must match "
-                f"(got {details.ftp_url!r} vs {extract_meta.ftp_url!r})"
-            )
-        if details.tdoc_id != extract_meta.tdoc_id:
-            raise ValueError(
-                "details.tdoc_id and extract_meta.tdoc_id must match "
-                f"(got {details.tdoc_id!r} vs {extract_meta.tdoc_id!r})"
             )
 
         ftp_url = details.ftp_url
@@ -173,19 +123,34 @@ class SQLAlchemyTDocCrRepository:
                 # row.
                 detail_row.tdoc_id = details.tdoc_id
             self._details_to_orm(detail_row, details)
+            session.commit()
 
+    def upsert_extract_meta(self, meta: TDocExtractMeta) -> None:
+        """Insert/update the ``tdoc_extracts`` row for ``meta.ftp_url``."""
+        self._ensure_table_exists()
+        if not meta.ftp_url:
+            raise ValueError(
+                "TDocExtractMeta requires a non-empty ftp_url for URL-keyed upsert"
+            )
+        if not meta.tdoc_id:
+            raise ValueError(
+                "TDocExtractMeta requires a non-empty tdoc_id for URL-keyed upsert"
+            )
+
+        ftp_url = meta.ftp_url
+        with self._session_factory() as session:
             extract_row = session.get(TDocExtractOrm, ftp_url)
             if extract_row is None:
-                extract_row = TDocExtractOrm(ftp_url=ftp_url, tdoc_id=extract_meta.tdoc_id)
+                extract_row = TDocExtractOrm(ftp_url=ftp_url, tdoc_id=meta.tdoc_id)
                 session.add(extract_row)
             else:
-                extract_row.tdoc_id = extract_meta.tdoc_id
-            self._meta_to_orm(extract_row, extract_meta)
-
+                extract_row.tdoc_id = meta.tdoc_id
+            self._meta_to_orm(extract_row, meta)
             session.commit()
 
     def get_extract_meta(self, tdoc_id: str) -> list[TDocExtractMeta]:
         """Return every metadata row for ``tdoc_id``, newest first."""
+        self._ensure_table_exists()
         with self._session_factory() as session:
             rows = (
                 session.scalars(
@@ -205,6 +170,7 @@ class SQLAlchemyTDocCrRepository:
 
         ``url`` is the relative ``ftp_url`` (the PK).
         """
+        self._ensure_table_exists()
         with self._session_factory() as session:
             row = session.get(TDocExtractOrm, url)
         if row is None:
@@ -213,18 +179,17 @@ class SQLAlchemyTDocCrRepository:
 
     def list_all(self) -> list[TDocCRDetails]:
         """Return every persisted detail row (CLI / debugging)."""
+        self._ensure_table_exists()
         with self._session_factory() as session:
             rows = session.scalars(select(TDocCrDetailOrm)).all()
         return [_orm_to_details(row) for row in rows]
 
     @staticmethod
     def _details_to_orm(target: TDocCrDetailOrm, details: TDocCRDetails) -> None:
-        """Copy :class:`TDocCRDetails` fields onto an ORM instance.
+        """Copy :class:`TDocCRDetails` cover-page fields onto an ORM instance.
 
-        Excludes ``ftp_url`` (PK, never overwritten after construction),
-        ``tdoc_id`` (handled by :meth:`upsert` because it is the FK),
-        and ``extracted_at`` (stamped by the server-side default).
-        The ``details`` blob is gzip-compressed JSON.
+        Excludes ``ftp_url`` (PK, never overwritten after construction)
+        and ``tdoc_id`` (handled by :meth:`upsert` because it is the FK).
         """
         target.spec = details.spec
         target.cr_num = details.cr_num
@@ -242,16 +207,14 @@ class SQLAlchemyTDocCrRepository:
         target.clauses_affected = details.clauses_affected
         target.other_comments = details.other_comments
         target.revision_history = details.revision_history
-        target.details = _compress_details(details.details)
         target.extracted_tdoc_id = details.extracted_tdoc_id
-        target.parser_version = details.parser_version
 
     @staticmethod
     def _meta_to_orm(target: TDocExtractOrm, meta: TDocExtractMeta) -> None:
         """Copy :class:`TDocExtractMeta` fields onto an ORM instance.
 
         Excludes ``ftp_url`` (PK) and ``tdoc_id`` (FK, handled by
-        :meth:`upsert`).
+        :meth:`upsert_extract_meta`).
         """
         target.zip_path = meta.zip_path
         target.markdown_path = meta.markdown_path
@@ -264,8 +227,6 @@ class SQLAlchemyTDocCrRepository:
 def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
     """Reconstruct a :class:`TDocCRDetails` from an ORM row.
 
-    The ``details`` blob is decoded with a tolerant fallback to ``{}``
-    so a ``None`` / empty / unparseable blob never breaks a read.
     ``ftp_url`` is read straight from the row — the URL is the PK.
     """
     return TDocCRDetails(
@@ -286,10 +247,8 @@ def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
         clauses_affected=row.clauses_affected,
         other_comments=row.other_comments,
         revision_history=row.revision_history,
-        details=_decompress_details(row.details),
         extracted_tdoc_id=row.extracted_tdoc_id,
         ftp_url=row.ftp_url,
-        parser_version=row.parser_version,
     )
 
 

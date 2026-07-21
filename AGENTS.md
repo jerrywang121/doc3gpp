@@ -45,7 +45,12 @@ doc3gpp/
 │   ├── scraping/         # HTTP / FTP transport — no parsing
 │   ├── parsers/          # HTML / Excel → domain objects — no network
 │   ├── settings/         # pydantic-settings + TOML discovery
-│   ├── storage/          # persistence umbrella (db/, backends/, repositories/)
+│   ├── storage/          # persistence umbrella
+│   │   ├── compression.py    # shared gzip JSON helpers (cover + TTCN sidecars)
+│   │   ├── db/               # ORM models, engine, create_schema bootstrap
+│   │   ├── backends/         # per-dialect engine kwargs
+│   │   └── repositories/     # SQL impls of the repository Protocols
+│   │       └── tdoc_cr_ttcn_sql.py   # SQL impl of TDocCrTTCNDetailRepository
 │   └── cli_filters.py    # shared filter / TDoc-id grammar
 ├── tests/
 │   ├── unit/             # mock external calls
@@ -89,6 +94,7 @@ runtime data flow, and ORM schema.
 | `scraping/` | HTTP / FTP transport only — **no HTML parsing** |
 | `parsers/` | HTML / Excel → domain only — **no network** |
 | `storage/db/` | ORM models, engine factory, `create_schema` bootstrap |
+| `storage/compression.py` | shared gzip JSON helpers for binary detail columns |
 | `storage/repositories/` | SQL impls of the `repository/` Protocols |
 | `settings/` | env + TOML config (pydantic-settings; precedence: CLI > env > file > defaults) |
 | `cli.py` | thin Typer commands; never instantiate SQL repos directly |
@@ -123,8 +129,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   mode the SQL query excludes rows already present in `tdoc_cr_details`,
   so the batch cap applies only to pending TDocs; the preview and
   confirmation list only pending rows. `--force` explicitly includes and
-  re-parses already-parsed matches. Full grammar and prompt-completion
-  semantics in [`docs/conventions.md`](docs/conventions.md) and
+  re-parses already-parsed matches. The parser returns
+  `TDocCRParseResult(cover, ttcn)` and `TDocCrService` fans the result
+  out across THREE independent upserts: the slim cover-page row in
+  `tdoc_cr_details`, the optional `tdoc_cr_ttcn_details` sidecar (only
+  when the parser recognised a TTCN CR), and the `tdoc_extracts`
+  metadata row. Full grammar and prompt-completion semantics in
+  [`docs/conventions.md`](docs/conventions.md) and
   [`docs/cli.md`](docs/cli.md).
 - `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a
   direct-mode alternative that bypasses the database filters. Local
@@ -134,6 +145,16 @@ Workflows in one line (full prose in `docs/architecture.md`):
   the result is still emitted with a warning). The zip cache is
   keyed on the **original (sanitized) filename** (D10 fix) so
   multiple revisions of the same tdoc_id never collide.
+- `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row, then
+  looks up the slim cover-page details and the extract metadata by the
+  row's immutable `tdoc.ftp_url` (one row per URL — the URL is the row
+  identity for both `tdoc_cr_details` and `tdoc_extracts`). The TTCN
+  sidecar is joined in via `cr_ttcn_repo.get_by_url(tdoc.ftp_url)` only
+  when `is_ttcn_tdoc(tdoc.tdoc_id)` is `True`. The CLI's renderers emit
+  `cover`, the optional `ttcn` block, and `extracted_at` (sourced from
+  the `tdoc_extracts` row via PK JOIN) as separate sections — the
+  legacy `details` / `parser_version` fields no longer appear in the
+  output.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
 - When `Settings.sync.auto_sync` is enabled, `meeting list`, `tdoc list`,

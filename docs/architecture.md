@@ -92,11 +92,17 @@ Per-layer modules:
   passed between layers; never leak ORM attributes.
     - `models/meeting.py`, `models/tdoc.py`, `models/tsg.py`,
       `models/wi.py`, `models/tdoc_file.py`, `models/tdoc_cr.py`
-      (`TDocCRDetails` + `TDocExtractMeta`)
+      (`TDocCRDetails` slim cover-page dataclass, `TDocCRTTCNDetails`
+      sidecar, `TDocCRParseResult` parser bundle, `TDocExtractMeta`
+      cache-pointer sidecar, `DirectParseResult` direct-mode outcome)
 - `repository/` — abstract `Protocol` contracts used by services.
     - `repository/protocols.py` — `MeetingRepository`,
       `TDocRepository` (+ `get_by_id`), `TsgRepository`,
-      `WiRepository`, `TDocFileRepository`, `TDocCrDetailRepository`
+      `WiRepository`, `TDocFileRepository`,
+      `TDocCrDetailRepository` (slim cover-page repo + the
+      `tdoc_extracts` sidecar, written through a separate
+      `upsert_extract_meta` method),
+      `TDocCrTTCNDetailRepository` (TTCN sidecar)
 - `services/` — orchestration. Constructed via `services/factory.py`
   (`build_*` helpers); the CLI never imports a concrete SQL repository
   directly.
@@ -106,14 +112,25 @@ Per-layer modules:
     - `services/tdoc_sync_coordinator.py` — cross-service orchestration
       for `tdoc sync`
     - `services/tdoc_cr_service.py` — end-to-end CR extraction pipeline
+      (accepts `cr_ttcn_repository` in its constructor; fans the
+      parser's `TDocCRParseResult` out across the cover-page repo,
+      the TTCN sidecar repo, and the extract-metadata repo)
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
       `build_tdoc_sync_coordinator`, `build_tdoc_cr_service`,
       `build_tsg_service`, `build_wi_service`,
-      `build_tdoc_repository`, `build_tdoc_cr_repository`
+      `build_tdoc_repository`, `build_tdoc_cr_repository`,
+      `build_tdoc_cr_ttcn_repository`
 - `storage/` — SQLAlchemy ORM models, engine / session factory,
   backend-specific options, concrete Protocol implementations.
-    - `storage/db/models.py` — ORM classes
+    - `storage/db/models.py` — ORM classes (including
+      `TDocCrDetailOrm` slim cover-page, `TDocCrTtcnDetailOrm`
+      TTCN sidecar, `TDocExtractOrm` cache-pointer sidecar)
+    - `storage/compression.py` — shared gzip JSON helpers
+      (`compress_json` / `decompress_json`) used by the cover-page
+      repo and the TTCN sidecar repo for any binary JSON column
+      (the sidecar's `required_changes` blob today; tolerant
+      decoding covers future binary detail columns)
     - `storage/db/session.py` — `get_engine`, `get_session_factory`
       (cached)
     - `storage/db/base.py` — declarative `Base`
@@ -122,7 +139,9 @@ Per-layer modules:
     - `storage/db/migrations/` — placeholder for future Alembic
     - `storage/backends/{sqlite,mysql,postgres}.py` — engine kwargs
     - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
-      — concrete `SQLAlchemy*Repository` classes
+      and `storage/repositories/tdoc_cr_ttcn_sql.py` — concrete
+      `SQLAlchemy*Repository` classes (the cover-page repo also
+      owns `tdoc_extracts` writes via `upsert_extract_meta`)
 
 ## Runtime Data Flow
 
@@ -216,25 +235,61 @@ and the TDoc CR extraction is the deepest.
       via `_compress_markdown`). The reader (`_decompress_markdown`)
       magic-byte-sniffs the on-disk bytes, so legacy plain UTF-8 cache
       files written before this change are still decoded transparently.
+      The same gzip JSON convention is used for the SQL-side
+      `tdoc_cr_ttcn_details.required_changes` blob via the shared
+      helpers in `storage/compression.py` (`compress_json` /
+      `decompress_json`) — same `compresslevel=9`, same tolerant
+      fallback (`None` / empty / gzip / JSON / Unicode errors all
+      resolve to `None` plus a warning, and legacy uncompressed
+      blobs decode transparently).
     - `parse_cr_details(markdown, tdoc_id=...)` returns a typed
-      `TDocCRDetails` (cover-page; TTCN overview + corrections only
-      when `tdoc_id` matches `R5s\d{6}`).
-    - `TDocCrRepository.upsert(details, extract_meta)` writes both the
-      detail row and the extract-metadata row (both keyed by the
-      relative `ftp_url`) in one transaction. The URL is the immutable
-      identity — multiple extracts at distinct URLs for the same
-      `tdoc_id` write distinct rows, one per revision.
+      `TDocCRParseResult(cover, ttcn)` — the slim cover-page fields
+      bundled with an optional `TDocCRTTCNDetails` sidecar (populated
+      only when `tdoc_id` matches `R5s\d{6}` and the parser ran the
+      TTCN overview + corrections sub-parsers; non-TTCN CRs get
+      `ttcn=None`).
+    - The service fans the result out across THREE independent
+      upserts in `TDocCrService.extract_many` /
+      `TDocCrService.extract_from_url`: the slim cover-page row in
+      `tdoc_cr_details` (`cr_repo.upsert(cover)`), the optional
+      TTCN sidecar in `tdoc_cr_ttcn_details`
+      (`cr_ttcn_repo.upsert(ttcn)` — only when `ttcn is not None`),
+      and the cache metadata row in `tdoc_extracts`
+      (`cr_repo.upsert_extract_meta(extract_meta)`). All three are
+      keyed by the relative `ftp_url`; multiple extracts at distinct
+      URLs for the same `tdoc_id` write distinct rows, one per
+      revision. The fan-out replaces the previous
+      `TDocCrRepository.upsert(details, extract_meta)` two-table
+      transaction; partial failure is now possible across the three
+      tables, but the unbuffered HTTP fetch we already trust keeps
+      that window negligible.
     - Returns `ExtractResult(details, extract_meta, from_cache=False)`.
-3. `doc3gpp tdoc show --tdoc <id>` reads `tdocs` (via
-   `TDocRepository.get_by_id`) and every matching `tdoc_cr_details`
-   row (one per URL/revision), printing each under its own
-   `[Extracted Details]` block with the URL as a header. The
-   `corrections` list of every block is JSON-dumped for full fidelity.
-   Output is controlled by `--format` (`table` / `json` / `markdown`
-   / `raw`) and `--output` / `-o` (PATH or `-` for stdout); `raw`
-   delegates to `TDocCrService.extract()` and writes the converted
-   `.docx` markdown (DB-cache short-circuit, otherwise download +
-   render + persist).
+  3. `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row
+    via `TDocRepository.get_by_id` (PK lookup on `tdocs.tdoc_id`),
+    then performs THREE URL-keyed reads against the immutable
+    `tdoc.ftp_url`:
+    1. `SQLAlchemyTDocCrRepository.get_by_url(tdoc.ftp_url)` — the
+       slim cover-page row from `tdoc_cr_details`.
+    2. `SQLAlchemyTDocCrRepository.get_extract_meta_by_url(tdoc.ftp_url)`
+       — the cache metadata row from `tdoc_extracts`. The
+       `extracted_at` display value is sourced from this row
+       (both `tdoc_cr_details` and `tdoc_cr_ttcn_details` no longer
+       carry their own timestamps after the slimming).
+    3. `SQLAlchemyTDocCrTtcnRepository.get_by_url(tdoc.ftp_url)` —
+       the TTCN sidecar from `tdoc_cr_ttcn_details`, gated on
+       `is_ttcn_tdoc(tdoc.tdoc_id)` so non-TTCN CRs never hit the
+       sidecar table.
+
+    The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at)`
+    is rendered by `table` / `json` / `markdown` to three separate
+    sections: `cover`, the optional `ttcn` block, and the standalone
+    `extracted_at` line. Optional keys are **omitted** (not emitted
+    as `null`) in the JSON payload when the corresponding row is
+    absent. The legacy `details` / `parser_version` fields no longer
+    appear in any output. The `raw` format delegates to
+    `TDocCrService.extract()` and writes the converted `.docx`
+    markdown (DB-cache short-circuit, otherwise download + render +
+    persist).
 
 ### Cache + CLI
 
@@ -264,18 +319,35 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
     - `ftp_url` (PK, immutable download URL stored relative to the
       3GPP FTP root) + `tdoc_id` (non-PK FK → `tdocs.tdoc_id` with
       `ondelete="CASCADE"`, indexed for the per-tdoc lookup), one
-      column per parsed cover-page / overview / corrections field
-      (`spec`, `cr_num`, `rev`, `version`, `title`, `source`, `tsg`,
-      `related_wis`, `date`, `cr_cat`, `release`,
-      `reason_for_change`, `consequences_if_not_approved`,
-      `clauses_affected`, `other_comments`, `revision_history`,
-      `ats_version`, `ttcn_release`, `test_case`, `test_suite`,
-      `ue`, `ss`, `corrections` JSON blob, `year`, `tech`,
-      `extracted_tdoc_id`), `parser_version`, `extracted_at`.
-      Identity is the URL because 3GPP assets are
-      byte-for-byte identical for the lifetime of the URL while a
-      single `tdoc_id` may map to multiple URLs across revisions —
-      every revision's parsed record is preserved.
+      column per parsed cover-page field (`spec`, `cr_num`, `rev`,
+      `version`, `title`, `source`, `tsg`, `related_wis`, `date`,
+      `cr_cat`, `release`, `reason_for_change`,
+      `consequences_if_not_approved`, `clauses_affected`,
+      `other_comments`, `revision_history`, `extracted_tdoc_id`).
+      Identity is the URL because 3GPP assets are byte-for-byte
+      identical for the lifetime of the URL while a single `tdoc_id`
+      may map to multiple URLs across revisions — every revision's
+      parsed record is preserved. The table is **slim** post-Wave-1:
+      it carries cover-page fields only. TTCN-specific fields
+      (`testcase`, `ue`, `ss`, `ats_version`, `ttcn_release`,
+      `test_suite`, `required_changes`) and the per-row timestamps
+      (`extracted_at`, `parser_version`) have moved to
+      `tdoc_extracts` (for timestamps) and `tdoc_cr_ttcn_details`
+      (for the TTCN slice).
+- `tdoc_cr_ttcn_details`:
+    - `ftp_url` (PK, immutable download URL — same identity
+      convention as `tdoc_cr_details`) + `tdoc_id` (non-PK FK →
+      `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed for the
+      per-tdoc lookup), six overview columns (`testcase`, `ue`,
+      `ss`, `ats_version`, `ttcn_release`, `test_suite`) plus
+      `required_changes` (`LargeBinary(16 MB)` — gzip-compressed
+      UTF-8 JSON list of correction dicts, written via
+      `storage/compression.py`). One row per immutable URL, so
+      multiple revisions of the same `tdoc_id` still land at
+      distinct URLs and occupy distinct rows. No `extracted_at`
+      or `parser_version` — the sidecar is purely the parsed
+      payload; timestamps and parser versioning live in
+      `tdoc_extracts`.
 - `tdoc_extracts`:
     - `ftp_url` (PK, matches `tdoc_cr_details.ftp_url`) + `tdoc_id`
       (non-PK FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed
@@ -301,16 +373,19 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       identifier stable across multi-TSG ownership.
 
 Cascading FK deletes are deliberately inconsistent across the schema:
-`tdoc_cr_details` / `tdoc_extracts` cascade on `tdocs.tdoc_id`
-deletion (they are derived artefacts of the parent TDoc and are safe
-to wipe with it), while `tdoc_files` does not (revision files
-survive a TDoc re-sync). The `tdoc_cr_details` and
-`tdoc_extracts` tables have **no FK between each other**: the cache
-sidecar can be purged without dropping parsed detail history, and
-the parsed detail can be rebuilt without invalidating the cached
-zip/markdown. The `test_cascade_delete_via_fk` ORM test exercises
-the cascade end-to-end via a `PRAGMA foreign_keys=ON` connect
-listener (SQLite default is OFF).
+`tdoc_cr_details` / `tdoc_cr_ttcn_details` / `tdoc_extracts` cascade
+on `tdocs.tdoc_id` deletion (they are derived artefacts of the parent
+TDoc and are safe to wipe with it), while `tdoc_files` does not
+(revision files survive a TDoc re-sync). The `tdoc_cr_details`,
+`tdoc_cr_ttcn_details`, and `tdoc_extracts` tables have **no FK
+between each other**: the cache sidecar can be purged without
+dropping parsed detail history, the parsed detail can be rebuilt
+without invalidating the cached zip/markdown, and the TTCN sidecar
+lives independently of the cover-page row at the same URL (a
+non-TTCN extract leaves no `tdoc_cr_ttcn_details` row). The
+`test_cascade_delete_via_fk` ORM test exercises the cascade
+end-to-end via a `PRAGMA foreign_keys=ON` connect listener (SQLite
+default is OFF).
 
 ## Backend Selection
 
@@ -364,8 +439,14 @@ eighteen commands):
       for the parser's `full=True` mode. End-to-end filter-driven:
       candidates are the intersection of every supplied predicate, with
       CR-type as the implicit default and a `max_batch` cap.
-    - `show` — `--tdoc`; renders the matching TDoc and, when present,
-      a `[Extracted Details]` block from `tdoc_cr_details`
+    - `show` — `--tdoc`; renders the matching TDoc, the slim
+      cover-page row from `tdoc_cr_details` (URL-keyed on
+      `tdoc.ftp_url`), the `extracted_at` timestamp from
+      `tdoc_extracts` (same URL), and, when the TDoc is a TTCN CR,
+      a `[TTCN Details]` block from `tdoc_cr_ttcn_details`. JSON
+      payload keys are `tdoc` (always), `cover` (omitted when
+      absent), `ttcn` (omitted when absent), `extracted_at`
+      (omitted when absent).
 - `tsg`:
     - `list`, `show`, `seed`
 - `wi`:

@@ -19,6 +19,8 @@ htmlcov/
 
 .ruff_cache/
 
+uv.lock
+
 docs/_build/
 
 tempCodeRunnerFile.py

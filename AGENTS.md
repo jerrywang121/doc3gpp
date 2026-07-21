@@ -38,7 +38,7 @@ or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (7 groups, 18 commands)
+│   ├── cli.py            # Typer commands (7 groups, 19 commands)
 │   ├── models/           # domain dataclasses — never leak ORM attrs out
 │   ├── repository/       # abstract repo contracts (Protocols)
 │   ├── services/         # orchestration; CLI-injected via factory
@@ -68,6 +68,7 @@ For the full symbol-to-file table, see
 | Task | Location | Notes |
 | --- | --- | --- |
 | Add a CLI command | `src/doc3gpp/cli.py` | Follow pattern: service → repo → CLI. |
+| Add a config writer / CLI set command | `src/doc3gpp/settings/config_writer.py` + `src/doc3gpp/cli.py` (`config_app`) | TOML read-modify-write helpers; Typer `config set` command. |
 | Add a data source | `src/doc3gpp/scraping/` + `src/doc3gpp/parsers/` | Network in `scraping/`, parsing in `parsers/`. |
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
@@ -157,6 +158,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
   output.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
+- `doc3gpp config set <key> <value>` writes one setting into the active
+  TOML config file (`--init` to bootstrap a new file); see the plan at
+  `.omo/plans/config-set-command.md` for the full command contract.
 - When `Settings.sync.auto_sync` is enabled, `meeting list`, `tdoc list`,
   `tdoc show`, and database-mode `tdoc parse` internally trigger the
   same meeting-calendar and TDoc-list sync paths used by explicit

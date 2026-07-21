@@ -3,15 +3,21 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import sys
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 import typer
 from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - exercised only on Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from doc3gpp.config import get_settings
 from doc3gpp.settings.schema import Settings
@@ -60,6 +66,17 @@ from doc3gpp.services.tdoc_sync_coordinator import (
 )
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.settings.config_source import find_config_file, load_config_data
+from doc3gpp.settings.config_writer import (
+    ConfigValidationError,
+    patch_dotted,
+    prune_empty_tables,
+    read_toml,
+    resolve_echo_subtree,
+    resolve_init_target,
+    validate_against_settings,
+    walk_known_dotted_keys,
+    write_toml,
+)
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
@@ -85,8 +102,19 @@ DEFAULT_TSG = "r5"
 
 
 def _configure_logging() -> None:
-    settings = get_settings()
-    level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    try:
+        settings = get_settings()
+        level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    except (tomllib.TOMLDecodeError, ValueError) as exc:
+        # Malformed active TOML must not abort every CLI command before
+        # the operator can run `doc3gpp config set` to repair it.
+        # ``load_config_data`` wraps the underlying TOMLDecodeError in
+        # a ValueError, so both shapes are caught here. The error is
+        # logged so it stays visible, then we fall back to INFO.
+        logging.getLogger(__name__).warning(
+            "active TOML config is malformed: %s; falling back to default log level", exc
+        )
+        level = logging.INFO
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -2857,6 +2885,127 @@ def config_show() -> None:
     settings = get_settings()
     typer.echo(f"# config source: {path if path is not None else '(no config file)'}")
     typer.echo(json.dumps(settings.model_dump(mode="json"), indent=2, sort_keys=True))
+
+
+def _env_var_for_key(key: str) -> str:
+    """Render the pydantic-settings env-var name for ``key``.
+
+    Single-segment keys map to ``DOC3GPP_<UPPER>``; dotted keys map to
+    ``DOC3GPP_<UPPER_HEAD>__<UPPER_TAIL>`` where ``TAIL`` joins the
+    remaining segments with underscores (matching pydantic-settings'
+    ``env_nested_delimiter="__"`` convention).
+    """
+    parts = key.split(".")
+    if len(parts) == 1:
+        return f"DOC3GPP_{parts[0].upper()}"
+    head = parts[0].upper()
+    tail = "_".join(parts[1:]).upper()
+    return f"DOC3GPP_{head}__{tail}"
+
+
+@config_app.command("set")
+def config_set(
+    key: str = typer.Argument(..., help="Dotted key, e.g. 'sync.auto_sync' or 'database_url'."),
+    value: str = typer.Argument(..., help="Value as a string; pydantic coerces to the schema field type."),
+    init: bool = typer.Option(False, "--init", help="Create the config file if none is in use."),
+    init_target: str = typer.Option(
+        "auto",
+        "--target",
+        help="Where --init writes: 'project' (./doc3gpp.toml) or 'user' "
+        "(~/.config/doc3gpp/config.toml). 'auto' (default) picks project "
+        "when run from a project root.",
+    ),
+    init_force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="With --init, overwrite an existing file at the bootstrap target. "
+        "Ignored when --init is not passed.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate + echo without writing."),
+) -> None:
+    """Set a single key in the active config file.
+
+    Writes ``key = value`` into the TOML config file (creating it with
+    ``--init`` when none is in use) and clears the settings cache so the
+    new value is visible to subsequent commands in this process.
+    ``value`` is always passed as a string and coerced by pydantic
+    against :class:`Settings`, so ``24h`` is accepted for ``timedelta``
+    fields and ``true``/``false`` for booleans. ``--dry-run`` validates
+    and prints what *would* be written without touching disk.
+    """
+    if init and os.environ.get("DOC3GPP_CONFIG"):
+        raise typer.BadParameter(
+            "--init refuses when DOC3GPP_CONFIG is set; unset it or pass "
+            "--target explicitly."
+        )
+
+    target: Path
+    creating = False
+    if init:
+        target = resolve_init_target(init_target)
+        if target.exists() and not init_force:
+            raise typer.BadParameter(
+                f"file exists at {target}; pass --force to overwrite"
+            )
+        creating = True
+    else:
+        found = find_config_file()
+        if found is None:
+            raise typer.BadParameter(
+                "no config file in use; pass --init to create one. Run "
+                "'doc3gpp config path' to see what's checked."
+            )
+        target = found
+
+    known = walk_known_dotted_keys(Settings)
+    if key not in known:
+        raise typer.BadParameter(
+            f"Unknown config key: {key}. Run 'doc3gpp config show' to see valid keys."
+        )
+
+    data: dict[str, Any]
+    if creating:
+        data = {}
+    else:
+        try:
+            data = read_toml(target)
+        except tomllib.TOMLDecodeError as exc:
+            raise typer.BadParameter(f"config file at {target} is malformed: {exc}")
+
+    data = patch_dotted(data, key, value)
+    data = prune_empty_tables(data, key)
+
+    try:
+        settings = validate_against_settings(data)
+    except ConfigValidationError as exc:
+        raise typer.BadParameter(str(exc))
+
+    if dry_run:
+        typer.echo(f"# dry-run: would write {target}")
+        typer.echo(
+            json.dumps(
+                resolve_echo_subtree(settings, key),
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        )
+        return
+
+    write_toml(target, data)
+    get_settings.cache_clear()
+
+    typer.echo(
+        f"Set {key} = "
+        f"{json.dumps(resolve_echo_subtree(settings, key), indent=2, sort_keys=True, default=str)}"
+        f" (written to {target})."
+    )
+    typer.echo(
+        f"  Note: if {_env_var_for_key(key)} is set in the environment, "
+        f"it overrides this at runtime."
+    )
+    typer.echo("  Run 'doc3gpp config show' to verify the active value.")
 
 
 def main() -> None:

@@ -235,6 +235,14 @@ doc3gpp config path   # which file is being read
 doc3gpp config show   # the fully-resolved settings, as JSON
 ```
 
+Edit values without hand-editing the TOML:
+
+```bash
+doc3gpp config set sync.auto_sync true
+doc3gpp config set output.format json
+doc3gpp config set --init sync.auto_sync true   # bootstrap a new config
+```
+
 ## CLI Usage
 
 ```bash
@@ -378,7 +386,8 @@ yet — for now:
   [Pydantic](https://docs.pydantic.dev/),
   [Typer](https://typer.tiangolo.com/),
   [BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/),
-  [openpyxl](https://openpyxl.readthedocs.io/), and
+  [openpyxl](https://openpyxl.readthedocs.io/),
+  [tomli_w](https://pypi.org/project/tomli_w/), and
   [python-docx](https://python-docx.readthedocs.io/) — the libraries this
   project stands on.
 

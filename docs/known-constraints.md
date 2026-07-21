@@ -107,3 +107,11 @@ change set so the docs stay honest.
 - **No CI pipeline exists.** The project relies on local
   `scripts/test_sqlite.sh` runs. There is no `.github/workflows/`,
   no Makefile, no Dockerfile.
+
+## Configuration writer
+
+- **`doc3gpp config set` rewrites the entire TOML file via `tomli_w`**
+  (`src/doc3gpp/settings/config_writer.py:write_toml`); comments, blank
+  lines, and key ordering are not preserved. Keep the file under VCS
+  if formatting matters — diffs will look like full rewrites on the
+  first edit.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol, TypeVar, runtime_checkable
 
-from doc3gpp.models.tdoc_cr import TDocCRDetails
+from doc3gpp.models.tdoc_cr import TDocCRParseResult
 
 
 T = TypeVar("T")
@@ -32,7 +32,7 @@ class SectionParser(Protocol[T]):
 
 @runtime_checkable
 class TDocParser(Protocol):
-    """Parses a CR markdown body into a :class:`TDocCRDetails`."""
+    """Parses a CR markdown body into a :class:`TDocCRParseResult`."""
 
     parser_version: str
 
@@ -47,7 +47,7 @@ class TDocParser(Protocol):
         tdoc_id: str,
         max_text_length: int = 0,
         full: bool = False,
-    ) -> TDocCRDetails: ...
+    ) -> TDocCRParseResult: ...
 
 
 class TDocParserRegistry:

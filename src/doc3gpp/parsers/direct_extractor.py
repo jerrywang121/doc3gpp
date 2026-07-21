@@ -41,6 +41,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from doc3gpp.models.tdoc_cr import TDocCRParseResult
 from doc3gpp.parsers.cr_parser import (
     _TDOC_HEADER_PATTERN,
     extract_docx_from_zip,
@@ -348,8 +349,8 @@ def direct_parse_bytes(
     *,
     filename: str,
     full: bool = False,
-) -> tuple[str, str, object]:
-    """Parse ``payload`` (a ``.docx`` or a zip-wrapped ``.docx``) into markdown + details.
+) -> tuple[str, str, "TDocCRParseResult"]:
+    """Parse ``payload`` (a ``.docx`` or a zip-wrapped ``.docx``) into markdown + parse result.
 
     Dispatch is by ``filename`` extension (not magic bytes — a docx
     is itself a zip, so the ``b"PK"`` prefix is not a reliable
@@ -377,14 +378,12 @@ def direct_parse_bytes(
             for the TTCN corrections sub-parser.
 
     Returns:
-        ``(markdown, docx_filename, details)`` — the converted
+        ``(markdown, docx_filename, parsed)`` — the converted
         markdown, the docx filename actually parsed (after the zip
-        unwrap, when applicable), and the resulting
-        :class:`TDocCRDetails`. ``details`` is returned as an
-        untyped object to keep this helper free of the model import
-        cycle; callers that need the typed value can
-        :func:`isinstance`-check against
-        :class:`doc3gpp.models.tdoc_cr.TDocCRDetails`.
+        unwrap, when applicable), and the
+        :class:`TDocCRParseResult` from the parser. Callers that need
+        the slim cover-page dataclass read ``parsed.cover``; TTCN-CR
+        callers read ``parsed.ttcn``.
 
     Raises:
         ValueError: the payload is a zip with no ``.docx`` entry
@@ -395,7 +394,7 @@ def direct_parse_bytes(
         CRHeaderMissingError: the parsed markdown lacks a
             ``3GPP TSG-`` header (forwarded from ``parse_cr_details``).
         PythonDocxNotInstalledError: python-docx is not installed
-            (forwarded from ``convert_document_to_markdown``).
+            (forwarded from :func:`convert_document_to_markdown`).
     """
     suffix = Path(filename).suffix.lower()
     if suffix == ".zip":
@@ -413,8 +412,8 @@ def direct_parse_bytes(
 
     tdoc_id = extract_tdoc_id_from_filename(filename) or _synthetic_tdoc_id(filename)
     parser = build_default_registry().resolve(tdoc_id, tdoc_type="CR")
-    details = parser.parse(markdown, tdoc_id=tdoc_id, full=full)
-    return markdown, docx_filename, details
+    parsed = parser.parse(markdown, tdoc_id=tdoc_id, full=full)
+    return markdown, docx_filename, parsed
 
 
 def _synthetic_tdoc_id(filename: str) -> str:

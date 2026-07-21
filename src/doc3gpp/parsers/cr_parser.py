@@ -20,7 +20,7 @@ to work without changes:
 
 from __future__ import annotations
 
-from doc3gpp.models.tdoc_cr import TDocCRDetails
+from doc3gpp.models.tdoc_cr import TDocCRParseResult
 from doc3gpp.parsers.cr.helpers import (
     _COVER_FIELDS,
     _collapse_whitespace,
@@ -42,12 +42,15 @@ def parse_cr_details(
     tdoc_id: str,
     max_text_length: int = 0,
     full: bool = False,
-) -> TDocCRDetails:
-    """Parse a CR markdown body into a :class:`TDocCRDetails`.
+) -> TDocCRParseResult:
+    """Parse a CR markdown body into a :class:`TDocCRParseResult`.
 
     Thin wrapper around the default :class:`TDocParserRegistry` for
     backwards compatibility. TTCN routing is handled by the registry
-    (specific parsers are registered before generic ones).
+    (specific parsers are registered before generic ones). The
+    returned :class:`TDocCRParseResult` bundles the slim cover-page
+    fields on ``.cover`` with the optional ``.ttcn`` sidecar (populated
+    when the parser detected a TTCN CR).
     """
     registry = build_default_registry()
     parser = registry.resolve(tdoc_id, tdoc_type="CR")

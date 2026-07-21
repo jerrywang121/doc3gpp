@@ -329,10 +329,10 @@ def test_direct_parse_bytes_with_bare_docx_returns_synthetic_id(
     buf = io.BytesIO()
     doc.save(buf)
     docx_bytes = buf.getvalue()
-    markdown, doc_filename, details = direct_parse_bytes(
+    markdown, doc_filename, parsed = direct_parse_bytes(
         docx_bytes, filename="random.docx", full=False,
     )
-    assert details.tdoc_id.startswith("LOCAL-")
+    assert parsed.cover.tdoc_id.startswith("LOCAL-")
     assert doc_filename == "random.docx"
 
 
@@ -344,11 +344,11 @@ def test_direct_parse_bytes_with_zip_picks_inner_docx(
     if not fixture.exists() or not _docx_available():
         pytest.skip("python-docx or fixture missing")
     zip_bytes = fixture.read_bytes()
-    markdown, doc_filename, details = direct_parse_bytes(
+    markdown, doc_filename, parsed = direct_parse_bytes(
         zip_bytes, filename="R5s260009.zip", full=False,
     )
     assert doc_filename == "R5s260009.docx"
-    assert details.tdoc_id == "R5s260009"
+    assert parsed.cover.tdoc_id == "R5s260009"
 
 
 def test_direct_parse_bytes_rejects_malformed_zip() -> None:
@@ -366,12 +366,14 @@ def _build_service_with_fake_repos(
     tmp_path: Path,
     *,
     zip_bytes: bytes | None = None,
-) -> tuple[TDocCrService, MagicMock, _StubCache, MagicMock, MagicMock]:
+) -> tuple[
+    TDocCrService, MagicMock, _StubCache, MagicMock, MagicMock, MagicMock,
+]:
     """Build a service with stubbed repos and a stubbed scraper.
 
     The cache is the in-memory ``_StubCache`` (records every call);
     the scraper is a ``MagicMock`` that returns a pre-cooked payload
-    for every ``get_bytes`` call. The two repos are bare
+    for every ``get_bytes`` call. The three repos are bare
     ``MagicMock`` instances so tests can configure specific
     per-method return values.
     """
@@ -383,15 +385,18 @@ def _build_service_with_fake_repos(
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
     cr_repo.get_extract_meta_by_url.return_value = None
+    cr_ttcn_repo = MagicMock()
+    cr_ttcn_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = None
     service = TDocCrService(
         cache=cache,
         scraper_client=scraper,
         cr_repository=cr_repo,
+        cr_ttcn_repository=cr_ttcn_repo,
         tdoc_repository=tdoc_repo,
     )
-    return service, scraper, cache, cr_repo, tdoc_repo
+    return service, scraper, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
 
 def _read_zip(path: Path) -> tuple[str, bytes]:
@@ -412,7 +417,7 @@ def test_extract_from_bytes_never_touches_cache_or_db(tmp_path: Path) -> None:
     doc.save(buf)
     payload = buf.getvalue()
 
-    service, scraper, cache, cr_repo, tdoc_repo = _build_service_with_fake_repos(
+    service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
     result = service.extract_from_bytes(payload, "local.docx", full=False)
@@ -444,7 +449,7 @@ def test_extract_from_url_other_url_skips_cache_and_db(tmp_path: Path) -> None:
     doc.save(buf)
     docx_bytes = buf.getvalue()
 
-    service, scraper, cache, cr_repo, _ = _build_service_with_fake_repos(
+    service, scraper, cache, cr_repo, _, _ = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
     scraper.get_bytes.return_value = docx_bytes
@@ -466,7 +471,7 @@ def test_extract_from_url_3gpp_with_tdoc_in_tdocs_writes_cache_and_db(
         pytest.skip("python-docx not installed")
     fixture = FIXTURES_DIR / "R5s260009.zip"
     zip_bytes = fixture.read_bytes()
-    service, scraper, cache, cr_repo, tdoc_repo = _build_service_with_fake_repos(
+    service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=zip_bytes,
     )
     tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
@@ -479,7 +484,6 @@ def test_extract_from_url_3gpp_with_tdoc_in_tdocs_writes_cache_and_db(
     assert result.from_cache is False
     assert result.details is not None
     assert result.extract_meta is not None
-    # Both rows written.
     assert cr_repo.upsert.call_count == 1
     # The zip lands under the override key (filename), not the tdoc_id.
     assert any(call[0].endswith("R5s260009.zip") for call in cache.put_calls)
@@ -499,7 +503,7 @@ def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
     doc.save(buf)
     docx_bytes = buf.getvalue()
 
-    service, scraper, cache, cr_repo, tdoc_repo = _build_service_with_fake_repos(
+    service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
     scraper.get_bytes.return_value = docx_bytes
@@ -532,7 +536,7 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_skips_db(
     doc.save(buf)
     docx_bytes = buf.getvalue()
 
-    service, scraper, cache, cr_repo, tdoc_repo = _build_service_with_fake_repos(
+    service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
     scraper.get_bytes.return_value = docx_bytes
@@ -546,7 +550,6 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_skips_db(
     assert result.persisted is False
     assert cr_repo.upsert.call_count == 0
     assert cache.put_calls == []
-    # tdoc_repo.get_by_id is not consulted (no tdoc id to probe).
     assert tdoc_repo.get_by_id.call_count == 0
 
 
@@ -558,11 +561,10 @@ def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
         pytest.skip("python-docx not installed")
     fixture = FIXTURES_DIR / "R5s260009.zip"
     zip_bytes = fixture.read_bytes()
-    service, scraper, cache, cr_repo, tdoc_repo = _build_service_with_fake_repos(
+    service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=zip_bytes,
     )
     tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
-    # Pre-populate the DB cache probes.
     cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
     cr_repo.get_extract_meta_by_url.return_value = _make_meta(
         "R5s260009", "/cache/zips/R5s260009.zip",
@@ -573,7 +575,6 @@ def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
     )
     assert result.from_cache is True
     assert result.persisted is False
-    # Network was NOT touched on a cache hit.
     assert scraper.get_bytes.call_count == 0
 
 
@@ -737,7 +738,8 @@ def test_cli_from_path_file_json_format_emits_object(tmp_path: Path, monkeypatch
     payload = json.loads(out.read_text())
     assert payload["tdoc_id"] == "R5s260009"
     assert payload["spec"] == "38.523-3"
-    assert payload["details"] == {}
+    assert "details" not in payload
+    assert "parser_version" not in payload
 
 
 def test_cli_from_path_file_raw_format_writes_markdown_verbatim(

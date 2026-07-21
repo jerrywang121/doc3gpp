@@ -7,8 +7,13 @@ import re
 from collections.abc import Sequence
 from dataclasses import fields
 from datetime import date as _date
+from typing import Any
 
-from doc3gpp.models.tdoc_cr import TDocCRDetails
+from doc3gpp.models.tdoc_cr import (
+    TDocCRDetails,
+    TDocCRParseResult,
+    TDocCRTTCNDetails,
+)
 from doc3gpp.parsers.cr.cover_page import CRCoverPageParser
 from doc3gpp.parsers.cr.header import (
     CRHeaderMissingError,
@@ -54,7 +59,7 @@ class CRParserBase(TDocParser):
         tdoc_id: str,
         max_text_length: int = 0,
         full: bool = False,
-    ) -> TDocCRDetails:
+    ) -> TDocCRParseResult:
         if not (tdoc_id or "").strip():
             raise ValueError("tdoc_id is required and cannot be empty")
 
@@ -88,7 +93,7 @@ class CRParserBase(TDocParser):
             lines, max_text_length=max_text_length
         )
 
-        details_payload: dict[str, object] = {}
+        details_payload: dict[str, Any] = {}
         for parser in self._details:
             ok, payload, _adv = parser.parse(
                 lines, max_text_length=max_text_length, full=full
@@ -127,17 +132,34 @@ class CRParserBase(TDocParser):
                 )
                 date_value = None
 
-        payload: dict[str, object] = {"tdoc_id": final_tdoc_id}
+        payload: dict[str, Any] = {"tdoc_id": final_tdoc_id}
         for key in _COVER_FIELDS:
             payload[key] = cover_details.get(key)
         payload["tsg"] = resolved_tsg
         payload["date"] = date_value
-        payload["details"] = details_payload
         payload["extracted_tdoc_id"] = extracted
 
         valid_keys = {f.name for f in fields(TDocCRDetails)}
         filtered = {k: v for k, v in payload.items() if k in valid_keys}
-        return TDocCRDetails(**filtered)
+        cover = TDocCRDetails(**filtered)
+
+        ttcn: TDocCRTTCNDetails | None = None
+        overview = details_payload.get("overview")
+        if overview is not None:
+            corrections = details_payload.get("corrections", [])
+            ttcn = TDocCRTTCNDetails(
+                tdoc_id=final_tdoc_id,
+                ftp_url=None,
+                testcase=overview.get("testcase"),
+                ue=overview.get("ue"),
+                ss=overview.get("ss"),
+                ats_version=overview.get("ats_version"),
+                ttcn_release=overview.get("ttcn_release"),
+                test_suite=overview.get("test_suite"),
+                required_changes=list(corrections),
+            )
+
+        return TDocCRParseResult(cover=cover, ttcn=ttcn)
 
 
 class CRParser(CRParserBase):

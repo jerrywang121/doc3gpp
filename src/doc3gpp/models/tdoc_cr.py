@@ -10,10 +10,6 @@ Design notes:
 * ``@dataclass(slots=True, frozen=True)`` keeps the object immutable
   and hashable — service / repo code can use it as a dict key or in a
   set without surprises.
-* ``details`` is a ``dict[str, Any]`` that holds variant-specific
-  payload sections (e.g. ``overview`` and ``corrections`` for TTCN CRs).
-  The service layer JSON-serialises it on demand and the repository
-  compresses the JSON into a single binary blob.
 * ``extracted_tdoc_id`` records what the header parser actually found
   in the document. It may diverge from the caller's input ``tdoc_id``
   when the document uses docx field codes that python-docx does not
@@ -22,7 +18,6 @@ Design notes:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date
 from datetime import datetime
@@ -69,9 +64,6 @@ class TDocCRDetails:
         clauses_affected: Clauses-affected cell text.
         other_comments: Other-comments cell text.
         revision_history: Revision-history cell text.
-        details: Variant-specific detail sections. For TTCN CRs this
-            contains ``overview`` and ``corrections`` keys; for non-TTCN
-            CRs it is empty.
         extracted_tdoc_id: What the header parser actually found in
             the document (may differ from ``tdoc_id`` when the docx
             uses field codes that python-docx does not render).
@@ -80,8 +72,6 @@ class TDocCRDetails:
             ``https://www.3gpp.org/ftp/``. ``None`` when the zip came
             from a prior cache hit (the originating URL is not tracked
             there) or when no provenance was captured.
-        parser_version: Version of the parser that produced this
-            object, persisted alongside the row for debugging.
     """
 
     tdoc_id: str
@@ -101,13 +91,11 @@ class TDocCRDetails:
     clauses_affected: str | None = None
     other_comments: str | None = None
     revision_history: str | None = None
-    details: dict[str, Any] = field(default_factory=dict)
     extracted_tdoc_id: str | None = None
     # Download provenance (None on cache hits; otherwise the relative URL
     # path, relative to https://www.3gpp.org/ftp/, that supplied the cached
     # zip bytes during this extract).
     ftp_url: str | None = None
-    parser_version: str = _PARSER_VERSION
 
     def __post_init__(self) -> None:
         # Validate tdoc_id is non-empty; ``frozen=True`` means we use
@@ -124,14 +112,10 @@ class TDocCRDetails:
     def to_persisted(self) -> dict[str, Any]:
         """Return a copy shaped for SQL persistence.
 
-        The SQL schema stores ``details`` as a compressed binary blob
-        rather than a relation, so the service layer converts the
-        in-memory ``details`` dict in this dataclass into a single JSON
-        string. Other fields pass through unchanged.
+        Other fields pass through unchanged.
 
         Returns:
-            Dict keyed by SQL column name with ``details_json``
-            replacing the in-memory ``details`` dict.
+            Dict keyed by SQL column name.
         """
         payload: dict[str, Any] = {
             "tdoc_id": self.tdoc_id,
@@ -153,10 +137,77 @@ class TDocCRDetails:
             "revision_history": self.revision_history,
             "extracted_tdoc_id": self.extracted_tdoc_id,
             "ftp_url": self.ftp_url,
-            "parser_version": self.parser_version,
-            "details_json": json.dumps(self.details, ensure_ascii=False),
         }
         return payload
+
+
+@dataclass(slots=True, frozen=True)
+class TDocCRTTCNDetails:
+    """TTCN-specific details extracted from a TTCN CR cover page.
+
+    A frozen sidecar value object that mirrors the
+    ``tdoc_cr_ttcn_details`` SQL table. It holds the six overview fields
+    exposed by the TTCN parser plus the list of required corrections.
+
+    Attributes:
+        tdoc_id: Canonical TDoc identifier (FK into ``tdocs.tdoc_id``).
+        ftp_url: Immutable download URL this row is keyed on, stored as
+            a path relative to ``https://www.3gpp.org/ftp/``. ``None`` in
+            the parser before the service layer supplies the provenance
+            URL.
+        testcase: Testcase overview field.
+        ue: UE overview field.
+        ss: SS overview field.
+        ats_version: ATS version overview field.
+        ttcn_release: TTCN release derived from the ATS version.
+        test_suite: Test suite overview field.
+        required_changes: List of correction dicts produced by the TTCN
+            parser.
+    """
+
+    tdoc_id: str
+    ftp_url: str | None = None
+    testcase: str | None = None
+    ue: str | None = None
+    ss: str | None = None
+    ats_version: str | None = None
+    ttcn_release: str | None = None
+    test_suite: str | None = None
+    required_changes: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Mirror TDocExtractMeta' invariant; the URL is the row identity.
+        # ``None`` is allowed here because the parser does not know the
+        # provenance URL; the service layer sets it before persistence.
+        if self.ftp_url is not None:
+            stripped = self.ftp_url.strip()
+            if not stripped:
+                raise ValueError("TDocCRTTCNDetails requires a non-empty ftp_url")
+            if stripped != self.ftp_url:
+                object.__setattr__(self, "ftp_url", stripped)
+        stripped_id = self.tdoc_id.strip()
+        if not stripped_id:
+            raise ValueError("TDocCRTTCNDetails requires a non-empty tdoc_id")
+        if stripped_id != self.tdoc_id:
+            object.__setattr__(self, "tdoc_id", stripped_id)
+
+
+@dataclass(slots=True, frozen=True)
+class TDocCRParseResult:
+    """Bundle produced by a CR parser.
+
+    Wraps the cover-page details and the optional TTCN sidecar so the
+    service layer can route each slice to its own repository in one
+    pass.
+
+    Attributes:
+        cover: Cover-page fields extracted from the CR document.
+        ttcn: TTCN-specific sidecar when the parser recognised a TTCN CR;
+            ``None`` for non-TTCN CRs.
+    """
+
+    cover: TDocCRDetails
+    ttcn: TDocCRTTCNDetails | None = None
 
 
 @dataclass(slots=True, frozen=True)

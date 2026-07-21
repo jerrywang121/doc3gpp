@@ -155,7 +155,7 @@ class TDocFileORM(Base):
 
 
 class TDocCrDetailOrm(Base):
-    """Structured CR (Change Request) details extracted from a TDoc.
+    """Structured CR (Change Request) cover-page details extracted from a TDoc.
 
     One row per **immutable download URL** rather than per TDoc id —
     3GPP zip assets are byte-for-byte identical for the lifetime of the
@@ -164,12 +164,10 @@ class TDocCrDetailOrm(Base):
     ``tdoc_id`` coexist: a fresh extract at a new URL writes a new
     row instead of clobbering the parsed record for the previous one.
 
-    Carries the cover-page fields (spec, cr_num, title, ...) plus a
-    single ``details`` column that stores the variant-specific payload
-    (TTCN overview + corrections, etc.) as gzip-compressed UTF-8 JSON.
-    See :class:`doc3gpp.models.tdoc_cr.TDocCRDetails` for the
-    in-memory shape; the repository compresses/decompresses the
-    ``details`` blob on write/read.
+    Carries the cover-page fields (spec, cr_num, title, ...) only.
+    TTCN-specific details live in :class:`TDocCrTtcnDetailOrm`. See
+    :class:`doc3gpp.models.tdoc_cr.TDocCRDetails` for the in-memory
+    shape.
 
     ``ftp_url`` is the primary key — the same URL serves the same bytes
     forever, so re-extracting at the same URL is idempotent. ``tdoc_id``
@@ -177,8 +175,7 @@ class TDocCrDetailOrm(Base):
     ``get(tdoc_id)`` lookup; ``ondelete="CASCADE"`` keeps the detail
     rows in sync with their parent TDoc — unlike ``TDocFileORM`` the
     CR details are derived artefacts of the TDoc row and should be
-    wiped when the TDoc itself is removed. ``parser_version`` and
-    ``extracted_at`` are diagnostic columns for re-extract audits.
+    wiped when the TDoc itself is removed.
 
     The URL is stored as a path relative to the canonical 3GPP FTP
     root (``https://www.3gpp.org/ftp/``) to match the convention used
@@ -211,15 +208,47 @@ class TDocCrDetailOrm(Base):
     clauses_affected: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
     revision_history: Mapped[str | None] = mapped_column(Text, nullable=True)
-    details: Mapped[bytes | None] = mapped_column(
-        LargeBinary(length=16 * 1024 * 1024), nullable=True,
-    )
     extracted_tdoc_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    parser_version: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="1.0.0"
+
+
+class TDocCrTtcnDetailOrm(Base):
+    """TTCN-specific CR details extracted from a TTCN CR TDoc.
+
+    One row per **immutable download URL** — the same URL serves the
+    same bytes forever, so the sidecar row is keyed on ``ftp_url`` and
+    shares its identity contract with :class:`TDocCrDetailOrm`.
+
+    Stores six overview columns exposed by the TTCN parser plus a
+    ``required_changes`` column that holds the list of correction dicts
+    as gzip-compressed UTF-8 JSON. See
+    :class:`doc3gpp.models.tdoc_cr.TDocCRTTCNDetails` for the in-memory
+    shape; the repository compresses/decompresses the
+    ``required_changes`` blob on write/read.
+
+    ``tdoc_id`` is a non-PK foreign key into ``tdocs.tdoc_id`` indexed
+    for the ``get(tdoc_id)`` lookup; ``ondelete="CASCADE"`` removes the
+    sidecar when the parent TDoc row is deleted. Timestamps and parser
+    versioning live in :class:`TDocExtractOrm`, which is the single
+    source of truth for extraction metadata.
+    """
+
+    __tablename__ = "tdoc_cr_ttcn_details"
+
+    ftp_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
-    extracted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+    testcase: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ue: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ss: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ats_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ttcn_release: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    test_suite: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    required_changes: Mapped[bytes | None] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=True,
     )
 
 

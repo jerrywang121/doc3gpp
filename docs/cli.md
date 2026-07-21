@@ -450,18 +450,40 @@ Options:
   `table`, unless overridden by `[output].format` in the resolved
   config (`DOC3GPP_OUTPUT__FORMAT=...`).
   - `table` (default): the historical line-oriented dump — `[TDoc]`
-    section followed by one `[Extracted Details]` block per revision.
-    Long free-text fields are truncated to 200 characters with an
-    ellipsis. Matches every prior release.
-  - `json`: one JSON object with `tdoc` (every TDoc field) and
-    `details` (one element per stored revision, with an
-    `extract_meta` sub-object when the row has matching
-    `tdoc_extracts` data). `date` / `datetime` fields are
-    ISO-8601-encoded.
+    section followed by a single `[Extracted Details]` block from
+    `tdoc_cr_details` (URL-keyed on `tdoc.ftp_url`) and, when the
+    TDoc is a TTCN CR and a matching `tdoc_cr_ttcn_details` row
+    exists, an extra `[TTCN Details]` block with the six overview
+    fields plus a `required_changes: N item(s)` summary line. The
+    `parser_version` and `details` lines are gone — `extracted_at`
+    is sourced from `tdoc_extracts` at the same URL and rendered
+    as `extracted_at: -` when the row is missing. Long free-text
+    fields are truncated to 200 characters with an ellipsis.
+    Matches every prior release on the visible line positions.
+  - `json`: one JSON object with the following top-level keys
+    (optional keys are **omitted**, not emitted as `null`, when
+    no corresponding row exists):
+    - `tdoc` — every `TDoc` field, with `date` / `datetime` values
+      ISO-8601-encoded.
+    - `cover` — the slim cover-page dataclass keyed by
+      `tdoc.ftp_url` (omitted when no `tdoc_cr_details` row).
+    - `ttcn` — the TTCN sidecar dataclass keyed by
+      `tdoc.ftp_url`, populated only for TTCN CRs (omitted
+      otherwise or when no row exists).
+    - `extracted_at` — ISO-8601 cache-extract timestamp from the
+      `tdoc_extracts` row at `tdoc.ftp_url` (omitted when no row
+      exists). Sits at the top level rather than nested under
+      `cover` / `ttcn` because neither detail table carries its
+      own timestamp.
   - `markdown`: a Markdown document — `# TDoc` heading, bullet list
-    of TDoc fields, then one `## Extracted Details #N` section per
-    revision. The nested `details` dict is rendered as a JSON fenced
-    block. Long fields are **not** truncated in this mode.
+    of TDoc fields under `## Metadata`, then `## Extracted Cover
+    Details` (slim cover-page fields when present) and `##
+    TTCN Details` (TTCN overview fields + `required_changes` as a
+    JSON fenced block when the TDoc is a TTCN CR and the sidecar
+    exists). When no extract row is present, a single `_No
+    extracted details; run \`doc3gpp tdoc parse --tdoc <id>\`
+    first._ placeholder is emitted. Long fields are **not**
+    truncated in this mode.
   - `raw`: the converted `.docx` markdown body (the artefact the CR
     parser consumes) for CR-type TDocs. Requires `python-docx`
     (`pip install doc3gpp[extract]`) when the cache is cold;
@@ -479,16 +501,31 @@ Behavior:
 - Looks up the row in the `tdocs` table via a PK lookup.
 - On miss: raises `BadParameter` listing the requested id and pointing
   to `doc3gpp tdoc sync` / `doc3gpp tdoc list`.
-- On hit, `table` (default) prints a `[TDoc]` section (every `TDoc`
-  field) followed by one `[Extracted Details]` block **per revision**
-  when one or more matching `tdoc_cr_details` rows exist (a single
-  `tdoc_id` may have multiple revisions at distinct URLs; the CLI
-  renders one block per URL with `extracted_at` newest first). The
-  `details` dict of every block is rendered as pretty-printed JSON.
+- On hit, every TDoc row resolves a single primary `ftp_url` for the
+  show lookup. The CLI performs three URL-keyed reads against that
+  primary URL (no per-revision fan-out for the slim schema):
+  - `tdoc_cr_details` cover row via
+    `SQLAlchemyTDocCrRepository.get_by_url(tdoc.ftp_url)`.
+  - `tdoc_extracts` metadata row via
+    `SQLAlchemyTDocCrRepository.get_extract_meta_by_url(tdoc.ftp_url)`
+    — this is the sole source of the displayed `extracted_at`.
+  - `tdoc_cr_ttcn_details` sidecar via
+    `SQLAlchemyTDocCrTtcnRepository.get_by_url(tdoc.ftp_url)`,
+    gated on `is_ttcn_tdoc(tdoc.tdoc_id)` so non-TTCN CRs never hit
+    the sidecar table.
+- The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at)` is
+  rendered by `table` (default) / `json` / `markdown` to three
+  separate sections (`cover`, optional `ttcn` block, and the
+  standalone `extracted_at` line). Optional keys are **omitted**
+  (not emitted as `null`) in the JSON payload when the corresponding
+  row is absent. The legacy `details` / `parser_version` fields no
+  longer appear in any output.
 - `raw` bypasses the DB-row render entirely and reads the converted
   markdown from the cache. When the cache is cold, the extract
-  pipeline runs (download zip, render markdown, persist to
-  `tdoc_cr_details` + `tdoc_extracts`) before the result is emitted.
+  pipeline runs (download zip, render markdown, persist across
+  `tdoc_cr_details` + the optional `tdoc_cr_ttcn_details` +
+  `tdoc_extracts` in three independent upserts) before the result is
+  emitted.
 
 Examples:
 
@@ -511,8 +548,16 @@ doc3gpp tdoc show --tdoc R5s260009 --format raw -o R5s260009.md
 Purpose:
 
 - Download a TDoc zip from the 3GPP FTP, render its `.docx` body to
-  markdown, parse the cover-page fields, and persist the result to
-  `tdoc_cr_details` + `tdoc_extracts`. Wraps the Phase 6
+  markdown, parse the cover-page fields, and persist the result
+  across the slim cover-page table (`tdoc_cr_details`), the cache
+  metadata table (`tdoc_extracts`), and — when the parser
+  recognises a TTCN CR — the new `tdoc_cr_ttcn_details` sidecar.
+  TTCN detection is automatic: the parser returns a
+  `TDocCRParseResult(cover, ttcn)` and `TDocCrService` writes the
+  sidecar only when `ttcn is not None` (i.e. when
+  `is_ttcn_tdoc(tdoc_id)` and the cover-page document contains a
+  TTCN overview + corrections section). The CLI surface itself is
+  unchanged — only the storage fan-out is wider. Wraps the Phase 6
   `TDocCrService.extract_many` for batch CLI use.
 
 Every flag is a **filter** — the candidate set is the intersection of
@@ -776,12 +821,14 @@ Options:
 - `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.
   When the URL is on the canonical 3GPP FTP root
   (`https://www.3gpp.org/ftp/...`) the result is cached on disk and
-  written to `tdoc_extracts` + `tdoc_cr_details` (subject to the FK
-  matrix below); any other URL is parsed in-memory only. Schemes
-  other than `http(s)` (e.g. `ftp://`, `file://`) are rejected —
-  download out of band and use `--from-path` instead. A URL ending
-  in `/` is treated as a 3GPP FTP folder and processed as a batch;
-  URLs ending in `.docx`/`.zip` are treated as single files;
+  written to `tdoc_extracts` + `tdoc_cr_details` (and to
+  `tdoc_cr_ttcn_details` when the parser produced a TTCN sidecar —
+  subject to the FK matrix below); any other URL is parsed
+  in-memory only. Schemes other than `http(s)` (e.g. `ftp://`,
+  `file://`) are rejected — download out of band and use
+  `--from-path` instead. A URL ending in `/` is treated as a 3GPP
+  FTP folder and processed as a batch; URLs ending in `.docx`/`.zip`
+  are treated as single files;
   ambiguous URLs are probed once and routed accordingly.
 - `--format {table,markdown,json,raw}`: output format. Default
   `table` (tab-separated header + single data row, matching
@@ -871,11 +918,11 @@ Directory (batch) behaviour (local or 3GPP URL folder):
 
 FK-aware behaviour matrix (3GPP URL):
 
-| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_details` row? | Output? | Warning? |
+| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_details` row? | `tdoc_cr_ttcn_details` row? | Output? | Warning? |
 |---|---|---|---|---|---|---|
-| `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | always | no |
-| `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
-| No `tdoc_id` pattern in filename | no | no | no | always | yes — pattern-miss notice |
+| `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | yes — only when the parser emitted a TTCN sidecar (i.e. `is_ttcn_tdoc(tdoc_id)` and the document contained a TTCN overview / corrections section) | always | no |
+| `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
+| No `tdoc_id` pattern in filename | no | no | no | no | always | yes — pattern-miss notice |
 
 Local files and non-3GPP URLs always emit output and never touch
 the cache or the database.

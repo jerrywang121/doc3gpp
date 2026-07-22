@@ -235,6 +235,36 @@ where the previous invocation stopped (already-parsed rows are excluded
 at the SQL level, so the second run picks up the next batch of pending 
 rows).
 
+## Cache key grammar (tdoc_extracts)
+
+The `tdoc_extracts` table stores a single `cache_file` column
+(`String(255)`, indexed) that names the on-disk artefact for both the
+zip cache (`zips/<cache_file>`) and the markdown cache
+(`markdown/<cache_file>`). The key is derived deterministically from the
+TDoc's `ftp_url`:
+
+```
+cache_file = "<stem>-<md5(ftp_url).hexdigest()>.zip"
+```
+
+where `stem` is the basename of `ftp_url` with a trailing `.zip`
+stripped and sanitised to `[A-Za-z0-9._-]`. The max length is 200
+characters (was 128). The `_KEY_PATTERN` regex in `cache.py` is
+`[A-Za-z0-9._-]{1,200}`.
+
+Spec examples:
+
+- `derive_cache_file("tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260162.zip")`
+  → `R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip`
+- `derive_cache_file("tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Review/R5s260034_MCC160Comments.zip")`
+  → `R5s260034_MCC160Comments-5415a41d39774d1e74e27420153f65cc.zip`
+
+This replaces the legacy dual-key scheme where the zip cache was keyed
+by `tdoc.lower()` and the markdown cache by `sha256(docx_bytes)`. The
+per-URL derivation makes the row portable when `cache.dir` moves and
+prevents collisions across revisions of the same `tdoc_id` (different
+`ftp_url` → different `cache_file`).
+
 ## meeting list --tdoc flow
 
 `meeting list --tdoc <id>` finds the meeting whose `start_doc` /

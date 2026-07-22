@@ -11,9 +11,10 @@ Glues the per-stage building blocks together:
 4. Extract the ``.docx`` body from the zip via
    :func:`doc3gpp.parsers.cr_parser.extract_docx_from_zip`.
 5. Convert the docx to markdown via the python-docx-based converter
-   in :mod:`doc3gpp.parsers.docx_converter`. Key the markdown cache by
-   the sha256 of the **docx bytes** so a re-downloaded zip with a
-   tweaked docx invalidates the rendered markdown cleanly.
+   in :mod:`doc3gpp.parsers.docx_converter`. The markdown cache shares
+   the zip cache's ``cache_file`` basename (URL-derived via
+   :func:`doc3gpp.scraping.cache_keys.derive_cache_file`) so a fresh
+   zip download lands on the same cache row as the prior run.
 6. Parse the markdown into a :class:`TDocCRDetails` value object via
    :func:`doc3gpp.parsers.cr_parser.parse_cr_details`.
 7. Persist both the details row and the cache-extract metadata sidecar
@@ -22,14 +23,15 @@ Glues the per-stage building blocks together:
 
 The service owns three caching layers:
 
-* **Zip cache** (``<root>/zips/<tdoc>.bin``) — keyed by the lower-cased
-  TDoc id; bypassed on network miss by
+* **Zip cache** (``<root>/zips/<cache_file>``) — keyed by the
+  URL-derived ``cache_file`` basename (via
+  :func:`doc3gpp.scraping.cache_keys.derive_cache_file`); bypassed on
+  network miss by
   :func:`doc3gpp.scraping.tdoc_zip_source.download_tdoc_zip`.
-* **Markdown cache** (``<root>/markdown/<sha256>``) — keyed by the
-  sha256 of the docx bytes; on-disk bytes are gzip-compressed UTF-8
-  (legacy plain UTF-8 files are still decoded transparently via magic-
-  byte sniffing). Skipped when the zip cache is already populated (i.e.
-  we have the docx on disk, so we can re-derive the cache key cheaply).
+* **Markdown cache** (``<root>/markdown/<cache_file>``) — shares the
+  zip cache's ``cache_file`` key; on-disk bytes are gzip-compressed
+  UTF-8 (legacy plain UTF-8 files are still decoded transparently via
+  magic-byte sniffing). Skipped when the zip cache is already populated.
 * **Database cache** — the ``tdoc_cr_details`` / ``tdoc_extracts``
   rows; a hit short-circuits the entire pipeline and returns the
   persisted ``TDocCRDetails`` with ``from_cache=True``.
@@ -53,7 +55,6 @@ either parser payload back into the in-memory ``ExtractResult``.
 from __future__ import annotations
 
 import gzip
-import hashlib
 import logging
 import re
 from collections.abc import Iterable
@@ -76,7 +77,6 @@ from doc3gpp.parsers.cr_parser import (
 )
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
-    derive_zip_cache_key,
     direct_parse_bytes,
     extract_tdoc_id_from_filename,
     is_3gpp_ftp_url,
@@ -93,6 +93,7 @@ from doc3gpp.repository.protocols import (
     TDocCrTTCNDetailRepository,
     TDocRepository,
 )
+from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.tdoc_zip_source import (
     TDocCacheLike,
     TDocZipDownloadError,
@@ -142,15 +143,19 @@ def _decompress_markdown(raw: bytes) -> str:
     return raw.decode("utf-8")
 
 
-def _read_cached_markdown_path(path: Path) -> str:
-    """Load markdown from an on-disk cache path, returning empty on any error.
+def _read_cached_markdown_path(cache_file: str, cache_root: Path) -> str:
+    """Load markdown from ``cache_root/markdown/<cache_file>``.
 
-    The path is trusted to be a previously persisted ``markdown_path`` from
-    a :class:`TDocExtractMeta` row. If the file has been purged, is corrupt,
-    or fails to decode, the failure is logged at WARNING and an empty string
-    is returned so that callers (including ``--format raw``) degrade safely
-    while still benefiting from the DB cache hit for other formats.
+    Returns empty string on any read/decode error so callers degrade
+    safely. The cache_file is trusted to be a previously persisted
+    basename from a :class:`TDocExtractMeta` row; the on-disk path is
+    reconstructed as ``cache_root / "markdown" / cache_file``. If the
+    file has been purged, is corrupt, or fails to decode, the failure
+    is logged at WARNING and an empty string is returned so callers
+    (including ``--format raw``) degrade safely while still benefiting
+    from the DB cache hit for other formats.
     """
+    path = cache_root / "markdown" / cache_file
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -218,9 +223,9 @@ class ExtractResult:
             come from the in-memory parser output that was just
             upserted.
         extract_meta: Metadata pointing at the on-disk cache artefacts
-            (zip + markdown paths and the inner docx filename). On a
-            DB-cache hit the paths reflect what the previous successful
-            extract wrote.
+            (the ``cache_file`` basename and the inner docx filename).
+            On a DB-cache hit the basename reflects what the previous
+            successful extract wrote.
         from_cache: ``True`` iff the result was returned from the
             ``tdoc_cr_details`` / ``tdoc_extracts`` rows **without**
             re-downloading the zip or re-rendering the markdown. A hot
@@ -372,6 +377,8 @@ class TDocCrService:
             build_ftp_url(tdoc.ftp_url) if tdoc.ftp_url else None
         )
 
+        cache_file = derive_cache_file(tdoc.ftp_url)
+
         # Hoist the URL candidates so the persistence fallback below
         # (used when the zip cache hits and ``downloaded.url`` is
         # None) reuses the same ordering the cache probe iterates
@@ -405,6 +412,7 @@ class TDocCrService:
             self._scraper,
             self._cache,
             primary_url=primary_url,
+            ftp_url=tdoc.ftp_url,
         )
 
         # Post-download probe: ``tdoc.ftp_url`` was None so step 3 had
@@ -429,10 +437,9 @@ class TDocCrService:
                 )
 
         doc_filename, docx_bytes = extract_docx_from_zip(downloaded.path.read_bytes())
-        doc_hash = hashlib.sha256(docx_bytes).hexdigest()
 
         markdown = self._load_or_render_markdown(
-            doc_hash=doc_hash,
+            cache_file=cache_file,
             docx_bytes=docx_bytes,
             doc_filename=doc_filename,
             force=force,
@@ -469,8 +476,7 @@ class TDocCrService:
         meta = TDocExtractMeta(
             ftp_url=stored_ftp_url or "",
             tdoc_id=normalised,
-            zip_path=str(downloaded.path),
-            markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
+            cache_file=cache_file,
             doc_filename=doc_filename,
         )
         self._repo.upsert(cover)
@@ -558,7 +564,7 @@ class TDocCrService:
         - **3GPP-URL path**: behaves like the regular
           :meth:`extract` happy path (cache + DB writes) but uses
           the URL-derived cache key (via
-          :func:`derive_zip_cache_key`) and a FK probe against
+          :func:`derive_cache_file`) and a FK probe against
           ``tdocs`` so the FK on ``tdoc_extracts`` / ``tdoc_cr_details``
           is never violated. The ``force`` flag is forwarded to
           :func:`download_tdoc_zip`; the per-TDoc id is auto-extracted
@@ -602,7 +608,7 @@ class TDocCrService:
                 source_url=url,
             )
 
-        cache_key = derive_zip_cache_key(url)
+        cache_file = derive_cache_file(url)
         stored_ftp_url = normalize_ftp_path(url)
         extracted_id = extract_tdoc_id_from_filename(url)
 
@@ -654,7 +660,7 @@ class TDocCrService:
         # 3GPP URL + tdoc_id ∈ tdocs: full happy path.
         return self._extract_from_3gpp_url(
             url=url,
-            cache_key=cache_key,
+            cache_file=cache_file,
             stored_ftp_url=stored_ftp_url,
             tdoc_id=extracted_id,
             force=force,
@@ -820,7 +826,7 @@ class TDocCrService:
         self,
         *,
         url: str,
-        cache_key: str,
+        cache_file: str,
         stored_ftp_url: str,
         tdoc_id: str,
         force: bool,
@@ -831,7 +837,7 @@ class TDocCrService:
         The 3GPP branch of :meth:`extract_from_url` delegates to this
         helper so the in-memory parse path stays readable. The
         helper reuses the on-disk zip + markdown caches (with
-        ``cache_key`` so distinct revisions of the same ``tdoc_id``
+        ``cache_file`` so distinct revisions of the same ``tdoc_id``
         get distinct cache slots — the D10 fix) and writes both
         :class:`TDocExtractMeta` + :class:`TDocCRDetails` rows on a
         fresh extract.
@@ -844,7 +850,7 @@ class TDocCrService:
                     "DB cache hit for direct-parse URL %s", url,
                 )
                 cached_markdown = _read_cached_markdown_path(
-                    Path(cached_meta.markdown_path)
+                    cached_meta.cache_file, self._cache.root,
                 )
                 return DirectParseResult(
                     source_kind="url-3gpp",
@@ -859,13 +865,11 @@ class TDocCrService:
                 )
 
         zip_payload = self._scraper.get_bytes(url)
-        self._cache.put_bytes(cache_key, zip_payload, "zips")
-        zip_path = self._cache.path_for(cache_key, "zips")
+        self._cache.put_bytes(cache_file, zip_payload, "zips")
 
         doc_filename, docx_bytes = extract_docx_from_zip(zip_payload)
-        doc_hash = hashlib.sha256(docx_bytes).hexdigest()
         markdown = self._load_or_render_markdown(
-            doc_hash=doc_hash,
+            cache_file=cache_file,
             docx_bytes=docx_bytes,
             doc_filename=doc_filename,
             force=force,
@@ -886,8 +890,7 @@ class TDocCrService:
         meta = TDocExtractMeta(
             ftp_url=stored_ftp_url,
             tdoc_id=tdoc_id,
-            zip_path=str(zip_path),
-            markdown_path=str(self._cache.path_for(doc_hash, "markdown")),
+            cache_file=cache_file,
             doc_filename=doc_filename,
         )
         self._repo.upsert(cover)
@@ -956,27 +959,26 @@ class TDocCrService:
     def _load_or_render_markdown(
         self,
         *,
-        doc_hash: str,
+        cache_file: str,
         docx_bytes: bytes,
         doc_filename: str,
         force: bool,
     ) -> str:
         """Return markdown for ``docx_bytes``, hitting the cache when possible.
 
-        Cache key is the sha256 of the docx bytes — a tweaked upstream
-        document invalidates cleanly. On-disk bytes are gzip-compressed
-        UTF-8; legacy plain UTF-8 cache files are still decoded
-        transparently. ``force=True`` bypasses the markdown cache too
-        (the zip is also re-downloaded upstream via
-        :func:`download_tdoc_zip`).
+        Cache key is the ``cache_file`` (URL-derived basename) — shared
+        with the zip cache. On-disk bytes are gzip-compressed UTF-8;
+        legacy plain UTF-8 cache files are still decoded transparently.
+        ``force=True`` bypasses the markdown cache too (the zip is also
+        re-downloaded upstream via :func:`download_tdoc_zip`).
         """
         if not force:
-            cached = self._cache.get_bytes(doc_hash, "markdown")
+            cached = self._cache.get_bytes(cache_file, "markdown")
             if cached is not None:
                 logger.debug(
-                    "Markdown cache hit for %s (sha256=%s)",
+                    "Markdown cache hit for %s (cache_file=%s)",
                     doc_filename,
-                    doc_hash,
+                    cache_file,
                 )
                 return _decompress_markdown(cached)
 
@@ -986,7 +988,7 @@ class TDocCrService:
 
         markdown = convert_document_to_markdown(docx_bytes, doc_filename)
         self._cache.put_bytes(
-            doc_hash,
+            cache_file,
             _compress_markdown(markdown),
             "markdown",
         )

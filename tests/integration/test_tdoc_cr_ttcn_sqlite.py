@@ -300,8 +300,7 @@ def test_tdoc_show_record_joins_cover_ttcn_and_metadata(sqlite_env) -> None:
     meta = TDocExtractMeta(
         ftp_url=url,
         tdoc_id=tdoc_id,
-        zip_path="/cache/zips/R5s260009.zip",
-        markdown_path="/cache/markdown/abc.bin",
+        cache_file="R5s260009.zip",
         doc_filename="R5s260009.docx",
     )
     cr_repo.upsert_extract_meta(meta)
@@ -517,8 +516,7 @@ def test_tdoc_show_json_payload_includes_cover_ttcn_and_extracted_at(
         TDocExtractMeta(
             ftp_url=url,
             tdoc_id=tdoc_id,
-            zip_path="/cache/zips/R5s260009.zip",
-            markdown_path="/cache/markdown/abc.bin",
+            cache_file="R5s260009-abcdef0123456789.zip",
             doc_filename="R5s260009.docx",
         ),
     )

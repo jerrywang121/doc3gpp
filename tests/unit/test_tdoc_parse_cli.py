@@ -365,8 +365,7 @@ def _make_result(
     meta = TDocExtractMeta(
         ftp_url=url,
         tdoc_id=tdoc_id,
-        zip_path=f"/tmp/cache/zips/{tdoc_id}",
-        markdown_path=f"/tmp/cache/markdown/{tdoc_id}.md",
+        cache_file=f"{tdoc_id}.zip",
         doc_filename=f"{tdoc_id}.docx",
         extracted_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
     )
@@ -1746,8 +1745,7 @@ def _seed_full_crdetail_row(tdoc_id: str, url: str | None = None) -> None:
     meta = TDocExtractMeta(
         ftp_url=resolved_url,
         tdoc_id=tdoc_id,
-        zip_path="/tmp/cache/zips/R5s260009",
-        markdown_path="/tmp/cache/markdown/R5s260009.md",
+        cache_file="R5s260009.zip",
         doc_filename="R5s260009.docx",
     )
     cr_repo.upsert(details)
@@ -2014,8 +2012,7 @@ def test_tdoc_show_format_json_includes_ttcn_block(sqlite_env) -> None:
         TDocExtractMeta(
             ftp_url="stored/R5s260009.zip",
             tdoc_id="R5s260009",
-            zip_path="/cache/zips/R5s260009.zip",
-            markdown_path="/cache/markdown/abc.bin",
+            cache_file="R5s260009.zip",
             doc_filename="R5s260009.docx",
         ),
     )
@@ -2183,7 +2180,7 @@ def test_tdoc_show_format_raw_emits_cached_markdown(
     cached_md = "# Heading\n\nbody paragraph\n"
     monkeypatch.setattr(
         "doc3gpp.cli._read_cached_markdown_path",
-        lambda path: cached_md,
+        lambda cache_file, cache_root: cached_md,
     )
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
@@ -2207,7 +2204,7 @@ def test_tdoc_show_format_raw_output_writes_to_file(
     cached_md = "raw body\n"
     monkeypatch.setattr(
         "doc3gpp.cli._read_cached_markdown_path",
-        lambda path: cached_md,
+        lambda cache_file, cache_root: cached_md,
     )
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
@@ -2306,7 +2303,7 @@ def test_tdoc_show_format_raw_empty_cache_raises_bad_parameter(
 
     monkeypatch.setattr(
         "doc3gpp.cli._read_cached_markdown_path",
-        lambda path: "",
+        lambda cache_file, cache_root: "",
     )
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),

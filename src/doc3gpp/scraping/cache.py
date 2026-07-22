@@ -37,7 +37,7 @@ Subdir = Literal["zips", "markdown"]
 # Keys are sanitised to this alphabet so a malicious TDoc id can never
 # escape the cache root via path traversal (no ``..``, no separators, no
 # control characters).
-_KEY_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_KEY_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,200}")
 _VALID_SUBDIRS: tuple[str, ...] = ("zips", "markdown")
 
 
@@ -366,7 +366,7 @@ class TDocCache:
         if not isinstance(key, str) or not _KEY_PATTERN.fullmatch(key):
             raise ValueError(
                 f"Invalid cache key {key!r}: must match {_KEY_PATTERN.pattern} "
-                f"(1-128 chars from [A-Za-z0-9._-])"
+                f"(1-200 chars from [A-Za-z0-9._-])"
             )
 
     @staticmethod

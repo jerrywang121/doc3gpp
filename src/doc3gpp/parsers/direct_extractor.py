@@ -23,7 +23,8 @@ Boundary discipline:
   ``R5s260008_MCC160Comments_r1.zip`` vs ``..._r2.zip``) get distinct
   cache slots. The fix is plumbed through
   :func:`doc3gpp.scraping.tdoc_zip_source.download_tdoc_zip` via the
-  ``cache_key_override`` keyword.
+  ``ftp_url`` keyword (which forwards into
+  :func:`doc3gpp.scraping.cache_keys.derive_cache_file`).
 
 Helpers in this module never raise for *user* errors (missing files,
 malformed sources) — those surface as plain ``ValueError`` /

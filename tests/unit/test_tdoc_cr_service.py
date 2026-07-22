@@ -9,7 +9,6 @@ backend. The repository and scraper boundaries are stubbed with
 from __future__ import annotations
 
 import gzip
-import hashlib
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -100,17 +99,17 @@ def test_markdown_cache_writes_gzip_and_hits_without_rerendering(
     service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
 
     doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
-    doc_hash = hashlib.sha256(docx_bytes).hexdigest()
+    cache_file = "R5s260009-abcdef0123456789.zip"
 
     markdown = service._load_or_render_markdown(
-        doc_hash=doc_hash,
+        cache_file=cache_file,
         docx_bytes=docx_bytes,
         doc_filename=doc_filename,
         force=False,
     )
     assert markdown
 
-    cached_path = cache.path_for(doc_hash, "markdown")
+    cached_path = cache.path_for(cache_file, "markdown")
     assert cached_path.exists()
     raw = cached_path.read_bytes()
     assert raw[:2] == b"\x1f\x8b"
@@ -126,7 +125,7 @@ def test_markdown_cache_writes_gzip_and_hits_without_rerendering(
     )
 
     second = service._load_or_render_markdown(
-        doc_hash=doc_hash,
+        cache_file=cache_file,
         docx_bytes=docx_bytes,
         doc_filename=doc_filename,
         force=False,
@@ -147,13 +146,13 @@ def test_markdown_cache_reads_legacy_plain_utf8(tmp_path: Path) -> None:
     service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
 
     doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
-    doc_hash = hashlib.sha256(docx_bytes).hexdigest()
+    cache_file = "R5s260009-abcdef0123456789.zip"
 
     legacy_text = "legacy plain markdown cache content"
-    cache.path_for(doc_hash, "markdown").write_text(legacy_text, encoding="utf-8")
+    cache.path_for(cache_file, "markdown").write_text(legacy_text, encoding="utf-8")
 
     result = service._load_or_render_markdown(
-        doc_hash=doc_hash,
+        cache_file=cache_file,
         docx_bytes=docx_bytes,
         doc_filename=doc_filename,
         force=False,
@@ -188,9 +187,9 @@ def test_extract_from_url_db_cache_hit_populates_markdown_for_raw(
     expected_markdown = "# Raw cache hit markdown\nCached body paragraph."
 
     # Seed the on-disk markdown cache with gzip-compressed UTF-8.
-    markdown_key = "raw_cache_test_doc_hash"
+    cache_file = "R5s260009-abcdef0123456789.zip"
     cache.put_bytes(
-        markdown_key,
+        cache_file,
         gzip.compress(expected_markdown.encode("utf-8")),
         "markdown",
     )
@@ -199,8 +198,7 @@ def test_extract_from_url_db_cache_hit_populates_markdown_for_raw(
     cr_repo.get_extract_meta_by_url.return_value = TDocExtractMeta(
         ftp_url=stored_ftp_url,
         tdoc_id="R5s260009",
-        zip_path=str(cache.path_for("R5s260009.zip", "zips")),
-        markdown_path=str(cache.path_for(markdown_key, "markdown")),
+        cache_file=cache_file,
         doc_filename="R5s260009.docx",
     )
 

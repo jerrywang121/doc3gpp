@@ -232,9 +232,13 @@ class TDocExtractMeta:
             ``ftp_url``.
         tdoc_id: Canonical TDoc identifier (logical reference, FK into
             ``tdocs.tdoc_id``).
-        zip_path: Absolute path to the cached 3GPP zip download.
-        markdown_path: Absolute path to the cached markdown rendering
-            of the CR's ``.docx`` body.
+        cache_file: Basename of the cached artefacts on disk — the
+            absolute paths are reconstructed as
+            ``cache.root / 'zips' / cache_file`` and
+            ``cache.root / 'markdown' / cache_file`` at lookup time
+            (see :mod:`doc3gpp.scraping.cache`). Only the basename
+            is persisted so the row stays portable when ``cache.dir``
+            moves.
         doc_filename: Filename of the word document inside the zip
             (e.g. ``"R5s260009.docx"``).
         extracted_at: When the extract was performed. ``None`` on
@@ -247,8 +251,7 @@ class TDocExtractMeta:
 
     ftp_url: str
     tdoc_id: str
-    zip_path: str
-    markdown_path: str
+    cache_file: str
     doc_filename: str
     extracted_at: datetime | None = None
     parser_version: str = _PARSER_VERSION

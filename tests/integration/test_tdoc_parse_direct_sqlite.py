@@ -99,7 +99,16 @@ def test_direct_3gpp_url_happy_path_writes_cache_and_db(
     get_settings.cache_clear()
 
     # Pre-seed the parent TDoc row.
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(
+            tdoc_id="R5s260009",
+            type="CR",
+            ftp_url=(
+                "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/"
+                "R5s260009.zip"
+            ),
+        ),
+    )
 
     # Stub the scraper with the local fixture.
     dummy = _DummyScraperClient()
@@ -122,10 +131,12 @@ def test_direct_3gpp_url_happy_path_writes_cache_and_db(
     assert details_list[0].spec == "38.523-3"
     assert len(meta_list) == 1
     meta = meta_list[0]
-    # The zip is cached under the filename key, not the tdoc_id.
-    assert Path(meta.zip_path).exists()
-    assert Path(meta.markdown_path).exists()
-    assert Path(meta.zip_path).name == "R5s260009.zip"
+    # The zip + markdown are cached under the cache_file key (post-T3).
+    from doc3gpp.scraping.cache import TDocCache
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    assert (cache.root / "zips" / meta.cache_file).exists()
+    assert (cache.root / "markdown" / meta.cache_file).exists()
+    assert meta.cache_file.endswith(".zip")
 
 
 # ---------------------------------------------------------------------------
@@ -384,10 +395,13 @@ def test_direct_two_revisions_never_collide(
     # Two zip cache files, one markdown file (same content but distinct
     # extract runs both write through).
     assert snapshot.zips == 2
-    # Verify the filenames are the original (filename-keyed), not r5s260008.
+    # Verify the keys are URL-derived (post-T3) — each ftp_url yields a
+    # distinct <stem>-<md5>.zip key. The legacy filename is still the
+    # leading component of the cached key.
     zip_names = sorted(p.name for p in (tmp_path / "cache" / "zips").iterdir())
-    assert "R5s260008_MCC160Comments_r1.zip" in zip_names
-    assert "R5s260008_MCC160Comments_r2.zip" in zip_names
+    assert any("R5s260008_MCC160Comments_r1" in name for name in zip_names)
+    assert any("R5s260008_MCC160Comments_r2" in name for name in zip_names)
+    assert all(name.endswith(".zip") for name in zip_names)
 
     # Both rows land in the DB keyed by the immutable URL (one per URL).
     cr_repo = SQLAlchemyTDocCrRepository()

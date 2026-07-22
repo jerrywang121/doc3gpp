@@ -21,6 +21,12 @@ change set so the docs stay honest.
   for fresh-database ergonomics. Idempotent but blurs the `db init`
   boundary; `tdoc sync` and `tdoc parse` already dropped the call.
   See [`docs/conventions.md`](conventions.md) for the canonical list.
+- **Cache schema break.** `tdoc_extracts` v2: hard schema break; dropped
+  `zip_path` + `markdown_path` columns in favour of `cache_file`
+  (String(255), indexed). Existing rows from older versions must be
+  re-extracted with `--force` to repopulate the new column. Legacy
+  on-disk files (`zips/<tdoc_lower>`, `markdown/<sha256>`) are orphaned
+  and will be cleaned up by `cache purge` or FIFO eviction.
 
 ## Settings caching
 

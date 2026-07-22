@@ -278,8 +278,7 @@ class TDocExtractOrm(Base):
         nullable=False,
         index=True,
     )
-    zip_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    markdown_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    cache_file: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     doc_filename: Mapped[str] = mapped_column(String(256), nullable=False)
     extracted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

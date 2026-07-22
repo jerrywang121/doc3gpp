@@ -352,14 +352,17 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
 - `tdoc_extracts`:
     - `ftp_url` (PK, matches `tdoc_cr_details.ftp_url`) + `tdoc_id`
       (non-PK FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed
-      for the per-tdoc lookup), `zip_path`, `markdown_path`,
+      for the per-tdoc lookup), `cache_file` (String(255), indexed),
       `doc_filename`, `extracted_at`, `parser_version`. Cache-pointer
       sidecar — the two child tables share the URL as their identity
       but have **no FK between themselves**: the on-disk cache can be
       purged (deleting every `tdoc_extracts` row) without dropping the
       parsed `tdoc_cr_details` history, and the parsed record can be
       rebuilt (deleting `tdoc_cr_details`) without invalidating the
-      cached zip/markdown.
+      cached zip/markdown. The `cache_file` column stores the unified
+      basename (derived from `ftp_url` via `derive_cache_file()`); the
+      on-disk paths are reconstructed as `{cache.dir}/zips/<cache_file>`
+      and `{cache.dir}/markdown/<cache_file>`.
 - `meetings`:
     - `meeting_id` (PK), `name`, `title`, `location`, `start_date`,
       `end_date`, `ftp_url`, `start_doc`, `end_doc`, `tsg` (nullable

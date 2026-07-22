@@ -155,7 +155,11 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `cover`, the optional `ttcn` block, and `extracted_at` (sourced from
   the `tdoc_extracts` row via PK JOIN) as separate sections — the
   legacy `details` / `parser_version` fields no longer appear in the
-  output.
+  output. The `tdoc_extracts` row carries a single `cache_file` column
+  (basename, derived from `tdoc.ftp_url` via `derive_cache_file()`);
+  the CLI reconstructs paths as `{cache.dir}/zips/<cache_file>` and
+  `{cache.dir}/markdown/<cache_file>` via `_build_cache().root` +
+  `derive_cache_file(ftp_url)`.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
 - `doc3gpp config set <key> <value>` writes one setting into the active

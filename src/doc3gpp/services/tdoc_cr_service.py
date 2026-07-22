@@ -766,7 +766,7 @@ class TDocCrService:
         if not is_3gpp_ftp_url(url):
             raise ValueError(f"URL is not a 3GPP FTP URL: {url}")
 
-        file_urls = self._collect_3gpp_file_urls(url, max_depth=max_depth)
+        file_urls = self.collect_3gpp_file_urls(url, max_depth=max_depth)
 
         results: list[DirectParseResult] = []
         failures: dict[str, str] = {}
@@ -821,6 +821,8 @@ class TDocCrService:
                         queue.append((subfolder_url, depth + 1))
 
         return file_urls
+
+    collect_3gpp_file_urls = _collect_3gpp_file_urls
 
     def extract_from_bytes(
         self,

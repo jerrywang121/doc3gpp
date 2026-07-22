@@ -937,6 +937,31 @@ FK-aware behaviour matrix (3GPP URL):
 Local files and non-3GPP URLs always emit output and never touch
 the cache or the database.
 
+Auto-sync from URL candidates (3GPP only): when `Settings.sync.auto_sync`
+is enabled, `tdoc parse --from-url` extracts `tdoc_id` candidates from
+the URL **before** dispatching to the parse helpers, then fires
+`trigger_auto_sync(...)` with the candidate set:
+
+- **3GPP FTP file URL** (`.docx` / `.zip` suffix) → one candidate parsed
+  out of the basename via `extract_tdoc_id_from_filename()`. Empty when
+  the basename has no recognised `tdoc_id` pattern.
+- **3GPP FTP folder URL** (trailing `/`) → BFS via
+  `TDocCrService.collect_3gpp_file_urls()` (up to `--max-depth` /
+  `--recursive`), then extract `tdoc_id`s per file. Empty when BFS
+  fails (warning only — the parse still proceeds).
+- **3GPP URL of unknown shape** → best-effort basename extraction.
+- **Non-3GPP URL** → empty. The CLI gates the call on
+  `is_3gpp_ftp_url()` so non-3GPP URLs never trigger the candidate
+  helper.
+
+Same skip rules as DB-mode apply (intervals, closed window, upstream
+mtime — never bypassed, never broken by a sync failure). When the
+candidate set is non-empty, `trigger_auto_sync` runs the TSG sync
+first so the meeting_id resolution usually finds the parent row by the
+time the parse fires; ordering is **TSG sync → meeting sync → parse**.
+Non-3GPP URLs, parse errors, and BFS failures all stay warnings and
+never abort the parse.
+
 Cache naming: both the zip cache and the markdown cache are keyed on
 the same `cache_file` column from `tdoc_extracts`, derived from the
 `tdoc.ftp_url` via `derive_cache_file()` (format:

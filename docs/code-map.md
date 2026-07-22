@@ -44,7 +44,7 @@ table below is for navigation only.
 | `TDocService` | class | `services/tdoc_service.py` | TDoc sync + list orchestration. |
 | `TDocSyncCoordinator` | class | `services/tdoc_sync_coordinator.py` | Cross-service orchestration for `tdoc sync`. Exposes `sync_for_meeting_id`, `sync_for_meeting_name`, and `sync_all_tracked_meetings` (bulk). |
 | `TDocFileService` | class | `services/tdoc_file_service.py` | Auxiliary TDoc-file sync. |
-| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → python-docx → parse → persist). Constructor takes `cr_ttcn_repository`; fans `TDocCRParseResult(cover, ttcn)` out across the slim cover-page repo, the optional TTCN sidecar repo, and the `tdoc_extracts` repo in three independent upserts. Also exposes `extract_from_url` / `extract_from_bytes` for the `tdoc parse --from-path/--from-url` direct-mode path. |
+| `TDocCrService` | class | `services/tdoc_cr_service.py` | End-to-end CR extraction (zip → cache → python-docx → parse → persist). Constructor takes `cr_ttcn_repository`; fans `TDocCRParseResult(cover, ttcn)` out across the slim cover-page repo, the optional TTCN sidecar repo, and the `tdoc_extracts` repo in three independent upserts. Also exposes `extract_from_url` / `extract_from_bytes` for the `tdoc parse --from-path/--from-url` direct-mode path, and the public `collect_3gpp_file_urls(url, *, max_depth)` alias (same body as the private `_collect_3gpp_file_urls`) used by the auto-sync URL-candidate helper. |
 | `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; exposes `build_tsg_url`. |
 | `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters. |
 | `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. |
@@ -123,6 +123,20 @@ table below is for navigation only.
 | `parse_tdoc_id` | function | `cli_filters.py` | Boundary guard for `meeting list --tdoc`; returns `(prefix, number)` or raises. |
 | `validate_tdoc_id` | function | `cli_filters.py` | `parse_tdoc_id` wrapper that raises on bad input. |
 | `DATE_FILTER_RE` | regex | `cli_filters.py` | `<op> 'YYYY-MM-DD'` pattern for date comparisons. |
+
+## Auto-sync helpers (`src/doc3gpp/cli_auto_sync.py`, `src/doc3gpp/cli_url_helpers.py`)
+
+| Symbol | Kind | File | Role |
+| --- | --- | --- | --- |
+| `extract_tsg_from_tdoc_id_or_pattern` | function | `cli_auto_sync.py` | Pull the TSG short name out of a TDoc id or SQL `LIKE` pattern (e.g. `R5-260013`, `R5%` → `R5`). |
+| `resolve_meeting_id_for_tdoc_id` | function | `cli_auto_sync.py` | Look up the `meeting_id` for a full CR-shape TDoc id via the meeting repo. |
+| `resolve_meetings_for_name_pattern` | function | `cli_auto_sync.py` | `LIKE`-pattern lookup for `meeting list --meeting`. |
+| `sync_tsg_internal` / `sync_meeting_internal` | functions | `cli_auto_sync.py` | Drive meeting-calendar + TDoc-list syncs with skip-rule honoured, warning-only failure. |
+| `trigger_auto_sync` | function | `cli_auto_sync.py` | Build candidate sets (`tsg_candidates`, `meeting_candidates`) from CLI filters — `tsg`, `tdoc`, `meeting_id`, `meeting_name`, and the iterable `tdoc_ids` for `tdoc parse --from-url`. Set-based dedup; returns `(meeting_syncs_done, tdoc_syncs_done)`. |
+| `collect_tdoc_candidates_for_url` | function | `cli_auto_sync.py` | Derive a tdoc-id candidate set from a URL alone (4-branch contract: non-3GPP ∅ / file basename / folder BFS via `TDocCrService.collect_3gpp_file_urls` / unknown-shape basename). Always returns a set — never raises. |
+| `is_3gpp_ftp_url` | function | `cli_url_helpers.py` | 3GPP-FTP detection rule; re-exported from `parsers.direct_extractor` for shared use between `cli.py` and `cli_auto_sync.py`. |
+| `_looks_like_3gpp_file_url` | function | `cli_url_helpers.py` | True when the URL ends with `.docx` or `.zip` (3GPP file shape). |
+| `_looks_like_3gpp_folder_url` | function | `cli_url_helpers.py` | True when the URL ends with `/` (3GPP folder shape). |
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 

@@ -123,11 +123,13 @@ def test_cache_status_unlimited_limit(cache_env, monkeypatch, tmp_path) -> None:
 
 
 def test_cache_purge_with_yes(cache_env) -> None:
-    """``--yes`` bypasses the prompt and deletes every cached file."""
+    """``--yes --scope all`` bypasses the prompt and deletes every cached file."""
     _populate_cache(cache_env, zips=2, markdown=1)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["cache", "purge", "--yes"])
+    result = runner.invoke(
+        app, ["cache", "purge", "--yes", "--scope", "all"]
+    )
     assert result.exit_code == 0, result.output
     assert "Deleted 3 files from cache." in result.output
 
@@ -188,7 +190,9 @@ def test_cache_purge_toml_overrides_confirm(
     _populate_cache(cache_env, zips=2, markdown=1)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["cache", "purge"])
+    result = runner.invoke(
+        app, ["cache", "purge", "--scope", "all"]
+    )
     assert result.exit_code == 0, result.output
     assert "Deleted 3 files from cache." in result.output
     assert list((cache_env / "zips").iterdir()) == []
@@ -213,6 +217,82 @@ def test_cache_purge_short_form_yes_alias(cache_env) -> None:
     _populate_cache(cache_env, zips=1, markdown=1)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["cache", "purge", "-y"])
+    result = runner.invoke(
+        app, ["cache", "purge", "-y", "--scope", "all"]
+    )
     assert result.exit_code == 0, result.output
     assert "Deleted 2 files from cache." in result.output
+
+
+def test_cache_purge_default_scope_purges_markdown_only(cache_env) -> None:
+    """``cache purge`` (no --scope) targets only the markdown sidecars.
+
+    The expensive zip blobs are preserved — the next ``tdoc parse``
+    against them will reuse the cached archive and just re-render the
+    markdown, avoiding a redownload.
+    """
+    _populate_cache(cache_env, zips=2, markdown=1)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["cache", "purge", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Deleted 1 markdown file from cache." in result.output
+
+    assert list((cache_env / "markdown").iterdir()) == []
+    assert sorted(p.name for p in (cache_env / "zips").iterdir()) == [
+        "tdoc0.zip",
+        "tdoc1.zip",
+    ]
+
+
+def test_cache_purge_scope_zips_purges_zips_only(cache_env) -> None:
+    """``--scope zips`` wipes only the zip subtree; markdown preserved."""
+    _populate_cache(cache_env, zips=2, markdown=1)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["cache", "purge", "--yes", "--scope", "zips"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Deleted 2 zip files from cache." in result.output
+
+    assert list((cache_env / "zips").iterdir()) == []
+    assert sorted(p.name for p in (cache_env / "markdown").iterdir()) == [
+        "hash0.md",
+    ]
+
+
+def test_cache_purge_scope_all_purges_both(cache_env) -> None:
+    """``--scope all`` matches the legacy wipe-everything behaviour."""
+    _populate_cache(cache_env, zips=2, markdown=1)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["cache", "purge", "--yes", "--scope", "all"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Deleted 3 files from cache." in result.output
+
+    assert list((cache_env / "zips").iterdir()) == []
+    assert list((cache_env / "markdown").iterdir()) == []
+
+
+def test_cache_purge_invalid_scope_rejected(cache_env) -> None:
+    """An unknown ``--scope`` value fails with a non-zero exit and a
+    helpful message naming the accepted scopes; no files are deleted.
+    """
+    _populate_cache(cache_env, zips=1, markdown=1)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["cache", "purge", "--yes", "--scope", "both"]
+    )
+    assert result.exit_code != 0
+    assert "Unknown --scope 'both'" in result.output
+    assert "markdown" in result.output
+    assert "zips" in result.output
+    assert "all" in result.output
+
+    # Nothing was deleted.
+    assert len(list((cache_env / "zips").iterdir())) == 1
+    assert len(list((cache_env / "markdown").iterdir())) == 1

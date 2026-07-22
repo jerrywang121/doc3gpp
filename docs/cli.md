@@ -1064,32 +1064,53 @@ doc3gpp cache status
 
 Purpose:
 
-- Delete every cached zip and markdown file, recreating the subtrees
-  empty so subsequent `tdoc parse` calls still work.
+- Delete cached files in the markdown subtree, the zips subtree, or
+  both. By default only the rendered markdown sidecars are removed;
+  pass `--scope zips` or `--scope all` to widen the wipe.
 
 Options:
 
 - `--yes`, `-y`: skip the confirmation prompt.
+- `--scope`: which subtree to purge. One of:
+    - `markdown` (default) — only the rendered markdown sidecars
+      (cheap artefacts; the next `tdoc parse` re-renders from the
+      preserved zip blobs without re-downloading).
+    - `zips` — only the 3GPP-served zip blobs (the expensive
+      downloads).
+    - `all` — both subtrees (the original wipe-everything behaviour).
 
 Behavior:
 
 - When `settings.cache.purge_confirm` is `True` (the default) and
   `--yes` is **not** passed, the command prompts for confirmation
-  (`typer.confirm(..., abort=True)`). In a non-interactive environment
-  the prompt raises `Abort` and no files are deleted.
+  (`typer.confirm(..., abort=True)`). The prompt names the scope
+  explicitly: "Delete all cached markdown?" for `--scope markdown`,
+  "Delete all cached zips?" for `--scope zips`, and "Delete all
+  cached zips and markdown?" for `--scope all`. In a non-interactive
+  environment the prompt raises `Abort` and no files are deleted.
 - Set `purge_confirm = false` in the TOML config file (the
   `[cache]` table) to skip the prompt globally (CI / scripted use).
 - The on-disk artefacts referenced from `tdoc_extracts.cache_file`
-  become stale — the next `tdoc parse` will repopulate them.
+  become stale for the wiped subtree(s) — the next `tdoc parse`
+  will repopulate them.
+- Unknown `--scope` values fail with `typer.BadParameter` and a
+  non-zero exit before any files are touched.
 
 Examples:
 
 ```bash
-# Interactive confirmation.
+# Interactive confirmation; default scope = markdown only.
 doc3gpp cache purge
 
 # Skip the prompt (scripted).
 doc3gpp cache purge --yes
+
+# Force a redownload of every TDoc: wipe only the zip subtree, keep
+# the rendered markdown so a fresh `tdoc parse --force` re-downloads.
+doc3gpp cache purge --scope zips --yes
+
+# Wipe both subtrees (the legacy behaviour).
+doc3gpp cache purge --scope all --yes
 ```
 
 ## tsg Commands

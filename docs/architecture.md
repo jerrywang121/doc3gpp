@@ -302,10 +302,12 @@ and the TDoc CR extraction is the deepest.
 
 - `doc3gpp cache status` → `TDocCache.status()` (file count, total
   bytes, limit, per-subdir breakdown; non-mutating).
-- `doc3gpp cache purge [--yes]` (gated by
+- `doc3gpp cache purge [--yes] [--scope {markdown,zips,all}]`
+  (default scope: `markdown` — only the rendered sidecars; gated by
   `CacheSettings.purge_confirm`, configurable only via TOML since
-  `DOC3GPP_CACHE__PURGE_CONFIRM` is outside the env-var allowlist) →
-  `TDocCache.purge()` clears both subtrees and recreates them.
+  `DOC3GPP_CACHE__PURGE_CONFIRM` is outside the env-var allowlist)
+  → `TDocCache.purge_subdir(scope)` for the scoped case, or
+  `TDocCache.purge()` for `--scope all`.
 
 ## Database Schema
 

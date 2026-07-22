@@ -13,15 +13,29 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from doc3gpp.cli_filters import parse_tdoc_id
+from doc3gpp.cli_url_helpers import (
+    _looks_like_3gpp_file_url,
+    _looks_like_3gpp_folder_url,
+    is_3gpp_ftp_url,
+)
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.parsers.direct_extractor import (
+    NotAFolderError,
+    extract_tdoc_id_from_filename,
+)
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingMissingFtpUrlError,
     MeetingNotFoundError,
     TDocSyncCoordinator,
 )
+
+if TYPE_CHECKING:
+    from doc3gpp.services.tdoc_cr_service import TDocCrService
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +160,95 @@ def sync_meeting_internal(meeting_id: int, coordinator: TDocSyncCoordinator) -> 
     return False
 
 
+def collect_tdoc_candidates_for_url(
+    url: str,
+    *,
+    tdoc_service: "TDocCrService | None" = None,
+    max_depth: int = 0,
+) -> set[str]:
+    """Return distinct tdoc_ids implied by ``url``.
+
+    The CLI's ``--from-url`` direct-parse path uses this helper to derive
+    auto-sync candidates from the URL alone, before the parse runs:
+
+    - Non-3GPP URL → empty set.
+    - 3GPP FTP file URL (ends with ``.docx`` / ``.zip``) → the tdoc_id
+      parsed out of the basename, or empty if the basename has no
+      recognised TDoc-id pattern.
+    - 3GPP FTP folder URL (ends with ``/``) → BFS over the folder up to
+      ``max_depth`` via the supplied service and extract tdoc_ids from
+      each file's basename. Returns empty when ``tdoc_service`` is
+      ``None`` (the helper is a pure no-op in that case).
+    - 3GPP URL of unknown shape → try basename extraction; empty if it
+      doesn't parse.
+
+    Network or BFS failures are logged at ``WARNING`` and the helper
+    returns whatever candidates were already collected — it never raises
+    so the CLI's parse path stays fail-soft.
+
+    Args:
+        url: A 3GPP FTP URL (file, folder, or unknown shape) or any
+            other URL.
+        tdoc_service: The TDoc-CR service used for folder BFS. Must be
+            supplied for the folder branch to do anything; ``None``
+            yields an empty set rather than raising so the CLI can call
+            this unconditionally without first probing the URL shape.
+        max_depth: Forwarded to
+            :meth:`TDocCrService.collect_3gpp_file_urls` for the folder
+            branch.
+
+    Returns:
+        Distinct tdoc_ids as a :class:`set`. May be empty for any
+        failure mode.
+    """
+    candidates: set[str] = set()
+    if not is_3gpp_ftp_url(url):
+        return candidates
+
+    if _looks_like_3gpp_file_url(url):
+        extracted = extract_tdoc_id_from_filename(url)
+        if extracted is not None:
+            candidates.add(extracted)
+        return candidates
+
+    if _looks_like_3gpp_folder_url(url):
+        return _collect_from_3gpp_folder(url, tdoc_service, max_depth)
+
+    extracted = extract_tdoc_id_from_filename(url)
+    if extracted is not None:
+        candidates.add(extracted)
+    return candidates
+
+
+def _collect_from_3gpp_folder(
+    url: str,
+    tdoc_service: "TDocCrService | None",
+    max_depth: int,
+) -> set[str]:
+    """BFS-collect tdoc_ids from a 3GPP FTP folder URL; empty on any failure."""
+    if tdoc_service is None:
+        return set()
+    try:
+        file_urls = tdoc_service.collect_3gpp_file_urls(url, max_depth=max_depth)
+    except NotAFolderError:
+        logger.warning(
+            "Auto-sync candidate collection: %s is not a 3GPP folder", url,
+        )
+        return set()
+    except Exception as exc:  # noqa: BLE001 - BFS failure must not break read commands
+        logger.warning(
+            "Auto-sync candidate collection failed for %s: %s", url, exc,
+        )
+        return set()
+
+    candidates: set[str] = set()
+    for file_url in file_urls:
+        extracted = extract_tdoc_id_from_filename(file_url)
+        if extracted is not None:
+            candidates.add(extracted)
+    return candidates
+
+
 def trigger_auto_sync(
     *,
     auto_sync_enabled: bool,
@@ -155,6 +258,7 @@ def trigger_auto_sync(
     meeting_id: int | None = None,
     meeting_name: str | None = None,
     tdoc: str | None = None,
+    tdoc_ids: Iterable[str] | None = None,
 ) -> tuple[int, int]:
     """Fire internal syncs based on the CLI filters supplied.
 
@@ -166,6 +270,11 @@ def trigger_auto_sync(
     - ``tdoc`` contributes a TSG when it starts with a recognisable prefix,
       and contributes a meeting_id when it is a full CR-shape id whose
       owning meeting is already stored.
+    - ``tdoc_ids`` is an iterable of TDoc-id-like strings (full CR ids or
+      SQL LIKE patterns). Each id is run through the same per-id extractors
+      as the single ``tdoc`` branch. The set semantics collapse duplicates
+      so a folder of 200 ``R5s*.zip`` files yields one TSG sync + the
+      distinct meeting_ids the resolved TDoc ids land in.
     - ``meeting_id`` contributes itself and its owning TSG (looked up from
       the stored meeting row).
     - ``meeting_name`` contributes matching stored meetings' ids and TSGs.
@@ -186,6 +295,17 @@ def trigger_auto_sync(
         resolved_meeting_id = resolve_meeting_id_for_tdoc_id(tdoc, meeting_service)
         if resolved_meeting_id is not None:
             meeting_candidates.add(resolved_meeting_id)
+
+    if tdoc_ids is not None:
+        for raw_id in tdoc_ids:
+            extracted_tsg = extract_tsg_from_tdoc_id_or_pattern(raw_id)
+            if extracted_tsg is not None:
+                tsg_candidates.add(extracted_tsg)
+            resolved_meeting_id = resolve_meeting_id_for_tdoc_id(
+                raw_id, meeting_service,
+            )
+            if resolved_meeting_id is not None:
+                meeting_candidates.add(resolved_meeting_id)
 
     if meeting_id is not None:
         meeting_candidates.add(meeting_id)

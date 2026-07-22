@@ -236,9 +236,8 @@ doc3gpp config show   # the fully-resolved settings, as JSON
 Edit values without hand-editing the TOML:
 
 ```bash
-doc3gpp config set sync.auto_sync true
-doc3gpp config set output.format json
-doc3gpp config set --init sync.auto_sync true   # bootstrap a new config
+doc3gpp config init                       # bootstrap a config file with full defaults
+doc3gpp config set sync.auto_sync true    # then edit individual keys
 ```
 
 ## CLI Usage

@@ -1315,6 +1315,69 @@ chain (CLI flags > environment variables > config file > defaults).
 Use this command to verify which file is in effect and to diff your
 TOML overrides against the built-in defaults.
 
+### doc3gpp config init
+
+Synopsis:
+
+```
+doc3gpp config init [--target {auto,project,user}] [--force]
+```
+
+Purpose:
+
+- Bootstrap a fresh TOML config file populated with the packaged
+  default template (every setting commented out so the file resolves
+  to built-in defaults). The write is atomic via a `tempfile` +
+  `os.replace` pair, so a crashed write cannot leave a partial file
+  behind. After the write completes the settings cache is cleared so
+  subsequent commands see the new file.
+- Refuses to run when `DOC3GPP_CONFIG` is set in the environment —
+  the env pin would mask the bootstrapped file, so unset it first.
+- Refuses to overwrite an existing file unless `--force` is passed.
+
+Flags:
+
+- `--target {auto,project,user}` (default `auto`): where to write the
+  config. `project` lands at `./doc3gpp.toml` (requires a project root
+  marker — `pyproject.toml`, `.git/`, or `doc3gpp.toml.example` —
+  somewhere up the cwd tree); `user` lands at
+  `~/.config/doc3gpp/config.toml` (honors `$XDG_CONFIG_HOME`). `auto`
+  picks `project` when a project root is found, otherwise `user`.
+- `--force`, `-f`: overwrite an existing file at the bootstrap target.
+  Required when the chosen target already has a config file.
+
+Examples:
+
+```bash
+doc3gpp config init                       # bootstrap at the auto-detected target
+doc3gpp config init --target user         # bootstrap at ~/.config/doc3gpp/config.toml
+doc3gpp config init --force               # overwrite an existing file
+doc3gpp config init --target project -f   # force-overwrite ./doc3gpp.toml
+```
+
+Failure (target file already exists — `--force` is required to
+overwrite):
+
+```text
+$ doc3gpp config init
+Error: file exists at /home/me/.config/doc3gpp/config.toml; pass --force to overwrite
+```
+
+Failure (`DOC3GPP_CONFIG` pin blocks bootstrap — unset it first):
+
+```text
+$ DOC3GPP_CONFIG=/etc/doc3gpp.toml doc3gpp config init
+Error: config init refuses when DOC3GPP_CONFIG is set; unset it to bootstrap a config file.
+```
+
+On success the command prints the file it wrote and a one-liner
+pointing at `config set` / `config show`:
+
+```text
+Initialized config at /home/me/.config/doc3gpp/config.toml (full default settings).
+  Run 'doc3gpp config set <key> <value>' to edit; 'doc3gpp config show' to verify.
+```
+
 ### doc3gpp config set
 
 Synopsis:
@@ -1326,11 +1389,11 @@ doc3gpp config set [OPTIONS] KEY VALUE
 Purpose:
 
 - Write a single dotted key (e.g. `sync.auto_sync`) into the active
-  TOML config file, creating it when none is in use. Pydantic coerces
-  `value` to the schema field type, so `24h` is accepted for `timedelta`
-  fields and `true` / `false` for booleans. The settings cache is
-  cleared so the new value is visible to subsequent commands in the
-  same process.
+  TOML config file. Pydantic coerces `value` to the schema field type,
+  so `24h` is accepted for `timedelta` fields and `true` / `false` for
+  booleans. The settings cache is cleared so the new value is visible
+  to subsequent commands in the same process. Refuses when no config
+  file is in use — run `doc3gpp config init` first to bootstrap one.
 
 Arguments:
 
@@ -1343,24 +1406,30 @@ Arguments:
 
 Options:
 
-- `--init`: create the config file when none is in use (one of the
-  search locations in `config path` must be writable). Refuses when
-  `DOC3GPP_CONFIG` is set in the environment.
-- `--target {project,user,auto}`: where `--init` writes the new
-  file — `project` for `./doc3gpp.toml`, `user` for
-  `~/.config/doc3gpp/config.toml`. `auto` (default) picks `project`
-  when run from a project root, `user` otherwise.
-- `--force`, `-f`: with `--init`, overwrite an existing file at the
-  bootstrap target. Ignored when `--init` is not passed.
 - `--dry-run`: validate the key + value and print what would be
   written, without touching the file.
+
+> **Note** — the previous `config set --init`, `--target`, `--force`,
+> and `--init-force` flags were removed when `config init` was split
+> out as a standalone command. To bootstrap a new file, run
+> `doc3gpp config init` first (with `--target` and `--force` as
+> needed); then `config set` to edit individual keys.
 
 Examples:
 
 ```bash
 doc3gpp config set sync.auto_sync true
 doc3gpp config set output.format json
-doc3gpp config set --init sync.auto_sync true   # bootstrap a new config
+doc3gpp config set tdoc_parse.max_batch 200
+```
+
+Failure (no config file in use — `config set` now refuses and points
+at `config init`):
+
+```text
+$ doc3gpp config set sync.auto_sync true
+Error: no config file in use; run 'doc3gpp config init' to create one.
+  Run 'doc3gpp config path' to see what's checked.
 ```
 
 Failure (bad value — pydantic rejects the coerced value before the

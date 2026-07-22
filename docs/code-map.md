@@ -112,6 +112,7 @@ table below is for navigation only.
 | `resolve_echo_subtree` | function | `settings/config_writer.py` | Slice the resolved `Settings` back to the dotted-key's subtree for `--dry-run` output. |
 | `write_toml` | function | `settings/config_writer.py` | Persist the patched dict to disk via `tomli_w`. |
 | `resolve_init_target` | function | `settings/config_writer.py` | Resolve `--target` to a writable `Path` (project / user / auto). |
+| `load_default_template` | function | `settings/config_writer.py` | Read the packaged default TOML template (`doc3gpp/data/doc3gpp.toml.example`) via `importlib.resources` with a source-tree fallback for editable installs; consumed by `config init`. |
 
 ## Filter / ID helpers (`src/doc3gpp/cli_filters.py`)
 
@@ -125,8 +126,9 @@ table below is for navigation only.
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 
-Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `config` (`path` / `show` / `set`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
+Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
-| `config_set` | Typer command | `cli.py` | Write one dotted key into the active TOML config file (or bootstrap one with `--init`); clears the settings cache so the new value is visible in the same process. |
+| `config_init` | Typer command | `cli.py` | Bootstrap a fresh TOML config file with the packaged default template at `--target` (auto / project / user); `--force` overwrites an existing file. Refuses while `DOC3GPP_CONFIG` is set. |
+| `config_set` | Typer command | `cli.py` | Write one dotted key into the active TOML config file (refuses when none is in use — run `config init` first); clears the settings cache so the new value is visible in the same process. |

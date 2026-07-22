@@ -132,3 +132,10 @@ change set so the docs stay honest.
   lines, and key ordering are not preserved. Keep the file under VCS
   if formatting matters — diffs will look like full rewrites on the
   first edit.
+- **`doc3gpp config init` writes the canonical template (full defaults)
+  at the bootstrap target** (`--target auto|project|user`; default
+  `auto`); `--force` overwrites unconditionally. Refuses while
+  `DOC3GPP_CONFIG` is set so the env pin cannot mask the new file.
+  The previous `doc3gpp config set --init` is removed — migrate by
+  running `doc3gpp config init` (with `--force` when overwriting) then
+  `doc3gpp config set <key> <value>` to edit individual keys.

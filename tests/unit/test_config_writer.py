@@ -24,6 +24,7 @@ from doc3gpp.settings.config_source import (
 )
 from doc3gpp.settings.config_writer import (
     ConfigValidationError,
+    load_default_template,
     parse_dotted_key,
     patch_dotted,
     prune_empty_tables,
@@ -461,3 +462,64 @@ def test_tomli_w_is_importable() -> None:
     import tomli_w
 
     assert hasattr(tomli_w, "dump")
+
+
+# ---------------------------------------------------------------------------
+# load_default_template
+# ---------------------------------------------------------------------------
+
+
+def test_load_default_template_returns_canonical_string() -> None:
+    """The packaged template ends with the ``tdoc_list_url_template`` line
+    and starts with the canonical comment header."""
+    text = load_default_template()
+
+    assert "# doc3gpp configuration file (TOML)" in text
+    assert text.rstrip().endswith(
+        'tdoc_list_url_template = "'
+        "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx"
+        '?meetingId={meeting_id}"'
+    )
+
+
+def test_load_default_template_matches_packaged_file() -> None:
+    """The result equals the on-disk ``src/doc3gpp/data/doc3gpp.toml.example``
+    bytes byte-for-byte (no transformation)."""
+    packaged = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "doc3gpp"
+        / "data"
+        / "doc3gpp.toml.example"
+    )
+    assert packaged.is_file(), (
+        f"expected the packaged template at {packaged} to exist for this test"
+    )
+
+    text = load_default_template()
+
+    assert text == packaged.read_text(encoding="utf-8")
+
+
+def test_load_default_template_injects_test_path(tmp_path: Path) -> None:
+    """``path=`` is honored verbatim — the helper reads the supplied file
+    and returns its contents without consulting ``importlib.resources``."""
+    fixture = tmp_path / "fixture.toml"
+    fixture.write_text(
+        '[output]\nformat = "json"\n',
+        encoding="utf-8",
+    )
+
+    text = load_default_template(path=fixture)
+
+    assert text == '[output]\nformat = "json"\n'
+
+
+def test_load_default_template_missing_resource_raises(tmp_path: Path) -> None:
+    """A non-existent ``path=`` raises :class:`FileNotFoundError`; the
+    provided file is the only lookup that runs in this branch."""
+    missing = tmp_path / "does-not-exist.toml"
+    assert not missing.exists()
+
+    with pytest.raises(FileNotFoundError):
+        load_default_template(path=missing)

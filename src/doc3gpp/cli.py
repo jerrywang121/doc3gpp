@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, datetime
 from pathlib import Path
@@ -68,6 +69,7 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.settings.config_source import find_config_file, load_config_data
 from doc3gpp.settings.config_writer import (
     ConfigValidationError,
+    load_default_template,
     patch_dotted,
     prune_empty_tables,
     read_toml,
@@ -2860,6 +2862,77 @@ def wi_list(
     )
 
 
+@config_app.command("init")
+def config_init(
+    target: str = typer.Option(
+        "auto",
+        "--target",
+        help="Where to write the config file: 'project' (./doc3gpp.toml) "
+        "or 'user' (~/.config/doc3gpp/config.toml). 'auto' (default) picks "
+        "project when run from a project root.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite an existing file at the bootstrap target.",
+    ),
+) -> None:
+    """Bootstrap a fresh config file with the full default settings.
+
+    Writes the packaged default template to the chosen target via an
+    atomic ``tempfile`` + :func:`os.replace` dance so a crashed write
+    cannot leave a partial file behind. After the write completes the
+    settings cache is cleared so subsequent commands see the new file.
+
+    Refuses to run when :envvar:`DOC3GPP_CONFIG` is set — the env pin
+    would mask the bootstrapped file, so unsetting it is mandatory.
+    Use ``--target`` to override the auto-detected location and
+    ``--force`` / ``-f`` to overwrite a file that already exists at the
+    target.
+    """
+    if os.environ.get("DOC3GPP_CONFIG"):
+        raise typer.BadParameter(
+            "config init refuses when DOC3GPP_CONFIG is set; unset it to bootstrap a config file."
+        )
+
+    try:
+        target_path = resolve_init_target(target)
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc))
+
+    if target_path.exists() and not force:
+        raise typer.BadParameter(
+            f"file exists at {target_path}; pass --force to overwrite"
+        )
+
+    template = load_default_template()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=target_path.parent,
+        delete=False,
+    )
+    tmp_path = Path(tmp_file.name)
+    try:
+        tmp_file.write(template)
+        tmp_file.close()
+        os.replace(tmp_path, target_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    get_settings.cache_clear()
+
+    typer.echo(f"Initialized config at {target_path} (full default settings).")
+    typer.echo(
+        "  Run 'doc3gpp config set <key> <value>' to edit; "
+        "'doc3gpp config show' to verify."
+    )
+
+
 @config_app.command("path")
 def config_path() -> None:
     """Print the config file in use, or "(no config file found)".
@@ -2909,56 +2982,26 @@ def _env_var_for_key(key: str) -> str | None:
 def config_set(
     key: str = typer.Argument(..., help="Dotted key, e.g. 'sync.auto_sync' or 'database_url'."),
     value: str = typer.Argument(..., help="Value as a string; pydantic coerces to the schema field type."),
-    init: bool = typer.Option(False, "--init", help="Create the config file if none is in use."),
-    init_target: str = typer.Option(
-        "auto",
-        "--target",
-        help="Where --init writes: 'project' (./doc3gpp.toml) or 'user' "
-        "(~/.config/doc3gpp/config.toml). 'auto' (default) picks project "
-        "when run from a project root.",
-    ),
-    init_force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="With --init, overwrite an existing file at the bootstrap target. "
-        "Ignored when --init is not passed.",
-    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Validate + echo without writing."),
 ) -> None:
     """Set a single key in the active config file.
 
-    Writes ``key = value`` into the TOML config file (creating it with
-    ``--init`` when none is in use) and clears the settings cache so the
-    new value is visible to subsequent commands in this process.
-    ``value`` is always passed as a string and coerced by pydantic
-    against :class:`Settings`, so ``24h`` is accepted for ``timedelta``
-    fields and ``true``/``false`` for booleans. ``--dry-run`` validates
-    and prints what *would* be written without touching disk.
+    Edits the TOML config file currently in use — it must already exist
+    (use ``doc3gpp config init`` to bootstrap one). Writes ``key = value``
+    into the file and clears the settings cache so the new value is
+    visible to subsequent commands in this process. ``value`` is always
+    passed as a string and coerced by pydantic against
+    :class:`Settings`, so ``24h`` is accepted for ``timedelta`` fields
+    and ``true``/``false`` for booleans. ``--dry-run`` validates and
+    prints what *would* be written without touching disk.
     """
-    if init and os.environ.get("DOC3GPP_CONFIG"):
+    found = find_config_file()
+    if found is None:
         raise typer.BadParameter(
-            "--init refuses when DOC3GPP_CONFIG is set; unset it or pass "
-            "--target explicitly."
+            "no config file in use; run 'doc3gpp config init' to create one. "
+            "Run 'doc3gpp config path' to see what's checked."
         )
-
-    target: Path
-    creating = False
-    if init:
-        target = resolve_init_target(init_target)
-        if target.exists() and not init_force:
-            raise typer.BadParameter(
-                f"file exists at {target}; pass --force to overwrite"
-            )
-        creating = True
-    else:
-        found = find_config_file()
-        if found is None:
-            raise typer.BadParameter(
-                "no config file in use; pass --init to create one. Run "
-                "'doc3gpp config path' to see what's checked."
-            )
-        target = found
+    target = found
 
     known = walk_known_dotted_keys(Settings)
     if key not in known:
@@ -2967,13 +3010,10 @@ def config_set(
         )
 
     data: dict[str, Any]
-    if creating:
-        data = {}
-    else:
-        try:
-            data = read_toml(target)
-        except tomllib.TOMLDecodeError as exc:
-            raise typer.BadParameter(f"config file at {target} is malformed: {exc}")
+    try:
+        data = read_toml(target)
+    except tomllib.TOMLDecodeError as exc:
+        raise typer.BadParameter(f"config file at {target} is malformed: {exc}")
 
     data = patch_dotted(data, key, value)
     data = prune_empty_tables(data, key)

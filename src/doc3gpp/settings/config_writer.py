@@ -248,10 +248,71 @@ def resolve_init_target(target: str) -> Path:
     return DEFAULT_USER_CONFIG
 
 
+def load_default_template(path: Path | None = None) -> str:
+    """Read the packaged default TOML template as utf-8 text.
+
+    Resolution order:
+
+    1. If ``path`` is supplied, read that file directly. Intended for
+       tests that need to inject a fixture; callers outside the test
+       suite should leave it as ``None``.
+    2. :func:`importlib.resources.files` on the ``doc3gpp`` package,
+       joined with ``data/doc3gpp.toml.example``. This is the canonical
+       path for wheel installs — ``pyproject.toml`` force-includes the
+       file at ``doc3gpp/data/doc3gpp.toml.example`` so it ships inside
+       the package.
+    3. Walk ``Path(__file__).parents`` looking for
+       ``<ancestor>/doc3gpp/data/doc3gpp.toml.example``. This catches
+       editable installs and source-tree runs where the file lives at
+       ``src/doc3gpp/data/doc3gpp.toml.example`` and
+       :mod:`importlib.resources` either isn't on ``sys.path`` or the
+       spec resolver can't locate the data file.
+
+    Returns:
+        The full template text (utf-8).
+
+    Raises:
+        FileNotFoundError: if the template cannot be located via any of
+            the strategies above; the message lists every candidate path
+            that was probed.
+    """
+    if path is not None:
+        return path.read_text(encoding="utf-8")
+
+    searched: list[str] = []
+
+    # Strategy 1: wheel-installed package data via importlib.resources.
+    try:
+        from importlib.resources import files
+
+        traversable = files("doc3gpp").joinpath("data/doc3gpp.toml.example")
+        return traversable.read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, NotImplementedError) as exc:
+        searched.append(
+            "importlib.resources.files('doc3gpp').joinpath("
+            f"'data/doc3gpp.toml.example') ({type(exc).__name__}: {exc})"
+        )
+
+    # Strategy 2: walk parents of this file looking for the source-tree
+    # location. The first hit wins.
+    here = Path(__file__).resolve()
+    for ancestor in (here.parent, *here.parents):
+        candidate = ancestor / "doc3gpp" / "data" / "doc3gpp.toml.example"
+        searched.append(str(candidate))
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+
+    raise FileNotFoundError(
+        "could not locate doc3gpp/data/doc3gpp.toml.example; "
+        f"searched: {', '.join(searched)}"
+    )
+
+
 __all__ = [
     "ConfigValidationError",
     "DEFAULT_PROJECT_CONFIG",
     "DEFAULT_USER_CONFIG",
+    "load_default_template",
     "parse_dotted_key",
     "patch_dotted",
     "prune_empty_tables",

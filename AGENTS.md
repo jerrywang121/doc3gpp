@@ -167,8 +167,15 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `ZIP_DEFLATED`).
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
+- `doc3gpp config init --target <auto|project|user> [--force]` writes
+  the packaged default TOML template (full defaults) at the bootstrap
+  target — `auto` (default) picks `./doc3gpp.toml` when run from a
+  project root, otherwise `~/.config/doc3gpp/config.toml`. Refuses
+  while `DOC3GPP_CONFIG` is set; `--force` overwrites an existing file.
 - `doc3gpp config set <key> <value>` writes one setting into the active
-  TOML config file (`--init` to bootstrap a new file); see the plan at
+  TOML config file (refuses when none is in use; run `config init` to
+  bootstrap one); the previous `--init` / `--target` / `--force` flags
+  are removed — see the plan at
   `.omo/plans/config-set-command.md` for the full command contract.
 - When `Settings.sync.auto_sync` is enabled, `meeting list`, `tdoc list`,
   `tdoc show`, and database-mode `tdoc parse` internally trigger the

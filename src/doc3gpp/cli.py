@@ -259,6 +259,28 @@ def _resolve_tdoc_show_format(fmt: str | None, default: str = "table") -> str:
     return normalized
 
 
+VALID_PURGE_SCOPES: tuple[str, ...] = ("markdown", "zips", "all")
+
+
+def _resolve_cache_purge_scope(scope: str) -> str:
+    """Resolve ``--scope`` for ``cache purge``.
+
+    Normalises whitespace + case and validates against
+    :data:`VALID_PURGE_SCOPES`. ``"markdown"`` is the default scope at
+    the Typer layer (the cheap artefacts); ``"zips"`` targets the
+    3GPP-served blobs alone; ``"all"`` is the original wipe-both
+    behaviour. Unknown values raise :class:`typer.BadParameter` so
+    Typer can render a clean error and a non-zero exit.
+    """
+    normalized = scope.strip().lower()
+    if normalized not in VALID_PURGE_SCOPES:
+        valid = ", ".join(VALID_PURGE_SCOPES)
+        raise typer.BadParameter(
+            f"Unknown --scope {scope!r}. Choose from: {valid}."
+        )
+    return normalized
+
+
 def _open_output(path: str | None) -> tuple[TextIO, bool]:
     """Open ``path`` for writing, or return ``(sys.stdout, False)`` for stdout.
 
@@ -423,19 +445,50 @@ def cache_purge(
         "-y",
         help="Skip the confirmation prompt.",
     ),
+    scope: str = typer.Option(
+        "markdown",
+        "--scope",
+        help=(
+            "Which subtree to purge: 'markdown' (default — only the "
+            "rendered markdown sidecars), 'zips' (only the 3GPP-served "
+            "zip blobs), or 'all' (both)."
+        ),
+    ),
 ) -> None:
-    """Delete all cached zip and markdown files.
+    """Delete cached files in the markdown subtree, the zips subtree, or both.
+
+    By default (``--scope markdown``) only the rendered markdown sidecars
+    are removed; the 3GPP-served zip blobs (the expensive downloads) are
+    preserved. Pass ``--scope zips`` to wipe only the zip subtree or
+    ``--scope all`` to wipe both subtrees (the original wipe-everything
+    behaviour).
 
     Prompts for confirmation by default; pass ``--yes`` to skip. The
     prompt can also be disabled globally via ``cache.purge_confirm``
     in config or the ``DOC3GPP_CACHE__PURGE_CONFIRM=false`` env var.
     """
+    resolved_scope = _resolve_cache_purge_scope(scope)
     settings = get_settings()
     if settings.cache.purge_confirm and not yes:
-        typer.confirm("Delete all cached files?", abort=True)
+        prompts = {
+            "markdown": "Delete all cached markdown?",
+            "zips": "Delete all cached zips?",
+            "all": "Delete all cached zips and markdown?",
+        }
+        typer.confirm(prompts[resolved_scope], abort=True)
     cache = _build_cache()
-    deleted = cache.purge()
-    typer.echo(f"Deleted {deleted} files from cache.")
+    if resolved_scope == "all":
+        deleted = cache.purge()
+        noun = "file" if deleted == 1 else "files"
+        typer.echo(f"Deleted {deleted} {noun} from cache.")
+    elif resolved_scope == "zips":
+        deleted = cache.purge_subdir("zips")
+        noun = "zip file" if deleted == 1 else "zip files"
+        typer.echo(f"Deleted {deleted} {noun} from cache.")
+    else:  # markdown
+        deleted = cache.purge_subdir("markdown")
+        noun = "markdown file" if deleted == 1 else "markdown files"
+        typer.echo(f"Deleted {deleted} {noun} from cache.")
 
 
 @db_app.command("check")

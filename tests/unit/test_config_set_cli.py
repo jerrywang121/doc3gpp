@@ -1,14 +1,16 @@
 """Unit tests for ``doc3gpp config set <key> <value>``.
 
-These tests pin the behaviour of the new :func:`config_set` command:
-operator ergonomics (one key + one value per invocation), TOML emission
-shape (top-level vs nested table), pydantic coercion for non-string
-fields, the ``--init`` / ``--target`` / ``--force`` /
-``--dry-run`` flag surface, and the cache-invalidation contract that
+These tests pin the behaviour of :func:`config_set`: operator
+ergonomics (one key + one value per invocation), TOML emission shape
+(top-level vs nested table), pydantic coercion for non-string fields,
+the ``--dry-run`` surface, and the cache-invalidation contract that
 makes the new value visible to :func:`get_settings` in the same
-process. Every test uses an isolated ``tmp_path`` and pins the config
-location via ``DOC3GPP_CONFIG`` so no shared state bleeds between
-cases.
+process. Bootstrapping a missing config file is the responsibility of
+``doc3gpp config init`` (covered by ``test_config_init_cli``); when no
+config file is in use ``config set`` exits non-zero with a diagnostic
+pointing the operator at ``config init``. Every test uses an isolated
+``tmp_path`` and pins the config location via ``DOC3GPP_CONFIG`` so no
+shared state bleeds between cases.
 """
 
 from __future__ import annotations
@@ -138,55 +140,8 @@ def test_config_set_coerces_timedelta_and_renders_p1d(
 
 
 # ---------------------------------------------------------------------------
-# Happy paths — --init / --target / --force / --dry-run
+# Happy paths — --dry-run
 # ---------------------------------------------------------------------------
-
-
-def test_config_set_init_user_target_creates_file(
-    clean_settings, monkeypatch, tmp_path,
-) -> None:
-    """Given no config in use, ``--init --target user`` creates the
-    user config and writes the key. We override ``DEFAULT_USER_CONFIG``
-    because it is bound at import time from ``Path.home()`` and because
-    :func:`resolve_init_target` reads it from the ``config_writer``
-    namespace, not the original ``config_source`` binding."""
-    # Isolate HOME/XDG so no real fallback is found.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.chdir(tmp_path)
-    user_target = tmp_path / "user-config.toml"
-    monkeypatch.setattr(
-        "doc3gpp.settings.config_writer.DEFAULT_USER_CONFIG", user_target
-    )
-
-    result = Runner().invoke(
-        app, ["config", "set", "--init", "--target", "user", "sync.auto_sync", "true"]
-    )
-    assert result.exit_code == 0, result.output
-    assert user_target.is_file()
-    data = read_toml(user_target)
-    assert data == {"sync": {"auto_sync": "true"}}
-
-
-def test_config_set_init_project_target_creates_file(
-    clean_settings, monkeypatch, tmp_path,
-) -> None:
-    """Given a cwd containing ``pyproject.toml``, ``--init --target
-    project`` writes ``./doc3gpp.toml`` (project-local) under cwd."""
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.chdir(tmp_path)
-
-    result = Runner().invoke(
-        app, ["config", "set", "--init", "--target", "project", "sync.auto_sync", "true"]
-    )
-    assert result.exit_code == 0, result.output
-
-    created = tmp_path / "doc3gpp.toml"
-    assert created.is_file()
-    data = read_toml(created)
-    assert data == {"sync": {"auto_sync": "true"}}
 
 
 def test_config_set_dry_run_leaves_file_unchanged(
@@ -214,8 +169,8 @@ def test_config_set_dry_run_leaves_file_unchanged(
 def test_config_set_without_file_and_no_init_fails(
     clean_settings, monkeypatch, tmp_path,
 ) -> None:
-    """With no config in use and no ``--init``, the command must exit
-    non-zero and point the operator at ``doc3gpp config path``."""
+    """With no config in use, the command must exit non-zero and tell
+    the operator to bootstrap one with ``doc3gpp config init``."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
@@ -225,7 +180,7 @@ def test_config_set_without_file_and_no_init_fails(
         app, ["config", "set", "sync.auto_sync", "true"]
     )
     assert result.exit_code != 0
-    assert "config path" in result.output
+    assert "config init" in result.output
 
 
 def test_config_set_invalid_value_for_bool_fails(
@@ -271,44 +226,6 @@ def test_config_set_against_malformed_toml_fails(
     )
     assert result.exit_code != 0
     assert "malformed" in result.output.lower()
-
-
-def test_config_set_init_refuses_when_env_var_pins_config(
-    clean_settings, write_toml, monkeypatch, tmp_path,
-) -> None:
-    """When ``DOC3GPP_CONFIG`` is set, ``--init`` refuses and tells the
-    operator to unset the explicit source — because the env pin takes
-    precedence over the bootstrap target."""
-    cfg = write_toml("pinned.toml", "")
-    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-
-    result = Runner().invoke(
-        app, ["config", "set", "--init", "sync.auto_sync", "true"]
-    )
-    assert result.exit_code != 0
-    assert "DOC3GPP_CONFIG" in result.output
-
-
-def test_config_set_init_user_target_existing_file_needs_force(
-    clean_settings, monkeypatch, tmp_path,
-) -> None:
-    """When the bootstrap target already exists, ``--init`` refuses and
-    points the operator at ``--force``."""
-    user_target = tmp_path / "user-config.toml"
-    user_target.write_text("# pre-existing\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "doc3gpp.settings.config_writer.DEFAULT_USER_CONFIG", user_target
-    )
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
-
-    result = Runner().invoke(
-        app, ["config", "set", "--init", "--target", "user", "sync.auto_sync", "true"]
-    )
-    assert result.exit_code != 0
-    assert "--force" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -22,8 +22,17 @@ else:  # pragma: no cover - exercised only on Python 3.10
 
 from doc3gpp.config import get_settings
 from doc3gpp.settings.schema import Settings, env_var_for_dotted_key
-from doc3gpp.cli_auto_sync import _build_meeting_url, trigger_auto_sync
+from doc3gpp.cli_auto_sync import (
+    _build_meeting_url,
+    collect_tdoc_candidates_for_url,
+    trigger_auto_sync,
+)
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
+from doc3gpp.cli_url_helpers import (
+    _looks_like_3gpp_file_url,
+    _looks_like_3gpp_folder_url,
+    is_3gpp_ftp_url,
+)
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.sync import BulkSyncOutcome
@@ -39,7 +48,6 @@ from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
     extract_tdoc_id_from_filename,
-    is_3gpp_ftp_url,
 )
 from doc3gpp.parsers.cr.header import is_ttcn_tdoc
 from doc3gpp.parsers.normalizers import normalize_ftp_path
@@ -1108,16 +1116,6 @@ def _resolve_url_batch_depth(
     return 0
 
 
-def _looks_like_3gpp_folder_url(url: str) -> bool:
-    """Return True when ``url`` is unambiguously a folder path."""
-    return url.endswith("/")
-
-
-def _looks_like_3gpp_file_url(url: str) -> bool:
-    """Return True when ``url`` ends with a known file extension."""
-    return url.lower().endswith((".docx", ".zip"))
-
-
 @tdoc_app.command("parse")
 def tdoc_parse(
     tdoc: str | None = typer.Option(
@@ -1352,6 +1350,20 @@ def tdoc_parse(
                 max_depth=max_depth,
                 settings=get_settings(),
             )
+            tdoc_service = build_tdoc_cr_service()
+            if is_3gpp_ftp_url(from_url):
+                candidates = collect_tdoc_candidates_for_url(
+                    from_url,
+                    tdoc_service=tdoc_service,
+                    max_depth=effective_depth,
+                )
+                if candidates:
+                    trigger_auto_sync(
+                        auto_sync_enabled=get_settings().sync.auto_sync,
+                        meeting_service=build_meeting_service(),
+                        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+                        tdoc_ids=candidates,
+                    )
             if not is_3gpp_ftp_url(from_url) or _looks_like_3gpp_file_url(from_url):
                 _tdoc_parse_direct(
                     from_path=None,
@@ -1370,9 +1382,8 @@ def tdoc_parse(
                     full=full,
                 )
             else:
-                service = build_tdoc_cr_service()
                 try:
-                    batch = service.extract_from_url_batch(
+                    batch = tdoc_service.extract_from_url_batch(
                         from_url,
                         max_depth=effective_depth,
                         force=force,

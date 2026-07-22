@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
@@ -2331,3 +2332,274 @@ def test_tdoc_show_format_invalid_raises_bad_parameter(sqlite_env) -> None:
     assert "yaml" in result.output
     assert "table" in result.output and "json" in result.output
     assert "raw" in result.output
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse --from-url — auto-sync wiring (3GPP URL only)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingCrService:
+    """Stand-in for ``TDocCrService`` that records which public methods
+    are touched during ``tdoc parse --from-url``.
+
+    The auto-sync tests replace ``build_tdoc_cr_service`` with this and
+    verify that ``collect_3gpp_file_urls`` and ``extract_from_url_batch``
+    are (or aren't) invoked — the parse-step content is irrelevant for
+    the auto-sync plumbing check.
+    """
+
+    def __init__(self) -> None:
+        self.collect_calls: list[tuple[str, int]] = []
+        self.extract_batch_calls: list[tuple[str, int]] = []
+        self.extract_url_calls: list[str] = []
+
+    def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> list[str]:
+        self.collect_calls.append((url, max_depth))
+        return []
+
+    def extract_from_url_batch(
+        self, url: str, *, max_depth: int, force: bool, full: bool,
+    ) -> "_RecordingBatchResult":
+        self.extract_batch_calls.append((url, max_depth))
+        return _RecordingBatchResult(results=[], failures={})
+
+    def extract_from_url(
+        self, url: str, *, force: bool, full: bool,
+    ) -> "_RecordingSingleResult":
+        self.extract_url_calls.append(url)
+        return _RecordingSingleResult(
+            source_kind="url-3gpp",
+            markdown="",
+            details=None,
+            extract_meta=None,
+            from_cache=False,
+            persisted=False,
+            tdoc_id="R5s260009",
+            tdoc_id_in_tdocs=True,
+        )
+
+
+@dataclass
+class _RecordingBatchResult:
+    results: list
+    failures: dict
+
+
+@dataclass
+class _RecordingSingleResult:
+    source_kind: str
+    markdown: str
+    details: object
+    extract_meta: object
+    from_cache: bool
+    persisted: bool
+    tdoc_id: str
+    tdoc_id_in_tdocs: bool
+
+
+def _patch_direct_parse_to_noop(monkeypatch) -> MagicMock:
+    """Stub ``_tdoc_parse_direct`` so it does nothing observable.
+
+    The auto-sync tests focus on whether the URL derived the right
+    candidates and whether ``trigger_auto_sync`` fired — the actual
+    parse-step output is irrelevant.
+    """
+    mock = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli._tdoc_parse_direct", mock)
+    return mock
+
+
+def _patch_url_batch_to_noop(monkeypatch) -> MagicMock:
+    mock = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli._tdoc_parse_url_batch", mock)
+    return mock
+
+
+def _enable_auto_sync(monkeypatch) -> None:
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "true")
+    get_settings.cache_clear()
+
+
+def test_tdoc_parse_from_url_3gpp_file_triggers_auto_sync_with_candidates(
+    sqlite_env, monkeypatch,
+) -> None:
+    """3GPP file URL + auto_sync on → trigger_auto_sync fires once with
+    the basename-derived tdoc_id set BEFORE the parse runs."""
+    _enable_auto_sync(monkeypatch)
+    service = _RecordingCrService()
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: service)
+    _patch_direct_parse_to_noop(monkeypatch)
+
+    candidates_mock = MagicMock(return_value={"R5s260009"})
+    monkeypatch.setattr(
+        "doc3gpp.cli.collect_tdoc_candidates_for_url", candidates_mock,
+    )
+
+    sync_mock = MagicMock(return_value=(1, 0))
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", sync_mock)
+
+    meeting_mock = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli.build_meeting_service", lambda: meeting_mock)
+    coordinator_mock = MagicMock()
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_sync_coordinator", lambda: coordinator_mock,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--from-url", "https://www.3gpp.org/ftp/R5s260009.zip"],
+    )
+
+    assert result.exit_code == 0, result.output
+    candidates_mock.assert_called_once()
+    call_args, call_kwargs = candidates_mock.call_args
+    assert call_args == ("https://www.3gpp.org/ftp/R5s260009.zip",)
+    assert call_kwargs["tdoc_service"] is service
+    assert call_kwargs["max_depth"] >= 0
+
+    sync_mock.assert_called_once()
+    sync_kwargs = sync_mock.call_args.kwargs
+    assert sync_kwargs["auto_sync_enabled"] is True
+    assert sync_kwargs["tdoc_ids"] == {"R5s260009"}
+    assert sync_kwargs["meeting_service"] is meeting_mock
+    assert sync_kwargs["tdoc_sync_coordinator"] is coordinator_mock
+
+
+def test_tdoc_parse_from_url_3gpp_folder_skips_sync_when_no_candidates(
+    sqlite_env, monkeypatch,
+) -> None:
+    """3GPP folder URL where the BFS yields nothing → candidates empty →
+    trigger_auto_sync is NOT called, but the parse still proceeds via
+    the batch dispatcher."""
+    _enable_auto_sync(monkeypatch)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service", lambda: _RecordingCrService(),
+    )
+    batch_mock = _patch_url_batch_to_noop(monkeypatch)
+
+    candidates_mock = MagicMock(return_value=set())
+    monkeypatch.setattr(
+        "doc3gpp.cli.collect_tdoc_candidates_for_url", candidates_mock,
+    )
+
+    sync_mock = MagicMock(return_value=(0, 0))
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", sync_mock)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--from-url", "https://www.3gpp.org/ftp/Docs/"],
+    )
+
+    assert result.exit_code == 0, result.output
+    candidates_mock.assert_called_once()
+    sync_mock.assert_not_called()
+    batch_mock.assert_called_once()
+    assert batch_mock.call_args.kwargs["from_url"] == "https://www.3gpp.org/ftp/Docs/"
+
+
+def test_tdoc_parse_from_url_non_3gpp_skips_auto_sync(
+    sqlite_env, monkeypatch,
+) -> None:
+    """Non-3GPP URLs never trigger auto-sync."""
+    _enable_auto_sync(monkeypatch)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service", lambda: _RecordingCrService(),
+    )
+    direct_mock = _patch_direct_parse_to_noop(monkeypatch)
+
+    candidates_mock = MagicMock(return_value=set())
+    monkeypatch.setattr(
+        "doc3gpp.cli.collect_tdoc_candidates_for_url", candidates_mock,
+    )
+
+    sync_mock = MagicMock(return_value=(0, 0))
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", sync_mock)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-url", "https://example.com/R5s260009.zip",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # Non-3GPP URL short-circuits the ``is_3gpp_ftp_url`` gate in the
+    # CLI before the collect helper is invoked — so ``collect`` is NOT
+    # called and the sync is skipped, but the direct-mode parse still
+    # dispatches.
+    candidates_mock.assert_not_called()
+    sync_mock.assert_not_called()
+    direct_mock.assert_called_once()
+
+
+def test_tdoc_parse_from_url_passes_max_depth_into_collect(
+    sqlite_env, monkeypatch,
+) -> None:
+    """``--max-depth`` and ``--recursive`` are forwarded through the
+    ``_resolve_url_batch_depth`` helper into ``collect_tdoc_candidates_for_url``."""
+    _enable_auto_sync(monkeypatch)
+    service = _RecordingCrService()
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: service)
+    _patch_url_batch_to_noop(monkeypatch)
+
+    candidates_mock = MagicMock(return_value=set())
+    monkeypatch.setattr(
+        "doc3gpp.cli.collect_tdoc_candidates_for_url", candidates_mock,
+    )
+    sync_mock = MagicMock(return_value=(0, 0))
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", sync_mock)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-url", "https://www.3gpp.org/ftp/Docs/",
+            "--max-depth", "3",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    _, collect_kwargs = candidates_mock.call_args
+    assert collect_kwargs["max_depth"] == 3
+    sync_mock.assert_not_called()
+
+
+def test_tdoc_parse_from_url_services_only_built_once(
+    sqlite_env, monkeypatch,
+) -> None:
+    """``build_meeting_service`` and ``build_tdoc_sync_coordinator`` are
+    only invoked when there are candidates to sync — avoid spinning up
+    unneeded service instances for non-3GPP URLs."""
+    _enable_auto_sync(monkeypatch)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda: _RecordingCrService(),
+    )
+    _patch_direct_parse_to_noop(monkeypatch)
+    monkeypatch.setattr(
+        "doc3gpp.cli.collect_tdoc_candidates_for_url",
+        MagicMock(return_value=set()),
+    )
+
+    meeting_factory = MagicMock(side_effect=RuntimeError("not built"))
+    monkeypatch.setattr("doc3gpp.cli.build_meeting_service", meeting_factory)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_sync_coordinator", meeting_factory,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.cli.trigger_auto_sync", MagicMock(return_value=(0, 0))
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--from-url", "https://example.com/x.zip"],
+    )
+    assert result.exit_code == 0, result.output
+    meeting_factory.assert_not_called()

@@ -303,3 +303,69 @@ def test_extract_from_url_batch_records_per_file_failures(service: TDocCrService
 def test_extract_from_url_batch_rejects_non_3gpp_url(service: TDocCrService) -> None:
     with pytest.raises(ValueError, match="not a 3GPP FTP URL"):
         service.extract_from_url_batch("https://example.com/", max_depth=0)
+
+
+def test_collect_3gpp_file_urls_public_alias_matches_private(
+    service: TDocCrService,
+) -> None:
+    """``collect_3gpp_file_urls`` is a public alias for the private BFS.
+
+    The auto-sync glue at ``cli_auto_sync.collect_tdoc_candidates_for_url``
+    invokes the public name; this confirms the alias points at the
+    same implementation rather than shadowing it.
+    """
+    root = "https://www.3gpp.org/ftp/Docs/"
+    service._scraper = _FakeScraper(
+        {
+            root: _folder_html(
+                '<a class="file" href="R5s260001.zip">R5s260001.zip</a>',
+                '<a href="sub/">sub/</a>',
+            ),
+            f"{root}sub/": _folder_html(
+                '<a class="file" href="R5s260002.zip">R5s260002.zip</a>',
+            ),
+        }
+    )
+
+    expected = service._collect_3gpp_file_urls(root, max_depth=2)
+    public = service.collect_3gpp_file_urls(root, max_depth=2)
+
+    assert public == expected
+
+
+def test_collect_3gpp_file_urls_public_alias_forwards_max_depth(
+    service: TDocCrService,
+) -> None:
+    """The public alias forwards ``max_depth`` to the BFS — depth-limit
+    must apply identically to both call sites."""
+    root = "https://www.3gpp.org/ftp/Docs/"
+    sub = f"{root}sub/"
+    subsub = f"{sub}subsub/"
+    service._scraper = _FakeScraper(
+        {
+            root: _folder_html(
+                '<a class="file" href="R5s260001.zip">R5s260001.zip</a>',
+                '<a href="sub/">sub/</a>',
+            ),
+            sub: _folder_html(
+                '<a class="file" href="R5s260002.zip">R5s260002.zip</a>',
+                '<a href="subsub/">subsub/</a>',
+            ),
+            subsub: _folder_html(
+                '<a class="file" href="R5s260003.zip">R5s260003.zip</a>',
+            ),
+        }
+    )
+
+    # max_depth=0 stops after root, regardless of entry point.
+    assert service.collect_3gpp_file_urls(root, max_depth=0) == [
+        f"{root}R5s260001.zip",
+    ]
+
+
+def test_collect_3gpp_file_urls_public_alias_is_a_method(
+    service: TDocCrService,
+) -> None:
+    """The alias lives on the class — not a module-level rebinding."""
+    assert "collect_3gpp_file_urls" in dir(TDocCrService)
+    assert TDocCrService.collect_3gpp_file_urls is TDocCrService._collect_3gpp_file_urls

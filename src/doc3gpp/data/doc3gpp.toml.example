@@ -1,0 +1,101 @@
+# doc3gpp configuration file (TOML)
+#
+# This is a reference template. Copy it to one of:
+#   - ./doc3gpp.toml       (project-local, checked into git)
+#   - ~/.config/doc3gpp/config.toml  (user-wide)
+# or point at any other location via the DOC3GPP_CONFIG env var.
+#
+# Precedence (highest wins):
+#   1. CLI flags
+#   2. Environment variables — only the ALLOWED_ENV_VARS subset of
+#      DOC3GPP_* (see src/doc3gpp/settings/schema.py). Anything else is
+#      silently ignored, so this file is the single source of truth for
+#      every other setting.
+#   3. This file
+#   4. Built-in defaults
+#
+# Run `doc3gpp config show` to inspect the resolved configuration,
+# and `doc3gpp config path` to see which file is in effect.
+# Or run `doc3gpp config init` to bootstrap a fresh config file (full defaults),
+# then `doc3gpp config set <key> <value>` to edit individual keys.
+
+# ── Database ─────────────────────────────────────────────────────────────────
+# Mirrors the DOC3GPP_DATABASE_URL / DOC3GPP_DB_ECHO env vars. Either layer
+# works; allowlisted env vars override this file when both are set.
+
+# database_url = "sqlite+pysqlite:////home/you/.local/share/doc3gpp/doc3gpp.db"
+# db_echo = false
+# db_pool_size = 5
+# db_auto_migrate = true
+
+# ── HTTP scraping ───────────────────────────────────────────────────────────
+# log_level = "INFO"            # DEBUG / INFO / WARNING / ERROR
+# http_verify = false           # set true for TLS verification on older hosts
+# http_max_retries = 3
+# http_retry_backoff = 0.5      # seconds; doubles per attempt
+
+# ── Output defaults for every `* list` command ──────────────────────────────
+# `format` becomes the default for --format on meeting/tdoc/tsg/wi list.
+# CLI flags --format and --fields always win over this file.
+# The `fields.<command>` lists mirror the previously hardcoded defaults;
+# trim them when the default columns are too noisy.
+
+# [output]
+# format = "table"     # table | json | markdown
+
+# [output.fields]
+# meeting = [
+#   "meeting_id", "name", "tsg", "location",
+#   "start_date", "end_date",
+#   "ftp_url", "start_doc", "end_doc",
+# ]
+# tdoc = [
+#   "tdoc_id", "meeting_name", "title",
+#   "source", "type", "status",
+#   "cr_cat", "spec", "version", "related_wis",
+#   # "ftp_url" — relative path to the TDoc zip on https://www.3gpp.org/ftp/
+# ]
+# tsg = ["tsg_name", "short_name", "description"]
+# wi = ["wi_id", "acronym", "release", "name"]
+
+# ── TDoc extraction cache ───────────────────────────────────────────────────
+# Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc parse`).
+# `dir` holds two subtrees: `zips/` (raw 3GPP downloads) and `markdown/`
+# (python-docx output, keyed by content hash). When the combined size of
+# both exceeds `size_limit_mb`, the cache evicts the oldest files first
+# (FIFO on `st_ctime`); `0` means unlimited. `purge_confirm` gates the
+# `doc3gpp cache purge` CLI behind an interactive prompt — set it to
+# `false` (or pass `--yes`) to bypass the prompt in scripts.
+
+# [cache]
+# dir = "~/.cache/doc3gpp/tdocs"   # XDG default; created on first write
+# size_limit_mb = 1024             # 0 = unlimited
+# purge_confirm = true             # CLI guard for `doc3gpp cache purge`
+
+# ── `tdoc parse` batch limit ────────────────────────────────────────────────
+# Caps how many TDocs a single `tdoc parse` invocation will actually
+# process when its filter set resolves to a larger candidate pool.
+# Matches above the cap are truncated and reported as `Remaining` in
+# the completion summary — re-run the same command without `--force`
+# to pick up the next batch. Raise this for big-batch sweeps; lower it
+# to keep confirmation prompts short.
+
+# [tdoc_parse]
+# max_batch = 100
+# max_ftp_depth = 2  # max recursion depth for `tdoc parse --from-url <3gpp-folder> --recursive`
+# Direct-parse flags (`--from-path`, `--from-url`, `--format`, `--output`)
+# are CLI-only — no TOML equivalent is exposed for the
+# `tdoc parse --from-*` direct mode.
+
+# ── Sync intervals ──────────────────────────────────────────────────────────
+# Gate how often `doc3gpp meeting sync` and `doc3gpp tdoc sync` re-scrape
+# unchanged upstream data. Durations may be written as human strings (`24h`,
+# `30m`, `90d`) or ISO 8601 durations (`P1D`, `PT30M`). Pass `--force` to
+# either command to bypass the skip rules for a single invocation.
+
+# [sync]
+# auto_sync = false               # automatically sync before list/show/parse read commands
+# meeting_sync_interval = "24h"   # skip meeting calendar sync if last sync is newer than this
+# tdoc_list_sync_interval = "30m" # skip TDoc list sync if last sync is newer than this
+# tdoc_list_closed_window = "90d" # skip TDoc list sync when meeting end_date is older than this
+# tdoc_list_url_template = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}"

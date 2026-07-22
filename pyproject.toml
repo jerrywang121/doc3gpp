@@ -49,3 +49,6 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/doc3gpp/data/doc3gpp.toml.example" = "doc3gpp/data/doc3gpp.toml.example"

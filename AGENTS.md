@@ -145,7 +145,18 @@ Workflows in one line (full prose in `docs/architecture.md`):
   land when the filename's tdoc_id is present in `tdocs`; otherwise
   the result is still emitted with a warning). The zip cache is
   keyed on the **original (sanitized) filename** (D10 fix) so
-  multiple revisions of the same tdoc_id never collide.
+  multiple revisions of the same tdoc_id never collide. When
+  `Settings.sync.auto_sync` is enabled, `tdoc parse --from-url`
+  on a 3GPP FTP URL extracts tdoc_id candidates from the URL
+  (basename for file URLs; BFS up to `--max-depth` / `--recursive`
+  for folder URLs) and runs `trigger_auto_sync(...)` **before**
+  dispatching to the per-file parse helpers — see
+  [`src/doc3gpp/cli.py:1353-1366`](src/doc3gpp/cli.py) and the
+  "Auto-sync from URL candidates" section in `docs/cli.md`. The
+  ordering is TSG sync → meeting sync → parse, so the meeting_id
+  resolution can usually find the parent row by the time the parse
+  fires. Same skip rules as DB-mode apply; non-3GPP URLs never
+  trigger auto-sync; failures stay warnings.
 - `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row, then
   looks up the slim cover-page details and the extract metadata by the
   row's immutable `tdoc.ftp_url` (one row per URL — the URL is the row

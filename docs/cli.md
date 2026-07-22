@@ -616,9 +616,12 @@ Options:
   Accepts the same rich-filter grammar as `--spec`.
 - `--uploaded-date EXPR`: filter on `uploaded_date` — see
   [Filter syntax](#filter-syntax) for accepted forms.
-- `--force`: skip both the on-disk zip/markdown cache and the
-  persisted `tdoc_cr_details` row so every id is re-fetched and
-  re-parsed.
+- `--force`: skip the persisted `tdoc_cr_details` /
+  `tdoc_extracts` short-circuit and re-render markdown (bypassing
+  the markdown cache) so every id is re-parsed from scratch.
+  The on-disk zip cache is **always** consulted first regardless of
+  `--force` — `download_tdoc_zip` keys the cache on `tdocs.ftp_url`
+  (via `derive_cache_file`) and reuses the cached bytes on a hit.
 - `--full`: reserved for the parser's `full=True` mode (pulls in
   `before_change` / `after_change` per correction). The current
   service does not yet wire this through; accepted silently so
@@ -780,7 +783,8 @@ doc3gpp tdoc parse --tdoc 'R5s26%' --yes
 # Parse every not-yet-parsed CR-type TDoc under meeting 85434.
 doc3gpp tdoc parse --meeting-id 85434
 
-# Re-parse every CR-type TDoc under the meeting (cache + DB row bypassed).
+# Re-parse every CR-type TDoc under the meeting (DB row + markdown
+# cache bypassed; on-disk zip cache is still consulted first).
 doc3gpp tdoc parse --meeting-id 85434 --force
 
 # Combine a meeting-id scope with a tdoc-id LIKE pattern and a meeting filter.

@@ -383,10 +383,13 @@ class TDocCrService:
            :func:`resolve_download_url` and probe the DB cache by URL
            before any network I/O. A hit short-circuits with
            ``from_cache=True`` (and ``force=True`` skips this).
-        4. Download the zip (cache or network) — preferring the
-           per-TDoc URL stored in ``tdocs.ftp_url`` (rebuilt to a full
-           URL via :func:`build_ftp_url`) and falling back to the
-           template-based URL on failure.
+        4. :func:`download_tdoc_zip` checks the on-disk zip cache first
+           via the ``ftp_url``-derived cache key (regardless of
+           ``force``) and returns the cached path on a hit. On a miss,
+           it downloads from the per-TDoc URL stored in
+           ``tdocs.ftp_url`` (rebuilt to a full URL via
+           :func:`build_ftp_url`), falling back to the template-based
+           URL on failure.
         5. Once the actual serving URL is known, probe the DB cache
            again by that URL — covers the case where ``primary_url``
            was unset at step 3 but the template URL was usable.
@@ -403,9 +406,15 @@ class TDocCrService:
 
         Args:
             tdoc_id: Canonical TDoc identifier.
-            force: Bypass the on-disk zip cache and the markdown cache
-                on a fresh parse. The ``tdoc_cr_details`` /
-                ``tdoc_extracts`` rows are always re-upserted.
+            force: Bypass the DB short-circuit probe (``tdoc_cr_details``
+                / ``tdoc_extracts``) and the markdown cache on a fresh
+                parse. The on-disk zip cache is **always** consulted
+                first regardless of ``force`` — :func:`download_tdoc_zip`
+                keys the cache on ``tdocs.ftp_url`` (via
+                :func:`derive_cache_file`), and a hit returns the cached
+                path without re-downloading, even when ``force=True``.
+                The ``tdoc_cr_details`` / ``tdoc_extracts`` rows are
+                always re-upserted on the parse path that runs.
             full: Forwarded to the parser as ``full=True``. For TTCN
                 CRs this enables extraction of the per-correction
                 ``before_change`` / ``after_change`` / ``new_change``
@@ -625,8 +634,14 @@ class TDocCrService:
             url: HTTP or HTTPS URL (other schemes raise ``ValueError``
                 — operators should use ``--from-path`` for
                 ``ftp://`` / ``file://`` sources).
-            force: When ``True``, bypass the on-disk zip cache (and
-                the markdown cache, in the 3GPP-URL path). The
+            force: When ``True`` on the 3GPP-URL path, skip the DB
+                short-circuit probe and re-render markdown (bypassing
+                the markdown cache). The on-disk zip is **always**
+                re-downloaded from ``url`` in the 3GPP-URL path
+                regardless of ``force`` — the direct-parse helper
+                does not consult the zip cache, it overwrites the
+                ``zips/<cache_file>`` slot on every call so the
+                caller always sees fresh bytes. The
                 ``tdoc_cr_details`` / ``tdoc_extracts`` rows are
                 always re-upserted on a 3GPP-URL call.
             full: Forwarded to :func:`parse_cr_details` as
@@ -882,10 +897,15 @@ class TDocCrService:
         """Run the full extract pipeline for a 3GPP URL whose FK target exists.
 
         The 3GPP branch of :meth:`extract_from_url` delegates to this
-        helper so the in-memory parse path stays readable. The
-        helper reuses the on-disk zip + markdown caches (with
-        ``cache_file`` so distinct revisions of the same ``tdoc_id``
-        get distinct cache slots — the D10 fix) and writes both
+        helper so the in-memory parse path stays readable. The helper
+        reuses the **markdown** cache (via :meth:`_load_or_render_markdown`
+        — ``cache_file`` keeps distinct revisions of the same
+        ``tdoc_id`` in distinct slots, the D10 fix) but **always**
+        re-downloads the zip from ``url`` via
+        :meth:`ScraperClient.get_bytes` and overwrites
+        ``zips/<cache_file>`` on every call. The DB short-circuit
+        probe runs only when ``force=False``; the markdown cache is
+        consulted regardless of ``force``. Writes both
         :class:`TDocExtractMeta` + :class:`TDocCRDetails` rows on a
         fresh extract.
         """
@@ -1020,8 +1040,10 @@ class TDocCrService:
         understand. Legacy plain-UTF-8 and legacy gzip cache files are
         still decoded transparently via
         :func:`_decompress_markdown`'s magic-byte sniff.
-        ``force=True`` bypasses the markdown cache too (the zip is also
-        re-downloaded upstream via :func:`download_tdoc_zip`).
+        ``force=True`` bypasses the markdown cache only — the upstream
+        zip is reused from :func:`download_tdoc_zip` on a cache hit
+        (the zip cache is keyed on ``ftp_url`` and consulted first
+        regardless of ``force``).
         """
         if not force:
             cached = self._cache.get_bytes(cache_file, "markdown")

@@ -217,12 +217,14 @@ and the TDoc CR extraction is the deepest.
       `TDocCrRepository.get_by_url` (normalised via `normalize_ftp_path`)
       per candidate. A hit short-circuits with
       `ExtractResult.from_cache = True` and skips the network.
-    - Else, `download_tdoc_zip` resolves the TDoc id to its 3GPP URL
-      via the template table (`R5s` → TTCN email CR,
-      `R5w` → workshop CR), hits `ScraperClient.get_bytes`, and stages
-      the zip in `TDocCache.put_bytes(key, payload, "zips")`. On cache
-      miss the function tries the stored `tdocs.ftp_url` (rebuilt to
-      an absolute URL), falling back to the template on a terminal
+    - Else, `download_tdoc_zip` first checks the on-disk zip cache via
+      the `ftp_url`-derived cache key (regardless of `force`) and
+      returns the cached path on a hit. On a miss, it resolves the
+      TDoc id to its 3GPP URL via the template table (`R5s` → TTCN
+      email CR, `R5w` → workshop CR), hits `ScraperClient.get_bytes`,
+      and stages the zip in `TDocCache.put_bytes(key, payload, "zips")`.
+      The function tries the stored `tdocs.ftp_url` (rebuilt to an
+      absolute URL) first, falling back to the template on a terminal
       HTTP error.
     - `extract_docx_from_zip` returns `(filename, docx_bytes)`.
     - The markdown for that exact `docx_bytes` is looked up by the

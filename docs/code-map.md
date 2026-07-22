@@ -16,7 +16,7 @@ table below is for navigation only.
 | `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …) — slimmed: no `details` blob, no `parser_version` field. Mirrors the slim `tdoc_cr_details` table 1:1. |
 | `TDocCRTTCNDetails` | dataclass | `models/tdoc_cr.py` | TTCN sidecar (six overview fields + `required_changes` list). Mirrors the new `tdoc_cr_ttcn_details` table 1:1. |
 | `TDocCRParseResult` | dataclass | `models/tdoc_cr.py` | Parser bundle: `cover: TDocCRDetails` + `ttcn: TDocCRTTCNDetails | None`. The service fans each slice out to its own repo. |
-| `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar (zip / markdown paths, `doc_filename`). |
+| `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar (`cache_file`, `doc_filename`). |
 | `DirectParseResult` | dataclass | `models/tdoc_cr.py` | Outcome of `tdoc parse --from-path/--from-url` (source kind, markdown, details, persistence flags). |
 | `SyncOutcome` | dataclass | `models/sync.py` | Result of `meeting sync` / `tdoc sync`: synced/skipped status, reason, and counts. |
 | `BulkSyncOutcome` | dataclass | `models/sync.py` | Result of `tdoc sync` bulk mode: per-meeting outcomes plus typed failures. |
@@ -59,6 +59,7 @@ table below is for navigation only.
 | `fetch_tdocs_from_portal` | function | `scraping/portal_source.py` | Download a meeting's TDoc-list XLSX from `GenerateDocumentList.aspx`. |
 | `fetch_wis` | function | `scraping/wi_source.py` | Fetch DynaReport WI list HTML for a TSG. |
 | `download_tdoc_zip` / `get_tdoc_zip_url` | functions | `scraping/tdoc_zip_source.py` | Resolve TDoc id → 3GPP URL + on-disk zip via `TDocCache`. `download_tdoc_zip` accepts an optional `cache_key_override` so the direct-parse path can key the zip cache on the original filename (D10 fix). |
+| `derive_cache_file` | function | `scraping/cache_keys.py` | Derive unified cache filename `<stem>-<md5(ftp_url)>.zip` from a 3GPP relative FTP URL. Used for both zip and markdown cache keys. |
 | `TDocCache` / `CacheStatus` | class | `scraping/cache.py` | On-disk `zips/` + `markdown/` cache with FIFO eviction. |
 | `parse_3gpp_calendar` | function | `parsers/calendar_parser.py` | DynaReport HTML → `Meeting` list. |
 | `read_tdoc_sheet` | function | `parsers/tdoc_parser.py` | TDoc-list XLSX → `TDoc` list. |
@@ -74,7 +75,7 @@ table below is for navigation only.
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
 | `Base` | declarative base | `storage/db/base.py` | SQLAlchemy `DeclarativeBase`. |
-| ORM classes | `Mapped[]` | `storage/db/models.py` | `TDocORM`, `MeetingORM`, `TsgORM`, `WiORM`, `TDocFileORM`, slim `TDocCrDetailOrm` (cover-page only), `TDocCrTtcnDetailOrm` (TTCN sidecar), `TDocExtractOrm` (cache metadata). |
+| ORM classes | `Mapped[]` | `storage/db/models.py` | `TDocORM`, `MeetingORM`, `TsgORM`, `WiORM`, `TDocFileORM`, slim `TDocCrDetailOrm` (cover-page only), `TDocCrTtcnDetailOrm` (TTCN sidecar), `TDocExtractOrm` (cache metadata: `cache_file` String(255), indexed). |
 | `get_engine` / `get_session_factory` | functions | `storage/db/session.py` | Cached engine + session factory. |
 | `create_schema` | function | `storage/db/migrate.py` | `Base.metadata.create_all` bootstrap. |
 | `compress_json` / `decompress_json` | functions | `storage/compression.py` | Shared gzip JSON helpers used by both `SQLAlchemyTDocCrRepository` and `SQLAlchemyTDocCrTtcnRepository` for any binary JSON detail column (currently the TTCN sidecar's `required_changes`). `decompress_json` is tolerant — `None` / empty / gzip / JSON / Unicode errors all resolve to `None` plus a warning; legacy uncompressed blobs decode transparently. |

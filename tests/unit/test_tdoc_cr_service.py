@@ -9,7 +9,8 @@ backend. The repository and scraper boundaries are stubbed with
 from __future__ import annotations
 
 import gzip
-import hashlib
+import io
+import zipfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -25,7 +26,10 @@ from doc3gpp.models.tdoc_cr import (
 )
 from doc3gpp.parsers.cr_parser import extract_docx_from_zip
 from doc3gpp.scraping.cache import TDocCache
-from doc3gpp.services.tdoc_cr_service import TDocCrService
+from doc3gpp.services.tdoc_cr_service import (
+    TDocCrService,
+    _wrap_markdown_zip,
+)
 
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
@@ -84,15 +88,33 @@ def _dummy_details(tdoc_id: str) -> TDocCRDetails:
 # ---------------------------------------------------------------------------
 
 
+def _zip_markdown_bytes(text: str, *, inner_name: str) -> bytes:
+    """Helper: wrap ``text`` in a real ZIP archive (mirrors ``_wrap_markdown_zip``).
+
+    Tests seed the on-disk cache directly via ``cache.put_bytes`` to
+    exercise read paths without re-running the docx-to-markdown render.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(inner_name, text.encode("utf-8"))
+    return buf.getvalue()
+
+
 @pytest.mark.skipif(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_markdown_cache_writes_gzip_and_hits_without_rerendering(
+def test_markdown_cache_writes_real_zip_and_hits_without_rerendering(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    """On write the markdown cache is gzip-compressed; on read it is decompressed."""
+    """On write the markdown cache is a real ``zipfile.ZipFile``; on read it is unpacked.
+
+    The ``PK\x03\x04`` magic is the post-this-change format — the cache
+    file extends with ``.zip`` and is byte-for-byte the same shape a
+    ``zipfile.ZipFile(..., "w")`` call would produce, so ``unzip`` /
+    7z / WinZip can open it directly off disk.
+    """
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
@@ -100,21 +122,28 @@ def test_markdown_cache_writes_gzip_and_hits_without_rerendering(
     service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
 
     doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
-    doc_hash = hashlib.sha256(docx_bytes).hexdigest()
+    cache_file = "R5s260009-abcdef0123456789.zip"
 
     markdown = service._load_or_render_markdown(
-        doc_hash=doc_hash,
+        cache_file=cache_file,
         docx_bytes=docx_bytes,
         doc_filename=doc_filename,
         force=False,
     )
     assert markdown
 
-    cached_path = cache.path_for(doc_hash, "markdown")
+    cached_path = cache.path_for(cache_file, "markdown")
     assert cached_path.exists()
     raw = cached_path.read_bytes()
-    assert raw[:2] == b"\x1f\x8b"
-    assert gzip.decompress(raw).decode("utf-8") == markdown
+    assert raw[:4] == b"PK\x03\x04", (
+        "markdown cache must be a real ZIP — got magic "
+        f"{raw[:4]!r}, expected b'PK\\x03\\x04'"
+    )
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        names = zf.namelist()
+        assert len(names) == 1
+        assert names[0].endswith(".md")
+        assert zf.read(names[0]).decode("utf-8") == markdown
 
     def _boom(*_args: Any, **_kwargs: Any) -> str:  # pragma: no cover
         raise AssertionError("convert_document_to_markdown should not be re-invoked")
@@ -126,7 +155,7 @@ def test_markdown_cache_writes_gzip_and_hits_without_rerendering(
     )
 
     second = service._load_or_render_markdown(
-        doc_hash=doc_hash,
+        cache_file=cache_file,
         docx_bytes=docx_bytes,
         doc_filename=doc_filename,
         force=False,
@@ -139,7 +168,12 @@ def test_markdown_cache_writes_gzip_and_hits_without_rerendering(
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_markdown_cache_reads_legacy_plain_utf8(tmp_path: Path) -> None:
-    """Pre-change plain UTF-8 markdown cache files continue to work."""
+    """Pre-change plain UTF-8 markdown cache files continue to work.
+
+    The ``_decompress_markdown`` reader magic-byte-sniffs for plain UTF-8
+    (no leading ``PK`` / ``\\x1f\\x8b``), so legacy unzipped cache files
+    remain readable after the ZIP-wrapping change.
+    """
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
@@ -147,18 +181,70 @@ def test_markdown_cache_reads_legacy_plain_utf8(tmp_path: Path) -> None:
     service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
 
     doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
-    doc_hash = hashlib.sha256(docx_bytes).hexdigest()
+    cache_file = "R5s260009-abcdef0123456789.zip"
 
     legacy_text = "legacy plain markdown cache content"
-    cache.path_for(doc_hash, "markdown").write_text(legacy_text, encoding="utf-8")
+    cache.path_for(cache_file, "markdown").write_text(legacy_text, encoding="utf-8")
 
     result = service._load_or_render_markdown(
-        doc_hash=doc_hash,
+        cache_file=cache_file,
         docx_bytes=docx_bytes,
         doc_filename=doc_filename,
         force=False,
     )
     assert result == legacy_text
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_markdown_cache_reads_legacy_gzip_blob(tmp_path: Path) -> None:
+    """Pre-this-change gzip-compressed cache files remain readable.
+
+    The pre-change writer produced a gzip-compressed blob with ``.zip``
+    extension; the reader's magic-byte sniff falls through to ``gzip.decompress``
+    when ``PK`` is not the leading two bytes, so a cache file written by
+    the previous code path still decodes cleanly.
+    """
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    zip_bytes = fixture.read_bytes()
+    service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
+
+    doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
+    cache_file = "R5s260009-abcdef0123456789.zip"
+
+    legacy_text = "legacy gzip-blob markdown cache content"
+    cache.put_bytes(
+        cache_file,
+        gzip.compress(legacy_text.encode("utf-8")),
+        "markdown",
+    )
+
+    result = service._load_or_render_markdown(
+        cache_file=cache_file,
+        docx_bytes=docx_bytes,
+        doc_filename=doc_filename,
+        force=False,
+    )
+    assert result == legacy_text
+
+
+def test_wrap_markdown_zip_is_a_real_zip(tmp_path: Path) -> None:
+    """``_wrap_markdown_zip`` output passes ``zipfile.ZipFile``'s read path.
+
+    Belt-and-braces unit test that does not require a docx fixture —
+    locks the public contract independently of ``_load_or_render_markdown``.
+    """
+    payload = "# hello\nbody\n"
+    archive = _wrap_markdown_zip(payload, inner_name="R5s260009.md")
+
+    assert archive[:4] == b"PK\x03\x04"
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        assert zf.namelist() == ["R5s260009.md"]
+        assert zf.read("R5s260009.md").decode("utf-8") == payload
 
 
 # ---------------------------------------------------------------------------
@@ -187,11 +273,10 @@ def test_extract_from_url_db_cache_hit_populates_markdown_for_raw(
     stored_ftp_url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
     expected_markdown = "# Raw cache hit markdown\nCached body paragraph."
 
-    # Seed the on-disk markdown cache with gzip-compressed UTF-8.
-    markdown_key = "raw_cache_test_doc_hash"
+    cache_file = "R5s260009-abcdef0123456789.zip"
     cache.put_bytes(
-        markdown_key,
-        gzip.compress(expected_markdown.encode("utf-8")),
+        cache_file,
+        _zip_markdown_bytes(expected_markdown, inner_name="R5s260009.md"),
         "markdown",
     )
 
@@ -199,8 +284,7 @@ def test_extract_from_url_db_cache_hit_populates_markdown_for_raw(
     cr_repo.get_extract_meta_by_url.return_value = TDocExtractMeta(
         ftp_url=stored_ftp_url,
         tdoc_id="R5s260009",
-        zip_path=str(cache.path_for("R5s260009.zip", "zips")),
-        markdown_path=str(cache.path_for(markdown_key, "markdown")),
+        cache_file=cache_file,
         doc_filename="R5s260009.docx",
     )
 

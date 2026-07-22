@@ -2169,12 +2169,15 @@ def _render_tdoc_show_raw(tdoc_id: str, output: str | None) -> None:
     except PythonDocxNotInstalledError as exc:
         raise typer.BadParameter(str(exc)) from None
 
-    markdown_path = Path(result.extract_meta.markdown_path)
-    markdown = _read_cached_markdown_path(markdown_path)
+    cache = _build_cache()
+    markdown = _read_cached_markdown_path(
+        result.extract_meta.cache_file, cache.root,
+    )
     if not markdown:
         raise typer.BadParameter(
             f"Markdown cache for TDoc '{tdoc_id}' is empty or unreadable "
-            f"(path: {markdown_path})"
+            f"(cache_file: {result.extract_meta.cache_file}, "
+            f"cache_dir: {cache.root})"
         )
     _emit_record_raw(markdown, output)
 

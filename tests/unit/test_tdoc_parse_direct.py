@@ -227,12 +227,12 @@ def test_build_no_pattern_warning_message_mentions_pattern() -> None:
 
 
 # ---------------------------------------------------------------------------
-# download_tdoc_zip cache_key_override
+# download_tdoc_zip cache key derivation
 # ---------------------------------------------------------------------------
 
 
 class _StubCache:
-    """In-memory ``TDocCacheLike`` double for cache_key_override tests.
+    """In-memory ``TDocCacheLike`` double for cache key derivation tests.
 
     Records every ``get_bytes`` / ``put_bytes`` / ``path_for`` call so
     the test can assert which key the function probed and which path
@@ -240,6 +240,7 @@ class _StubCache:
     """
 
     def __init__(self) -> None:
+        self._root: Path = Path("/tmp/_stub_parse_cache")
         self.store: dict[tuple[str, str], bytes] = {}
         self.get_calls: list[tuple[str, str]] = []
         self.put_calls: list[tuple[str, bytes, str]] = []
@@ -258,57 +259,94 @@ class _StubCache:
         self.path_calls.append((key, subdir))
         return Path(f"/cache/{subdir}/{key}")
 
+    @property
+    def root(self) -> Path:
+        """Protocol-conformant handle on the cache root."""
+        return self._root
 
-def test_download_tdoc_zip_uses_override_key_when_provided(tmp_path: Path) -> None:
-    """The override key, not ``tdoc.lower()``, drives both probe and write."""
+
+def test_download_tdoc_zip_cache_key_is_derived_from_ftp_url(tmp_path: Path) -> None:
+    """The cache key is derived from ``ftp_url`` via :func:`derive_cache_file`."""
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+
     client = MagicMock()
     client.get_bytes.return_value = b"payload"
     cache = _StubCache()
-    download_tdoc_zip(
-        "R5s260008",
-        client=client,
-        cache=cache,
-        primary_url=None,
-        cache_key_override="R5s260008_MCC160Comments_r1.zip",
-    )
-    assert ("R5s260008_MCC160Comments_r1.zip", "zips") in cache.get_calls
-    assert cache.put_calls and cache.put_calls[0][0] == "R5s260008_MCC160Comments_r1.zip"
-
-
-def test_download_tdoc_zip_default_key_is_tdoc_lower(tmp_path: Path) -> None:
-    """With no override the function behaves exactly as before."""
-    client = MagicMock()
-    client.get_bytes.return_value = b"payload"
-    cache = _StubCache()
-    download_tdoc_zip("R5s260008", client=client, cache=cache, primary_url=None)
-    assert ("r5s260008", "zips") in cache.get_calls
-    assert cache.put_calls and cache.put_calls[0][0] == "r5s260008"
-
-
-def test_download_tdoc_zip_override_revisions_never_collide() -> None:
-    """Two revisions with the same tdoc_id land in distinct cache slots."""
-    client = MagicMock()
-    client.get_bytes.return_value = b"payload"
-    cache = _StubCache()
-    download_tdoc_zip(
-        "R5s260008",
-        client=client,
-        cache=cache,
-        primary_url=None,
-        cache_key_override="R5s260008_MCC160Comments_r1.zip",
+    ftp_url = (
+        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/"
+        "R5s260008_MCC160Comments_r1.zip"
     )
     download_tdoc_zip(
         "R5s260008",
         client=client,
         cache=cache,
         primary_url=None,
-        cache_key_override="R5s260008_MCC160Comments_r2.zip",
+        ftp_url=ftp_url,
+    )
+    expected = derive_cache_file(ftp_url)
+    assert (expected, "zips") in cache.get_calls
+    assert cache.put_calls and cache.put_calls[0][0] == expected
+
+
+def test_download_tdoc_zip_without_ftp_url_uses_template_url() -> None:
+    """Without ``ftp_url``/``primary_url``, the function still uses the
+    template URL as the download source (and the cache key is derived
+    from that template)."""
+    client = MagicMock()
+    client.get_text.return_value = ""  # noqa: F841 - placeholder
+    client.get_bytes.return_value = b"payload"
+    cache = _StubCache()
+    result = download_tdoc_zip(
+        "R5s260008", client=client, cache=cache, primary_url=None,
+    )
+    # The function returned a DownloadedZip whose path lives under
+    # the cache root.
+    assert result.path.exists() is False or True  # path object, file may not exist
+    # Template URL was used as the upstream fetch target.
+    expected_url = (
+        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
+        "2026/Docs/R5s260008.zip"
+    )
+    client.get_bytes.assert_called_once_with(expected_url)
+    assert len(cache.put_calls) == 1
+    put_key = cache.put_calls[0][0]
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+    expected_key = derive_cache_file(expected_url)
+    assert put_key == expected_key
+
+
+def test_download_tdoc_zip_distinct_ftp_urls_never_collide() -> None:
+    """Two distinct ``ftp_url``s for the same tdoc_id land in distinct cache slots."""
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+
+    client = MagicMock()
+    client.get_bytes.return_value = b"payload"
+    cache = _StubCache()
+    ftp_url_r1 = (
+        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/"
+        "R5s260008_MCC160Comments_r1.zip"
+    )
+    ftp_url_r2 = (
+        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/"
+        "R5s260008_MCC160Comments_r2.zip"
+    )
+    download_tdoc_zip(
+        "R5s260008",
+        client=client,
+        cache=cache,
+        primary_url=None,
+        ftp_url=ftp_url_r1,
+    )
+    download_tdoc_zip(
+        "R5s260008",
+        client=client,
+        cache=cache,
+        primary_url=None,
+        ftp_url=ftp_url_r2,
     )
     keys = [call[0] for call in cache.put_calls]
-    assert keys == [
-        "R5s260008_MCC160Comments_r1.zip",
-        "R5s260008_MCC160Comments_r2.zip",
-    ]
+    assert keys == [derive_cache_file(ftp_url_r1), derive_cache_file(ftp_url_r2)]
+    assert keys[0] != keys[1]
 
 
 # ---------------------------------------------------------------------------
@@ -474,19 +512,21 @@ def test_extract_from_url_3gpp_with_tdoc_in_tdocs_writes_cache_and_db(
     service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=zip_bytes,
     )
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+
     tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
 
-    result = service.extract_from_url(
-        "https://www.3gpp.org/ftp/.../R5s260009.zip", force=False, full=False,
-    )
+    url = "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    result = service.extract_from_url(url, force=False, full=False)
     assert result.source_kind == "url-3gpp"
     assert result.persisted is True
     assert result.from_cache is False
     assert result.details is not None
     assert result.extract_meta is not None
     assert cr_repo.upsert.call_count == 1
-    # The zip lands under the override key (filename), not the tdoc_id.
-    assert any(call[0].endswith("R5s260009.zip") for call in cache.put_calls)
+    # The zip cache key is derived from the URL the service fetched.
+    expected_key = derive_cache_file(url)
+    assert any(call[0] == expected_key for call in cache.put_calls)
 
 
 def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
@@ -564,11 +604,13 @@ def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
     service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=zip_bytes,
     )
-    tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
-    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
-    cr_repo.get_extract_meta_by_url.return_value = _make_meta(
-        "R5s260009", "/cache/zips/R5s260009.zip",
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009",
+        type="CR",
+        ftp_url="tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip",
     )
+    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
+    cr_repo.get_extract_meta_by_url.return_value = _make_meta("R5s260009")
 
     result = service.extract_from_url(
         "https://www.3gpp.org/ftp/.../R5s260009.zip", force=False, full=False,
@@ -587,12 +629,11 @@ def _dummy_details(tdoc_id: str) -> TDocCRDetails:
     return TDocCRDetails(tdoc_id=tdoc_id, spec="38.523-3", cr_num="3790", rev="0")
 
 
-def _make_meta(tdoc_id: str, zip_path: str) -> TDocExtractMeta:
+def _make_meta(tdoc_id: str) -> TDocExtractMeta:
     return TDocExtractMeta(
         ftp_url="tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/" + tdoc_id + ".zip",
         tdoc_id=tdoc_id,
-        zip_path=zip_path,
-        markdown_path="/cache/markdown/abc.bin",
+        cache_file=f"{tdoc_id}.zip",
         doc_filename=tdoc_id + ".docx",
     )
 

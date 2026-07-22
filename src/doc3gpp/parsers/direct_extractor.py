@@ -23,7 +23,8 @@ Boundary discipline:
   ``R5s260008_MCC160Comments_r1.zip`` vs ``..._r2.zip``) get distinct
   cache slots. The fix is plumbed through
   :func:`doc3gpp.scraping.tdoc_zip_source.download_tdoc_zip` via the
-  ``cache_key_override`` keyword.
+  ``ftp_url`` keyword (which forwards into
+  :func:`doc3gpp.scraping.cache_keys.derive_cache_file`).
 
 Helpers in this module never raise for *user* errors (missing files,
 malformed sources) — those surface as plain ``ValueError`` /
@@ -296,8 +297,12 @@ def derive_zip_cache_key(source: str | Path) -> str:
     cache slot (e.g. ``R5s260008_MCC160Comments_r1.zip`` and
     ``R5s260008_MCC160Comments_r2.zip``). The direct-parse path keys
     the zip cache on the **original filename** so revisions land in
-    distinct slots; the markdown cache stays keyed by sha256 of the
-    docx bytes, which is content-addressed and already collision-free.
+    distinct slots. After the ``feat(tdoc): unify zip + markdown
+    cache`` change, the production cache key is derived from the
+    upstream URL via
+    :func:`doc3gpp.scraping.cache_keys.derive_cache_file` — this
+    helper exists for ad-hoc cache lookups on a filename / URL that
+    do not have the full URL in hand.
 
     For a URL, only the URL path's basename is considered (3GPP serves
     assets like ``R5s260008.zip`` — the URL path matches the file

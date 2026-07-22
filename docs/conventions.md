@@ -235,6 +235,60 @@ where the previous invocation stopped (already-parsed rows are excluded
 at the SQL level, so the second run picks up the next batch of pending 
 rows).
 
+## Cache key grammar (tdoc_extracts)
+
+The `tdoc_extracts` table stores a single `cache_file` column
+(`String(255)`, indexed) that names the on-disk artefact for both the
+zip cache (`zips/<cache_file>`) and the markdown cache
+(`markdown/<cache_file>`). The key is derived deterministically from the
+TDoc's `ftp_url`:
+
+```
+cache_file = "<stem>-<md5(ftp_url).hexdigest()>.zip"
+```
+
+where `stem` is the basename of `ftp_url` with a trailing `.zip`
+stripped and sanitised to `[A-Za-z0-9._-]`. The max length is 200
+characters (was 128). The `_KEY_PATTERN` regex in `cache.py` is
+`[A-Za-z0-9._-]{1,200}`.
+
+Spec examples:
+
+- `derive_cache_file("tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260162.zip")`
+  → `R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip`
+- `derive_cache_file("tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Review/R5s260034_MCC160Comments.zip")`
+  → `R5s260034_MCC160Comments-5415a41d39774d1e74e27420153f65cc.zip`
+
+This replaces the legacy dual-key scheme where the zip cache was keyed
+by `tdoc.lower()` and the markdown cache by `sha256(docx_bytes)`. The
+per-URL derivation makes the row portable when `cache.dir` moves and
+prevents collisions across revisions of the same `tdoc_id` (different
+`ftp_url` → different `cache_file`).
+
+## Cache on-disk formats
+
+The two subtrees under `cache.dir` use different on-disk formats
+despite sharing the same `.zip` extension and the same `cache_file`
+basename:
+
+- `cache.dir/zips/<cache_file>` — **real ZIP** written byte-for-byte
+  from `client.get_bytes(url)`. The 3GPP FTP server serves the zip
+  payload directly; `extract_docx_from_zip` reads it via
+  `zipfile.ZipFile`. Opening with `unzip` / 7z / WinZip yields the
+  inner `.docx` straight away.
+- `cache.dir/markdown/<cache_file>` — **real ZIP** produced by
+  `_wrap_markdown_zip` in `services/tdoc_cr_service.py`. The archive
+  holds a single UTF-8 entry named `<docx stem>.md`
+  (`zipfile.ZIP_DEFLATED`); opening with `unzip` / 7z / WinZip
+  extracts that markdown file. The reader
+  (`_decompress_markdown`) magic-byte-sniffs on-disk bytes so legacy
+  gzip blobs (`\x1f\x8b`) and pre-gzip plain UTF-8 cache files remain
+  readable without forcing a re-extract.
+
+Both formats are deliberate so a single `*.zip` extension maps to a
+single on-disk archive shape that standard archival tooling can open.
+
+
 ## meeting list --tdoc flow
 
 `meeting list --tdoc <id>` finds the meeting whose `start_doc` /

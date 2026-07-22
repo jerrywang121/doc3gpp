@@ -240,8 +240,7 @@ def test_extract_meta_post_init_rejects_blank_url() -> None:
         TDocExtractMeta(
             ftp_url="",
             tdoc_id="R5s260009",
-            zip_path="/tmp/z",
-            markdown_path="/tmp/m",
+            cache_file="R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip",
             doc_filename="R5s260009.docx",
         )
 
@@ -249,8 +248,7 @@ def test_extract_meta_post_init_rejects_blank_url() -> None:
         TDocExtractMeta(
             ftp_url="   ",
             tdoc_id="R5s260009",
-            zip_path="/tmp/z",
-            markdown_path="/tmp/m",
+            cache_file="R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip",
             doc_filename="R5s260009.docx",
         )
 
@@ -261,8 +259,7 @@ def test_extract_meta_post_init_rejects_blank_tdoc_id() -> None:
         TDocExtractMeta(
             ftp_url="example.com/r5s260009.zip",
             tdoc_id="",
-            zip_path="/tmp/z",
-            markdown_path="/tmp/m",
+            cache_file="R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip",
             doc_filename="R5s260009.docx",
         )
 
@@ -272,12 +269,29 @@ def test_extract_meta_post_init_strips_whitespace() -> None:
     meta = TDocExtractMeta(
         ftp_url="  example.com/r5s260009.zip\n",
         tdoc_id=" R5s260009 ",
-        zip_path="/tmp/z",
-        markdown_path="/tmp/m",
+        cache_file="R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip",
         doc_filename="R5s260009.docx",
     )
     assert meta.ftp_url == "example.com/r5s260009.zip"
     assert meta.tdoc_id == "R5s260009"
+
+
+def test_tdoc_extract_meta_requires_cache_file() -> None:
+    """Omitting the required ``cache_file`` arg raises ``TypeError``.
+
+    ``cache_file`` is a required positional/keyword arg on the
+    dataclass (no default) — the constructor must reject calls
+    that omit it so callers always pair an extract row with the
+    on-disk basename.
+    """
+    with pytest.raises(TypeError):
+        TDocExtractMeta(ftp_url="x", tdoc_id="y")  # no cache_file
+
+
+def test_cache_file_must_be_present(tmp_path) -> None:
+    """The QA lock: ``cache_file`` is mandatory even with a fresh tmp dir."""
+    with pytest.raises(TypeError):
+        TDocExtractMeta(ftp_url="x", tdoc_id="y")  # no cache_file
 
 
 # ---------------------------------------------------------------------------
@@ -398,13 +412,13 @@ def test_tdoc_extract_orm_round_trip() -> None:
     Session = sessionmaker(bind=engine)
 
     url = "stored/R5s260009.zip"
+    cache_file = "R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip"
     with Session() as session:
         _seed_tdoc(session, "R5s260009")
         row = TDocExtractOrm(
             ftp_url=url,
             tdoc_id="R5s260009",
-            zip_path="/cache/zips/R5s260009.zip",
-            markdown_path="/cache/markdown/R5s260009.md",
+            cache_file=cache_file,
             doc_filename="R5s260009.docx",
         )
         session.add(row)
@@ -414,8 +428,7 @@ def test_tdoc_extract_orm_round_trip() -> None:
         loaded = session.get(TDocExtractOrm, url)
         assert loaded is not None
         assert loaded.tdoc_id == "R5s260009"
-        assert loaded.zip_path == "/cache/zips/R5s260009.zip"
-        assert loaded.markdown_path == "/cache/markdown/R5s260009.md"
+        assert loaded.cache_file == cache_file
         assert loaded.doc_filename == "R5s260009.docx"
         assert loaded.parser_version == "1.0.0"
         assert loaded.extracted_at is not None
@@ -518,8 +531,7 @@ def test_cascade_delete_via_fk() -> None:
             TDocExtractOrm(
                 ftp_url=url_a,
                 tdoc_id="R5s260051",
-                zip_path="/z",
-                markdown_path="/m",
+                cache_file="R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip",
                 doc_filename="R5s260051.docx",
             )
         )
@@ -527,8 +539,7 @@ def test_cascade_delete_via_fk() -> None:
             TDocExtractOrm(
                 ftp_url=url_b,
                 tdoc_id="R5s260051",
-                zip_path="/z2",
-                markdown_path="/m2",
+                cache_file="R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip",
                 doc_filename="R5s260051.docx",
             )
         )

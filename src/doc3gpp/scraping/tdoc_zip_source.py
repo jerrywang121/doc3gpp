@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
 
 import httpx
 
+from doc3gpp.scraping.cache_keys import derive_cache_file
+
 if TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
 
@@ -74,6 +76,12 @@ class TDocCacheLike(Protocol):
     Defined as a Protocol so Phase 1's ``TDocCache`` implementation can
     slot in without import gymnastics. Keep this in sync with
     ``src/doc3gpp/scraping/cache.py`` once Phase 1 lands.
+
+    The ``root`` property exposes the cache directory so callers (e.g.
+    the service layer rendering ``tdoc show --format raw``) can
+    reconstruct per-entry paths under ``zips/`` and ``markdown/``
+    without needing the cache to expose a per-key path helper for
+    keys it has not yet materialised.
     """
 
     def put_bytes(self, key: str, payload: bytes, subdir: CacheSubdir) -> Path: ...
@@ -81,6 +89,17 @@ class TDocCacheLike(Protocol):
     def get_bytes(self, key: str, subdir: CacheSubdir) -> bytes | None: ...
 
     def path_for(self, key: str, subdir: CacheSubdir) -> Path: ...
+
+    @property
+    def root(self) -> Path:
+        """Absolute path to the cache root.
+
+        The service layer uses this to reconstruct per-entry paths under
+        ``zips/`` and ``markdown/`` (e.g. for ``tdoc show --format raw``).
+        Implementations must return the same root their ``path_for(key, subdir)``
+        calls prepend.
+        """
+        ...
 
 
 def tsg_meeting_year_for(tdoc: str) -> tuple[str, int | None]:
@@ -208,14 +227,16 @@ def download_tdoc_zip(
     cache: TDocCacheLike,
     primary_url: str | None = None,
     *,
-    cache_key_override: str | None = None,
+    ftp_url: str | None = None,
 ) -> DownloadedZip:
     """Return a :class:`DownloadedZip` for the TDoc, downloading on cache miss.
 
-    Cache key is ``tdoc.lower()``; subdir is ``"zips"``. On cache hit the
-    cached path is returned (with ``url=None`` since the URL that
-    populated the cache in an earlier call is not tracked here). On
-    miss the function tries each candidate URL in order and caches the
+    Cache key is derived from the URL via
+    :func:`doc3gpp.scraping.cache_keys.derive_cache_file`; subdir is
+    ``"zips"``. The caller supplies the upstream URL ahead of time via
+    ``ftp_url`` (the ``tdocs.ftp_url`` row is the canonical source); on
+    a cache hit the same key is reused without re-deriving. On a miss
+    the function tries each candidate URL in order and caches the
     first successful download:
 
     1. ``primary_url`` (typically rebuilt from ``tdocs.ftp_url`` via
@@ -234,20 +255,19 @@ def download_tdoc_zip(
     fresh download, so the caller can persist the download provenance
     alongside the extracted CR fields.
 
-    The ``cache_key_override`` keyword is a strict opt-in: when set, the
-    function uses the supplied string in place of the default
-    ``canonical.lower()`` for both the cache probe and the cache write.
-    The default ``None`` keeps the legacy tdoc_id-based key, so existing
-    callers stay byte-for-byte identical. Callers that need a filename-
-    keyed cache (the direct-parse path) pass a sanitised basename here;
-    the cache layer accepts the override as-is and applies its own key
-    validation, so a hostile value still fails the
-    ``[A-Za-z0-9._-]{1,128}`` check in :mod:`doc3gpp.scraping.cache`.
+    ``ftp_url`` is the new contract for the service layer: it lets the
+    caller pin the cache key to a known URL up-front (so a cache hit
+    uses the same key a fresh fetch would have written). On a cache
+    hit where the caller already passed ``ftp_url``, the same derived
+    key is reused. ``primary_url`` is retained for back-compat with the
+    resolve-and-retry path inside this function.
 
     Raises:
-        ValueError: ``tdoc`` does not match the CR pattern (the cache and
-            network are left untouched in that case — a bad id should
-            fail fast, not produce a half-written cache entry).
+        ValueError: ``tdoc`` does not match the CR pattern (the cache
+            and network are left untouched in that case — a bad id
+            should fail fast, not produce a half-written cache entry),
+            or neither ``ftp_url`` nor a resolved URL is available to
+            derive the cache key from.
         TDocZipDownloadError: every candidate URL was tried and none
             succeeded (no ``primary_url`` and no template, or all
             fetches raised a terminal ``httpx.HTTPError``).
@@ -259,12 +279,14 @@ def download_tdoc_zip(
     if canonical is None:
         raise ValueError(f"Invalid TDoc id shape: {tdoc!r}")
 
-    cache_key = cache_key_override or canonical.lower()
-
-    cached_bytes = cache.get_bytes(cache_key, "zips")
-    if cached_bytes is not None:
-        logger.debug("Cache hit for TDoc zip %s", cache_key)
-        return DownloadedZip(path=cache.path_for(cache_key, "zips"), url=None)
+    cached_bytes: bytes | None = None
+    cache_key: str | None = None
+    if ftp_url:
+        cache_key = derive_cache_file(ftp_url)
+        cached_bytes = cache.get_bytes(cache_key, "zips")
+        if cached_bytes is not None:
+            logger.debug("Cache hit for TDoc zip %s", cache_key)
+            return DownloadedZip(path=cache.path_for(cache_key, "zips"), url=None)
 
     candidates: list[str] = []
     if primary_url:
@@ -282,10 +304,15 @@ def download_tdoc_zip(
             payload = client.get_bytes(url)
         except httpx.HTTPError as exc:
             logger.error(
-                "HTTP error downloading TDoc zip %s from %s: %s", cache_key, url, exc
+                "HTTP error downloading TDoc zip %s from %s: %s",
+                cache_key or canonical.lower(),
+                url,
+                exc,
             )
             last_error = TDocZipDownloadError(url=url, original=exc)
             continue
+        if cache_key is None:
+            cache_key = derive_cache_file(url)
         cached_path = cache.put_bytes(cache_key, payload, "zips")
         logger.info(
             "Cached TDoc zip %s at %s (%d bytes) from %s",

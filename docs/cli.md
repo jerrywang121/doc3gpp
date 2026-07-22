@@ -485,12 +485,17 @@ Options:
     first._ placeholder is emitted. Long fields are **not**
     truncated in this mode.
   - `raw`: the converted `.docx` markdown body (the artefact the CR
-    parser consumes) for CR-type TDocs. Requires `python-docx`
-    (`pip install doc3gpp[extract]`) when the cache is cold;
-    surfaces a friendly error otherwise. When no cached markdown
-    exists, this format triggers a fresh `TDocCrService.extract()`
-    to populate the cache + DB. Non-CR-type TDocs are rejected
-    with a friendly error.
+    parser consumes) for CR-type TDocs. The markdown is loaded from
+    `{cache.dir}/markdown/<cache_file>` where `cache_file` is the
+    `tdoc_extracts.cache_file` column value derived from
+    `tdoc.ftp_url` via `derive_cache_file()`. Requires `python-docx`
+    (`pip install doc3gpp[extract]`) when the cache is cold; surfaces a
+    friendly error otherwise. When no cached markdown exists, this
+    format triggers a fresh `TDocCrService.extract()` to populate the
+    cache + DB. Non-CR-type TDocs are rejected with a friendly error.
+    If the markdown cache file is missing or unreadable, the error
+    message is:
+    `Markdown cache for TDoc '<tdoc>' is empty or unreadable (cache_file: <cache_file>, cache_dir: <dir>)`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Pass `-` for stdout (the historical default).
 
@@ -611,9 +616,12 @@ Options:
   Accepts the same rich-filter grammar as `--spec`.
 - `--uploaded-date EXPR`: filter on `uploaded_date` — see
   [Filter syntax](#filter-syntax) for accepted forms.
-- `--force`: skip both the on-disk zip/markdown cache and the
-  persisted `tdoc_cr_details` row so every id is re-fetched and
-  re-parsed.
+- `--force`: skip the persisted `tdoc_cr_details` /
+  `tdoc_extracts` short-circuit and re-render markdown (bypassing
+  the markdown cache) so every id is re-parsed from scratch.
+  The on-disk zip cache is **always** consulted first regardless of
+  `--force` — `download_tdoc_zip` keys the cache on `tdocs.ftp_url`
+  (via `derive_cache_file`) and reuses the cached bytes on a hit.
 - `--full`: reserved for the parser's `full=True` mode (pulls in
   `before_change` / `after_change` per correction). The current
   service does not yet wire this through; accepted silently so
@@ -775,7 +783,8 @@ doc3gpp tdoc parse --tdoc 'R5s26%' --yes
 # Parse every not-yet-parsed CR-type TDoc under meeting 85434.
 doc3gpp tdoc parse --meeting-id 85434
 
-# Re-parse every CR-type TDoc under the meeting (cache + DB row bypassed).
+# Re-parse every CR-type TDoc under the meeting (DB row + markdown
+# cache bypassed; on-disk zip cache is still consulted first).
 doc3gpp tdoc parse --meeting-id 85434 --force
 
 # Combine a meeting-id scope with a tdoc-id LIKE pattern and a meeting filter.
@@ -928,13 +937,16 @@ FK-aware behaviour matrix (3GPP URL):
 Local files and non-3GPP URLs always emit output and never touch
 the cache or the database.
 
-Cache naming (D10 fix): the zip cache is keyed on the **original
-(sanitized) filename**, not the TDoc id. Multiple revisions of the
-same id (`R5s260008_MCC160Comments_r1.zip` vs `…_r2.zip`) land in
-distinct cache slots; the legacy tdoc-id key would have silently
-served the first downloaded file forever. The markdown cache stays
-keyed by sha256 of the docx bytes (content-addressed, already
-collision-free).
+Cache naming: both the zip cache and the markdown cache are keyed on
+the same `cache_file` column from `tdoc_extracts`, derived from the
+`tdoc.ftp_url` via `derive_cache_file()` (format:
+`<stem>-<md5(ftp_url)>.zip`, max 200 chars). This replaces the legacy
+dual-key scheme where the zip cache used the sanitized filename and the
+markdown cache used `sha256(docx_bytes)`. The unified key makes the
+cache portable when `cache.dir` moves and prevents collisions across
+revisions of the same `tdoc_id`. Example outputs:
+`R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip` and
+`R5s260034_MCC160Comments-5415a41d39774d1e74e27420153f65cc.zip`.
 
 Install the optional dependency before first use (same as the
 filter path):
@@ -1017,8 +1029,10 @@ The `cache` sub-app exposes the on-disk cache that backs the TDoc
 extraction pipeline (Phase 1 `TDocCache`). The cache lives under
 `settings.cache.dir` (default `~/.cache/doc3gpp/tdocs`) with two
 subtrees: `zips/` (raw 3GPP zip downloads) and `markdown/` (python-docx
-output keyed by content hash). Both commands are pure file-system
-operations — they do **not** touch the database.
+output). Both subtrees share the same filename — the `cache_file`
+column from `tdoc_extracts` (derived from `tdoc.ftp_url` via
+`derive_cache_file()`). Both commands are pure file-system operations —
+they do **not** touch the database.
 
 ### doc3gpp cache status
 
@@ -1065,9 +1079,8 @@ Behavior:
   the prompt raises `Abort` and no files are deleted.
 - Set `purge_confirm = false` in the TOML config file (the
   `[cache]` table) to skip the prompt globally (CI / scripted use).
-- The on-disk artefacts referenced from
-  `tdoc_extracts.markdown_path` and `tdoc_extracts.zip_path` become
-  stale — the next `tdoc parse` will repopulate them.
+- The on-disk artefacts referenced from `tdoc_extracts.cache_file`
+  become stale — the next `tdoc parse` will repopulate them.
 
 Examples:
 

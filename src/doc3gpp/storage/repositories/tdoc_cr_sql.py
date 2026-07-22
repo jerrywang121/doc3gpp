@@ -216,8 +216,7 @@ class SQLAlchemyTDocCrRepository:
         Excludes ``ftp_url`` (PK) and ``tdoc_id`` (FK, handled by
         :meth:`upsert_extract_meta`).
         """
-        target.zip_path = meta.zip_path
-        target.markdown_path = meta.markdown_path
+        target.cache_file = meta.cache_file
         target.doc_filename = meta.doc_filename
         target.parser_version = meta.parser_version
         if meta.extracted_at is not None:
@@ -257,8 +256,7 @@ def _orm_to_meta(row: TDocExtractOrm) -> TDocExtractMeta:
     return TDocExtractMeta(
         ftp_url=row.ftp_url,
         tdoc_id=row.tdoc_id,
-        zip_path=row.zip_path,
-        markdown_path=row.markdown_path,
+        cache_file=row.cache_file,
         doc_filename=row.doc_filename,
         extracted_at=row.extracted_at,
         parser_version=row.parser_version,

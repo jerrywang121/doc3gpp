@@ -17,7 +17,7 @@ from doc3gpp.services.tdoc_cr_service import TDocCrService
 
 class _FakeCache:
     def __init__(self, tmp_path: Path) -> None:
-        self.root = tmp_path
+        self._root = tmp_path
 
     def put_bytes(self, key: str, payload: bytes, subdir: str) -> Path:
         path = self.path_for(key, subdir)
@@ -32,7 +32,12 @@ class _FakeCache:
         return None
 
     def path_for(self, key: str, subdir: str) -> Path:
-        return self.root / subdir / key
+        return self._root / subdir / key
+
+    @property
+    def root(self) -> Path:
+        """Protocol-conformant handle on the cache root (same as ``path_for`` prefix)."""
+        return self._root
 
 
 class _FakeScraper:

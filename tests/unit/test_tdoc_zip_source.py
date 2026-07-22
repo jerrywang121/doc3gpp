@@ -13,6 +13,7 @@ from typing import Literal
 import httpx
 import pytest
 
+from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.scraping.tdoc_zip_source import (
     TDocZipDownloadError,
@@ -59,6 +60,11 @@ class _StubTDocCache:
     def path_for(self, key: str, subdir: CacheSubdir) -> Path:
         safe = key.lower()
         return self._root / subdir / f"{safe}.bin"
+
+    @property
+    def root(self) -> Path:
+        """Protocol-conformant handle on the cache root (same as ``path_for`` prefix)."""
+        return self._root
 
 
 # ---------------------------------------------------------------------------
@@ -194,17 +200,19 @@ def test_download_tdoc_zip_cache_hit_skips_network(
 ) -> None:
     """Pre-populated cache must satisfy the request without touching the client."""
     payload = b"PK\x03\x04already-cached"
-    cache.put_bytes("R5s260009", payload, "zips")
+    ftp_url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    cache_key = derive_cache_file(ftp_url)
+    cache.put_bytes(cache_key, payload, "zips")
 
     # Wire a client whose get_bytes raises — if it is called, the test fails.
     fake_client.payload = None
     fake_client.error = AssertionError("network should not be called on a cache hit")
 
-    result = download_tdoc_zip("R5s260009", fake_client, cache)
+    result = download_tdoc_zip("R5s260009", fake_client, cache, ftp_url=ftp_url)
 
-    assert result.path == cache.path_for("r5s260009", "zips")
+    assert result.path == cache.path_for(cache_key, "zips")
     assert fake_client.calls == []
-    assert cache.get_bytes("R5s260009", "zips") == payload
+    assert cache.get_bytes(cache_key, "zips") == payload
 
 
 # ---------------------------------------------------------------------------
@@ -219,13 +227,15 @@ def test_download_tdoc_zip_cache_miss_writes_through(
     payload = b"zip-bytes"
     fake_client.payload = payload
 
-    result = download_tdoc_zip("R5s260009", fake_client, cache)
-
     expected_url = get_tdoc_zip_url("R5s260009")
     assert expected_url is not None
+    expected_key = derive_cache_file(expected_url)
+
+    result = download_tdoc_zip("R5s260009", fake_client, cache)
+
     assert fake_client.calls == [expected_url]
-    assert result.path == cache.path_for("r5s260009", "zips")
-    assert cache.get_bytes("R5s260009", "zips") == payload
+    assert result.path == cache.path_for(expected_key, "zips")
+    assert cache.get_bytes(expected_key, "zips") == payload
     # File is actually on disk too — guards against future stubs that forget to write.
     assert result.path.read_bytes() == payload
 
@@ -310,13 +320,14 @@ def test_download_tdoc_zip_uses_primary_url_when_present(
     URL must never be tried."""
     payload = b"zip-bytes"
     primary = "https://www.3gpp.org/ftp/meeting/R5s260009.zip"
+    expected_key = derive_cache_file(primary)
     client = _FakeScraperClient(url_payloads={primary: payload})
 
     result = download_tdoc_zip("R5s260009", client, cache, primary_url=primary)
 
     assert client.calls == [primary]
-    assert result.path == cache.path_for("r5s260009", "zips")
-    assert cache.get_bytes("R5s260009", "zips") == payload
+    assert result.path == cache.path_for(expected_key, "zips")
+    assert cache.get_bytes(expected_key, "zips") == payload
 
 
 def test_download_tdoc_zip_falls_back_to_template_on_primary_error(
@@ -328,6 +339,7 @@ def test_download_tdoc_zip_falls_back_to_template_on_primary_error(
     template = get_tdoc_zip_url("R5s260009")
     assert template is not None
     assert primary != template  # dedup assertion only meaningful if they differ
+    expected_key = derive_cache_file(template)
     client = _FakeScraperClient(
         url_errors={primary: httpx.ConnectError("primary down")},
         url_payloads={template: b"template-zip"},
@@ -336,8 +348,8 @@ def test_download_tdoc_zip_falls_back_to_template_on_primary_error(
     result = download_tdoc_zip("R5s260009", client, cache, primary_url=primary)
 
     assert client.calls == [primary, template]
-    assert result.path == cache.path_for("r5s260009", "zips")
-    assert cache.get_bytes("R5s260009", "zips") == b"template-zip"
+    assert result.path == cache.path_for(expected_key, "zips")
+    assert cache.get_bytes(expected_key, "zips") == b"template-zip"
 
 
 def test_download_tdoc_zip_without_primary_url_uses_template(
@@ -347,12 +359,13 @@ def test_download_tdoc_zip_without_primary_url_uses_template(
     original template-only behaviour."""
     template = get_tdoc_zip_url("R5s260009")
     assert template is not None
+    expected_key = derive_cache_file(template)
     client = _FakeScraperClient(url_payloads={template: b"zip"})
 
     result = download_tdoc_zip("R5s260009", client, cache)
 
     assert client.calls == [template]
-    assert result.path == cache.path_for("r5s260009", "zips")
+    assert result.path == cache.path_for(expected_key, "zips")
 
 
 def test_download_tdoc_zip_both_urls_fail_raises_last_error(
@@ -388,12 +401,13 @@ def test_download_tdoc_zip_dedupes_when_primary_matches_template(
     location the template would guess), only one fetch is made."""
     template = get_tdoc_zip_url("R5s260009")
     assert template is not None
+    expected_key = derive_cache_file(template)
     client = _FakeScraperClient(url_payloads={template: b"zip"})
 
     result = download_tdoc_zip("R5s260009", client, cache, primary_url=template)
 
     assert client.calls == [template]
-    assert result.path == cache.path_for("r5s260009", "zips")
+    assert result.path == cache.path_for(expected_key, "zips")
 
 
 def test_download_tdoc_zip_primary_url_with_no_template_falls_back_to_error(
@@ -428,12 +442,13 @@ def test_download_tdoc_zip_returns_primary_url_on_fresh_download(
     """On a fresh download, the returned ``DownloadedZip.url`` must match
     the primary candidate that actually served the bytes."""
     primary = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
+    expected_key = derive_cache_file(primary)
     client = _FakeScraperClient(url_payloads={primary: b"zip"})
 
     result = download_tdoc_zip("R5s260009", client, cache, primary_url=primary)
 
     assert result.url == primary
-    assert result.path == cache.path_for("r5s260009", "zips")
+    assert result.path == cache.path_for(expected_key, "zips")
 
 
 def test_download_tdoc_zip_returns_template_url_when_primary_fails(
@@ -444,6 +459,7 @@ def test_download_tdoc_zip_returns_template_url_when_primary_fails(
     primary = "https://www.3gpp.org/ftp/stored/R5s260009.zip"
     template = get_tdoc_zip_url("R5s260009")
     assert template is not None and primary != template
+    expected_key = derive_cache_file(template)
     client = _FakeScraperClient(
         url_errors={primary: httpx.HTTPError("404")},
         url_payloads={template: b"zip"},
@@ -452,7 +468,7 @@ def test_download_tdoc_zip_returns_template_url_when_primary_fails(
     result = download_tdoc_zip("R5s260009", client, cache, primary_url=primary)
 
     assert result.url == template
-    assert result.path == cache.path_for("r5s260009", "zips")
+    assert result.path == cache.path_for(expected_key, "zips")
 
 
 def test_download_tdoc_zip_url_is_none_on_cache_hit(
@@ -460,15 +476,17 @@ def test_download_tdoc_zip_url_is_none_on_cache_hit(
 ) -> None:
     """A pre-populated cache must return ``url=None`` — the URL that
     populated the cache in an earlier call is not tracked here."""
-    cache.put_bytes("R5s260009", b"cached", "zips")
+    ftp_url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    cache_key = derive_cache_file(ftp_url)
+    cache.put_bytes(cache_key, b"cached", "zips")
     # Client would raise if invoked; the assertion proves the cache
     # short-circuit never touched the network.
     client = _FakeScraperClient(error=AssertionError("network on cache hit"))
 
-    result = download_tdoc_zip("R5s260009", client, cache)
+    result = download_tdoc_zip("R5s260009", client, cache, ftp_url=ftp_url)
 
     assert result.url is None
-    assert result.path == cache.path_for("r5s260009", "zips")
+    assert result.path == cache.path_for(cache_key, "zips")
     assert client.calls == []
 
 
@@ -478,12 +496,13 @@ def test_download_tdoc_zip_url_is_none_without_primary_url(
     """Without a primary URL the template's URL is recorded on success."""
     template = get_tdoc_zip_url("R5s260009")
     assert template is not None
+    expected_key = derive_cache_file(template)
     client = _FakeScraperClient(url_payloads={template: b"zip"})
 
     result = download_tdoc_zip("R5s260009", client, cache)
 
     assert result.url == template
-    assert result.path == cache.path_for("r5s260009", "zips")
+    assert result.path == cache.path_for(expected_key, "zips")
 
 
 # ---------------------------------------------------------------------------

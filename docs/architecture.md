@@ -217,25 +217,32 @@ and the TDoc CR extraction is the deepest.
       `TDocCrRepository.get_by_url` (normalised via `normalize_ftp_path`)
       per candidate. A hit short-circuits with
       `ExtractResult.from_cache = True` and skips the network.
-    - Else, `download_tdoc_zip` resolves the TDoc id to its 3GPP URL
-      via the template table (`R5s` → TTCN email CR,
-      `R5w` → workshop CR), hits `ScraperClient.get_bytes`, and stages
-      the zip in `TDocCache.put_bytes(key, payload, "zips")`. On cache
-      miss the function tries the stored `tdocs.ftp_url` (rebuilt to
-      an absolute URL), falling back to the template on a terminal
+    - Else, `download_tdoc_zip` first checks the on-disk zip cache via
+      the `ftp_url`-derived cache key (regardless of `force`) and
+      returns the cached path on a hit. On a miss, it resolves the
+      TDoc id to its 3GPP URL via the template table (`R5s` → TTCN
+      email CR, `R5w` → workshop CR), hits `ScraperClient.get_bytes`,
+      and stages the zip in `TDocCache.put_bytes(key, payload, "zips")`.
+      The function tries the stored `tdocs.ftp_url` (rebuilt to an
+      absolute URL) first, falling back to the template on a terminal
       HTTP error.
     - `extract_docx_from_zip` returns `(filename, docx_bytes)`.
-    - The markdown for that exact `docx_bytes` is looked up by
-      `sha256(docx_bytes)` in `TDocCache.get_bytes(sha, "markdown")`;
-      on miss, `convert_document_to_markdown` runs (raises
+    - The markdown for that exact `docx_bytes` is looked up by the
+      shared `cache_file` (URL-derived via
+      `scraping.cache_keys.derive_cache_file`) in
+      `TDocCache.get_bytes(cache_file, "markdown")`; on miss,
+      `convert_document_to_markdown` runs (raises
       `PythonDocxNotInstalledError` if `python-docx` is not installed)
-      and the result is written to `markdown/<sha>` as
-      **gzip-compressed UTF-8** (the cache layer stays format-agnostic;
-      the gzip wrapping is applied in `tdoc_cr_service._load_or_render_markdown`
-      via `_compress_markdown`). The reader (`_decompress_markdown`)
-      magic-byte-sniffs the on-disk bytes, so legacy plain UTF-8 cache
-      files written before this change are still decoded transparently.
-      The same gzip JSON convention is used for the SQL-side
+      and the result is written to `markdown/<cache_file>` as a **real
+      ZIP archive** (single entry named `<docx stem>.md`,
+      `zipfile.ZIP_DEFLATED`) — so the `.zip` extension matches a
+      format that `unzip` / 7z / WinZip understand directly. The
+      writer is `_wrap_markdown_zip`; the reader
+      (`_decompress_markdown`) magic-byte-sniffs the on-disk bytes
+      (`PK\x03\x04` for the new format, `\x1f\x8b` for the legacy
+      gzip blob, plain UTF-8 for the pre-gzip era) so previously
+      written cache files still decode transparently. The same gzip
+      JSON convention continues to apply to the SQL-side
       `tdoc_cr_ttcn_details.required_changes` blob via the shared
       helpers in `storage/compression.py` (`compress_json` /
       `decompress_json`) — same `compresslevel=9`, same tolerant
@@ -352,14 +359,17 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
 - `tdoc_extracts`:
     - `ftp_url` (PK, matches `tdoc_cr_details.ftp_url`) + `tdoc_id`
       (non-PK FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed
-      for the per-tdoc lookup), `zip_path`, `markdown_path`,
+      for the per-tdoc lookup), `cache_file` (String(255), indexed),
       `doc_filename`, `extracted_at`, `parser_version`. Cache-pointer
       sidecar — the two child tables share the URL as their identity
       but have **no FK between themselves**: the on-disk cache can be
       purged (deleting every `tdoc_extracts` row) without dropping the
       parsed `tdoc_cr_details` history, and the parsed record can be
       rebuilt (deleting `tdoc_cr_details`) without invalidating the
-      cached zip/markdown.
+      cached zip/markdown. The `cache_file` column stores the unified
+      basename (derived from `ftp_url` via `derive_cache_file()`); the
+      on-disk paths are reconstructed as `{cache.dir}/zips/<cache_file>`
+      and `{cache.dir}/markdown/<cache_file>`.
 - `meetings`:
     - `meeting_id` (PK), `name`, `title`, `location`, `start_date`,
       `end_date`, `ftp_url`, `start_doc`, `end_doc`, `tsg` (nullable

@@ -21,6 +21,12 @@ change set so the docs stay honest.
   for fresh-database ergonomics. Idempotent but blurs the `db init`
   boundary; `tdoc sync` and `tdoc parse` already dropped the call.
   See [`docs/conventions.md`](conventions.md) for the canonical list.
+- **Cache schema break.** `tdoc_extracts` v2: hard schema break; dropped
+  `zip_path` + `markdown_path` columns in favour of `cache_file`
+  (String(255), indexed). Existing rows from older versions must be
+  re-extracted with `--force` to repopulate the new column. Legacy
+  on-disk files (`zips/<tdoc_lower>`, `markdown/<sha256>`) are orphaned
+  and will be cleaned up by `cache purge` or FIFO eviction.
 
 ## Settings caching
 
@@ -88,6 +94,14 @@ change set so the docs stay honest.
   `OperationalError("no such table")` triggers an idempotent
   `Base.metadata.create_all()` followed by a retry. The same lazy
   bootstrap covers `tdoc_cr_details` on legacy DBs.
+- **Markdown cache format changed.** `cache/markdown/<cache_file>`
+  files are now real ZIP archives (single `<docx stem>.md` entry) so a
+  plain `.zip` extension maps to a format `unzip` / 7z / WinZip can
+  open. Pre-change files (gzip blob with `.zip` extension or plain
+  UTF-8) stay readable via the magic-byte sniff in
+  `tdoc_cr_service._decompress_markdown`; a re-extract via
+  `doc3gpp tdoc parse --force` is only required if an operator wants
+  the cache rewritten in the new shape.
 - **`direct_parse_bytes` returns a loosely-typed tuple.**
   The helper exposes the third element of its return tuple as
   `object` (`tuple[str, str, object]`) to keep `parsers/`

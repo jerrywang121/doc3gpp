@@ -159,7 +159,12 @@ Workflows in one line (full prose in `docs/architecture.md`):
   (basename, derived from `tdoc.ftp_url` via `derive_cache_file()`);
   the CLI reconstructs paths as `{cache.dir}/zips/<cache_file>` and
   `{cache.dir}/markdown/<cache_file>` via `_build_cache().root` +
-  `derive_cache_file(ftp_url)`.
+  `derive_cache_file(ftp_url)`. **Both subtrees write real ZIPs** so
+  the `.zip` extension maps to a format `unzip` / 7z / WinZip can open
+  straight from disk — the zip subtree holds the 3GPP-served zip bytes;
+  the markdown subtree holds a `zipfile.ZipFile` wrapper produced by
+  `_wrap_markdown_zip` (single entry named `<docx stem>.md`,
+  `ZIP_DEFLATED`).
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
 - `doc3gpp config set <key> <value>` writes one setting into the active

@@ -297,8 +297,12 @@ def derive_zip_cache_key(source: str | Path) -> str:
     cache slot (e.g. ``R5s260008_MCC160Comments_r1.zip`` and
     ``R5s260008_MCC160Comments_r2.zip``). The direct-parse path keys
     the zip cache on the **original filename** so revisions land in
-    distinct slots; the markdown cache stays keyed by sha256 of the
-    docx bytes, which is content-addressed and already collision-free.
+    distinct slots. After the ``feat(tdoc): unify zip + markdown
+    cache`` change, the production cache key is derived from the
+    upstream URL via
+    :func:`doc3gpp.scraping.cache_keys.derive_cache_file` — this
+    helper exists for ad-hoc cache lookups on a filename / URL that
+    do not have the full URL in hand.
 
     For a URL, only the URL path's basename is considered (3GPP serves
     assets like ``R5s260008.zip`` — the URL path matches the file

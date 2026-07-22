@@ -29,9 +29,12 @@ The service owns three caching layers:
   network miss by
   :func:`doc3gpp.scraping.tdoc_zip_source.download_tdoc_zip`.
 * **Markdown cache** (``<root>/markdown/<cache_file>``) — shares the
-  zip cache's ``cache_file`` key; on-disk bytes are gzip-compressed
-  UTF-8 (legacy plain UTF-8 files are still decoded transparently via
-  magic-byte sniffing). Skipped when the zip cache is already populated.
+  zip cache's ``cache_file`` key; on-disk bytes are a real ``ZIP``
+  archive (single entry named ``<docx stem>.md``), so operators can
+  open / extract the cached markdown with standard archival tooling
+  (``unzip`` / 7z / WinZip). Legacy plain-UTF-8 and legacy gzip blobs
+  are still decoded transparently via magic-byte sniffing. Skipped when
+  the zip cache is already populated.
 * **Database cache** — the ``tdoc_cr_details`` / ``tdoc_extracts``
   rows; a hit short-circuits the entire pipeline and returns the
   persisted ``TDocCRDetails`` with ``from_cache=True``.
@@ -55,8 +58,10 @@ either parser payload back into the in-memory ``ExtractResult``.
 from __future__ import annotations
 
 import gzip
+import io
 import logging
 import re
+import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -119,25 +124,67 @@ _TDOC_ID_RE = re.compile(r"[A-Za-z0-9-]{1,32}")
 
 
 _GZIP_MAGIC = b"\x1f\x8b"
+_ZIP_MAGIC = b"PK\x03\x04"
 
 
-def _compress_markdown(text: str) -> bytes:
-    """gzip-compress UTF-8 markdown for on-disk storage."""
-    return gzip.compress(text.encode("utf-8"))
+def _wrap_markdown_zip(text: str, *, inner_name: str) -> bytes:
+    """Wrap ``text`` in a real ``zipfile.ZipFile`` archive for on-disk storage.
+
+    The ``.zip`` extension on the cache key matches the on-disk format, so
+    operators can ``unzip`` / 7z / WinZip-open the cached markdown straight
+    from disk — and ``7z -t zip cache/markdown/...zip`` lists the inner
+    ``<inner_name>`` entry without any custom decoder.
+
+    The single entry is named ``inner_name`` (a ``.md`` basename derived
+    from the source docx filename) so an extracted copy from the archive
+    has a recognisable filename.
+
+    Args:
+        text: UTF-8 markdown text to wrap.
+        inner_name: Entry name inside the archive (e.g.
+            ``"R5s260009.md"``).
+
+    Returns:
+        The ZIP archive bytes ready to be handed to ``cache.put_bytes``.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(inner_name, text.encode("utf-8"))
+    return buf.getvalue()
 
 
 def _decompress_markdown(raw: bytes) -> str:
-    """Decode cached markdown bytes, gunzipping if gzipped.
+    """Decode cached markdown bytes written by :func:`_wrap_markdown_zip`.
 
-    Magic-byte sniff (1f 8b) supports legacy unzipped cache files written
-    before this change: gzip.compress() output starts with the same two bytes
-    as the gzip format, so the sniff is unambiguous. Non-gzip bytes are
-    decoded as UTF-8 (the pre-change format).
+    Three layouts are accepted on read:
+
+    1. **Real ZIP archive** (``PK\\x03\\x04`` magic) — the post-this-change
+       format. The first entry whose payload is valid UTF-8 wins; this
+       matches the legacy entry shape (``<docx stem>.md``) the writer
+       produces.
+    2. **Legacy gzip blob** (``\\x1f\\x8b`` magic) — the prior
+       pre-real-zip cache format. Decompressed via :mod:`gzip`.
+    3. **Legacy plain UTF-8** — the pre-gzip cache format (no compression
+       at all). Decoded directly.
+
+    Magic-byte sniffing keeps read tolerant: a cache populated by either
+    legacy write path stays readable while new writes adopt the real-ZIP
+    layout.
 
     Raises:
-        OSError: gzip decompression failed (corrupt cache file)
-        UnicodeDecodeError: legacy file isn't valid UTF-8 either
+        OSError: zip / gzip decompression failed (corrupt cache file).
+        UnicodeDecodeError: payload bytes are not valid UTF-8.
     """
+    if not raw:
+        return ""
+    if raw[:4] == _ZIP_MAGIC:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            for name in zf.namelist():
+                try:
+                    return zf.read(name).decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+            return ""
     if raw[:2] == _GZIP_MAGIC:
         return gzip.decompress(raw).decode("utf-8")
     return raw.decode("utf-8")
@@ -967,8 +1014,12 @@ class TDocCrService:
         """Return markdown for ``docx_bytes``, hitting the cache when possible.
 
         Cache key is the ``cache_file`` (URL-derived basename) — shared
-        with the zip cache. On-disk bytes are gzip-compressed UTF-8;
-        legacy plain UTF-8 cache files are still decoded transparently.
+        with the zip cache. On-disk bytes are a real ``zipfile.ZipFile``
+        archive (single ``<docx stem>.md`` entry), so the ``.zip``
+        extension on disk matches a format that ``unzip`` / 7z / WinZip
+        understand. Legacy plain-UTF-8 and legacy gzip cache files are
+        still decoded transparently via
+        :func:`_decompress_markdown`'s magic-byte sniff.
         ``force=True`` bypasses the markdown cache too (the zip is also
         re-downloaded upstream via :func:`download_tdoc_zip`).
         """
@@ -987,9 +1038,11 @@ class TDocCrService:
         )
 
         markdown = convert_document_to_markdown(docx_bytes, doc_filename)
+        docx_stem = Path(doc_filename).stem or "markdown"
+        inner_name = f"{docx_stem}.md"
         self._cache.put_bytes(
             cache_file,
-            _compress_markdown(markdown),
+            _wrap_markdown_zip(markdown, inner_name=inner_name),
             "markdown",
         )
         return markdown

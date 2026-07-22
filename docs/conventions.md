@@ -265,6 +265,30 @@ per-URL derivation makes the row portable when `cache.dir` moves and
 prevents collisions across revisions of the same `tdoc_id` (different
 `ftp_url` → different `cache_file`).
 
+## Cache on-disk formats
+
+The two subtrees under `cache.dir` use different on-disk formats
+despite sharing the same `.zip` extension and the same `cache_file`
+basename:
+
+- `cache.dir/zips/<cache_file>` — **real ZIP** written byte-for-byte
+  from `client.get_bytes(url)`. The 3GPP FTP server serves the zip
+  payload directly; `extract_docx_from_zip` reads it via
+  `zipfile.ZipFile`. Opening with `unzip` / 7z / WinZip yields the
+  inner `.docx` straight away.
+- `cache.dir/markdown/<cache_file>` — **real ZIP** produced by
+  `_wrap_markdown_zip` in `services/tdoc_cr_service.py`. The archive
+  holds a single UTF-8 entry named `<docx stem>.md`
+  (`zipfile.ZIP_DEFLATED`); opening with `unzip` / 7z / WinZip
+  extracts that markdown file. The reader
+  (`_decompress_markdown`) magic-byte-sniffs on-disk bytes so legacy
+  gzip blobs (`\x1f\x8b`) and pre-gzip plain UTF-8 cache files remain
+  readable without forcing a re-extract.
+
+Both formats are deliberate so a single `*.zip` extension maps to a
+single on-disk archive shape that standard archival tooling can open.
+
+
 ## meeting list --tdoc flow
 
 `meeting list --tdoc <id>` finds the meeting whose `start_doc` /

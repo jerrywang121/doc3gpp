@@ -94,6 +94,14 @@ change set so the docs stay honest.
   `OperationalError("no such table")` triggers an idempotent
   `Base.metadata.create_all()` followed by a retry. The same lazy
   bootstrap covers `tdoc_cr_details` on legacy DBs.
+- **Markdown cache format changed.** `cache/markdown/<cache_file>`
+  files are now real ZIP archives (single `<docx stem>.md` entry) so a
+  plain `.zip` extension maps to a format `unzip` / 7z / WinZip can
+  open. Pre-change files (gzip blob with `.zip` extension or plain
+  UTF-8) stay readable via the magic-byte sniff in
+  `tdoc_cr_service._decompress_markdown`; a re-extract via
+  `doc3gpp tdoc parse --force` is only required if an operator wants
+  the cache rewritten in the new shape.
 - **`direct_parse_bytes` returns a loosely-typed tuple.**
   The helper exposes the third element of its return tuple as
   `object` (`tuple[str, str, object]`) to keep `parsers/`

@@ -225,17 +225,22 @@ and the TDoc CR extraction is the deepest.
       an absolute URL), falling back to the template on a terminal
       HTTP error.
     - `extract_docx_from_zip` returns `(filename, docx_bytes)`.
-    - The markdown for that exact `docx_bytes` is looked up by
-      `sha256(docx_bytes)` in `TDocCache.get_bytes(sha, "markdown")`;
-      on miss, `convert_document_to_markdown` runs (raises
+    - The markdown for that exact `docx_bytes` is looked up by the
+      shared `cache_file` (URL-derived via
+      `scraping.cache_keys.derive_cache_file`) in
+      `TDocCache.get_bytes(cache_file, "markdown")`; on miss,
+      `convert_document_to_markdown` runs (raises
       `PythonDocxNotInstalledError` if `python-docx` is not installed)
-      and the result is written to `markdown/<sha>` as
-      **gzip-compressed UTF-8** (the cache layer stays format-agnostic;
-      the gzip wrapping is applied in `tdoc_cr_service._load_or_render_markdown`
-      via `_compress_markdown`). The reader (`_decompress_markdown`)
-      magic-byte-sniffs the on-disk bytes, so legacy plain UTF-8 cache
-      files written before this change are still decoded transparently.
-      The same gzip JSON convention is used for the SQL-side
+      and the result is written to `markdown/<cache_file>` as a **real
+      ZIP archive** (single entry named `<docx stem>.md`,
+      `zipfile.ZIP_DEFLATED`) — so the `.zip` extension matches a
+      format that `unzip` / 7z / WinZip understand directly. The
+      writer is `_wrap_markdown_zip`; the reader
+      (`_decompress_markdown`) magic-byte-sniffs the on-disk bytes
+      (`PK\x03\x04` for the new format, `\x1f\x8b` for the legacy
+      gzip blob, plain UTF-8 for the pre-gzip era) so previously
+      written cache files still decode transparently. The same gzip
+      JSON convention continues to apply to the SQL-side
       `tdoc_cr_ttcn_details.required_changes` blob via the shared
       helpers in `storage/compression.py` (`compress_json` /
       `decompress_json`) — same `compresslevel=9`, same tolerant

@@ -257,8 +257,9 @@ def test_extract_markdown_cache_hit_when_zip_purged(
         raising=False,
     )
 
-    # Wipe the zip subtree; the markdown subtree (keyed by sha256 of
-    # the docx bytes) remains intact so the second call must hit it.
+    # Wipe the zip subtree; the markdown subtree (sharing the
+    # ``cache_file`` basename with the zip subtree) remains intact so
+    # the second call must hit it.
     deleted = cache.purge_subdir("zips")
     assert deleted == 1
 

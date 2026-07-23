@@ -32,7 +32,7 @@ _CORRECTIONS_REQUIRED_RE = re.compile(
 )
 
 _SINGLE_CORRECTION_FUNCTION_RE = re.compile(
-    r"^\s*\|\s*(?:Function\s+name|Template\s+name)\s*\|\s*(.+?)\s*\|", re.IGNORECASE
+    r"^\s*\|\s*(?:[\w\s]+\s+name)\s*\|\s*(.+?)\s*\|", re.IGNORECASE
 )
 _SINGLE_CORRECTION_REASON_RE = re.compile(
     r"^\s*\|\s*Reason\s+for\s+change\s*\|\s*(.+?)\s*\|", re.IGNORECASE
@@ -47,17 +47,20 @@ _SINGLE_CORRECTION_MCC160_RE = re.compile(
     r"^\s*\|\s*MCC160\s+Comment\s*\|\s*(.+?)\s*\|", re.IGNORECASE
 )
 _SINGLE_CORRECTION_BEFORE_RE = re.compile(
-    r"^\s*Before\s+change\s*:{0,1}\s*$", re.IGNORECASE
+    r"^\s*Before\s+changes{0,1}\s*:{0,1}\s*$", re.IGNORECASE
 )
 _SINGLE_CORRECTION_AFTER_RE = re.compile(
-    r"^\s*After\s+change\s*:{0,1}\s*$", re.IGNORECASE
+    r"^\s*After\s+changes{0,1}\s*:{0,1}\s*$", re.IGNORECASE
+)
+_SINGLE_CORRECTION_MCC_IMPL_RE = re.compile(
+    r"^\s*MCC160\s+Implementation\s*:{0,1}\s*$", re.IGNORECASE
 )
 _SINGLE_CORRECTION_NEW_RE = re.compile(
-    r"^\s*New\s+change\s*:{0,1}\s*$", re.IGNORECASE
+    r"^\s*New\s+changes{0,1}\s*:{0,1}\s*$", re.IGNORECASE
 )
 _TABLE_CELL_RE = re.compile(r"^\s*\|\s*(.+?)\s*\|")
 _FUNCTION_NAME_START_RE = re.compile(
-    r"^\s*\|\s*(?:Function\s+name|Template\s+name)\s*\|", re.IGNORECASE
+    r"^\s*\|\s*(?:[\w\s]+\s+name)\s*\|\s*(.+?)\s*\|", re.IGNORECASE
 )
 _TTCN_MODULE_END_RE = re.compile(r"^\s*\|\s*TTCN\s+module\s*\|", re.IGNORECASE)
 _MCC160_END_RE = re.compile(r"^\s*\|\s*MCC160\s+Comment\s*\|", re.IGNORECASE)
@@ -310,6 +313,9 @@ def _parse_ttcn_cr_single_correction(
                 if text.startswith("#"):
                     scan_idx -= 1
                     break
+                if _FUNCTION_NAME_START_RE.match(text):
+                    scan_idx -= 2
+                    break
                 if _SINGLE_CORRECTION_BEFORE_RE.match(text):
                     key = "before_change"
                     continue
@@ -318,6 +324,9 @@ def _parse_ttcn_cr_single_correction(
                     continue
                 if _SINGLE_CORRECTION_NEW_RE.match(text):
                     key = "new_change"
+                    continue
+                if _SINGLE_CORRECTION_MCC_IMPL_RE.match(text):
+                    key = "mcc_implementation"
                     continue
                 if _TABLE_CELL_RE.match(text):
                     # ``text`` is the cell line; ``scan_idx`` was just
@@ -339,9 +348,12 @@ def _parse_ttcn_cr_single_correction(
                     if content:
                         if key is None:
                             key = "new_change"
-                        change[key] = content
-                    if key != "before_change":
-                        break
+                        if change[key] is None:
+                            change[key] = content
+                        # if change[key] already has content, append to it with a newline
+                        else:
+                            change[key] += "\n\n---\n\n" + content
+                        key = None
             next_line_number = scan_idx
 
         if max_text_length > 0:
@@ -352,6 +364,7 @@ def _parse_ttcn_cr_single_correction(
                 "before_change",
                 "after_change",
                 "new_change",
+                "mcc_implementation",
             ):
                 value = change.get(key_name)
                 if value and len(value) > max_text_length:

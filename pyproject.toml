@@ -10,6 +10,34 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "doc3gpp contributors" }]
+keywords = [
+  "3gpp",
+  "tdoc",
+  "scraping",
+  "telecom",
+  "3gpp-meetings",
+  "3gpp-tdocs",
+  "tsg",
+  "wi",
+  "dyna-report",
+  "sqlalchemy",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Utilities",
+  "Typing :: Typed",
+]
 dependencies = [
   "sqlalchemy>=2.0.30",
   "alembic>=1.13.2",
@@ -22,6 +50,13 @@ dependencies = [
   "tomli>=2.0.1; python_version < '3.11'",
   "tomli_w>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jerrywang121/doc3gpp"
+Repository = "https://github.com/jerrywang121/doc3gpp"
+Issues = "https://github.com/jerrywang121/doc3gpp/issues"
+Documentation = "https://github.com/jerrywang121/doc3gpp/tree/main/docs"
+Changelog = "https://github.com/jerrywang121/doc3gpp/releases"
 
 [project.optional-dependencies]
 cli = ["typer>=0.12.3"]
@@ -52,3 +87,15 @@ target-version = "py310"
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/doc3gpp/data/doc3gpp.toml.example" = "doc3gpp/data/doc3gpp.toml.example"
+
+# Local-only symlinks (codegraph, opencode, serena, OMO plans) — without
+# an explicit exclude hatchling follows them and bundles their contents
+# into the sdist. See also .gitignore.
+[tool.hatch.build.targets.sdist]
+exclude = [
+  ".codegraph",
+  ".omo",
+  ".opencode",
+  ".serena",
+  ".logs",
+]

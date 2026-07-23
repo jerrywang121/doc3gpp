@@ -457,10 +457,14 @@ eighteen commands):
       cover-page row from `tdoc_cr_details` (URL-keyed on
       `tdoc.ftp_url`), the `extracted_at` timestamp from
       `tdoc_extracts` (same URL), and, when the TDoc is a TTCN CR,
-      a `[TTCN Details]` block from `tdoc_cr_ttcn_details`. JSON
-      payload keys are `tdoc` (always), `cover` (omitted when
-      absent), `ttcn` (omitted when absent), `extracted_at`
-      (omitted when absent).
+      a `[TTCN Details]` block from `tdoc_cr_ttcn_details`. Every
+      matching `tdoc_files` row (`tdoc_id`-keyed read, no URL
+      match) renders under an `[Auxiliary Files]` block (table),
+      `## Auxiliary Files` section (markdown), or `files` key
+      (JSON). JSON payload keys are `tdoc` (always), `cover`
+      (omitted when absent), `ttcn` (omitted when absent),
+      `extracted_at` (omitted when absent), `files` (omitted when
+      no auxiliary files exist).
 - `tsg`:
     - `list`, `show`, `seed`
 - `wi`:

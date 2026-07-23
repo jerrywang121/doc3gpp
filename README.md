@@ -49,7 +49,9 @@ PostgreSQL available via configuration.
   plus a gzip-compressed `required_changes` JSON blob. Cache artefacts
   live in `tdoc_extracts`. `tdoc show` automatically appends a TTCN
   section (`[TTCN Details]` in table, `## TTCN Details` in markdown, a
-  `ttcn` key in JSON) when the TDoc is a TTCN CR.
+  `ttcn` key in JSON) when the TDoc is a TTCN CR, and an auxiliary
+  files section (`[Auxiliary Files]` / `## Auxiliary Files` / `files`
+  key) listing every `tdoc_files` row whose `tdoc_id` matches.
 - **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
   SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
 - **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to

@@ -42,6 +42,22 @@ class TDocRepository(Protocol):
         """
         ...
 
+    def get_by_ftp_url(self, ftp_url: str) -> TDoc | None:
+        """Return the TDoc whose ``ftp_url`` matches exactly.
+
+        The 3GPP upload pipeline maintains a 1:1 invariant between
+        ``ftp_url`` and ``tdoc_id`` (one upload batch produces one
+        ``tdoc_id`` at one URL); the schema does NOT have a DB-level
+        UNIQUE constraint on ``tdocs.ftp_url``. If the invariant is
+        ever violated at runtime, this method deterministically
+        returns the lexically-first ``tdoc_id`` (``ORDER BY tdoc_id
+        ASC LIMIT 1``) so CLI output is reproducible.
+
+        Used by ``tdoc show --ftp-url <url>`` to anchor a URL-keyed
+        read when the parent ``TDoc`` is unknown to the caller.
+        """
+        ...
+
     def list(
         self,
         limit: int = 20,

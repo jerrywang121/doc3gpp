@@ -348,11 +348,11 @@ def _parse_ttcn_cr_single_correction(
                     if content:
                         if key is None:
                             key = "new_change"
-                        if change[key] is None:
+                        existing = change.get(key)
+                        if existing is None:
                             change[key] = content
-                        # if change[key] already has content, append to it with a newline
                         else:
-                            change[key] += "\n\n---\n\n" + content
+                            change[key] = existing + "\n\n/*********************************/\n\n" + content
                         key = None
             next_line_number = scan_idx
 

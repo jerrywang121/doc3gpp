@@ -71,6 +71,18 @@ def build_tdoc_cr_ttcn_repository() -> SQLAlchemyTDocCrTtcnRepository:
     return SQLAlchemyTDocCrTtcnRepository()
 
 
+def build_tdoc_file_repository() -> SQLAlchemyTDocFileRepository:
+    """Construct a :class:`SQLAlchemyTDocFileRepository` for direct lookups.
+
+    Used by the ``tdoc show`` CLI command to surface auxiliary
+    ``tdoc_files`` rows next to their parent ``TDoc`` without going
+    through the full sync-flow :class:`TDocFileService`. Mirrors the
+    read-side factory pattern used by ``build_tdoc_cr_repository`` /
+    ``build_tdoc_cr_ttcn_repository``.
+    """
+    return SQLAlchemyTDocFileRepository()
+
+
 def build_tdoc_file_service() -> TDocFileService:
     """Construct a :class:`TDocFileService` backed by the configured repo."""
     return TDocFileService(SQLAlchemyTDocFileRepository())

@@ -1,4 +1,4 @@
-name: Publish to TestPyPI
+name: Publish to PyPI
 
 on:
   release:
@@ -6,15 +6,15 @@ on:
 
 jobs:
   build-n-publish:
-    name: Build and publish Python distro to TestPyPI
+    name: Build and publish Python distro to PyPI
     runs-on: ubuntu-latest
 
     # environment + id-token: write are mandatory for Trusted Publishing (OIDC).
     # The "testpypi" environment must match what's registered at
     # https://test.pypi.org/manage/account/publishing/.
     environment:
-      name: testpypi
-      url: https://test.pypi.org/p/doc3gpp
+      name: pypi
+      url: https://pypi.org/p/doc3gpp
     permissions:
       id-token: write  # Required for OIDC authentication
       contents: read
@@ -39,7 +39,7 @@ jobs:
       - name: Inspect built artifacts
         run: ls -lh dist/
 
-      - name: Publish to TestPyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
+        # with:
+        #  repository-url: https://test.pypi.org/legacy/

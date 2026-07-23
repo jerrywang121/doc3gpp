@@ -46,6 +46,7 @@ from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
+from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
     extract_tdoc_id_from_filename,
@@ -1104,6 +1105,20 @@ def _normalise_cli_tdoc_id(raw: str) -> str:
     return canonical if canonical is not None else raw.strip()
 
 
+def _normalise_cli_ftp_url(raw: str) -> str:
+    """Normalise a CLI ``--ftp-url`` argument for DB lookup.
+
+    Accepts both full URLs (``https://www.3gpp.org/ftp/TSG_RAN/...``)
+    and bare relative paths (``TSG_RAN/...``); delegates to
+    :func:`normalize_ftp_path` so both forms collapse to the same
+    canonical key the database stores. Empty input is rejected so
+    the caller never silently no-ops on whitespace.
+    """
+    if not raw or not raw.strip():
+        raise typer.BadParameter("Empty --ftp-url argument.")
+    return normalize_ftp_path(raw)
+
+
 def _resolve_url_batch_depth(
     *,
     recursive: bool,
@@ -1980,6 +1995,43 @@ class TDocShowRecord:
     files: tuple[TDocFile, ...] = ()
 
 
+@dataclass(slots=True, frozen=True)
+class TDocShowRecordByUrl:
+    """Bundled output of ``tdoc show --ftp-url`` for the JSON / markdown / table renderers.
+
+    Mirrors :class:`TDocShowRecord` but anchors on the URL rather than
+    on a parent ``TDoc``. The 1:1 invariant between ``ftp_url`` and
+    ``tdoc_id`` (enforced by the upload pipeline) means the parent
+    ``TDoc`` is optional from the caller's perspective — a URL may
+    surface a cover row, TTCN sidecar, extract meta, or auxiliary
+    files without a matching ``tdocs`` row.
+
+    ``ftp_url`` is always emitted (it's the selector). Optional keys
+    are omitted (not null) in renderers when the corresponding value
+    is absent.
+
+    Attributes:
+        ftp_url: The normalised URL the user supplied.
+        tdoc: The unique TDoc whose ``ftp_url`` matches (1:1 invariant);
+            ``None`` when no ``tdocs`` row exists for the URL.
+        cover: Slim cover-page fields keyed by ``ftp_url``;
+            ``None`` when no extract row exists.
+        ttcn: TTCN sidecar keyed by ``ftp_url``; ``None`` when no
+            sidecar row exists.
+        extracted_at: Cache-extract timestamp for ``ftp_url``;
+            ``None`` when no ``tdoc_extracts`` row exists.
+        files: Auxiliary ``tdoc_files`` rows matching ``ftp_url``;
+            empty tuple when no auxiliary file is attached.
+    """
+
+    ftp_url: str
+    tdoc: TDoc | None = None
+    cover: TDocCRDetails | None = None
+    ttcn: TDocCRTTCNDetails | None = None
+    extracted_at: datetime | None = None
+    files: tuple[TDocFile, ...] = ()
+
+
 def _render_tdoc_show_json(
     record: TDocShowRecord,
     output: str | None,
@@ -2318,6 +2370,350 @@ def _render_tdoc_show_raw(tdoc_id: str, output: str | None) -> None:
             f"cache_dir: {cache.root})"
         )
     _emit_record_raw(markdown, output)
+
+
+# ---------------------------------------------------------------------------
+# tdoc show --ftp-url <url> dispatch + renderers
+# ---------------------------------------------------------------------------
+
+
+def _tdoc_show_by_ftp_url(
+    raw_url: str,
+    fmt: str,
+    output: str | None,
+) -> None:
+    """Dispatch ``tdoc show --ftp-url`` to the right renderer.
+
+    Normalises the URL via :func:`_normalise_cli_ftp_url`, fans out
+    to four URL-keyed reads (``tdocs``, ``tdoc_cr_details``,
+    ``tdoc_cr_ttcn_details``, ``tdoc_files`` — the
+    ``tdoc_extracts`` timestamp is sourced via
+    ``TDocCrDetailRepository.get_extract_meta_by_url``), and
+    raises :class:`typer.BadParameter` when the URL matches no row
+    in any of them.
+
+    Does NOT trigger :func:`trigger_auto_sync` — the URL is the row
+    identity, so no parent-meeting sync is meaningful for an
+    arbitrary URL. Raw format takes the cache-direct path below
+    without going through ``TDocCrService.extract``.
+    """
+    url = _normalise_cli_ftp_url(raw_url)
+
+    if fmt == "raw":
+        _render_tdoc_show_raw_by_url(url, output)
+        return
+
+    tdoc_repo = build_tdoc_repository()
+    cr_repo = build_tdoc_cr_repository()
+    cr_ttcn_repo = build_tdoc_cr_ttcn_repository()
+    file_repo = build_tdoc_file_repository()
+
+    tdoc = tdoc_repo.get_by_ftp_url(url)
+    cover = cr_repo.get_by_url(url)
+    meta = cr_repo.get_extract_meta_by_url(url)
+    extracted_at = meta.extracted_at if meta is not None else None
+    # TTCN sidecar can only exist when the URL has a cover row
+    # (the cover parser is what produces it), so gate the lookup.
+    ttcn = cr_ttcn_repo.get_by_url(url) if cover is not None else None
+    files = tuple(file_repo.get_by_ftp_url(url))
+
+    if (
+        tdoc is None
+        and cover is None
+        and meta is None
+        and ttcn is None
+        and not files
+    ):
+        raise typer.BadParameter(
+            f"No row in tdocs, tdoc_cr_details, tdoc_cr_ttcn_details, "
+            f"or tdoc_files matches ftp_url {url!r}."
+        )
+
+    record = TDocShowRecordByUrl(
+        ftp_url=url,
+        tdoc=tdoc,
+        cover=cover,
+        ttcn=ttcn,
+        extracted_at=extracted_at,
+        files=files,
+    )
+
+    if fmt == "json":
+        _render_tdoc_show_by_url_json(record, output)
+    elif fmt == "markdown":
+        _render_tdoc_show_by_url_markdown(record, output)
+    else:
+        _render_tdoc_show_by_url_table(record, output)
+
+
+def _render_tdoc_show_raw_by_url(url: str, output: str | None) -> None:
+    """Emit ``tdoc show --ftp-url --format raw``.
+
+    The URL is the row identity — the cache file is derived
+    directly from the URL via :func:`derive_cache_file`, so no
+    TDoc resolution or ``TDocCrService.extract`` call is needed.
+    On a cache miss the operator is pointed at the explicit-parse
+    paths that would populate the cache.
+    """
+    cache_file = derive_cache_file(url)
+    cache = _build_cache()
+    markdown = _read_cached_markdown_path(cache_file, cache.root)
+    if not markdown:
+        raise typer.BadParameter(
+            f"No cached markdown for {url!r} (key {cache_file!r}). "
+            "Run `doc3gpp tdoc parse --from-url <url>` or "
+            "`doc3gpp tdoc parse --tdoc <id>` first."
+        )
+    _emit_record_raw(markdown, output)
+
+
+def _render_tdoc_show_by_url_json(
+    record: TDocShowRecordByUrl,
+    output: str | None,
+) -> None:
+    """Emit ``tdoc show --ftp-url --format json``.
+
+    Payload shape mirrors :func:`_render_tdoc_show_json` but
+    anchored on the URL. ``ftp_url`` is always emitted; ``tdoc``
+    is omitted when no matching ``TDoc`` row exists. Optional keys
+    (``cover`` / ``ttcn`` / ``extracted_at`` / ``files``) follow
+    the same omit-when-null convention as the existing renderer.
+    """
+    payload: dict[str, object] = {
+        "ftp_url": record.ftp_url,
+    }
+    if record.tdoc is not None:
+        payload["tdoc"] = {
+            f.name: _serialise_show_value(getattr(record.tdoc, f.name))
+            for f in dataclass_fields(record.tdoc)
+        }
+    if record.cover is not None:
+        payload["cover"] = {
+            f.name: _serialise_show_value(getattr(record.cover, f.name))
+            for f in dataclass_fields(record.cover)
+        }
+    if record.ttcn is not None:
+        payload["ttcn"] = {
+            f.name: _serialise_show_value(getattr(record.ttcn, f.name))
+            for f in dataclass_fields(record.ttcn)
+        }
+    if record.extracted_at is not None:
+        payload["extracted_at"] = _serialise_show_value(record.extracted_at)
+    if record.files:
+        payload["files"] = [
+            {
+                f.name: _serialise_show_value(getattr(file, f.name))
+                for f in dataclass_fields(file)
+            }
+            for file in record.files
+        ]
+    stream, close_after = _open_output(output)
+    try:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _render_tdoc_show_by_url_markdown(
+    record: TDocShowRecordByUrl,
+    output: str | None,
+) -> None:
+    """Emit ``tdoc show --ftp-url --format markdown``.
+
+    The URL is the document anchor (``# FTP URL ...``); each
+    populated table gets its own ``## ...`` section. Optional
+    sections (``## TDoc``, ``## Extracted Cover Details``,
+    ``## TTCN Details``, ``## Auxiliary Files``) are emitted only
+    when populated. ``tdoc_files`` rows mirror the per-row layout
+    used by :func:`_render_tdoc_show_markdown`.
+    """
+    stream, close_after = _open_output(output)
+    try:
+        stream.write(f"# FTP URL `{record.ftp_url}`\n\n")
+
+        if record.tdoc is not None:
+            stream.write("## TDoc\n\n")
+            for f in dataclass_fields(record.tdoc):
+                value = _serialise_show_value(getattr(record.tdoc, f.name))
+                rendered = "—" if value is None else str(value)
+                stream.write(f"- **{f.name}**: {rendered}\n")
+        else:
+            stream.write(
+                "_No `tdocs` row matches this URL. The URL still "
+                "surfaces in `tdoc_cr_details` / `tdoc_cr_ttcn_details` "
+                "/ `tdoc_files` because the upstream document appeared "
+                "in a sync but no parent TDoc row was stored._\n\n"
+            )
+
+        if record.cover is not None:
+            stream.write("\n## Extracted Cover Details\n\n")
+            for f in dataclass_fields(record.cover):
+                if f.name in {"details", "parser_version"}:
+                    continue
+                value = getattr(record.cover, f.name)
+                formatted = _serialise_show_value(value)
+                rendered = "—" if formatted is None else str(formatted)
+                stream.write(f"- **{f.name}**: {rendered}\n")
+            if record.extracted_at is not None:
+                stream.write(
+                    f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n"
+                )
+        elif record.extracted_at is not None:
+            stream.write("\n## Extracted Details\n\n")
+            stream.write(
+                f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n"
+            )
+
+        if record.ttcn is not None:
+            stream.write("\n## TTCN Details\n\n")
+            for f in dataclass_fields(record.ttcn):
+                value = getattr(record.ttcn, f.name)
+                if f.name == "required_changes" and isinstance(value, list):
+                    stream.write(f"- **{f.name}**:\n\n```json\n")
+                    stream.write(
+                        json.dumps(value, ensure_ascii=False, indent=2)
+                    )
+                    stream.write("\n```\n")
+                    continue
+                formatted = _serialise_show_value(value)
+                rendered = "—" if formatted is None else str(formatted)
+                stream.write(f"- **{f.name}**: {rendered}\n")
+
+        if record.files:
+            stream.write("\n## Auxiliary Files\n\n")
+            for file in record.files:
+                stream.write(f"- **type**: {file.type}\n")
+                stream.write(f"  - **file**: {file.file}\n")
+                stream.write(f"  - **ftp_url**: {file.ftp_url}\n")
+                uploaded = (
+                    file.uploaded_date.isoformat()
+                    if file.uploaded_date is not None
+                    else "—"
+                )
+                stream.write(f"  - **uploaded_date**: {uploaded}\n")
+        else:
+            stream.write(
+                "\n_No auxiliary files match this URL._\n"
+            )
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _render_tdoc_show_by_url_table(
+    record: TDocShowRecordByUrl,
+    output: str | None,
+) -> None:
+    """Emit ``tdoc show --ftp-url --format table`` (the default for URL mode).
+
+    Mirrors :func:`_render_tdoc_show_table` but anchored on the URL:
+    ``[FTP URL]`` precedes ``[TDoc]`` / ``[Extracted Details]`` /
+    ``[TTCN Details]`` / ``[Auxiliary Files]``. Optional blocks are
+    omitted when their source row is absent (the ``[TDoc]`` block
+    drops entirely when no ``TDoc`` row matches).
+    """
+    stream, close_after = _open_output(output)
+    try:
+        stream.write("[FTP URL]\n")
+        stream.write(f"ftp_url: {record.ftp_url}\n")
+
+        if record.tdoc is not None:
+            stream.write("[TDoc]\n")
+            for f in dataclass_fields(record.tdoc):
+                value = getattr(record.tdoc, f.name)
+                if value is None:
+                    value = "-"
+                elif hasattr(value, "isoformat"):
+                    value = value.isoformat()
+                else:
+                    value = str(value)
+                stream.write(f"{f.name}: {value}\n")
+        else:
+            stream.write(
+                "No tdocs row matches this URL.\n"
+            )
+
+        if record.cover is None:
+            stream.write(
+                "No extracted details; run `doc3gpp tdoc parse "
+                "--from-url <url>` first.\n"
+            )
+            if record.extracted_at is not None:
+                stream.write(
+                    f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+                )
+            else:
+                stream.write("extracted_at: -\n")
+        else:
+            details = record.cover
+            stream.write("[Extracted Details]\n")
+            if details.ftp_url:
+                stream.write(f"ftp_url: {details.ftp_url}\n")
+            stream.write(f"spec: {details.spec or '-'}\n")
+            stream.write(f"cr_num: {details.cr_num or '-'}\n")
+            stream.write(f"rev: {details.rev or '-'}\n")
+            stream.write(f"version: {details.version or '-'}\n")
+            stream.write(f"title: {details.title or '-'}\n")
+            stream.write(f"source: {details.source or '-'}\n")
+            stream.write(f"tsg: {details.tsg or '-'}\n")
+            stream.write(f"related_wis: {details.related_wis or '-'}\n")
+            stream.write(f"date: {details.date or '-'}\n")
+            stream.write(f"cr_cat: {details.cr_cat or '-'}\n")
+            stream.write(f"release: {details.release or '-'}\n")
+            stream.write(
+                "reason_for_change: "
+                f"{_truncate_for_display(details.reason_for_change)}\n"
+            )
+            stream.write(
+                "consequences_if_not_approved: "
+                f"{_truncate_for_display(details.consequences_if_not_approved)}\n"
+            )
+            stream.write(
+                f"clauses_affected: {details.clauses_affected or '-'}\n"
+            )
+            if record.extracted_at is not None:
+                stream.write(
+                    f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+                )
+            else:
+                stream.write("extracted_at: -\n")
+
+        if record.ttcn is not None:
+            ttcn = record.ttcn
+            stream.write("[TTCN Details]\n")
+            if ttcn.ftp_url:
+                stream.write(f"ftp_url: {ttcn.ftp_url}\n")
+            stream.write(f"testcase: {ttcn.testcase or '-'}\n")
+            stream.write(f"ue: {ttcn.ue or '-'}\n")
+            stream.write(f"ss: {ttcn.ss or '-'}\n")
+            stream.write(f"ats_version: {ttcn.ats_version or '-'}\n")
+            stream.write(f"ttcn_release: {ttcn.ttcn_release or '-'}\n")
+            stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
+            count = len(ttcn.required_changes)
+            stream.write(f"required_changes: {count} item(s)\n")
+
+        if record.files:
+            stream.write("[Auxiliary Files]\n")
+            for file in record.files:
+                stream.write(f"type: {file.type}\n")
+                stream.write(f"file: {file.file}\n")
+                stream.write(f"ftp_url: {file.ftp_url}\n")
+                uploaded = (
+                    file.uploaded_date.isoformat()
+                    if file.uploaded_date is not None
+                    else "-"
+                )
+                stream.write(f"uploaded_date: {uploaded}\n")
+        else:
+            stream.write(
+                "No auxiliary files; run `doc3gpp tdoc sync` first "
+                "if you haven't synced this meeting yet.\n"
+            )
+    finally:
+        if close_after:
+            stream.close()
 
 
 _DIRECT_FORMAT_EXTENSIONS: dict[str, str] = {
@@ -2715,12 +3111,23 @@ def _print_parse_group(
 
 @tdoc_app.command("show")
 def tdoc_show(
-    tdoc: str = typer.Option(
-        ...,
+    tdoc: str | None = typer.Option(
+        None,
         "--tdoc",
         help=(
             "TDoc ID to show (canonical form, e.g. R5s260009). "
-            "Case-insensitive for CR-shape IDs."
+            "Case-insensitive for CR-shape IDs. Mutually exclusive "
+            "with --ftp-url."
+        ),
+    ),
+    ftp_url: str | None = typer.Option(
+        None,
+        "--ftp-url",
+        help=(
+            "3GPP FTP URL (full URL or relative path) to show. "
+            "Surfaces every row in tdocs, tdoc_cr_details, "
+            "tdoc_cr_ttcn_details, and tdoc_files whose ftp_url "
+            "matches. Mutually exclusive with --tdoc."
         ),
     ),
     fmt: str | None = typer.Option(
@@ -2740,21 +3147,41 @@ def tdoc_show(
         ),
     ),
 ) -> None:
-    """Show a stored TDoc and any extracted CR cover-page details.
+    """Show a stored TDoc (or URL) and any extracted CR cover-page details.
 
-    Prints the TDoc record, any extracted cover-page / TTCN sidecar
-    rows for the canonical ``ftp_url``, the cache-extract timestamp,
-    and every auxiliary ``tdoc_files`` row matching ``tdoc_id``
-    (revisions, reviews, support files). ``--tdoc`` is
-    case-insensitive for CR-shape IDs. ``--format`` controls the output
-    representation; ``raw`` emits the converted .docx markdown instead
-    of the extracted cover-page fields and triggers a fresh extract
-    when the cache is cold. ``--output`` / ``-o`` writes the result to
-    a file instead of stdout. Raises ``BadParameter`` if the TDoc is
-    not stored.
+    Two selectors are supported, mutually exclusive:
+
+    - ``--tdoc <id>`` anchors on the parent TDoc row. Auto-sync
+      fires when ``Settings.sync.auto_sync`` is enabled; the parent
+      TDoc's ``ftp_url`` is then used to look up the cover-page,
+      TTCN sidecar, extract meta, and any ``tdoc_files`` rows
+      matching the parent ``tdoc_id``.
+    - ``--ftp-url <url>`` anchors on the URL. Accepts both full
+      URLs (``https://www.3gpp.org/ftp/TSG_RAN/...``) and bare
+      relative paths; the value is normalised via
+      :func:`normalize_ftp_path` before lookup. Surfaces every
+      matching row across the four tables (``tdocs``,
+      ``tdoc_cr_details``, ``tdoc_cr_ttcn_details``,
+      ``tdoc_files``); auto-sync does NOT fire because no parent
+      meeting sync is meaningful for an arbitrary URL.
+
+    ``--format`` controls the output representation; ``raw`` emits
+    the converted .docx markdown instead of the DB-row render and
+    triggers a fresh extract (TDoc mode) or reads the cache file
+    directly (URL mode). ``--output`` / ``-o`` writes the result
+    to a file instead of stdout.
     """
     settings = get_settings()
     fmt = _resolve_tdoc_show_format(fmt, default=settings.output.format)
+
+    if (tdoc is None) == (ftp_url is None):
+        raise typer.BadParameter(
+            "Provide exactly one of --tdoc <id> or --ftp-url <url>."
+        )
+
+    if ftp_url is not None:
+        _tdoc_show_by_ftp_url(ftp_url, fmt, output)
+        return
 
     trigger_auto_sync(
         auto_sync_enabled=settings.sync.auto_sync,

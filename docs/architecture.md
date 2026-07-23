@@ -319,7 +319,12 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `ftp_url`, `source`, `type`, `status`, `reservation_date`,
       `uploaded_date`, `cr_cat`, `is_revision_of`, `revised_to`,
       `release`, `spec`, `version`, `related_wis`, `cr_num`,
-      `cr_pack`.
+      `cr_pack`. `ftp_url` is a regular nullable text column (no
+      DB-level `UNIQUE` constraint); the upload pipeline maintains it
+      as a 1:1 invariant (one `tdoc_id` per `ftp_url`), so the new
+      `TDocRepository.get_by_ftp_url` reads with
+      `ORDER BY tdoc_id ASC LIMIT 1` as a deterministic fallback if
+      the invariant is ever violated.
 - `tdoc_files`:
     - `id` (PK), `tdoc_id` (FK → `tdocs.tdoc_id`, no cascade),
       `type` (`revision` / `review` / `support`), `file`, `ftp_url`

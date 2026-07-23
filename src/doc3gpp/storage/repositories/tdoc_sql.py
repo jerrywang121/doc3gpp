@@ -213,6 +213,25 @@ class SQLAlchemyTDocRepository:
             return None
         return _orm_to_domain(row)
 
+    def get_by_ftp_url(self, ftp_url: str) -> TDoc | None:
+        """Return the TDoc whose ``ftp_url`` matches exactly.
+
+        See :meth:`doc3gpp.repository.protocols.TDocRepository.get_by_ftp_url`
+        for the 1:1 invariant rationale. ``ORDER BY tdoc_id ASC LIMIT 1``
+        guarantees a deterministic tie-breaker if the invariant is ever
+        violated by a re-upload / re-sync batch.
+        """
+        with self._session_factory() as session:
+            row = session.scalars(
+                select(TDocORM)
+                .where(TDocORM.ftp_url == ftp_url)
+                .order_by(TDocORM.tdoc_id.asc())
+                .limit(1)
+            ).first()
+        if row is None:
+            return None
+        return _orm_to_domain(row)
+
     def list_with_meeting(
         self,
         limit: int = 20,

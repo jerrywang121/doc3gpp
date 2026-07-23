@@ -2522,6 +2522,376 @@ def test_tdoc_show_format_invalid_raises_bad_parameter(sqlite_env) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tdoc show --ftp-url — URL-keyed read across tdocs / tdoc_cr_details /
+# tdoc_cr_ttcn_details / tdoc_files
+# ---------------------------------------------------------------------------
+
+
+_FTP_URL = "stored/R5s260100.zip"
+_FTP_URL_ALT_FORM = "https://www.3gpp.org/ftp/stored/R5s260100.zip"
+
+
+def _seed_ftp_url_target(
+    tdoc_id: str,
+    url: str,
+    *,
+    with_cover: bool = True,
+    with_ttcn: bool = False,
+    files: list[TDocFile] | None = None,
+) -> None:
+    """Seed a parent TDoc row + cover/TTCN rows + optional aux files
+    all under the same ``ftp_url``.
+
+    The TDoc row carries ``ftp_url`` because the URL-keyed lookup
+    reads via :meth:`SQLAlchemyTDocRepository.get_by_ftp_url`; the
+    cover/TTCN repos use URL as PK; aux files are matched by
+    ``TDocFileORM.ftp_url``.
+    """
+    tdoc_repo = SQLAlchemyTDocRepository()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
+    if with_cover:
+        cr_repo.upsert(
+            TDocCRDetails(
+                tdoc_id=tdoc_id,
+                spec="38.523-3",
+                cr_num="3790",
+                ftp_url=url,
+            )
+        )
+        cr_repo.upsert_extract_meta(
+            TDocExtractMeta(
+                ftp_url=url,
+                tdoc_id=tdoc_id,
+                cache_file=f"{tdoc_id}-deadbeef.zip",
+                doc_filename=f"{tdoc_id}.docx",
+            )
+        )
+    if with_ttcn:
+        from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+            SQLAlchemyTDocCrTtcnRepository,
+        )
+        SQLAlchemyTDocCrTtcnRepository().upsert(
+            TDocCRTTCNDetails(
+                tdoc_id=tdoc_id,
+                ftp_url=url,
+                testcase="7.1.3.5.3",
+            )
+        )
+    if files:
+        SQLAlchemyTDocFileRepository().upsert_many(files)
+
+
+def test_tdoc_show_ftp_url_flag_mutex_neither_provided_raises(
+    sqlite_env,
+) -> None:
+    """Calling ``tdoc show`` with neither selector raises BadParameter."""
+    create_schema()
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show"])
+    assert result.exit_code != 0
+    assert "exactly one" in result.output
+    assert "--tdoc" in result.output
+    assert "--ftp-url" in result.output
+
+
+def test_tdoc_show_ftp_url_flag_mutex_both_provided_raises(
+    sqlite_env,
+) -> None:
+    """Calling ``tdoc show`` with both selectors raises BadParameter."""
+    create_schema()
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--tdoc", "R5s260009", "--ftp-url", _FTP_URL],
+    )
+    assert result.exit_code != 0
+    assert "exactly one" in result.output
+
+
+def test_tdoc_show_ftp_url_normalises_full_url_to_bare_path(
+    sqlite_env,
+) -> None:
+    """A full ``https://www.3gpp.org/ftp/...`` URL is normalised to the
+    canonical bare-path form the DB stores, so either spelling matches
+    the same row."""
+    create_schema()
+    _seed_ftp_url_target("R5s260100", _FTP_URL)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", _FTP_URL_ALT_FORM]
+    )
+    assert result.exit_code == 0, result.output
+    assert "[FTP URL]" in result.output
+    assert f"ftp_url: {_FTP_URL}" in result.output
+    assert "[TDoc]" in result.output
+    assert "tdoc_id: R5s260100" in result.output
+
+
+def test_tdoc_show_ftp_url_empty_raises_bad_parameter(sqlite_env) -> None:
+    """An empty URL value is rejected at the boundary with a friendly message."""
+    create_schema()
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--ftp-url", ""])
+    assert result.exit_code != 0
+    assert "Empty FTP URL" in result.output or "empty" in result.output.lower()
+
+
+def test_tdoc_show_ftp_url_unknown_raises_bad_parameter(sqlite_env) -> None:
+    """A URL that matches no row in any of the four tables exits non-zero."""
+    create_schema()
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--ftp-url", "stored/does-not-exist.zip"],
+    )
+    assert result.exit_code != 0
+    assert "No row" in result.output or "matches" in result.output.lower()
+
+
+def test_tdoc_show_ftp_url_table_happy_path(sqlite_env) -> None:
+    """A URL that hits every table emits ``[FTP URL]``, ``[TDoc]``,
+    ``[Extracted Details]``, and ``[Auxiliary Files]`` blocks."""
+    create_schema()
+    _seed_ftp_url_target(
+        "R5s260101",
+        _FTP_URL,
+        files=[
+            TDocFile(
+                tdoc_id="R5s260101",
+                type="revision",
+                file="R5s260101r1.zip",
+                ftp_url=_FTP_URL,
+                uploaded_date=date(2026, 7, 4),
+            ),
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--ftp-url", _FTP_URL])
+    assert result.exit_code == 0, result.output
+    assert "[FTP URL]" in result.output
+    assert f"ftp_url: {_FTP_URL}" in result.output
+    assert "[TDoc]" in result.output
+    assert "tdoc_id: R5s260101" in result.output
+    assert "[Extracted Details]" in result.output
+    assert "spec: 38.523-3" in result.output
+    assert "cr_num: 3790" in result.output
+    assert "extracted_at:" in result.output
+    assert "[Auxiliary Files]" in result.output
+    assert "type: revision" in result.output
+    assert "file: R5s260101r1.zip" in result.output
+
+
+def test_tdoc_show_ftp_url_table_omits_cover_when_null(sqlite_env) -> None:
+    """No ``tdoc_cr_details`` row at the URL → the ``[Extracted Details]``
+    block is absent (omitted, not null) per the optional-key convention."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260102", type="CR", ftp_url=_FTP_URL)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--ftp-url", _FTP_URL])
+    assert result.exit_code == 0, result.output
+    assert "[TDoc]" in result.output
+    assert "[Extracted Details]" not in result.output
+    assert "extracted_at: -" in result.output
+
+
+def test_tdoc_show_ftp_url_json_payload_shape(sqlite_env) -> None:
+    """The JSON payload always carries ``ftp_url``; ``tdoc`` is present
+    when a TDoc row matches; optional keys are omitted when null."""
+    create_schema()
+    _seed_ftp_url_target("R5s260103", _FTP_URL)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ftp_url"] == _FTP_URL
+    assert payload["tdoc"]["tdoc_id"] == "R5s260103"
+    assert payload["cover"]["spec"] == "38.523-3"
+    assert "extracted_at" in payload
+    assert "ttcn" not in payload
+    assert "files" not in payload
+
+
+def test_tdoc_show_ftp_url_json_payload_includes_ttcn_and_files(
+    sqlite_env,
+) -> None:
+    """The TTCN block and ``files`` array both surface when seeded."""
+    create_schema()
+    _seed_ftp_url_target(
+        "R5s260104",
+        _FTP_URL,
+        with_ttcn=True,
+        files=[
+            TDocFile(
+                tdoc_id="R5s260104",
+                type="review",
+                file="R5s260104_MCC.zip",
+                ftp_url=_FTP_URL,
+            ),
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ttcn"]["testcase"] == "7.1.3.5.3"
+    assert isinstance(payload["files"], list)
+    assert len(payload["files"]) == 1
+    assert payload["files"][0]["type"] == "review"
+    assert payload["files"][0]["ftp_url"] == _FTP_URL
+
+
+def test_tdoc_show_ftp_url_json_tdoc_omitted_when_no_match(sqlite_env) -> None:
+    """A URL that has ``tdoc_cr_details`` / ``files`` but no ``tdocs``
+    row surfaces those keys but ``tdoc`` is omitted.
+
+    The TDoc row is seeded at a *different* URL than the cover row so
+    the URL-keyed TDoc lookup misses while the URL-keyed cover lookup
+    still hits. The CR row's ``tdoc_id`` FK targets the seeded TDoc.
+    """
+    create_schema()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    other_url = "stored/different-tdoc.zip"
+    tdoc_repo.upsert(TDoc(tdoc_id="R5s260999", type="CR", ftp_url=other_url))
+    cr_repo.upsert(
+        TDocCRDetails(
+            tdoc_id="R5s260999",
+            spec="38.523-3",
+            cr_num="3790",
+            ftp_url=_FTP_URL,
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "tdoc" not in payload
+    assert payload["cover"]["spec"] == "38.523-3"
+
+
+def test_tdoc_show_ftp_url_markdown_anchors_on_ftp_url(sqlite_env) -> None:
+    """Markdown output is anchored on ``# FTP URL`` and renders every
+    populated section beneath it."""
+    create_schema()
+    _seed_ftp_url_target("R5s260105", _FTP_URL)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "markdown"],
+    )
+    assert result.exit_code == 0, result.output
+    assert f"# FTP URL `{_FTP_URL}`" in result.output
+    assert "## TDoc" in result.output
+    assert "- **tdoc_id**: R5s260105" in result.output
+    assert "## Extracted Cover Details" in result.output
+
+
+def test_tdoc_show_ftp_url_markdown_omits_tdoc_section_when_no_match(
+    sqlite_env,
+) -> None:
+    """No ``tdocs`` row → the ``## TDoc`` section is absent (omitted)."""
+    create_schema()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    other_url = "stored/different-tdoc.zip"
+    tdoc_repo.upsert(TDoc(tdoc_id="R5s260998", type="CR", ftp_url=other_url))
+    cr_repo.upsert(
+        TDocCRDetails(
+            tdoc_id="R5s260998",
+            spec="38.523-3",
+            cr_num="3790",
+            ftp_url=_FTP_URL,
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "markdown"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "## TDoc" not in result.output
+    assert "## Extracted Cover Details" in result.output
+
+
+def test_tdoc_show_ftp_url_raw_emits_cached_markdown(
+    sqlite_env, tmp_path, monkeypatch
+) -> None:
+    """``--ftp-url --format raw`` reads the cache file derived from the
+    URL directly and writes its content to stdout."""
+    create_schema()
+    _seed_ftp_url_target("R5s260106", _FTP_URL)
+
+    cached_md = "# Heading\n\nbody from URL-keyed cache\n"
+    monkeypatch.setattr(
+        "doc3gpp.cli._read_cached_markdown_path",
+        lambda cache_file, cache_root: cached_md,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw"]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output == cached_md
+
+
+def test_tdoc_show_ftp_url_raw_cache_miss_raises_bad_parameter(
+    sqlite_env, monkeypatch
+) -> None:
+    """``--ftp-url --format raw`` with no cached markdown raises
+    ``BadParameter`` pointing at the parse command."""
+    create_schema()
+    _seed_ftp_url_target("R5s260107", _FTP_URL)
+
+    monkeypatch.setattr(
+        "doc3gpp.cli._read_cached_markdown_path",
+        lambda cache_file, cache_root: "",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw"]
+    )
+    assert result.exit_code != 0
+    assert "cached markdown" in result.output.lower() or "cache" in result.output
+    assert "tdoc parse" in result.output
+
+
+def test_tdoc_show_ftp_url_does_not_trigger_auto_sync(
+    sqlite_env, monkeypatch
+) -> None:
+    """The ``--ftp-url`` path bypasses ``trigger_auto_sync`` — there's
+    no parent meeting sync meaningful for an arbitrary URL."""
+    create_schema()
+    _seed_ftp_url_target("R5s260108", _FTP_URL)
+
+    mock_auto_sync = MagicMock(return_value=(0, 0))
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", mock_auto_sync)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--ftp-url", _FTP_URL])
+    assert result.exit_code == 0, result.output
+    mock_auto_sync.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # tdoc parse --from-url — auto-sync wiring (3GPP URL only)
 # ---------------------------------------------------------------------------
 

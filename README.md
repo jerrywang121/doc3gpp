@@ -293,6 +293,13 @@ doc3gpp wi list --format markdown
 # `--format raw` to emit the converted .docx markdown:
 doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
 doc3gpp tdoc show --tdoc R5s260009 --format raw -o r5s260009.md
+
+# Show every row across `tdocs` / `tdoc_cr_details` /
+# `tdoc_cr_ttcn_details` / `tdoc_files` whose `ftp_url` matches
+# (mutually exclusive with `--tdoc`; raw mode emits the cached
+# converted markdown for that URL):
+doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip
+doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 ```
 
 Full command reference: [`docs/cli.md`](docs/cli.md).

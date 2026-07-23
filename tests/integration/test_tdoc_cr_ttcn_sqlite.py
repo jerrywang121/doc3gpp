@@ -532,3 +532,70 @@ def test_tdoc_show_json_payload_includes_cover_ttcn_and_extracted_at(
     assert payload["ttcn"]["testcase"] == "7.1.3.5.3"
     assert "extracted_at" in payload
     assert "files" not in payload
+
+
+# ---------------------------------------------------------------------------
+# ``tdoc show --ftp-url`` end-to-end smoke (URL-keyed read path)
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_show_by_ftp_url_json_payload_includes_cover_ttcn_and_extracted_at(
+    sqlite_env, tmp_path: Path,
+) -> None:
+    """URL-keyed counterpart of ``test_tdoc_show_json_payload_includes_cover_ttcn_and_extracted_at``.
+
+    Seeds the same row set under one ``ftp_url`` and drives the CLI
+    with ``--ftp-url`` (not ``--tdoc``). The payload gains a top-level
+    ``ftp_url`` key; ``tdoc`` / ``cover`` / ``ttcn`` / ``extracted_at``
+    still surface in the same shape.
+    """
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+
+    create_schema()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+
+    tdoc_id = "R5s260110"
+    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260110.zip"
+    tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
+
+    cr_repo.upsert(
+        TDocCRDetails(
+            tdoc_id=tdoc_id,
+            spec="38.523-3",
+            cr_num="3790",
+            ftp_url=url,
+        ),
+    )
+    cr_ttcn_repo.upsert(
+        TDocCRTTCNDetails(
+            tdoc_id=tdoc_id,
+            ftp_url=url,
+            testcase="7.1.3.5.3",
+            ats_version="iwd-TTCN3-B2512-260-eng",
+        ),
+    )
+    cr_repo.upsert_extract_meta(
+        TDocExtractMeta(
+            ftp_url=url,
+            tdoc_id=tdoc_id,
+            cache_file="R5s260110-abcdef0123456789.zip",
+            doc_filename="R5s260110.docx",
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", url, "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = __import__("json").loads(result.output)
+    assert payload["ftp_url"] == url
+    assert payload["tdoc"]["tdoc_id"] == tdoc_id
+    assert payload["cover"]["spec"] == "38.523-3"
+    assert payload["ttcn"]["testcase"] == "7.1.3.5.3"
+    assert "extracted_at" in payload
+    assert "files" not in payload

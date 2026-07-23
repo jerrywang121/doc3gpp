@@ -42,6 +42,22 @@ class TDocRepository(Protocol):
         """
         ...
 
+    def get_by_ftp_url(self, ftp_url: str) -> TDoc | None:
+        """Return the TDoc whose ``ftp_url`` matches exactly.
+
+        The 3GPP upload pipeline maintains a 1:1 invariant between
+        ``ftp_url`` and ``tdoc_id`` (one upload batch produces one
+        ``tdoc_id`` at one URL); the schema does NOT have a DB-level
+        UNIQUE constraint on ``tdocs.ftp_url``. If the invariant is
+        ever violated at runtime, this method deterministically
+        returns the lexically-first ``tdoc_id`` (``ORDER BY tdoc_id
+        ASC LIMIT 1``) so CLI output is reproducible.
+
+        Used by ``tdoc show --ftp-url <url>`` to anchor a URL-keyed
+        read when the parent ``TDoc`` is unknown to the caller.
+        """
+        ...
+
     def list(
         self,
         limit: int = 20,
@@ -336,6 +352,19 @@ class TDocFileRepository(Protocol):
         category (``revision`` / ``review`` / ``support``) and is
         deterministic across calls. Used by ``tdoc show`` to surface
         every auxiliary file for the requested TDoc.
+        """
+        ...
+
+    def get_by_ftp_url(self, ftp_url: str) -> list[TDocFile]:
+        """Return every TDocFile whose ``ftp_url`` matches exactly.
+
+        The unique index on ``tdoc_files.ftp_url`` makes this a
+        constant-time PK-like lookup; in practice it returns at most
+        one row. The list return type keeps the caller-side shape
+        uniform with the multi-row :meth:`get_for_tdoc_id`. Used by
+        ``tdoc show --ftp-url <url>`` to surface the auxiliary file
+        (revision / review / support) attached to the requested URL
+        rather than to a parent ``tdoc_id``.
         """
         ...
 

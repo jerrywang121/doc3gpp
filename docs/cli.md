@@ -445,7 +445,17 @@ Purpose:
 
 Options:
 
-- `--tdoc TDOC`: canonical TDoc identifier (e.g. `R5s260009`). Required.
+- `--tdoc TDOC`: canonical TDoc identifier (e.g. `R5s260009`).
+  Mutually exclusive with `--ftp-url` (the XOR validator raises
+  `BadParameter` if neither or both are supplied).
+- `--ftp-url URL`: 3GPP FTP URL (full URL like
+  `https://www.3gpp.org/ftp/TSG_RAN/...` or bare relative path like
+  `TSG_RAN/...`) to anchor the read on. Surfaces every matching row
+  across `tdocs`, `tdoc_cr_details`, `tdoc_cr_ttcn_details`, and
+  `tdoc_files`. Normalised via `normalize_ftp_path` before lookup so
+  both URL spellings resolve the same row. Mutually exclusive with
+  `--tdoc`. Does NOT trigger auto-sync (no parent TDoc to anchor a
+  meeting sync).
 - `--format {table,json,markdown,raw}`: output format. Default
   `table`, unless overridden by `[output].format` in the resolved
   TOML config (`output.format`).
@@ -557,6 +567,32 @@ Behavior:
   `tdoc_extracts` in three independent upserts) before the result is
   emitted.
 
+`--ftp-url` selector:
+
+- Bypasses the parent-TDoc lookup entirely; resolves the URL into
+  matching rows via `SQLAlchemyTDocRepository.get_by_ftp_url` (a
+  `WHERE ftp_url == :url ORDER BY tdoc_id ASC LIMIT 1` lookup on the
+  unindexed-but-narrow `tdocs.ftp_url` text column),
+  `SQLAlchemyTDocCrRepository.get_by_url`, the existing TTCN sidecar
+  lookup (gated on the cover row's presence), and the new
+  `SQLAlchemyTDocFileRepository.get_by_ftp_url` (URL-unique-indexed).
+  No row in any of the four tables → `BadParameter` with the URL
+  quoted in the message.
+- Does NOT trigger `trigger_auto_sync` — the URL is the row identity,
+  there's no parent TDoc / meeting sync meaningful for an arbitrary
+  URL, and a URL-keyed read should be a deterministic snapshot of the
+  DB. Users wanting to backfill the DB must run `meeting sync` /
+  `tdoc sync` / `tdoc parse --from-url` explicitly.
+- Bundles the result into `TDocShowRecordByUrl(ftp_url, tdoc, cover,
+  ttcn, extracted_at, files)` and renders under a `# FTP URL` /
+  `[FTP URL]` anchor with the same omit-when-null convention as the
+  `--tdoc` path.
+- `--format raw` on the URL path reads the cache file directly via
+  `derive_cache_file(url)` (no `TDocCrService.extract` detour) because
+  the URL is the row identity. Cache miss → `BadParameter` pointing at
+  `doc3gpp tdoc parse --from-url <url>` or
+  `doc3gpp tdoc parse --tdoc <id>`.
+
 Examples:
 
 ```bash
@@ -571,6 +607,15 @@ doc3gpp tdoc show --tdoc R5s260009 --format markdown -o R5s260009.md
 
 # Converted .docx markdown (raw). Triggers an extract on cache miss.
 doc3gpp tdoc show --tdoc R5s260009 --format raw -o R5s260009.md
+
+# URL-keyed read — show every row matching the URL across the four
+# tables (default table format). Normalises both full URLs and bare
+# relative paths via `normalize_ftp_path`.
+doc3gpp tdoc show --ftp-url TSG_RAN/WG5_Test_ex-T1/.../R5s260009.zip
+
+# URL-keyed raw — read the converted markdown cache directly (URL is
+# the row identity; cache miss points at `tdoc parse --from-url`).
+doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 ```
 
 ### doc3gpp tdoc parse

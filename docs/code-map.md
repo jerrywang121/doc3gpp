@@ -29,8 +29,8 @@ table below is for navigation only.
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
 | `MeetingRepository` | Protocol | `repository/protocols.py` | Contract for meeting storage. |
-| `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage; `get_by_id` resolves canonical id strings. |
-| `TDocFileRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_files` storage. |
+| `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage; `get_by_id` resolves canonical id strings; `get_by_ftp_url` (1:1 invariant, `LIMIT 1`) anchors the new `tdoc show --ftp-url` selector on the URL. |
+| `TDocFileRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_files` storage; `get_by_ftp_url` (URL-unique-indexed) is the new URL-keyed read used by `tdoc show --ftp-url`. |
 | `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for the slim `tdoc_cr_details` table. `tdoc_extracts` reads are still exposed here for convenience but writes go through the separate `upsert_extract_meta` method. |
 | `TDocCrTTCNDetailRepository` | Protocol | `repository/protocols.py` | Contract for the new `tdoc_cr_ttcn_details` TTCN sidecar (one row per immutable `ftp_url`). |
 | `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage. |

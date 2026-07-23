@@ -179,6 +179,34 @@ Workflows in one line (full prose in `docs/architecture.md`):
   the markdown subtree holds a `zipfile.ZipFile` wrapper produced by
   `_wrap_markdown_zip` (single entry named `<docx stem>.md`,
   `ZIP_DEFLATED`).
+- `doc3gpp tdoc show --ftp-url <url>` resolves the URL into matching
+  rows across four tables (`tdocs`, `tdoc_cr_details`,
+  `tdoc_cr_ttcn_details`, `tdoc_files`) directly — `tdocs` and
+  `tdoc_files` use the new `get_by_ftp_url` lookups
+  (`SQLAlchemyTDocRepository.get_by_ftp_url` /
+  `SQLAlchemyTDocFileRepository.get_by_ftp_url`); the cover / TTCN
+  tables use the existing URL-PK lookups. The `--ftp-url` path is
+  **mutually exclusive** with `--tdoc` (an XOR validator raises
+  `BadParameter` when neither or both are supplied) and **does NOT
+  trigger** `trigger_auto_sync` — there's no parent TDoc to anchor a
+  meeting sync on, and a URL-keyed read should be a deterministic
+  snapshot of whatever is already in the DB. URL is normalised via
+  `normalize_ftp_path` so both full URLs
+  (`https://www.3gpp.org/ftp/...`) and bare relative paths resolve
+  the same row. `tdocs.ftp_url` is maintained as a 1:1 invariant by
+  the upload pipeline (no DB-level `UNIQUE` constraint); the lookup
+  returns a single row via `ORDER BY tdoc_id ASC LIMIT 1` as a
+  deterministic fallback if the invariant is ever violated.
+  `--format raw` on the URL path reads the cache file directly via
+  `derive_cache_file(url)` (no `TDocCrService.extract` detour)
+  because the URL is the row identity — a cache miss raises
+  `BadParameter` pointing at `doc3gpp tdoc parse --from-url <url>`
+  or `doc3gpp tdoc parse --tdoc <id>`. The CLI bundles the result
+  into a new `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn,
+  extracted_at, files)` DTO and renders it under a
+  `# FTP URL` / `[FTP URL]` anchor; the renderer contract follows
+  the same omit-when-null convention as the `--tdoc` path's
+  `TDocShowRecord`.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
 - `doc3gpp config init --target <auto|project|user> [--force]` writes
@@ -197,7 +225,11 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `meeting sync` / `tdoc sync`. The same skip rules apply and are never
   bypassed; failures are logged as warnings and do not abort the read
   command. Direct-mode `tdoc parse --from-path` / `--from-url` never
-  triggers auto-sync.
+  triggers auto-sync. The `tdoc show --ftp-url` selector also never
+  triggers auto-sync — the URL is the row identity and there's no
+  parent TDoc / meeting to anchor a sync on; users wanting a fresh
+  extract at the URL must run `tdoc parse --from-url <url>` or
+  `tdoc parse --tdoc <id>` explicitly.
 
 ## Common commands
 

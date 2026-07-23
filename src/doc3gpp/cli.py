@@ -41,6 +41,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocCRTTCNDetails,
 )
+from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
@@ -57,6 +58,7 @@ from doc3gpp.services.factory import (
     build_tdoc_cr_repository,
     build_tdoc_cr_service,
     build_tdoc_cr_ttcn_repository,
+    build_tdoc_file_repository,
     build_tdoc_repository,
     build_tdoc_service,
     build_tdoc_sync_coordinator,
@@ -1948,8 +1950,9 @@ class TDocShowRecord:
 
     Carries the parent :class:`TDoc`, the optional cover-page row keyed
     by the stored ``tdoc.ftp_url`` (the slim ``TDocCRDetails`` shape),
-    the optional TTCN sidecar (only populated for TTCN CRs), and the
-    extract ``extracted_at`` timestamp derived from ``tdoc_extracts``.
+    the optional TTCN sidecar (only populated for TTCN CRs), the
+    extract ``extracted_at`` timestamp derived from ``tdoc_extracts``,
+    and every auxiliary ``tdoc_files`` row whose ``tdoc_id`` matches.
     Keys are omitted (not null) in renderers when the corresponding
     value is absent.
 
@@ -1962,12 +1965,19 @@ class TDocShowRecord:
             a TTCN CR.
         extracted_at: Cache-extract timestamp for ``tdoc.ftp_url``;
             ``None`` when no ``tdoc_extracts`` row exists for that URL.
+        files: Auxiliary ``tdoc_files`` rows matching ``tdoc_id``;
+            empty tuple when the parent TDoc has no auxiliary files.
+            The JSON renderer omits the top-level ``files`` key when
+            this is empty; the markdown and table renderers always
+            render their auxiliary-files section (markdown) or
+            placeholder (table) — see the renderer docstrings.
     """
 
     tdoc: TDoc
     cover: TDocCRDetails | None = None
     ttcn: TDocCRTTCNDetails | None = None
     extracted_at: datetime | None = None
+    files: tuple[TDocFile, ...] = ()
 
 
 def _render_tdoc_show_json(
@@ -1995,6 +2005,11 @@ def _render_tdoc_show_json(
       ``tdoc.ftp_url``. Lives at the top level rather than nested
       under ``cover`` / ``ttcn`` because both detail rows no longer
       carry their own timestamps after the slimming.
+    - ``files``: array of every :class:`TDocFile` row matching
+      ``tdoc_id`` (auxiliary revisions / reviews / support files).
+      Every dataclass field of :class:`TDocFile` is serialised. The
+      key is **omitted** when the TDoc has no auxiliary files, so the
+      JSON stays dense for hits and sparse for misses.
     """
     payload: dict[str, object] = {
         "tdoc": {
@@ -2014,6 +2029,14 @@ def _render_tdoc_show_json(
         }
     if record.extracted_at is not None:
         payload["extracted_at"] = _serialise_show_value(record.extracted_at)
+    if record.files:
+        payload["files"] = [
+            {
+                f.name: _serialise_show_value(getattr(file, f.name))
+                for f in dataclass_fields(file)
+            }
+            for file in record.files
+        ]
     stream, close_after = _open_output(output)
     try:
         json.dump(payload, stream, ensure_ascii=False, indent=2)
@@ -2034,7 +2057,9 @@ def _render_tdoc_show_markdown(
     under ``## Extracted Cover Details``; when a TTCN sidecar exists it
     renders under ``## TTCN Details``. When neither is present and no
     ``extracted_at`` is known, a "_no extracted details_" placeholder
-    is emitted.
+    is emitted. Every ``tdoc_files`` row matching ``tdoc_id`` renders
+    under ``## Auxiliary Files`` (or a placeholder when none exist);
+    the section is always emitted so the document skeleton is stable.
 
     ``required_changes`` on the TTCN sidecar renders as a JSON fenced
     block (matching the legacy ``details``-field rendering convention)
@@ -2067,37 +2092,55 @@ def _render_tdoc_show_markdown(
                 "_No extracted details; run "
                 "`doc3gpp tdoc parse --tdoc <id>` first._\n"
             )
-            return
+        else:
+            if record.cover is not None:
+                stream.write("\n## Extracted Cover Details\n\n")
+                for f in dataclass_fields(record.cover):
+                    # Defensive: the slim cover dataclass no longer carries
+                    # ``details`` or ``parser_version``, but skip defensively in
+                    # case a stale code path slips through.
+                    if f.name in {"details", "parser_version"}:
+                        continue
+                    value = getattr(record.cover, f.name)
+                    formatted = _serialise_show_value(value)
+                    rendered = "—" if formatted is None else str(formatted)
+                    stream.write(f"- **{f.name}**: {rendered}\n")
+                if record.extracted_at is not None:
+                    stream.write(f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n")
 
-        if record.cover is not None:
-            stream.write("\n## Extracted Cover Details\n\n")
-            for f in dataclass_fields(record.cover):
-                # Defensive: the slim cover dataclass no longer carries
-                # ``details`` or ``parser_version``, but skip defensively in
-                # case a stale code path slips through.
-                if f.name in {"details", "parser_version"}:
-                    continue
-                value = getattr(record.cover, f.name)
-                formatted = _serialise_show_value(value)
-                rendered = "—" if formatted is None else str(formatted)
-                stream.write(f"- **{f.name}**: {rendered}\n")
-            if record.extracted_at is not None:
-                stream.write(f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n")
+            if record.ttcn is not None:
+                stream.write("\n## TTCN Details\n\n")
+                for f in dataclass_fields(record.ttcn):
+                    value = getattr(record.ttcn, f.name)
+                    if f.name == "required_changes" and isinstance(value, list):
+                        stream.write(f"- **{f.name}**:\n\n```json\n")
+                        stream.write(
+                            json.dumps(value, ensure_ascii=False, indent=2)
+                        )
+                        stream.write("\n```\n")
+                        continue
+                    formatted = _serialise_show_value(value)
+                    rendered = "—" if formatted is None else str(formatted)
+                    stream.write(f"- **{f.name}**: {rendered}\n")
 
-        if record.ttcn is not None:
-            stream.write("\n## TTCN Details\n\n")
-            for f in dataclass_fields(record.ttcn):
-                value = getattr(record.ttcn, f.name)
-                if f.name == "required_changes" and isinstance(value, list):
-                    stream.write(f"- **{f.name}**:\n\n```json\n")
-                    stream.write(
-                        json.dumps(value, ensure_ascii=False, indent=2)
-                    )
-                    stream.write("\n```\n")
-                    continue
-                formatted = _serialise_show_value(value)
-                rendered = "—" if formatted is None else str(formatted)
-                stream.write(f"- **{f.name}**: {rendered}\n")
+        stream.write("\n## Auxiliary Files\n\n")
+        if not record.files:
+            stream.write(
+                "_No auxiliary files; run "
+                "`doc3gpp tdoc sync` first if you haven't synced "
+                "this meeting yet._\n"
+            )
+        else:
+            for file in record.files:
+                stream.write(f"- **type**: {file.type}\n")
+                stream.write(f"  - **file**: {file.file}\n")
+                stream.write(f"  - **ftp_url**: {file.ftp_url}\n")
+                uploaded = (
+                    file.uploaded_date.isoformat()
+                    if file.uploaded_date is not None
+                    else "—"
+                )
+                stream.write(f"  - **uploaded_date**: {uploaded}\n")
     finally:
         if close_after:
             stream.close()
@@ -2120,7 +2163,14 @@ def _render_tdoc_show_table(
     When the TTCN sidecar is also present the renderer emits an
     extra ``[TTCN Details]`` block with the six overview fields and a
     ``required_changes: <count> item(s)`` summary line, matching the
-    markdown renderer's convention.
+    markdown renderer's convention. Every ``tdoc_files`` row matching
+    ``tdoc_id`` renders under a ``[Auxiliary Files]`` block with the
+    four informative fields (``type``, ``file``, ``ftp_url``,
+    ``uploaded_date``); the autoincrement ``id`` and the ``tdoc_id``
+    match key are dropped because the parent ``[TDoc]`` block already
+    shows the match key. When the TDoc has no auxiliary files, the
+    header is omitted and a placeholder line points the reader at
+    ``tdoc sync`` (the flow that populates ``tdoc_files``).
     """
     stream, close_after = _open_output(output)
     try:
@@ -2151,8 +2201,6 @@ def _render_tdoc_show_table(
                 )
             else:
                 stream.write("extracted_at: -\n")
-            if record.ttcn is None:
-                return
 
         if record.cover is not None:
             details = record.cover
@@ -2199,6 +2247,30 @@ def _render_tdoc_show_table(
             stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
             count = len(ttcn.required_changes)
             stream.write(f"required_changes: {count} item(s)\n")
+
+        if record.files:
+            stream.write("[Auxiliary Files]\n")
+            for file in record.files:
+                # Drop ``id`` (autoincrement PK) and ``tdoc_id``
+                # (match key, already in the ``[TDoc]`` block) —
+                # both are noise in this output.
+                stream.write(f"type: {file.type}\n")
+                stream.write(f"file: {file.file}\n")
+                stream.write(f"ftp_url: {file.ftp_url}\n")
+                uploaded = (
+                    file.uploaded_date.isoformat()
+                    if file.uploaded_date is not None
+                    else "-"
+                )
+                stream.write(f"uploaded_date: {uploaded}\n")
+        else:
+            # No header on the empty case — placeholder line alone.
+            # Hint points to ``tdoc sync`` (not ``tdoc parse``)
+            # because the file table is populated by the sync flow.
+            stream.write(
+                "No auxiliary files; run `doc3gpp tdoc sync` first "
+                "if you haven't synced this meeting yet.\n"
+            )
     finally:
         if close_after:
             stream.close()
@@ -2670,8 +2742,10 @@ def tdoc_show(
 ) -> None:
     """Show a stored TDoc and any extracted CR cover-page details.
 
-    Prints the TDoc record and, if ``tdoc parse`` has been run for this
-    id, one ``[Extracted Details]`` block per revision. ``--tdoc`` is
+    Prints the TDoc record, any extracted cover-page / TTCN sidecar
+    rows for the canonical ``ftp_url``, the cache-extract timestamp,
+    and every auxiliary ``tdoc_files`` row matching ``tdoc_id``
+    (revisions, reviews, support files). ``--tdoc`` is
     case-insensitive for CR-shape IDs. ``--format`` controls the output
     representation; ``raw`` emits the converted .docx markdown instead
     of the extracted cover-page fields and triggers a fresh extract
@@ -2705,6 +2779,7 @@ def tdoc_show(
 
     cr_repo = build_tdoc_cr_repository()
     cr_ttcn_repo = build_tdoc_cr_ttcn_repository()
+    file_repo = build_tdoc_file_repository()
 
     cover: TDocCRDetails | None = None
     extracted_at: datetime | None = None
@@ -2717,11 +2792,14 @@ def tdoc_show(
         if is_ttcn_tdoc(record.tdoc_id):
             ttcn = cr_ttcn_repo.get_by_url(record.ftp_url)
 
+    files = tuple(file_repo.get_for_tdoc_id(record.tdoc_id))
+
     show_record = TDocShowRecord(
         tdoc=record,
         cover=cover,
         ttcn=ttcn,
         extracted_at=extracted_at,
+        files=files,
     )
 
     if fmt == "json":

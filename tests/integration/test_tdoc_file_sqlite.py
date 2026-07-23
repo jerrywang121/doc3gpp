@@ -477,3 +477,68 @@ def test_tdoc_show_cli_surfaces_tdoc_files_rows(sqlite_env) -> None:
     review_idx = aux_block.index("type: review")
     revision_idx = aux_block.index("type: revision")
     assert review_idx < revision_idx
+
+
+def test_tdoc_show_by_ftp_url_cli_surfaces_tdoc_files_rows(sqlite_env) -> None:
+    """URL-keyed counterpart of ``test_tdoc_show_cli_surfaces_tdoc_files_rows``.
+
+    ``tdoc_files.ftp_url`` is unique-indexed, so the URL-keyed lookup
+    matches at most one row. Seeds two aux files at distinct URLs
+    (matching the original fixture) and queries the CLI with each
+    URL in turn; the rendered ``[Auxiliary Files]`` block surfaces
+    only the matching file (no leakage from the other URL).
+    """
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+
+    create_schema()
+    revision_url = "tsg_ran/WG5/TSGR5_128/Inbox/R5s260040r1.zip"
+    review_url = (
+        "tsg_ran/WG5/TSGR5_128/Review/R5s260040_MCC160Comments.zip"
+    )
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260040", type="CR", ftp_url=revision_url)
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5s260040",
+                type="revision",
+                file="R5s260040r1.zip",
+                ftp_url=revision_url,
+                uploaded_date=date(2026, 7, 4),
+            ),
+            TDocFile(
+                tdoc_id="R5s260040",
+                type="review",
+                file="R5s260040_MCC160Comments.zip",
+                ftp_url=review_url,
+                uploaded_date=date(2026, 7, 3),
+            ),
+        ]
+    )
+
+    runner = CliRunner()
+
+    revision_result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", revision_url]
+    )
+    assert revision_result.exit_code == 0, revision_result.output
+    revision_block = revision_result.output.split("[Auxiliary Files]", 1)[1]
+    assert "type: revision" in revision_block
+    assert "file: R5s260040r1.zip" in revision_block
+    assert "uploaded_date: 2026-07-04" in revision_block
+    assert "type: review" not in revision_block
+    assert "R5s260040_MCC160Comments.zip" not in revision_block
+
+    review_result = runner.invoke(
+        app, ["tdoc", "show", "--ftp-url", review_url]
+    )
+    assert review_result.exit_code == 0, review_result.output
+    review_block = review_result.output.split("[Auxiliary Files]", 1)[1]
+    assert "type: review" in review_block
+    assert "file: R5s260040_MCC160Comments.zip" in review_block
+    assert "uploaded_date: 2026-07-03" in review_block
+    assert "type: revision" not in review_block
+    assert "R5s260040r1.zip" not in review_block

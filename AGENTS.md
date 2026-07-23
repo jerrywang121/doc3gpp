@@ -162,11 +162,14 @@ Workflows in one line (full prose in `docs/architecture.md`):
   row's immutable `tdoc.ftp_url` (one row per URL — the URL is the row
   identity for both `tdoc_cr_details` and `tdoc_extracts`). The TTCN
   sidecar is joined in via `cr_ttcn_repo.get_by_url(tdoc.ftp_url)` only
-  when `is_ttcn_tdoc(tdoc.tdoc_id)` is `True`. The CLI's renderers emit
-  `cover`, the optional `ttcn` block, and `extracted_at` (sourced from
-  the `tdoc_extracts` row via PK JOIN) as separate sections — the
-  legacy `details` / `parser_version` fields no longer appear in the
-  output. The `tdoc_extracts` row carries a single `cache_file` column
+  when `is_ttcn_tdoc(tdoc.tdoc_id)` is `True`. Auxiliary files are
+  read once via `file_repo.get_for_tdoc_id(tdoc.tdoc_id)` and match
+  by `tdoc_id` (not URL) so all revisions / reviews / support files
+  surface in a single pass. The CLI's renderers emit `cover`, the
+  optional `ttcn` block, `extracted_at` (sourced from the
+  `tdoc_extracts` row via PK JOIN), and `files` (the auxiliary files
+  block / placeholder) as separate sections — the legacy `details` /
+  `parser_version` fields no longer appear in the output. The `tdoc_extracts` row carries a single `cache_file` column
   (basename, derived from `tdoc.ftp_url` via `derive_cache_file()`);
   the CLI reconstructs paths as `{cache.dir}/zips/<cache_file>` and
   `{cache.dir}/markdown/<cache_file>` via `_build_cache().root` +

@@ -26,6 +26,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.services.tdoc_cr_service import (
     BatchExtractResult,
@@ -37,6 +38,7 @@ from doc3gpp.services.tdoc_cr_service import (
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 
@@ -1829,6 +1831,191 @@ def test_tdoc_show_no_ftp_url_skips_cover_and_ttcn(sqlite_env) -> None:
     assert "extracted_at: -" in result.output
     assert "[Extracted Details]" not in result.output
     assert "cr_num: 3790" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# tdoc show - auxiliary files (tdoc_files)
+# ---------------------------------------------------------------------------
+
+
+def _seed_aux_files(
+    tdoc_id: str,
+    files: list[TDocFile],
+    ftp_url: str | None = None,
+) -> None:
+    """Seed a parent TDoc (and optional CR row) plus auxiliary files.
+
+    The parent row is what ``tdoc show`` keys off; the file rows live on
+    ``tdoc_files`` and are matched by ``tdoc_id``. ``ftp_url`` on the
+    parent row is populated so the URL-keyed cover lookup is exercised
+    end-to-end when a CR row is supplied.
+    """
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url))
+    SQLAlchemyTDocFileRepository().upsert_many(files)
+
+
+def test_tdoc_show_table_includes_auxiliary_files_block(sqlite_env) -> None:
+    """Two ``tdoc_files`` rows render an ``[Auxiliary Files]`` block
+    with the four informative fields per file.
+
+    The autoincrement ``id`` and the ``tdoc_id`` match key are dropped
+    per D8 — they are noise in the show output and the parent ``[TDoc]``
+    block already carries the match key.
+    """
+    create_schema()
+    _seed_aux_files(
+        "R5s260020",
+        [
+            TDocFile(
+                tdoc_id="R5s260020",
+                type="revision",
+                file="R5s260020r1.zip",
+                ftp_url="tsg_ran/WG5/TSGR5_128/Inbox/R5s260020r1.zip",
+                uploaded_date=date(2026, 7, 4),
+            ),
+            TDocFile(
+                tdoc_id="R5s260020",
+                type="review",
+                file="R5s260020_MCC160Comments.zip",
+                ftp_url="tsg_ran/WG5/TSGR5_128/Review/R5s260020_MCC160Comments.zip",
+                uploaded_date=date(2026, 7, 3),
+            ),
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260020"])
+    assert result.exit_code == 0, result.output
+    assert "[Auxiliary Files]" in result.output
+    assert "type: revision" in result.output
+    assert "file: R5s260020r1.zip" in result.output
+    assert "ftp_url: tsg_ran/WG5/TSGR5_128/Inbox/R5s260020r1.zip" in result.output
+    assert "uploaded_date: 2026-07-04" in result.output
+    assert "type: review" in result.output
+    assert "file: R5s260020_MCC160Comments.zip" in result.output
+    assert "id:" not in result.output.split("[Auxiliary Files]")[1]
+    assert "tdoc_id:" not in result.output.split("[Auxiliary Files]")[1]
+
+
+def test_tdoc_show_table_omits_auxiliary_files_header_when_empty(
+    sqlite_env,
+) -> None:
+    """A TDoc with no ``tdoc_files`` rows emits no ``[Auxiliary Files]``
+    header but the placeholder line is still rendered so the reader
+    knows where the file table would appear once synced."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260021", type="CR"))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260021"])
+    assert result.exit_code == 0, result.output
+    assert "[Auxiliary Files]" not in result.output
+    assert "No auxiliary files" in result.output
+    assert "doc3gpp tdoc sync" in result.output
+
+
+def test_tdoc_show_json_payload_includes_files_array(sqlite_env) -> None:
+    """The JSON payload gains a ``files`` array with one entry per
+    auxiliary file, every dataclass field of ``TDocFile`` preserved."""
+    create_schema()
+    _seed_aux_files(
+        "R5s260022",
+        [
+            TDocFile(
+                tdoc_id="R5s260022",
+                type="revision",
+                file="R5s260022r1.zip",
+                ftp_url="x/R5s260022r1.zip",
+                uploaded_date=date(2026, 7, 4),
+            ),
+            TDocFile(
+                tdoc_id="R5s260022",
+                type="review",
+                file="R5s260022_MCC.zip",
+                ftp_url="x/R5s260022_MCC.zip",
+            ),
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260022", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "files" in payload
+    assert isinstance(payload["files"], list)
+    assert len(payload["files"]) == 2
+    assert payload["files"][0]["type"] == "review"
+    assert payload["files"][0]["file"] == "R5s260022_MCC.zip"
+    assert payload["files"][0]["tdoc_id"] == "R5s260022"
+    assert payload["files"][0]["uploaded_date"] is None
+    assert payload["files"][1]["type"] == "revision"
+    assert payload["files"][1]["file"] == "R5s260022r1.zip"
+    assert payload["files"][1]["uploaded_date"] == "2026-07-04"
+
+
+def test_tdoc_show_json_files_key_omitted_when_empty(sqlite_env) -> None:
+    """When no auxiliary files exist, the JSON top-level ``files`` key
+    is **omitted** (matches the existing optional-key convention)."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260023", type="CR"))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260023", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "files" not in payload
+
+
+def test_tdoc_show_markdown_includes_auxiliary_files_section(
+    sqlite_env,
+) -> None:
+    """The markdown output gains a ``## Auxiliary Files`` section with
+    one nested bullet group per file (type / file / ftp_url /
+    uploaded_date)."""
+    create_schema()
+    _seed_aux_files(
+        "R5s260024",
+        [
+            TDocFile(
+                tdoc_id="R5s260024",
+                type="revision",
+                file="R5s260024r1.zip",
+                ftp_url="x/R5s260024r1.zip",
+                uploaded_date=date(2026, 7, 4),
+            ),
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260024", "--format", "markdown"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "## Auxiliary Files" in result.output
+    assert "- **type**: revision" in result.output
+    assert "- **file**: R5s260024r1.zip" in result.output
+    assert "- **ftp_url**: x/R5s260024r1.zip" in result.output
+    assert "- **uploaded_date**: 2026-07-04" in result.output
+
+
+def test_tdoc_show_markdown_files_placeholder_when_empty(sqlite_env) -> None:
+    """Empty case: the section is still emitted (skeleton stability)
+    but with a placeholder pointing the reader at ``tdoc sync``."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260025", type="CR"))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260025", "--format", "markdown"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "## Auxiliary Files" in result.output
+    assert "_No auxiliary files" in result.output
+    assert "doc3gpp tdoc sync" in result.output
 
 
 # ---------------------------------------------------------------------------

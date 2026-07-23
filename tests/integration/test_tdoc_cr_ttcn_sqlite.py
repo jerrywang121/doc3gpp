@@ -531,3 +531,4 @@ def test_tdoc_show_json_payload_includes_cover_ttcn_and_extracted_at(
     assert payload["cover"]["spec"] == "38.523-3"
     assert payload["ttcn"]["testcase"] == "7.1.3.5.3"
     assert "extracted_at" in payload
+    assert "files" not in payload

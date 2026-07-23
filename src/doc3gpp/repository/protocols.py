@@ -329,6 +329,16 @@ class TDocFileRepository(Protocol):
         """
         ...
 
+    def get_for_tdoc_id(self, tdoc_id: str) -> list[TDocFile]:
+        """Return every TDocFile whose ``tdoc_id`` matches, no limit.
+
+        Ordered by ``(type, ftp_url) ASC`` so the output groups by
+        category (``revision`` / ``review`` / ``support``) and is
+        deterministic across calls. Used by ``tdoc show`` to surface
+        every auxiliary file for the requested TDoc.
+        """
+        ...
+
     def delete_for_tdoc_ids(self, tdoc_ids: Iterable[str]) -> int:
         """Delete every TDocFile whose ``tdoc_id`` is in ``tdoc_ids``.
 

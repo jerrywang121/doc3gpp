@@ -457,9 +457,17 @@ Options:
     fields plus a `required_changes: N item(s)` summary line. The
     `parser_version` and `details` lines are gone — `extracted_at`
     is sourced from `tdoc_extracts` at the same URL and rendered
-    as `extracted_at: -` when the row is missing. Long free-text
-    fields are truncated to 200 characters with an ellipsis.
-    Matches every prior release on the visible line positions.
+    as `extracted_at: -` when the row is missing. Every
+    `tdoc_files` row matching `tdoc_id` renders under an
+    `[Auxiliary Files]` block with the four informative fields
+    (`type`, `file`, `ftp_url`, `uploaded_date`); the autoincrement
+    `id` and the `tdoc_id` match key are dropped because the parent
+    `[TDoc]` block already carries the match key. When the TDoc has
+    no auxiliary files, the `[Auxiliary Files]` header is omitted
+    and a placeholder line points the reader at `tdoc sync` (the
+    flow that populates `tdoc_files`). Long free-text fields are
+    truncated to 200 characters with an ellipsis. Matches every
+    prior release on the visible line positions.
   - `json`: one JSON object with the following top-level keys
     (optional keys are **omitted**, not emitted as `null`, when
     no corresponding row exists):
@@ -475,6 +483,11 @@ Options:
       exists). Sits at the top level rather than nested under
       `cover` / `ttcn` because neither detail table carries its
       own timestamp.
+    - `files` — array of every `TDocFile` row matching `tdoc_id`
+      (auxiliary revisions / reviews / support files). Every
+      dataclass field of `TDocFile` is serialised (`id`,
+      `tdoc_id`, `type`, `file`, `ftp_url`, `uploaded_date`).
+      Omitted when the TDoc has no auxiliary files.
   - `markdown`: a Markdown document — `# TDoc` heading, bullet list
     of TDoc fields under `## Metadata`, then `## Extracted Cover
     Details` (slim cover-page fields when present) and `##
@@ -482,8 +495,13 @@ Options:
     JSON fenced block when the TDoc is a TTCN CR and the sidecar
     exists). When no extract row is present, a single `_No
     extracted details; run \`doc3gpp tdoc parse --tdoc <id>\`
-    first._ placeholder is emitted. Long fields are **not**
-    truncated in this mode.
+    first._ placeholder is emitted. Every `tdoc_files` row
+    matching `tdoc_id` renders under `## Auxiliary Files` with one
+    nested bullet group per file (`type`, `file`, `ftp_url`,
+    `uploaded_date`); when no files exist, a `_No auxiliary
+    files; run \`doc3gpp tdoc sync\` first if you haven't synced
+    this meeting yet._` placeholder keeps the document skeleton
+    stable. Long fields are **not** truncated in this mode.
   - `raw`: the converted `.docx` markdown body (the artefact the CR
     parser consumes) for CR-type TDocs. The markdown is loaded from
     `{cache.dir}/markdown/<cache_file>` where `cache_file` is the
@@ -518,13 +536,20 @@ Behavior:
     `SQLAlchemyTDocCrTtcnRepository.get_by_url(tdoc.ftp_url)`,
     gated on `is_ttcn_tdoc(tdoc.tdoc_id)` so non-TTCN CRs never hit
     the sidecar table.
-- The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at)` is
-  rendered by `table` (default) / `json` / `markdown` to three
-  separate sections (`cover`, optional `ttcn` block, and the
-  standalone `extracted_at` line). Optional keys are **omitted**
-  (not emitted as `null`) in the JSON payload when the corresponding
-  row is absent. The legacy `details` / `parser_version` fields no
-  longer appear in any output.
+  - A single `tdoc_id`-keyed read on `tdoc_files` via
+    `SQLAlchemyTDocFileRepository.get_for_tdoc_id(tdoc.tdoc_id)`,
+    ordered by `(type, ftp_url) ASC` so the output groups by
+    category (revision / review / support). Runs unconditionally —
+    a TDoc may have auxiliary files even when the cover has not
+    been extracted.
+- The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at,
+  files)` is rendered by `table` (default) / `json` / `markdown`
+  to four separate sections (`cover`, optional `ttcn` block, the
+  standalone `extracted_at` line, and the auxiliary files block
+  or placeholder). Optional keys are **omitted** (not emitted as
+  `null`) in the JSON payload when the corresponding row is
+  absent. The legacy `details` / `parser_version` fields no longer
+  appear in any output.
 - `raw` bypasses the DB-row render entirely and reads the converted
   markdown from the cache. When the cache is cold, the extract
   pipeline runs (download zip, render markdown, persist across

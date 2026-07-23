@@ -109,6 +109,24 @@ class SQLAlchemyTDocFileRepository:
 
         return [_orm_to_domain(row) for row in rows]
 
+    def get_for_tdoc_id(self, tdoc_id: str) -> list[TDocFile]:
+        """Return every TDocFile for a given TDoc, ordered by category then URL.
+
+        Groups by ``type`` (``revision`` / ``review`` / ``support``) first
+        so the output is easy to scan, with ``ftp_url`` as a stable
+        secondary order. The FK index on ``tdoc_id`` covers the WHERE;
+        per-TDoc row counts are bounded (typically <10), so the
+        unindexed ``ORDER BY`` cost is trivial.
+        """
+        with self._session_factory() as session:
+            stmt = (
+                select(TDocFileORM)
+                .where(TDocFileORM.tdoc_id == tdoc_id)
+                .order_by(TDocFileORM.type.asc(), TDocFileORM.ftp_url.asc())
+            )
+            rows = session.scalars(stmt).all()
+        return [_orm_to_domain(row) for row in rows]
+
     def delete_for_tdoc_ids(self, tdoc_ids: Iterable[str]) -> int:
         """Delete every TDocFile whose ``tdoc_id`` is in ``tdoc_ids``.
 

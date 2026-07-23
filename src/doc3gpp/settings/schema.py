@@ -293,7 +293,9 @@ class CacheSettings(BaseModel):
     :attr:`purge_confirm` flag is read by the CLI's ``cache purge``
     command to gate the destructive operation with an interactive prompt
     (skip the prompt with ``--yes`` or by setting
-    ``DOC3GPP_CACHE__PURGE_CONFIRM=false``).
+    ``cache.purge_confirm = false`` in the active TOML config — it is
+    not exposed via environment variable; see
+    :data:`ALLOWED_ENV_VARS`).
     """
 
     dir: Path = Field(

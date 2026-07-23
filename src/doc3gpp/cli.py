@@ -475,8 +475,10 @@ def cache_purge(
     behaviour).
 
     Prompts for confirmation by default; pass ``--yes`` to skip. The
-    prompt can also be disabled globally via ``cache.purge_confirm``
-    in config or the ``DOC3GPP_CACHE__PURGE_CONFIRM=false`` env var.
+    prompt can also be disabled globally by setting
+    ``cache.purge_confirm = false`` in the active TOML config (it is
+    not exposed via environment variable — see
+    ``ALLOWED_ENV_VARS`` in ``src/doc3gpp/settings/schema.py``).
     """
     resolved_scope = _resolve_cache_purge_scope(scope)
     settings = get_settings()

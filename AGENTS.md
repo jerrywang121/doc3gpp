@@ -38,7 +38,7 @@ or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (7 groups, 19 commands)
+│   ├── cli.py            # Typer commands (7 groups, 20 commands)
 │   ├── models/           # domain dataclasses — never leak ORM attrs out
 │   ├── repository/       # abstract repo contracts (Protocols)
 │   ├── services/         # orchestration; CLI-injected via factory

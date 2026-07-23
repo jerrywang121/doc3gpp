@@ -59,7 +59,7 @@ Per-layer modules:
 
 - `settings/` — schema and loader for environment-driven and TOML config;
   exposes `get_settings()` (cached) with `Settings` (root) +
-  `MeetingSyncSettings` / `OutputSettings` / `OutputFieldsSettings` /
+  `SyncSettings` / `OutputSettings` / `OutputFieldsSettings` /
   `CacheSettings` / `TDocParseSettings` sub-models.
     - `src/doc3gpp/settings/schema.py`
     - `src/doc3gpp/settings/loader.py`
@@ -86,8 +86,14 @@ Per-layer modules:
       `PythonDocxNotInstalledError` when missing). The legacy `.doc`
       binary format is rejected at the wrapper boundary because
       python-docx only supports the OOXML container.
-    - `parsers/cr_parser.py` — markdown → `TDocCRDetails` (cover-page,
-      optional TTCN overview, optional TTCN corrections)
+    - `parsers/cr_parser.py` — thin re-export shim around
+      `parsers/cr/`, exposing `parse_cr_details(markdown) ->
+      TDocCRParseResult(cover, ttcn)`. The actual implementations
+      (`CRParserBase` / `CRParser` / `TTCNCRParser`,
+      `cover_page.py`, `header.py`, `helpers.py`,
+      `ttcn_sections.py`) live in the `parsers/cr/` subpackage; the
+      shim delegates to `build_default_registry()` so the public
+      surface stays a single import.
 - `models/` — pure domain dataclasses (`@dataclass(slots=True)`),
   passed between layers; never leak ORM attributes.
     - `models/meeting.py`, `models/tdoc.py`, `models/tsg.py`,
@@ -424,7 +430,7 @@ Backend-specific engine kwargs are applied in
 ## CLI Surface
 
 Implemented command groups in `src/doc3gpp/cli.py` (seven groups,
-eighteen commands):
+twenty commands):
 
 - `db`:
     - `check`
@@ -458,37 +464,57 @@ eighteen commands):
       for the parser's `full=True` mode. End-to-end filter-driven:
       candidates are the intersection of every supplied predicate, with
       CR-type as the implicit default and a `max_batch` cap.
-    - `show` — `--tdoc`; renders the matching TDoc, the slim
-      cover-page row from `tdoc_cr_details` (URL-keyed on
-      `tdoc.ftp_url`), the `extracted_at` timestamp from
-      `tdoc_extracts` (same URL), and, when the TDoc is a TTCN CR,
-      a `[TTCN Details]` block from `tdoc_cr_ttcn_details`. Every
-      matching `tdoc_files` row (`tdoc_id`-keyed read, no URL
-      match) renders under an `[Auxiliary Files]` block (table),
-      `## Auxiliary Files` section (markdown), or `files` key
-      (JSON). JSON payload keys are `tdoc` (always), `cover`
-      (omitted when absent), `ttcn` (omitted when absent),
-      `extracted_at` (omitted when absent), `files` (omitted when
-      no auxiliary files exist).
+    - `show` — `--tdoc` (mutually exclusive with `--ftp-url`); renders
+      the matching TDoc, the slim cover-page row from
+      `tdoc_cr_details` (URL-keyed on `tdoc.ftp_url`), the
+      `extracted_at` timestamp from `tdoc_extracts` (same URL), and,
+      when the TDoc is a TTCN CR, a `[TTCN Details]` block from
+      `tdoc_cr_ttcn_details`. Every matching `tdoc_files` row
+      (`tdoc_id`-keyed read, no URL match) renders under an
+      `[Auxiliary Files]` block (table), `## Auxiliary Files`
+      section (markdown), or `files` key (JSON). JSON payload keys
+      are `tdoc` (always), `cover` (omitted when absent), `ttcn`
+      (omitted when absent), `extracted_at` (omitted when absent),
+      `files` (omitted when no auxiliary files exist). `--ftp-url`
+      resolves the URL across `tdocs` / `tdoc_cr_details` /
+      `tdoc_cr_ttcn_details` / `tdoc_files` directly (no parent
+      TDoc needed) and bundles the result into a separate
+      `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn, extracted_at,
+      files)` DTO rendered under a `# FTP URL` / `[FTP URL]`
+      anchor.
 - `tsg`:
     - `list`, `show`, `seed`
 - `wi`:
     - `sync` — `--tsg`
     - `list` — filters by `--tsg`, `--name`, `--acronym`, `--release`
 - `config`:
+    - `init` — bootstrap a default TOML at `--target {auto,project,user}`
+      (default `auto`: `./doc3gpp.toml` from a project root, otherwise
+      `~/.config/doc3gpp/config.toml`); refuses when `DOC3GPP_CONFIG`
+      is set; `--force/-f` overwrites an existing file.
     - `path` — which TOML file is in effect (or
       `"(no config file found)"`)
     - `show` — fully-resolved `Settings` as JSON for diffing against
       `doc3gpp.toml.example`
+    - `set` — `<key> <value>` write one setting into the active TOML
+      config file (refuses when none is in use; run `config init`
+      first); `--dry-run` prints the resulting TOML without writing.
 - `cache`:
     - `status` — file count, total bytes, limit, per-subdir breakdown
-    - `purge` — `[--yes]` to skip the interactive confirm; gated by
-      `CacheSettings.purge_confirm` (TOML-only)
+    - `purge` — `[--scope {markdown,zips,all}]` (default `markdown`)
+      selects which subtree to evict; `[--yes]` skips the interactive
+      confirm; gated by `CacheSettings.purge_confirm` (TOML-only)
 
 Every `* list` command also accepts `--format table|json|markdown`
 and `-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list` also
 accept `--fields`; `wi list` uses the configured `output.fields.wi` list
-without a per-command `--fields` override.
+without a per-command `--fields` override. `tdoc show` additionally
+accepts `--format {table,json,markdown,raw}` (the `raw` mode reads the
+converted `.docx` markdown body straight from the cache, bypassing the
+DB-row render — `--format raw` on the `--ftp-url` path is a
+deterministic cache read because the URL is the row identity), and
+the direct-mode `tdoc parse --from-path/--from-url` also accepts
+`--format raw` for local-batch use.
 
 ## Composition
 

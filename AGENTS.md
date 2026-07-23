@@ -31,7 +31,6 @@ alembic (installed but not wired). Optional extras:
 
 `pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"`
 or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
-`references-external/` is gitignored local scratch — never commit there.
 
 ## Structure (high level)
 

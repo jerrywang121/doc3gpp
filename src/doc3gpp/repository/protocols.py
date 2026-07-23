@@ -355,6 +355,19 @@ class TDocFileRepository(Protocol):
         """
         ...
 
+    def get_by_ftp_url(self, ftp_url: str) -> list[TDocFile]:
+        """Return every TDocFile whose ``ftp_url`` matches exactly.
+
+        The unique index on ``tdoc_files.ftp_url`` makes this a
+        constant-time PK-like lookup; in practice it returns at most
+        one row. The list return type keeps the caller-side shape
+        uniform with the multi-row :meth:`get_for_tdoc_id`. Used by
+        ``tdoc show --ftp-url <url>`` to surface the auxiliary file
+        (revision / review / support) attached to the requested URL
+        rather than to a parent ``tdoc_id``.
+        """
+        ...
+
     def delete_for_tdoc_ids(self, tdoc_ids: Iterable[str]) -> int:
         """Delete every TDocFile whose ``tdoc_id`` is in ``tdoc_ids``.
 

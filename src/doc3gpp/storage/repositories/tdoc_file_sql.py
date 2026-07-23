@@ -127,6 +127,24 @@ class SQLAlchemyTDocFileRepository:
             rows = session.scalars(stmt).all()
         return [_orm_to_domain(row) for row in rows]
 
+    def get_by_ftp_url(self, ftp_url: str) -> list[TDocFile]:
+        """Return every TDocFile whose ``ftp_url`` matches exactly.
+
+        The unique index on ``TDocFileORM.ftp_url`` (declared in
+        :mod:`doc3gpp.storage.db.models`) makes this an index-served
+        lookup; in practice the list has length <=1. Ordered by
+        ``(type, ftp_url) ASC`` for consistency with
+        :meth:`get_for_tdoc_id`.
+        """
+        with self._session_factory() as session:
+            stmt = (
+                select(TDocFileORM)
+                .where(TDocFileORM.ftp_url == ftp_url)
+                .order_by(TDocFileORM.type.asc(), TDocFileORM.ftp_url.asc())
+            )
+            rows = session.scalars(stmt).all()
+        return [_orm_to_domain(row) for row in rows]
+
     def delete_for_tdoc_ids(self, tdoc_ids: Iterable[str]) -> int:
         """Delete every TDocFile whose ``tdoc_id`` is in ``tdoc_ids``.
 

@@ -37,11 +37,6 @@ import logging
 from pathlib import Path
 import re
 
-from docx import Document
-from docx.oxml.ns import qn
-from docx.table import Table
-from docx.text.paragraph import Paragraph
-
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +56,34 @@ class PythonDocxNotInstalledError(ImportError):
                 "Install with `pip install doc3gpp[extract]`."
             )
         )
+
+
+# python-docx is optional — see ``[extract]`` extra in pyproject.toml.
+# Module-level import is wrapped in try/except so ``import doc3gpp.cli``
+# succeeds without python-docx; when the extra is missing, the stub
+# definitions below replace the real symbols and raise the install hint
+# only if a caller actually invokes the docx conversion path.
+try:
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+except ImportError:
+
+    class Document:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs) -> None:
+            raise PythonDocxNotInstalledError()
+
+    def qn(*args, **kwargs):  # type: ignore[no-redef]
+        raise PythonDocxNotInstalledError()
+
+    class Table:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs) -> None:
+            raise PythonDocxNotInstalledError()
+
+    class Paragraph:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs) -> None:
+            raise PythonDocxNotInstalledError()
 
 
 # ---------------------------------------------------------------------------
@@ -279,13 +302,9 @@ def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
             "(python-docx cannot parse the legacy .doc binary format)"
         )
 
-    # python-docx is optional — see ``[extract]`` extra in pyproject.toml.
-    # The import is at module scope above for production use; this guard
-    # is purely defensive against an exotic environment that strips the
-    # extra without removing the package.
     try:
         document = Document(io.BytesIO(doc_bytes))
-    except ImportError as exc:  # pragma: no cover - guarded import above
+    except ImportError as exc:  # pragma: no cover - only triggered when [extract] missing
         logger.error(
             "python-docx is not installed; it is required for document conversion. "
             "Install with `pip install doc3gpp[extract]`."

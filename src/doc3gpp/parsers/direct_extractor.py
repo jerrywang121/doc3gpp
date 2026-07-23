@@ -47,7 +47,6 @@ from doc3gpp.parsers.cr_parser import (
     _TDOC_HEADER_PATTERN,
     extract_docx_from_zip,
 )
-from doc3gpp.parsers.docx_converter import convert_document_to_markdown
 from doc3gpp.parsers.normalizers import FTP_BASE_URL
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
 
@@ -412,6 +411,10 @@ def direct_parse_bytes(
             f"Unsupported extension {suffix!r} for direct-parse; "
             "expected .docx or .zip"
         )
+
+    # Deferred so importing this module (for URL classification, ZIP-cache
+    # helpers, etc.) does not require python-docx to be installed.
+    from doc3gpp.parsers.docx_converter import convert_document_to_markdown
 
     markdown = convert_document_to_markdown(docx_bytes, docx_filename)
 

@@ -418,3 +418,62 @@ def test_coordinator_sync_persists_tdocs_and_files(sqlite_env, monkeypatch) -> N
     assert all(f.tdoc_id in meeting_tdoc_ids for f in tdoc_files)
     assert outcome.status == "synced"
     assert "TDoc sync complete:" in outcome.reason
+
+
+# ---------------------------------------------------------------------------
+# CLI end-to-end: ``tdoc show`` reads ``tdoc_files`` matching ``tdoc_id``
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_show_cli_surfaces_tdoc_files_rows(sqlite_env) -> None:
+    """End-to-end smoke test: seed parent + two ``tdoc_files`` rows,
+    drive ``doc3gpp tdoc show --tdoc <id>``, and assert the table
+    output renders the auxiliary files block in ``(type, ftp_url)``
+    ASC order with the four informative fields.
+
+    This catches regressions in the wiring from the CLI through the
+    factory, repo, DTO, and table renderer in one sweep.
+    """
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260030", type="CR", ftp_url="x/R5s260030.zip")
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5s260030",
+                type="revision",
+                file="R5s260030r1.zip",
+                ftp_url="tsg_ran/WG5/TSGR5_128/Inbox/R5s260030r1.zip",
+                uploaded_date=date(2026, 7, 4),
+            ),
+            TDocFile(
+                tdoc_id="R5s260030",
+                type="review",
+                file="R5s260030_MCC160Comments.zip",
+                ftp_url=(
+                    "tsg_ran/WG5/TSGR5_128/Review/"
+                    "R5s260030_MCC160Comments.zip"
+                ),
+                uploaded_date=date(2026, 7, 3),
+            ),
+        ]
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260030"])
+    assert result.exit_code == 0, result.output
+    aux_block = result.output.split("[Auxiliary Files]", 1)[1]
+    assert "type: revision" in aux_block
+    assert "file: R5s260030r1.zip" in aux_block
+    assert "uploaded_date: 2026-07-04" in aux_block
+    assert "type: review" in aux_block
+    assert "file: R5s260030_MCC160Comments.zip" in aux_block
+    assert "uploaded_date: 2026-07-03" in aux_block
+    review_idx = aux_block.index("type: review")
+    revision_idx = aux_block.index("type: revision")
+    assert review_idx < revision_idx

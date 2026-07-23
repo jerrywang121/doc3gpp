@@ -37,12 +37,14 @@ class ScraperClient:
         settings = get_settings()
         self._max_retries = settings.http_max_retries
         self._backoff = settings.http_retry_backoff
+        # httpx 1.0 moved ``timeout`` out of ``Client.__init__`` and onto the
+        # client; the attribute form works on both 0.27+ and 1.0+.
         self._client = httpx.Client(
-            timeout=timeout_seconds,
             headers={"User-Agent": self.USER_AGENT},
             follow_redirects=True,
             verify=settings.http_verify,
         )
+        self._client.timeout = timeout_seconds
 
     def get_text(self, url: str) -> str:
         """Fetch a URL and return its response body as text.

@@ -232,6 +232,35 @@ def test_user_agent_includes_project_repo_url() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Regression — timeout must reach the underlying httpx client
+# ---------------------------------------------------------------------------
+# httpx 1.0 dropped ``timeout`` from ``Client.__init__``; we set it as a
+# post-construct attribute so the same code works on 0.27+ and 1.0+.
+
+
+def test_timeout_is_propagated_to_underlying_client() -> None:
+    """The user-supplied timeout must reach the underlying httpx.Client."""
+    with patch("doc3gpp.scraping.client.get_settings") as get_settings:
+        get_settings.return_value = MagicMock(
+            http_verify=True, http_max_retries=0, http_retry_backoff=0.0
+        )
+        client = ScraperClient(timeout_seconds=12.5)
+
+    assert client._client.timeout == httpx.Timeout(12.5)
+
+
+def test_default_timeout_is_applied_when_not_overridden() -> None:
+    """Omitting ``timeout_seconds`` must use the documented default."""
+    with patch("doc3gpp.scraping.client.get_settings") as get_settings:
+        get_settings.return_value = MagicMock(
+            http_verify=True, http_max_retries=0, http_retry_backoff=0.0
+        )
+        client = ScraperClient()
+
+    assert client._client.timeout == httpx.Timeout(ScraperClient.DEFAULT_TIMEOUT_SECONDS)
+
+
+# ---------------------------------------------------------------------------
 # Coverage for the "give up after max retries on 5xx" path
 # ---------------------------------------------------------------------------
 

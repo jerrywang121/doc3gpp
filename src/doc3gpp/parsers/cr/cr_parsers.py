@@ -21,6 +21,7 @@ from doc3gpp.parsers.cr.header import (
     is_ttcn_tdoc,
 )
 from doc3gpp.parsers.cr.helpers import _COVER_FIELDS
+from doc3gpp.parsers.cr.ttcn_functions import extract_changed_functions
 from doc3gpp.parsers.tdoc_parsers import SectionParser, TDocParser
 from doc3gpp.parsers.cr.ttcn_sections import (
     TTCNCorrectionsParser,
@@ -157,6 +158,7 @@ class CRParserBase(TDocParser):
                 ttcn_release=overview.get("ttcn_release"),
                 test_suite=overview.get("test_suite"),
                 required_changes=list(corrections),
+                changed_functions=extract_changed_functions(corrections),
             )
 
         return TDocCRParseResult(cover=cover, ttcn=ttcn)

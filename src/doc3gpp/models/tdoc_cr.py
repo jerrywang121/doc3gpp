@@ -163,6 +163,9 @@ class TDocCRTTCNDetails:
         test_suite: Test suite overview field.
         required_changes: List of correction dicts produced by the TTCN
             parser.
+        changed_functions:
+            Sorted, deduplicated `<module>.<function>` entries derived from
+            `required_changes`. Empty list when no entries could be extracted.
     """
 
     tdoc_id: str
@@ -174,6 +177,7 @@ class TDocCRTTCNDetails:
     ttcn_release: str | None = None
     test_suite: str | None = None
     required_changes: list[dict[str, Any]] = field(default_factory=list)
+    changed_functions: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Mirror TDocExtractMeta' invariant; the URL is the row identity.

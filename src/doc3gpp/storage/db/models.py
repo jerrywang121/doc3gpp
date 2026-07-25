@@ -220,10 +220,15 @@ class TDocCrTtcnDetailOrm(Base):
 
     Stores six overview columns exposed by the TTCN parser plus a
     ``required_changes`` column that holds the list of correction dicts
-    as gzip-compressed UTF-8 JSON. See
+    as gzip-compressed UTF-8 JSON. The ``changed_functions`` aggregate
+    column holds a newline-delimited, SQL-searchable projection of the
+    ``<module_basename>.<function_name>`` pairs derived from
+    ``required_changes`` (no gzip, by design — see
+    ``.omo/plans/ttcn-changed-functions.md`` §D1). See
     :class:`doc3gpp.models.tdoc_cr.TDocCRTTCNDetails` for the in-memory
     shape; the repository compresses/decompresses the
-    ``required_changes`` blob on write/read.
+    ``required_changes`` blob on write/read and joins/splits the
+    ``changed_functions`` text column on newline.
 
     ``tdoc_id`` is a non-PK foreign key into ``tdocs.tdoc_id`` indexed
     for the ``get(tdoc_id)`` lookup; ``ondelete="CASCADE"`` removes the
@@ -250,6 +255,7 @@ class TDocCrTtcnDetailOrm(Base):
     required_changes: Mapped[bytes | None] = mapped_column(
         LargeBinary(length=16 * 1024 * 1024), nullable=True,
     )
+    changed_functions: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TDocExtractOrm(Base):

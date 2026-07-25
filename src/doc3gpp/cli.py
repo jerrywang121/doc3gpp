@@ -2173,6 +2173,14 @@ def _render_tdoc_show_markdown(
                         )
                         stream.write("\n```\n")
                         continue
+                    if f.name == "changed_functions" and isinstance(value, list):
+                        if not value:
+                            stream.write(f"- **{f.name}**: —\n")
+                        else:
+                            stream.write(f"- **{f.name}**:\n")
+                            for entry in value:
+                                stream.write(f"  * {entry}\n")
+                        continue
                     formatted = _serialise_show_value(value)
                     rendered = "—" if formatted is None else str(formatted)
                     stream.write(f"- **{f.name}**: {rendered}\n")
@@ -2301,6 +2309,15 @@ def _render_tdoc_show_table(
             stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
             count = len(ttcn.required_changes)
             stream.write(f"required_changes: {count} item(s)\n")
+            if ttcn.changed_functions is None:
+                stream.write("changed_functions: -\n")
+            elif not ttcn.changed_functions:
+                stream.write("changed_functions: 0 item(s)\n")
+            else:
+                count = len(ttcn.changed_functions)
+                stream.write(f"changed_functions: {count} item(s)\n")
+                for entry in ttcn.changed_functions:
+                    stream.write(f"  - {entry}\n")
 
         if record.files:
             stream.write("[Auxiliary Files]\n")
@@ -2579,6 +2596,14 @@ def _render_tdoc_show_by_url_markdown(
                     )
                     stream.write("\n```\n")
                     continue
+                if f.name == "changed_functions" and isinstance(value, list):
+                    if not value:
+                        stream.write(f"- **{f.name}**: —\n")
+                    else:
+                        stream.write(f"- **{f.name}**:\n")
+                        for entry in value:
+                            stream.write(f"  * {entry}\n")
+                    continue
                 formatted = _serialise_show_value(value)
                 rendered = "—" if formatted is None else str(formatted)
                 stream.write(f"- **{f.name}**: {rendered}\n")
@@ -2695,6 +2720,15 @@ def _render_tdoc_show_by_url_table(
             stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
             count = len(ttcn.required_changes)
             stream.write(f"required_changes: {count} item(s)\n")
+            if ttcn.changed_functions is None:
+                stream.write("changed_functions: -\n")
+            elif not ttcn.changed_functions:
+                stream.write("changed_functions: 0 item(s)\n")
+            else:
+                count = len(ttcn.changed_functions)
+                stream.write(f"changed_functions: {count} item(s)\n")
+                for entry in ttcn.changed_functions:
+                    stream.write(f"  - {entry}\n")
 
         if record.files:
             stream.write("[Auxiliary Files]\n")

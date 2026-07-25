@@ -464,20 +464,24 @@ Options:
     `tdoc_cr_details` (URL-keyed on `tdoc.ftp_url`) and, when the
     TDoc is a TTCN CR and a matching `tdoc_cr_ttcn_details` row
     exists, an extra `[TTCN Details]` block with the six overview
-    fields plus a `required_changes: N item(s)` summary line. The
-    `parser_version` and `details` lines are gone — `extracted_at`
-    is sourced from `tdoc_extracts` at the same URL and rendered
-    as `extracted_at: -` when the row is missing. Every
-    `tdoc_files` row matching `tdoc_id` renders under an
-    `[Auxiliary Files]` block with the four informative fields
-    (`type`, `file`, `ftp_url`, `uploaded_date`); the autoincrement
-    `id` and the `tdoc_id` match key are dropped because the parent
-    `[TDoc]` block already carries the match key. When the TDoc has
-    no auxiliary files, the `[Auxiliary Files]` header is omitted
-    and a placeholder line points the reader at `tdoc sync` (the
-    flow that populates `tdoc_files`). Long free-text fields are
-    truncated to 200 characters with an ellipsis. Matches every
-    prior release on the visible line positions.
+    fields, a `required_changes: N item(s)` summary line, and a
+    `changed_functions: N item(s)` summary line with one indented
+    entry per `<module>.<function>` aggregate (`-` when the
+    aggregate column is `NULL`, `0 item(s)` when the aggregate is
+    an empty list). The `parser_version` and `details` lines are
+    gone — `extracted_at` is sourced from `tdoc_extracts` at the
+    same URL and rendered as `extracted_at: -` when the row is
+    missing. Every `tdoc_files` row matching `tdoc_id` renders
+    under an `[Auxiliary Files]` block with the four informative
+    fields (`type`, `file`, `ftp_url`, `uploaded_date`); the
+    autoincrement `id` and the `tdoc_id` match key are dropped
+    because the parent `[TDoc]` block already carries the match
+    key. When the TDoc has no auxiliary files, the `[Auxiliary
+    Files]` header is omitted and a placeholder line points the
+    reader at `tdoc sync` (the flow that populates `tdoc_files`).
+    Long free-text fields are truncated to 200 characters with an
+    ellipsis. Matches every prior release on the visible line
+    positions.
   - `json`: one JSON object with the following top-level keys
     (optional keys are **omitted**, not emitted as `null`, when
     no corresponding row exists):
@@ -487,7 +491,11 @@ Options:
       `tdoc.ftp_url` (omitted when no `tdoc_cr_details` row).
     - `ttcn` — the TTCN sidecar dataclass keyed by
       `tdoc.ftp_url`, populated only for TTCN CRs (omitted
-      otherwise or when no row exists).
+      otherwise or when no row exists). Every dataclass field of
+      `TDocCRTTCNDetails` is serialised — including the
+      `changed_functions` aggregate list, which appears as a JSON
+      array (`[]` when the aggregate is empty or the row
+      predates the column).
     - `extracted_at` — ISO-8601 cache-extract timestamp from the
       `tdoc_extracts` row at `tdoc.ftp_url` (omitted when no row
       exists). Sits at the top level rather than nested under
@@ -502,16 +510,19 @@ Options:
     of TDoc fields under `## Metadata`, then `## Extracted Cover
     Details` (slim cover-page fields when present) and `##
     TTCN Details` (TTCN overview fields + `required_changes` as a
-    JSON fenced block when the TDoc is a TTCN CR and the sidecar
-    exists). When no extract row is present, a single `_No
-    extracted details; run \`doc3gpp tdoc parse --tdoc <id>\`
-    first._ placeholder is emitted. Every `tdoc_files` row
-    matching `tdoc_id` renders under `## Auxiliary Files` with one
-    nested bullet group per file (`type`, `file`, `ftp_url`,
-    `uploaded_date`); when no files exist, a `_No auxiliary
-    files; run \`doc3gpp tdoc sync\` first if you haven't synced
-    this meeting yet._` placeholder keeps the document skeleton
-    stable. Long fields are **not** truncated in this mode.
+    JSON fenced block + `changed_functions` as a bullet list when
+    the TDoc is a TTCN CR and the sidecar exists). The
+    `changed_functions` bullet list renders one `* <entry>` per
+    line, or `—` when the aggregate is empty. When no extract row
+    is present, a single `_No extracted details; run \`doc3gpp
+    tdoc parse --tdoc <id>\` first._ placeholder is emitted.
+    Every `tdoc_files` row matching `tdoc_id` renders under `##
+    Auxiliary Files` with one nested bullet group per file
+    (`type`, `file`, `ftp_url`, `uploaded_date`); when no files
+    exist, a `_No auxiliary files; run \`doc3gpp tdoc sync\`
+    first if you haven't synced this meeting yet._` placeholder
+    keeps the document skeleton stable. Long fields are **not**
+    truncated in this mode.
   - `raw`: the converted `.docx` markdown body (the artefact the CR
     parser consumes) for CR-type TDocs. The markdown is loaded from
     `{cache.dir}/markdown/<cache_file>` where `cache_file` is the
@@ -617,6 +628,151 @@ doc3gpp tdoc show --ftp-url TSG_RAN/WG5_Test_ex-T1/.../R5s260009.zip
 # the row identity; cache miss points at `tdoc parse --from-url`).
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 ```
+
+Sample output for a TTCN CR (`R5s260009`, fixture-driven) — every
+format surfaces the new `changed_functions` aggregate. The aggregate
+is auto-derived at parse time by
+`parsers/cr/ttcn_functions.py::extract_changed_functions` and
+round-trips through `tdoc_cr_ttcn_details.changed_functions` as a
+newline-delimited text column:
+
+`--format table`:
+
+```text
+[TDoc]
+tdoc_id: R5s260009
+meeting_id: 85434
+...
+ftp_url: tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009.zip
+
+[Extracted Details]
+ftp_url: tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009.zip
+spec: 38.523-3
+cr_num: 3790
+...
+extracted_at: 2026-07-24T10:31:00+00:00
+
+[TTCN Details]
+ftp_url: tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009.zip
+testcase: 7.1.3.5.3
+ue: MTK MT6986D and Qualcomm X105 5G Modem-RF
+ss: Anritsu Protocol Conformance Test System
+ats_version: -
+ttcn_release: -
+test_suite: NR5GC
+required_changes: 1 item(s)
+changed_functions: 1 item(s)
+  - NR_DC_Testcases.fl_TC_7_1_3_5_3_Body
+```
+
+`--format markdown`:
+
+```markdown
+# TDoc `R5s260009`
+
+## Metadata
+
+- **tdoc_id**: R5s260009
+- **meeting_id**: 85434
+- ...
+- **ftp_url**: tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009.zip
+
+## Extracted Cover Details
+
+- **spec**: 38.523-3
+- **cr_num**: 3790
+- ...
+- **extracted_at**: 2026-07-24T10:31:00+00:00
+
+## TTCN Details
+
+- **testcase**: 7.1.3.5.3
+- **ue**: MTK MT6986D and Qualcomm X105 5G Modem-RF
+- **ss**: Anritsu Protocol Conformance Test System
+- **ats_version**: —
+- **ttcn_release**: —
+- **test_suite**: NR5GC
+- **required_changes**:
+
+```json
+[
+  {
+    "function_name": "fl_TC_7_1_3_5_3_Body",
+    "reason_for_change": "Change due to MCX feature addition.",
+    "summary_of_change": "Use new PDCP function.",
+    "ttcn_module": "NR_DC_Testcases.ttcn",
+    "mcc160_comment": "OK"
+  }
+]
+```
+
+- **changed_functions**:
+  * NR_DC_Testcases.fl_TC_7_1_3_5_3_Body
+
+## Auxiliary Files
+
+- **type**: revision
+  - **file**: R5s260009_r1.docx
+  - **ftp_url**: tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009_r1.zip
+  - **uploaded_date**: 2026-07-22
+```
+
+`--format json`:
+
+```json
+{
+  "tdoc": {
+    "tdoc_id": "R5s260009",
+    "meeting_id": 85434,
+    ...
+    "ftp_url": "tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009.zip"
+  },
+  "cover": {
+    "ftp_url": "tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009.zip",
+    "tdoc_id": "R5s260009",
+    "spec": "38.523-3",
+    "cr_num": "3790",
+    ...
+  },
+  "ttcn": {
+    "ftp_url": "tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009.zip",
+    "tdoc_id": "R5s260009",
+    "testcase": "7.1.3.5.3",
+    "ue": "MTK MT6986D and Qualcomm X105 5G Modem-RF",
+    "ss": "Anritsu Protocol Conformance Test System",
+    "ats_version": null,
+    "ttcn_release": null,
+    "test_suite": "NR5GC",
+    "required_changes": [
+      {
+        "function_name": "fl_TC_7_1_3_5_3_Body",
+        "reason_for_change": "Change due to MCX feature addition.",
+        "summary_of_change": "Use new PDCP function.",
+        "ttcn_module": "NR_DC_Testcases.ttcn",
+        "mcc160_comment": "OK"
+      }
+    ],
+    "changed_functions": [
+      "NR_DC_Testcases.fl_TC_7_1_3_5_3_Body"
+    ]
+  },
+  "extracted_at": "2026-07-24T10:31:00+00:00",
+  "files": [
+    {
+      "id": 1,
+      "tdoc_id": "R5s260009",
+      "type": "revision",
+      "file": "R5s260009_r1.docx",
+      "ftp_url": "tsg_ran/WG5_Test_ex-T1/TTCN/2026/R5s260009_r1.zip",
+      "uploaded_date": "2026-07-22"
+    }
+  ]
+}
+```
+
+`--ftp-url` mirrors every section above under a `# FTP URL` /
+`[FTP URL]` anchor and uses the same `changed_functions` rendering
+contract for both the `markdown` and `table` formats.
 
 ### doc3gpp tdoc parse
 

@@ -130,7 +130,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   so the batch cap applies only to pending TDocs; the preview and
   confirmation list only pending rows. `--force` explicitly includes and
   re-parses already-parsed matches. The parser returns
-  `TDocCRParseResult(cover, ttcn)` and `TDocCrService` fans the result
+  `TDocCRParseResult(cover, ttcn)` — when the parser recognised a
+  TTCN CR, the sidecar's `changed_functions` aggregate
+  (sorted + deduped `<module_basename>.<function_name>` entries) is
+  auto-derived from `required_changes` at parse time by
+  `parsers/cr/ttcn_functions.py::extract_changed_functions` and round-trips
+  through the `tdoc_cr_ttcn_details.changed_functions` newline-delimited
+  text column (searchable via `LIKE`). `TDocCrService` fans the result
   out across THREE independent upserts: the slim cover-page row in
   `tdoc_cr_details`, the optional `tdoc_cr_ttcn_details` sidecar (only
   when the parser recognised a TTCN CR), and the `tdoc_extracts`

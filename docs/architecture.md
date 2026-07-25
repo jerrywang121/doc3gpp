@@ -260,7 +260,13 @@ and the TDoc CR extraction is the deepest.
       bundled with an optional `TDocCRTTCNDetails` sidecar (populated
       only when `tdoc_id` matches `R5s\d{6}` and the parser ran the
       TTCN overview + corrections sub-parsers; non-TTCN CRs get
-      `ttcn=None`).
+      `ttcn=None`). The sidecar is built with the derived
+      `changed_functions` aggregate via
+      `parsers/cr/ttcn_functions.py::extract_changed_functions` at the
+      `TDocCRTTCNDetails(...)` construction site in
+      `parsers/cr/cr_parsers.py:161`, so every successful TTCN
+      parse persists the sorted + deduped `<module>.<function>`
+      list alongside `required_changes`.
     - The service fans the result out across THREE independent
       upserts in `TDocCrService.extract_many` /
       `TDocCrService.extract_from_url`: the slim cover-page row in
@@ -363,11 +369,18 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `ss`, `ats_version`, `ttcn_release`, `test_suite`) plus
       `required_changes` (`LargeBinary(16 MB)` — gzip-compressed
       UTF-8 JSON list of correction dicts, written via
-      `storage/compression.py`). One row per immutable URL, so
-      multiple revisions of the same `tdoc_id` still land at
-      distinct URLs and occupy distinct rows. No `extracted_at`
-      or `parser_version` — the sidecar is purely the parsed
-      payload; timestamps and parser versioning live in
+      `storage/compression.py`) and `changed_functions`
+      (`Text`, nullable — a `\n`-joined `list[str]` of
+      `"<module_basename>.<function_name>"` entries, sorted +
+      deduped by `parsers/cr/ttcn_functions.py::extract_changed_functions`
+      at parse time; deliberately **not** gzip-compressed so the
+      column stays queryable via `LIKE`). The serialization contract
+      is `"\n".join(...)` on write and `value.split("\n")` on read
+      (`NULL` and empty both round-trip to `[]`). One row per
+      immutable URL, so multiple revisions of the same `tdoc_id`
+      still land at distinct URLs and occupy distinct rows. No
+      `extracted_at` or `parser_version` — the sidecar is purely the
+      parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
 - `tdoc_extracts`:
     - `ftp_url` (PK, matches `tdoc_cr_details.ftp_url`) + `tdoc_id`

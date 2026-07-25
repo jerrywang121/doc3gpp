@@ -266,7 +266,12 @@ and the TDoc CR extraction is the deepest.
       `TDocCRTTCNDetails(...)` construction site in
       `parsers/cr/cr_parsers.py:161`, so every successful TTCN
       parse persists the sorted + deduped `<module>.<function>`
-      list alongside `required_changes`.
+      list alongside `required_changes`. Partial-extraction markers
+      apply: when only the module basename is recoverable the entry is
+      recorded as `'<module>.'` (trailing-dot sentinel); when only the
+      function name is recoverable it is recorded as `'.<function>'`
+      (leading-dot sentinel); when neither is recoverable the
+      correction is dropped.
     - The service fans the result out across THREE independent
       upserts in `TDocCrService.extract_many` /
       `TDocCrService.extract_from_url`: the slim cover-page row in
@@ -376,7 +381,12 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       at parse time; deliberately **not** gzip-compressed so the
       column stays queryable via `LIKE`). The serialization contract
       is `"\n".join(...)` on write and `value.split("\n")` on read
-      (`NULL` and empty both round-trip to `[]`). One row per
+      (`NULL` and empty both round-trip to `[]`). Partial-extraction
+      markers apply: when only the module basename is recoverable the
+      entry is recorded as `'<module>.'` (trailing-dot sentinel);
+      when only the function name is recoverable it is recorded as
+      `'.<function>'` (leading-dot sentinel); when neither is
+      recoverable the correction is dropped. One row per
       immutable URL, so multiple revisions of the same `tdoc_id`
       still land at distinct URLs and occupy distinct rows. No
       `extracted_at` or `parser_version` — the sidecar is purely the

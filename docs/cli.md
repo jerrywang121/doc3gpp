@@ -634,7 +634,14 @@ format surfaces the new `changed_functions` aggregate. The aggregate
 is auto-derived at parse time by
 `parsers/cr/ttcn_functions.py::extract_changed_functions` and
 round-trips through `tdoc_cr_ttcn_details.changed_functions` as a
-newline-delimited text column:
+newline-delimited text column. Partial-extraction markers apply: when
+only the module basename is recoverable the entry is recorded as
+`'<module>.'` (trailing-dot sentinel); when only the function name is
+recoverable it is recorded as `'.<function>'` (leading-dot sentinel);
+when neither is recoverable the correction is dropped. The full-match
+form `<module>.<function>` is unchanged, so SQL queries that
+`LIKE '%<module>.%'` continue to match both full and module-only
+entries. The sample payload below uses the full-match form:
 
 `--format table`:
 

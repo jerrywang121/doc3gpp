@@ -121,6 +121,17 @@ change set so the docs stay honest.
   site (`parsers/cr/cr_parsers.py:161`). A scripted bulk back-fill
   is not provided — iterate `tdoc list --cr-type TTCN` and invoke
   `tdoc parse --tdoc <id> --force --yes` per id.
+  - **Partial-extraction markers.** The aggregate uses a 4-form
+    output contract: when both the module basename and function name
+    extract the entry is the full-match form `"<module>.<function>"`;
+    when only the module basename is recoverable the entry is
+    recorded as `'<module>.'` (trailing-dot sentinel); when only the
+    function name is recoverable it is recorded as `'.<function>'`
+    (leading-dot sentinel); when neither is recoverable the
+    correction is dropped. The dot sentinels are unambiguous in SQL:
+    `LIKE '%.'` finds module-only entries, `LIKE '.%'` finds
+    function-only entries, and the joined dot inside the full-match
+    form remains inert.
 - **Markdown cache format changed.** `cache/markdown/<cache_file>`
   files are now real ZIP archives (single `<docx stem>.md` entry) so a
   plain `.zip` extension maps to a format `unzip` / 7z / WinZip can

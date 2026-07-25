@@ -49,7 +49,11 @@ PostgreSQL available via configuration.
   plus a gzip-compressed `required_changes` JSON blob and a
   newline-delimited, SQL-searchable `changed_functions` aggregate
   (sorted + deduped `<module>.<function>` entries auto-derived from
-  `required_changes`). Cache artefacts live in `tdoc_extracts`. `tdoc
+  `required_changes`). When only the module basename is recoverable the
+  entry is recorded as `'<module>.'` (trailing-dot sentinel); when only
+  the function name is recoverable it is recorded as `'.<function>'`
+  (leading-dot sentinel); when neither is recoverable the correction
+  is dropped. Cache artefacts live in `tdoc_extracts`. `tdoc
   show` automatically appends a TTCN section (`[TTCN Details]` in table,
   `## TTCN Details` in markdown, a `ttcn` key in JSON) when the TDoc is
   a TTCN CR, and an auxiliary files section (`[Auxiliary Files]` / `##

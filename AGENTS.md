@@ -136,7 +136,11 @@ Workflows in one line (full prose in `docs/architecture.md`):
   auto-derived from `required_changes` at parse time by
   `parsers/cr/ttcn_functions.py::extract_changed_functions` and round-trips
   through the `tdoc_cr_ttcn_details.changed_functions` newline-delimited
-  text column (searchable via `LIKE`). `TDocCrService` fans the result
+  text column (searchable via `LIKE`). Partial-extraction markers apply:
+  when only the module basename is recoverable the entry is recorded
+  as `'<module>.'` (trailing-dot sentinel); when only the function name
+  is recoverable it is recorded as `'.<function>'` (leading-dot
+  sentinel); when neither is recoverable the correction is dropped. `TDocCrService` fans the result
   out across THREE independent upserts: the slim cover-page row in
   `tdoc_cr_details`, the optional `tdoc_cr_ttcn_details` sidecar (only
   when the parser recognised a TTCN CR), and the `tdoc_extracts`

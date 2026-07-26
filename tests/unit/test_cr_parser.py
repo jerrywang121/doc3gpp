@@ -333,6 +333,49 @@ def test_ttcn_cr_extracts_function_name_from_template_name_row() -> None:
     assert change["mcc160_comment"] == "OK"
 
 
+# ---------------------------------------------------------------------------
+# ``changed_functions`` aggregate: parser-side derivation contract.
+#
+# The aggregate is computed in :meth:`CRParserBase.parse` from the
+# ``required_changes`` list using the regex helpers in
+# :mod:`doc3gpp.parsers.cr.ttcn_functions`. These tests pin the
+# parser-side derivation; the on-disk round-trip is exercised in the
+# integration suite (:mod:`tests.integration.test_tdoc_cr_ttcn_sqlite`).
+# ---------------------------------------------------------------------------
+
+
+def test_ttcn_cr_populates_changed_functions() -> None:
+    """A TTCN CR with a ``fl_``-prefixed function and a bare-basename
+    module populates the parser-derived ``changed_functions`` aggregate
+    with the single ``"<module>.<function>"`` entry.
+
+    Mirrors the ``_TTCN_CORRECTION_LINES`` fixture:
+    ``ttcn_module = "NR_DC_Testcases.ttcn"`` and
+    ``function_name = "fl_TC_7_1_3_5_3_Body"``. The module basename is
+    stripped of the ``.ttcn`` extension; the function name is kept
+    verbatim because it already matches the canonical ``fl_`` prefix.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES))
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert parsed.ttcn.changed_functions == ["NR_DC_Testcases.fl_TC_7_1_3_5_3_Body"]
+
+
+def test_ttcn_cr_template_name_also_populates_changed_functions() -> None:
+    """``_TTCN_TEMPLATE_CORRECTION_LINES`` has a ``tr_``-prefixed function
+    (``tr_CommonPart_Template``) that is NOT in the regex's prefix set
+    — so the function side fails to extract. The module side DOES
+    extract (``NR_DC_Templates.ttcn`` → ``NR_DC_Templates``), so the
+    partial-include rule emits ``"NR_DC_Templates."`` with a trailing-dot
+    sentinel marking the function as missing."""
+    md = "\n".join(
+        list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_TEMPLATE_CORRECTION_LINES)
+    )
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert parsed.ttcn.changed_functions == ["NR_DC_Templates."]
+
+
 _TTCN_CORRECTION_LINES_FULL = (
     "",
     "Changes provided in TTCN CR R5s260009 are required for the verification of NR5GC 7.1.3.5.3.",

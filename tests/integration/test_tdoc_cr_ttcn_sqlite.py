@@ -38,6 +38,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocExtractMeta,
 )
 from doc3gpp.parsers.cr.header import is_ttcn_tdoc
+from doc3gpp.parsers.cr.ttcn_functions import extract_changed_functions
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_session_factory
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
@@ -194,6 +195,212 @@ def test_ttcn_repository_lazy_creates_table(sqlite_env) -> None:
     loaded = cr_ttcn_repo.get_by_url("stored/R5s260009.zip")
     assert loaded is not None
     assert loaded.testcase == "7.1.3.5.3"
+
+
+# ---------------------------------------------------------------------------
+# 3b. ``changed_functions`` aggregate column: round-trip, on-disk
+#     format, searchability, lazy-ALTER bootstrap, and legacy NULL
+#     recovery. See ``.omo/plans/ttcn-changed-functions.md`` v2 §D1
+#     and §D4 for the column shape and lazy-migration contract.
+# ---------------------------------------------------------------------------
+
+
+def test_ttcn_changed_functions_round_trips_through_orm(sqlite_env) -> None:
+    """Mirror of ``test_ttcn_round_trips_through_orm``: write the
+    sidecar with the standard ``_sample_corrections()`` payload and
+    assert the parser-derived ``changed_functions`` aggregate round-trips
+    through the ORM.
+
+    The 3-item corrections list:
+    - item 1: ``"NR5GC_Test.ttcn"`` + ``"fl_TC_7_1_3_5_3_Body"`` —
+      both extract → ``"NR5GC_Test.fl_TC_7_1_3_5_3_Body"``
+    - item 2: missing ``ttcn_module``, ``"f_TC_7_1_3_5_3_IMS2"`` —
+      only function extracts → ``".f_TC_7_1_3_5_3_IMS2"``
+      (leading-dot sentinel)
+    - item 3: missing ``ttcn_module``, ``"tr_CommonPart_Template"`` —
+      both fail (``tr_`` not in regex; no module) → dropped.
+    """
+    create_schema()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    corrections = _sample_corrections()
+    details = TDocCRTTCNDetails(
+        tdoc_id="R5s260009",
+        ftp_url=url,
+        required_changes=corrections,
+        changed_functions=extract_changed_functions(corrections),
+    )
+    cr_ttcn_repo.upsert(details)
+
+    loaded = cr_ttcn_repo.get_by_url(url)
+    assert loaded is not None
+    assert loaded.changed_functions == [
+        ".f_TC_7_1_3_5_3_IMS2",
+        "NR5GC_Test.fl_TC_7_1_3_5_3_Body",
+    ]
+
+
+def test_ttcn_changed_functions_is_newline_delimited_text(sqlite_env) -> None:
+    """The ``changed_functions`` column is a plain newline-delimited
+    text column (D1 contract): no gzip, no JSON wrapper, no list
+    punctuation — just ``"<module>.<fn>\\n<module>.<fn>"``.
+
+    Locks the "searchable, no compression" decision so a future
+    regression that re-introduces gzip / JSON would fail loudly.
+    """
+    create_schema()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    url = "stored/R5s260009.zip"
+    cr_ttcn_repo.upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260009",
+            ftp_url=url,
+            changed_functions=["a.b", "c.d"],
+        ),
+    )
+
+    factory = get_session_factory()
+    with factory() as session:
+        raw_value = session.execute(
+            text("SELECT changed_functions FROM tdoc_cr_ttcn_details WHERE ftp_url = :u"),
+            {"u": url},
+        ).scalar()
+
+    assert raw_value == "a.b\nc.d"
+    # Not gzip-compressed (gzip magic bytes would be the first 2 bytes).
+    assert not raw_value.startswith("\x1f\x8b")
+    # Not a JSON array (would start with ``[``).
+    assert not raw_value.startswith("[")
+
+
+def test_ttcn_changed_functions_searchable_by_like(sqlite_env) -> None:
+    """A ``LIKE '%<fragment>%'`` query against the ``changed_functions``
+    column finds the row whose aggregate contains the fragment.
+
+    This is the "searchable in SQL" contract from plan §D1. A
+    gzip-compressed blob would NOT match the plaintext fragment, so
+    this test pins the column shape (no gzip) as a regression guard.
+    """
+    create_schema()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    url = "stored/R5s260009.zip"
+    cr_ttcn_repo.upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260009",
+            ftp_url=url,
+            changed_functions=["foo.bar", "baz.qux"],
+        ),
+    )
+
+    factory = get_session_factory()
+    with factory() as session:
+        result = session.execute(
+            text(
+                "SELECT 1 FROM tdoc_cr_ttcn_details "
+                "WHERE changed_functions LIKE '%foo.bar%'"
+            )
+        ).first()
+    assert result is not None
+
+
+def test_ttcn_lazy_alter_adds_changed_functions_column(sqlite_env) -> None:
+    """Mirrors ``test_ttcn_repository_lazy_creates_table``: drop the
+    ``tdoc_cr_ttcn_details`` table mid-test, recreate it without the
+    new column, reset the repo's ``_ensured`` flag, then call
+    ``upsert`` with a sidecar carrying ``changed_functions``.
+
+    The lazy column-probe in ``_ensure_table_exists`` must detect the
+    missing column and run ``ALTER TABLE tdoc_cr_ttcn_details ADD
+    COLUMN changed_functions TEXT`` before the upsert fires
+    (plan §D4). The new value must land in the column after the call.
+    """
+    create_schema()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    factory = get_session_factory()
+    # Drop + recreate the table WITHOUT the changed_functions column,
+    # simulating a pre-this-PR DB after the sidecar table landed.
+    with factory() as session:
+        session.execute(text("DROP TABLE tdoc_cr_ttcn_details"))
+        session.commit()
+    with factory() as session:
+        session.execute(
+            text(
+                "CREATE TABLE tdoc_cr_ttcn_details ("
+                "ftp_url VARCHAR(1024) PRIMARY KEY,"
+                "tdoc_id VARCHAR(64) NOT NULL,"
+                "testcase VARCHAR(256),"
+                "ue VARCHAR(256),"
+                "ss VARCHAR(256),"
+                "ats_version VARCHAR(64),"
+                "ttcn_release VARCHAR(16),"
+                "test_suite VARCHAR(256),"
+                "required_changes LARGEBLOB"
+                ")"
+            )
+        )
+        session.commit()
+
+    # Reset the ensured flag so the next public call re-probes the schema.
+    cr_ttcn_repo._ensured = False  # type: ignore[attr-defined]
+
+    url = "stored/R5s260009.zip"
+    cr_ttcn_repo.upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260009",
+            ftp_url=url,
+            changed_functions=["NR5GC_Test.fl_TC_Body"],
+        ),
+    )
+
+    # The ALTER ran; the new value is persisted.
+    with factory() as session:
+        raw_value = session.execute(
+            text("SELECT changed_functions FROM tdoc_cr_ttcn_details WHERE ftp_url = :u"),
+            {"u": url},
+        ).scalar()
+    assert raw_value == "NR5GC_Test.fl_TC_Body"
+
+
+def test_ttcn_legacy_row_with_null_changed_functions_reads_as_empty_list(
+    sqlite_env,
+) -> None:
+    """A pre-this-PR sidecar row whose ``changed_functions`` column was
+    never populated reads back as ``[]`` (the dataclass default).
+
+    Plan §D6 backward-compat contract: existing rows have
+    ``changed_functions = NULL``; the repo's tolerant
+    ``_orm_to_details`` converts that to ``[]`` on read so downstream
+    consumers don't have to special-case ``None``.
+    """
+    create_schema()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    url = "stored/R5s260009_legacy.zip"
+    factory = get_session_factory()
+    with factory() as session:
+        # Insert a minimal row directly via SQL with the new column NULL.
+        session.execute(
+            text(
+                "INSERT INTO tdoc_cr_ttcn_details "
+                "(ftp_url, tdoc_id, changed_functions) "
+                "VALUES (:u, :t, NULL)"
+            ),
+            {"u": url, "t": "R5s260009"},
+        )
+        session.commit()
+
+    loaded = cr_ttcn_repo.get_by_url(url)
+    assert loaded is not None
+    assert loaded.changed_functions == []
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +622,9 @@ def test_is_ttcn_tdoc_gate_skips_ttcn_repo_for_non_ttcn_ids(sqlite_env) -> None:
 def test_ttcn_details_with_empty_required_changes_round_trips(sqlite_env) -> None:
     """A sidecar row with ``required_changes=[]`` (a non-TTCN-shape
     document that nevertheless lands a row) round-trips through the
-    repo without dropping the field.
+    repo without dropping the field. The ``changed_functions``
+    aggregate (always paired with the corrections list) is also
+    preserved as an empty list on the read-back.
     """
     create_schema()
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
@@ -428,11 +637,13 @@ def test_ttcn_details_with_empty_required_changes_round_trips(sqlite_env) -> Non
             ftp_url=url,
             testcase="7.1.3.5.3",
             required_changes=[],
+            changed_functions=[],
         ),
     )
     loaded = cr_ttcn_repo.get_by_url(url)
     assert loaded is not None
     assert loaded.required_changes == []
+    assert loaded.changed_functions == []
 
 
 # ---------------------------------------------------------------------------

@@ -46,12 +46,19 @@ PostgreSQL available via configuration.
   `tdoc_cr_details` table holds cover-page fields only; the new
   `tdoc_cr_ttcn_details` sidecar persists the six TTCN overview fields
   (`testcase`, `ue`, `ss`, `ats_version`, `ttcn_release`, `test_suite`)
-  plus a gzip-compressed `required_changes` JSON blob. Cache artefacts
-  live in `tdoc_extracts`. `tdoc show` automatically appends a TTCN
-  section (`[TTCN Details]` in table, `## TTCN Details` in markdown, a
-  `ttcn` key in JSON) when the TDoc is a TTCN CR, and an auxiliary
-  files section (`[Auxiliary Files]` / `## Auxiliary Files` / `files`
-  key) listing every `tdoc_files` row whose `tdoc_id` matches.
+  plus a gzip-compressed `required_changes` JSON blob and a
+  newline-delimited, SQL-searchable `changed_functions` aggregate
+  (sorted + deduped `<module>.<function>` entries auto-derived from
+  `required_changes`). When only the module basename is recoverable the
+  entry is recorded as `'<module>.'` (trailing-dot sentinel); when only
+  the function name is recoverable it is recorded as `'.<function>'`
+  (leading-dot sentinel); when neither is recoverable the correction
+  is dropped. Cache artefacts live in `tdoc_extracts`. `tdoc
+  show` automatically appends a TTCN section (`[TTCN Details]` in table,
+  `## TTCN Details` in markdown, a `ttcn` key in JSON) when the TDoc is
+  a TTCN CR, and an auxiliary files section (`[Auxiliary Files]` / `##
+  Auxiliary Files` / `files` key) listing every `tdoc_files` row whose
+  `tdoc_id` matches.
 - **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
   SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
 - **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to

@@ -202,6 +202,26 @@ def test_ttcn_details_allows_none_ftp_url() -> None:
     assert ttcn.ftp_url is None
 
 
+def test_ttcn_details_default_changed_functions() -> None:
+    """Constructing a :class:`TDocCRTTCNDetails` without an explicit
+    ``changed_functions`` kwarg yields an empty list (the dataclass
+    field default). The parser-side helper is responsible for filling
+    the aggregate; a bare constructor leaves it untouched."""
+    ttcn = TDocCRTTCNDetails(tdoc_id="R5s260009")
+    assert ttcn.changed_functions == []
+
+
+def test_ttcn_details_changed_functions_round_trip() -> None:
+    """An explicit ``changed_functions`` value round-trips through
+    :class:`TDocCRTTCNDetails` unchanged. The dataclass is a frozen
+    value object — it does no derivation of its own."""
+    ttcn = TDocCRTTCNDetails(
+        tdoc_id="R5s260009",
+        changed_functions=["A.f1", "B.f2"],
+    )
+    assert ttcn.changed_functions == ["A.f1", "B.f2"]
+
+
 # ---------------------------------------------------------------------------
 # TDocCRParseResult — cover + optional TTCN bundle.
 # ---------------------------------------------------------------------------

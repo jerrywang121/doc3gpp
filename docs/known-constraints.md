@@ -94,6 +94,44 @@ change set so the docs stay honest.
   `OperationalError("no such table")` triggers an idempotent
   `Base.metadata.create_all()` followed by a retry. The same lazy
   bootstrap covers `tdoc_cr_details` on legacy DBs.
+- **`tdoc_cr_ttcn_details.changed_functions` is a derived aggregate
+  column.** It holds the sorted, deduplicated set of
+  `"<module_basename>.<function_name>"` entries derived from each
+  row's `required_changes` payload by
+  `parsers/cr/ttcn_functions.py::extract_changed_functions` at parse
+  time, persisted as a newline-delimited `Text` column (deliberately
+  **not** gzip-compressed — the column is queryable via `LIKE`, e.g.
+  `WHERE changed_functions LIKE 'NR5GC_Positioning_Functions.%'`).
+  Pre-existing rows from before the column landed stay `NULL` after
+  the lazy bootstrap; the repo's tolerant `_orm_to_details` reads
+  `NULL` / empty as `[]` so the sidecar still round-trips, and the
+  CLI renderers display the empty aggregate as `0 item(s)` (table)
+  or `—` (markdown). For installs that pre-date this column, the
+  same `_ensure_table_exists()` helper extends the lazy bootstrap
+  with a column-probe step: a `SELECT changed_functions FROM
+  tdoc_cr_ttcn_details LIMIT 0` is attempted after the table-exists
+  probe, and an `OperationalError("no such column")` triggers an
+  idempotent `ALTER TABLE tdoc_cr_ttcn_details ADD COLUMN
+  changed_functions TEXT`. The probe is idempotent — a second call
+  short-circuits as soon as the SELECT succeeds. The `--force`
+  re-parse path (`doc3gpp tdoc parse --tdoc <id> --force`)
+  recomputes and persists the aggregate on demand, since the
+  derivation runs unconditionally inside
+  `CRParserBase.parse()` at the `TDocCRTTCNDetails` construction
+  site (`parsers/cr/cr_parsers.py:161`). A scripted bulk back-fill
+  is not provided — iterate `tdoc list --cr-type TTCN` and invoke
+  `tdoc parse --tdoc <id> --force --yes` per id.
+  - **Partial-extraction markers.** The aggregate uses a 4-form
+    output contract: when both the module basename and function name
+    extract the entry is the full-match form `"<module>.<function>"`;
+    when only the module basename is recoverable the entry is
+    recorded as `'<module>.'` (trailing-dot sentinel); when only the
+    function name is recoverable it is recorded as `'.<function>'`
+    (leading-dot sentinel); when neither is recoverable the
+    correction is dropped. The dot sentinels are unambiguous in SQL:
+    `LIKE '%.'` finds module-only entries, `LIKE '.%'` finds
+    function-only entries, and the joined dot inside the full-match
+    form remains inert.
 - **Markdown cache format changed.** `cache/markdown/<cache_file>`
   files are now real ZIP archives (single `<docx stem>.md` entry) so a
   plain `.zip` extension maps to a format `unzip` / 7z / WinZip can

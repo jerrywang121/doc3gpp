@@ -63,6 +63,26 @@ class SQLAlchemyTDocCrTtcnRepository:
                     session.execute(text("SELECT 1 FROM tdoc_cr_ttcn_details LIMIT 0"))
             else:
                 raise
+        # Column-probe step (idempotent ALTER for the changed_functions
+        # column on pre-existing sidecar tables). See plan D4.
+        try:
+            with self._session_factory() as session:
+                session.execute(
+                    text("SELECT changed_functions FROM tdoc_cr_ttcn_details LIMIT 0")
+                )
+        except OperationalError as exc:
+            msg = str(exc).lower()
+            if "no such column" in msg:
+                with self._session_factory() as session:
+                    with session.begin():
+                        session.execute(
+                            text(
+                                "ALTER TABLE tdoc_cr_ttcn_details "
+                                "ADD COLUMN changed_functions TEXT"
+                            )
+                        )
+            else:
+                raise
         self._ensured = True
 
     def upsert(self, details: TDocCRTTCNDetails) -> None:
@@ -132,13 +152,16 @@ def _details_to_orm(target: TDocCrTtcnDetailOrm, details: TDocCRTTCNDetails) -> 
     target.ttcn_release = details.ttcn_release
     target.test_suite = details.test_suite
     target.required_changes = compress_json(details.required_changes)
+    target.changed_functions = "\n".join(details.changed_functions) if details.changed_functions else None
 
 
 def _orm_to_details(row: TDocCrTtcnDetailOrm) -> TDocCRTTCNDetails:
     """Reconstruct a :class:`TDocCRTTCNDetails` from an ORM row.
 
     The ``required_changes`` blob is decoded with a tolerant fallback to
-    an empty list so a corrupt row never breaks the read path.
+    an empty list so a corrupt row never breaks the read path. The
+    ``changed_functions`` newline-delimited text column splits back to
+    ``[]`` when the column is ``NULL`` or empty.
     """
     required_changes = decompress_json(row.required_changes)
     if not isinstance(required_changes, list):
@@ -153,4 +176,5 @@ def _orm_to_details(row: TDocCrTtcnDetailOrm) -> TDocCRTTCNDetails:
         ttcn_release=row.ttcn_release,
         test_suite=row.test_suite,
         required_changes=required_changes,
+        changed_functions=[s for s in row.changed_functions.split("\n") if s] if row.changed_functions else [],
     )

@@ -979,3 +979,326 @@ def test_to_persisted_then_json_round_trip() -> None:
     assert "details_json" not in decoded
     assert decoded["spec"] == "38.523-3"
     assert decoded["cr_num"] == "3790"
+
+
+# ---------------------------------------------------------------------------
+# "Corrections required" heading variants — regression lock.
+#
+# The original regex used ``\s*$`` which only matched headings that
+# ended exactly with the phrase. Real 3GPP TTCN CRs ship two common
+# variants the parser silently skipped:
+#
+#   1. ``# Corrections required.`` (trailing period) — seen on
+#      R5s260034, R5s260035, R5s260057, R5s260122 in the cached
+#      2026-TTCN corpus. Each carries a real ``## Change 1``
+#      metadata table that the parser would skip, dropping the
+#      ``changed_functions`` entry.
+#   2. ``# Corrections required to test case 8.1.3.1.26``
+#      (trailing clause) — seen on R5s260239 (and its
+#      ``_MCC160Comments`` revision). Same shape: real
+#      ``Function name | cr_38508_MeasResults_No_Neighbour()`` row
+#      followed by ``TTCN module | NR_Measurement_Templates.ttcn``
+#      that the parser used to miss.
+#
+# The fix is two-layered:
+#
+#   - ``_CORRECTIONS_REQUIRED_RE`` is a permissive heading-only match
+#     that accepts any line whose body contains ``Corrections
+#     required`` — including the TOC entry that appears earlier in
+#     the document than the real heading.
+#   - ``_TOC_LEADER_RE`` captures the structural property of a 3GPP
+#     TOC line: whitespace + leader dots (``...``) + whitespace +
+#     page number at end-of-line. Real section headings never carry
+#     this suffix. The call sites (TTCNOverviewParser and
+#     TTCNCorrectionsParser) reject any heading match that ALSO
+#     matches the TOC leader pattern.
+#
+# The tests below pin both halves of the contract: the permissive
+# heading matches (variants 1 + 2 above), the TOC-leader pattern's
+# positive / negative coverage, and the combined call-site filter
+# that yields exactly the real-heading subset.
+# ---------------------------------------------------------------------------
+
+
+_TTCN_OVERVIEW_LINES_TRAILING_PERIOD = (
+    "### 1. Overview",
+    "",
+    "Test Case: 7.1.3.5.3",
+    "UE used: MTK MT6986D and Qualcomm X105 5G Modem-RF",
+    "System Simulator used: Anritsu Protocol Conformance Test System",
+    "",
+    "is part of the NR5GC test suite",
+    "",
+    "### 2. Corrections required.",
+)
+
+
+_TTCN_CORRECTION_LINES_TEMPLATE_NAME = (
+    "",
+    "Changes provided in TTCN CR R5s260034 are required for the verification of NR5GC.",
+    "",
+    "| Template name | f_NR_CellInfo_SetTAC |",
+    "| Reason for change | New helper for TAC configuration. |",
+    "| Summary of change | Add TAC setter. |",
+    "| TTCN module | NR_CellInfo.ttcn |",
+    "| MCC160 Comment | OK |",
+    "",
+    "| --- |",
+    "| Before change: |",
+    "| --- |",
+    "|   function f_NR_CellInfo_SetTAC() { return old ; } |",
+    "",
+    "### 3. Method of test",
+)
+
+
+def test_corrections_required_re_matches_trailing_period() -> None:
+    """The relaxed regex matches ``# Corrections required.`` (trailing period).
+
+    Before the fix, ``\\s*$`` failed on the trailing ``.`` and the
+    parser skipped the entire ``## Change 1`` block.
+    """
+    from doc3gpp.parsers.cr.ttcn_sections import _CORRECTIONS_REQUIRED_RE
+
+    assert _CORRECTIONS_REQUIRED_RE.match("# Corrections required.")
+    assert _CORRECTIONS_REQUIRED_RE.match("## Corrections required.")
+    assert _CORRECTIONS_REQUIRED_RE.match("### Corrections required.")
+    # Word-boundary: heading must *start* with "Corrections required".
+    assert not _CORRECTIONS_REQUIRED_RE.match("# Corrections are required to fix X")
+
+
+def test_corrections_required_re_matches_trailing_clause() -> None:
+    """The relaxed regex matches ``# Corrections required to test case X.Y.Z``.
+
+    Real 2026-TTCN corpus file R5s260239 ships this exact form.
+    """
+    from doc3gpp.parsers.cr.ttcn_sections import _CORRECTIONS_REQUIRED_RE
+
+    assert _CORRECTIONS_REQUIRED_RE.match(
+        "# Corrections required to test case 8.1.3.1.26"
+    )
+    assert _CORRECTIONS_REQUIRED_RE.match(
+        "## Corrections required to test case 7.1.3.5.3"
+    )
+
+
+def test_corrections_required_re_still_matches_bare_heading() -> None:
+    """Backward compat: the plain ``# Corrections required`` still matches."""
+    from doc3gpp.parsers.cr.ttcn_sections import _CORRECTIONS_REQUIRED_RE
+
+    assert _CORRECTIONS_REQUIRED_RE.match("# Corrections required")
+    assert _CORRECTIONS_REQUIRED_RE.match("### 2. Corrections required")
+    # R5s260123_MCC160Comments / R5s260176_MCC160Comments ship the
+    # phrase at column 0 with no leading ``#``. The regex must accept
+    # the no-prefix form too.
+    assert _CORRECTIONS_REQUIRED_RE.match("Corrections required")
+
+
+def test_corrections_required_re_matches_dotted_numbered_prefix() -> None:
+    """Dotted-numbered prefixes (``## 2.1``, ``### 1.2.3``, ...) match.
+
+    Forward-looking lock for nested section numbers — the original
+    ``(?:[#\\d\\.\\s]*)?`` prefix anchor (now restored after the
+    permissiveness-vs-precision debate) covers every leading-prefix
+    variant that ends in a digit-or-period before the phrase. Without
+    this case being pinned, a future "tighter" prefix rewrite would
+    silently skip these headings.
+    """
+    from doc3gpp.parsers.cr.ttcn_sections import _CORRECTIONS_REQUIRED_RE
+
+    assert _CORRECTIONS_REQUIRED_RE.match("## 2.1 Corrections Required")
+    assert _CORRECTIONS_REQUIRED_RE.match("## 2.1. Corrections Required")
+    assert _CORRECTIONS_REQUIRED_RE.match("### 1.2.3 Corrections required")
+
+
+def test_corrections_required_re_is_permissive_enough_to_match_toc() -> None:
+    """The heading regex is intentionally permissive — it also matches
+    the TOC entry.
+
+    The TOC rejection happens at the call site, NOT in the heading
+    regex. Locking the permissiveness here is what lets
+    :func:`test_toc_leader_re_rejects_toc_entries` keep its
+    sharp, positive-signal definition. If the heading regex ever
+    becomes too strict and stops matching the TOC line, the TOC
+    exclusion becomes a no-op and the regression-prevention story
+    silently breaks.
+    """
+    from doc3gpp.parsers.cr.ttcn_sections import _CORRECTIONS_REQUIRED_RE
+
+    # Single-digit TOC entry (the canonical 2026-TTCN shape).
+    assert _CORRECTIONS_REQUIRED_RE.match(
+        "2    Corrections required     ...... 4"
+    )
+    # Two-digit TOC entry (defensive).
+    assert _CORRECTIONS_REQUIRED_RE.match(
+        "12    Corrections required     ...... 4"
+    )
+    # Same shape but the trailing-period heading we want to match
+    # appears inside the TOC entry.
+    assert _CORRECTIONS_REQUIRED_RE.match(
+        "2    Corrections required.     ...... 3"
+    )
+    # Same shape but the trailing-clause heading we want to match
+    # appears inside the TOC entry.
+    assert _CORRECTIONS_REQUIRED_RE.match(
+        "2    Corrections required to test case 8.1.3.1.26     ...... 4"
+    )
+
+
+def test_toc_leader_re_matches_table_of_contents_entries() -> None:
+    """``_TOC_LEADER_RE`` is the positive signal that identifies a TOC line.
+
+    Pattern: ``\\s\\.{6}\\s+\\d+\\s*$`` — whitespace + **exactly six**
+    leader dots + whitespace + page number at end-of-line. The ``6``
+    is exact because the docx-to-markdown converter renders the
+    source one-dot-leader tab as exactly six ``.`` characters; a
+    survey of 545 TOC-leader lines across the 2026-TTCN corpus
+    confirms 100% uniformity.
+    """
+    from doc3gpp.parsers.cr.ttcn_sections import _TOC_LEADER_RE
+
+    # Canonical shape.
+    assert _TOC_LEADER_RE.search("2    Corrections required     ...... 4")
+    # Multi-digit page number.
+    assert _TOC_LEADER_RE.search("1    Overview     ...... 12")
+
+
+def test_toc_leader_re_rejects_non_six_dot_lines() -> None:
+    """Lines with the wrong dot count must NOT match — pinning the exact-6
+    invariant.
+
+    ``\\.{6}`` (not ``\\.+``) is the locked shape. If the converter
+    ever changes the dot count, the regression breaks loudly here
+    instead of silently over- or under-matching TOC entries.
+    """
+    from doc3gpp.parsers.cr.ttcn_sections import _TOC_LEADER_RE
+
+    # 5 dots: too few
+    assert not _TOC_LEADER_RE.search(
+        "2    Corrections required     ..... 4"
+    )
+    # 7 dots: too many
+    assert not _TOC_LEADER_RE.search(
+        "2    Corrections required     ....... 4"
+    )
+    # 1 dot (could appear in prose)
+    assert not _TOC_LEADER_RE.search("end of sentence.")
+
+
+def test_corrections_required_combined_filter_excludes_toc_entries() -> None:
+    """End-to-end of the call-site filter: the heading regex matches
+    but the TOC leader filter rejects.
+
+    This is the exact predicate both ``TTCNOverviewParser`` and
+    ``TTCNCorrectionsParser`` apply — pinning it here catches any
+    future drift between the two call sites.
+    """
+    from doc3gpp.parsers.cr.ttcn_sections import (
+        _CORRECTIONS_REQUIRED_RE,
+        _TOC_LEADER_RE,
+    )
+
+    def _is_real_heading(line: str) -> bool:
+        return bool(
+            _CORRECTIONS_REQUIRED_RE.match(line)
+            and not _TOC_LEADER_RE.search(line)
+        )
+
+    # Real headings: pass.
+    assert _is_real_heading("# Corrections required")
+    assert _is_real_heading("## Corrections required.")
+    assert _is_real_heading(
+        "### 2. Corrections required to test case 8.1.3.1.26"
+    )
+    assert _is_real_heading("Corrections required")
+    # TOC entries: rejected.
+    assert not _is_real_heading(
+        "2    Corrections required     ...... 4"
+    )
+    assert not _is_real_heading(
+        "2    Corrections required.     ...... 3"
+    )
+    assert not _is_real_heading(
+        "2    Corrections required to test case 8.1.3.1.26     ...... 4"
+    )
+
+
+def test_ttcn_cr_with_trailing_period_heading_extracts_change() -> None:
+    """End-to-end: a TTCN CR whose ``Corrections required`` heading carries
+    a trailing period is parsed all the way through to
+    ``changed_functions``.
+
+    Locks the regression on the 2026-TTCN corpus files
+    R5s260034 / R5s260035 / R5s260057 / R5s260122 — all use
+    ``# Corrections required.`` with a ``| Template name |`` row
+    followed by ``| TTCN module | NR_CellInfo.ttcn |``.
+    """
+    md = "\n".join(
+        list(_HEADER_LINES)
+        + list(_TTCN_OVERVIEW_LINES_TRAILING_PERIOD)
+        + list(_TTCN_CORRECTION_LINES_TEMPLATE_NAME)
+    )
+    parsed = parse_cr_details(md, tdoc_id="R5s260034")
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
+    assert change["function_name"] == "f_NR_CellInfo_SetTAC"
+    assert change["ttcn_module"] == "NR_CellInfo.ttcn"
+    assert parsed.ttcn.changed_functions == ["NR_CellInfo.f_NR_CellInfo_SetTAC"]
+
+
+_TTCN_OVERVIEW_LINES_TRAILING_CLAUSE = (
+    "### 1. Overview",
+    "",
+    "Test Case: 8.1.3.1.26",
+    "UE used: Test UE",
+    "System Simulator used: Anritsu",
+    "",
+    "is part of the NR test suite",
+    "",
+    "### 2. Corrections required to test case 8.1.3.1.26",
+)
+
+
+_TTCN_CORRECTION_LINES_CL_TRAILING = (
+    "",
+    "Changes provided in TTCN CR R5s260239 are required for the verification of NR 8.1.3.1.26.",
+    "",
+    "| Function name | cr_38508_MeasResults_No_Neighbour() |",
+    "| Reason for change | New measurement result handling. |",
+    "| Summary of change | Add No Neighbour case. |",
+    "| TTCN module | NR_Measurement_Templates.ttcn |",
+    "| MCC160 Comment | OK |",
+    "",
+    "| --- |",
+    "| Before change: |",
+    "| --- |",
+    "|   function cr_38508_MeasResults_No_Neighbour() { return old ; } |",
+    "",
+    "### 3. Method of test",
+)
+
+
+def test_ttcn_cr_with_trailing_clause_heading_extracts_change() -> None:
+    """End-to-end: a TTCN CR whose ``Corrections required`` heading carries
+    a trailing ``to test case X.Y.Z`` clause is parsed all the way through.
+
+    Locks the regression on the 2026-TTCN corpus file R5s260239
+    (and its ``_MCC160Comments`` revision). Note the function name
+    carries a trailing ``()`` — the regex's ``\b`` boundary at the
+    end of the function name group consumes the parens.
+    """
+    md = "\n".join(
+        list(_HEADER_LINES)
+        + list(_TTCN_OVERVIEW_LINES_TRAILING_CLAUSE)
+        + list(_TTCN_CORRECTION_LINES_CL_TRAILING)
+    )
+    parsed = parse_cr_details(md, tdoc_id="R5s260239")
+    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
+    assert len(parsed.ttcn.required_changes) == 1
+    change = parsed.ttcn.required_changes[0]
+    assert change["function_name"].startswith("cr_38508_MeasResults_No_Neighbour")
+    assert change["ttcn_module"] == "NR_Measurement_Templates.ttcn"
+    assert parsed.ttcn.changed_functions == [
+        "NR_Measurement_Templates.cr_38508_MeasResults_No_Neighbour"
+    ]

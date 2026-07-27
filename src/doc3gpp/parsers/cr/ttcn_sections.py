@@ -28,8 +28,17 @@ _OVERVIEW_TABLE_OF_CONTENTS_RE = re.compile(
     r"^(?:[#\d\.\s]*)?(Table of Contents)\s*$", re.IGNORECASE
 )
 _CORRECTIONS_REQUIRED_RE = re.compile(
-    r"^(?:[#\d\.\s]*)?(Corrections\s+required)\s*$", re.IGNORECASE
+    r"^(?:[#\d\.\s]*)?(Corrections\s+required)\b.*$", re.IGNORECASE
 )
+# Every 3GPP TTCN CR ships a Table of Contents whose entries use the
+# pattern ``<title>     ...... <page>`` — whitespace + six leader dots
+# + whitespace + page number at end-of-line. The ``6`` is exact: the
+# docx-to-markdown converter renders the source one-dot-leader tab as
+# exactly six ``.`` characters, and a survey of 545 TOC-leader lines
+# across the 2026-TTCN corpus confirms 100% uniformity. Pinning the
+# count is what lets the prefix anchor stay permissive — the TOC
+# rejection is a positive signal, not a negative-prefix heuristic.
+_TOC_LEADER_RE = re.compile(r"\s\.{6}\s+\d+\s*$")
 
 _SINGLE_CORRECTION_FUNCTION_RE = re.compile(
     r"^\s*\|\s*(?:[\w\s]+\s+name)\s*\|\s*(.+?)\s*\|", re.IGNORECASE
@@ -89,7 +98,7 @@ class TTCNOverviewParser:
             if _OVERVIEW_OVERVIEW_RE.match(line):
                 start_idx = idx
                 continue
-            if _CORRECTIONS_REQUIRED_RE.match(line):
+            if _CORRECTIONS_REQUIRED_RE.match(line) and not _TOC_LEADER_RE.search(line):
                 end_idx = idx
                 break
 
@@ -173,7 +182,7 @@ class TTCNCorrectionsParser:
         total_lines = len(lines)
 
         for idx in range(total_lines):
-            if _CORRECTIONS_REQUIRED_RE.match(lines[idx]):
+            if _CORRECTIONS_REQUIRED_RE.match(lines[idx]) and not _TOC_LEADER_RE.search(lines[idx]):
                 next_line_number = idx + 1
                 break
         if next_line_number == 0:

@@ -101,10 +101,28 @@ from doc3gpp.repository.protocols import (
 from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.tdoc_zip_source import (
     TDocCacheLike,
+    TDocTooLargeError,
     TDocZipDownloadError,
     download_tdoc_zip,
     resolve_download_url,
 )
+
+# Re-exported so callers can catch ``TDocTooLargeError`` from a single
+# import path (the service layer) without depending on the scraping
+# module directly. The canonical home of the class is
+# :mod:`doc3gpp.scraping.tdoc_zip_source` to avoid a service ↔ scraping
+# circular import (the service already imports from scraping).
+__all__ = [
+    "BatchExtractResult",
+    "CRHeaderMissingError",
+    "ExtractResult",
+    "TDocCrService",
+    "TDocNotFoundError",
+    "TDocNotYetOnFTPError",
+    "TDocTooLargeError",
+    "TDocTypeUnsupportedError",
+    "TDocZipDownloadError",
+]
 
 if TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
@@ -273,43 +291,6 @@ class TDocNotYetOnFTPError(ValueError):
             "pipeline has not propagated a final URL; try again later "
             "or run `doc3gpp tdoc sync` to refresh the tdocs table"
         )
-
-
-class TDocTooLargeError(Exception):
-    """Raised when a TDoc's source file exceeds ``tdoc_parse.max_tdoc_size_kb``.
-
-    Surfaced by :meth:`TDocCrService.extract` (via the
-    :func:`download_tdoc_zip` pre-fetch cache probe, the post-fetch
-    guard, or :func:`direct_parse_bytes`), by
-    :meth:`TDocCrService.extract_from_url` (via
-    :meth:`TDocCrService._extract_from_3gpp_url`'s defence-in-depth
-    guard), and by the CLI's :func:`_tdoc_parse_local_batch` pre-read
-    ``stat()`` guard.
-
-    Routed to the existing skip bucket (:attr:`BatchExtractResult.skipped`
-    and :attr:`DirectParseBatchResult.skipped`) rather than the failure
-    bucket because "this file is too big for our parse budget" is an
-    operational decision, not an upstream-side error — the operator's
-    knob, not a 3GPP-side bug. ``0`` disables the check entirely.
-
-    Attributes:
-        source: A short identifier for the bytes the check fired on —
-            ``"cache:<path>"`` on a cache-hit pre-flight,
-            ``"download:<url>"`` on a fresh-download post-fetch,
-            or the original ``filename`` for :func:`direct_parse_bytes`.
-        size: The measured byte length of the source.
-        limit: The active per-file cap in bytes (``max_tdoc_size_kb *
-            1024``).
-    """
-
-    def __init__(self, source: str, size: int, limit: int) -> None:
-        super().__init__(
-            f"TDoc source {source!r} is {size} bytes, "
-            f"exceeds max_tdoc_size_kb limit ({limit} bytes)"
-        )
-        self.source = source
-        self.size = size
-        self.limit = limit
 
 
 # ---------------------------------------------------------------------------
@@ -1174,14 +1155,4 @@ class TDocCrService:
 
 # Re-export the parser-side exception so callers can catch a single
 # type if they want to treat "not a CR markdown" as a soft failure in
-# batch flows. Not part of the Plan but convenient.
-__all__ = [
-    "BatchExtractResult",
-    "CRHeaderMissingError",
-    "ExtractResult",
-    "TDocCrService",
-    "TDocNotFoundError",
-    "TDocNotYetOnFTPError",
-    "TDocTypeUnsupportedError",
-    "TDocZipDownloadError",
-] 
+# batch flows. Not part of the Plan but convenient. 

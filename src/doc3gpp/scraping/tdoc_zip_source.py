@@ -70,6 +70,41 @@ class TDocZipDownloadError(Exception):
         self.original = original
 
 
+class TDocTooLargeError(Exception):
+    """Raised when a TDoc's source file exceeds ``tdoc_parse.max_tdoc_size_kb``.
+
+    Surfaced by :func:`download_tdoc_zip` (pre-fetch cache probe +
+    post-fetch fresh-download guard) and propagated up through the
+    service layer to the CLI summary. Routed to the existing skip
+    bucket (:attr:`BatchExtractResult.skipped` and
+    :attr:`DirectParseBatchResult.skipped`) rather than the failure
+    bucket because "this file is too big for our parse budget" is an
+    operational decision, not an upstream-side error — the operator's
+    knob, not a 3GPP-side bug. ``0`` disables the check entirely.
+
+    Defined in this module (the lowest layer that uses it) to avoid a
+    service-layer → scraping-layer → service-layer circular import.
+
+    Attributes:
+        source: A short identifier for the bytes the check fired on —
+            ``"cache:<path>"`` on a cache-hit pre-flight,
+            ``"download:<url>"`` on a fresh-download post-fetch,
+            or the original ``filename`` for :func:`direct_parse_bytes`.
+        size: The measured byte length of the source.
+        limit: The active per-file cap in bytes (``max_tdoc_size_kb *
+            1024``).
+    """
+
+    def __init__(self, source: str, size: int, limit: int) -> None:
+        super().__init__(
+            f"TDoc source {source!r} is {size} bytes, "
+            f"exceeds max_tdoc_size_kb limit ({limit} bytes)"
+        )
+        self.source = source
+        self.size = size
+        self.limit = limit
+
+
 class TDocCacheLike(Protocol):
     """Minimal cache interface consumed by ``download_tdoc_zip``.
 
@@ -228,49 +263,22 @@ def download_tdoc_zip(
     primary_url: str | None = None,
     *,
     ftp_url: str | None = None,
+    max_bytes: int = 0,
 ) -> DownloadedZip:
     """Return a :class:`DownloadedZip` for the TDoc, downloading on cache miss.
 
-    Cache key is derived from the URL via
-    :func:`doc3gpp.scraping.cache_keys.derive_cache_file`; subdir is
-    ``"zips"``. The caller supplies the upstream URL ahead of time via
-    ``ftp_url`` (the ``tdocs.ftp_url`` row is the canonical source); on
-    a cache hit the same key is reused without re-deriving. On a miss
-    the function tries each candidate URL in order and caches the
-    first successful download:
+    See the existing docstring for cache / URL semantics. When
+    ``max_bytes > 0``:
 
-    1. ``primary_url`` (typically rebuilt from ``tdocs.ftp_url`` via
-    :func:`doc3gpp.parsers.normalizers.build_ftp_url`).
-    2. The template-based URL from :func:`get_tdoc_zip_url`.
+    * On a cache hit, the cached file is statted first; if its size
+      exceeds ``max_bytes``, :class:`TDocTooLargeError` is raised
+      before any network I/O.
+    * On a fresh download, the bytes are written to the cache (so a
+      subsequent call hits the cache-hit path) and then statted; if
+      they exceed ``max_bytes``, :class:`TDocTooLargeError` is raised
+      before returning.
 
-    The two are deduplicated, so a ``primary_url`` that matches the
-    template only triggers one fetch. A terminal ``httpx.HTTPError`` on
-    ``primary_url`` is swallowed and the template is tried as a fallback;
-    if the template also fails, the last error is raised as
-    :class:`TDocZipDownloadError`. Programming errors (e.g.
-    ``httpx.InvalidURL``) on ``primary_url`` propagate immediately so
-    a malformed stored URL doesn't silently mask the real problem.
-
-    The returned ``url`` records the exact candidate that succeeded on a
-    fresh download, so the caller can persist the download provenance
-    alongside the extracted CR fields.
-
-    ``ftp_url`` is the new contract for the service layer: it lets the
-    caller pin the cache key to a known URL up-front (so a cache hit
-    uses the same key a fresh fetch would have written). On a cache
-    hit where the caller already passed ``ftp_url``, the same derived
-    key is reused. ``primary_url`` is retained for back-compat with the
-    resolve-and-retry path inside this function.
-
-    Raises:
-        ValueError: ``tdoc`` does not match the CR pattern (the cache
-            and network are left untouched in that case — a bad id
-            should fail fast, not produce a half-written cache entry),
-            or neither ``ftp_url`` nor a resolved URL is available to
-            derive the cache key from.
-        TDocZipDownloadError: every candidate URL was tried and none
-            succeeded (no ``primary_url`` and no template, or all
-            fetches raised a terminal ``httpx.HTTPError``).
+    ``max_bytes=0`` disables both checks (the historical behaviour).
     """
     if not tdoc:
         raise ValueError("TDoc id is empty")
@@ -285,6 +293,22 @@ def download_tdoc_zip(
         cache_key = derive_cache_file(ftp_url)
         cached_bytes = cache.get_bytes(cache_key, "zips")
         if cached_bytes is not None:
+            # Pre-fetch cache size guard. ``stat`` reflects the on-disk
+            # size even after the atomic rename in ``put_bytes``; falls
+            # back to ``len(cached_bytes)`` if the file vanished between
+            # the read and the stat.
+            if max_bytes > 0:
+                cached_path = cache.path_for(cache_key, "zips")
+                try:
+                    cached_size = cached_path.stat().st_size
+                except FileNotFoundError:
+                    cached_size = len(cached_bytes)
+                if cached_size > max_bytes:
+                    raise TDocTooLargeError(
+                        source=f"cache:{cached_path}",
+                        size=cached_size,
+                        limit=max_bytes,
+                    )
             logger.debug("Cache hit for TDoc zip %s", cache_key)
             return DownloadedZip(path=cache.path_for(cache_key, "zips"), url=None)
 
@@ -314,6 +338,15 @@ def download_tdoc_zip(
         if cache_key is None:
             cache_key = derive_cache_file(url)
         cached_path = cache.put_bytes(cache_key, payload, "zips")
+        # Post-fetch size guard. The bytes are already on disk so a
+        # future call can short-circuit on the cache-hit path; the
+        # exception fires before returning to the caller.
+        if max_bytes > 0 and len(payload) > max_bytes:
+            raise TDocTooLargeError(
+                source=f"download:{url}",
+                size=len(payload),
+                limit=max_bytes,
+            )
         logger.info(
             "Cached TDoc zip %s at %s (%d bytes) from %s",
             cache_key,

@@ -541,3 +541,94 @@ def test_download_tdoc_zip_url_is_none_without_primary_url(
 )
 def test_canonicalise_tdoc_id(raw: str, expected: str | None) -> None:
     assert canonicalise_tdoc_id(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# download_tdoc_zip — max_bytes pre-fetch + post-fetch guards
+# ---------------------------------------------------------------------------
+
+
+def test_download_tdoc_zip_skips_oversized_cache_without_network(
+    tmp_path,
+) -> None:
+    """When the on-disk zip cache exists and exceeds ``max_bytes``,
+    no network fetch happens — the function raises TDocTooLargeError
+    before calling ``client.get_bytes``.
+    """
+    from doc3gpp.scraping.cache import TDocCache
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    cache = TDocCache(root=tmp_path, size_limit_bytes=0)
+    ftp_url = "tsg/WG5/R5/TSGR5_99/Docs/R5-260100.zip"
+    big_payload = b"x" * (5 * 1024 * 1024)  # 5 MiB
+    cache.put_bytes(derive_cache_file(ftp_url), big_payload, "zips")
+
+    calls: list[str] = []
+
+    class _NoNetworkClient:
+        def get_bytes(self, url: str) -> bytes:
+            calls.append(url)
+            return b""
+
+    with pytest.raises(TDocTooLargeError) as exc_info:
+        download_tdoc_zip(
+            "R5-260100",
+            _NoNetworkClient(),  # type: ignore[arg-type]
+            cache,
+            primary_url="https://example.test/" + ftp_url,
+            ftp_url=ftp_url,
+            max_bytes=1024 * 1024,  # 1 MiB cap → 5 MiB cache must be skipped
+        )
+    assert exc_info.value.size == len(big_payload)
+    assert calls == [], "network must not have been called"
+
+
+def test_download_tdoc_zip_post_fetch_raises_when_fresh_download_too_large(
+    tmp_path,
+) -> None:
+    """A fresh download that exceeds ``max_bytes`` raises TDocTooLargeError.
+
+    The zip is written to the cache first (existing behaviour) so the
+    next call can short-circuit on the cache-hit path; the exception
+    fires after the write, before returning to the caller.
+    """
+    from doc3gpp.scraping.cache import TDocCache
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    cache = TDocCache(root=tmp_path, size_limit_bytes=0)
+
+    class _FakeClient:
+        def get_bytes(self, url: str) -> bytes:
+            return b"y" * (3 * 1024 * 1024)
+
+    with pytest.raises(TDocTooLargeError) as exc_info:
+        download_tdoc_zip(
+            "R5-260100",
+            _FakeClient(),  # type: ignore[arg-type]
+            cache,
+            primary_url="https://example.test/tsg/R5-260100.zip",
+            ftp_url="tsg/R5-260100.zip",
+            max_bytes=1024 * 1024,
+        )
+    assert exc_info.value.size == 3 * 1024 * 1024
+
+
+def test_download_tdoc_zip_max_bytes_zero_is_noop(tmp_path) -> None:
+    """``max_bytes=0`` disables the check (no exception, download proceeds)."""
+    from doc3gpp.scraping.cache import TDocCache
+
+    cache = TDocCache(root=tmp_path, size_limit_bytes=0)
+
+    class _FakeClient:
+        def get_bytes(self, url: str) -> bytes:
+            return b"z" * (10 * 1024 * 1024)
+
+    result = download_tdoc_zip(
+        "R5-260100",
+        _FakeClient(),  # type: ignore[arg-type]
+        cache,
+        primary_url="https://example.test/tsg/R5-260100.zip",
+        ftp_url="tsg/R5-260100.zip",
+        max_bytes=0,
+    )
+    assert result.path.exists()

@@ -2,7 +2,7 @@
 
 These tests exercise the full CLI path with local fixtures standing in for
 3GPP network responses. They verify that:
-- auto-sync is disabled by default,
+- auto-sync is enabled by default,
 - enabling ``sync.auto_sync`` causes ``meeting list``, ``tdoc list`` and
   ``tdoc show`` to internally trigger syncs,
 - DB-mode ``tdoc parse`` triggers auto-sync,

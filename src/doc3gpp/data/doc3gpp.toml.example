@@ -94,7 +94,7 @@
 # either command to bypass the skip rules for a single invocation.
 
 # [sync]
-# auto_sync = false               # automatically sync before list/show/parse read commands
+# auto_sync = true                # automatically sync before list/show/parse read commands
 # meeting_sync_interval = "24h"   # skip meeting calendar sync if last sync is newer than this
 # tdoc_list_sync_interval = "30m" # skip TDoc list sync if last sync is newer than this
 # tdoc_list_closed_window = "90d" # skip TDoc list sync when meeting end_date is older than this

@@ -112,8 +112,8 @@ internal syncs before querying. Contract:
   - Meeting IDs come from `--meeting-id`, from meetings whose name
     matches `--meeting`, or from resolving a full TDoc id through the
     existing `meeting list --tdoc` range logic.
-- Auto-sync is gated by `Settings.sync.auto_sync` and is **disabled by
-  default**.
+- Auto-sync is gated by `Settings.sync.auto_sync` and is **enabled by
+  default**; set it to `false` to opt out.
 
 ## Settings caching — flush in tests
 

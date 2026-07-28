@@ -235,14 +235,14 @@ def test_config_init_clears_settings_cache(
     # Sanity: with no config file present, the loader falls back to the
     # built-in defaults.
     get_settings.cache_clear()
-    assert get_settings().sync.auto_sync is False
+    assert get_settings().sync.auto_sync is True
 
     result = Runner().invoke(app, ["config", "init"])
     assert result.exit_code == 0, result.output
 
     # Same process, no env churn → must keep returning the fresh instance.
     refreshed = get_settings()
-    assert refreshed.sync.auto_sync is False  # template has the default value
+    assert refreshed.sync.auto_sync is True  # template has the default value
     # And the new file is now discoverable by ``find_config_file`` via
     # ``DOC3GPP_CONFIG`` or by virtue of the cwd containing it — i.e.
     # the loader path is wired correctly.

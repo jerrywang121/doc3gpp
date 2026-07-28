@@ -33,7 +33,7 @@ controlled by the `sync.auto_sync` setting:
 
 ```toml
 [sync]
-auto_sync = false   # default; set to true to enable
+auto_sync = true    # default; set to false to disable
 ```
 
 When enabled:

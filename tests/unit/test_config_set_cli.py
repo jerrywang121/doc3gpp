@@ -245,7 +245,7 @@ def test_config_set_clears_settings_cache(
 
     # Sanity: pre-set state shows the default.
     get_settings.cache_clear()
-    assert get_settings().sync.auto_sync is False
+    assert get_settings().sync.auto_sync is True
 
     result = Runner().invoke(
         app, ["config", "set", "sync.auto_sync", "true"]

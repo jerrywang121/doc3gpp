@@ -250,7 +250,7 @@ class SyncSettings(BaseModel):
     """
 
     auto_sync: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Automatically sync meeting calendars and TDoc lists when "
             "running list/show/parse commands."

@@ -12,10 +12,12 @@ from openpyxl import load_workbook
 logger = logging.getLogger(__name__)
 
 
-CR_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6}(?:r\d{1})?", re.IGNORECASE)
+CR_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6,7}(?:r\d{1})?", re.IGNORECASE)
 
 # Mirrors CR_ID_RE but exposes the year as a capture group; keep in sync.
-_TDOC_YEAR_GROUP_RE = re.compile(r"[RSC][1-9][-sw](\d{2})\d{4}(?:r\d{1})?$", re.IGNORECASE)
+# 7-digit ids (RAN4) drop the third sequence digit so the year still
+# sits at offset 3-4.
+_TDOC_YEAR_GROUP_RE = re.compile(r"[RSC][1-9][-sw](\d{2})\d{4,5}(?:r\d{1})?$", re.IGNORECASE)
 
 
 def tdoc_id_year(tdoc_id: str) -> int | None:

@@ -197,6 +197,9 @@ class TestParseTdocId:
             ("S2-150000", "S2-", 150000),
             ("r5-260013", "r5-", 260013),
             ("  R5-260013  ", "R5-", 260013),
+            # 7-digit sequence number — RAN4 has used this since 2016.
+            ("R4-2607922", "R4-", 2607922),
+            ("r4-2607922", "r4-", 2607922),
         ],
     )
     def test_accepts_valid_shapes(self, value: str, prefix: str, number: int) -> None:
@@ -208,7 +211,9 @@ class TestParseTdocId:
             "",
             "   ",
             "R5-26001",
-            "R5-2600133",
+            # 8+ digits is still invalid (the regex caps at 7).
+            "R4-26079220",
+            "R5-2600133333",
             "A5-260013",
             "X5-260013",
             "R0-260013",
@@ -230,6 +235,7 @@ class TestParseTdocId:
         assert "R5-260013" in msg
         assert "R5s260009" in msg
         assert "R5w260013" in msg
+        assert "R4-2607922" in msg
 
     def test_validate_tdoc_id_is_parse_tdoc_id_without_return(self) -> None:
         validate_tdoc_id("R5-260013")

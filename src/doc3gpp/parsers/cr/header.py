@@ -22,9 +22,9 @@ class CRHeaderMissingError(ValueError):
 
 _HEADER_PATTERN = re.compile(r"3GPP\s+TSG-", re.IGNORECASE)
 # Union: ``R5-227476`` (dash) AND ``R5s260009`` / ``R5w260176`` (single
-# letter) AND ``C6-250028`` (dash). Matches in the document header
-# near the top of the markdown.
-_TDOC_HEADER_PATTERN = re.compile(r"([RSC][1-6](?:[-sw])\d{6})", re.IGNORECASE)
+# letter) AND ``C6-250028`` (dash) AND RAN4's 7-digit ``R4-2607922``.
+# Matches in the document header near the top of the markdown.
+_TDOC_HEADER_PATTERN = re.compile(r"([RSC][1-6](?:[-sw])\d{6,7})", re.IGNORECASE)
 # Email-meeting TTCN pattern. Overview / corrections are only parsed
 # for TDocs matching this shape.
 _TTCN_TDOC_PATTERN = re.compile(r"R5s\d{6}", re.IGNORECASE)

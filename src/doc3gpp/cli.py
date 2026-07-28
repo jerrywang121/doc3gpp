@@ -244,6 +244,20 @@ def _resolve_format(fmt: str | None, default: str = "table") -> str:
     return normalized
 
 
+def _resolve_compact(compact: bool) -> bool:
+    """Resolve ``--compact`` against :attr:`Settings.output.compact`.
+
+    CLI flag wins when ``True``; otherwise the setting decides. This
+    keeps the precedence consistent with ``_resolve_format`` (CLI >
+    settings) while keeping the Typer ``Option`` a plain ``bool`` —
+    no ``--no-compact`` toggle is exposed because absence of the
+    flag maps to the default ``False`` unambiguously.
+    """
+    if compact:
+        return True
+    return get_settings().output.compact
+
+
 # ``tdoc show`` adds ``raw`` to the standard set because it can emit the
 # converted .docx markdown (the artefact the parser otherwise consumes).
 # Keeping the constant local to this command avoids leaking the option

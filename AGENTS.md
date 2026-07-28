@@ -127,7 +127,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   PK `(wi_id, tsg_short)`; `tsgs` table is auto-seeded so the FK
   validates).
 - `doc3gpp tdoc parse <filters>` is end-to-end filter-driven — every
-  flag is a filter, capped by `Settings.tdoc_parse.max_batch`. In normal
+  flag is a filter, capped by `Settings.tdoc_parse.max_batch`. The
+  per-file byte cap is `Settings.tdoc_parse.max_tdoc_size_kb` (default
+  `1000` KB; `0` = unlimited); oversized sources are routed to the skip
+  bucket via `TDocTooLargeError`. In normal
   mode the SQL query excludes rows already present in `tdoc_cr_cover_page`,
   so the batch cap applies only to pending TDocs; the preview and
   confirmation list only pending rows. `--force` explicitly includes and

@@ -864,6 +864,13 @@ Options:
   existing scripts keep parsing.
 - `--yes` / `-y`: skip the confirmation prompt before extracting.
   Useful in scripts and CI where an interactive prompt would block.
+- `--max-tdoc-size-kb INT`: override
+  `tdoc_parse.max_tdoc_size_kb` for this invocation. Accepts the
+  same `ge=0` domain — `0` disables the cap. The flag is a
+  per-invocation override; the value is **not** written back to
+  the TOML config. See [Size limit](#size-limit) below for the
+  default, the four gate points, and the routing into the skip
+  bucket.
 
 #### Filter syntax
 
@@ -939,7 +946,8 @@ After filters resolve, the CLI:
    (`y/N`, default `N`). A declined prompt exits 0 with `Aborted.`
    — no work happened, so non-zero is misleading.
 4. Dispatches the batch through `TDocCrService.extract_many`.
-5. Prints a completion summary on four counters:
+5. Prints a completion summary on five counters:
+   - `Skipped (exceeds max_tdoc_size_kb): N`
    - `Skipped (already parsed before this run): N`
    - `Re-parsed (with --force): N`
    - `Newly parsed: N`
@@ -948,6 +956,54 @@ After filters resolve, the CLI:
    (truncated by max_batch=…): N` line is appended with a hint to
    re-run the same command **without** `--force` to continue with the
    next batch of pending rows.
+
+#### Size limit
+
+A per-file byte cap protects against oversized `.docx` / `.zip`
+downloads that take forever to fetch and balloon the on-disk cache.
+The cap is set via `tdoc_parse.max_tdoc_size_kb` in the TOML config
+(default `1000` KB; `0` = unlimited) and can be overridden per
+invocation with `--max-tdoc-size-kb`. The field is **TOML-only** —
+mirroring the other `tdoc_parse.*` knobs (`max_batch`,
+`max_ftp_depth`) — so `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` is
+silently ignored.
+
+Gate points: the cap is enforced at four layers, all wired through
+`TDocCrService` and a single `TDocTooLargeError(source, size, limit)`
+exception:
+
+1. `download_tdoc_zip(..., max_bytes=0)` — pre-fetch cache probe
+   (`Path.stat().st_size`) **and** post-fetch `len(payload)` check.
+   Catches cache-hit and fresh-download cases before the zip is
+   handed to the parser.
+2. `direct_parse_bytes(..., max_bytes=0)` — in-memory single-file
+   parse path used by `tdoc parse --from-path FILE` and the
+   non-3GPP URL branch. Catches the case where the operator points
+   the CLI at a local file or non-3GPP URL that exceeds the cap.
+3. `_tdoc_parse_local_batch` — `Path.stat().st_size` pre-read
+   guard before dispatching directory trees. Skips oversized files
+   *before* they enter the batch loop.
+4. `extract_from_url_batch` / `_extract_from_3gpp_url` —
+   URL-driven folder batches; the post-fetch defence catches a
+   downloaded zip that crossed the cap between the cache probe and
+   the parser.
+
+Routing: every `TDocTooLargeError` raised by a service method is
+caught at the batch boundary and routed into `BatchExtractResult.skipped`
+(DB-mode) or `DirectParseBatchResult.skipped` (URL batch). The CLI's
+completion summary counts the size-skip bucket separately from the
+FTP-skip bucket so an operator can tell whether the cap or a missing
+3GPP upload is responsible for the gap.
+
+Edge cases:
+
+- `0` (unlimited) is a no-op at every gate point — the check
+  `if limit > 0 and size > limit` is the standard form.
+- A cache hit + oversized file is caught at the pre-fetch probe
+  (no download, no parser invocation).
+- A fresh download that crosses the cap is caught by the post-fetch
+  guard (the partial bytes are discarded; the on-disk cache is
+  not populated).
 
 #### Batch limits
 
@@ -1154,6 +1210,11 @@ Directory (batch) behaviour (local or 3GPP URL folder):
 - No per-file output is printed to stdout. Instead a summary reports:
   `Skipped (output already exists)`, `Re-parsed (with --force)`,
   `Newly parsed`, `Cache hits`, and `Failures` for URL batches.
+  When any file in the directory tree exceeds the size cap (see
+  [Size limit](#size-limit) above), an additional
+  `Skipped (exceeds max_tdoc_size_kb): N` line is appended — the
+  local path is gated by a pre-read `Path.stat().st_size` check, so
+  the oversized file never reaches the parser.
 - DB/cache writes happen automatically for 3GPP URL folder batches
   when the extracted TDoc id exists in `tdocs`; missing ids are parsed
   in-memory and warned per file.

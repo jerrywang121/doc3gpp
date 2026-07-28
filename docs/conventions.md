@@ -184,6 +184,16 @@ DOC3GPP_TEST_MYSQL_URL     # MySQL integration test fixture (test-only)
 
 MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
 
+The `tdoc_parse.*` knobs (`max_batch`, `max_ftp_depth`,
+`max_tdoc_size_kb`) are **TOML-only** by convention. None of them
+are added to `ALLOWED_ENV_VARS`, so `DOC3GPP_TDOC_PARSE__MAX_BATCH`
+/ `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` / etc. are silently ignored
+at runtime. Configure them via `[tdoc_parse] <key> = <value>` in
+the TOML file, or via `doc3gpp config set tdoc_parse.<key> <value>`.
+The corresponding CLI flag (e.g. `--max-tdoc-size-kb`) is a
+per-invocation override — the value is **not** written back to the
+TOML config.
+
 ## Filter grammar (tdoc list / tdoc parse)
 
 Both `tdoc list` and `tdoc parse` share a single grammar defined in

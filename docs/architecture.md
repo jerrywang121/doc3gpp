@@ -544,6 +544,16 @@ deterministic cache read because the URL is the row identity), and
 the direct-mode `tdoc parse --from-path/--from-url` also accepts
 `--format raw` for local-batch use.
 
+The `--compact` flag threads a `compact: bool` through four renderer
+seams — `_emit_records` (list commands), `_emit_record` (direct-mode
+tdoc parse), the four `_render_tdoc_show_*` functions, and the four
+`_render_tdoc_show_by_url_*` functions. `_resolve_compact(compact)`
+resolves the CLI flag against `Settings.output.compact` (CLI > settings).
+Table and raw formats are explicit no-ops; JSON swaps to
+`separators=(",", ":")` with no trailing newline; Markdown drops every
+CommonMark decorator and emits `key: value` lines with blank-line
+section separators.
+
 ## Composition
 
 The CLI layer never instantiates a concrete `SQLAlchemy*Repository`

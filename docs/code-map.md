@@ -102,6 +102,7 @@ table below is for navigation only.
 | `FilteredEnvSettingsSource` | class | `settings/schema.py` | `EnvSettingsSource` subclass that filters to the allowlist. |
 | `env_var_for_dotted_key` | function | `settings/schema.py` | Render the `DOC3GPP_*` env-var name for a dotted key, or `None` if TOML-only. |
 | `OutputSettings` | model | `settings/schema.py` | Default `format` + per-command field lists. |
+| `OutputSettings.compact` | field | `settings/schema.py:209` | `Settings.output.compact` — `--compact` default (`bool`, default `False`); CLI flag wins when `True`. |
 | `OutputFieldsSettings` | model | `settings/schema.py` | Per-list-command `default_fields` lists. |
 | `CacheSettings` | model | `settings/schema.py` | Disk cache (`dir`, `size_limit_mb`, `purge_confirm`). |
 | `TDocParseSettings` | model | `settings/schema.py` | `tdoc parse` knobs (`max_batch`). |
@@ -150,3 +151,4 @@ Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `li
 | --- | --- | --- | --- |
 | `config_init` | Typer command | `cli.py` | Bootstrap a fresh TOML config file with the packaged default template at `--target` (auto / project / user); `--force` overwrites an existing file. Refuses while `DOC3GPP_CONFIG` is set. |
 | `config_set` | Typer command | `cli.py` | Write one dotted key into the active TOML config file (refuses when none is in use — run `config init` first); clears the settings cache so the new value is visible in the same process. |
+| `_resolve_compact` | function | `cli.py:247` | Resolve `--compact` against `Settings.output.compact` (CLI flag wins when `True`); keeps the Typer `Option` a plain `bool` without a `--no-compact` toggle. |

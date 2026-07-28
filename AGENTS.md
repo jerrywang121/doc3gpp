@@ -126,6 +126,14 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many` (composite
   PK `(wi_id, tsg_short)`; `tsgs` table is auto-seeded so the FK
   validates).
+- `tdoc/meeting/wi * --compact` (any `--format` command) strips
+  decorators from JSON / Markdown output. JSON becomes single line
+  (`separators=(",", ":")`, no trailing newline); Markdown drops
+  bold, italic, headings, bullets, GFM tables, code fences, and
+  emits `key: value` lines with blank-line section separators. No-op
+  for `table` and `raw`. CLI flag wins over `[output] compact` in
+  `doc3gpp.toml`. See `_resolve_compact` (`src/doc3gpp/cli.py:247`)
+  and `Settings.output.compact` (`src/doc3gpp/settings/schema.py:209`).
 - `doc3gpp tdoc parse <filters>` is end-to-end filter-driven — every
   flag is a filter, capped by `Settings.tdoc_parse.max_batch`. The
   per-file byte cap is `Settings.tdoc_parse.max_tdoc_size_kb` (default

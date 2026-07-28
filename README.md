@@ -363,6 +363,13 @@ doc3gpp wi list --format markdown
 `tdoc parse --from-path` / `--from-url` also accepts `--format raw` for
 local-batch use.
 
+- `--compact` — strip output formatting. JSON drops indent and operator
+  space (single line, `separators=(",", ":")`); Markdown drops CommonMark
+  decorators (bold, italic, headings, bullets, GFM tables, code fences)
+  and emits `key: value` lines with blank-line section separators. No-op
+  for `table` and `raw`. Default: `false`; opt in globally with
+  `[output] compact = true` in `doc3gpp.toml`.
+
 Full command reference: [`docs/cli.md`](docs/cli.md).
 
 ## Architecture

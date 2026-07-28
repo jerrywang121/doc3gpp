@@ -182,6 +182,7 @@ Additional options:
   Prefix match is case-insensitive (`r5s`, `R5S`, `r5S` all match).
 - --fields: comma-separated list of fields to include in output, or `all`.
 - --format: see "Common list output options" below (table | json | markdown).
+- --compact: see "Compact output" in the format-overview section.
 - -o, --output: write the result to a file instead of stdout.
 
 Default output fields:
@@ -372,6 +373,7 @@ Options:
   accepted forms (including date comparisons).
 - --fields: comma-separated list of fields to include in output, or `all`.
 - --format: see "Common list output options" below (table | json | markdown).
+- --compact: see "Compact output" in the format-overview section.
 - -o, --output: write the result to a file instead of stdout.
 
 Default output fields:
@@ -540,6 +542,7 @@ Options:
     `Markdown cache for TDoc '<tdoc>' is empty or unreadable (cache_file: <cache_file>, cache_dir: <dir>)`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Pass `-` for stdout (the historical default).
+- `--compact`: see "Compact output" in the format-overview section.
 
 Behavior:
 
@@ -1157,6 +1160,7 @@ Options:
   folder, overwrite existing output files. Rejected for single file
   sources.
 - `--full`: forward `full=True` to the parser (TTCN corrections).
+- `--compact`: see "Compact output" in the format-overview section.
 
 Mutual exclusivity:
 
@@ -1582,6 +1586,7 @@ Options:
 - --release: SQL `LIKE` pattern to filter the release marker
   (supports `%` and `_`).
 - --format: see "Common list output options" below (table | json | markdown).
+- --compact: see "Compact output" in the format-overview section.
 - -o, --output: write the result to a file instead of stdout.
 
 Default output fields (tab-separated):
@@ -1634,6 +1639,23 @@ stdout in the chosen format, and `--output` without an explicit
 The defaults for `--format` and the implicit column list can be
 overridden for every list command via a TOML config file — see the
 `config` commands below.
+
+### Compact output
+
+Every `--format` command accepts `--compact`. The default is `false`;
+set it globally with `[output] compact = true` in `doc3gpp.toml`. The
+flag is a no-op for `--format table` and `--format raw` (both are
+already line-oriented / maximally compact by construction).
+
+`--format json --compact` emits a single line of JSON: no indent, no
+operator-space (`separators=(",", ":")`), and no trailing newline.
+`--format markdown --compact` drops every CommonMark decorator
+(`**bold**`, `*italic*`, `## headings`, `- ` bullets, fenced
+```` ```json ```` blocks, GFM `| col | col |` tables) and emits
+`key: value` lines with one blank line between sections. `None` is
+rendered as `-` and `—` is normalised to `-`. List-typed values
+(`required_changes`) become single-line JSON literals; `changed_functions`
+becomes a comma-joined line.
 
 ## config Commands
 

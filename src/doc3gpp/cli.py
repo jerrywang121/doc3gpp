@@ -2705,6 +2705,8 @@ def _tdoc_show_by_ftp_url(
     raw_url: str,
     fmt: str,
     output: str | None,
+    *,
+    compact: bool = False,
 ) -> None:
     """Dispatch ``tdoc show --ftp-url`` to the right renderer.
 
@@ -2720,11 +2722,18 @@ def _tdoc_show_by_ftp_url(
     identity, so no parent-meeting sync is meaningful for an
     arbitrary URL. Raw format takes the cache-direct path below
     without going through ``TDocCrService.extract``.
+
+    ``compact`` is resolved against :attr:`Settings.output.compact` via
+    :func:`_resolve_compact` and forwarded to the by-url renderers. The
+    CLI flag (``--compact`` on the parent ``tdoc show`` command) wins
+    over the setting; the dispatcher mirrors the by-id path so both
+    selectors produce byte-identical output.
     """
     url = _normalise_cli_ftp_url(raw_url)
+    resolved_compact = _resolve_compact(compact)
 
     if fmt == "raw":
-        _render_tdoc_show_raw_by_url(url, output)
+        _render_tdoc_show_raw_by_url(url, output, compact=resolved_compact)
         return
 
     tdoc_repo = build_tdoc_repository()
@@ -2763,11 +2772,11 @@ def _tdoc_show_by_ftp_url(
     )
 
     if fmt == "json":
-        _render_tdoc_show_by_url_json(record, output)
+        _render_tdoc_show_by_url_json(record, output, compact=resolved_compact)
     elif fmt == "markdown":
-        _render_tdoc_show_by_url_markdown(record, output)
+        _render_tdoc_show_by_url_markdown(record, output, compact=resolved_compact)
     else:
-        _render_tdoc_show_by_url_table(record, output)
+        _render_tdoc_show_by_url_table(record, output, compact=resolved_compact)
 
 
 def _render_tdoc_show_raw_by_url(
@@ -3631,6 +3640,16 @@ def tdoc_show(
             "Write output to PATH instead of stdout. Pass '-' for stdout."
         ),
     ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table`` and ``raw``. Defaults to ``output.compact`` in "
+            "settings when the flag is not passed."
+        ),
+    ),
 ) -> None:
     """Show a stored TDoc (or URL) and any extracted CR cover-page details.
 
@@ -3658,6 +3677,7 @@ def tdoc_show(
     """
     settings = get_settings()
     fmt = _resolve_tdoc_show_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
 
     if (tdoc is None) == (ftp_url is None):
         raise typer.BadParameter(
@@ -3665,7 +3685,7 @@ def tdoc_show(
         )
 
     if ftp_url is not None:
-        _tdoc_show_by_ftp_url(ftp_url, fmt, output)
+        _tdoc_show_by_ftp_url(ftp_url, fmt, output, compact=resolved_compact)
         return
 
     trigger_auto_sync(
@@ -3686,7 +3706,7 @@ def tdoc_show(
     # it pulls the converted markdown from the cache (populating it via
     # a fresh extract when the cache is cold).
     if fmt == "raw":
-        _render_tdoc_show_raw(record.tdoc_id, output)
+        _render_tdoc_show_raw(record.tdoc_id, output, compact=resolved_compact)
         return
 
     cr_repo = build_tdoc_cr_repository()
@@ -3715,11 +3735,11 @@ def tdoc_show(
     )
 
     if fmt == "json":
-        _render_tdoc_show_json(show_record, output)
+        _render_tdoc_show_json(show_record, output, compact=resolved_compact)
     elif fmt == "markdown":
-        _render_tdoc_show_markdown(show_record, output)
+        _render_tdoc_show_markdown(show_record, output, compact=resolved_compact)
     else:
-        _render_tdoc_show_table(show_record, output)
+        _render_tdoc_show_table(show_record, output, compact=resolved_compact)
 
 
 @tsg_app.command("list")

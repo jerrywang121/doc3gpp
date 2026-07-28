@@ -425,3 +425,217 @@ def test_render_tdoc_show_raw_by_url_compact_is_noop(monkeypatch) -> None:
     _render_tdoc_show_raw_by_url("https://x/1", plain)
     _render_tdoc_show_raw_by_url("https://x/1", compact, compact=True)
     assert plain.getvalue() == compact.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — tdoc show --compact end-to-end via the Typer CLI runner
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_show_json_compact_via_cli(monkeypatch) -> None:
+    """``tdoc show --tdoc <id> --format json --compact`` end-to-end via
+    the CLI runner emits a single line of JSON.
+
+    The brief's first-draft snippet monkeypatches ``_resolve_tdoc_show_record``
+    which doesn't exist as a separate symbol — the dispatcher builds the
+    ``TDocShowRecord`` inline. The cleanest seam that doesn't change the
+    production code is to stub the four ``build_*_repository`` factories
+    (and ``trigger_auto_sync``) so the by-tdoc path returns a pre-baked
+    record. This mirrors how ``test_cli_auto_sync.py`` mocks the same
+    factories for end-to-end CLI runs.
+    """
+    import json
+    from datetime import date
+
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+    cover = TDocCRDetails(
+        tdoc_id="R5s260001",
+        spec="38.300",
+        cr_num="0001",
+        rev="-",
+        version="1.0.0",
+        title="CR on 5G NR",
+        source="RAN1",
+        tsg="RAN1",
+        related_wis="-",
+        date=date(2026, 1, 15),
+        cr_cat="F",
+        release="Rel-18",
+        reason_for_change="-",
+        consequences_if_not_approved="-",
+        clauses_affected="5.4.2",
+    )
+
+    class _TDocRepoStub:
+        def get_by_id(self, _tdoc_id: str) -> TDoc:
+            return tdoc
+
+    class _CrRepoStub:
+        def get_by_url(self, _url: str) -> TDocCRDetails | None:
+            return cover
+
+        def get_extract_meta_by_url(self, _url: str):
+            return None
+
+    class _TtcnRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
+    class _FileRepoStub:
+        def get_for_tdoc_id(self, _tdoc_id: str) -> tuple:
+            return ()
+
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_repository", lambda: _TDocRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_repository", lambda: _CrRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_ttcn_repository", lambda: _TtcnRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_file_repository", lambda: _FileRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", lambda **kwargs: None)
+
+    result = CliRunner().invoke(
+        app,
+        ["tdoc", "show", "--tdoc", "R5s260001", "--format", "json", "--compact"],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    assert "\n" not in output
+    assert ", " not in output
+    assert ": " not in output
+    payload = json.loads(output)
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+
+
+def test_tdoc_show_by_ftp_url_markdown_compact_via_cli(monkeypatch) -> None:
+    """``tdoc show --ftp-url <url> --format markdown --compact`` end-to-end
+    via the CLI runner drops the CommonMark decorators and uses
+    ``key: value`` lines.
+
+    Mirrors :func:`test_tdoc_show_json_compact_via_cli` but exercises
+    the ``_tdoc_show_by_ftp_url`` dispatcher and the by-url renderer.
+    """
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+
+    class _TDocRepoStub:
+        def get_by_ftp_url(self, _url: str) -> TDoc:
+            return tdoc
+
+    class _CrRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
+        def get_extract_meta_by_url(self, _url: str):
+            return None
+
+    class _TtcnRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
+    class _FileRepoStub:
+        def get_by_ftp_url(self, _url: str) -> tuple:
+            return ()
+
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_repository", lambda: _TDocRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_repository", lambda: _CrRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_ttcn_repository", lambda: _TtcnRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_file_repository", lambda: _FileRepoStub())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--ftp-url", "x/1",
+            "--format", "markdown", "--compact",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    # No CommonMark decorators survive in compact markdown.
+    assert "##" not in output
+    assert "**" not in output
+    assert "```" not in output
+    assert "ftp_url: x/1" in output
+    assert "tdoc_id: R5s260001" in output
+
+
+def test_tdoc_show_json_default_still_pretty_prints(monkeypatch) -> None:
+    """Default (no ``--compact``) keeps the legacy pretty-printed JSON.
+
+    Guards the "default byte-identical" contract: a user who doesn't
+    pass ``--compact`` (and has ``Settings.output.compact = False``)
+    must see the same output as before this task landed.
+    """
+    import json
+
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+
+    class _TDocRepoStub:
+        def get_by_id(self, _tdoc_id: str) -> TDoc:
+            return tdoc
+
+    class _CrRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
+        def get_extract_meta_by_url(self, _url: str):
+            return None
+
+    class _TtcnRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
+    class _FileRepoStub:
+        def get_for_tdoc_id(self, _tdoc_id: str) -> tuple:
+            return ()
+
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_repository", lambda: _TDocRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_repository", lambda: _CrRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_ttcn_repository", lambda: _TtcnRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_file_repository", lambda: _FileRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", lambda **kwargs: None)
+
+    result = CliRunner().invoke(
+        app,
+        ["tdoc", "show", "--tdoc", "R5s260001", "--format", "json"],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    # Pretty-printed JSON: newline at end, key-colon-space preserved.
+    assert output.endswith("\n")
+    assert ": " in output
+    payload = json.loads(output)
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"

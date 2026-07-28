@@ -15,6 +15,46 @@ from doc3gpp.parsers.cr.helpers import (
 logger = logging.getLogger(__name__)
 
 
+# Long-form ``Release <N>`` label as it appears in some CR cover pages.
+# Group 1 captures the trailing token (the release number or
+# identifier); accepts one or more internal whitespace characters and
+# is case-insensitive. The cell value is already ``strip()``-ed by
+# :func:`doc3gpp.parsers.cr.helpers._search_pattern_in_lines` before it
+# lands here, so the regex is anchored on the leading ``Release`` and
+# the trailing identifier only.
+_LONG_RELEASE_RE = re.compile(r"^Release\s+(\S+)$", re.IGNORECASE)
+
+
+def _normalize_release(value: str | None) -> str | None:
+    """Canonicalise a cover-page release label.
+
+    The cover-page ``Release:`` cell can appear in two shapes:
+
+    * Short / canonical: ``Rel-17``, ``Rel-20``.
+    * Long / prose: ``Release 17``, ``Release 20``.
+
+    The DB stores the short form exclusively, so the long form is
+    collapsed to ``Rel-<token>`` here — the parser is the single
+    conversion point, and every downstream consumer
+    (:class:`doc3gpp.models.tdoc_cr.TDocCRDetails`,
+    :class:`SQLAlchemyTDocCrCoverPageRepository`) sees the canonical
+    short form.
+
+    The conversion is intentionally narrow: only an exact
+    ``Release <token>`` label is rewritten. ``Rel-17`` passes through
+    unchanged, blank / ``None`` values pass through unchanged, and any
+    other shape (e.g. an already-truncated ``Release`` with no
+    identifier) is left as-is so an unexpected value remains visible
+    in the DB rather than being silently dropped.
+    """
+    if value is None:
+        return None
+    match = _LONG_RELEASE_RE.match(value)
+    if not match:
+        return value
+    return f"Rel-{match.group(1)}"
+
+
 # Cover-page row that holds spec / CR / rev / version.
 _COVER_SPEC_RE = re.compile(
     r"\|\s*\b(\d{2}\.\d{3}(?:-\d)?)\b\s*\|\s*CR\s*\|"
@@ -138,6 +178,15 @@ class CRCoverPageParser:
                 "CR revision in Cover Page is not digits-only: %r; clearing", rev
             )
             details["rev"] = ""
+
+        normalised_release = _normalize_release(details.get("release"))
+        if normalised_release != details.get("release"):
+            logger.debug(
+                "Normalising cover-page release %r to canonical short form %r",
+                details.get("release"),
+                normalised_release,
+            )
+            details["release"] = normalised_release
 
         if max_text_length > 0:
             for field_name in (

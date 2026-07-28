@@ -1375,6 +1375,40 @@ def test_cover_cat_rel_regex_handles_short_and_long_release(
     assert m.group(2).strip() == expected_rel
 
 
+# -- Release long-form -> short-form normalisation --------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Release 20", "Rel-20"),
+        ("Release 17", "Rel-17"),
+        ("Release 18", "Rel-18"),
+        ("Release 9", "Rel-9"),
+        ("Release 8", "Rel-8"),
+        ("release 9", "Rel-9"),
+        ("RELEASE 9", "Rel-9"),
+        ("Rel-9", "Rel-9"),
+        ("Rel-8", "Rel-8"),
+        ("release 20", "Rel-20"),
+        ("RELEASE 20", "Rel-20"),
+        ("Rel-20", "Rel-20"),
+        ("Rel-17", "Rel-17"),
+        ("R99", "R99"),
+        ("", ""),
+        (None, None),
+        ("Release", "Release"),
+        ("Release ", "Release "),
+        ("Released 20", "Released 20"),
+        ("  Release 20", "  Release 20"),
+    ],
+)
+def test_normalize_release_rewrites_long_form_to_short(raw: str | None, expected: str | None) -> None:
+    from doc3gpp.parsers.cr.cover_page import _normalize_release
+
+    assert _normalize_release(raw) == expected
+
+
 # -- End-to-end smoke: full cover-page row covering all four fixes ----------
 
 
@@ -1396,7 +1430,7 @@ def test_parse_cr_details_extracts_release_long_form_with_space_tdoc_id() -> Non
     cover = parsed.cover
     assert cover.tdoc_id == "C3-262686"
     assert cover.cr_cat == "F"
-    assert cover.release == "Release 20"
+    assert cover.release == "Rel-20"
     assert cover.date is not None and cover.date.isoformat() == "2026-05-21"
     assert cover.related_wis == "FS_NG_RAN"
     assert cover.rev == "0"

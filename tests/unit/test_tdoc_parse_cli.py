@@ -1749,6 +1749,66 @@ def test_tdoc_parse_max_batch_env_var_is_ignored(
         get_settings.cache_clear()
 
 
+# ---------------------------------------------------------------------------
+# tdoc_parse.max_tdoc_size_kb — settings surface
+# ---------------------------------------------------------------------------
+
+
+def _pin_max_tdoc_size_kb_via_toml(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    max_tdoc_size_kb: int,
+) -> None:
+    """Set ``tdoc_parse.max_tdoc_size_kb`` through a TOML config file.
+
+    Mirrors :func:`_pin_max_batch_via_toml`; ``tdoc_parse.*`` knobs
+    are TOML-only (the corresponding ``DOC3GPP_TDOC_PARSE__*`` env
+    vars are outside the
+    :data:`doc3gpp.settings.schema.ALLOWED_ENV_VARS` allowlist).
+    """
+    config_path = tmp_path / "tdoc-parse-size-config.toml"
+    config_path.write_text(
+        f"[tdoc_parse]\nmax_tdoc_size_kb = {max_tdoc_size_kb}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
+    get_settings.cache_clear()
+
+
+def test_tdoc_parse_max_tdoc_size_kb_default_is_1000(sqlite_env) -> None:
+    """``tdoc_parse.max_tdoc_size_kb`` defaults to 1000 KB (≈ 1 MiB)."""
+    from doc3gpp.config import get_settings
+
+    assert get_settings().tdoc_parse.max_tdoc_size_kb == 1000
+
+
+def test_tdoc_parse_max_tdoc_size_kb_toml_override(
+    sqlite_env, monkeypatch, tmp_path,
+) -> None:
+    """TOML config can override ``tdoc_parse.max_tdoc_size_kb``."""
+    _pin_max_tdoc_size_kb_via_toml(
+        monkeypatch, tmp_path, max_tdoc_size_kb=500,
+    )
+    try:
+        assert get_settings().tdoc_parse.max_tdoc_size_kb == 500
+    finally:
+        get_settings.cache_clear()
+
+
+def test_tdoc_parse_max_tdoc_size_kb_zero_disables(
+    sqlite_env, monkeypatch, tmp_path,
+) -> None:
+    """``0`` is a valid value that disables the limit (per the field's ``ge=0``)."""
+    _pin_max_tdoc_size_kb_via_toml(
+        monkeypatch, tmp_path, max_tdoc_size_kb=0,
+    )
+    try:
+        assert get_settings().tdoc_parse.max_tdoc_size_kb == 0
+    finally:
+        get_settings.cache_clear()
+
+
 def test_tdoc_parse_batch_limit_warning_when_under_max(
     sqlite_env, monkeypatch, tmp_path,
 ) -> None:

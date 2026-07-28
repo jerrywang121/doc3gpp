@@ -83,6 +83,7 @@
 # [tdoc_parse]
 # max_batch = 100
 # max_ftp_depth = 2  # max recursion depth for `tdoc parse --from-url <3gpp-folder> --recursive`
+# max_tdoc_size_kb = 1000  # skip .zip/.docx larger than this; 0 = unlimited
 # Direct-parse flags (`--from-path`, `--from-url`, `--format`, `--output`)
 # are CLI-only — no TOML equivalent is exposed for the
 # `tdoc parse --from-*` direct mode.

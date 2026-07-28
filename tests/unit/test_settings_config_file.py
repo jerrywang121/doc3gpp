@@ -486,6 +486,24 @@ def test_allowlisted_env_vars_override_toml(
     assert s.sync.auto_sync is True
 
 
+def test_tdoc_parse_max_tdoc_size_kb_env_var_is_ignored(monkeypatch) -> None:
+    """``DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB`` is outside the env-var
+    allowlist, so it is silently dropped and the default applies —
+    mirrors the existing :func:`test_tdoc_parse_max_batch_env_var_is_ignored`
+    policy for the sibling knob.
+    """
+    from doc3gpp.settings.schema import ALLOWED_ENV_VARS
+
+    assert "DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB" not in ALLOWED_ENV_VARS
+    monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
+    monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB", "256")
+    get_settings.cache_clear()
+    try:
+        assert get_settings().tdoc_parse.max_tdoc_size_kb == 1000
+    finally:
+        get_settings.cache_clear()
+
+
 # ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------

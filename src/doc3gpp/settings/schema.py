@@ -222,17 +222,35 @@ class TDocParseSettings(BaseModel):
     The default of 100 is conservative — 3GPP meetings rarely exceed
     that for CR-type TDocs and most ad-hoc runs are well under it.
     Operators can raise it for big-batch sweeps via the TOML
-    ``[tdoc_parse] max_batch`` key or the
-    ``DOC3GPP_TDOC_PARSE__MAX_BATCH`` env var.
+    ``[tdoc_parse] max_batch`` key.
 
     :attr:`max_ftp_depth` controls how many folder levels
     ``tdoc parse --from-url <3gpp-folder> --recursive`` will descend.
     A value of ``0`` means only the root folder is scanned; the
     default of ``2`` scans the root plus two levels of subfolders.
+
+    :attr:`max_tdoc_size_kb` caps the per-file source size (KB)
+    applied at four gate points (``download_tdoc_zip`` pre-fetch +
+    post-fetch, ``direct_parse_bytes``, and ``_tdoc_parse_local_batch``
+    pre-read stat). Oversized files are routed to the existing skip
+    bucket (``BatchExtractResult.skipped``) rather than the failure
+    bucket — they represent a budget decision, not an upstream-side
+    error. ``0`` disables the limit. TOML-only (the
+    ``DOC3GPP_TDOC_PARSE__*`` env vars are outside the
+    ``ALLOWED_ENV_VARS`` allowlist, matching the sibling knobs).
     """
 
     max_batch: int = Field(default=100, ge=1)
     max_ftp_depth: int = Field(default=2, ge=0, le=10)
+    max_tdoc_size_kb: int = Field(
+        default=1000,
+        ge=0,
+        description=(
+            "Per-file cap in KB for TDoc sources (.zip or .docx). "
+            "Files larger than this are skipped (size-limit skip "
+            "bucket). 0 disables the limit."
+        ),
+    )
 
 
 class SyncSettings(BaseModel):

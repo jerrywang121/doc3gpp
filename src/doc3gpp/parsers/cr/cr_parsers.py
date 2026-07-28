@@ -7,6 +7,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import fields
 from datetime import date as _date
+from datetime import datetime as _datetime
 from typing import Any
 
 from doc3gpp.models.tdoc_cr import (
@@ -30,6 +31,37 @@ from doc3gpp.parsers.cr.ttcn_sections import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_cover_date(raw: str) -> _date | None:
+    """Parse a cover-page date cell, accepting ISO 8601 plus the
+    slash and month-name shapes that appear in real 3GPP CRs."""
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return _date.fromisoformat(text)
+    except ValueError:
+        pass
+    for fmt in (
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d %B %Y",
+        "%B %d, %Y",
+        "%d %b %Y",
+        "%b %d, %Y",
+        "%d-%b-%Y",
+    ):
+        try:
+            return _datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    logger.warning(
+        "Could not parse cover-page date %r as ISO 8601 or common "
+        "fallback formats; leaving tdoc_cr_details.date as None",
+        raw,
+    )
+    return None
 
 
 class CRParserBase(TDocParser):
@@ -123,15 +155,7 @@ class CRParserBase(TDocParser):
         raw_date = cover_details.get("date")
         date_value: _date | None = None
         if raw_date:
-            try:
-                date_value = _date.fromisoformat(raw_date.strip())
-            except ValueError:
-                logger.warning(
-                    "Could not parse cover-page date %r as ISO 8601 (YYYY-MM-DD); "
-                    "leaving tdoc_cr_details.date as None",
-                    raw_date,
-                )
-                date_value = None
+            date_value = _parse_cover_date(raw_date)
 
         payload: dict[str, Any] = {"tdoc_id": final_tdoc_id}
         for key in _COVER_FIELDS:

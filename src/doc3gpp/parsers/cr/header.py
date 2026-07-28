@@ -20,7 +20,7 @@ class CRHeaderMissingError(ValueError):
         super().__init__(message)
 
 
-_HEADER_PATTERN = re.compile(r"3GPP\s+TSG-", re.IGNORECASE)
+_HEADER_PATTERN = re.compile(r"3GPP\s+TSG", re.IGNORECASE)
 # Union: ``R5-227476`` (dash) AND ``R5s260009`` / ``R5w260176`` (single
 # letter) AND ``C6-250028`` (dash) AND RAN4's 7-digit ``R4-2607922``.
 # Matches in the document header near the top of the markdown.

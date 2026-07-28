@@ -26,13 +26,18 @@ _COVER_TITLE_RE = re.compile(r"\|\s*Title:\s*\|\s*(.*?)\s*\|", re.IGNORECASE)
 _COVER_SOURCE_RE = re.compile(r"\|\s*Source to WG:\s*\|\s*(.*?)\s*\|", re.IGNORECASE)
 _COVER_TSG_RE = re.compile(r"\|\s*Source to TSG:\s*\|\s*(.*?)\s*\|", re.IGNORECASE)
 _COVER_WI_DATE_RE = re.compile(
-    r"\|\s*Work item code:\s*\|\s*(.*?)\s*\|(?:\s+\|)*\s*Date:\s*\|\s*([\d\-]+)\s*\|",
+    r"\|\s*Work item code:\s*\|\s*(.*?)\s*\|(?:\s+\|)*\s*Date:\s*\|\s*([^\s|]+(?:\s+[^\s|]+)*?)\s*\|",
     re.IGNORECASE,
 )
-# Category + Release on the same line.
+# Category + Release on the same line. The Release cell value can
+# sit in the cell immediately following ``Release:`` (canonical
+# form ``Rel-17``) or in a later cell after empty cells, and is
+# either the short ``Rel-17`` token or the long ``Release 17`` form.
 _COVER_CATREL_RE = re.compile(
-    r"\|\s*Category:\s*\|\s*([^\s|]+)(?:\s*\|)+"
-    r"\s*Release:(?:\s*\|)*\s*([^\s|]+)\s*\|",
+    r"\|\s*Category:\s*\|\s*([^\s|][^|]*?)\s*\|(?:\s*\|)*"
+    r"\s*Release:\s*\|"
+    r"(?:[^|]*\|)*?"
+    r"\s*([^|\s][^|]*?)\s*\|",
     re.IGNORECASE,
 )
 _COVER_REASON_RE = re.compile(r"\|\s*Reason for change:(?:\s*\|)+\s*(.*?)\s*\|", re.IGNORECASE)

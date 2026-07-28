@@ -10,6 +10,7 @@ resets the settings/engine caches via ``conftest.sqlite_env``.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -69,11 +70,13 @@ class _FakeCrService:
         self,
         results: dict[str, ExtractResult] | None = None,
         failures: dict[str, str] | None = None,
+        skipped: dict[str, str] | None = None,
         raise_from_many: Exception | None = None,
         raise_from_extract: Exception | None = None,
     ) -> None:
         self._results = results or {}
         self._failures = failures or {}
+        self._skipped = skipped or {}
         self._raise_from_many = raise_from_many
         self._raise_from_extract = raise_from_extract
         self.many_calls: list[tuple[list[str], bool, bool]] = []
@@ -88,6 +91,7 @@ class _FakeCrService:
         return BatchExtractResult(
             successes=dict(self._results),
             failures=dict(self._failures),
+            skipped=dict(self._skipped),
         )
 
     def extract(self, tdoc_id, *, force: bool = False) -> ExtractResult:
@@ -520,6 +524,7 @@ def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
     """When ``extract_many`` reports a failure for one id via
     ``batch.failures``, the CLI prints ``FAILED - {reason}`` inline and
     still exits 0 (one success keeps the batch non-fatal)."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
     runner = CliRunner()
     cr_tdocs = [
         TDoc(tdoc_id="R5s260009", type="CR"),
@@ -689,6 +694,130 @@ def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) 
     assert result.exit_code == 1
     assert "python-docx is not installed" in result.output
     assert "pip install doc3gpp[extract]" in result.output
+
+
+def test_tdoc_parse_typeerror_in_batch_is_per_id_failure(
+    sqlite_env, monkeypatch,
+) -> None:
+    """Regression: an internal ``TypeError`` from one TDoc (e.g. from a
+    cache-key helper being called with ``None``) used to abort the
+    whole batch via the outer CLI handler. ``extract_many`` now catches
+    ``TypeError`` as a per-id failure so the rest of the batch makes
+    progress and the CLI prints the failure inline.
+    """
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+
+    runner = CliRunner()
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s263431", type="CR"),
+        TDoc(tdoc_id="R5s263432", type="CR"),
+    ]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={
+            "R5s263432": _make_result("R5s263432"),
+        },
+        failures={
+            "R5s263431": (
+                "TypeError: argument should be a str or an os.PathLike "
+                "object where __fspath__ returns a str, not 'NoneType'"
+            ),
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s2634%", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "R5s263431: FAILED - TypeError:" in result.output
+    assert "R5s263432: spec=" in result.output
+    assert "Newly parsed:                              1" in result.output
+    assert "Failures:                                  1" in result.output
+
+
+def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
+    sqlite_env, monkeypatch,
+) -> None:
+    """Rows whose ``ftp_url`` is NULL (3GPP upload pipeline hasn't
+    propagated yet) are routed to the ``skipped`` dict, NOT
+    ``failures`` — the CLI prints them under a dedicated
+    ``Skipped (not yet on FTP)`` summary line and exits 0 when the
+    batch has no real failures.
+    """
+    # Pin ``auto_sync=false`` so the test doesn't depend on the
+    # ``DOC3GPP_SYNC__AUTO_SYNC`` value any prior test left in
+    # the cached pydantic settings.
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+
+    runner = CliRunner()
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s263431", type="CR", ftp_url=None),
+        TDoc(tdoc_id="R5s263432", type="CR", ftp_url=None),
+    ]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={},
+        skipped={
+            "R5s263431": (
+                "TDocNotYetOnFTPError: TDoc 'R5s263431' has no ftp_url "
+                "yet — the 3GPP upload pipeline has not propagated a "
+                "final URL; try again later or run `doc3gpp tdoc sync` "
+                "to refresh the tdocs table"
+            ),
+            "R5s263432": (
+                "TDocNotYetOnFTPError: TDoc 'R5s263432' has no ftp_url "
+                "yet — the 3GPP upload pipeline has not propagated a "
+                "final URL; try again later or run `doc3gpp tdoc sync` "
+                "to refresh the tdocs table"
+            ),
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s2634%", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    # Per-row inline prefix for the skip bucket.
+    assert "R5s263431: SKIPPED - TDocNotYetOnFTPError:" in result.output
+    assert "R5s263432: SKIPPED - TDocNotYetOnFTPError:" in result.output
+    # Dedicated summary line (matches the existing format: right-padded
+    # to a column width with the bucket label + count).
+    assert "Skipped (not yet on FTP):" in result.output
+    assert "Failures:                                  0" in result.output
+
+
+def test_tdoc_parse_unexpected_internal_error_exits_cleanly(
+    sqlite_env, monkeypatch, caplog,
+) -> None:
+    """Regression: a non-``PythonDocxNotInstalledError`` exception escaping
+    ``extract_many`` used to leak a raw ``rich`` traceback whose
+    in-context source line confused users into reading the
+    ``python-docx`` install hint as the actual error. The CLI now
+    surfaces a short message and exits 1, with the full traceback in
+    the log file.
+    """
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(raise_from_many=RuntimeError("boom"))
+    _patch_service(monkeypatch, fake)
+
+    with caplog.at_level(logging.ERROR, logger="doc3gpp.cli"):
+        result = runner.invoke(
+            app, ["tdoc", "parse", "--tdoc", "R5s26%", "--yes"],
+        )
+    assert result.exit_code == 1, result.output
+    assert "Unexpected error: RuntimeError: boom" in result.output
+    # The full traceback lands in the log, not stdout.
+    assert "Traceback" not in result.output
+    assert any("Unexpected error" in rec.message for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -1353,6 +1482,7 @@ def test_tdoc_parse_yes_short_alias_works(sqlite_env, monkeypatch) -> None:
 def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> None:
     """Under ``--force`` the preview prints both groups: "To parse" plus
     "Already parsed ... (with --force, these will be re-extracted)"."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
     runner = CliRunner()
     meeting_id = 33
     cr_tdocs = [

@@ -1586,8 +1586,19 @@ def tdoc_parse(
         )
         typer.echo(f"hint: {exc}", err=True)
         raise typer.Exit(code=1) from None
+    except Exception as exc:
+        # Any exception escaping ``extract_many`` is an internal bug
+        # (recoverable per-id failures are caught inside the batch
+        # loop). Log the full traceback; surface a short message.
+        logger.exception("Unexpected error extracting TDoc batch")
+        typer.echo(
+            f"Unexpected error: {type(exc).__name__}: {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
 
     failures: list[str] = []
+    skipped_ftp: list[str] = []
     for raw_id in tdoc_ids:
         normalised = raw_id.strip()
         if normalised in batch.successes:
@@ -1597,6 +1608,9 @@ def tdoc_parse(
                 f"cr_num={result.details.cr_num} "
                 f"title={result.details.title}"
             )
+        elif normalised in batch.skipped:
+            typer.echo(f"{normalised}: SKIPPED - {batch.skipped[normalised]}")
+            skipped_ftp.append(normalised)
         elif normalised in batch.failures:
             typer.echo(f"{normalised}: FAILED - {batch.failures[normalised]}")
             failures.append(normalised)
@@ -1605,11 +1619,12 @@ def tdoc_parse(
             failures.append(normalised)
 
     success_set = set(batch.successes.keys())
-    skipped = len(parsed_ids - dispatched_set)
+    already_parsed = len(parsed_ids - dispatched_set)
     re_parsed = len(parsed_ids & success_set)
     newly_parsed = len(success_set - parsed_ids)
     typer.echo("---")
-    typer.echo(f"Skipped (already parsed before this run): {skipped}")
+    typer.echo(f"Skipped (already parsed before this run): {already_parsed}")
+    typer.echo(f"Skipped (not yet on FTP):                 {len(skipped_ftp)}")
     typer.echo(f"Re-parsed (with --force):                  {re_parsed}")
     typer.echo(f"Newly parsed:                              {newly_parsed}")
     typer.echo(f"Failures:                                  {len(failures)}")
@@ -1619,7 +1634,11 @@ def tdoc_parse(
             f"at least 1 — re-run the same command (without --force) "
             f"to continue."
         )
-    if not tdoc_ids or newly_parsed + re_parsed == 0:
+    if failures and not batch.successes:
+        raise typer.Exit(code=1)
+    if not tdoc_ids:
+        raise typer.Exit(code=1)
+    if not batch.successes and not batch.skipped:
         raise typer.Exit(code=1)
 
 

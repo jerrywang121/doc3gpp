@@ -59,11 +59,13 @@ class TDocParseSettings(BaseModel):
   limit" is enforceable at the schema boundary.
 - Internal value is always converted to bytes (`* 1024`) at the
   call-site so the rest of the code never deals with KB.
-- Env var: `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` (auto-derived from
-  the field name via pydantic-settings).
 - TOML key: `tdoc_parse.max_tdoc_size_kb`.
-- Allowlist: add `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` to
-  `ALLOWED_ENV_VARS` in `src/doc3gpp/settings/schema.py`.
+- Env var: TOML-only, consistent with the existing
+  `tdoc_parse.max_batch` / `tdoc_parse.max_ftp_depth` knobs —
+  `DOC3GPP_TDOC_PARSE__*` is intentionally outside the
+  `ALLOWED_ENV_VARS` allowlist (see
+  `tests/unit/test_settings_config_file.py::test_env_var_allowlist`).
+  No allowlist change required.
 
 ### `doc3gpp.toml.example`
 
@@ -332,9 +334,11 @@ non-3GPP URL branch surfaces a warning + emit today.
 ### Unit (`tests/unit/`)
 
 - `test_tdoc_parse_settings.py` (extend existing): default `1000`,
-  `ge=0` enforces, `0` parses cleanly, env var
-  `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` overrides, TOML
+  `ge=0` enforces, `0` parses cleanly, TOML
   `[tdoc_parse] max_tdoc_size_kb` overrides.
+- `test_settings_config_file.py` (extend): add a mirror of
+  `test_tdoc_parse_max_batch_env_var_is_ignored` confirming
+  `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` is silently ignored (TOML-only).
 - `test_tdoc_cr_service.py` (extend existing):
   - `extract_many` routes `TDocTooLargeError` into `skipped` not
     `failures`.
@@ -363,8 +367,9 @@ non-3GPP URL branch surfaces a warning + emit today.
   new "Skipped (exceeds max_tdoc_size_kb)" summary line, and a
   one-paragraph "Size limit" subsection explaining the default,
   the `0`-disables semantics, and the four gate points.
-- `docs/conventions.md` §"Settings caching" — add the new
-  env-var allowlist entry.
+- `docs/conventions.md` §"Settings caching" — note that
+  `tdoc_parse.max_tdoc_size_kb` is TOML-only like the other
+  `tdoc_parse.*` knobs (no env-var allowlist update needed).
 - `doc3gpp.toml.example` — update the `[tdoc_parse]` block (see above).
 - `AGENTS.md` — add the new field to the "Where to look" table;
   extend the `tdoc_parse` workflow one-liner to mention the new knob.

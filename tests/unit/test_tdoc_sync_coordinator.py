@@ -354,7 +354,9 @@ def test_skip_when_closed_window() -> None:
         start_date=date(2026, 1, 1),
         end_date=date(2026, 1, 2),
         ftp_url="tsg_ran/WG5_1/",
-        tdoc_list_last_sync=None,
+        # Closed-window skip is gated on a prior sync; a non-None timestamp
+        # represents the "we've synced this before" branch of the contract.
+        tdoc_list_last_sync=datetime.now(timezone.utc) - timedelta(days=1),
     )
     meeting_repo = _FakeMeetingRepository({1: meeting})
     tdoc_repo = _FakeTDocRepository()
@@ -370,6 +372,42 @@ def test_skip_when_closed_window() -> None:
 
     assert outcome.status == "skipped"
     assert "closed window" in outcome.reason
+
+
+def test_runs_when_closed_window_but_never_synced(monkeypatch) -> None:
+    # Regression: the 90-day closed window must NOT skip a first-time sync.
+    # The whole point of the rule is to avoid re-fetching meetings whose
+    # TDocs we already have; a never-synced meeting has no TDocs yet and
+    # must be allowed to populate them even when its end_date is ancient.
+    meeting = Meeting(
+        meeting_id=1,
+        name="C6-124",
+        title="C6 124",
+        location="Online",
+        start_date=date(2025, 11, 17),
+        end_date=date(2025, 11, 21),
+        ftp_url="tsg_ct/WG6_124/",
+        tdoc_list_last_sync=None,
+    )
+    meeting_repo = _FakeMeetingRepository({1: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
+        lambda self, meeting_id, url_template: 0,
+    )
+
+    coord = _make_coordinator(
+        meeting_repo,
+        tdoc_repo,
+        tdoc_file_repo,
+        tdoc_list_closed_window=timedelta(days=90),
+    )
+    outcome = coord.sync_for_meeting_id(1)
+
+    assert outcome.status == "synced"
+    assert "closed window" not in outcome.reason
 
 
 def test_skip_when_within_auto_sync_interval() -> None:

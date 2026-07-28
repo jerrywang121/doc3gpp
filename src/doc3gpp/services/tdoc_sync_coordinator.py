@@ -145,7 +145,11 @@ class TDocSyncCoordinator:
             )
 
         now = datetime.now(timezone.utc)
-        if not force:
+        if not force and meeting.tdoc_list_last_sync is not None:
+            # The closed-window rule only applies to meetings that have already
+            # been synced at least once — a never-synced meeting must still
+            # get a chance to populate the tdocs table even when its
+            # ``end_date`` is older than the configured cutoff.
             if meeting.end_date is not None:
                 closed_cutoff = now - self._tdoc_list_closed_window
                 if meeting.end_date < closed_cutoff.date():
@@ -159,18 +163,17 @@ class TDocSyncCoordinator:
                         ),
                     )
 
-            if meeting.tdoc_list_last_sync is not None:
-                age = now - meeting.tdoc_list_last_sync
-                if age < self._tdoc_list_sync_interval:
-                    return SyncOutcome(
-                        status="skipped",
-                        reason=(
-                            f"TDoc sync skipped for meeting {meeting.meeting_id} "
-                            f"({meeting.name}): last sync {self._format_duration(age)} ago "
-                            f"(sync interval {self._format_duration(self._tdoc_list_sync_interval)}). "
-                            f"Use --force to override."
-                        ),
-                    )
+            age = now - meeting.tdoc_list_last_sync
+            if age < self._tdoc_list_sync_interval:
+                return SyncOutcome(
+                    status="skipped",
+                    reason=(
+                        f"TDoc sync skipped for meeting {meeting.meeting_id} "
+                        f"({meeting.name}): last sync {self._format_duration(age)} ago "
+                        f"(sync interval {self._format_duration(self._tdoc_list_sync_interval)}). "
+                        f"Use --force to override."
+                    ),
+                )
 
         logger.info(
             "Starting TDoc sync for meeting %s (id=%s, ftp=%s)",

@@ -639,3 +639,136 @@ def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
         ("R5s260009", False),
         ("R5s260051", False),
     ]
+
+
+def test_extract_raises_skip_when_ftp_url_is_null(tmp_path: Path) -> None:
+    """Regression: ``tdocs.ftp_url`` is nullable (R5-112 had 43/62 CR rows
+    with NULL). Previously ``derive_cache_file(None)`` raised a bare
+    ``TypeError`` from ``Path(None).name``. The contract is now that a
+    NULL ``ftp_url`` is the upstream sign "3GPP hasn't uploaded this
+    yet", so ``extract`` raises :class:`TDocNotYetOnFTPError` — the
+    service is the right layer to flag this because the only path
+    that consumes ``derive_cache_file(ftp_url)`` is gated on
+    ``ftp_url`` being truthy.
+    """
+    from doc3gpp.services.tdoc_cr_service import TDocNotYetOnFTPError
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper = MagicMock()
+    cr_repo = MagicMock()
+    cr_repo.get_by_url.return_value = None
+    cr_repo.get_extract_meta_by_url.return_value = None
+    cr_ttcn_repo = MagicMock()
+    cr_ttcn_repo.get_by_url.return_value = None
+    tdoc_repo = MagicMock()
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s263431",
+        type="CR",
+        ftp_url=None,
+    )
+
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper,
+        cr_repository=cr_repo,
+        cr_ttcn_repository=cr_ttcn_repo,
+        tdoc_repository=tdoc_repo,
+    )
+
+    with pytest.raises(TDocNotYetOnFTPError) as info:
+        service.extract("R5s263431")
+    assert info.value.tdoc_id == "R5s263431"
+
+    # And: the scraper must not have been hit — there is nothing to
+    # download until the 3GPP pipeline publishes a final URL.
+    scraper.get_bytes.assert_not_called()
+
+
+def test_extract_many_routes_null_ftp_url_into_skip_bucket(
+    tmp_path: Path,
+) -> None:
+    """``extract_many`` routes :class:`TDocNotYetOnFTPError` into
+    :attr:`BatchExtractResult.skipped` (not failures) so the CLI can
+    surface "FTP hasn't published yet" as its own summary line.
+    Mixed batch: one row's ftp_url is None (skipped), one row has a
+    real URL (would succeed but the fake parse layer just skips it
+    here), one row is type="LS" (real failure).
+    """
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper = MagicMock()
+    cr_repo = MagicMock()
+    cr_repo.get_by_url.return_value = None
+    cr_repo.get_extract_meta_by_url.return_value = None
+    cr_ttcn_repo = MagicMock()
+    cr_ttcn_repo.get_by_url.return_value = None
+    tdoc_repo = MagicMock()
+    tdoc_repo.get_by_id.side_effect = lambda tdoc_id: {
+        "R5s263431": TDoc(tdoc_id="R5s263431", type="CR", ftp_url=None),
+        "R5s263432": TDoc(
+            tdoc_id="R5s263432",
+            type="CR",
+            ftp_url=f"tsg_ran/{tdoc_id}.zip",
+        ),
+        "R5s263499": TDoc(
+            tdoc_id="R5s263499",
+            type="LS",
+            ftp_url=f"tsg_ran/{tdoc_id}.zip",
+        ),
+    }[tdoc_id]
+
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper,
+        cr_repository=cr_repo,
+        cr_ttcn_repository=cr_ttcn_repo,
+        tdoc_repository=tdoc_repo,
+    )
+
+    result = service.extract_many(["R5s263431", "R5s263432", "R5s263499"])
+
+    assert "R5s263431" in result.skipped
+    assert "TDocNotYetOnFTPError" in result.skipped["R5s263431"]
+    # The "no ftp_url" row is NOT in failures.
+    assert "R5s263431" not in result.failures
+    # The non-CR row stays a real failure.
+    assert "R5s263499" in result.failures
+    assert "TDocTypeUnsupportedError" in result.failures["R5s263499"]
+
+
+def test_extract_many_skipped_only_batch_exits_cleanly(
+    tmp_path: Path,
+) -> None:
+    """A batch where every row has NULL ftp_url returns a
+    :class:`BatchExtractResult` with all rows in the ``skipped`` dict
+    and no failures — letting the CLI exit 0 even though no work was
+    done (FTP hasn't published anything yet, not an error from our
+    side).
+    """
+
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper = MagicMock()
+    cr_repo = MagicMock()
+    cr_repo.get_by_url.return_value = None
+    cr_repo.get_extract_meta_by_url.return_value = None
+    cr_ttcn_repo = MagicMock()
+    cr_ttcn_repo.get_by_url.return_value = None
+    tdoc_repo = MagicMock()
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s263431",
+        type="CR",
+        ftp_url=None,
+    )
+
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper,
+        cr_repository=cr_repo,
+        cr_ttcn_repository=cr_ttcn_repo,
+        tdoc_repository=tdoc_repo,
+    )
+
+    result = service.extract_many(["R5s263431"])
+    assert result.failures == {}
+    assert "R5s263431" in result.skipped
+    assert "TDocNotYetOnFTPError" in result.skipped["R5s263431"]  # noqa: E501

@@ -63,7 +63,7 @@ import logging
 import re
 import zipfile
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -255,6 +255,26 @@ class TDocNotFoundError(LookupError):
         )
 
 
+class TDocNotYetOnFTPError(ValueError):
+    """The row is stored but its ``ftp_url`` is still NULL.
+
+    Surfaced by :meth:`TDocCrService.extract` when
+    :attr:`doc3gpp.models.tdoc.TDoc.ftp_url` is ``None`` — meaning
+    the 3GPP FTP pipeline has not propagated the upload yet, so there
+    is nothing to download. Distinct from :class:`TDocNotFoundError`
+    (the row exists) and :class:`TDocZipDownloadError` (we tried but
+    failed); the upstream pipeline state is the actionable cause.
+    """
+
+    def __init__(self, tdoc_id: str) -> None:
+        self.tdoc_id = tdoc_id
+        super().__init__(
+            f"TDoc {tdoc_id!r} has no ftp_url yet — the 3GPP upload "
+            "pipeline has not propagated a final URL; try again later "
+            "or run `doc3gpp tdoc sync` to refresh the tdocs table"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Service result DTO.
 # ---------------------------------------------------------------------------
@@ -295,7 +315,11 @@ class BatchExtractResult:
     ``TDocNotFoundError: TDoc 'R5s260010' is not stored...``) instead
     of pointing the operator at the log file. A single broken id does
     not abort the batch — it lands in :attr:`failures` keyed by the
-    normalised tdoc_id, and the remaining ids continue.
+    normalised tdoc_id, and the remaining ids continue. Skipped ids
+    (e.g. rows whose ``ftp_url`` is still NULL because the 3GPP upload
+    pipeline hasn't propagated yet) land in :attr:`skipped` instead —
+    the CLI counts them separately so they don't pollute the failure
+    total.
 
     Attributes:
         successes: ``{tdoc_id: ExtractResult}`` for every id that
@@ -308,10 +332,18 @@ class BatchExtractResult:
             guard) without tailing logs, and the exception's own
             message carries the actionable detail (e.g. "run
             ``doc3gpp tdoc sync`` first" for a missing row).
+        skipped: ``{tdoc_id: short reason}`` for every id that was
+            routed to the skip bucket (currently
+            :class:`TDocNotYetOnFTPError` only). Tracked separately
+            from failures because the operator-facing meaning differs
+            ("FTP hasn't published yet" is not an error from our
+            side) and the CLI summary table surfaces it under its
+            own "Skipped (not yet on FTP)" line.
     """
 
     successes: dict[str, ExtractResult]
     failures: dict[str, str]
+    skipped: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -427,12 +459,23 @@ class TDocCrService:
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
 
+        if not tdoc.ftp_url:
+            # Stored row but the upload pipeline hasn't propagated a
+            # final URL yet — there is nothing on the 3GPP FTP to
+            # download. Surface this as a distinct exception so
+            # ``extract_many`` can route it into the skip bucket
+            # instead of treating it as a download failure.
+            raise TDocNotYetOnFTPError(normalised)
+
         # Stored ``ftp_url`` is relative to the 3GPP FTP root; rebuild
         # the absolute URL the network layer expects.
-        primary_url = (
-            build_ftp_url(tdoc.ftp_url) if tdoc.ftp_url else None
-        )
+        primary_url = build_ftp_url(tdoc.ftp_url)
 
+        # Derive the cache key from ``tdoc.ftp_url`` so it matches
+        # what :func:`download_tdoc_zip` writes to the zips cache
+        # (keyed on the same relative url). Keeping the two in sync
+        # is required for a cache hit to feed the same key into the
+        # markdown cache.
         cache_file = derive_cache_file(tdoc.ftp_url)
 
         # Hoist the URL candidates so the persistence fallback below
@@ -568,6 +611,13 @@ class TDocCrService:
         inline so the operator can tell which step failed without
         tailing the log file.
 
+        Rows whose ``ftp_url`` is NULL (the 3GPP upload pipeline
+        hasn't propagated a final URL yet) are routed to the skip
+        bucket (:attr:`BatchExtractResult.skipped`) instead of
+        :attr:`failures` — "FTP is lagging" is not an error from our
+        side, and these IDs deserve a separate CLI summary line so
+        the operator doesn't see them as failures.
+
         Args:
             tdoc_ids: Iterable of TDoc ids to extract. Strings that
                 fail the shape guard, are missing from the ``tdocs``
@@ -581,16 +631,27 @@ class TDocCrService:
 
         Returns:
             A :class:`BatchExtractResult` whose ``successes`` dict maps
-            the canonical tdoc_id to its :class:`ExtractResult` and
+            the canonical tdoc_id to its :class:`ExtractResult`,
             whose ``failures`` dict maps the normalised tdoc_id to a
-            short reason string (``"{ExceptionClassName}: {exc}"``).
+            short reason string (``"{ExceptionClassName}: {exc}"``),
+            and whose ``skipped`` dict maps the normalised tdoc_id to
+            a short reason string for ids whose ``ftp_url`` is NULL
+            (the 3GPP upload pipeline hasn't propagated yet). The
+            skip bucket is surfaced separately by the CLI so the
+            operator can tell "FTP is lagging" apart from "this
+            batch had real failures".
         """
         successes: dict[str, ExtractResult] = {}
         failures: dict[str, str] = {}
+        skipped: dict[str, str] = {}
         for raw_id in tdoc_ids:
             try:
                 result = self.extract(raw_id, force=force, full=full)
-            except (ValueError, LookupError, TDocZipDownloadError) as exc:
+            except TDocNotYetOnFTPError as exc:
+                logger.info("Skipping TDoc %r: %s", raw_id, exc)
+                skipped[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
+                continue
+            except (ValueError, LookupError, TDocZipDownloadError, TypeError) as exc:
                 logger.warning(
                     "Failed to extract TDoc %r: %s",
                     raw_id,
@@ -600,7 +661,7 @@ class TDocCrService:
                 failures[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
                 continue
             successes[result.details.tdoc_id] = result
-        return BatchExtractResult(successes=successes, failures=failures)
+        return BatchExtractResult(successes=successes, failures=failures, skipped=skipped)
 
     # ------------------------------------------------------------------
     # Direct-parse path: ``tdoc parse --from-path/--from-url``
@@ -1081,6 +1142,7 @@ __all__ = [
     "ExtractResult",
     "TDocCrService",
     "TDocNotFoundError",
+    "TDocNotYetOnFTPError",
     "TDocTypeUnsupportedError",
     "TDocZipDownloadError",
-]
+] 

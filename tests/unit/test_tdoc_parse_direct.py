@@ -1506,3 +1506,46 @@ def test_cli_from_path_nonexistent_path_raises_bad_parameter(
     )
     assert result.exit_code != 0
     assert "--from-path does not exist" in (result.output or "")
+
+
+# ---------------------------------------------------------------------------
+# direct_parse_bytes — max_bytes guard
+# ---------------------------------------------------------------------------
+
+
+def test_direct_parse_bytes_raises_when_payload_too_large() -> None:
+    """``max_bytes > 0`` and ``len(payload) > max_bytes`` raises
+    TDocTooLargeError before any unzip / python-docx work.
+    """
+    from doc3gpp.parsers.direct_extractor import direct_parse_bytes
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    payload = b"x" * (3 * 1024 * 1024)
+    with pytest.raises(TDocTooLargeError) as exc_info:
+        direct_parse_bytes(
+            payload, filename="R5-260100.zip", max_bytes=1024 * 1024,
+        )
+    assert exc_info.value.size == len(payload)
+    assert exc_info.value.limit == 1024 * 1024
+    assert exc_info.value.source == "R5-260100.zip"
+
+
+def test_direct_parse_bytes_max_bytes_zero_is_noop() -> None:
+    """``max_bytes=0`` disables the guard — no TDocTooLargeError raised.
+
+    Uses a clearly-invalid payload (one byte, with a ``.zip``
+    extension) to assert that *only* the size guard is bypassed —
+    other parser errors (zipfile.BadZipFile, CRHeaderMissingError)
+    may still surface.
+    """
+    from doc3gpp.parsers.direct_extractor import direct_parse_bytes
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    try:
+        direct_parse_bytes(b"x", filename="R5-260100.zip", max_bytes=0)
+    except TDocTooLargeError as exc:
+        pytest.fail(f"max_bytes=0 must disable the guard; got {exc}")
+    except Exception:
+        # Any other exception is acceptable — we only assert the
+        # size guard did not fire on a tiny payload.
+        pass

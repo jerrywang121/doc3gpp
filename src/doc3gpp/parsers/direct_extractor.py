@@ -353,6 +353,7 @@ def direct_parse_bytes(
     *,
     filename: str,
     full: bool = False,
+    max_bytes: int = 0,
 ) -> tuple[str, str, "TDocCRParseResult"]:
     """Parse ``payload`` (a ``.docx`` or a zip-wrapped ``.docx``) into markdown + parse result.
 
@@ -380,6 +381,11 @@ def direct_parse_bytes(
             no 3GPP pattern matches).
         full: Forwarded to :func:`parse_cr_details` as ``full=True``
             for the TTCN corrections sub-parser.
+        max_bytes: When ``> 0``, the function raises
+            :class:`TDocTooLargeError` before any unzip /
+            ``python-docx`` work when ``len(payload) > max_bytes``.
+            ``0`` (default) disables the guard — callers that do not
+            want the size check simply omit the kwarg.
 
     Returns:
         ``(markdown, docx_filename, parsed)`` — the converted
@@ -399,7 +405,22 @@ def direct_parse_bytes(
             ``3GPP TSG-`` header (forwarded from ``parse_cr_details``).
         PythonDocxNotInstalledError: python-docx is not installed
             (forwarded from :func:`convert_document_to_markdown`).
+        TDocTooLargeError: ``max_bytes > 0`` and ``len(payload)`` exceeds
+            the cap.
     """
+    if max_bytes > 0 and len(payload) > max_bytes:
+        # Deferred import — ``direct_extractor`` sits below the
+        # scraping layer where ``TDocTooLargeError`` is canonically
+        # defined, but the class is re-exported from
+        # ``doc3gpp.services.tdoc_cr_service`` for callers that don't
+        # want to depend on the scraping module directly.
+        from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+        raise TDocTooLargeError(
+            source=filename,
+            size=len(payload),
+            limit=max_bytes,
+        )
+
     suffix = Path(filename).suffix.lower()
     if suffix == ".zip":
         docx_filename, docx_bytes = extract_docx_from_zip(payload)

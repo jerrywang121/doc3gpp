@@ -110,7 +110,7 @@ class TDocRepository(Protocol):
           ``null`` / ``not-null`` / ``!pattern`` / plain LIKE grammar
           as the other text columns.
         - ``exclude_parsed``: when ``True``, drop every TDoc whose
-          ``tdoc_id`` already has a row in ``tdoc_cr_details`` —
+          ``tdoc_id`` already has a row in ``tdoc_cr_cover_page`` —
           applied in SQL *before* ``ORDER BY ... OFFSET ... LIMIT`` so
           the limit reflects the un-parsed candidate set. Default
           ``False`` keeps the raw match set.
@@ -380,7 +380,7 @@ class TDocFileRepository(Protocol):
 
 
 class TDocCrDetailRepository(Protocol):
-    """Storage operations for the slim ``tdoc_cr_details`` table.
+    """Storage operations for the slim ``tdoc_cr_cover_page`` table.
 
     Owns the cover-page fields extracted from a CR document. The
     companion ``tdoc_extracts`` table (cache paths + provenance) is still
@@ -416,7 +416,7 @@ class TDocCrDetailRepository(Protocol):
         ...
 
     def upsert(self, details: TDocCRDetails) -> None:
-        """Insert/update the cover-page row in ``tdoc_cr_details``.
+        """Insert/update the cover-page row in ``tdoc_cr_cover_page``.
 
         Rows are keyed by ``url`` (the immutable download URL), so
         re-extracting the same URL is idempotent.

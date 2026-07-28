@@ -16,7 +16,11 @@ change set so the docs stay honest.
   migrations. After pulling an ORM shape change, **existing SQLite
   installs must run `doc3gpp db reset --yes`** (or a backend-native
   migration for MySQL / PostgreSQL) — otherwise the live schema stays
-  out of sync and SQL repos raise `OperationalError`.
+  out of sync and SQL repos raise `OperationalError`. The single
+  exception is `docs/db/migrate.py::_migrate_rename_tdoc_cr_details`,
+  a one-shot idempotent rename that bridges legacy `tdoc_cr_details`
+  callers to the current `tdoc_cr_cover_page` table; nothing else
+  in the bootstrap is allowed to mutate an existing table in place.
 - **`meeting sync`, `wi sync`, and `tsg seed` call `create_schema()`**
   for fresh-database ergonomics. Idempotent but blurs the `db init`
   boundary; `tdoc sync` and `tdoc parse` already dropped the call.
@@ -93,7 +97,7 @@ change set so the docs stay honest.
   `SELECT 1 FROM tdoc_cr_ttcn_details LIMIT 0` is attempted, and an
   `OperationalError("no such table")` triggers an idempotent
   `Base.metadata.create_all()` followed by a retry. The same lazy
-  bootstrap covers `tdoc_cr_details` on legacy DBs.
+  bootstrap covers `tdoc_cr_cover_page` on legacy DBs.
 - **`tdoc_cr_ttcn_details.changed_functions` is a derived aggregate
   column.** It holds the sorted, deduplicated set of
   `"<module_basename>.<function_name>"` entries derived from each

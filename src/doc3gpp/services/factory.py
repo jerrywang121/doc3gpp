@@ -56,7 +56,7 @@ def build_tdoc_cr_repository() -> SQLAlchemyTDocCrRepository:
     """Construct a :class:`SQLAlchemyTDocCrRepository` for direct lookups.
 
     Used by the Phase 7 ``tdoc show`` CLI command to surface a
-    previously extracted ``tdoc_cr_details`` row next to its parent
+    previously extracted ``tdoc_cr_cover_page`` row next to its parent
     ``TDoc`` without going through the full extraction service.
     """
     return SQLAlchemyTDocCrRepository()
@@ -134,7 +134,7 @@ def build_tdoc_cr_service(
       for the TTCN sidecar table.
     * :class:`~doc3gpp.storage.repositories.tdoc_sql.SQLAlchemyTDocRepository`
       for read-only ``tdocs`` lookups (type guard) and for the FK
-      probe that gates ``tdoc_extracts`` / ``tdoc_cr_details`` writes
+      probe that gates ``tdoc_extracts`` / ``tdoc_cr_cover_page`` writes
       in the ``--from-url`` direct-mode path.
 
     The factory is shared by both the filter-based batch path

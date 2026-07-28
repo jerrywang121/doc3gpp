@@ -13,7 +13,7 @@ table below is for navigation only.
 | `TDoc` | dataclass | `models/tdoc.py` | Domain model for TDocs. |
 | `TDocWithMeeting` | dataclass | `models/tdoc.py` | Presentation-time DTO: `TDoc` JOINed with `meetings.name`. |
 | `TDocFile` | dataclass | `models/tdoc_file.py` | Auxiliary file attached to a TDoc (revision / review / support). |
-| `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …) — slimmed: no `details` blob, no `parser_version` field. Mirrors the slim `tdoc_cr_details` table 1:1. |
+| `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …) — slimmed: no `details` blob, no `parser_version` field. Mirrors the slim `tdoc_cr_cover_page` table 1:1. |
 | `TDocCRTTCNDetails` | dataclass | `models/tdoc_cr.py` | TTCN sidecar (six overview fields + `required_changes` list). Mirrors the new `tdoc_cr_ttcn_details` table 1:1. |
 | `TDocCRParseResult` | dataclass | `models/tdoc_cr.py` | Parser bundle: `cover: TDocCRDetails` + `ttcn: TDocCRTTCNDetails | None`. The service fans each slice out to its own repo. |
 | `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar (`cache_file`, `doc_filename`). |
@@ -31,7 +31,7 @@ table below is for navigation only.
 | `MeetingRepository` | Protocol | `repository/protocols.py` | Contract for meeting storage. |
 | `TDocRepository` | Protocol | `repository/protocols.py` | Contract for TDoc storage; `get_by_id` resolves canonical id strings; `get_by_ftp_url` (1:1 invariant, `LIMIT 1`) anchors the new `tdoc show --ftp-url` selector on the URL. |
 | `TDocFileRepository` | Protocol | `repository/protocols.py` | Contract for `tdoc_files` storage; `get_by_ftp_url` (URL-unique-indexed) is the new URL-keyed read used by `tdoc show --ftp-url`. |
-| `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for the slim `tdoc_cr_details` table. `tdoc_extracts` reads are still exposed here for convenience but writes go through the separate `upsert_extract_meta` method. |
+| `TDocCrDetailRepository` | Protocol | `repository/protocols.py` | Contract for the slim `tdoc_cr_cover_page` table. `tdoc_extracts` reads are still exposed here for convenience but writes go through the separate `upsert_extract_meta` method. |
 | `TDocCrTTCNDetailRepository` | Protocol | `repository/protocols.py` | Contract for the new `tdoc_cr_ttcn_details` TTCN sidecar (one row per immutable `ftp_url`). |
 | `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage. |
 | `WiRepository` | Protocol | `repository/protocols.py` | Contract for WI storage; upsert keyed by `(wi_id, tsg_short)`. |
@@ -86,7 +86,7 @@ table below is for navigation only.
 | `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of `MeetingRepository`. |
 | `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of `TDocRepository`. |
 | `SQLAlchemyTDocFileRepository` | class | `storage/repositories/tdoc_file_sql.py` | SQL impl of `TDocFileRepository`. |
-| `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of `TDocCrDetailRepository`. Owns both the slim `tdoc_cr_details` cover-page table (`upsert(details)`) and the `tdoc_extracts` cache-pointer sidecar (`upsert_extract_meta(meta)`). Reads via `get_by_url`, `get`, `list_all`, `get_extract_meta`, `get_extract_meta_by_url`. |
+| `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of `TDocCrDetailRepository`. Owns both the slim `tdoc_cr_cover_page` cover-page table (`upsert(details)`) and the `tdoc_extracts` cache-pointer sidecar (`upsert_extract_meta(meta)`). Reads via `get_by_url`, `get`, `list_all`, `get_extract_meta`, `get_extract_meta_by_url`. |
 | `SQLAlchemyTDocCrTtcnRepository` | class | `storage/repositories/tdoc_cr_ttcn_sql.py` | SQL impl of `TDocCrTTCNDetailRepository` for the new `tdoc_cr_ttcn_details` sidecar. One row per immutable `ftp_url`; six overview columns + a gzip-compressed `required_changes` blob. Lazy-bootstrap (`_ensure_table_exists`) catches `OperationalError "no such table"` and runs `Base.metadata.create_all` once per process. |
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of `TsgRepository`. |
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of `WiRepository`. |

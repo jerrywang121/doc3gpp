@@ -1,6 +1,6 @@
 """SQLAlchemy-backed implementation of :class:`TDocCrDetailRepository`.
 
-Stores the parsed CR cover-page row (``tdoc_cr_details``) and the
+Stores the parsed CR cover-page row (``tdoc_cr_cover_page``) and the
 cache-extract metadata sidecar (``tdoc_extracts``) that point at the
 on-disk artefacts under :mod:`doc3gpp.scraping.cache`. Both tables are
 owned by this repository, but writes are split into two upsert methods
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class SQLAlchemyTDocCrRepository:
     """SQLAlchemy implementation of :class:`TDocCrDetailRepository`.
 
-    Persists two tables — ``tdoc_cr_details`` (parsed cover-page fields)
+    Persists two tables — ``tdoc_cr_cover_page`` (parsed cover-page fields)
     and ``tdoc_extracts`` (paths to cached zip / markdown) — both keyed
     by the immutable download ``ftp_url``. Cover-page rows and extract
     metadata rows are written through separate upsert methods.
@@ -62,13 +62,13 @@ class SQLAlchemyTDocCrRepository:
 
         try:
             with self._session_factory() as session:
-                session.execute(text("SELECT 1 FROM tdoc_cr_details LIMIT 0"))
+                session.execute(text("SELECT 1 FROM tdoc_cr_cover_page LIMIT 0"))
         except OperationalError as exc:
             msg = str(exc).lower()
             if "no such table" in msg or "doesn't exist" in msg:
                 Base.metadata.create_all(bind=get_engine())
                 with self._session_factory() as session:
-                    session.execute(text("SELECT 1 FROM tdoc_cr_details LIMIT 0"))
+                    session.execute(text("SELECT 1 FROM tdoc_cr_cover_page LIMIT 0"))
             else:
                 raise
         self._ensured = True

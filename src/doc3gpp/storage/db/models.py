@@ -183,7 +183,7 @@ class TDocCrDetailOrm(Base):
     normalising at the boundary.
     """
 
-    __tablename__ = "tdoc_cr_details"
+    __tablename__ = "tdoc_cr_cover_page"
 
     ftp_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(

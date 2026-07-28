@@ -1553,7 +1553,7 @@ def tdoc_parse(
     if already_parsed:
         suffix = " (with --force, these will be re-extracted)" if force else ""
         _print_parse_group(
-            f"Already parsed in tdoc_cr_details{suffix}",
+            f"Already parsed in tdoc_cr_cover_page{suffix}",
             already_parsed,
             columns,
         )
@@ -2423,7 +2423,7 @@ def _tdoc_show_by_ftp_url(
     """Dispatch ``tdoc show --ftp-url`` to the right renderer.
 
     Normalises the URL via :func:`_normalise_cli_ftp_url`, fans out
-    to four URL-keyed reads (``tdocs``, ``tdoc_cr_details``,
+    to four URL-keyed reads (``tdocs``, ``tdoc_cr_cover_page``,
     ``tdoc_cr_ttcn_details``, ``tdoc_files`` — the
     ``tdoc_extracts`` timestamp is sourced via
     ``TDocCrDetailRepository.get_extract_meta_by_url``), and
@@ -2463,7 +2463,7 @@ def _tdoc_show_by_ftp_url(
         and not files
     ):
         raise typer.BadParameter(
-            f"No row in tdocs, tdoc_cr_details, tdoc_cr_ttcn_details, "
+            f"No row in tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
             f"or tdoc_files matches ftp_url {url!r}."
         )
 
@@ -2580,7 +2580,7 @@ def _render_tdoc_show_by_url_markdown(
         else:
             stream.write(
                 "_No `tdocs` row matches this URL. The URL still "
-                "surfaces in `tdoc_cr_details` / `tdoc_cr_ttcn_details` "
+                "surfaces in `tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` "
                 "/ `tdoc_files` because the upstream document appeared "
                 "in a sync but no parent TDoc row was stored._\n\n"
             )
@@ -3180,7 +3180,7 @@ def tdoc_show(
         "--ftp-url",
         help=(
             "3GPP FTP URL (full URL or relative path) to show. "
-            "Surfaces every row in tdocs, tdoc_cr_details, "
+            "Surfaces every row in tdocs, tdoc_cr_cover_page, "
             "tdoc_cr_ttcn_details, and tdoc_files whose ftp_url "
             "matches. Mutually exclusive with --tdoc."
         ),
@@ -3216,7 +3216,7 @@ def tdoc_show(
       relative paths; the value is normalised via
       :func:`normalize_ftp_path` before lookup. Surfaces every
       matching row across the four tables (``tdocs``,
-      ``tdoc_cr_details``, ``tdoc_cr_ttcn_details``,
+      ``tdoc_cr_cover_page``, ``tdoc_cr_ttcn_details``,
       ``tdoc_files``); auto-sync does NOT fire because no parent
       meeting sync is meaningful for an arbitrary URL.
 

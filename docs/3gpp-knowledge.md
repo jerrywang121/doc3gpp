@@ -388,7 +388,7 @@ Meeting pages and document listings may use FTP-style links containing `ftp/` or
 
 R5 TTCN CR documents (`R5s\d{6}`) carry an additional overview + corrections
 section on top of the standard CR cover page. The cover-page fields (spec,
-cr_num, release, etc.) flow through the slim `tdoc_cr_details` table; the
+cr_num, release, etc.) flow through the slim `tdoc_cr_cover_page` table; the
 TTCN-specific slice lands in a dedicated sidecar.
 
 The TTCN sidecar (`tdoc_cr_ttcn_details`) is keyed by the immutable

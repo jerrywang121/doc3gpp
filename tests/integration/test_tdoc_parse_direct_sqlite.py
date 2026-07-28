@@ -6,7 +6,7 @@ database. The CLI is exercised via Typer's ``CliRunner``; the
 direct path fetches is served from a local fixture. The cache is
 rooted under ``tmp_path`` and the schema is bootstrapped via the
 ``sqlite_env`` + ``create_schema`` pair so the FK constraints on
-``tdoc_extracts`` / ``tdoc_cr_details`` are real and exercised.
+``tdoc_extracts`` / ``tdoc_cr_cover_page`` are real and exercised.
 """
 
 from __future__ import annotations

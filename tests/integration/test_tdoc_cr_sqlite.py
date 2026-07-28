@@ -647,7 +647,7 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
     assert "Newly parsed:                              1" in result.output
     assert dummy.calls, "ScraperClient.get_bytes was never invoked"
 
-    # 2. The DB now has the persisted tdoc_cr_details + tdoc_extracts rows.
+    # 2. The DB now has the persisted tdoc_cr_cover_page + tdoc_extracts rows.
     cr_repo = SQLAlchemyTDocCrRepository()
     details_list = cr_repo.get("R5s260009")
     meta_list = cr_repo.get_extract_meta("R5s260009")
@@ -852,7 +852,7 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
 
 # ---------------------------------------------------------------------------
 # 11. Download provenance: the exact URL the zip was fetched from is
-# persisted on the tdoc_cr_details row and surfaced through the ORM.
+    # persisted on the tdoc_cr_cover_page row and surfaced through the ORM.
 # ---------------------------------------------------------------------------
 
 
@@ -862,7 +862,7 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
 )
 def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> None:
     """The exact URL the zip was downloaded from must land on the
-    ``tdoc_cr_details.ftp_url`` column and round-trip through the repo."""
+    ``tdoc_cr_cover_page.ftp_url`` column and round-trip through the repo."""
     create_schema()
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
@@ -1209,7 +1209,7 @@ def test_parse_with_combined_filters_against_sqlite(
     # "To parse" group is rendered — the "Already parsed" preview is
     # force-mode-only.
     assert "To parse [count=4]:" in result.output
-    assert "Already parsed in tdoc_cr_details" not in result.output
+    assert "Already parsed in tdoc_cr_cover_page" not in result.output
     # The completion summary reports zero Skipped (the parsed id never
     # reached dispatch), zero Re-parsed (no --force), four Newly
     # parsed, zero Failures.
@@ -1218,7 +1218,7 @@ def test_parse_with_combined_filters_against_sqlite(
     assert "Newly parsed:                              4" in result.output
     assert "Failures:                                  0" in result.output
 
-    # Persisted: four new tdoc_cr_details rows + the pre-seeded one.
+    # Persisted: four new tdoc_cr_cover_page rows + the pre-seeded one.
     cr_repo = SQLAlchemyTDocCrRepository()
     for tid in ("R5s260002", "R5s260003", "R5s260004", "R5s260005"):
         assert cr_repo.get(tid), f"{tid} should have a persisted CR detail row"

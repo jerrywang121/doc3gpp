@@ -34,7 +34,7 @@ class TDocCRDetails:
     A frozen dataclass so callers (parsers, service layers, repo
     implementations) can rely on value semantics. Use
     :meth:`to_persisted` to convert into the JSON-friendly shape the
-    SQL repo writes to the ``tdoc_cr_details`` table.
+    SQL repo writes to the ``tdoc_cr_cover_page`` table.
 
     Attributes:
         tdoc_id: Canonical TDoc identifier, always set from the
@@ -306,12 +306,12 @@ class DirectParseResult:
             non-3GPP URLs, and 3GPP URLs whose FK target is missing
             from ``tdocs``).
         from_cache: ``True`` when the call hit a previously persisted
-            ``tdoc_cr_details`` row and short-circuited the network
+            ``tdoc_cr_cover_page`` row and short-circuited the network
             and parser paths. Only ever set for 3GPP-URL happy-path
             cells.
         persisted: ``True`` when this call wrote both a
             ``tdoc_extracts`` row and, unless ``--format raw``, a
-            ``tdoc_cr_details`` row. False for local files,
+            ``tdoc_cr_cover_page`` row. False for local files,
             non-3GPP URLs, the FK-miss cells, and cache hits (which
             do not re-write the rows).
         tdoc_id: The 3GPP TDoc id extracted from the source

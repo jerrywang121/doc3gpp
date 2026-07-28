@@ -911,7 +911,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
     assert "R5s260009" in result.output
     assert "R5s260011" in result.output
     # Normal mode never renders the already-parsed table.
-    assert "Already parsed in tdoc_cr_details" not in result.output
+    assert "Already parsed in tdoc_cr_cover_page" not in result.output
     assert "R5s260010" not in result.output
     assert "Newly parsed:                              2" in result.output
 
@@ -1552,7 +1552,7 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
     assert result.exit_code == 0, result.output
     assert "To parse [count=2]:" in result.output
     assert (
-        "Already parsed in tdoc_cr_details "
+        "Already parsed in tdoc_cr_cover_page "
         "(with --force, these will be re-extracted) [count=1]:"
     ) in result.output
     assert "spec" in result.output
@@ -1924,7 +1924,7 @@ def test_tdoc_show_happy_path(sqlite_env, monkeypatch) -> None:
 
 
 def test_tdoc_show_no_extract_row(sqlite_env) -> None:
-    """A TDoc without a matching ``tdoc_cr_details`` row prints a
+    """A TDoc without a matching ``tdoc_cr_cover_page`` row prints a
     friendly hint rather than the full block."""
     create_schema()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260010", type="CR"))
@@ -2670,7 +2670,7 @@ def test_tdoc_show_format_invalid_raises_bad_parameter(sqlite_env) -> None:
 
 
 # ---------------------------------------------------------------------------
-# tdoc show --ftp-url — URL-keyed read across tdocs / tdoc_cr_details /
+# tdoc show --ftp-url — URL-keyed read across tdocs / tdoc_cr_cover_page /
 # tdoc_cr_ttcn_details / tdoc_files
 # ---------------------------------------------------------------------------
 
@@ -2833,7 +2833,7 @@ def test_tdoc_show_ftp_url_table_happy_path(sqlite_env) -> None:
 
 
 def test_tdoc_show_ftp_url_table_omits_cover_when_null(sqlite_env) -> None:
-    """No ``tdoc_cr_details`` row at the URL → the ``[Extracted Details]``
+    """No ``tdoc_cr_cover_page`` row at the URL → the ``[Extracted Details]``
     block is absent (omitted, not null) per the optional-key convention."""
     create_schema()
     SQLAlchemyTDocRepository().upsert(
@@ -2901,7 +2901,7 @@ def test_tdoc_show_ftp_url_json_payload_includes_ttcn_and_files(
 
 
 def test_tdoc_show_ftp_url_json_tdoc_omitted_when_no_match(sqlite_env) -> None:
-    """A URL that has ``tdoc_cr_details`` / ``files`` but no ``tdocs``
+    """A URL that has ``tdoc_cr_cover_page`` / ``files`` but no ``tdocs``
     row surfaces those keys but ``tdoc`` is omitted.
 
     The TDoc row is seeded at a *different* URL than the cover row so

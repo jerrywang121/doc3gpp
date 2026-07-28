@@ -58,7 +58,7 @@ def _parse_cover_date(raw: str) -> _date | None:
             continue
     logger.warning(
         "Could not parse cover-page date %r as ISO 8601 or common "
-        "fallback formats; leaving tdoc_cr_details.date as None",
+        "fallback formats; leaving tdoc_cr_cover_page.date as None",
         raw,
     )
     return None

@@ -354,7 +354,7 @@ def test_metadata_creates_new_tables() -> None:
     """``create_all`` registers the Phase 5 tables on a fresh engine."""
     engine = _make_engine()
     table_names = set(Base.metadata.tables.keys())
-    assert "tdoc_cr_details" in table_names
+    assert "tdoc_cr_cover_page" in table_names
     assert "tdoc_extracts" in table_names
     # Sanity check: the pre-existing tables are still registered.
     assert "tdocs" in table_names
@@ -362,7 +362,7 @@ def test_metadata_creates_new_tables() -> None:
     # And the on-disk tables match the metadata registration.
     inspector = inspect(engine)
     on_disk_tables = set(inspector.get_table_names())
-    assert "tdoc_cr_details" in on_disk_tables
+    assert "tdoc_cr_cover_page" in on_disk_tables
     assert "tdoc_extracts" in on_disk_tables
 
 

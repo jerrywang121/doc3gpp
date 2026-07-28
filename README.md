@@ -43,7 +43,7 @@ PostgreSQL available via configuration.
   Auxiliary TDoc files are still scanned from the meeting's FTP folders.
 - **TDoc CR extraction** — optional `python-docx` pipeline that downloads,
   caches, and parses CR cover pages into structured records. The slim
-  `tdoc_cr_details` table holds cover-page fields only; the new
+  `tdoc_cr_cover_page` table holds cover-page fields only; the new
   `tdoc_cr_ttcn_details` sidecar persists the six TTCN overview fields
   (`testcase`, `ue`, `ss`, `ats_version`, `ttcn_release`, `test_suite`)
   plus a gzip-compressed `required_changes` JSON blob and a

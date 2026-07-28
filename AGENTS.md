@@ -128,7 +128,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   validates).
 - `doc3gpp tdoc parse <filters>` is end-to-end filter-driven — every
   flag is a filter, capped by `Settings.tdoc_parse.max_batch`. In normal
-  mode the SQL query excludes rows already present in `tdoc_cr_details`,
+  mode the SQL query excludes rows already present in `tdoc_cr_cover_page`,
   so the batch cap applies only to pending TDocs; the preview and
   confirmation list only pending rows. `--force` explicitly includes and
   re-parses already-parsed matches. The parser returns
@@ -144,7 +144,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   is recoverable it is recorded as `'.<function>'` (leading-dot
   sentinel); when neither is recoverable the correction is dropped. `TDocCrService` fans the result
   out across THREE independent upserts: the slim cover-page row in
-  `tdoc_cr_details`, the optional `tdoc_cr_ttcn_details` sidecar (only
+  `tdoc_cr_cover_page`, the optional `tdoc_cr_ttcn_details` sidecar (only
   when the parser recognised a TTCN CR), and the `tdoc_extracts`
   metadata row. Full grammar and prompt-completion semantics in
   [`docs/conventions.md`](docs/conventions.md) and
@@ -171,7 +171,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
 - `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row, then
   looks up the slim cover-page details and the extract metadata by the
   row's immutable `tdoc.ftp_url` (one row per URL — the URL is the row
-  identity for both `tdoc_cr_details` and `tdoc_extracts`). The TTCN
+  identity for both `tdoc_cr_cover_page` and `tdoc_extracts`). The TTCN
   sidecar is joined in via `cr_ttcn_repo.get_by_url(tdoc.ftp_url)` only
   when `is_ttcn_tdoc(tdoc.tdoc_id)` is `True`. Auxiliary files are
   read once via `file_repo.get_for_tdoc_id(tdoc.tdoc_id)` and match
@@ -191,7 +191,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `_wrap_markdown_zip` (single entry named `<docx stem>.md`,
   `ZIP_DEFLATED`).
 - `doc3gpp tdoc show --ftp-url <url>` resolves the URL into matching
-  rows across four tables (`tdocs`, `tdoc_cr_details`,
+  rows across four tables (`tdocs`, `tdoc_cr_cover_page`,
   `tdoc_cr_ttcn_details`, `tdoc_files`) directly — `tdocs` and
   `tdoc_files` use the new `get_by_ftp_url` lookups
   (`SQLAlchemyTDocRepository.get_by_ftp_url` /

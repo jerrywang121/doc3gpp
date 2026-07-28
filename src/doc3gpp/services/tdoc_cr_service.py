@@ -35,7 +35,7 @@ The service owns three caching layers:
   (``unzip`` / 7z / WinZip). Legacy plain-UTF-8 and legacy gzip blobs
   are still decoded transparently via magic-byte sniffing. Skipped when
   the zip cache is already populated.
-* **Database cache** — the ``tdoc_cr_details`` / ``tdoc_extracts``
+* **Database cache** — the ``tdoc_cr_cover_page`` / ``tdoc_extracts``
   rows; a hit short-circuits the entire pipeline and returns the
   persisted ``TDocCRDetails`` with ``from_cache=True``.
 
@@ -45,7 +45,7 @@ markdown cache still means we re-parsed and re-validated the document
 against the latest parser regexes.
 
 The parsed :class:`TDocCRParseResult` is fanned out across three
-independent writes: the slim ``tdoc_cr_details`` cover row, an
+independent writes: the slim ``tdoc_cr_cover_page`` cover row, an
 optional ``tdoc_cr_ttcn_details`` sidecar (only present for TTCN
 CRs), and the ``tdoc_extracts`` cache-metadata row. Each write goes
 through its own repository (cover via the slim CR repo, TTCN
@@ -294,7 +294,7 @@ class ExtractResult:
             On a DB-cache hit the basename reflects what the previous
             successful extract wrote.
         from_cache: ``True`` iff the result was returned from the
-            ``tdoc_cr_details`` / ``tdoc_extracts`` rows **without**
+            ``tdoc_cr_cover_page`` / ``tdoc_extracts`` rows **without**
             re-downloading the zip or re-rendering the markdown. A hot
             markdown cache alone does NOT set this flag — we still
             re-parse the markdown against the latest parser regexes
@@ -438,14 +438,14 @@ class TDocCrService:
 
         Args:
             tdoc_id: Canonical TDoc identifier.
-            force: Bypass the DB short-circuit probe (``tdoc_cr_details``
+            force: Bypass the DB short-circuit probe (``tdoc_cr_cover_page``
                 / ``tdoc_extracts``) and the markdown cache on a fresh
                 parse. The on-disk zip cache is **always** consulted
                 first regardless of ``force`` — :func:`download_tdoc_zip`
                 keys the cache on ``tdocs.ftp_url`` (via
                 :func:`derive_cache_file`), and a hit returns the cached
                 path without re-downloading, even when ``force=True``.
-                The ``tdoc_cr_details`` / ``tdoc_extracts`` rows are
+                The ``tdoc_cr_cover_page`` / ``tdoc_extracts`` rows are
                 always re-upserted on the parse path that runs.
             full: Forwarded to the parser as ``full=True``. For TTCN
                 CRs this enables extraction of the per-correction
@@ -682,12 +682,12 @@ class TDocCrService:
           :meth:`extract` happy path (cache + DB writes) but uses
           the URL-derived cache key (via
           :func:`derive_cache_file`) and a FK probe against
-          ``tdocs`` so the FK on ``tdoc_extracts`` / ``tdoc_cr_details``
+          ``tdocs`` so the FK on ``tdoc_extracts`` / ``tdoc_cr_cover_page``
           is never violated. The ``force`` flag is forwarded to
           :func:`download_tdoc_zip`; the per-TDoc id is auto-extracted
           from the URL's basename. The ``--format raw`` branch
           (downstream of this method) writes the ``tdoc_extracts``
-          row but skips the ``tdoc_cr_details`` row.
+          row but skips the ``tdoc_cr_cover_page`` row.
         - **Other URL path**: in-memory parse only; the cache and the
           database are never touched.
 
@@ -703,7 +703,7 @@ class TDocCrService:
                 does not consult the zip cache, it overwrites the
                 ``zips/<cache_file>`` slot on every call so the
                 caller always sees fresh bytes. The
-                ``tdoc_cr_details`` / ``tdoc_extracts`` rows are
+                ``tdoc_cr_cover_page`` / ``tdoc_extracts`` rows are
                 always re-upserted on a 3GPP-URL call.
             full: Forwarded to :func:`parse_cr_details` as
                 ``full=True`` for the TTCN corrections sub-parser.
@@ -941,7 +941,7 @@ class TDocCrService:
         """Return ``True`` when ``tdoc_id`` has a matching row in ``tdocs``.
 
         Cheap single-row probe against the TDoc repository; the FK on
-        ``tdoc_extracts`` / ``tdoc_cr_details`` is non-nullable, so
+        ``tdoc_extracts`` / ``tdoc_cr_cover_page`` is non-nullable, so
         the service layer must consult this before either
         :meth:`_repo.upsert` is called from the direct path.
         """

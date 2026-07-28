@@ -596,7 +596,7 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_skips_db(
 def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
     tmp_path: Path,
 ) -> None:
-    """A pre-existing ``tdoc_cr_details`` row means ``from_cache=True`` and no new network call."""
+    """A pre-existing ``tdoc_cr_cover_page`` row means ``from_cache=True`` and no new network call."""
     if not _docx_available():
         pytest.skip("python-docx not installed")
     fixture = FIXTURES_DIR / "R5s260009.zip"

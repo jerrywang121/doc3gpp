@@ -214,7 +214,7 @@ and the TDoc CR extraction is the deepest.
    any text/date filter); the CLI validates `--meeting-id` when present,
    applies `type == "CR"` by default when no explicit `--type` is
    supplied, and in normal mode the SQL query excludes rows already
-   present in `tdoc_cr_details` before applying the batch cap, so the
+   present in `tdoc_cr_cover_page` before applying the batch cap, so the
    preview and confirmation list only pending TDocs. With `--force`, the
    exclusion is disabled and every match (including already-parsed rows)
    becomes a candidate. If the pending set is empty, the CLI prints
@@ -280,7 +280,7 @@ and the TDoc CR extraction is the deepest.
     - The service fans the result out across THREE independent
       upserts in `TDocCrService.extract_many` /
       `TDocCrService.extract_from_url`: the slim cover-page row in
-      `tdoc_cr_details` (`cr_repo.upsert(cover)`), the optional
+      `tdoc_cr_cover_page` (`cr_repo.upsert(cover)`), the optional
       TTCN sidecar in `tdoc_cr_ttcn_details`
       (`cr_ttcn_repo.upsert(ttcn)` — only when `ttcn is not None`),
       and the cache metadata row in `tdoc_extracts`
@@ -298,11 +298,11 @@ and the TDoc CR extraction is the deepest.
     then performs THREE URL-keyed reads against the immutable
     `tdoc.ftp_url`:
     1. `SQLAlchemyTDocCrRepository.get_by_url(tdoc.ftp_url)` — the
-       slim cover-page row from `tdoc_cr_details`.
+       slim cover-page row from `tdoc_cr_cover_page`.
     2. `SQLAlchemyTDocCrRepository.get_extract_meta_by_url(tdoc.ftp_url)`
        — the cache metadata row from `tdoc_extracts`. The
        `extracted_at` display value is sourced from this row
-       (both `tdoc_cr_details` and `tdoc_cr_ttcn_details` no longer
+       (both `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details` no longer
        carry their own timestamps after the slimming).
     3. `SQLAlchemyTDocCrTtcnRepository.get_by_url(tdoc.ftp_url)` —
        the TTCN sidecar from `tdoc_cr_ttcn_details`, gated on
@@ -352,7 +352,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `type` (`revision` / `review` / `support`), `file`, `ftp_url`
       (unique, the upsert key; stored as a path relative to the
       canonical 3GPP FTP root), `uploaded_date`.
-- `tdoc_cr_details`:
+- `tdoc_cr_cover_page`:
     - `ftp_url` (PK, immutable download URL stored relative to the
       3GPP FTP root) + `tdoc_id` (non-PK FK → `tdocs.tdoc_id` with
       `ondelete="CASCADE"`, indexed for the per-tdoc lookup), one
@@ -373,7 +373,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       (for the TTCN slice).
 - `tdoc_cr_ttcn_details`:
     - `ftp_url` (PK, immutable download URL — same identity
-      convention as `tdoc_cr_details`) + `tdoc_id` (non-PK FK →
+      convention as `tdoc_cr_cover_page`) + `tdoc_id` (non-PK FK →
       `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed for the
       per-tdoc lookup), six overview columns (`testcase`, `ue`,
       `ss`, `ats_version`, `ttcn_release`, `test_suite`) plus
@@ -398,15 +398,15 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
 - `tdoc_extracts`:
-    - `ftp_url` (PK, matches `tdoc_cr_details.ftp_url`) + `tdoc_id`
+    - `ftp_url` (PK, matches `tdoc_cr_cover_page.ftp_url`) + `tdoc_id`
       (non-PK FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed
       for the per-tdoc lookup), `cache_file` (String(255), indexed),
       `doc_filename`, `extracted_at`, `parser_version`. Cache-pointer
       sidecar — the two child tables share the URL as their identity
       but have **no FK between themselves**: the on-disk cache can be
       purged (deleting every `tdoc_extracts` row) without dropping the
-      parsed `tdoc_cr_details` history, and the parsed record can be
-      rebuilt (deleting `tdoc_cr_details`) without invalidating the
+      parsed `tdoc_cr_cover_page` history, and the parsed record can be
+      rebuilt (deleting `tdoc_cr_cover_page`) without invalidating the
       cached zip/markdown. The `cache_file` column stores the unified
       basename (derived from `ftp_url` via `derive_cache_file()`); the
       on-disk paths are reconstructed as `{cache.dir}/zips/<cache_file>`
@@ -425,10 +425,10 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       identifier stable across multi-TSG ownership.
 
 Cascading FK deletes are deliberately inconsistent across the schema:
-`tdoc_cr_details` / `tdoc_cr_ttcn_details` / `tdoc_extracts` cascade
+`tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` / `tdoc_extracts` cascade
 on `tdocs.tdoc_id` deletion (they are derived artefacts of the parent
 TDoc and are safe to wipe with it), while `tdoc_files` does not
-(revision files survive a TDoc re-sync). The `tdoc_cr_details`,
+(revision files survive a TDoc re-sync). The `tdoc_cr_cover_page`,
 `tdoc_cr_ttcn_details`, and `tdoc_extracts` tables have **no FK
 between each other**: the cache sidecar can be purged without
 dropping parsed detail history, the parsed detail can be rebuilt
@@ -494,7 +494,7 @@ twenty commands):
       CR-type as the implicit default and a `max_batch` cap.
     - `show` — `--tdoc` (mutually exclusive with `--ftp-url`); renders
       the matching TDoc, the slim cover-page row from
-      `tdoc_cr_details` (URL-keyed on `tdoc.ftp_url`), the
+      `tdoc_cr_cover_page` (URL-keyed on `tdoc.ftp_url`), the
       `extracted_at` timestamp from `tdoc_extracts` (same URL), and,
       when the TDoc is a TTCN CR, a `[TTCN Details]` block from
       `tdoc_cr_ttcn_details`. Every matching `tdoc_files` row
@@ -504,7 +504,7 @@ twenty commands):
       are `tdoc` (always), `cover` (omitted when absent), `ttcn`
       (omitted when absent), `extracted_at` (omitted when absent),
       `files` (omitted when no auxiliary files exist). `--ftp-url`
-      resolves the URL across `tdocs` / `tdoc_cr_details` /
+      resolves the URL across `tdocs` / `tdoc_cr_cover_page` /
       `tdoc_cr_ttcn_details` / `tdoc_files` directly (no parent
       TDoc needed) and bundles the result into a separate
       `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn, extracted_at,

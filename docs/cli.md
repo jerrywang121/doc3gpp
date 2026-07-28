@@ -454,7 +454,7 @@ Options:
 - `--ftp-url URL`: 3GPP FTP URL (full URL like
   `https://www.3gpp.org/ftp/TSG_RAN/...` or bare relative path like
   `TSG_RAN/...`) to anchor the read on. Surfaces every matching row
-  across `tdocs`, `tdoc_cr_details`, `tdoc_cr_ttcn_details`, and
+  across `tdocs`, `tdoc_cr_cover_page`, `tdoc_cr_ttcn_details`, and
   `tdoc_files`. Normalised via `normalize_ftp_path` before lookup so
   both URL spellings resolve the same row. Mutually exclusive with
   `--tdoc`. Does NOT trigger auto-sync (no parent TDoc to anchor a
@@ -464,7 +464,7 @@ Options:
   TOML config (`output.format`).
   - `table` (default): the historical line-oriented dump — `[TDoc]`
     section followed by a single `[Extracted Details]` block from
-    `tdoc_cr_details` (URL-keyed on `tdoc.ftp_url`) and, when the
+    `tdoc_cr_cover_page` (URL-keyed on `tdoc.ftp_url`) and, when the
     TDoc is a TTCN CR and a matching `tdoc_cr_ttcn_details` row
     exists, an extra `[TTCN Details]` block with the six overview
     fields, a `required_changes: N item(s)` summary line, and a
@@ -491,7 +491,7 @@ Options:
     - `tdoc` — every `TDoc` field, with `date` / `datetime` values
       ISO-8601-encoded.
     - `cover` — the slim cover-page dataclass keyed by
-      `tdoc.ftp_url` (omitted when no `tdoc_cr_details` row).
+      `tdoc.ftp_url` (omitted when no `tdoc_cr_cover_page` row).
     - `ttcn` — the TTCN sidecar dataclass keyed by
       `tdoc.ftp_url`, populated only for TTCN CRs (omitted
       otherwise or when no row exists). Every dataclass field of
@@ -551,7 +551,7 @@ Behavior:
 - On hit, every TDoc row resolves a single primary `ftp_url` for the
   show lookup. The CLI performs three URL-keyed reads against that
   primary URL (no per-revision fan-out for the slim schema):
-  - `tdoc_cr_details` cover row via
+  - `tdoc_cr_cover_page` cover row via
     `SQLAlchemyTDocCrRepository.get_by_url(tdoc.ftp_url)`.
   - `tdoc_extracts` metadata row via
     `SQLAlchemyTDocCrRepository.get_extract_meta_by_url(tdoc.ftp_url)`
@@ -577,7 +577,7 @@ Behavior:
 - `raw` bypasses the DB-row render entirely and reads the converted
   markdown from the cache. When the cache is cold, the extract
   pipeline runs (download zip, render markdown, persist across
-  `tdoc_cr_details` + the optional `tdoc_cr_ttcn_details` +
+  `tdoc_cr_cover_page` + the optional `tdoc_cr_ttcn_details` +
   `tdoc_extracts` in three independent upserts) before the result is
   emitted.
 
@@ -790,7 +790,7 @@ Purpose:
 
 - Download a TDoc zip from the 3GPP FTP, render its `.docx` body to
   markdown, parse the cover-page fields, and persist the result
-  across the slim cover-page table (`tdoc_cr_details`), the cache
+  across the slim cover-page table (`tdoc_cr_cover_page`), the cache
   metadata table (`tdoc_extracts`), and — when the parser
   recognises a TTCN CR — the new `tdoc_cr_ttcn_details` sidecar.
   TTCN detection is automatic: the parser returns a
@@ -852,7 +852,7 @@ Options:
   Accepts the same rich-filter grammar as `--spec`.
 - `--uploaded-date EXPR`: filter on `uploaded_date` — see
   [Filter syntax](#filter-syntax) for accepted forms.
-- `--force`: skip the persisted `tdoc_cr_details` /
+- `--force`: skip the persisted `tdoc_cr_cover_page` /
   `tdoc_extracts` short-circuit and re-render markdown (bypassing
   the markdown cache) so every id is re-parsed from scratch.
   The on-disk zip cache is **always** consulted first regardless of
@@ -929,7 +929,7 @@ table is truncated to the first 20 rows per group with an explicit
 After filters resolve, the CLI:
 
 1. In normal mode, the SQL query already excludes rows that have a
-   `tdoc_cr_details` entry, so the candidate set consists only of
+   `tdoc_cr_cover_page` entry, so the candidate set consists only of
    **pending** TDocs. With `--force`, the exclusion is disabled and
    every match (including already-parsed rows) becomes a candidate.
 2. Prints the candidate table with the column set above. If the
@@ -1067,7 +1067,7 @@ Options:
 - `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.
   When the URL is on the canonical 3GPP FTP root
   (`https://www.3gpp.org/ftp/...`) the result is cached on disk and
-  written to `tdoc_extracts` + `tdoc_cr_details` (and to
+  written to `tdoc_extracts` + `tdoc_cr_cover_page` (and to
   `tdoc_cr_ttcn_details` when the parser produced a TTCN sidecar —
   subject to the FK matrix below); any other URL is parsed
   in-memory only. Schemes other than `http(s)` (e.g. `ftp://`,
@@ -1164,7 +1164,7 @@ Directory (batch) behaviour (local or 3GPP URL folder):
 
 FK-aware behaviour matrix (3GPP URL):
 
-| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_details` row? | `tdoc_cr_ttcn_details` row? | Output? | Warning? |
+| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_cover_page` row? | `tdoc_cr_ttcn_details` row? | Output? | Warning? |
 |---|---|---|---|---|---|---|
 | `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | yes — only when the parser emitted a TTCN sidecar (i.e. `is_ttcn_tdoc(tdoc_id)` and the document contained a TTCN overview / corrections section) | always | no |
 | `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |

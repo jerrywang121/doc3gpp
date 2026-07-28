@@ -346,8 +346,13 @@ class DirectParseBatchResult:
     """Outcome of a batch ``tdoc parse --from-url <folder>`` run.
 
     Bundles every per-file :class:`DirectParseResult` with a failure map
-    so the CLI can emit a summary without recomputing visit order.
+    and a skip map so the CLI can emit a summary without recomputing
+    visit order. ``skipped`` carries URLs that were too large for the
+    ``tdoc_parse.max_tdoc_size_kb`` cap (size-limit skip) — kept
+    separate from ``failures`` because the operator-facing meaning
+    differs (size-skip is a budget decision, failure is a bug).
     """
 
     results: list[DirectParseResult]
     failures: dict[str, str]
+    skipped: dict[str, str] = field(default_factory=dict)

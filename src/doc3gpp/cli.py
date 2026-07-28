@@ -3052,9 +3052,10 @@ def _emit_url_batch_results(
             newly_parsed += 1
 
     typer.echo("---")
-    typer.echo(f"Scanned:                         {len(batch.results) + failures}")
+    typer.echo(f"Scanned:                         {len(batch.results) + failures + len(batch.skipped)}")
     if output_dir is not None:
         typer.echo(f"Skipped (output already exists): {skipped}")
+    typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {len(batch.skipped)}")
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Cache hits:                      {cache_hits}")
     typer.echo(f"Failures:                        {failures}")

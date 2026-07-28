@@ -845,3 +845,39 @@ def test_extract_many_routes_too_large_to_skipped(tmp_path) -> None:
         reason.startswith("TDocTooLargeError:")
         for reason in batch.skipped.values()
     )
+
+
+def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
+    """``extract_from_url_batch`` puts oversized URLs in ``skipped``
+    (NOT in ``failures``).
+    """
+    from doc3gpp.services import tdoc_cr_service as svc_mod
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    service, _, _, _, _, _ = _build_service(tmp_path)
+
+    urls = [
+        "https://www.3gpp.org/ftp/a.zip",
+        "https://www.3gpp.org/ftp/b.zip",
+    ]
+
+    service.collect_3gpp_file_urls = lambda url, *, max_depth: urls  # type: ignore[method-assign]
+
+    def _boom(url: str, *, force: bool = False, full: bool = False):
+        raise TDocTooLargeError(source=url, size=99, limit=10)
+
+    service.extract_from_url = _boom  # type: ignore[method-assign]
+
+    original_is_3gpp = svc_mod.is_3gpp_ftp_url
+    svc_mod.is_3gpp_ftp_url = lambda u: True  # type: ignore[assignment]
+    try:
+        batch = service.extract_from_url_batch(
+            "https://www.3gpp.org/ftp/folder/", max_depth=0,
+        )
+    finally:
+        svc_mod.is_3gpp_ftp_url = original_is_3gpp  # type: ignore[assignment]
+
+    assert batch.failures == {}
+    assert set(batch.skipped.keys()) == set(urls)
+    for url, reason in batch.skipped.items():
+        assert reason.startswith("TDocTooLargeError:"), url

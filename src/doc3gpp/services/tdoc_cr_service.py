@@ -862,9 +862,17 @@ class TDocCrService:
 
         results: list[DirectParseResult] = []
         failures: dict[str, str] = {}
+        skipped: dict[str, str] = {}
         for file_url in file_urls:
             try:
                 result = self.extract_from_url(file_url, force=force, full=full)
+            except TDocTooLargeError as exc:
+                logger.info(
+                    "Skipping %s: %s bytes exceeds max_tdoc_size_kb limit (%s bytes)",
+                    file_url, exc.size, exc.limit,
+                )
+                skipped[file_url] = f"{type(exc).__name__}: {exc}"
+                continue
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Failed to parse %s: %s", file_url, exc, exc_info=True,
@@ -873,7 +881,9 @@ class TDocCrService:
                 continue
             results.append(result)
 
-        return DirectParseBatchResult(results=results, failures=failures)
+        return DirectParseBatchResult(
+            results=results, failures=failures, skipped=skipped,
+        )
 
     def _collect_3gpp_file_urls(
         self,
@@ -1027,6 +1037,21 @@ class TDocCrService:
                 )
 
         zip_payload = self._scraper.get_bytes(url)
+        # Post-fetch size guard: defence-in-depth — the direct-parse
+        # path also writes its own zip slot, and the cache's
+        # enforce_size_limit may evict it differently from the DB-mode
+        # path. The size check is cheap and keeps the per-file budget
+        # honest end-to-end.
+        if (
+            self._max_tdoc_size_bytes > 0
+            and len(zip_payload) > self._max_tdoc_size_bytes
+        ):
+            self._cache.put_bytes(cache_file, zip_payload, "zips")
+            raise TDocTooLargeError(
+                source=f"download:{url}",
+                size=len(zip_payload),
+                limit=self._max_tdoc_size_bytes,
+            )
         self._cache.put_bytes(cache_file, zip_payload, "zips")
 
         doc_filename, docx_bytes = extract_docx_from_zip(zip_payload)

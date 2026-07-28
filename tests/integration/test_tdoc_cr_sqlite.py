@@ -1295,7 +1295,7 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
 
         stub = _StubCrService()
         monkeypatch.setattr(
-            "doc3gpp.cli.build_tdoc_cr_service", lambda: stub,
+            "doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: stub,
         )
 
         runner = CliRunner()

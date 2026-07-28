@@ -1135,6 +1135,24 @@ def _resolve_url_batch_depth(
     return 0
 
 
+def _resolve_max_tdoc_size_bytes(
+    *,
+    override_kb: int | None,
+    settings: "Settings",
+) -> int:
+    """Return the effective per-file cap in bytes; ``0`` = unlimited.
+
+    Mirrors :func:`_resolve_url_batch_depth`: when ``override_kb`` is
+    ``None`` (the CLI flag was not supplied), the value comes from
+    ``settings.tdoc_parse.max_tdoc_size_kb``. The bytes value (KB ×
+    1024) is the canonical form the service layer and gate points
+    consume; the CLI flag is in KB for human readability.
+    """
+    if override_kb is not None:
+        return override_kb * 1024
+    return settings.tdoc_parse.max_tdoc_size_kb * 1024
+
+
 @tdoc_app.command("parse")
 def tdoc_parse(
     tdoc: str | None = typer.Option(
@@ -1270,6 +1288,16 @@ def tdoc_parse(
         max=10,
         help="Override tdoc_parse.max_ftp_depth for --from-url folder batch (implies --recursive).",
     ),
+    max_tdoc_size_kb: int | None = typer.Option(
+        None,
+        "--max-tdoc-size-kb",
+        min=0,
+        help=(
+            "Override tdoc_parse.max_tdoc_size_kb. Source files "
+            "(.zip or .docx) larger than this many KB are skipped "
+            "(size-limit skip bucket). 0 = unlimited."
+        ),
+    ),
     direct_format: str | None = typer.Option(
         None,
         "--format",
@@ -1308,6 +1336,10 @@ def tdoc_parse(
       batch scans .docx/.zip files, recurses with --recursive, and always
       writes cache/DB for matching TDoc ids)
     """
+    max_tdoc_size_bytes = _resolve_max_tdoc_size_bytes(
+        override_kb=max_tdoc_size_kb,
+        settings=get_settings(),
+    )
     if from_url is not None or from_path is not None:
         _validate_source_mode_flags(from_url, from_path)
         _warn_on_ignored_filter_flags(
@@ -1345,6 +1377,7 @@ def tdoc_parse(
                     fmt=direct_format,
                     output=direct_output,
                     full=full,
+                    max_tdoc_size_bytes=max_tdoc_size_bytes,
                 )
             elif input_path.is_dir():
                 if direct_output is None:
@@ -1358,6 +1391,7 @@ def tdoc_parse(
                     recursive=recursive,
                     force=force,
                     full=full,
+                    max_tdoc_size_bytes=max_tdoc_size_bytes,
                 )
             else:
                 raise typer.BadParameter(
@@ -1369,7 +1403,7 @@ def tdoc_parse(
                 max_depth=max_depth,
                 settings=get_settings(),
             )
-            tdoc_service = build_tdoc_cr_service()
+            tdoc_service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
             if is_3gpp_ftp_url(from_url):
                 candidates = collect_tdoc_candidates_for_url(
                     from_url,
@@ -1390,6 +1424,7 @@ def tdoc_parse(
                     fmt=direct_format,
                     output=direct_output,
                     full=full,
+                    max_tdoc_size_bytes=max_tdoc_size_bytes,
                 )
             elif _looks_like_3gpp_folder_url(from_url):
                 _tdoc_parse_url_batch(
@@ -1399,6 +1434,7 @@ def tdoc_parse(
                     max_depth=effective_depth,
                     force=force,
                     full=full,
+                    max_tdoc_size_bytes=max_tdoc_size_bytes,
                 )
             else:
                 try:
@@ -1407,6 +1443,7 @@ def tdoc_parse(
                         max_depth=effective_depth,
                         force=force,
                         full=full,
+                        max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                     )
                 except NotAFolderError:
                     _tdoc_parse_direct(
@@ -1415,6 +1452,7 @@ def tdoc_parse(
                         fmt=direct_format,
                         output=direct_output,
                         full=full,
+                        max_tdoc_size_bytes=max_tdoc_size_bytes,
                     )
                 else:
                     _emit_url_batch_results(
@@ -1576,7 +1614,7 @@ def tdoc_parse(
         "Starting TDoc parse for %d id(s) (force=%s, full=%s)",
         len(tdoc_ids), force, full,
     )
-    service = build_tdoc_cr_service()
+    service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     try:
         batch = service.extract_many(tdoc_ids, force=force, full=full)
     except PythonDocxNotInstalledError as exc:
@@ -1812,8 +1850,17 @@ def _tdoc_parse_direct(
     fmt: str | None,
     output: str | None,
     full: bool,
+    max_tdoc_size_bytes: int = 0,
 ) -> None:
     """Dispatch a single ``--from-path`` (file) or ``--from-url`` call.
+
+    ``max_tdoc_size_bytes`` is forwarded to
+    :meth:`TDocCrService.extract_from_bytes` /
+    :meth:`TDocCrService.extract_from_url` so the same per-file byte
+    cap that gates ``tdoc parse --tdoc`` also applies to direct
+    single-file invocations. ``0`` (the default) disables the cap;
+    the CLI always resolves the resolved bytes value up-front and
+    passes it explicitly.
 
     Resolves the format, runs the appropriate service method, prints
     the FK-miss warning when applicable, and emits the result in the
@@ -1827,9 +1874,10 @@ def _tdoc_parse_direct(
         build_no_pattern_warning_message,
     )
     from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
 
     resolved_format = _resolve_direct_format(fmt)
-    service = build_tdoc_cr_service()
+    service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     raw = from_path if from_path is not None else from_url
     assert raw is not None
 
@@ -1838,11 +1886,23 @@ def _tdoc_parse_direct(
             payload = Path(from_path).read_bytes()
             result = service.extract_from_bytes(
                 payload, from_path, force=False, full=full,
+                max_tdoc_size_bytes=max_tdoc_size_bytes,
             )
         else:
             result = service.extract_from_url(
                 raw, force=False, full=full,
+                max_tdoc_size_bytes=max_tdoc_size_bytes,
             )
+    except TDocTooLargeError as exc:
+        # Size-limit skip — exit 0 with a warning. The operator's
+        # --max-tdoc-size-kb is an explicit budget decision, not a
+        # bug. Consistent with the non-3GPP URL warning+emit path
+        # below.
+        typer.echo(
+            f"SKIPPED - {type(exc).__name__}: {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=0) from None
     except FileNotFoundError as exc:
         typer.echo(f"FAILED - FileNotFoundError: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -2827,6 +2887,7 @@ def _tdoc_parse_local_batch(
     recursive: bool,
     force: bool,
     full: bool,
+    max_tdoc_size_bytes: int = 0,
 ) -> None:
     """Parse every ``.docx`` / ``.zip`` under ``from_path`` and write one output file each.
 
@@ -2860,7 +2921,7 @@ def _tdoc_parse_local_batch(
         )
         raise typer.Exit(code=0)
 
-    service = build_tdoc_cr_service()
+    service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     skipped = 0
     re_parsed = 0
     newly_parsed = 0
@@ -2947,6 +3008,7 @@ def _tdoc_parse_url_batch(
     max_depth: int,
     force: bool,
     full: bool,
+    max_tdoc_size_bytes: int = 0,
 ) -> None:
     """Batch-parse every matching file under a 3GPP FTP folder URL.
 
@@ -2955,12 +3017,13 @@ def _tdoc_parse_url_batch(
     under the FTP folder structure; otherwise only a summary is printed.
     """
     resolved_format = _resolve_direct_format(fmt)
-    service = build_tdoc_cr_service()
+    service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     batch = service.extract_from_url_batch(
         from_url,
         max_depth=max_depth,
         force=force,
         full=full,
+        max_tdoc_size_bytes=max_tdoc_size_bytes or None,
     )
     if not batch.results and not batch.failures and max_depth == 0:
         typer.echo(

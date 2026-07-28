@@ -658,7 +658,10 @@ class _FakeService:
         self.url_calls: list[tuple[str, bool, bool]] = []
         self.bytes_calls: list[tuple[bytes, str, bool, bool]] = []
 
-    def extract_from_url(self, url: str, *, force: bool, full: bool) -> DirectParseResult:
+    def extract_from_url(
+        self, url: str, *, force: bool, full: bool,
+        max_tdoc_size_bytes: int = 0,
+    ) -> DirectParseResult:
         self.url_calls.append((url, force, full))
         if isinstance(self._result, Exception):
             raise self._result
@@ -666,6 +669,7 @@ class _FakeService:
 
     def extract_from_bytes(
         self, payload: bytes, filename: str, *, force: bool, full: bool,
+        max_tdoc_size_bytes: int = 0,
     ) -> DirectParseResult:
         self.bytes_calls.append((payload, filename, force, full))
         if isinstance(self._result, Exception):
@@ -675,7 +679,7 @@ class _FakeService:
 
 def _build_service_factory(monkeypatch, service: TDocCrService) -> None:
     """Patch the CLI's service factory to return ``service``."""
-    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: service)
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: service)
 
 
 def test_cli_from_path_file_table_format_emits_single_row(tmp_path: Path, monkeypatch) -> None:
@@ -1255,6 +1259,7 @@ def test_cli_from_path_recursive_mirrors_subfolders(
     class _CountingFakeService(_FakeService):
         def extract_from_bytes(
             self, payload: bytes, filename: str, *, force: bool, full: bool,
+            max_tdoc_size_bytes: int = 0,
         ) -> DirectParseResult:
             call_count["n"] += 1
             tdoc_id = extract_tdoc_id_from_filename(filename) or "R5s260009"

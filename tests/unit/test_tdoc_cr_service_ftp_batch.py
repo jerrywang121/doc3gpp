@@ -269,8 +269,12 @@ def test_extract_from_url_batch_delegates_per_file(service: TDocCrService) -> No
     assert isinstance(batch, DirectParseBatchResult)
     assert len(batch.results) == 2
     assert batch.failures == {}
-    service.extract_from_url.assert_any_call(file1, force=False, full=False)
-    service.extract_from_url.assert_any_call(file2, force=False, full=False)
+    service.extract_from_url.assert_any_call(
+        file1, force=False, full=False, max_tdoc_size_bytes=None,
+    )
+    service.extract_from_url.assert_any_call(
+        file2, force=False, full=False, max_tdoc_size_bytes=None,
+    )
 
 
 def test_extract_from_url_batch_records_per_file_failures(service: TDocCrService) -> None:

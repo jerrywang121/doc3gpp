@@ -863,7 +863,8 @@ def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
 
     service.collect_3gpp_file_urls = lambda url, *, max_depth: urls  # type: ignore[method-assign]
 
-    def _boom(url: str, *, force: bool = False, full: bool = False):
+    def _boom(url: str, *, force: bool = False, full: bool = False,
+              max_tdoc_size_bytes: int | None = None):
         raise TDocTooLargeError(source=url, size=99, limit=10)
 
     service.extract_from_url = _boom  # type: ignore[method-assign]

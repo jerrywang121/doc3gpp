@@ -266,10 +266,15 @@ _SENTINEL_DETAIL = object()
 
 
 def _patch_service(monkeypatch, fake: _FakeCrService) -> None:
-    """Stub ``build_tdoc_cr_service`` so the CLI picks up ``fake``."""
+    """Stub ``build_tdoc_cr_service`` so the CLI picks up ``fake``.
+
+    The CLI passes ``max_tdoc_size_bytes=`` through to the factory; the
+    stub accepts and ignores any kwargs so dispatch-side wiring changes
+    don't break unrelated tests.
+    """
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_cr_service",
-        lambda: fake,
+        lambda *args, **kwargs: fake,
     )
 
 
@@ -3125,12 +3130,14 @@ class _RecordingCrService:
 
     def extract_from_url_batch(
         self, url: str, *, max_depth: int, force: bool, full: bool,
+        max_tdoc_size_bytes: int = 0,
     ) -> "_RecordingBatchResult":
         self.extract_batch_calls.append((url, max_depth))
         return _RecordingBatchResult(results=[], failures={})
 
     def extract_from_url(
         self, url: str, *, force: bool, full: bool,
+        max_tdoc_size_bytes: int = 0,
     ) -> "_RecordingSingleResult":
         self.extract_url_calls.append(url)
         return _RecordingSingleResult(
@@ -3193,7 +3200,7 @@ def test_tdoc_parse_from_url_3gpp_file_triggers_auto_sync_with_candidates(
     the basename-derived tdoc_id set BEFORE the parse runs."""
     _enable_auto_sync(monkeypatch)
     service = _RecordingCrService()
-    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: service)
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: service)
     _patch_direct_parse_to_noop(monkeypatch)
 
     candidates_mock = MagicMock(return_value={"R5s260009"})
@@ -3240,7 +3247,7 @@ def test_tdoc_parse_from_url_3gpp_folder_skips_sync_when_no_candidates(
     the batch dispatcher."""
     _enable_auto_sync(monkeypatch)
     monkeypatch.setattr(
-        "doc3gpp.cli.build_tdoc_cr_service", lambda: _RecordingCrService(),
+        "doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: _RecordingCrService(),
     )
     batch_mock = _patch_url_batch_to_noop(monkeypatch)
 
@@ -3271,7 +3278,7 @@ def test_tdoc_parse_from_url_non_3gpp_skips_auto_sync(
     """Non-3GPP URLs never trigger auto-sync."""
     _enable_auto_sync(monkeypatch)
     monkeypatch.setattr(
-        "doc3gpp.cli.build_tdoc_cr_service", lambda: _RecordingCrService(),
+        "doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: _RecordingCrService(),
     )
     direct_mock = _patch_direct_parse_to_noop(monkeypatch)
 
@@ -3309,7 +3316,7 @@ def test_tdoc_parse_from_url_passes_max_depth_into_collect(
     ``_resolve_url_batch_depth`` helper into ``collect_tdoc_candidates_for_url``."""
     _enable_auto_sync(monkeypatch)
     service = _RecordingCrService()
-    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: service)
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: service)
     _patch_url_batch_to_noop(monkeypatch)
 
     candidates_mock = MagicMock(return_value=set())
@@ -3344,7 +3351,7 @@ def test_tdoc_parse_from_url_services_only_built_once(
     _enable_auto_sync(monkeypatch)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_cr_service",
-        lambda: _RecordingCrService(),
+        lambda *args, **kwargs: _RecordingCrService(),
     )
     _patch_direct_parse_to_noop(monkeypatch)
     monkeypatch.setattr(

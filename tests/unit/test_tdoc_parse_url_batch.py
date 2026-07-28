@@ -37,6 +37,7 @@ class _FakeBatchService:
         max_depth: int = 2,
         force: bool = False,
         full: bool = False,
+        max_tdoc_size_bytes: int = 0,
     ) -> DirectParseBatchResult:
         self.batch_calls.append((url, {"max_depth": max_depth, "force": force, "full": full}))
         if self.batch_result is None:
@@ -49,6 +50,7 @@ class _FakeBatchService:
         *,
         force: bool = False,
         full: bool = False,
+        max_tdoc_size_bytes: int = 0,
     ) -> DirectParseResult:
         self.direct_calls.append((url, {"force": force, "full": full}))
         if self.direct_raises is not None:
@@ -61,7 +63,7 @@ class _FakeBatchService:
 
 
 def _build_service_factory(monkeypatch: pytest.MonkeyPatch, service: _FakeBatchService) -> None:
-    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: service)
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: service)
 
 
 def _dummy_details(tdoc_id: str) -> DirectParseResult:

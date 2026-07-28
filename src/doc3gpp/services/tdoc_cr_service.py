@@ -701,6 +701,7 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = False,
+        max_tdoc_size_bytes: int | None = None,
     ) -> DirectParseResult:
         """Download ``url`` and return a :class:`DirectParseResult`.
 
@@ -819,6 +820,11 @@ class TDocCrService:
             tdoc_id=extracted_id,
             force=force,
             full=full,
+            max_bytes=(
+                max_tdoc_size_bytes
+                if max_tdoc_size_bytes is not None
+                else self._max_tdoc_size_bytes
+            ),
         )
 
     def extract_from_url_batch(
@@ -828,6 +834,7 @@ class TDocCrService:
         max_depth: int = 2,
         force: bool = False,
         full: bool = False,
+        max_tdoc_size_bytes: int | None = None,
     ) -> DirectParseBatchResult:
         """Batch-parse every matching ``.docx``/``.zip`` under a 3GPP FTP folder.
 
@@ -865,7 +872,10 @@ class TDocCrService:
         skipped: dict[str, str] = {}
         for file_url in file_urls:
             try:
-                result = self.extract_from_url(file_url, force=force, full=full)
+                result = self.extract_from_url(
+                    file_url, force=force, full=full,
+                    max_tdoc_size_bytes=max_tdoc_size_bytes,
+                )
             except TDocTooLargeError as exc:
                 logger.info(
                     "Skipping %s: %s bytes exceeds max_tdoc_size_kb limit (%s bytes)",
@@ -933,6 +943,7 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = True,
+        max_tdoc_size_bytes: int | None = None,
     ) -> DirectParseResult:
         """Parse ``docx_bytes`` from a local source — never touches cache or DB.
 
@@ -965,7 +976,11 @@ class TDocCrService:
         del force
         markdown, docx_filename, parsed = direct_parse_bytes(
             docx_bytes, filename=filename, full=full,
-            max_bytes=self._max_tdoc_size_bytes,
+            max_bytes=(
+                max_tdoc_size_bytes
+                if max_tdoc_size_bytes is not None
+                else self._max_tdoc_size_bytes
+            ),
         )
         tdoc_id = extract_tdoc_id_from_filename(filename)
         return DirectParseResult(
@@ -998,6 +1013,7 @@ class TDocCrService:
         tdoc_id: str,
         force: bool,
         full: bool,
+        max_bytes: int = 0,
     ) -> DirectParseResult:
         """Run the full extract pipeline for a 3GPP URL whose FK target exists.
 
@@ -1042,15 +1058,12 @@ class TDocCrService:
         # enforce_size_limit may evict it differently from the DB-mode
         # path. The size check is cheap and keeps the per-file budget
         # honest end-to-end.
-        if (
-            self._max_tdoc_size_bytes > 0
-            and len(zip_payload) > self._max_tdoc_size_bytes
-        ):
+        if max_bytes > 0 and len(zip_payload) > max_bytes:
             self._cache.put_bytes(cache_file, zip_payload, "zips")
             raise TDocTooLargeError(
                 source=f"download:{url}",
                 size=len(zip_payload),
-                limit=self._max_tdoc_size_bytes,
+                limit=max_bytes,
             )
         self._cache.put_bytes(cache_file, zip_payload, "zips")
 

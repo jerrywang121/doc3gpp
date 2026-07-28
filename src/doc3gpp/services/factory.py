@@ -118,6 +118,8 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
 
 def build_tdoc_cr_service(
     cr_ttcn_repository: TDocCrTTCNDetailRepository | None = None,
+    *,
+    max_tdoc_size_bytes: int | None = None,
 ) -> TDocCrService:
     """Construct a :class:`TDocCrService` for the ``tdoc parse`` command.
 
@@ -145,8 +147,22 @@ def build_tdoc_cr_service(
     through :meth:`TDocCrService.extract_many` or through
     :meth:`TDocCrService.extract_from_url` /
     :meth:`TDocCrService.extract_from_bytes`.
+
+    Args:
+        cr_ttcn_repository: Optional override for the TTCN sidecar
+            repository (tests inject a stub here).
+        max_tdoc_size_bytes: Optional explicit cap (bytes). When
+            ``None`` (default), the factory resolves from
+            ``settings.tdoc_parse.max_tdoc_size_kb * 1024``. When an
+            explicit value is supplied it overrides the setting —
+            typically used by the CLI dispatcher to apply
+            ``--max-tdoc-size-kb``. The value is forwarded to
+            :class:`TDocCrService` as ``max_tdoc_size_bytes``;
+            ``0`` disables the size guard.
     """
     settings = get_settings()
+    if max_tdoc_size_bytes is None:
+        max_tdoc_size_bytes = settings.tdoc_parse.max_tdoc_size_kb * 1024
     return TDocCrService(
         cache=TDocCache(
             root=settings.cache.dir,
@@ -156,4 +172,5 @@ def build_tdoc_cr_service(
         cr_repository=SQLAlchemyTDocCrRepository(),
         cr_ttcn_repository=cr_ttcn_repository or build_tdoc_cr_ttcn_repository(),  # type: ignore[call-arg]
         tdoc_repository=SQLAlchemyTDocRepository(),
+        max_tdoc_size_bytes=max_tdoc_size_bytes,
     )

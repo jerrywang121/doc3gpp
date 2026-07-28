@@ -810,3 +810,78 @@ def test_tdoc_show_by_ftp_url_json_payload_includes_cover_ttcn_and_extracted_at(
     assert payload["ttcn"]["testcase"] == "7.1.3.5.3"
     assert "extracted_at" in payload
     assert "files" not in payload
+
+
+# ---------------------------------------------------------------------------
+# 11. End-to-end: ``tdoc show --format json --compact`` emits a single
+#     line of compact JSON that round-trips through ``json.loads``.
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_show_format_json_compact_round_trips(
+    sqlite_env, tmp_path: Path,
+) -> None:
+    """End-to-end smoke test: drive ``tdoc show --tdoc <id> --format json
+    --compact`` against a real sqlite database and assert the output is
+    a single line of compact JSON that parses back to the same payload
+    as the pretty-printed form.
+
+    Mirrors :func:`test_tdoc_show_json_payload_includes_cover_ttcn_and_extracted_at`
+    (Task 10 covers the same shape via CLI mocks; this one uses real
+    sqlite + repositories so the dispatcher's full read path is
+    exercised).
+    """
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+
+    create_schema()
+    tdoc_repo = SQLAlchemyTDocRepository()
+    cr_repo = SQLAlchemyTDocCrRepository()
+    cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+
+    tdoc_id = "R5s260011"
+    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260011.zip"
+    tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
+
+    cr_repo.upsert(
+        TDocCRDetails(
+            tdoc_id=tdoc_id,
+            spec="38.523-3",
+            cr_num="3790",
+            ftp_url=url,
+        ),
+    )
+    cr_ttcn_repo.upsert(
+        TDocCRTTCNDetails(
+            tdoc_id=tdoc_id,
+            ftp_url=url,
+            testcase="7.1.3.5.3",
+            ats_version="iwd-TTCN3-B2512-260-eng",
+        ),
+    )
+    cr_repo.upsert_extract_meta(
+        TDocExtractMeta(
+            ftp_url=url,
+            tdoc_id=tdoc_id,
+            cache_file="R5s260011-abcdef0123456789.zip",
+            doc_filename="R5s260011.docx",
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--tdoc", tdoc_id, "--format", "json", "--compact"],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    assert "\n" not in output
+    assert ", " not in output
+    assert ": " not in output
+    payload = json.loads(output)
+    assert payload["tdoc"]["tdoc_id"] == tdoc_id
+    assert payload["cover"]["spec"] == "38.523-3"
+    assert payload["ttcn"]["testcase"] == "7.1.3.5.3"
+    assert "extracted_at" in payload
+    assert "files" not in payload

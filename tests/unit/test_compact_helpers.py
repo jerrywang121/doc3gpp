@@ -123,3 +123,74 @@ def test_emit_markdown_default_still_gfm_table() -> None:
         "|---|---|\n"
         "| R5s260001 | RAN5#111 |\n"
     )
+
+
+def _make_record():
+    from datetime import date
+
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+
+    return TDocCRDetails(
+        tdoc_id="R5s260001",
+        spec="38.300",
+        cr_num="0001",
+        rev="-",
+        version="1.0.0",
+        title="CR on 5G NR",
+        source="RAN1",
+        tsg="RAN1",
+        related_wis="-",
+        date=date(2026, 1, 15),
+        cr_cat="F",
+        release="Rel-18",
+        reason_for_change="-",
+        consequences_if_not_approved="-",
+        clauses_affected="5.4.2",
+    )
+
+
+def test_emit_record_json_compact_single_line(tmp_path) -> None:
+    """``_emit_record_json`` honours ``compact`` the same way as
+    ``_emit_json`` (single line, no spaces, no trailing newline)."""
+    import json
+
+    from doc3gpp.cli import _emit_record_json
+
+    record = _make_record()
+    out = tmp_path / "out.json"
+    _emit_record_json(record, str(out), compact=True)
+    text = out.read_text(encoding="utf-8")
+    assert "\n" not in text
+    assert ", " not in text
+    assert ": " not in text
+    payload = json.loads(text)
+    assert payload["tdoc_id"] == "R5s260001"
+    assert payload["date"] == "2026-01-15"
+
+
+def test_emit_record_markdown_compact_strips_decorators(tmp_path) -> None:
+    """``_emit_record_markdown`` compact form drops the GFM table and
+    emits ``field: value`` lines."""
+    from doc3gpp.cli import _DIRECT_PARSE_FIELDS, _emit_record_markdown
+
+    record = _make_record()
+    out = tmp_path / "out.md"
+    _emit_record_markdown(record, str(out), compact=True)
+    text = out.read_text(encoding="utf-8")
+    assert "|" not in text
+    assert "---" not in text
+    for label in _DIRECT_PARSE_FIELDS:
+        assert f"{label}:" in text
+
+
+def test_emit_record_table_compact_is_noop(tmp_path) -> None:
+    """``_emit_record_table`` ignores ``compact`` (table is already
+    line-oriented and maximally compact by construction)."""
+    from doc3gpp.cli import _emit_record_table
+
+    record = _make_record()
+    plain = tmp_path / "plain.tsv"
+    compact = tmp_path / "compact.tsv"
+    _emit_record_table(record, str(plain))
+    _emit_record_table(record, str(compact), compact=True)
+    assert plain.read_text(encoding="utf-8") == compact.read_text(encoding="utf-8")

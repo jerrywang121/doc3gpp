@@ -2016,19 +2016,26 @@ def _emit_record(
     record: TDocCRDetails,
     fmt: str,
     output: str | None,
+    *,
+    compact: bool = False,
 ) -> None:
     """Dispatch to the table / markdown / json emitter for a single parsed record."""
     if fmt == "table":
-        _emit_record_table(record, output)
+        _emit_record_table(record, output, compact=compact)
     elif fmt == "markdown":
-        _emit_record_markdown(record, output)
+        _emit_record_markdown(record, output, compact=compact)
     elif fmt == "json":
-        _emit_record_json(record, output)
+        _emit_record_json(record, output, compact=compact)
     else:
         raise typer.BadParameter(f"Unsupported direct-parse format: {fmt!r}")
 
 
-def _emit_record_table(record: TDocCRDetails, output: str | None) -> None:
+def _emit_record_table(
+    record: TDocCRDetails,
+    output: str | None,
+    *,
+    compact: bool = False,  # noqa: ARG001 — table is already compact
+) -> None:
     """Emit a single record as a tab-separated header + data row."""
     stream, close_after = _open_output(output)
     try:
@@ -2041,10 +2048,20 @@ def _emit_record_table(record: TDocCRDetails, output: str | None) -> None:
             stream.close()
 
 
-def _emit_record_markdown(record: TDocCRDetails, output: str | None) -> None:
-    """Emit a single record as a one-row GFM table."""
+def _emit_record_markdown(
+    record: TDocCRDetails,
+    output: str | None,
+    *,
+    compact: bool = False,
+) -> None:
+    """Emit a single record as a one-row GFM table, or a per-field
+    ``key: value`` block when ``compact=True``."""
     stream, close_after = _open_output(output)
     try:
+        if compact:
+            for name in _DIRECT_PARSE_FIELDS:
+                stream.write(f"{name}: {_serialise_cell(record, name)}\n")
+            return
         stream.write("| " + " | ".join(_md_cell(h) for h in _DIRECT_PARSE_FIELDS) + " |\n")
         stream.write("|" + "|".join(["---"] * len(_DIRECT_PARSE_FIELDS)) + "|\n")
         cells = [_md_cell(_serialise_cell(record, name)) for name in _DIRECT_PARSE_FIELDS]
@@ -2054,12 +2071,20 @@ def _emit_record_markdown(record: TDocCRDetails, output: str | None) -> None:
             stream.close()
 
 
-def _emit_record_json(record: TDocCRDetails, output: str | None) -> None:
+def _emit_record_json(
+    record: TDocCRDetails,
+    output: str | None,
+    *,
+    compact: bool = False,
+) -> None:
     """Emit a single record as a JSON object via ``dataclasses.asdict``."""
     payload = dataclasses.asdict(record)
     payload["date"] = record.date.isoformat() if record.date is not None else None
     stream, close_after = _open_output(output)
     try:
+        if compact:
+            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+            return
         json.dump(payload, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
     finally:
@@ -2067,7 +2092,12 @@ def _emit_record_json(record: TDocCRDetails, output: str | None) -> None:
             stream.close()
 
 
-def _emit_record_raw(markdown: str, output: str | None) -> None:
+def _emit_record_raw(
+    markdown: str,
+    output: str | None,
+    *,
+    compact: bool = False,  # noqa: ARG001 — raw is already compact
+) -> None:
     """Write the converted markdown bytes verbatim, no wrapping."""
     stream, close_after = _open_output(output)
     try:

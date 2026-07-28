@@ -3873,6 +3873,16 @@ def wi_list(
         "-o",
         help="Write results to FILE instead of stdout. Pass '-' for stdout.",
     ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
 ) -> None:
     """List stored WIs matching optional filters.
 
@@ -3901,6 +3911,7 @@ def wi_list(
     settings = get_settings()
     default_fields = settings.output.fields.wi
     fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
 
     rows: list[list[str]] = []
     for item in records:
@@ -3913,6 +3924,7 @@ def wi_list(
         fmt=fmt,
         output=output,
         no_records_msg="No WIs found",
+        compact=resolved_compact,
     )
 
 

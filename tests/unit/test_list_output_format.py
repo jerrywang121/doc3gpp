@@ -457,6 +457,39 @@ def test_wi_list_empty_json_writes_array(monkeypatch, tmp_path) -> None:
     assert json.loads(target.read_text(encoding="utf-8")) == []
 
 
+def test_wi_list_format_json_compact(monkeypatch) -> None:
+    """``wi list --format json --compact`` emits single-line JSON."""
+    _patch_simple(monkeypatch, WiService, "list_recent", [SAMPLE_WI])
+
+    result = Runner().invoke(
+        app,
+        ["wi", "list", "--format", "json", "--compact"],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    assert "\n" not in output
+    assert ", " not in output
+    assert ": " not in output
+    assert json.loads(output) == [{
+        "wi_id": "42", "acronym": "NTShar",
+        "release": "Rel-19", "name": "NTM sharing",
+    }]
+
+
+def test_wi_list_format_markdown_compact(monkeypatch) -> None:
+    """``wi list --format markdown --compact`` drops the GFM table."""
+    _patch_simple(monkeypatch, WiService, "list_recent", [SAMPLE_WI])
+
+    result = Runner().invoke(
+        app,
+        ["wi", "list", "--format", "markdown", "--compact"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "|" not in result.output
+    assert "wi_id: 42" in result.output
+    assert "name: NTM sharing" in result.output
+
+
 # ---------- negative flow shared across commands ----------
 
 @pytest.mark.parametrize(

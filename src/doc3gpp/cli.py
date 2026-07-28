@@ -2898,6 +2898,7 @@ def _tdoc_parse_local_batch(
     """
     from doc3gpp.parsers.cr_parser import CRHeaderMissingError
     from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
 
     resolved_format = _resolve_direct_format(fmt)
     input_dir = Path(from_path)
@@ -2923,6 +2924,7 @@ def _tdoc_parse_local_batch(
 
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     skipped = 0
+    size_skipped = 0
     re_parsed = 0
     newly_parsed = 0
     failures = 0
@@ -2936,11 +2938,31 @@ def _tdoc_parse_local_batch(
             logger.debug("Skipping %s because output already exists: %s", input_path, out_path)
             continue
 
+        if max_tdoc_size_bytes > 0:
+            try:
+                file_size = input_path.stat().st_size
+            except OSError as exc:
+                logger.warning("Failed to stat %s: %s", input_path, exc)
+                failures += 1
+                continue
+            if file_size > max_tdoc_size_bytes:
+                logger.warning(
+                    "Skipping %s: %d bytes exceeds max_tdoc_size_kb limit (%d bytes)",
+                    input_path, file_size, max_tdoc_size_bytes,
+                )
+                size_skipped += 1
+                continue
+
         try:
             payload = input_path.read_bytes()
             result = service.extract_from_bytes(
                 payload, str(input_path), force=False, full=full,
+                max_tdoc_size_bytes=max_tdoc_size_bytes,
             )
+        except TDocTooLargeError as exc:
+            logger.warning("Skipping %s: %s", input_path, exc)
+            size_skipped += 1
+            continue
         except (FileNotFoundError, IsADirectoryError, PermissionError) as exc:
             logger.warning("Failed to read %s: %s", input_path, exc)
             failures += 1
@@ -2979,10 +3001,11 @@ def _tdoc_parse_local_batch(
 
     typer.echo("---")
     typer.echo(f"Skipped (output already exists): {skipped}")
+    typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {size_skipped}")
     typer.echo(f"Re-parsed (with --force):        {re_parsed}")
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Failures:                        {failures}")
-    if failures > 0 and newly_parsed + re_parsed == 0:
+    if failures > 0 and newly_parsed + re_parsed == 0 and size_skipped == 0:
         raise typer.Exit(code=1)
 
 

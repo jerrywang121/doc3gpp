@@ -532,6 +532,7 @@ class TDocCrService:
             self._cache,
             primary_url=primary_url,
             ftp_url=tdoc.ftp_url,
+            max_bytes=self._max_tdoc_size_bytes,
         )
 
         # Post-download probe: ``tdoc.ftp_url`` was None so step 3 had
@@ -671,6 +672,13 @@ class TDocCrService:
                 logger.info("Skipping TDoc %r: %s", raw_id, exc)
                 skipped[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
                 continue
+            except TDocTooLargeError as exc:
+                logger.info(
+                    "Skipping TDoc %r: %s bytes exceeds max_tdoc_size_kb limit (%s bytes)",
+                    raw_id, exc.size, exc.limit,
+                )
+                skipped[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
+                continue
             except (ValueError, LookupError, TDocZipDownloadError, TypeError) as exc:
                 logger.warning(
                     "Failed to extract TDoc %r: %s",
@@ -738,6 +746,7 @@ class TDocCrService:
             payload = self._scraper.get_bytes(url)
             markdown, docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
+                max_bytes=self._max_tdoc_size_bytes,
             )
             return DirectParseResult(
                 source_kind="url-other",
@@ -759,6 +768,7 @@ class TDocCrService:
             payload = self._scraper.get_bytes(url)
             markdown, docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
+                max_bytes=self._max_tdoc_size_bytes,
             )
             logger.warning(
                 "Direct-parse URL %s has no TDoc id pattern; "
@@ -781,6 +791,7 @@ class TDocCrService:
             payload = self._scraper.get_bytes(url)
             markdown, docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
+                max_bytes=self._max_tdoc_size_bytes,
             )
             logger.warning(
                 "Direct-parse URL %s has tdoc_id %s missing from tdocs; "
@@ -944,6 +955,7 @@ class TDocCrService:
         del force
         markdown, docx_filename, parsed = direct_parse_bytes(
             docx_bytes, filename=filename, full=full,
+            max_bytes=self._max_tdoc_size_bytes,
         )
         tdoc_id = extract_tdoc_id_from_filename(filename)
         return DirectParseResult(

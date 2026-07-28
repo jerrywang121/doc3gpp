@@ -823,3 +823,25 @@ def test_too_large_error_carries_size_and_limit() -> None:
     assert exc.limit == 1_024_000
     assert "5_000_000" in str(exc) or "5000000" in str(exc)
     assert "1_024_000" in str(exc) or "1024000" in str(exc)
+
+
+def test_extract_many_routes_too_large_to_skipped(tmp_path) -> None:
+    """When ``extract`` raises ``TDocTooLargeError``, ``extract_many``
+    puts the id in ``skipped`` (NOT in ``failures``).
+    """
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    service, _, _, _, _, _ = _build_service(tmp_path)
+
+    def _boom(tdoc_id: str, *, force: bool = False, full: bool = False):
+        raise TDocTooLargeError(source=tdoc_id, size=10, limit=5)
+
+    service.extract = _boom  # type: ignore[method-assign]
+
+    batch = service.extract_many(["R5-260100", "R5-260101"])
+    assert set(batch.failures) == set()
+    assert set(batch.skipped.keys()) == {"R5-260100", "R5-260101"}
+    assert all(
+        reason.startswith("TDocTooLargeError:")
+        for reason in batch.skipped.values()
+    )

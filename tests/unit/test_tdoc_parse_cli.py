@@ -1715,6 +1715,65 @@ def test_tdoc_parse_summary_without_force_dispatches_only_new(
     assert "Newly parsed:                              1" in result.output
 
 
+def test_tdoc_parse_db_mode_summary_splits_size_skip_from_ftp_skip(
+    sqlite_env, monkeypatch,
+) -> None:
+    """The DB-mode summary splits ``batch.skipped`` into a size-skip
+    bucket and an FTP-skip bucket, distinguished by reason prefix.
+
+    The service stores reasons as ``"TDocTooLargeError: ..."`` /
+    ``"TDocNotYetOnFTPError: ..."`` (Task 5). The CLI must count
+    each bucket separately so an operator can see whether the cap or
+    a missing upload is responsible for the gap.
+    """
+    runner = CliRunner()
+    meeting_id = 79
+    cr_tdocs = [
+        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260002", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260003", type="CR", meeting_id=meeting_id),
+    ]
+    _patch_meeting_service(
+        monkeypatch,
+        {meeting_id: Meeting(
+            meeting_id=meeting_id,
+            name="RAN5#111",
+            title="RAN WG5 #111",
+            location="Online",
+        )},
+    )
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs, parsed_ids=set())
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        results={},
+        skipped={
+            "R5s260001": "TDocTooLargeError: 5 MiB exceeds 1024 bytes",
+            "R5s260002": "TDocNotYetOnFTPError: not on FTP",
+            "R5s260003": "TDocTooLargeError: 9 MiB exceeds 1024 bytes",
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Skipped (exceeds max_tdoc_size_kb" in result.output
+    assert "Skipped (not yet on FTP):" in result.output
+    # Split counts: 2 size-skip, 1 FTP-skip.
+    size_line = next(
+        (ln for ln in result.output.splitlines()
+         if ln.startswith("Skipped (exceeds max_tdoc_size_kb")),
+    )
+    assert size_line.endswith(" 2"), size_line
+    assert "Skipped (not yet on FTP):                 1" in result.output
+
+
 # ---------------------------------------------------------------------------
 # tdoc parse — batch limit warning
 # ---------------------------------------------------------------------------

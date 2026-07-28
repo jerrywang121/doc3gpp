@@ -1637,6 +1637,7 @@ def tdoc_parse(
 
     failures: list[str] = []
     skipped_ftp: list[str] = []
+    skipped_size: list[str] = []
     for raw_id in tdoc_ids:
         normalised = raw_id.strip()
         if normalised in batch.successes:
@@ -1647,8 +1648,12 @@ def tdoc_parse(
                 f"title={result.details.title}"
             )
         elif normalised in batch.skipped:
-            typer.echo(f"{normalised}: SKIPPED - {batch.skipped[normalised]}")
-            skipped_ftp.append(normalised)
+            reason = batch.skipped[normalised]
+            typer.echo(f"{normalised}: SKIPPED - {reason}")
+            if reason.startswith("TDocTooLargeError:"):
+                skipped_size.append(normalised)
+            else:
+                skipped_ftp.append(normalised)
         elif normalised in batch.failures:
             typer.echo(f"{normalised}: FAILED - {batch.failures[normalised]}")
             failures.append(normalised)
@@ -1661,6 +1666,9 @@ def tdoc_parse(
     re_parsed = len(parsed_ids & success_set)
     newly_parsed = len(success_set - parsed_ids)
     typer.echo("---")
+    typer.echo(
+        f"Skipped (exceeds max_tdoc_size_kb):          {len(skipped_size)}"
+    )
     typer.echo(f"Skipped (already parsed before this run): {already_parsed}")
     typer.echo(f"Skipped (not yet on FTP):                 {len(skipped_ftp)}")
     typer.echo(f"Re-parsed (with --force):                  {re_parsed}")

@@ -43,6 +43,24 @@ from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileReposit
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 
+@pytest.fixture(autouse=True)
+def _disable_auto_sync_by_default(monkeypatch):
+    """Force ``sync.auto_sync`` off for every test in this file.
+
+    These tests stub out the network/DB paths, so a user-level
+    ``~/.config/doc3gpp/config.toml`` with ``auto_sync = "true"`` would
+    cause the CLI to attempt a sync against the (otherwise unused) tmp
+    sqlite DB before the stubbed repo takes over, raising
+    ``sqlite3.OperationalError: no such table: meetings``. Pinning the
+    setting via the env (which beats the TOML in precedence) keeps the
+    tests hermetic regardless of the operator's local config.
+    """
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------

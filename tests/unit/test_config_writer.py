@@ -370,9 +370,14 @@ def test_resolve_init_target_rejects_unknown_value() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cross_helper_round_trip(tmp_path: Path) -> None:
+def test_cross_helper_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full pipeline: read an existing TOML, patch a key, prune the table
     if it became empty, validate, write back, and re-read."""
+    # Allowlisted env var shadows ``Settings(**data)`` init kwargs; clear
+    # it so the patched dict is the only source of truth for the assertion
+    # below.
+    monkeypatch.delenv("DOC3GPP_SYNC__AUTO_SYNC", raising=False)
+
     src = tmp_path / "doc3gpp.toml"
     src.write_text(
         '[cache]\ndir = "/tmp/cache"\nsize_limit_mb = 256\n',

@@ -15,6 +15,7 @@ from datetime import date
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -23,6 +24,22 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+
+@pytest.fixture(autouse=True)
+def _disable_auto_sync_by_default(monkeypatch):
+    """Force ``sync.auto_sync`` off for every test in this file unless the
+    test explicitly opts in via :func:`_enable_auto_sync`.
+
+    A user-level ``~/.config/doc3gpp/config.toml`` with ``auto_sync = "true"``
+    would otherwise leak into these tests (the loader merges the TOML with
+    env vars), causing the "default off" test to spuriously hit the network
+    and the auto-sync-on tests to behave as if their opt-in was a no-op.
+    """
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def _future_date(days: int = 7) -> date:

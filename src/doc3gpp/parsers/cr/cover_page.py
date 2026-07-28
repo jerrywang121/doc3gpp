@@ -23,36 +23,49 @@ logger = logging.getLogger(__name__)
 # lands here, so the regex is anchored on the leading ``Release`` and
 # the trailing identifier only.
 _LONG_RELEASE_RE = re.compile(r"^Release\s+(\S+)$", re.IGNORECASE)
+# Compact short form without a hyphen, e.g. ``Rel9``, ``Rel99``,
+# ``REL8``. Group 1 captures the trailing digits. This is
+# case-insensitive and anchored on the leading ``Rel`` and the
+# trailing digits only; the cell value is already ``strip()``-ed by
+# :func:`doc3gpp.parsers.cr.helpers._search_pattern_in_lines` before
+# it lands here.
+_COMPACT_RELEASE_RE = re.compile(r"^Rel(\d+)$", re.IGNORECASE)
 
 
 def _normalize_release(value: str | None) -> str | None:
     """Canonicalise a cover-page release label.
 
-    The cover-page ``Release:`` cell can appear in two shapes:
+    The cover-page ``Release:`` cell can appear in three shapes:
 
     * Short / canonical: ``Rel-17``, ``Rel-20``.
     * Long / prose: ``Release 17``, ``Release 20``.
+    * Compact short form without a hyphen: ``Rel17``, ``Rel9``.
 
-    The DB stores the short form exclusively, so the long form is
-    collapsed to ``Rel-<token>`` here — the parser is the single
-    conversion point, and every downstream consumer
-    (:class:`doc3gpp.models.tdoc_cr.TDocCRDetails`,
+    The DB stores the short form exclusively, so the long and
+    compact short forms are collapsed to ``Rel-<token>`` here — the
+    parser is the single conversion point, and every downstream
+    consumer (:class:`doc3gpp.models.tdoc_cr.TDocCRDetails`,
     :class:`SQLAlchemyTDocCrCoverPageRepository`) sees the canonical
     short form.
 
     The conversion is intentionally narrow: only an exact
-    ``Release <token>`` label is rewritten. ``Rel-17`` passes through
-    unchanged, blank / ``None`` values pass through unchanged, and any
-    other shape (e.g. an already-truncated ``Release`` with no
-    identifier) is left as-is so an unexpected value remains visible
-    in the DB rather than being silently dropped.
+    ``Release <token>`` label is rewritten, and only a compact
+    ``Rel<digits>`` label is rewritten. ``Rel-17`` passes through
+    unchanged, blank / ``None`` values pass through unchanged, and
+    any other shape (e.g. an already-truncated ``Release`` with no
+    identifier, or an unrelated ``R99`` token) is left as-is so an
+    unexpected value remains visible in the DB rather than being
+    silently dropped.
     """
     if value is None:
         return None
     match = _LONG_RELEASE_RE.match(value)
-    if not match:
-        return value
-    return f"Rel-{match.group(1)}"
+    if match:
+        return f"Rel-{match.group(1)}"
+    match = _COMPACT_RELEASE_RE.match(value)
+    if match:
+        return f"Rel-{match.group(1)}"
+    return value
 
 
 # Cover-page row that holds spec / CR / rev / version.

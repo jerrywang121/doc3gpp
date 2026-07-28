@@ -743,6 +743,16 @@ def meeting_list(
         "-o",
         help="Write results to FILE instead of stdout. Pass '-' for stdout.",
     ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
 ) -> None:
     """List meetings from database with optional filtering and pagination.
 
@@ -773,6 +783,7 @@ def meeting_list(
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
     fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
 
     # Validate --tdoc against the CR-shape regex before the database is
     # touched so the operator sees a clear error at the CLI boundary.
@@ -834,6 +845,7 @@ def meeting_list(
         fmt=fmt,
         output=output,
         no_records_msg="No meetings found",
+        compact=resolved_compact,
     )
 
 
@@ -1024,6 +1036,16 @@ def tdoc_list(
         "-o",
         help="Write results to PATH instead of stdout. Pass '-' for stdout.",
     ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
 ) -> None:
     """List stored TDocs from the database.
 
@@ -1051,6 +1073,7 @@ def tdoc_list(
 
     out_fields = _parse_field_selection(fields, allowed_fields, default_fields)
     fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
 
     logger.info(
         "Listing %s recent TDocs (offset=%s) with filters tdoc=%s meeting=%s "
@@ -1135,6 +1158,7 @@ def tdoc_list(
         fmt=fmt,
         output=output,
         no_records_msg="No TDocs found",
+        compact=resolved_compact,
     )
 
 

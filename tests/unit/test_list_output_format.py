@@ -187,6 +187,50 @@ def test_meeting_list_invalid_format_rejected(monkeypatch) -> None:
     assert "markdown" in result.output
 
 
+def test_meeting_list_format_json_compact(monkeypatch) -> None:
+    """``meeting list --format json --compact`` emits single-line JSON."""
+    _patch_simple(monkeypatch, MeetingService, "list_recent", [SAMPLE_MEETING])
+
+    result = Runner().invoke(
+        app,
+        ["meeting", "list", "--format", "json", "--compact",
+         "--fields", "meeting_id,name"],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    assert "\n" not in output
+    assert ", " not in output
+    assert ": " not in output
+    assert json.loads(output) == [{"meeting_id": "10", "name": "R5-200"}]
+
+
+def test_meeting_list_format_markdown_compact(monkeypatch) -> None:
+    """``meeting list --format markdown --compact`` drops the GFM table."""
+    _patch_simple(monkeypatch, MeetingService, "list_recent", [SAMPLE_MEETING])
+
+    result = Runner().invoke(
+        app,
+        ["meeting", "list", "--format", "markdown", "--compact",
+         "--fields", "meeting_id,name"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "|" not in result.output
+    assert "meeting_id: 10" in result.output
+    assert "name: R5-200" in result.output
+
+
+def test_meeting_list_format_table_compact_is_noop(monkeypatch) -> None:
+    """``meeting list --format table --compact`` is byte-identical to
+    the default."""
+    _patch_simple(monkeypatch, MeetingService, "list_recent", [SAMPLE_MEETING])
+
+    plain = Runner().invoke(app, ["meeting", "list"])
+    compact = Runner().invoke(app, ["meeting", "list", "--compact"])
+    assert plain.exit_code == 0
+    assert compact.exit_code == 0
+    assert plain.output == compact.output
+
+
 # ---------- tdoc list ----------
 
 def test_tdoc_list_format_json_stdout(monkeypatch) -> None:
@@ -264,6 +308,44 @@ def test_tdoc_list_invalid_format_rejected(monkeypatch) -> None:
     result = Runner().invoke(app, ["tdoc", "list", "--format", "csv"])
     assert result.exit_code != 0
     assert "Unknown format 'csv'" in result.output
+
+
+def test_tdoc_list_format_json_compact(monkeypatch) -> None:
+    """``tdoc list --format json --compact`` emits single-line JSON."""
+    def fake(self, **kwargs) -> list[TDocWithMeeting]:
+        return [SAMPLE_TDOC_ROW]
+    monkeypatch.setattr(TDocService, "list_recent_with_meeting", fake)
+
+    result = Runner().invoke(
+        app,
+        ["tdoc", "list", "--format", "json", "--compact",
+         "--fields", "tdoc_id,meeting_name"],
+    )
+    assert result.exit_code == 0, result.output
+    output = result.output
+    assert "\n" not in output
+    assert ", " not in output
+    assert ": " not in output
+    assert json.loads(output) == [
+        {"tdoc_id": "R5s260001", "meeting_name": "RAN5#111"}
+    ]
+
+
+def test_tdoc_list_format_markdown_compact(monkeypatch) -> None:
+    """``tdoc list --format markdown --compact`` drops the GFM table."""
+    def fake(self, **kwargs) -> list[TDocWithMeeting]:
+        return [SAMPLE_TDOC_ROW]
+    monkeypatch.setattr(TDocService, "list_recent_with_meeting", fake)
+
+    result = Runner().invoke(
+        app,
+        ["tdoc", "list", "--format", "markdown", "--compact",
+         "--fields", "tdoc_id,meeting_name"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "|" not in result.output
+    assert "tdoc_id: R5s260001" in result.output
+    assert "meeting_name: RAN5#111" in result.output
 
 
 # ---------- tsg list ----------

@@ -332,13 +332,35 @@ def _emit_table(rows: list[list[str]], stream: TextIO) -> None:
         stream.write("\n")
 
 
-def _emit_json(rows: list[list[str]], stream: TextIO, fields: list[str]) -> None:
+def _emit_json(
+    rows: list[list[str]],
+    stream: TextIO,
+    fields: list[str],
+    *,
+    compact: bool = False,
+) -> None:
+    """Emit ``rows`` as a JSON array.
+
+    When ``compact=True`` the output is a single line with no indent
+    and no operator-space (``separators=(",", ":")``) and no trailing
+    newline. The default is byte-identical to the legacy pretty-printed
+    output (``indent=2`` + trailing newline).
+    """
     objs = [dict(zip(fields, row)) for row in rows]
+    if compact:
+        json.dump(objs, stream, ensure_ascii=False, separators=(",", ":"))
+        return
     json.dump(objs, stream, ensure_ascii=False, indent=2)
     stream.write("\n")
 
 
-def _emit_markdown(rows: list[list[str]], stream: TextIO, fields: list[str]) -> None:
+def _emit_markdown(
+    rows: list[list[str]],
+    stream: TextIO,
+    fields: list[str],
+    *,
+    compact: bool = False,  # noqa: ARG001 — added in Task 3, real impl in Task 4
+) -> None:
     stream.write("| " + " | ".join(_md_cell(h) for h in fields) + " |\n")
     stream.write("|" + "|".join(["---"] * len(fields)) + "|\n")
     for row in rows:
@@ -420,21 +442,24 @@ def _emit_records(
     output: str | None,
     *,
     no_records_msg: str,
+    compact: bool = False,
 ) -> None:
     """Emit ``rows`` to ``output`` (or stdout) in the chosen format.
 
-    Empty rows are emitted as ``[]`` / header-only in JSON and markdown so
-    downstream consumers always see a parseable payload. The friendly
-    "no records" message prints only when ``--format table`` is paired
-    with stdout — writing an empty table file would just be noise.
+    ``compact=True`` propagates to the JSON and markdown emitters —
+    the table emitter ignores it. Empty rows are emitted as ``[]`` /
+    header-only in JSON and markdown so downstream consumers always
+    see a parseable payload. The friendly "no records" message prints
+    only when ``--format table`` is paired with stdout — writing an
+    empty table file would just be noise.
     """
     stream, close_after = _open_output(output)
     try:
         if not rows:
             if fmt == "json":
-                _emit_json([], stream, fields)
+                _emit_json([], stream, fields, compact=compact)
             elif fmt == "markdown":
-                _emit_markdown([], stream, fields)
+                _emit_markdown([], stream, fields, compact=compact)
             elif output is None:
                 stream.write(no_records_msg + "\n")
             return
@@ -442,9 +467,9 @@ def _emit_records(
         if fmt == "table":
             _emit_table(rows, stream)
         elif fmt == "json":
-            _emit_json(rows, stream, fields)
+            _emit_json(rows, stream, fields, compact=compact)
         else:
-            _emit_markdown(rows, stream, fields)
+            _emit_markdown(rows, stream, fields, compact=compact)
     finally:
         if close_after:
             stream.close()

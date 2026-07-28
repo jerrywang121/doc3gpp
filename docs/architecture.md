@@ -164,11 +164,16 @@ and the TDoc CR extraction is the deepest.
 1. `doc3gpp tdoc sync --meeting-id <id>` (or `--meeting <name>`)
    resolves the meeting and reads its stored `meeting_id` and `ftp_url`.
 2. `TDocSyncCoordinator.sync_for_meeting_id` applies two skip rules
-   in order: closed window (`meetings.end_date` older than
-   `Settings.sync.tdoc_list_closed_window`, default `90d`) and recent local
-   sync (`meetings.tdoc_list_last_sync` newer than
-   `Settings.sync.tdoc_list_sync_interval`, default `30m`). `--force`
-   bypasses both rules.
+   in order, **but only when the meeting has been synced before**
+   (`meetings.tdoc_list_last_sync IS NOT NULL`): closed window
+   (`meetings.end_date` older than
+   `Settings.sync.tdoc_list_closed_window`, default `90d`) and recent
+   local sync (`meetings.tdoc_list_last_sync` newer than
+   `Settings.sync.tdoc_list_sync_interval`, default `30m`). A meeting
+   that has never been synced is allowed to fetch even when its
+   `end_date` is older than the closed window — the rule exists to
+   avoid re-fetching meetings whose TDocs we already have, not to gate
+   the first sync. `--force` bypasses both rules.
 3. On a non-skipped run, the coordinator orchestrates:
       - `TDocService.sync_tdoc_list` →
         `fetch_tdocs_from_portal` →

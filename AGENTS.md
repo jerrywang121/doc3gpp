@@ -113,9 +113,11 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}`);
   the auxiliary TDoc file scan still uses the stored meeting row's
   FTP URL. **No meeting row → no TDoc sync.** Skips when the meeting
-  is outside `Settings.sync.tdoc_list_closed_window` or was synced
-  within `Settings.sync.tdoc_list_sync_interval`; `--force` bypasses
-  both checks.
+  has been synced before **and** is outside
+  `Settings.sync.tdoc_list_closed_window` or was synced within
+  `Settings.sync.tdoc_list_sync_interval`; the closed-window check is
+  skipped on a never-synced meeting so a first-time sync can populate
+  the tdocs table for an old meeting. `--force` bypasses both checks.
 - `doc3gpp tdoc sync` (no selector) →
   `TDocSyncCoordinator.sync_all_tracked_meetings` → every distinct
   ``meeting_id`` in the ``tdocs`` table is synced individually with the

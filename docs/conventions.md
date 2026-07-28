@@ -72,6 +72,11 @@ intervals to avoid re-scraping unchanged upstream data:
      `Settings.sync.tdoc_list_closed_window` (default `90d`).
   2. `meetings.tdoc_list_last_sync` is newer than
      `Settings.sync.tdoc_list_sync_interval` (default `30m`).
+  Both checks are gated on `meetings.tdoc_list_last_sync IS NOT NULL`,
+  so a meeting that has never been synced is allowed to fetch even
+  when its `end_date` is older than the closed window — the rule
+  exists to avoid re-fetching meetings whose TDocs we already have,
+  not to gate the first sync.
 
 The legacy upstream-`Last-Modified` rule was retired when TDoc lists
 moved off FTP and onto the 3GPP portal

@@ -277,7 +277,10 @@ Behavior (single-meeting: `--meeting-id` or `--meeting`):
 
 - Loads the meeting record from storage.
 - Resolves the stored FTP URL from that meeting.
-- Skips the sync when any of the following is true (checked in order):
+- Skips the sync when any of the following is true (checked in order,
+  **but only after a prior `tdoc_list_last_sync` has been recorded** — a
+  never-synced meeting is always allowed to fetch even when its
+  `end_date` is older than the closed window):
   1. `meetings.end_date` is older than
      `Settings.sync.tdoc_list_closed_window` (default `90d`).
   2. `meetings.tdoc_list_last_sync` is newer than

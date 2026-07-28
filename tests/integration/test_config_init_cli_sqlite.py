@@ -60,6 +60,10 @@ def _seed_project_root(tmp_path: Path, monkeypatch) -> None:
     target resolve to ``./doc3gpp.toml``. Redirecting ``$HOME`` and
     dropping ``$XDG_CONFIG_HOME`` keeps the user-wide fallback from
     pointing at the developer's real ``~/.config/doc3gpp/config.toml``.
+    The ``DOC3GPP_SYNC__AUTO_SYNC`` clear is the allowlist twin of the
+    same intent — without it, a developer shell that exports the var
+    shadows the TOML write and ``config set sync.auto_sync true``
+    would look like a no-op when ``config show`` runs.
     """
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname = 'demo'\n", encoding="utf-8"
@@ -68,6 +72,7 @@ def _seed_project_root(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("DOC3GPP_SYNC__AUTO_SYNC", raising=False)
     get_settings.cache_clear()
 
 

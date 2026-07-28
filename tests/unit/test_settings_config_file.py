@@ -504,6 +504,22 @@ def test_tdoc_parse_max_tdoc_size_kb_env_var_is_ignored(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_output_compact_env_var_is_ignored(monkeypatch) -> None:
+    """``DOC3GPP_OUTPUT__COMPACT`` is outside the env-var allowlist and
+    must be silently dropped — the TOML/default value wins. Mirrors
+    ``test_tdoc_parse_max_tdoc_size_kb_env_var_is_ignored``."""
+    from doc3gpp.settings.schema import ALLOWED_ENV_VARS
+
+    assert "DOC3GPP_OUTPUT__COMPACT" not in ALLOWED_ENV_VARS
+    monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
+    monkeypatch.setenv("DOC3GPP_OUTPUT__COMPACT", "true")
+    get_settings.cache_clear()
+    try:
+        assert get_settings().output.compact is False
+    finally:
+        get_settings.cache_clear()
+
+
 # ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------

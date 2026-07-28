@@ -42,6 +42,7 @@
 
 # [output]
 # format = "table"     # table | json | markdown
+# compact = false      # drop decorators in json/markdown output
 
 # [output.fields]
 # meeting = [

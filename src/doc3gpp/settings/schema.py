@@ -206,6 +206,17 @@ class OutputSettings(BaseModel):
     """Output defaults for every ``* list`` command."""
 
     format: OutputFormat = "table"
+    compact: bool = Field(
+        default=False,
+        description=(
+            "When true, JSON output drops indent and operator-space "
+            "(single line, ``separators=(\",\", \":\")``) and Markdown "
+            "output drops CommonMark decorators (bold, italic, headings, "
+            "bullets, code fences, GFM tables). No-op for ``table`` and "
+            "``raw``. The CLI ``--compact`` flag takes precedence when "
+            "passed."
+        ),
+    )
     fields: OutputFieldsSettings = Field(default_factory=OutputFieldsSettings)
 
 

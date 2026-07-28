@@ -92,7 +92,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 # matching DOCPROPERTY field tag, e.g. ` DOCPROPERTY  TSG/WGRef  \* MERGEFORMAT `
-_DOCPROPERTY_PATTERN = re.compile(r"(?:^|\s)DOCPROPERTY\s+.+?\s+\\\* MERGEFORMAT(?:\s|$)")
+_DOCPROPERTY_PATTERN = re.compile(r"(?:^|\s{0,1})DOCPROPERTY\s+.+?\s+\\\* MERGEFORMAT(?:\s|$)")
 # matching TOC field tag, e.g. `TOC \o "1-3" `
 _TOC_PATTERN = re.compile(r'^TOC\s+\\o\s+".+?"\s+')
 # matching PAGEREF field tag, e.g. ` PAGEREF _Toc217032158 \h `

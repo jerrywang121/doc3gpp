@@ -1302,3 +1302,104 @@ def test_ttcn_cr_with_trailing_clause_heading_extracts_change() -> None:
     assert parsed.ttcn.changed_functions == [
         "NR_Measurement_Templates.cr_38508_MeasResults_No_Neighbour"
     ]
+
+# -- TDoc-id regex coverage (RAN4 7-digit, single-letter s/w variants) --------
+
+
+@pytest.mark.parametrize(
+    "raw,tdoc_id",
+    [
+        ("R5-227476", "R5-227476"),
+        ("R5s260009", "R5s260009"),
+        ("R5w260176", "R5w260176"),
+        ("C6-250028", "C6-250028"),
+        ("R4-2607922", "R4-2607922"),
+    ],
+)
+def test_tdoc_header_pattern_recognises_canonical_shapes(
+    raw: str, tdoc_id: str
+) -> None:
+    from doc3gpp.parsers.cr.header import _TDOC_HEADER_PATTERN
+
+    m = _TDOC_HEADER_PATTERN.search(raw)
+    assert m is not None
+    assert m.group(1) == tdoc_id
+
+
+# -- Cover-page date parser coverage (ISO + slash + month-name) --------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected_iso",
+    [
+        ("2026-05-22", "2026-05-22"),
+        ("21/05/2026", "2026-05-21"),
+        ("05/22/2026", "2026-05-22"),
+        ("May 18, 2026", "2026-05-18"),
+        ("18 May 2026", "2026-05-18"),
+        ("", None),
+        ("2026-01-2", None),
+        ("18th May 2026", None),
+        ("18 - 22 May 2026", None),
+    ],
+)
+def test_parse_cover_date_handles_real_world_formats(
+    raw: str, expected_iso: str | None
+) -> None:
+    from doc3gpp.parsers.cr.cr_parsers import _parse_cover_date
+
+    got = _parse_cover_date(raw)
+    assert (got.isoformat() if got else None) == expected_iso
+
+
+# -- Category / Release regex coverage (Release 20 long form) ----------------
+
+
+@pytest.mark.parametrize(
+    "line,expected_cat,expected_rel",
+    [
+        ("| Category: | F |  | Release: | Rel-19 |", "F", "Rel-19"),
+        ("| Category: | F |  | Release: | Release 20 |", "F", "Release 20"),
+        ("| Category: | A |  | Release: | Release 20 |  |", "A", "Release 20"),
+        ("| Category: | B | | Release: | Rel-18 |", "B", "Rel-18"),
+    ],
+)
+def test_cover_cat_rel_regex_handles_short_and_long_release(
+    line: str, expected_cat: str, expected_rel: str
+) -> None:
+    from doc3gpp.parsers.cr.cover_page import _COVER_CATREL_RE
+
+    m = _COVER_CATREL_RE.search(line)
+    assert m is not None
+    assert m.group(1).strip() == expected_cat
+    assert m.group(2).strip() == expected_rel
+
+
+# -- End-to-end smoke: full cover-page row covering all four fixes ----------
+
+
+def test_parse_cr_details_extracts_release_long_form_with_space_tdoc_id() -> None:
+    """End-to-end check: space-form header, R5-26xxxx tdoc, Release 20."""
+    md = (
+        "3GPP TSG CT WG3 Meeting #147 C3-262686 Dalian, China, 18 - 22 May, 2026\n"
+        "\n"
+        "| Title: | Example CR |\n"
+        "| Source to WG: | Example |\n"
+        "| Source to TSG: | CT WG3 |\n"
+        "| 36.521-2 | CR | 0042 | rev | - | Current version: | 16.5.0 |\n"
+        "| Work item code: | FS_NG_RAN | | Date: | 21/05/2026 |\n"
+        "| Category: | F |  | Release: | Release 20 |\n"
+        "| Reason for change: | Example |\n"
+        "| Clauses affected: | Example |\n"
+    )
+    parsed = parse_cr_details(md, tdoc_id="C3-262686")
+    cover = parsed.cover
+    assert cover.tdoc_id == "C3-262686"
+    assert cover.cr_cat == "F"
+    assert cover.release == "Release 20"
+    assert cover.date is not None and cover.date.isoformat() == "2026-05-21"
+    assert cover.related_wis == "FS_NG_RAN"
+    assert cover.rev == "0"
+    assert cover.spec == "36.521-2"
+    assert cover.cr_num == "0042"
+    assert cover.version == "16.5.0"

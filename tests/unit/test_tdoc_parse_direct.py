@@ -1514,6 +1514,130 @@ def test_cli_from_path_nonexistent_path_raises_bad_parameter(
 
 
 # ---------------------------------------------------------------------------
+# CLI dispatch: --compact on tdoc parse --from-path / --from-url
+# ---------------------------------------------------------------------------
+
+
+def test_cli_from_path_file_json_compact_emits_single_line(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--from-path FILE --format json --compact`` writes a single-line
+    JSON object — no indent, no operator-space, no trailing newline."""
+    source = tmp_path / "in.docx"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out.json"
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, [
+            "tdoc", "parse",
+            "--from-path", str(source),
+            "--format", "json",
+            "--compact",
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    body = out.read_text()
+    assert "\n" not in body
+    assert ": " not in body
+    payload = json.loads(body)
+    assert payload["tdoc_id"] == "R5s260009"
+    assert payload["spec"] == "38.523-3"
+
+
+def test_cli_from_path_file_markdown_compact_drops_gfm_decorators(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--from-path FILE --format markdown --compact`` drops the GFM
+    table decorators and emits ``key: value`` lines per field."""
+    source = tmp_path / "in.docx"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out.md"
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, [
+            "tdoc", "parse",
+            "--from-path", str(source),
+            "--format", "markdown",
+            "--compact",
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    body = out.read_text()
+    assert "|" not in body
+    assert "---" not in body
+    assert "tdoc_id: R5s260009" in body
+    assert "spec: 38.523-3" in body
+
+
+def test_cli_from_path_directory_json_compact_emits_single_line(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--from-path DIR --format json --compact`` writes single-line
+    JSON files (one per input source) — the local-batch branch threads
+    ``compact`` through to ``_emit_record``."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    source = in_dir / "R5s260009.docx"
+    source.write_bytes(b"dummy")
+    out = tmp_path / "out"
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, [
+            "tdoc", "parse",
+            "--from-path", str(in_dir),
+            "--format", "json",
+            "--compact",
+            "--output", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    out_file = out / "R5s260009.json"
+    assert out_file.exists()
+    body = out_file.read_text()
+    assert "\n" not in body
+    payload = json.loads(body)
+    assert payload["tdoc_id"] == "R5s260009"
+
+
+# ---------------------------------------------------------------------------
 # direct_parse_bytes — max_bytes guard
 # ---------------------------------------------------------------------------
 

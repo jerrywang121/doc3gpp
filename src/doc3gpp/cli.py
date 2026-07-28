@@ -1393,6 +1393,18 @@ def tdoc_parse(
         "-o",
         help="Write output to PATH (file when source is a file, folder in batch mode). Default stdout",
     ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table`` and ``raw``. Defaults to ``output.compact`` in "
+            "settings when the flag is not passed. Applies to direct mode "
+            "(--from-path / --from-url); the DB-mode filter branch renders "
+            "an inline per-row summary and is unaffected."
+        ),
+    ),
 ) -> None:
     """Parse Tdoc from the DB table, online file, a local file, or a folder tree.
 
@@ -1424,6 +1436,7 @@ def tdoc_parse(
         override_kb=max_tdoc_size_kb,
         settings=get_settings(),
     )
+    resolved_compact = _resolve_compact(compact)
     if from_url is not None or from_path is not None:
         _validate_source_mode_flags(from_url, from_path)
         _warn_on_ignored_filter_flags(
@@ -1462,6 +1475,7 @@ def tdoc_parse(
                     output=direct_output,
                     full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
+                    compact=resolved_compact,
                 )
             elif input_path.is_dir():
                 if direct_output is None:
@@ -1476,6 +1490,7 @@ def tdoc_parse(
                     force=force,
                     full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
+                    compact=resolved_compact,
                 )
             else:
                 raise typer.BadParameter(
@@ -1509,6 +1524,7 @@ def tdoc_parse(
                     output=direct_output,
                     full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
+                    compact=resolved_compact,
                 )
             elif _looks_like_3gpp_folder_url(from_url):
                 _tdoc_parse_url_batch(
@@ -1519,6 +1535,7 @@ def tdoc_parse(
                     force=force,
                     full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
+                    compact=resolved_compact,
                 )
             else:
                 try:
@@ -1537,6 +1554,7 @@ def tdoc_parse(
                         output=direct_output,
                         full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
+                        compact=resolved_compact,
                     )
                 else:
                     _emit_url_batch_results(
@@ -1544,6 +1562,7 @@ def tdoc_parse(
                         root_url=from_url,
                         output=direct_output,
                         fmt=direct_format,
+                        compact=resolved_compact,
                     )
         return
 
@@ -1943,6 +1962,7 @@ def _tdoc_parse_direct(
     output: str | None,
     full: bool,
     max_tdoc_size_bytes: int = 0,
+    compact: bool = False,
 ) -> None:
     """Dispatch a single ``--from-path`` (file) or ``--from-url`` call.
 
@@ -2030,7 +2050,7 @@ def _tdoc_parse_direct(
         typer.echo(build_no_pattern_warning_message(raw), err=True)
 
     if resolved_format == "raw":
-        _emit_record_raw(result.markdown, output)
+        _emit_record_raw(result.markdown, output, compact=compact)
     elif result.details is None:
         typer.echo(
             f"FAILED - ValueError: --format {resolved_format!r} requires parsed fields; "
@@ -2039,7 +2059,7 @@ def _tdoc_parse_direct(
         )
         raise typer.Exit(code=1) from None
     else:
-        _emit_record(result.details, resolved_format, output)
+        _emit_record(result.details, resolved_format, output, compact=compact)
 
 
 def _emit_record(
@@ -3240,6 +3260,7 @@ def _tdoc_parse_local_batch(
     force: bool,
     full: bool,
     max_tdoc_size_bytes: int = 0,
+    compact: bool = False,
 ) -> None:
     """Parse every ``.docx`` / ``.zip`` under ``from_path`` and write one output file each.
 
@@ -3332,7 +3353,7 @@ def _tdoc_parse_local_batch(
 
         try:
             if resolved_format == "raw":
-                _emit_record_raw(result.markdown, str(out_path))
+                _emit_record_raw(result.markdown, str(out_path), compact=compact)
             else:
                 if result.details is None:
                     logger.warning(
@@ -3340,7 +3361,7 @@ def _tdoc_parse_local_batch(
                     )
                     failures += 1
                     continue
-                _emit_record(result.details, resolved_format, str(out_path))
+                _emit_record(result.details, resolved_format, str(out_path), compact=compact)
         except OSError as exc:
             logger.warning("Failed to write %s: %s", out_path, exc)
             failures += 1
@@ -3384,6 +3405,7 @@ def _tdoc_parse_url_batch(
     force: bool,
     full: bool,
     max_tdoc_size_bytes: int = 0,
+    compact: bool = False,
 ) -> None:
     """Batch-parse every matching file under a 3GPP FTP folder URL.
 
@@ -3411,6 +3433,7 @@ def _tdoc_parse_url_batch(
         root_url=from_url,
         output=output,
         fmt=resolved_format,
+        compact=compact,
     )
 
 
@@ -3420,6 +3443,7 @@ def _emit_url_batch_results(
     root_url: str,
     output: str | None,
     fmt: str,
+    compact: bool = False,
 ) -> None:
     """Emit a URL batch result to disk and/or summary."""
     from doc3gpp.parsers.direct_extractor import (
@@ -3470,7 +3494,7 @@ def _emit_url_batch_results(
 
             try:
                 if fmt == "raw":
-                    _emit_record_raw(result.markdown, str(out_path))
+                    _emit_record_raw(result.markdown, str(out_path), compact=compact)
                 else:
                     if result.details is None:
                         logger.warning(
@@ -3478,7 +3502,7 @@ def _emit_url_batch_results(
                         )
                         failures += 1
                         continue
-                    _emit_record(result.details, fmt, str(out_path))
+                    _emit_record(result.details, fmt, str(out_path), compact=compact)
             except OSError as exc:
                 logger.warning("Failed to write %s: %s", out_path, exc)
                 failures += 1

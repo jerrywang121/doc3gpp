@@ -3434,3 +3434,39 @@ def test_tdoc_parse_from_url_services_only_built_once(
     )
     assert result.exit_code == 0, result.output
     meeting_factory.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# tdoc parse --compact (direct-mode)
+# ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_compact_flag_accepted_on_from_url(sqlite_env, monkeypatch) -> None:
+    """``tdoc parse --from-url URL --format json --compact`` is a valid
+    CLI surface combination. Verifies the Typer command accepts the
+    ``--compact`` flag without raising an ``Unknown option`` error and
+    reaches the noop direct-parse stub. The actual compact JSON output
+    contract is covered by ``tests/unit/test_tdoc_parse_direct.py``."""
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: _RecordingCrService(),
+    )
+    _patch_direct_parse_to_noop(monkeypatch)
+    monkeypatch.setattr(
+        "doc3gpp.cli.collect_tdoc_candidates_for_url",
+        MagicMock(return_value=set()),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-url", "https://example.com/x.zip",
+            "--format", "json",
+            "--compact",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "no such option" not in (result.output or "").lower()
+    assert "Unknown option" not in (result.output or "")

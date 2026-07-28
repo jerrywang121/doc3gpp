@@ -2746,7 +2746,12 @@ def _tdoc_show_by_ftp_url(
         _render_tdoc_show_by_url_table(record, output)
 
 
-def _render_tdoc_show_raw_by_url(url: str, output: str | None) -> None:
+def _render_tdoc_show_raw_by_url(
+    url: str,
+    output: str | None,
+    *,
+    compact: bool = False,  # noqa: ARG001 — raw is already compact
+) -> None:
     """Emit ``tdoc show --ftp-url --format raw``.
 
     The URL is the row identity — the cache file is derived
@@ -2754,6 +2759,10 @@ def _render_tdoc_show_raw_by_url(url: str, output: str | None) -> None:
     TDoc resolution or ``TDocCrService.extract`` call is needed.
     On a cache miss the operator is pointed at the explicit-parse
     paths that would populate the cache.
+
+    ``compact`` is accepted for symmetry with the other renderers but
+    ignored — raw emits the converted markdown verbatim, which is
+    already maximally compact by construction.
     """
     cache_file = derive_cache_file(url)
     cache = _build_cache()
@@ -2770,6 +2779,8 @@ def _render_tdoc_show_raw_by_url(url: str, output: str | None) -> None:
 def _render_tdoc_show_by_url_json(
     record: TDocShowRecordByUrl,
     output: str | None,
+    *,
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --ftp-url --format json``.
 
@@ -2778,6 +2789,10 @@ def _render_tdoc_show_by_url_json(
     is omitted when no matching ``TDoc`` row exists. Optional keys
     (``cover`` / ``ttcn`` / ``extracted_at`` / ``files``) follow
     the same omit-when-null convention as the existing renderer.
+
+    When ``compact=True`` the output is a single line with no indent,
+    no operator-space, and no trailing newline — sized for tight
+    log/scan pipelines instead of human reading.
     """
     payload: dict[str, object] = {
         "ftp_url": record.ftp_url,
@@ -2809,6 +2824,9 @@ def _render_tdoc_show_by_url_json(
         ]
     stream, close_after = _open_output(output)
     try:
+        if compact:
+            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+            return
         json.dump(payload, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
     finally:
@@ -2819,6 +2837,8 @@ def _render_tdoc_show_by_url_json(
 def _render_tdoc_show_by_url_markdown(
     record: TDocShowRecordByUrl,
     output: str | None,
+    *,
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --ftp-url --format markdown``.
 
@@ -2828,9 +2848,100 @@ def _render_tdoc_show_by_url_markdown(
     ``## TTCN Details``, ``## Auxiliary Files``) are emitted only
     when populated. ``tdoc_files`` rows mirror the per-row layout
     used by :func:`_render_tdoc_show_markdown`.
+
+    When ``compact=True`` every CommonMark decorator (``**bold**``,
+    ``*italic*``, ``## headings``, ``- `` bullets, ```` ```json ````
+    fences) is dropped; fields become ``key: value`` plain lines and
+    sections are separated by a single blank line. ``None`` values
+    render as ``-`` and ``—`` is normalised to ``-``.
+    ``required_changes`` becomes a single-line JSON literal;
+    ``changed_functions`` becomes a comma-joined line. Placeholder
+    text becomes a single ``note: <plain>`` line. ``ftp_url`` is
+    just another ``key: value`` line (the first field in the compact
+    form) — the URL is the document anchor in the non-compact form
+    only.
     """
     stream, close_after = _open_output(output)
     try:
+        if compact:
+            stream.write(f"ftp_url: {record.ftp_url}\n")
+
+            if record.tdoc is not None:
+                for f in dataclass_fields(record.tdoc):
+                    value = _serialise_show_value(getattr(record.tdoc, f.name))
+                    rendered = "-" if value is None else str(value)
+                    stream.write(f"{f.name}: {rendered}\n")
+            else:
+                stream.write(
+                    "\nnote: No tdocs row matches this URL; the URL "
+                    "still surfaces in tdoc_cr_cover_page / "
+                    "tdoc_cr_ttcn_details / tdoc_files because the "
+                    "upstream document appeared in a sync but no "
+                    "parent TDoc row was stored.\n"
+                )
+
+            if (
+                record.cover is None
+                and record.ttcn is None
+                and record.extracted_at is None
+            ):
+                stream.write(
+                    "\nnote: No extracted details; run "
+                    "doc3gpp tdoc parse --from-url <url> first.\n"
+                )
+            else:
+                if record.cover is not None:
+                    stream.write("\n")
+                    for f in dataclass_fields(record.cover):
+                        if f.name in {"details", "parser_version"}:
+                            continue
+                        value = getattr(record.cover, f.name)
+                        formatted = _serialise_show_value(value)
+                        rendered = "-" if formatted is None else str(formatted)
+                        stream.write(f"{f.name}: {rendered}\n")
+                    if record.extracted_at is not None:
+                        stream.write(
+                            f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+                        )
+
+                if record.ttcn is not None:
+                    stream.write("\n")
+                    for f in dataclass_fields(record.ttcn):
+                        value = getattr(record.ttcn, f.name)
+                        if f.name == "required_changes" and isinstance(value, list):
+                            inline = json.dumps(
+                                value, ensure_ascii=False, separators=(",", ":")
+                            )
+                            stream.write(f"{f.name}: {inline}\n")
+                            continue
+                        if f.name == "changed_functions" and isinstance(value, list):
+                            if not value:
+                                stream.write(f"{f.name}: -\n")
+                            else:
+                                stream.write(f"{f.name}: {', '.join(value)}\n")
+                            continue
+                        formatted = _serialise_show_value(value)
+                        rendered = "-" if formatted is None else str(formatted)
+                        stream.write(f"{f.name}: {rendered}\n")
+
+            stream.write("\n")
+            if not record.files:
+                stream.write(
+                    "note: No auxiliary files match this URL.\n"
+                )
+            else:
+                for file in record.files:
+                    stream.write(f"type: {file.type}\n")
+                    stream.write(f"file: {file.file}\n")
+                    stream.write(f"ftp_url: {file.ftp_url}\n")
+                    uploaded = (
+                        file.uploaded_date.isoformat()
+                        if file.uploaded_date is not None
+                        else "-"
+                    )
+                    stream.write(f"uploaded_date: {uploaded}\n")
+            return
+
         stream.write(f"# FTP URL `{record.ftp_url}`\n\n")
 
         if record.tdoc is not None:
@@ -2913,6 +3024,8 @@ def _render_tdoc_show_by_url_markdown(
 def _render_tdoc_show_by_url_table(
     record: TDocShowRecordByUrl,
     output: str | None,
+    *,
+    compact: bool = False,  # noqa: ARG001 — table is already compact
 ) -> None:
     """Emit ``tdoc show --ftp-url --format table`` (the default for URL mode).
 
@@ -2921,6 +3034,10 @@ def _render_tdoc_show_by_url_table(
     ``[TTCN Details]`` / ``[Auxiliary Files]``. Optional blocks are
     omitted when their source row is absent (the ``[TDoc]`` block
     drops entirely when no ``TDoc`` row matches).
+
+    ``compact`` is accepted for symmetry with the other renderers but
+    ignored — the table format is already line-oriented and maximally
+    compact by construction.
     """
     stream, close_after = _open_output(output)
     try:

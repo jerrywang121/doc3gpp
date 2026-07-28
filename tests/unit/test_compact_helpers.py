@@ -338,3 +338,90 @@ def test_render_tdoc_show_raw_compact_is_noop(monkeypatch) -> None:
     _render_tdoc_show_raw("R5s260001", plain_buf)
     _render_tdoc_show_raw("R5s260001", compact_buf, compact=True)
     assert plain_buf.getvalue() == compact_buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — tdoc show --ftp-url renderers: compact kwarg
+# ---------------------------------------------------------------------------
+
+
+def test_render_tdoc_show_by_url_json_compact_round_trips() -> None:
+    """``_render_tdoc_show_by_url_json(..., compact=True)`` returns
+    a single line, no spaces, no trailing newline, and parses back."""
+    import io
+    import json
+
+    from doc3gpp.cli import _render_tdoc_show_by_url_json, TDocShowRecordByUrl
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(tdoc_id="R5s260001", title="CR on 5G NR", ftp_url="x/1")
+    record = TDocShowRecordByUrl(
+        ftp_url="x/1", tdoc=tdoc, cover=None, ttcn=None,
+        extracted_at=None, files=(),
+    )
+    stream = io.StringIO()
+    _render_tdoc_show_by_url_json(record, stream, compact=True)
+    text = stream.getvalue()
+    assert "\n" not in text
+    assert ", " not in text
+    assert ": " not in text
+    assert json.loads(text)["ftp_url"] == "x/1"
+
+
+def test_render_tdoc_show_by_url_markdown_compact_strips_decorators() -> None:
+    """``_render_tdoc_show_by_url_markdown(..., compact=True)`` drops
+    every CommonMark decorator."""
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_by_url_markdown, TDocShowRecordByUrl
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(tdoc_id="R5s260001", title="X", ftp_url="x/1")
+    record = TDocShowRecordByUrl(
+        ftp_url="x/1", tdoc=tdoc, cover=None, ttcn=None,
+        extracted_at=None, files=(),
+    )
+    stream = io.StringIO()
+    _render_tdoc_show_by_url_markdown(record, stream, compact=True)
+    text = stream.getvalue()
+    assert "##" not in text
+    assert "**" not in text
+    assert "```" not in text
+    assert "ftp_url: x/1" in text
+
+
+def test_render_tdoc_show_by_url_table_compact_is_noop() -> None:
+    """``_render_tdoc_show_by_url_table`` ignores ``compact``."""
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_by_url_table, TDocShowRecordByUrl
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(tdoc_id="R5s260001", title="X", ftp_url="x/1")
+    record = TDocShowRecordByUrl(
+        ftp_url="x/1", tdoc=tdoc, cover=None, ttcn=None,
+        extracted_at=None, files=(),
+    )
+    plain = io.StringIO()
+    _render_tdoc_show_by_url_table(record, plain)
+    compact = io.StringIO()
+    _render_tdoc_show_by_url_table(record, compact, compact=True)
+    assert plain.getvalue() == compact.getvalue()
+
+
+def test_render_tdoc_show_raw_by_url_compact_is_noop(monkeypatch) -> None:
+    """``_render_tdoc_show_raw_by_url`` ignores ``compact``."""
+    from doc3gpp.cli import _render_tdoc_show_raw_by_url
+
+    def fake_read_cached_markdown_path(*args, **kwargs):
+        return "# hello"
+
+    monkeypatch.setattr("doc3gpp.cli._read_cached_markdown_path", fake_read_cached_markdown_path)
+    monkeypatch.setattr("doc3gpp.cli._build_cache", lambda: type("C", (), {"root": "."})())
+
+    import io
+    plain = io.StringIO()
+    compact = io.StringIO()
+    _render_tdoc_show_raw_by_url("https://x/1", plain)
+    _render_tdoc_show_raw_by_url("https://x/1", compact, compact=True)
+    assert plain.getvalue() == compact.getvalue()

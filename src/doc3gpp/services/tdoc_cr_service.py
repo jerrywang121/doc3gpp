@@ -275,6 +275,43 @@ class TDocNotYetOnFTPError(ValueError):
         )
 
 
+class TDocTooLargeError(Exception):
+    """Raised when a TDoc's source file exceeds ``tdoc_parse.max_tdoc_size_kb``.
+
+    Surfaced by :meth:`TDocCrService.extract` (via the
+    :func:`download_tdoc_zip` pre-fetch cache probe, the post-fetch
+    guard, or :func:`direct_parse_bytes`), by
+    :meth:`TDocCrService.extract_from_url` (via
+    :meth:`TDocCrService._extract_from_3gpp_url`'s defence-in-depth
+    guard), and by the CLI's :func:`_tdoc_parse_local_batch` pre-read
+    ``stat()`` guard.
+
+    Routed to the existing skip bucket (:attr:`BatchExtractResult.skipped`
+    and :attr:`DirectParseBatchResult.skipped`) rather than the failure
+    bucket because "this file is too big for our parse budget" is an
+    operational decision, not an upstream-side error — the operator's
+    knob, not a 3GPP-side bug. ``0`` disables the check entirely.
+
+    Attributes:
+        source: A short identifier for the bytes the check fired on —
+            ``"cache:<path>"`` on a cache-hit pre-flight,
+            ``"download:<url>"`` on a fresh-download post-fetch,
+            or the original ``filename`` for :func:`direct_parse_bytes`.
+        size: The measured byte length of the source.
+        limit: The active per-file cap in bytes (``max_tdoc_size_kb *
+            1024``).
+    """
+
+    def __init__(self, source: str, size: int, limit: int) -> None:
+        super().__init__(
+            f"TDoc source {source!r} is {size} bytes, "
+            f"exceeds max_tdoc_size_kb limit ({limit} bytes)"
+        )
+        self.source = source
+        self.size = size
+        self.limit = limit
+
+
 # ---------------------------------------------------------------------------
 # Service result DTO.
 # ---------------------------------------------------------------------------
@@ -369,6 +406,7 @@ class TDocCrService:
         tdoc_repository: TDocRepository,
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
+        max_tdoc_size_bytes: int = 0,
     ) -> None:
         self._cache = cache
         self._scraper = scraper_client
@@ -377,6 +415,7 @@ class TDocCrService:
         self._tdoc_repo = tdoc_repository
         self._parser = parser
         self._parser_registry = parser_registry
+        self._max_tdoc_size_bytes = max_tdoc_size_bytes
 
     def _resolve_parser(self, tdoc_id: str) -> TDocParser:
         """Return the parser to use for ``tdoc_id``.

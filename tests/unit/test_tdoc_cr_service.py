@@ -772,3 +772,54 @@ def test_extract_many_skipped_only_batch_exits_cleanly(
     assert result.failures == {}
     assert "R5s263431" in result.skipped
     assert "TDocNotYetOnFTPError" in result.skipped["R5s263431"]  # noqa: E501
+
+
+# ---------------------------------------------------------------------------
+# TDocTooLargeError + max_tdoc_size_bytes kwarg
+# ---------------------------------------------------------------------------
+
+
+def test_constructor_default_max_tdoc_size_bytes_is_zero(tmp_path) -> None:
+    """``TDocCrService(...)`` defaults to ``max_tdoc_size_bytes=0`` (no check).
+
+    Existing test fixtures construct the service without the new
+    kwarg; the default must be backwards-compatible.
+    """
+    _, _, _, _, _, _ = _build_service(tmp_path)
+    # Re-build via the kwargs the test cares about — go through the
+    # constructor explicitly so the kwarg default is verified.
+    service = TDocCrService(
+        cache=TDocCache(root=tmp_path / "cache2", size_limit_bytes=0),
+        scraper_client=MagicMock(),
+        cr_repository=MagicMock(),
+        cr_ttcn_repository=MagicMock(),
+        tdoc_repository=MagicMock(),
+    )
+    assert service._max_tdoc_size_bytes == 0
+
+
+def test_constructor_accepts_max_tdoc_size_bytes(tmp_path) -> None:
+    """Passing ``max_tdoc_size_bytes=N`` is stored verbatim."""
+    service = TDocCrService(
+        cache=TDocCache(root=tmp_path / "cache3", size_limit_bytes=0),
+        scraper_client=MagicMock(),
+        cr_repository=MagicMock(),
+        cr_ttcn_repository=MagicMock(),
+        tdoc_repository=MagicMock(),
+        max_tdoc_size_bytes=2_500_000,
+    )
+    assert service._max_tdoc_size_bytes == 2_500_000
+
+
+def test_too_large_error_carries_size_and_limit() -> None:
+    """``TDocTooLargeError`` exposes ``source``/``size``/``limit`` attributes
+    so the CLI summary formatter can render a precise reason string.
+    """
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    exc = TDocTooLargeError(source="x.zip", size=5_000_000, limit=1_024_000)
+    assert exc.source == "x.zip"
+    assert exc.size == 5_000_000
+    assert exc.limit == 1_024_000
+    assert "5_000_000" in str(exc) or "5000000" in str(exc)
+    assert "1_024_000" in str(exc) or "1024000" in str(exc)

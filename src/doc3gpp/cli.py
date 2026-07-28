@@ -359,8 +359,23 @@ def _emit_markdown(
     stream: TextIO,
     fields: list[str],
     *,
-    compact: bool = False,  # noqa: ARG001 — added in Task 3, real impl in Task 4
+    compact: bool = False,
 ) -> None:
+    """Emit ``rows`` as a markdown table or a compact ``key: value`` block.
+
+    Default shape is the legacy GFM table (``| col | col |`` +
+    ``|---|---|`` + one row per record). When ``compact=True`` the
+    table is replaced with a per-row ``key: value`` block; rows are
+    separated by a single blank line, the field name is repeated
+    per row (so the output is parseable without an external schema).
+    """
+    if compact:
+        for index, row in enumerate(rows):
+            if index:
+                stream.write("\n")
+            for field, cell in zip(fields, row):
+                stream.write(f"{field}: {cell}\n")
+        return
     stream.write("| " + " | ".join(_md_cell(h) for h in fields) + " |\n")
     stream.write("|" + "|".join(["---"] * len(fields)) + "|\n")
     for row in rows:

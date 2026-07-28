@@ -74,3 +74,52 @@ def test_emit_json_default_still_pretty_prints() -> None:
     text = stream.getvalue()
     assert text.endswith("\n")
     assert ",\n" in text  # pretty-print indent survives
+
+
+def test_emit_markdown_compact_per_row_blocks() -> None:
+    """Compact markdown drops the GFM table and emits ``key: value``
+    blocks per row, separated by blank lines."""
+    import io
+
+    from doc3gpp.cli import _emit_markdown
+
+    stream = io.StringIO()
+    _emit_markdown(
+        [
+            ["R5s260001", "RAN5#111"],
+            ["R5s260002", "RAN5#111"],
+        ],
+        stream,
+        ["tdoc_id", "meeting_name"],
+        compact=True,
+    )
+    text = stream.getvalue()
+    # No GFM decorators survive.
+    assert "|" not in text
+    assert "---" not in text
+    assert "```" not in text
+    # Two rows, each with two ``key: value`` lines, blank-line separated.
+    assert text.strip().split("\n\n") == [
+        "tdoc_id: R5s260001\nmeeting_name: RAN5#111",
+        "tdoc_id: R5s260002\nmeeting_name: RAN5#111",
+    ]
+
+
+def test_emit_markdown_default_still_gfm_table() -> None:
+    """Default (non-compact) output is the legacy GFM table."""
+    import io
+
+    from doc3gpp.cli import _emit_markdown
+
+    stream = io.StringIO()
+    _emit_markdown(
+        [["R5s260001", "RAN5#111"]],
+        stream,
+        ["tdoc_id", "meeting_name"],
+    )
+    text = stream.getvalue()
+    assert text == (
+        "| tdoc_id | meeting_name |\n"
+        "|---|---|\n"
+        "| R5s260001 | RAN5#111 |\n"
+    )

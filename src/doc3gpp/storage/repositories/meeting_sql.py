@@ -195,9 +195,11 @@ def _tdoc_id_in_range(row: MeetingORM, prefix: str, number: int) -> bool:
     See :meth:`MeetingRepository.list` for the matching contract.
     Returns ``False`` (rather than raising) on malformed stored values
     so a stray scraper artifact never breaks a list query.
+
+    Accepts 9-char (6-digit) and 10-char (7-digit) start/end doc shapes.
     """
     start_doc = row.start_doc
-    if start_doc is None or len(start_doc) != 9 or start_doc[:3].upper() != prefix:
+    if start_doc is None or len(start_doc) not in (9, 10) or start_doc[:3].upper() != prefix:
         return False
     try:
         start_num = int(start_doc[3:])
@@ -209,7 +211,7 @@ def _tdoc_id_in_range(row: MeetingORM, prefix: str, number: int) -> bool:
     end_doc = row.end_doc
     if end_doc is None:
         return True
-    if len(end_doc) != 9 or end_doc[:3].upper() != prefix:
+    if len(end_doc) not in (9, 10) or end_doc[:3].upper() != prefix:
         return False
     try:
         end_num = int(end_doc[3:])

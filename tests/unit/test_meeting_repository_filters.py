@@ -370,3 +370,75 @@ def test_list_tdoc_id_prefix_match_is_case_insensitive():
     for prefix in ("r5s", "R5S", "r5S", "R5s"):
         matches = repo.list(limit=20, tdoc_id=(prefix, 260025))
         assert {m.meeting_id for m in matches} == {200}, prefix
+
+
+def test_list_tdoc_id_in_range_accepts_ran4_7digit_shapes():
+    """RAN4 has used 7-digit sequence numbers since 2016 (``R4-2607922``);
+    stored ``start_doc`` / ``end_doc`` are 10 characters long instead of
+    9. The range check must accept both shapes."""
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        s.add(
+            TsgORM(
+                tsg_name="RAN WG4",
+                short_name="R4",
+                description="Radio performance",
+                url=None,
+            )
+        )
+        s.flush()
+        s.add_all(
+            [
+                MeetingORM(
+                    meeting_id=300,
+                    name="R4-119-7digit",
+                    title="R4-119",
+                    location="China",
+                    start_date=date(2026, 5, 18),
+                    end_date=date(2026, 5, 22),
+                    start_doc="R4-2605200",
+                    end_doc="R4-2607999",
+                    tsg="R4",
+                ),
+                MeetingORM(
+                    meeting_id=301,
+                    name="R4-119-open-ended",
+                    title="R4-119",
+                    location="China",
+                    start_date=date(2026, 5, 18),
+                    end_date=date(2026, 5, 22),
+                    start_doc="R4-2607000",
+                    end_doc=None,
+                    tsg="R4",
+                ),
+                MeetingORM(
+                    meeting_id=302,
+                    name="R4-still-6digit-R5-shape",
+                    title="placeholder",
+                    location="Online",
+                    start_date=date(2026, 5, 18),
+                    end_date=date(2026, 5, 22),
+                    start_doc="R4-260010",
+                    end_doc="R4-260099",
+                    tsg="R4",
+                ),
+            ]
+        )
+        s.commit()
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    matches = repo.list(limit=20, tdoc_id=("R4-", 2607922))
+    assert {m.meeting_id for m in matches} == {300, 301}
+
+    below_both = repo.list(limit=20, tdoc_id=("R4-", 2605100))
+    assert {m.meeting_id for m in below_both} == set()
+
+    above_closed = repo.list(limit=20, tdoc_id=("R4-", 2608000))
+    assert {m.meeting_id for m in above_closed} == {301}
+
+    six_digit = repo.list(limit=20, tdoc_id=("R4-", 260050))
+    assert {m.meeting_id for m in six_digit} == {302}

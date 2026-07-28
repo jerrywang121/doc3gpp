@@ -194,3 +194,147 @@ def test_emit_record_table_compact_is_noop(tmp_path) -> None:
     _emit_record_table(record, str(plain))
     _emit_record_table(record, str(compact), compact=True)
     assert plain.read_text(encoding="utf-8") == compact.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — tdoc show renderers: compact kwarg
+# ---------------------------------------------------------------------------
+
+
+def test_render_tdoc_show_json_compact_round_trips() -> None:
+    """``_render_tdoc_show_json(record, None, compact=True)`` returns
+    a single line, no operator-space, no trailing newline, and parses
+    back to the same payload."""
+    import io
+    import json
+    from datetime import date
+
+    from doc3gpp.cli import _render_tdoc_show_json, TDocShowRecord
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+        spec="38.300",
+        cr_num="0001",
+        version="1.0.0",
+        release="Rel-18",
+    )
+    cover = TDocCRDetails(
+        tdoc_id="R5s260001",
+        spec="38.300",
+        cr_num="0001",
+        rev="-",
+        version="1.0.0",
+        title="CR on 5G NR",
+        source="RAN1",
+        tsg="RAN1",
+        related_wis="-",
+        date=date(2026, 1, 15),
+        cr_cat="F",
+        release="Rel-18",
+        reason_for_change="-",
+        consequences_if_not_approved="-",
+        clauses_affected="5.4.2",
+    )
+    record = TDocShowRecord(tdoc=tdoc, cover=cover, ttcn=None, extracted_at=None, files=())
+    stream = io.StringIO()
+    _render_tdoc_show_json(record, stream, compact=True)
+    text = stream.getvalue()
+    assert "\n" not in text
+    assert ", " not in text
+    assert ": " not in text
+    payload = json.loads(text)
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+    assert payload["cover"]["date"] == "2026-01-15"
+
+
+def test_render_tdoc_show_markdown_compact_strips_decorators() -> None:
+    """``_render_tdoc_show_markdown(..., compact=True)`` drops every
+    CommonMark decorator and uses blank-line section separators."""
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_markdown, TDocShowRecord
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+    record = TDocShowRecord(
+        tdoc=tdoc,
+        cover=None,
+        ttcn=None,
+        extracted_at=None,
+        files=(),
+    )
+    stream = io.StringIO()
+    _render_tdoc_show_markdown(record, stream, compact=True)
+    text = stream.getvalue()
+    # No CommonMark decorators survive.
+    assert "##" not in text
+    assert "**" not in text
+    assert "*" not in text
+    assert "```" not in text
+    # Field labels still appear as ``key: value`` lines.
+    assert "tdoc_id: R5s260001" in text
+    assert "title: CR on 5G NR" in text
+
+
+def test_render_tdoc_show_table_compact_is_noop() -> None:
+    """``_render_tdoc_show_table`` ignores ``compact`` (table is
+    already line-oriented)."""
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_table, TDocShowRecord
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(tdoc_id="R5s260001", title="X", ftp_url="x/1")
+    record = TDocShowRecord(tdoc=tdoc, cover=None, ttcn=None, extracted_at=None, files=())
+    plain = io.StringIO()
+    _render_tdoc_show_table(record, plain)
+    compact = io.StringIO()
+    _render_tdoc_show_table(record, compact, compact=True)
+    assert plain.getvalue() == compact.getvalue()
+
+
+def test_render_tdoc_show_raw_compact_is_noop(monkeypatch) -> None:
+    """``_render_tdoc_show_raw`` ignores ``compact`` (raw is already
+    maximally compact by construction)."""
+    from doc3gpp.cli import _render_tdoc_show_raw
+
+    def fake_read_cached_markdown_path(*args, **kwargs):
+        return "# hello"
+
+    monkeypatch.setattr(
+        "doc3gpp.cli._read_cached_markdown_path", fake_read_cached_markdown_path
+    )
+    monkeypatch.setattr("doc3gpp.cli._build_cache", lambda: type("C", (), {"root": "."})())
+
+    class _Stub:
+        def extract(self, _tdoc_id):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                extract_meta=SimpleNamespace(cache_file="x.zip"),
+                tdoc_id=_tdoc_id,
+            )
+
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: _Stub())
+
+    import io
+
+    plain_buf = io.StringIO()
+    compact_buf = io.StringIO()
+    _render_tdoc_show_raw("R5s260001", plain_buf)
+    _render_tdoc_show_raw("R5s260001", compact_buf, compact=True)
+    assert plain_buf.getvalue() == compact_buf.getvalue()

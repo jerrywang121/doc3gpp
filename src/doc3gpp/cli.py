@@ -306,14 +306,20 @@ def _resolve_cache_purge_scope(scope: str) -> str:
     return normalized
 
 
-def _open_output(path: str | None) -> tuple[TextIO, bool]:
+def _open_output(path: str | TextIO | None) -> tuple[TextIO, bool]:
     """Open ``path`` for writing, or return ``(sys.stdout, False)`` for stdout.
 
-    ``None`` and the literal ``"-"`` both resolve to stdout. The second
-    return value tells the caller whether to close the stream afterwards.
+    ``None`` and the literal ``"-"`` both resolve to stdout. A
+    pre-opened :class:`io.TextIOBase` (e.g. an ``io.StringIO`` in
+    tests) is returned as-is and is the caller's responsibility to
+    close. The second return value tells the caller whether to close
+    the stream afterwards (``False`` for stdout or for caller-owned
+    streams).
     """
     if path is None or path == "-":
         return sys.stdout, False
+    if hasattr(path, "write"):
+        return path, False
     return Path(path).open("w", encoding="utf-8", newline=""), True
 
 
@@ -2207,7 +2213,9 @@ class TDocShowRecordByUrl:
 
 def _render_tdoc_show_json(
     record: TDocShowRecord,
-    output: str | None,
+    output: str | TextIO | None,
+    *,
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --format json``.
 
@@ -2235,6 +2243,10 @@ def _render_tdoc_show_json(
       Every dataclass field of :class:`TDocFile` is serialised. The
       key is **omitted** when the TDoc has no auxiliary files, so the
       JSON stays dense for hits and sparse for misses.
+
+    When ``compact=True`` the output is a single line with no indent,
+    no operator-space, and no trailing newline — sized for tight
+    log/scan pipelines instead of human reading.
     """
     payload: dict[str, object] = {
         "tdoc": {
@@ -2264,6 +2276,9 @@ def _render_tdoc_show_json(
         ]
     stream, close_after = _open_output(output)
     try:
+        if compact:
+            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+            return
         json.dump(payload, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
     finally:
@@ -2273,7 +2288,9 @@ def _render_tdoc_show_json(
 
 def _render_tdoc_show_markdown(
     record: TDocShowRecord,
-    output: str | None,
+    output: str | TextIO | None,
+    *,
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --format markdown``.
 
@@ -2294,9 +2311,87 @@ def _render_tdoc_show_markdown(
     is sourced from the ``tdoc_extracts`` row and lives under the
     ``Extracted Cover Details`` section (or as its own bullet when
     only the timestamp is known).
+
+    When ``compact=True`` every CommonMark decorator (``**bold**``,
+    ``*italic*``, ``## headings``, ``- `` bullets, ```` ```json ````
+    fences) is dropped; fields become ``key: value`` plain lines and
+    sections are separated by a single blank line. ``None`` values
+    render as ``-`` and ``—`` is normalised to ``-``.
+    ``required_changes`` becomes a single-line JSON literal;
+    ``changed_functions`` becomes a comma-joined line. Placeholder
+    text becomes a single ``note: <plain>`` line.
     """
     stream, close_after = _open_output(output)
     try:
+        if compact:
+            for f in dataclass_fields(record.tdoc):
+                value = _serialise_show_value(getattr(record.tdoc, f.name))
+                rendered = "-" if value is None else str(value)
+                stream.write(f"{f.name}: {rendered}\n")
+
+            if (
+                record.cover is None
+                and record.ttcn is None
+                and record.extracted_at is None
+            ):
+                stream.write(
+                    "\nnote: No extracted details; run "
+                    "doc3gpp tdoc parse --tdoc <id> first.\n"
+                )
+            else:
+                if record.cover is not None:
+                    stream.write("\n")
+                    for f in dataclass_fields(record.cover):
+                        if f.name in {"details", "parser_version"}:
+                            continue
+                        value = getattr(record.cover, f.name)
+                        formatted = _serialise_show_value(value)
+                        rendered = "-" if formatted is None else str(formatted)
+                        stream.write(f"{f.name}: {rendered}\n")
+                    if record.extracted_at is not None:
+                        stream.write(
+                            f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+                        )
+
+                if record.ttcn is not None:
+                    stream.write("\n")
+                    for f in dataclass_fields(record.ttcn):
+                        value = getattr(record.ttcn, f.name)
+                        if f.name == "required_changes" and isinstance(value, list):
+                            inline = json.dumps(
+                                value, ensure_ascii=False, separators=(",", ":")
+                            )
+                            stream.write(f"{f.name}: {inline}\n")
+                            continue
+                        if f.name == "changed_functions" and isinstance(value, list):
+                            if not value:
+                                stream.write(f"{f.name}: -\n")
+                            else:
+                                stream.write(f"{f.name}: {', '.join(value)}\n")
+                            continue
+                        formatted = _serialise_show_value(value)
+                        rendered = "-" if formatted is None else str(formatted)
+                        stream.write(f"{f.name}: {rendered}\n")
+
+            stream.write("\n")
+            if not record.files:
+                stream.write(
+                    "note: No auxiliary files; run doc3gpp tdoc sync "
+                    "first if you haven't synced this meeting yet.\n"
+                )
+            else:
+                for file in record.files:
+                    stream.write(f"type: {file.type}\n")
+                    stream.write(f"file: {file.file}\n")
+                    stream.write(f"ftp_url: {file.ftp_url}\n")
+                    uploaded = (
+                        file.uploaded_date.isoformat()
+                        if file.uploaded_date is not None
+                        else "-"
+                    )
+                    stream.write(f"uploaded_date: {uploaded}\n")
+            return
+
         stream.write(f"# TDoc `{record.tdoc.tdoc_id}`\n\n")
         stream.write("## Metadata\n\n")
         for f in dataclass_fields(record.tdoc):
@@ -2381,7 +2476,9 @@ def _render_tdoc_show_markdown(
 
 def _render_tdoc_show_table(
     record: TDocShowRecord,
-    output: str | None,
+    output: str | TextIO | None,
+    *,
+    compact: bool = False,  # noqa: ARG001 — table is already compact
 ) -> None:
     """Emit ``tdoc show --format table`` (the default).
 
@@ -2404,6 +2501,10 @@ def _render_tdoc_show_table(
     shows the match key. When the TDoc has no auxiliary files, the
     header is omitted and a placeholder line points the reader at
     ``tdoc sync`` (the flow that populates ``tdoc_files``).
+
+    ``compact`` is accepted for symmetry with the other renderers but
+    ignored — the table format is already line-oriented and maximally
+    compact by construction.
     """
     stream, close_after = _open_output(output)
     try:
@@ -2518,7 +2619,12 @@ def _render_tdoc_show_table(
             stream.close()
 
 
-def _render_tdoc_show_raw(tdoc_id: str, output: str | None) -> None:
+def _render_tdoc_show_raw(
+    tdoc_id: str,
+    output: str | TextIO | None,
+    *,
+    compact: bool = False,  # noqa: ARG001 — raw is already compact
+) -> None:
     """Emit ``tdoc show --format raw``.
 
     Delegates to :class:`TDocCrService.extract`, which short-circuits
@@ -2527,6 +2633,10 @@ def _render_tdoc_show_raw(tdoc_id: str, output: str | None) -> None:
     rendered markdown is then read back from the cache path the
     service populated. Service-level exceptions are translated into
     friendly CLI errors so the operator never sees a raw traceback.
+
+    ``compact`` is accepted for symmetry with the other renderers but
+    ignored — raw emits the converted markdown verbatim, which is
+    already maximally compact by construction.
     """
     try:
         service = build_tdoc_cr_service()

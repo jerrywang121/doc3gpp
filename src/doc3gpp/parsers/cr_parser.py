@@ -11,7 +11,8 @@ to work without changes:
 * :func:`derive_tech_from_spec` — derives a 5G/LTE/etc. label from a
   spec number.
 * :class:`CRHeaderMissingError` — raised when the input lacks the
-  ``3GPP TSG-`` header.
+  structural CR cover-page markers (a ``| CHANGE REQUEST |`` line
+  and a spec/CR/rev/``Current version:`` cover-page row).
 * Private helpers (``_TDOC_HEADER_PATTERN``, ``_collapse_whitespace``,
   ``_remove_markdown_formatting``, ``_search_pattern_in_lines``,
   ``_COVER_FIELDS``) are also re-exported because the service layer

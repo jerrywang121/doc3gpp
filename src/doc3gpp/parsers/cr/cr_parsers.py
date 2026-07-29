@@ -109,8 +109,9 @@ class CRParserBase(TDocParser):
         present, header_blob = is_cr_header_present(markdown)
         if not present:
             raise CRHeaderMissingError(
-                "Markdown does not contain a '3GPP TSG-' header; "
-                "this does not look like a 3GPP CR document.",
+                "Markdown does not contain a '| CHANGE REQUEST |' line "
+                "and a structural CR cover-page row (spec | CR | rev | "
+                "Current version:); this does not look like a 3GPP CR document.",
                 snippet=header_blob[:100],
             )
 

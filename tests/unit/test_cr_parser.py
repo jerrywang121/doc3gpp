@@ -103,6 +103,9 @@ _HEADER_LINES = (
     "",
     "**Online, , 12th Dec 2025 - 31st Dec 2026**",
     "",
+    "| CR-Form-v12.4 |",
+    "| --- |",
+    "| CHANGE REQUEST |",
     "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |",
     "|  | | | | | | | | |",
     "| *For* ***HELP*** *on using this form.* | | | | | | | | |",
@@ -155,7 +158,7 @@ _TTCN_CORRECTION_LINES = (
 
 
 def test_parse_cr_details_raises_when_header_missing() -> None:
-    """An input without the ``3GPP TSG-`` header raises CRHeaderMissingError."""
+    """An input without the structural CR markers raises CRHeaderMissingError."""
     bad_md = (
         "| not | a | cr | document |\n"
         "| --- | --- | --- | --- |\n"
@@ -165,7 +168,7 @@ def test_parse_cr_details_raises_when_header_missing() -> None:
         parse_cr_details(bad_md, tdoc_id="R5s260009")
     assert isinstance(excinfo.value, ValueError)
     msg = str(excinfo.value)
-    assert "3GPP TSG-" in msg
+    assert "CHANGE REQUEST" in msg
     # The error should include the input snippet for diagnostics.
     assert "random table content" in msg or "not" in msg
 
@@ -248,6 +251,9 @@ _NON_TTCN_HEADER_LINES = (
     "",
     "**Toulouse, France, 14th Nov 2022 - 18th Nov 2022**",
     "",
+    "| CR-Form-v12.4 |",
+    "| --- |",
+    "| CHANGE REQUEST |",
     "|  | 38.508-1 | CR | 2678 | rev | 1 | Current version: | 17.6.0 |  |",
     "| Title: | Addition of USIM configuration for MUSIM test cases | | | | | | | | |",
     "| Source to WG: | Qualcomm Incorporated | | | | | | | | |",
@@ -934,7 +940,15 @@ def test_parse_cr_details_logs_warning_on_header_divergence(
         "\n"
         "**, , -**\n"
         "\n"
+        "| CR-Form-v12.4 |\n"
+        "| --- |\n"
+        "| CHANGE REQUEST |\n"
         "| Source to TSG: | C6 |\n"
+        # Cover-page row: spec / CR / rev / version. The cover parser
+        # will only resolve ``tsg`` from this row (no ``Source to TSG``
+        # cell is required once the structural gate is satisfied), and
+        # the test asserts the ``id[:2]`` fallback path kicks in.
+        "| 36.521-2 | CR | 0042 | rev | - | Current version: | 16.5.0 |\n"
     )
     with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr_parser"):
         parsed = parse_cr_details(md, tdoc_id="C6-250028")
@@ -949,7 +963,11 @@ def test_parse_cr_details_falls_back_to_id_for_tsg_when_cover_empty(
     md = (
         "**3GPP TSG- Meeting #2026-TTCN email *R5s260009***\n"
         "\n"
+        "| CR-Form-v12.4 |\n"
+        "| --- |\n"
+        "| CHANGE REQUEST |\n"
         "| ***Title:*** | x | | | | | | | | | |\n"
+        "| 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |\n"
         # Note: no Source to TSG row.
     )
     with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr_parser"):
@@ -1422,6 +1440,9 @@ def test_parse_cr_details_extracts_release_long_form_with_space_tdoc_id() -> Non
     md = (
         "3GPP TSG CT WG3 Meeting #147 C3-262686 Dalian, China, 18 - 22 May, 2026\n"
         "\n"
+        "| CR-Form-v12.4 |\n"
+        "| --- |\n"
+        "| CHANGE REQUEST |\n"
         "| Title: | Example CR |\n"
         "| Source to WG: | Example |\n"
         "| Source to TSG: | CT WG3 |\n"

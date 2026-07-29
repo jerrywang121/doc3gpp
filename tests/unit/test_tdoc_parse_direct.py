@@ -357,13 +357,23 @@ def test_download_tdoc_zip_distinct_ftp_urls_never_collide() -> None:
 def test_direct_parse_bytes_with_bare_docx_returns_synthetic_id(
     tmp_path: Path,
 ) -> None:
-    """A bare ``.docx`` payload with no 3GPP id gets a ``LOCAL-`` synthetic id."""
+    """A bare ``.docx`` payload with no 3GPP id in the filename gets a ``LOCAL-`` synthetic id.
+
+    The docx body must still be a valid 3GPP CR cover sheet (so the
+    parser accepts it) — only the *filename* lacks a 3GPP id, which
+    is what triggers the ``_synthetic_tdoc_id`` fallback in
+    :func:`direct_parse_bytes`.
+    """
     if not _docx_available():
         pytest.skip("python-docx not installed")
     from docx import Document
     doc = Document()
     doc.add_heading("3GPP TSG-RAN WG5 Meeting #1234-TTCN email", level=1)
-    doc.add_paragraph("Random non-CR document body.")
+    doc.add_paragraph("CR-Form-v12.4")
+    doc.add_paragraph("| CHANGE REQUEST |")
+    doc.add_paragraph(
+        "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |"
+    )
     buf = io.BytesIO()
     doc.save(buf)
     docx_bytes = buf.getvalue()
@@ -451,6 +461,11 @@ def test_extract_from_bytes_never_touches_cache_or_db(tmp_path: Path) -> None:
     from docx import Document
     doc = Document()
     doc.add_heading("3GPP TSG-RAN WG5 Meeting #1234-TTCN email", level=1)
+    doc.add_paragraph("CR-Form-v12.4")
+    doc.add_paragraph("| CHANGE REQUEST |")
+    doc.add_paragraph(
+        "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |"
+    )
     doc.add_paragraph("dummy body")
     buf = io.BytesIO()
     doc.save(buf)
@@ -483,6 +498,11 @@ def test_extract_from_url_other_url_skips_cache_and_db(tmp_path: Path) -> None:
     from docx import Document
     doc = Document()
     doc.add_heading("3GPP TSG-RAN WG5 Meeting #1234-TTCN email", level=1)
+    doc.add_paragraph("CR-Form-v12.4")
+    doc.add_paragraph("| CHANGE REQUEST |")
+    doc.add_paragraph(
+        "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |"
+    )
     doc.add_paragraph("dummy body")
     buf = io.BytesIO()
     doc.save(buf)
@@ -539,6 +559,11 @@ def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
     from docx import Document
     doc = Document()
     doc.add_heading("3GPP TSG-RAN WG5 Meeting #1234-TTCN email", level=1)
+    doc.add_paragraph("CR-Form-v12.4")
+    doc.add_paragraph("| CHANGE REQUEST |")
+    doc.add_paragraph(
+        "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |"
+    )
     doc.add_paragraph("dummy body")
     buf = io.BytesIO()
     doc.save(buf)
@@ -572,6 +597,11 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_skips_db(
     from docx import Document
     doc = Document()
     doc.add_heading("3GPP TSG-RAN WG5 Meeting #1234-TTCN email", level=1)
+    doc.add_paragraph("CR-Form-v12.4")
+    doc.add_paragraph("| CHANGE REQUEST |")
+    doc.add_paragraph(
+        "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |"
+    )
     doc.add_paragraph("dummy body")
     buf = io.BytesIO()
     doc.save(buf)

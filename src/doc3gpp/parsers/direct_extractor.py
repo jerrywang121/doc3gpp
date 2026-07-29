@@ -402,7 +402,8 @@ def direct_parse_bytes(
         zipfile.BadZipFile: the payload looks like a zip but is
             malformed.
         CRHeaderMissingError: the parsed markdown lacks a
-            ``3GPP TSG-`` header (forwarded from ``parse_cr_details``).
+            ``| CHANGE REQUEST |`` line and the structural CR
+            cover-page row (forwarded from ``parse_cr_details``).
         PythonDocxNotInstalledError: python-docx is not installed
             (forwarded from :func:`convert_document_to_markdown`).
         TDocTooLargeError: ``max_bytes > 0`` and ``len(payload)`` exceeds

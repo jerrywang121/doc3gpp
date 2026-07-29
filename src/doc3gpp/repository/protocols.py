@@ -11,6 +11,12 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.search import (
+    RebuildProgress,  # noqa: F401
+    SearchFilters,
+    SearchHit,
+    SearchIndexStatus,
+)
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tsg import Tsg
@@ -472,3 +478,123 @@ class TDocCrChangeDetailsRepository(Protocol):
     def get_for_tdoc_id(self, tdoc_id: str) -> list[TDocCRChangeDetails]:
         """Return every body-change row for ``tdoc_id``."""
         ...
+
+
+class SearchIndexRepository(Protocol):
+    """FTS5-backed search index for ``tdocs``.
+
+    All write paths are idempotent (``INSERT OR REPLACE`` /
+    ``DELETE``). The repository owns the JOIN between the FTS5
+    virtual table and the ``tdocs`` / ``meetings`` rows so callers
+    never need to know that index rows are projections rather than
+    copies of the source data.
+
+    Implementations are dialect-aware: on sqlite with FTS5 enabled
+    everything works; on non-sqlite or FTS5-less builds every
+    method raises :class:`SearchUnavailableError`. The factory layer
+    (``build_search_service``) catches that error once at startup
+    and returns ``None`` so callers can degrade gracefully.
+    """
+
+    def upsert(self, tdoc_id: int) -> None:
+        """Rebuild the FTS5 row for ``tdoc_id`` from the joined tables.
+
+        Idempotent: a re-upsert of the same ``tdoc_id`` replaces the
+        existing row in place. Decompresses the gzip JSON blobs in
+        Python (sqlite has no ``gzip()`` SQL builtin) and inserts the
+        concatenated text into every FTS5 column.
+        """
+        ...
+
+    def remove(self, tdoc_id: int) -> None:
+        """Delete the FTS5 row for ``tdoc_id``. No-op if absent."""
+        ...
+
+    def search(
+        self, query: str, filters: SearchFilters,
+    ) -> list[SearchHit]:
+        """Run an FTS5 ``MATCH`` + filters + ``bm25()`` scoring.
+
+        Returns at most ``filters.limit`` hits, ordered by score
+        ascending (lower = better in FTS5). Filters apply as
+        additional ``AND`` clauses on the joined ``tdocs`` /
+        ``meetings`` tables.
+        """
+        ...
+
+    def rebuild_batch(
+        self,
+        batch_size: int,
+        after_id: int | None,
+        stale_only: bool,
+    ) -> Iterable[list[int]]:
+        """Yield batches of ``tdoc_id`` integers for the rebuild loop.
+
+        ``stale_only=True`` returns only rows whose
+        ``tdocs.uploaded_date > last_indexed_uploaded_date``; the
+        default (``False``) returns every ``tdoc_id``. ``after_id``
+        sets the cursor — rows with ``tdoc_id > after_id`` (or
+        ``>= after_id + 1``) are returned so resume picks up where
+        the previous crash left off. The caller (``SearchService``)
+        iterates the batches and invokes :meth:`upsert` per id.
+        """
+        ...
+
+    def count_tdocs_to_index(self, stale_only: bool) -> int:
+        """Return how many rows the next rebuild will process.
+
+        The CLI prints this total up-front so operators can size the
+        rebuild. ``stale_only=True`` matches :meth:`rebuild_batch`'s
+        filtering.
+        """
+        ...
+
+    def get_resume_cursor(self) -> int | None:
+        """Return the last ``tdoc_id`` written to ``tdoc_search_meta``.
+
+        ``None`` means no cursor has been recorded; ``search index
+        --rebuild --resume`` starts at the first id > cursor.
+        """
+        ...
+
+    def set_resume_cursor(self, tdoc_id: int) -> None:
+        """Update the resume cursor after a successful batch upsert."""
+        ...
+
+    def status(self) -> SearchIndexStatus:
+        """Return a :class:`SearchIndexStatus` snapshot for ``search index``.
+
+        Reads ``tdoc_search_meta`` + ``COUNT(*)`` from the FTS5 table
+        + ``MAX(uploaded_date)`` from ``tdocs`` to compute
+        ``is_stale``. ``enabled`` reflects whether the repo was
+        constructed without raising :class:`SearchUnavailableError`
+        — the service layer translates a missing service into
+        ``enabled=False``.
+        """
+        ...
+
+
+class EmbeddingReranker(Protocol):
+    """Re-score an FTS5 hit list using a semantic model.
+
+    The v1 default :class:`~doc3gpp.services.search_service.PassthroughReranker`
+    returns ``hits`` unchanged so the service contract is testable
+    before the embedding spec lands. When the embedding spec lands,
+    a new impl plugs in here without any change to
+    :class:`SearchService` or the CLI.
+    """
+
+    def rerank(
+        self, query: str, hits: list[SearchHit],
+    ) -> list[SearchHit]:
+        """Return ``hits`` re-ordered (and possibly truncated) by relevance.
+
+        ``PassthroughReranker`` returns ``hits`` verbatim. A future
+        embedding impl would return the same list re-ordered by
+        cosine similarity between the query embedding and each
+        hit's content embedding. The ``query`` parameter is the
+        raw user input (not the FTS5 expression) so the reranker
+        can do its own tokenization.
+        """
+        ...
+

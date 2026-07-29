@@ -69,6 +69,7 @@ For the full symbol-to-file table, see
 | Add a CLI command | `src/doc3gpp/cli.py` | Follow pattern: service → repo → CLI. |
 | Add a config writer / CLI set command | `src/doc3gpp/settings/config_writer.py` + `src/doc3gpp/cli.py` (`config_app`) | TOML read-modify-write helpers; Typer `config set` command. |
 | Add a data source | `src/doc3gpp/scraping/` + `src/doc3gpp/parsers/` | Network in `scraping/`, parsing in `parsers/`. |
+| Add a body-change extraction | `src/doc3gpp/parsers/cr/body_changes.py` + `src/doc3gpp/storage/repositories/tdoc_cr_change_details_sql.py` | Pure function in parsers, sidecar repo in storage. |
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
@@ -157,7 +158,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
   out across THREE independent upserts: the slim cover-page row in
   `tdoc_cr_cover_page`, the optional `tdoc_cr_ttcn_details` sidecar (only
   when the parser recognised a TTCN CR), and the `tdoc_extracts`
-  metadata row. Full grammar and prompt-completion semantics in
+  metadata row. `TDocCrService` also writes a `tdoc_cr_change_details`
+  row (non-TTCN CRs only) when the parser detects revision marks.
+  Full grammar and prompt-completion semantics in
   [`docs/conventions.md`](docs/conventions.md) and
   [`docs/cli.md`](docs/cli.md).
 - `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a

@@ -15,6 +15,7 @@ table below is for navigation only.
 | `TDocFile` | dataclass | `models/tdoc_file.py` | Auxiliary file attached to a TDoc (revision / review / support). |
 | `TDocCRDetails` | dataclass | `models/tdoc_cr.py` | Parsed CR cover-page fields (spec, cr_num, release, …) — slimmed: no `details` blob, no `parser_version` field. Mirrors the slim `tdoc_cr_cover_page` table 1:1. |
 | `TDocCRTTCNDetails` | dataclass | `models/tdoc_cr.py` | TTCN sidecar (six overview fields + `required_changes` list). Mirrors the new `tdoc_cr_ttcn_details` table 1:1. |
+| `TDocCRChangeDetails` | dataclass | `models/tdoc_cr_change_details.py` | Body-derived change sidecar (`clauses` + `changes`). Mirrors the new `tdoc_cr_change_details` table 1:1; non-TTCN CRs only. |
 | `TDocCRParseResult` | dataclass | `models/tdoc_cr.py` | Parser bundle: `cover: TDocCRDetails` + `ttcn: TDocCRTTCNDetails | None`. The service fans each slice out to its own repo. |
 | `TDocExtractMeta` | dataclass | `models/tdoc_cr.py` | Cache-pointer sidecar (`cache_file`, `doc_filename`). |
 | `DirectParseResult` | dataclass | `models/tdoc_cr.py` | Outcome of `tdoc parse --from-path/--from-url` (source kind, markdown, details, persistence flags). |
@@ -73,6 +74,7 @@ table below is for navigation only.
 | `extract_module_basename` | function | `parsers/cr/ttcn_functions.py` | Rightmost-alphanumeric-run regex with optional `\.ttcn` suffix; returns the module basename or `None` for blank / non-alphanumeric input. |
 | `extract_function_name` | function | `parsers/cr/ttcn_functions.py` | Regex match against the TTCN function-name prefix set (with a `*_type` fallback); strips a trailing non-alphanumeric boundary (e.g. ` (NR)`); returns `None` when neither group matches. |
 | `extract_changed_functions` | function | `parsers/cr/ttcn_functions.py` | Aggregator: walks `required_changes`, applies the 4-form contract — both extract → `"<module>.<function>"`, only module → `"<module>."` (trailing-dot sentinel), only function → `".<function>"` (leading-dot sentinel), neither → drop — deduplicates, and returns `sorted(set(...))`. |
+| `extract_body_changes` | function | `parsers/cr/body_changes.py` | Pure function: line-by-line scan of the converted markdown body to capture change blocks and clause numbers. |
 
 ## Storage (`src/doc3gpp/storage/`)
 
@@ -88,6 +90,7 @@ table below is for navigation only.
 | `SQLAlchemyTDocFileRepository` | class | `storage/repositories/tdoc_file_sql.py` | SQL impl of `TDocFileRepository`. |
 | `SQLAlchemyTDocCrRepository` | class | `storage/repositories/tdoc_cr_sql.py` | SQL impl of `TDocCrDetailRepository`. Owns both the slim `tdoc_cr_cover_page` cover-page table (`upsert(details)`) and the `tdoc_extracts` cache-pointer sidecar (`upsert_extract_meta(meta)`). Reads via `get_by_url`, `get`, `list_all`, `get_extract_meta`, `get_extract_meta_by_url`. |
 | `SQLAlchemyTDocCrTtcnRepository` | class | `storage/repositories/tdoc_cr_ttcn_sql.py` | SQL impl of `TDocCrTTCNDetailRepository` for the new `tdoc_cr_ttcn_details` sidecar. One row per immutable `ftp_url`; six overview columns + a gzip-compressed `required_changes` blob. Lazy-bootstrap (`_ensure_table_exists`) catches `OperationalError "no such table"` and runs `Base.metadata.create_all` once per process. |
+| `SQLAlchemyTDocCrChangeDetailsRepository` | class | `storage/repositories/tdoc_cr_change_details_sql.py` | SQL impl of the body-change sidecar. |
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of `TsgRepository`. |
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of `WiRepository`. |
 | `_apply_text_filter` / `_apply_date_filter` | helpers | `storage/repositories/tdoc_sql.py` | SQLAlchemy helpers that consume `cli_filters.DATE_FILTER_RE` and the rich-filter grammar. |

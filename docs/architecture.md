@@ -292,6 +292,8 @@ and the TDoc CR extraction is the deepest.
       transaction; partial failure is now possible across the three
       tables, but the unbuffered HTTP fetch we already trust keeps
       that window negligible.
+    - Writes a `tdoc_cr_change_details` row when the parser detects
+      `<ins>`/`<del>` revision marks in the body (non-TTCN CRs only).
     - Returns `ExtractResult(details, extract_meta, from_cache=False)`.
   3. `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row
     via `TDocRepository.get_by_id` (PK lookup on `tdocs.tdoc_id`),
@@ -397,6 +399,29 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `extracted_at` or `parser_version` — the sidecar is purely the
       parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
+- `tdoc_cr_change_details`:
+    - `ftp_url` (PK, immutable download URL — same identity
+      convention as `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details`)
+      + `tdoc_id` (non-PK FK → `tdocs.tdoc_id` with
+      `ondelete="CASCADE"`, indexed for the per-tdoc lookup), plus
+      two payload columns: `clauses` (`Text`, nullable — a
+      `\n`-joined `list[str]` of clause numbers observed across the
+      body that belong to a captured change block; sorted + deduped
+      on write, deliberately **not** gzip-compressed so the column
+      stays queryable via `LIKE`) and `changes` (`LargeBinary(16 MB)`,
+      nullable — gzip-compressed UTF-8 JSON array of the captured
+      change blocks, each block being a list of the original markdown
+      lines that surround the `<ins>` / `<del>` revision marks;
+      written via `storage/compression.py`). The serialization
+      contract is `"\n".join(...)` on write and `value.splitlines()`
+      on read (`NULL` and empty both round-trip to `[]`). One row
+      per immutable URL, so multiple revisions of the same
+      `tdoc_id` still land at distinct URLs and occupy distinct
+      rows. No `extracted_at` or `parser_version` — the sidecar is
+      purely the parsed payload; timestamps and parser versioning
+      live in `tdoc_extracts`. Non-TTCN CRs only — a TTCN CR
+      leaves no `tdoc_cr_change_details` row because the TTCN
+      sidecar already carries the per-function change aggregate.
 - `tdoc_extracts`:
     - `ftp_url` (PK, matches `tdoc_cr_cover_page.ftp_url`) + `tdoc_id`
       (non-PK FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed

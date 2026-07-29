@@ -128,6 +128,7 @@ __all__ = [
 
 if TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
+    from doc3gpp.services.search_service import SearchService
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +392,7 @@ class TDocCrService:
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
         max_tdoc_size_bytes: int = 0,
+        search_service: "SearchService | None" = None,
     ) -> None:
         self._cache = cache
         self._scraper = scraper_client
@@ -401,6 +403,7 @@ class TDocCrService:
         self._parser = parser
         self._parser_registry = parser_registry
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
+        self._search_service = search_service
 
     def _resolve_parser(self, tdoc_id: str) -> TDocParser:
         """Return the parser to use for ``tdoc_id``.

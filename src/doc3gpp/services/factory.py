@@ -7,12 +7,16 @@ letting callers depend only on the Protocol-typed service interface.
 from __future__ import annotations
 
 from doc3gpp.repository.protocols import (
+    EmbeddingReranker,
+    SearchIndexRepository,
     TDocCrChangeDetailsRepository,
     TDocCrTTCNDetailRepository,
 )
+from doc3gpp.models.search import SearchUnavailableError
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.services.meetings_service import MeetingService
+from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_file_service import TDocFileService
 from doc3gpp.services.tdoc_service import TDocService
@@ -20,6 +24,8 @@ from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.loader import get_settings
+from doc3gpp.settings.schema import Settings
+from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
@@ -156,6 +162,11 @@ def build_tdoc_cr_service(
       for read-only ``tdocs`` lookups (type guard) and for the FK
       probe that gates ``tdoc_extracts`` / ``tdoc_cr_cover_page`` writes
       in the ``--from-url`` direct-mode path.
+    * :func:`build_search_service` — wired through to
+      :class:`TDocCrService` so successful parses can keep the FTS5
+      index in sync. Returns ``None`` when search is disabled, the
+      dialect is non-sqlite, or FTS5 is missing; in those cases the
+      service simply skips the auto-index hook.
 
     The factory is shared by both the filter-based batch path
     (existing ``tdoc parse --tdoc/--meeting-id`` flow) and the new
@@ -198,4 +209,56 @@ def build_tdoc_cr_service(
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
+        search_service=build_search_service(),
     )
+
+
+def build_search_service(
+    settings: Settings | None = None,
+    repo: SearchIndexRepository | None = None,
+    reranker: EmbeddingReranker | None = None,
+) -> SearchService | None:
+    """Build a :class:`SearchService` or return ``None`` if unavailable.
+
+    The factory is best-effort: any :class:`SearchUnavailableError`
+    raised by the repo (wrong dialect, missing FTS5, missing extra)
+    is caught here once at startup and returned as ``None``. The
+    CLI and the :class:`TDocCrService` hook both treat ``None`` as
+    "search is not available" and skip.
+
+    Args:
+        settings: Optional explicit settings (defaults to
+            :func:`get_settings`). Tests inject a stub.
+        repo: Optional explicit repo (tests inject a stub). When
+            ``None``, the factory constructs the real
+            :class:`SQLAlchemySearchIndexRepository`.
+        reranker: Optional explicit reranker. When ``None``, the
+            factory constructs the default
+            :class:`PassthroughReranker`.
+    """
+    if settings is None:
+        settings = get_settings()
+    if not settings.search.enabled:
+        return None
+    try:
+        resolved_engine = get_engine()
+        if resolved_engine.dialect.name != "sqlite":
+            raise SearchUnavailableError(
+                f"search requires sqlite FTS5; current dialect is "
+                f"{resolved_engine.dialect.name!r}"
+            )
+        if repo is None:
+            from doc3gpp.storage.repositories.search_sql import (
+                SQLAlchemySearchIndexRepository,
+            )
+
+            repo = SQLAlchemySearchIndexRepository()
+        if reranker is None:
+            from doc3gpp.services.search_service import (
+                PassthroughReranker,
+            )
+
+            reranker = PassthroughReranker()
+        return SearchService(repo=repo, reranker=reranker)
+    except SearchUnavailableError:
+        return None

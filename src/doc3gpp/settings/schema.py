@@ -361,6 +361,64 @@ class CacheSettings(BaseModel):
     purge_confirm: bool = Field(default=True)  # CLI guard for `cache purge`
 
 
+class SearchSettings(BaseModel):
+    """Knobs for the FTS5 full-text search subsystem.
+
+    Defaults match the conservative end: ``enabled`` and
+    ``auto_index_on_parse`` both default to True so the index
+    stays in sync with every successful ``tdoc parse`` until the
+    operator opts out. ``rebuild_batch_size`` keeps the default
+    CLI ``search index --rebuild`` manageable on huge DBs;
+    ``snippet_tokens`` caps the FTS5 ``snippet(...)`` length.
+
+    TOML-only (the ``DOC3GPP_SEARCH__*`` env vars are outside the
+    :data:`ALLOWED_ENV_VARS` allowlist, matching the sibling
+    knobs). The presence of FTS5 itself is gated by the new
+    ``[search]`` pyproject extra; on sqlite builds without FTS5
+    the runtime probe in
+    :class:`~doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository`
+    raises :class:`SearchUnavailableError` which the factory
+    catches once at startup.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the search subsystem. False disables "
+            "the CLI commands, the auto-index hook, and the "
+            "tdoc_search DDL creation. doc3gpp continues to "
+            "function normally otherwise."
+        ),
+    )
+    auto_index_on_parse: bool = Field(
+        default=True,
+        description=(
+            "When true, every successful tdoc parse calls "
+            "SearchService.upsert_for_tdoc(tdoc_id) so the index "
+            "stays in sync. Disable to manage the index manually."
+        ),
+    )
+    rebuild_batch_size: int = Field(
+        default=500,
+        ge=1,
+        description=(
+            "TDocs per batch during `search index --rebuild`. "
+            "Smaller values reduce peak memory; larger values "
+            "finish faster."
+        ),
+    )
+    snippet_tokens: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description=(
+            "Approximate number of tokens per FTS5 snippet() "
+            "output. The CLI's --snippet-tokens flag overrides "
+            "this for a single invocation."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
@@ -391,6 +449,7 @@ class Settings(BaseSettings):
     cache: CacheSettings = Field(default_factory=CacheSettings)
     tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)
     sync: SyncSettings = Field(default_factory=SyncSettings)
+    search: SearchSettings = Field(default_factory=SearchSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="DOC3GPP_",

@@ -390,6 +390,104 @@ def test_render_tdoc_show_by_url_markdown_compact_strips_decorators() -> None:
     assert "ftp_url: x/1" in text
 
 
+def test_render_tdoc_show_markdown_compact_emits_changes_when_only_changes_populated() -> None:
+    """``_render_tdoc_show_markdown(..., compact=True)`` must emit the
+    compact ``changes:`` block when ONLY ``record.changes`` is populated
+    (no cover, no TTCN, no extracted_at).
+
+    Regression: the compact branch used to gate the changes render
+    behind ``cover/ttcn/extracted_at is None``, so a TDoc with only
+    a body-change sidecar dropped the ``## Change Details`` block
+    silently. The spec is "every renderer branch is independent,
+    omit-when-null per field", so each field renders when populated.
+    """
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_markdown, TDocShowRecord
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+    changes = TDocCRChangeDetails(
+        ftp_url="x/1",
+        tdoc_id="R5s260001",
+        clauses=("5.4.2",),
+        changes=(("[F] add clause",),),
+    )
+    record = TDocShowRecord(
+        tdoc=tdoc,
+        cover=None,
+        ttcn=None,
+        changes=changes,
+        extracted_at=None,
+        files=(),
+    )
+    stream = io.StringIO()
+    _render_tdoc_show_markdown(record, stream, compact=True)
+    text = stream.getvalue()
+    # The compact branch must surface the changes block.
+    assert "changes: 1 block(s), 1 clause(s)" in text
+    assert "line[1]: [F] add clause" in text
+    # And it must NOT regress to the "no extracted details" placeholder,
+    # because changes is populated.
+    assert "note: No extracted details" not in text
+
+
+def test_render_tdoc_show_by_url_markdown_compact_emits_changes_when_only_changes_populated() -> None:
+    """``_render_tdoc_show_by_url_markdown(..., compact=True)`` must emit
+    the compact ``changes:`` block when ONLY ``record.changes`` is
+    populated (no cover, no TTCN, no extracted_at).
+
+    Same regression as the by-tdoc twin — the compact branch used to
+    gate the changes render behind ``cover/ttcn/extracted_at is None``.
+    """
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_by_url_markdown, TDocShowRecordByUrl
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+    changes = TDocCRChangeDetails(
+        ftp_url="x/1",
+        tdoc_id="R5s260001",
+        clauses=("5.4.2",),
+        changes=(("[F] add clause",),),
+    )
+    record = TDocShowRecordByUrl(
+        ftp_url="x/1",
+        tdoc=tdoc,
+        cover=None,
+        ttcn=None,
+        changes=changes,
+        extracted_at=None,
+        files=(),
+    )
+    stream = io.StringIO()
+    _render_tdoc_show_by_url_markdown(record, stream, compact=True)
+    text = stream.getvalue()
+    # The compact branch must surface the changes block.
+    assert "changes: 1 block(s), 1 clause(s)" in text
+    assert "line[1]: [F] add clause" in text
+    # And it must NOT regress to the "no extracted details" placeholder,
+    # because changes is populated.
+    assert "note: No extracted details" not in text
+
+
 def test_render_tdoc_show_by_url_table_compact_is_noop() -> None:
     """``_render_tdoc_show_by_url_table`` ignores ``compact``."""
     import io

@@ -2386,6 +2386,7 @@ def _render_tdoc_show_markdown(
                 record.cover is None
                 and record.ttcn is None
                 and record.extracted_at is None
+                and record.changes is None
             ):
                 stream.write(
                     "\nnote: No extracted details; run "
@@ -2426,15 +2427,15 @@ def _render_tdoc_show_markdown(
                         rendered = "-" if formatted is None else str(formatted)
                         stream.write(f"{f.name}: {rendered}\n")
 
-                if record.changes is not None:
-                    stream.write("\n")
-                    stream.write(
-                        f"changes: {len(record.changes.changes)} block(s), "
-                        f"{len(record.changes.clauses)} clause(s)\n"
-                    )
-                    for idx, block in enumerate(record.changes.changes, start=1):
-                        for ln in block:
-                            stream.write(f"line[{idx}]: {ln}\n")
+            if record.changes is not None:
+                stream.write("\n")
+                stream.write(
+                    f"changes: {len(record.changes.changes)} block(s), "
+                    f"{len(record.changes.clauses)} clause(s)\n"
+                )
+                for idx, block in enumerate(record.changes.changes, start=1):
+                    for ln in block:
+                        stream.write(f"line[{idx}]: {ln}\n")
 
             stream.write("\n")
             if not record.files:
@@ -2819,7 +2820,7 @@ def _tdoc_show_by_ftp_url(
     ):
         raise typer.BadParameter(
             f"No row in tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
-            f"or tdoc_files matches ftp_url {url!r}."
+            f"tdoc_cr_change_details, or tdoc_files matches ftp_url {url!r}."
         )
 
     record = TDocShowRecordByUrl(
@@ -2983,6 +2984,7 @@ def _render_tdoc_show_by_url_markdown(
                 record.cover is None
                 and record.ttcn is None
                 and record.extracted_at is None
+                and record.changes is None
             ):
                 stream.write(
                     "\nnote: No extracted details; run "
@@ -3023,15 +3025,15 @@ def _render_tdoc_show_by_url_markdown(
                         rendered = "-" if formatted is None else str(formatted)
                         stream.write(f"{f.name}: {rendered}\n")
 
-                if record.changes is not None:
-                    stream.write("\n")
-                    stream.write(
-                        f"changes: {len(record.changes.changes)} block(s), "
-                        f"{len(record.changes.clauses)} clause(s)\n"
-                    )
-                    for idx, block in enumerate(record.changes.changes, start=1):
-                        for ln in block:
-                            stream.write(f"line[{idx}]: {ln}\n")
+            if record.changes is not None:
+                stream.write("\n")
+                stream.write(
+                    f"changes: {len(record.changes.changes)} block(s), "
+                    f"{len(record.changes.clauses)} clause(s)\n"
+                )
+                for idx, block in enumerate(record.changes.changes, start=1):
+                    for ln in block:
+                        stream.write(f"line[{idx}]: {ln}\n")
 
             stream.write("\n")
             if not record.files:

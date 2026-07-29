@@ -85,6 +85,18 @@
 # max_batch = 100
 # max_ftp_depth = 2  # max recursion depth for `tdoc parse --from-url <3gpp-folder> --recursive`
 # max_tdoc_size_kb = 1000  # skip .zip/.docx larger than this; 0 = unlimited
+# Extract the per-clause change-block list from the body of a
+# non-TTCN CR. The extracted clauses and change blocks are stored
+# in tdoc_cr_change_details (sidecar) and surfaced via tdoc show.
+# body_change_enabled = true
+
+# Max plain lines tolerated between two <ins>/<del> lines that
+# still count as the same change block. 0 = consecutive only.
+# body_change_gap_window = 2
+
+# Plain context lines captured before and after each change block.
+# 0 = no context, only marker lines + bridge.
+# body_change_context_padding = 2
 # Direct-parse flags (`--from-path`, `--from-url`, `--format`, `--output`)
 # are CLI-only — no TOML equivalent is exposed for the
 # `tdoc parse --from-*` direct mode.

@@ -404,6 +404,8 @@ class TDocCrService:
         self._parser_registry = parser_registry
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
         self._search_service = search_service
+        from doc3gpp.settings.loader import get_settings as _gs
+        self._settings = _gs()
 
     def _resolve_parser(self, tdoc_id: str) -> TDocParser:
         """Return the parser to use for ``tdoc_id``.
@@ -417,6 +419,32 @@ class TDocCrService:
             return self._parser
         registry = self._parser_registry or build_default_registry()
         return registry.resolve(tdoc_id, tdoc_type="CR")
+
+    def _index_after_parse(self, tdoc_id: str) -> None:
+        """Best-effort FTS5 upsert after a successful parse.
+
+        Called by both the DB-mode ``extract`` happy path and the
+        direct-mode ``_extract_from_3gpp_url`` happy path — both
+        produce the same final DB state, so both should keep the
+        index in sync. Skipped when
+        ``Settings.search.auto_index_on_parse`` is False or when
+        the search extra is not installed (``_search_service`` is
+        ``None``).
+
+        Best-effort: every exception is caught and logged. A failing
+        index write never aborts a successful parse.
+        """
+        if not self._settings.search.auto_index_on_parse:
+            return
+        if self._search_service is None:
+            return
+        try:
+            self._search_service.upsert_for_tdoc(tdoc_id)
+        except Exception as exc:
+            logger.warning(
+                "failed to update search index for tdoc_id=%s: %s",
+                tdoc_id, exc,
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -621,6 +649,7 @@ class TDocCrService:
         if changes is not None:
             self._change_details_repo.upsert(changes)
         self._repo.upsert_extract_meta(meta)
+        self._index_after_parse(normalised)
         logger.info(
             "Persisted CR details for TDoc %s at ftp_url %s (spec=%s cr_num=%s)",
             normalised,
@@ -1126,6 +1155,7 @@ class TDocCrService:
         if changes is not None:
             self._change_details_repo.upsert(changes)
         self._repo.upsert_extract_meta(meta)
+        self._index_after_parse(tdoc_id)
         logger.info(
             "Persisted direct-parse CR details for tdoc_id %s at %s",
             tdoc_id,

@@ -78,7 +78,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     # Write paths
     # ------------------------------------------------------------------
 
-    def upsert(self, tdoc_id: int) -> None:
+    def upsert(self, tdoc_id: str) -> None:
         text_payload = self._build_index_text(tdoc_id)
         if text_payload is None:
             self.remove(tdoc_id)
@@ -104,18 +104,30 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                 ),
                 {"tdoc_id": tdoc_id, **text_payload},
             )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO tdoc_search_meta (key, value)
-                    VALUES ('last_indexed_at', :ts)
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                    """
+            now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+            uploaded_date = conn.execute(
+                text("SELECT uploaded_date FROM tdocs WHERE tdoc_id = :id"),
+                {"id": tdoc_id},
+            ).scalar()
+            for key, value in (
+                ("last_indexed_at", now_iso),
+                (
+                    "last_indexed_uploaded_date",
+                    uploaded_date or "",
                 ),
-                {"ts": datetime.now(UTC).isoformat(timespec="seconds")},
-            )
+            ):
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO tdoc_search_meta (key, value)
+                        VALUES (:key, :value)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                        """
+                    ),
+                    {"key": key, "value": value},
+                )
 
-    def remove(self, tdoc_id: int) -> None:
+    def remove(self, tdoc_id: str) -> None:
         with self._engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM tdoc_search WHERE tdoc_id = :id"),
@@ -135,7 +147,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             "       t.title, m.title AS meeting, m.tsg AS tsg,",
             "       t.uploaded_date",
             "  FROM tdoc_search",
-            "  JOIN tdocs t   ON t.rowid = tdoc_search.rowid",
+            "  JOIN tdocs t   ON t.tdoc_id = tdoc_search.tdoc_id",
             "  JOIN meetings m ON t.meeting_id = m.meeting_id",
             " WHERE tdoc_search MATCH :query",
         ]
@@ -188,10 +200,10 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     def rebuild_batch(
         self,
         batch_size: int,
-        after_id: int | None,
+        after_id: str | None,
         stale_only: bool,
-    ) -> Iterable[list[int]]:
-        last_id = after_id if after_id is not None else -1
+    ) -> Iterable[list[str]]:
+        last_id = after_id if after_id is not None else ""
         while True:
             sql = [
                 "SELECT tdoc_id FROM tdocs",
@@ -224,7 +236,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         with self._engine.begin() as conn:
             return int(conn.execute(text(sql)).scalar() or 0)
 
-    def get_resume_cursor(self) -> int | None:
+    def get_resume_cursor(self) -> str | None:
         with self._engine.begin() as conn:
             row = conn.execute(
                 text(
@@ -232,14 +244,11 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                     "WHERE key = 'last_rebuild_last_tdoc_id'"
                 )
             ).first()
-        if row is None:
+        if row is None or row[0] in (None, ""):
             return None
-        try:
-            return int(row[0])
-        except (TypeError, ValueError):
-            return None
+        return str(row[0])
 
-    def set_resume_cursor(self, tdoc_id: int) -> None:
+    def set_resume_cursor(self, tdoc_id: str) -> None:
         with self._engine.begin() as conn:
             conn.execute(
                 text(
@@ -249,7 +258,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value
                     """
                 ),
-                {"id": str(tdoc_id)},
+                {"id": tdoc_id},
             )
 
     def status(self) -> SearchIndexStatus:
@@ -299,7 +308,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     # Internal: build concatenated text for one tdoc_id
     # ------------------------------------------------------------------
 
-    def _build_index_text(self, tdoc_id: int) -> dict[str, str] | None:
+    def _build_index_text(self, tdoc_id: str) -> dict[str, str] | None:
         """Return the column→text mapping for ``tdoc_id``.
 
         Runs a single JOIN across ``tdocs`` + ``meetings`` + the
@@ -316,7 +325,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                            m.location AS meeting_location
                       FROM tdocs t
                       LEFT JOIN meetings m ON t.meeting_id = m.meeting_id
-                     WHERE t.rowid = :id
+                     WHERE t.tdoc_id = :id
                     """
                 ),
                 {"id": tdoc_id},
@@ -354,7 +363,7 @@ def _wis_to_text(related_wis: str | None) -> str:
     return " ".join(part.strip() for part in related_wis.split(",") if part.strip())
 
 
-def _cover_text(*, conn: Engine, tdoc_id: int) -> str:
+def _cover_text(*, conn: Engine, tdoc_id: str) -> str:
     with conn.begin() as c:
         row = c.execute(
             text(
@@ -375,7 +384,7 @@ def _cover_text(*, conn: Engine, tdoc_id: int) -> str:
     return " ".join(str(v) for v in row if v is not None)
 
 
-def _change_text(*, conn: Engine, tdoc_id: int) -> str:
+def _change_text(*, conn: Engine, tdoc_id: str) -> str:
     with conn.begin() as c:
         row = c.execute(
             text(
@@ -395,7 +404,7 @@ def _change_text(*, conn: Engine, tdoc_id: int) -> str:
     return " ".join(parts)
 
 
-def _ttcn_text(*, conn: Engine, tdoc_id: int) -> str:
+def _ttcn_text(*, conn: Engine, tdoc_id: str) -> str:
     with conn.begin() as c:
         row = c.execute(
             text(

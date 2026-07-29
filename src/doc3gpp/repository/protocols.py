@@ -496,17 +496,22 @@ class SearchIndexRepository(Protocol):
     and returns ``None`` so callers can degrade gracefully.
     """
 
-    def upsert(self, tdoc_id: int) -> None:
+    def upsert(self, tdoc_id: str) -> None:
         """Rebuild the FTS5 row for ``tdoc_id`` from the joined tables.
 
         Idempotent: a re-upsert of the same ``tdoc_id`` replaces the
         existing row in place. Decompresses the gzip JSON blobs in
         Python (sqlite has no ``gzip()`` SQL builtin) and inserts the
         concatenated text into every FTS5 column.
+
+        ``tdoc_id`` is the user-facing string (e.g. ``"R5-1234567"``)
+        — NOT the sqlite-internal rowid int — so the FTS5 row
+        identity stays stable across full ``--rebuild`` cycles
+        (FTS5 rowids get re-allocated on each ``DELETE+INSERT``).
         """
         ...
 
-    def remove(self, tdoc_id: int) -> None:
+    def remove(self, tdoc_id: str) -> None:
         """Delete the FTS5 row for ``tdoc_id``. No-op if absent."""
         ...
 
@@ -525,18 +530,20 @@ class SearchIndexRepository(Protocol):
     def rebuild_batch(
         self,
         batch_size: int,
-        after_id: int | None,
+        after_id: str | None,
         stale_only: bool,
-    ) -> Iterable[list[int]]:
-        """Yield batches of ``tdoc_id`` integers for the rebuild loop.
+    ) -> Iterable[list[str]]:
+        """Yield batches of ``tdoc_id`` strings for the rebuild loop.
 
         ``stale_only=True`` returns only rows whose
         ``tdocs.uploaded_date > last_indexed_uploaded_date``; the
         default (``False``) returns every ``tdoc_id``. ``after_id``
-        sets the cursor — rows with ``tdoc_id > after_id`` (or
-        ``>= after_id + 1``) are returned so resume picks up where
-        the previous crash left off. The caller (``SearchService``)
-        iterates the batches and invokes :meth:`upsert` per id.
+        sets the cursor — rows with ``tdoc_id > after_id`` are
+        returned so resume picks up where the previous crash left
+        off. The comparison is the natural TEXT order on
+        ``tdocs.tdoc_id`` (e.g. ``"R5-1234567"`` < ``"R5-1234568"``).
+        The caller (``SearchService``) iterates the batches and
+        invokes :meth:`upsert` per id.
         """
         ...
 
@@ -549,7 +556,7 @@ class SearchIndexRepository(Protocol):
         """
         ...
 
-    def get_resume_cursor(self) -> int | None:
+    def get_resume_cursor(self) -> str | None:
         """Return the last ``tdoc_id`` written to ``tdoc_search_meta``.
 
         ``None`` means no cursor has been recorded; ``search index
@@ -557,8 +564,11 @@ class SearchIndexRepository(Protocol):
         """
         ...
 
-    def set_resume_cursor(self, tdoc_id: int) -> None:
-        """Update the resume cursor after a successful batch upsert."""
+    def set_resume_cursor(self, tdoc_id: str) -> None:
+        """Update the resume cursor after a successful batch upsert.
+
+        ``tdoc_id`` is the user-facing string (e.g. ``"R5-1234567"``).
+        """
         ...
 
     def status(self) -> SearchIndexStatus:

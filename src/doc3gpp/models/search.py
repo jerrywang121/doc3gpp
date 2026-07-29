@@ -81,7 +81,7 @@ class SearchHit:
     ``markdown``.
     """
 
-    tdoc_id: int
+    tdoc_id: str
     score: float
     preview: str
     title: str
@@ -97,12 +97,15 @@ class RebuildProgress:
     The CLI consumes the generator and (unless ``--quiet``) prints a
     progress line per batch. ``current_tdoc_id`` is the last id
     processed in this batch — also written to the ``tdoc_search_meta``
-    resume cursor.
+    resume cursor. The value is the user-facing ``tdocs.tdoc_id``
+    string (e.g. ``"R5-1234567"``), NOT the sqlite-internal rowid
+    int, so the resume cursor survives a full ``--rebuild`` cycle
+    (FTS5 rowids get re-allocated on each ``DELETE+INSERT``).
     """
 
     processed: int
     total: int
-    current_tdoc_id: int
+    current_tdoc_id: str
 
 
 @dataclass(slots=True, frozen=True)

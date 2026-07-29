@@ -61,10 +61,10 @@ def test_upsert_then_search_title(sqlite_env) -> None:
                 """
             )
         )
-    repo.upsert(1)
+    repo.upsert("R5-1234567")
     hits = repo.search("nb iot", SearchFilters(limit=10))
     assert len(hits) == 1
-    assert hits[0].tdoc_id == 1
+    assert hits[0].tdoc_id == "R5-1234567"
     assert "NB-IoT" in hits[0].title
 
 
@@ -81,8 +81,8 @@ def test_search_after_delete_returns_empty(sqlite_env) -> None:
                 "'https://www.3gpp.org/ftp/R5-9999999.zip', 'CR')"
             )
         )
-    repo.upsert(1)
-    repo.remove(1)
+    repo.upsert("R5-9999999")
+    repo.remove("R5-9999999")
     hits = repo.search("orphan", SearchFilters(limit=10))
     assert hits == []
 
@@ -92,16 +92,17 @@ def test_status_reports_row_count(sqlite_env) -> None:
     create_schema()
     repo = SQLAlchemySearchIndexRepository()
     engine = get_engine()
-    for i in range(3):
+    seeded_ids = [f"R5-{1000000 + i}" for i in range(3)]
+    for tdoc_id in seeded_ids:
         with engine.begin() as conn:
             conn.execute(
                 text(
                     f"INSERT INTO tdocs (tdoc_id, title, ftp_url, type) "
-                    f"VALUES ('R5-{1000000 + i}', 'doc-{i}', "
-                    f"'https://www.3gpp.org/ftp/R5-{1000000 + i}.zip', 'CR')"
+                    f"VALUES ('{tdoc_id}', 'doc', "
+                    f"'https://www.3gpp.org/ftp/{tdoc_id}.zip', 'CR')"
                 )
             )
-        repo.upsert(i + 1)
+        repo.upsert(tdoc_id)
     status = repo.status()
     assert status.row_count == 3
     assert status.enabled is True

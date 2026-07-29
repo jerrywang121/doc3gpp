@@ -436,10 +436,11 @@ def test_render_tdoc_show_markdown_compact_emits_changes_when_only_changes_popul
     assert "changes: 1 block(s), 1 clause(s)" in text
     # The compact renderer prints the per-block layout with clauses first
     # and the change text on its own line. The change text must appear
-    # under the block[1]: / clauses[1]: / changes[1]: sub-tree.
-    assert "- block[1]:" in text
-    assert "- clauses[1]: 5.4.2" in text
-    assert "- changes[1]:" in text
+    # under the ``* block N:`` / ``\t* clauses:`` / ``\t* changes:``
+    # sub-tree.
+    assert "* block 1:" in text
+    assert "\t* clauses: 5.4.2" in text
+    assert "\t* changes:" in text
     assert "[F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
@@ -490,14 +491,127 @@ def test_render_tdoc_show_by_url_markdown_compact_emits_changes_when_only_change
     assert "changes: 1 block(s), 1 clause(s)" in text
     # The compact renderer prints the per-block layout with clauses first
     # and the change text on its own line. The change text must appear
-    # under the block[1]: / clauses[1]: / changes[1]: sub-tree.
-    assert "- block[1]:" in text
-    assert "- clauses[1]: 5.4.2" in text
-    assert "- changes[1]:" in text
+    # under the ``* block N:`` / ``\t* clauses:`` / ``\t* changes:``
+    # sub-tree.
+    assert "* block 1:" in text
+    assert "\t* clauses: 5.4.2" in text
+    assert "\t* changes:" in text
     assert "[F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
     assert "note: No extracted details" not in text
+
+
+def test_render_tdoc_show_markdown_full_emits_changes_when_only_changes_populated() -> None:
+    """``_render_tdoc_show_markdown`` (default full mode, compact=False)
+    must emit the ``## Change Details`` block when ONLY
+    ``record.changes`` is populated (no cover, no TTCN, no extracted_at).
+
+    Regression: the full-mode markdown renderer nested the
+    ``## Change Details`` block inside the ``if record.ttcn is not None``
+    branch, so a TDoc with only a body-change sidecar — like the
+    non-TTCN CR in the bug report — silently dropped the body
+    changes from markdown output. The JSON renderer and the
+    compact-mode markdown renderer both emit the block
+    unconditionally, so full-mode markdown must do the same.
+    """
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_markdown, TDocShowRecord
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+    changes = TDocCRChangeDetails(
+        ftp_url="x/1",
+        tdoc_id="R5s260001",
+        clauses=("5.4.2",),
+        changes=({"clauses": ["5.4.2"], "text": "[F] add clause"},),
+    )
+    record = TDocShowRecord(
+        tdoc=tdoc,
+        cover=None,
+        ttcn=None,
+        changes=changes,
+        extracted_at=None,
+        files=(),
+    )
+    stream = io.StringIO()
+    _render_tdoc_show_markdown(record, stream)  # default compact=False
+    text = stream.getvalue()
+    # The full-mode renderer must surface the changes block.
+    assert "## Change Details" in text
+    # The clauses summary and the per-block layout. The block line is
+    # flush-left at the first bullet level; the clauses / changes
+    # children are one tab in.
+    assert "**clauses**" in text
+    assert "5.4.2" in text
+    assert "1 change block" in text
+    assert "* block 1:" in text
+    assert "\t* clauses: 5.4.2" in text
+    assert "\t* Changes:" in text
+    assert "[F] add clause" in text
+    # And it must NOT regress to the "no extracted details"
+    # placeholder, because changes is populated.
+    assert "_No extracted details;" not in text
+
+
+def test_render_tdoc_show_by_url_markdown_full_emits_changes_when_only_changes_populated() -> None:
+    """``_render_tdoc_show_by_url_markdown`` (default full mode,
+    compact=False) must emit the ``## Change Details`` block when ONLY
+    ``record.changes`` is populated.
+
+    Same regression as the by-tdoc twin — the full-mode markdown
+    renderer nested the ``## Change Details`` block inside the
+    ``if record.ttcn is not None`` branch.
+    """
+    import io
+
+    from doc3gpp.cli import _render_tdoc_show_by_url_markdown, TDocShowRecordByUrl
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+
+    tdoc = TDoc(
+        tdoc_id="R5s260001",
+        title="CR on 5G NR",
+        ftp_url="x/1",
+        source="RAN1",
+        type="CR",
+        status="approved",
+    )
+    changes = TDocCRChangeDetails(
+        ftp_url="x/1",
+        tdoc_id="R5s260001",
+        clauses=("5.4.2",),
+        changes=({"clauses": ["5.4.2"], "text": "[F] add clause"},),
+    )
+    record = TDocShowRecordByUrl(
+        ftp_url="x/1",
+        tdoc=tdoc,
+        cover=None,
+        ttcn=None,
+        changes=changes,
+        extracted_at=None,
+        files=(),
+    )
+    stream = io.StringIO()
+    _render_tdoc_show_by_url_markdown(record, stream)  # default compact=False
+    text = stream.getvalue()
+    assert "## Change Details" in text
+    assert "**clauses**" in text
+    assert "5.4.2" in text
+    assert "1 change block" in text
+    assert "* block 1:" in text
+    assert "\t* clauses: 5.4.2" in text
+    assert "\t* Changes:" in text
+    assert "[F] add clause" in text
 
 
 def test_render_tdoc_show_by_url_table_compact_is_noop() -> None:

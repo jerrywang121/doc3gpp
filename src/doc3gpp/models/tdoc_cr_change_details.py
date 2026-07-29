@@ -18,9 +18,12 @@ class TDocCRChangeDetails:
 
     Attributes:
         ftp_url: Immutable download URL this row is keyed on, stored
-            as a path relative to ``https://www.3gpp.org/ftp/``.
-            ``None`` is not allowed — the row identity is the URL.
+            as a path relative to ``https://www.3gpp.org/ftp/``. Empty
+            in the parser (the service layer fills it in once the
+            download URL is known); non-empty on the persisted row.
         tdoc_id: Canonical TDoc identifier (FK into ``tdocs.tdoc_id``).
+            Empty in the parser (the service layer fills it in);
+            non-empty on the persisted row.
         clauses: Sorted, unique clause numbers observed in the body
             that belong to a captured change block. Stored as
             newline-delimited text on the table; reconstructed from
@@ -37,18 +40,7 @@ class TDocCRChangeDetails:
     changes: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
-        stripped_url = self.ftp_url.strip()
-        if not stripped_url:
-            raise ValueError(
-                "TDocCRChangeDetails requires a non-empty ftp_url"
-            )
-        if stripped_url != self.ftp_url:
-            object.__setattr__(self, "ftp_url", stripped_url)
-
-        stripped_id = self.tdoc_id.strip()
-        if not stripped_id:
-            raise ValueError(
-                "TDocCRChangeDetails requires a non-empty tdoc_id"
-            )
-        if stripped_id != self.tdoc_id:
-            object.__setattr__(self, "tdoc_id", stripped_id)
+        if self.ftp_url and self.ftp_url.strip() != self.ftp_url:
+            object.__setattr__(self, "ftp_url", self.ftp_url.strip())
+        if self.tdoc_id and self.tdoc_id.strip() != self.tdoc_id:
+            object.__setattr__(self, "tdoc_id", self.tdoc_id.strip())

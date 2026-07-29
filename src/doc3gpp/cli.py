@@ -2437,11 +2437,14 @@ def _render_tdoc_show_markdown(
                     f"{len(record.changes.clauses)} clause(s)\n"
                 )
                 for idx, block in enumerate(record.changes.changes, start=1):
-                    stream.write(f"block[{idx}]: {block['text']}\n")
+                    stream.write(f"- block[{idx}]:\n")
                     if block["clauses"]:
                         stream.write(
-                            f"clauses[{idx}]: {', '.join(block['clauses'])}\n"
+                            f"  - clauses[{idx}]: {', '.join(block['clauses'])}\n"
                         )
+                    if block["text"]:
+                        stream.write(f"  - changes[{idx}]: \n{block['text']}\n")
+                    stream.write(f"\n")
 
             stream.write("\n")
             if not record.files:
@@ -2531,8 +2534,11 @@ def _render_tdoc_show_markdown(
                         stream.write(
                             f"    * clauses: {', '.join(block['clauses'])}\n"
                         )
-                    for ln in block["text"].split("\n"):
-                        stream.write(f"    * {ln}\n")
+                    if block["text"]:
+                        stream.write(f"    * Changes:\n")
+                        for ln in block["text"].split("\n"):
+                            stream.write(f">{ln}\n")
+                        stream.write(f"\n")
 
         stream.write("\n## Auxiliary Files\n\n")
         if not record.files:
@@ -3045,11 +3051,14 @@ def _render_tdoc_show_by_url_markdown(
                     f"{len(record.changes.clauses)} clause(s)\n"
                 )
                 for idx, block in enumerate(record.changes.changes, start=1):
-                    stream.write(f"block[{idx}]: {block['text']}\n")
+                    stream.write(f"- block[{idx}]:\n")
                     if block["clauses"]:
                         stream.write(
-                            f"clauses[{idx}]: {', '.join(block['clauses'])}\n"
+                            f"  - clauses[{idx}]: {', '.join(block['clauses'])}\n"
                         )
+                    if block["text"]:
+                        stream.write(f"  - changes[{idx}]: \n{block['text']}\n")
+                    stream.write(f"\n")
 
             stream.write("\n")
             if not record.files:
@@ -3137,8 +3146,11 @@ def _render_tdoc_show_by_url_markdown(
                         stream.write(
                             f"    * clauses: {', '.join(block['clauses'])}\n"
                         )
-                    for ln in block["text"].split("\n"):
-                        stream.write(f"    * {ln}\n")
+                    if block["text"]:
+                        stream.write(f"    * Changes:\n")
+                        for ln in block["text"].split("\n"):
+                            stream.write(f">{ln}\n")
+                        stream.write(f"\n")
 
         if record.files:
             stream.write("\n## Auxiliary Files\n\n")

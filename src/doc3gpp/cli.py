@@ -2259,6 +2259,90 @@ class TDocShowRecordByUrl:
     files: tuple[TDocFile, ...] = ()
 
 
+def _build_show_payload(
+    record: TDocShowRecord | TDocShowRecordByUrl,
+    *,
+    anchor_key: str | None = None,
+    anchor_value: object = None,
+    include_tdoc: bool = True,
+) -> dict[str, object]:
+    """Build the omit-when-null JSON payload for the show renderers.
+
+    Both the by-id and by-url JSON renderers share the same payload
+    shape (cover / ttcn / changes / extracted_at / files keys) and the
+    same omit-when-null convention. The by-id renderer anchors on a
+    required ``tdoc`` key; the by-url renderer anchors on a required
+    ``anchor_key`` (``"ftp_url"``) and treats ``tdoc`` as optional.
+
+    ``record.tdoc`` is always read through the same iterator when it is
+    non-``None`` so the by-id renderer's always-present ``tdoc`` key
+    and the by-url renderer's optional ``tdoc`` key share the same
+    serialisation rules.
+    """
+    payload: dict[str, object] = {}
+    if anchor_key is not None:
+        payload[anchor_key] = anchor_value
+    if include_tdoc and record.tdoc is not None:
+        payload["tdoc"] = {
+            f.name: _serialise_show_value(getattr(record.tdoc, f.name))
+            for f in dataclass_fields(record.tdoc)
+        }
+    if record.cover is not None:
+        payload["cover"] = {
+            f.name: _serialise_show_value(getattr(record.cover, f.name))
+            for f in dataclass_fields(record.cover)
+        }
+    if record.ttcn is not None:
+        payload["ttcn"] = {
+            f.name: _serialise_show_value(getattr(record.ttcn, f.name))
+            for f in dataclass_fields(record.ttcn)
+        }
+    if record.changes is not None:
+        payload["changes"] = {
+            "clauses": list(record.changes.clauses),
+            "changes": [
+                {"clauses": list(b["clauses"]), "text": b["text"]}
+                for b in record.changes.changes
+            ],
+        }
+    if record.extracted_at is not None:
+        payload["extracted_at"] = _serialise_show_value(record.extracted_at)
+    if record.files:
+        payload["files"] = [
+            {
+                f.name: _serialise_show_value(getattr(file, f.name))
+                for f in dataclass_fields(file)
+            }
+            for file in record.files
+        ]
+    return payload
+
+
+def _dump_show_json(
+    payload: dict[str, object],
+    output: str | TextIO | None,
+    *,
+    compact: bool,
+) -> None:
+    """Open ``output`` and serialise ``payload`` as JSON, honouring ``compact``.
+
+    The by-id and by-url JSON renderers share the same compact /
+    pretty-printed write path; centralising it here keeps the omit-when-null
+    payload rules in :func:`_build_show_payload` and the byte-level
+    formatting in one place.
+    """
+    stream, close_after = _open_output(output)
+    try:
+        if compact:
+            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+            return
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+    finally:
+        if close_after:
+            stream.close()
+
+
 def _render_tdoc_show_json(
     record: TDocShowRecord,
     output: str | TextIO | None,
@@ -2296,50 +2380,245 @@ def _render_tdoc_show_json(
     no operator-space, and no trailing newline — sized for tight
     log/scan pipelines instead of human reading.
     """
-    payload: dict[str, object] = {
-        "tdoc": {
-            f.name: _serialise_show_value(getattr(record.tdoc, f.name))
-            for f in dataclass_fields(record.tdoc)
-        },
-    }
-    if record.cover is not None:
-        payload["cover"] = {
-            f.name: _serialise_show_value(getattr(record.cover, f.name))
-            for f in dataclass_fields(record.cover)
-        }
-    if record.ttcn is not None:
-        payload["ttcn"] = {
-            f.name: _serialise_show_value(getattr(record.ttcn, f.name))
-            for f in dataclass_fields(record.ttcn)
-        }
+    payload = _build_show_payload(record)
+    _dump_show_json(payload, output, compact=compact)
+
+
+def _render_tdoc_show_markdown_compact(
+    stream: TextIO,
+    record: TDocShowRecord | TDocShowRecordByUrl,
+    *,
+    anchor_field: str | None,
+    anchor_value: str | None,
+    tdoc_missing_note: str | None,
+    parse_hint: str,
+    files_missing_hint: str,
+) -> None:
+    """Write the shared ``--compact`` markdown body for the show renderers.
+
+    Both the by-id and by-url compact renderers share the same
+    per-block logic; the only differences are the tdoc preamble
+    (an optional anchor line + an optional "no tdocs row" note vs
+    just the tdoc fields), the "no extracted details" placeholder
+    text, and the "no auxiliary files" placeholder text. Those are
+    all parameters here.
+    """
+    if anchor_field is not None and anchor_value is not None:
+        stream.write(f"{anchor_field}: {anchor_value}\n")
+
+    if record.tdoc is not None:
+        for f in dataclass_fields(record.tdoc):
+            value = _serialise_show_value(getattr(record.tdoc, f.name))
+            rendered = "-" if value is None else str(value)
+            stream.write(f"{f.name}: {rendered}\n")
+    elif tdoc_missing_note is not None:
+        stream.write(f"\n{tdoc_missing_note}\n")
+
+    if (
+        record.cover is None
+        and record.ttcn is None
+        and record.extracted_at is None
+        and record.changes is None
+    ):
+        stream.write(f"\nnote: No extracted details; run doc3gpp tdoc parse {parse_hint} first.\n")
+    else:
+        if record.cover is not None:
+            stream.write("\n")
+            for f in dataclass_fields(record.cover):
+                if f.name in {"details", "parser_version"}:
+                    continue
+                value = getattr(record.cover, f.name)
+                formatted = _serialise_show_value(value)
+                rendered = "-" if formatted is None else str(formatted)
+                stream.write(f"{f.name}: {rendered}\n")
+            if record.extracted_at is not None:
+                stream.write(
+                    f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+                )
+
+        if record.ttcn is not None:
+            stream.write("\n")
+            for f in dataclass_fields(record.ttcn):
+                value = getattr(record.ttcn, f.name)
+                if f.name == "required_changes" and isinstance(value, list):
+                    inline = json.dumps(
+                        value, ensure_ascii=False, separators=(",", ":")
+                    )
+                    stream.write(f"{f.name}: {inline}\n")
+                    continue
+                if f.name == "changed_functions" and isinstance(value, list):
+                    if not value:
+                        stream.write(f"{f.name}: -\n")
+                    else:
+                        stream.write(f"{f.name}: {', '.join(value)}\n")
+                    continue
+                formatted = _serialise_show_value(value)
+                rendered = "-" if formatted is None else str(formatted)
+                stream.write(f"{f.name}: {rendered}\n")
+
     if record.changes is not None:
-        payload["changes"] = {
-            "clauses": list(record.changes.clauses),
-            "changes": [
-                {"clauses": list(b["clauses"]), "text": b["text"]}
-                for b in record.changes.changes
-            ],
-        }
-    if record.extracted_at is not None:
-        payload["extracted_at"] = _serialise_show_value(record.extracted_at)
-    if record.files:
-        payload["files"] = [
-            {
-                f.name: _serialise_show_value(getattr(file, f.name))
-                for f in dataclass_fields(file)
-            }
-            for file in record.files
-        ]
-    stream, close_after = _open_output(output)
-    try:
-        if compact:
-            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
-            return
-        json.dump(payload, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
-    finally:
-        if close_after:
-            stream.close()
+        stream.write(
+            f"changes: {len(record.changes.changes)} block(s), "
+            f"{len(record.changes.clauses)} clause(s)\n"
+        )
+        for idx, block in enumerate(record.changes.changes, start=1):
+            stream.write(f"- block[{idx}]:\n")
+            if block["clauses"]:
+                stream.write(
+                    f"  - clauses[{idx}]: {', '.join(block['clauses'])}\n"
+                )
+            if block["text"]:
+                stream.write(f"  - changes[{idx}]: \n{block['text']}\n")
+            stream.write(f"\n")
+
+    stream.write("\n")
+    if not record.files:
+        stream.write(f"note: {files_missing_hint}\n")
+    else:
+        for file in record.files:
+            stream.write(f"type: {file.type}\n")
+            stream.write(f"file: {file.file}\n")
+            stream.write(f"ftp_url: {file.ftp_url}\n")
+            uploaded = (
+                file.uploaded_date.isoformat()
+                if file.uploaded_date is not None
+                else "-"
+            )
+            stream.write(f"uploaded_date: {uploaded}\n")
+
+
+def _render_tdoc_show_markdown_full(
+    stream: TextIO,
+    record: TDocShowRecord | TDocShowRecordByUrl,
+    *,
+    header_line: str,
+    tdoc_heading: str,
+    tdoc_missing_note: str | None,
+    parse_hint: str,
+    show_extracted_details_fallback: bool,
+    files_missing_hint: str,
+    omit_files_heading_when_empty: bool = False,
+) -> None:
+    """Write the shared full-mode markdown body for the show renderers.
+
+    Both renderers share the per-block (cover / ttcn / changes / files)
+    logic; the differences are the top-level document header, the
+    tdoc section heading + fallback note, the parse-hint string baked
+    into the "no extracted details" placeholder, whether to render an
+    ``## Extracted Details`` section when only ``extracted_at`` is
+    known (by-url yes, by-id no), the "no auxiliary files" placeholder
+    text, and whether the ``## Auxiliary Files`` heading is emitted
+    when no files are attached (by-id yes, by-url no). Those are all
+    parameters here.
+    """
+    stream.write(f"{header_line}\n\n")
+
+    if record.tdoc is not None:
+        stream.write(f"{tdoc_heading}\n\n")
+        for f in dataclass_fields(record.tdoc):
+            value = _serialise_show_value(getattr(record.tdoc, f.name))
+            rendered = "—" if value is None else str(value)
+            stream.write(f"- **{f.name}**: {rendered}\n")
+    elif tdoc_missing_note is not None:
+        stream.write(f"{tdoc_missing_note}\n\n")
+
+    if record.cover is not None:
+        stream.write("\n## Extracted Cover Details\n\n")
+        for f in dataclass_fields(record.cover):
+            # Defensive: the slim cover dataclass no longer carries
+            # ``details`` or ``parser_version``, but skip defensively in
+            # case a stale code path slips through.
+            if f.name in {"details", "parser_version"}:
+                continue
+            value = getattr(record.cover, f.name)
+            formatted = _serialise_show_value(value)
+            rendered = "—" if formatted is None else str(formatted)
+            stream.write(f"- **{f.name}**: {rendered}\n")
+        if record.extracted_at is not None:
+            stream.write(f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n")
+    elif show_extracted_details_fallback and record.extracted_at is not None:
+        # by-url only: when no cover row exists but the extract
+        # timestamp does, surface it under its own short section so
+        # the document skeleton stays populated.
+        stream.write("\n## Extracted Details\n\n")
+        stream.write(
+            f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n"
+        )
+    elif (
+        record.cover is None
+        and record.ttcn is None
+        and record.extracted_at is None
+        and not show_extracted_details_fallback
+    ):
+        # by-id: when nothing is known, emit a single "no extracted
+        # details" placeholder pointing at the parse command.
+        stream.write("\n## Extracted Details\n\n")
+        stream.write(
+            f"_No extracted details; run "
+            f"`doc3gpp tdoc parse {parse_hint}` first._\n"
+        )
+
+    if record.ttcn is not None:
+        stream.write("\n## TTCN Details\n\n")
+        for f in dataclass_fields(record.ttcn):
+            value = getattr(record.ttcn, f.name)
+            if f.name == "required_changes" and isinstance(value, list):
+                stream.write(f"- **{f.name}**:\n\n```json\n")
+                stream.write(
+                    json.dumps(value, ensure_ascii=False, indent=2)
+                )
+                stream.write("\n```\n")
+                continue
+            if f.name == "changed_functions" and isinstance(value, list):
+                if not value:
+                    stream.write(f"- **{f.name}**: —\n")
+                else:
+                    stream.write(f"- **{f.name}**:\n")
+                    for entry in value:
+                        stream.write(f"  * {entry}\n")
+                continue
+            formatted = _serialise_show_value(value)
+            rendered = "—" if formatted is None else str(formatted)
+            stream.write(f"- **{f.name}**: {rendered}\n")
+
+        if record.changes is not None:
+            stream.write("\n## Change Details\n\n")
+            stream.write(f"- **clauses**: {', '.join(record.changes.clauses) or '—'}\n")
+            stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
+            for idx, block in enumerate(record.changes.changes, start=1):
+                stream.write(f"\n  * block {idx}:\n")
+                if block["clauses"]:
+                    stream.write(
+                        f"    * clauses: {', '.join(block['clauses'])}\n"
+                    )
+                if block["text"]:
+                    stream.write(f"    * Changes:\n")
+                    for ln in block["text"].split("\n"):
+                        stream.write(f">{ln}\n")
+                    stream.write(f"\n")
+
+    if record.files:
+        stream.write("\n## Auxiliary Files\n\n")
+        for file in record.files:
+            stream.write(f"- **type**: {file.type}\n")
+            stream.write(f"  - **file**: {file.file}\n")
+            stream.write(f"  - **ftp_url**: {file.ftp_url}\n")
+            uploaded = (
+                file.uploaded_date.isoformat()
+                if file.uploaded_date is not None
+                else "—"
+            )
+            stream.write(f"  - **uploaded_date**: {uploaded}\n")
+    elif not omit_files_heading_when_empty:
+        # by-id: always emit the heading and put the placeholder
+        # underneath so the document skeleton stays stable.
+        stream.write("\n## Auxiliary Files\n\n")
+        stream.write(f"_{files_missing_hint}_\n")
+    else:
+        # by-url: drop the heading when no files match and emit the
+        # placeholder as a single italic line preceded by a blank.
+        stream.write(f"\n_{files_missing_hint}_\n")
 
 
 def _render_tdoc_show_markdown(
@@ -2380,187 +2659,173 @@ def _render_tdoc_show_markdown(
     stream, close_after = _open_output(output)
     try:
         if compact:
-            for f in dataclass_fields(record.tdoc):
-                value = _serialise_show_value(getattr(record.tdoc, f.name))
-                rendered = "-" if value is None else str(value)
-                stream.write(f"{f.name}: {rendered}\n")
-
-            if (
-                record.cover is None
-                and record.ttcn is None
-                and record.extracted_at is None
-                and record.changes is None
-            ):
-                stream.write(
-                    "\nnote: No extracted details; run "
-                    "doc3gpp tdoc parse --tdoc <id> first.\n"
-                )
-            else:
-                if record.cover is not None:
-                    stream.write("\n")
-                    for f in dataclass_fields(record.cover):
-                        if f.name in {"details", "parser_version"}:
-                            continue
-                        value = getattr(record.cover, f.name)
-                        formatted = _serialise_show_value(value)
-                        rendered = "-" if formatted is None else str(formatted)
-                        stream.write(f"{f.name}: {rendered}\n")
-                    if record.extracted_at is not None:
-                        stream.write(
-                            f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
-                        )
-
-                if record.ttcn is not None:
-                    stream.write("\n")
-                    for f in dataclass_fields(record.ttcn):
-                        value = getattr(record.ttcn, f.name)
-                        if f.name == "required_changes" and isinstance(value, list):
-                            inline = json.dumps(
-                                value, ensure_ascii=False, separators=(",", ":")
-                            )
-                            stream.write(f"{f.name}: {inline}\n")
-                            continue
-                        if f.name == "changed_functions" and isinstance(value, list):
-                            if not value:
-                                stream.write(f"{f.name}: -\n")
-                            else:
-                                stream.write(f"{f.name}: {', '.join(value)}\n")
-                            continue
-                        formatted = _serialise_show_value(value)
-                        rendered = "-" if formatted is None else str(formatted)
-                        stream.write(f"{f.name}: {rendered}\n")
-
-            if record.changes is not None:
-                stream.write("\n")
-                stream.write(
-                    f"changes: {len(record.changes.changes)} block(s), "
-                    f"{len(record.changes.clauses)} clause(s)\n"
-                )
-                for idx, block in enumerate(record.changes.changes, start=1):
-                    stream.write(f"- block[{idx}]:\n")
-                    if block["clauses"]:
-                        stream.write(
-                            f"  - clauses[{idx}]: {', '.join(block['clauses'])}\n"
-                        )
-                    if block["text"]:
-                        stream.write(f"  - changes[{idx}]: \n{block['text']}\n")
-                    stream.write(f"\n")
-
-            stream.write("\n")
-            if not record.files:
-                stream.write(
-                    "note: No auxiliary files; run doc3gpp tdoc sync "
-                    "first if you haven't synced this meeting yet.\n"
-                )
-            else:
-                for file in record.files:
-                    stream.write(f"type: {file.type}\n")
-                    stream.write(f"file: {file.file}\n")
-                    stream.write(f"ftp_url: {file.ftp_url}\n")
-                    uploaded = (
-                        file.uploaded_date.isoformat()
-                        if file.uploaded_date is not None
-                        else "-"
-                    )
-                    stream.write(f"uploaded_date: {uploaded}\n")
+            _render_tdoc_show_markdown_compact(
+                stream, record,
+                anchor_field=None,
+                anchor_value=None,
+                tdoc_missing_note=None,
+                parse_hint="--tdoc <id>",
+                files_missing_hint=(
+                    "No auxiliary files; run doc3gpp tdoc sync "
+                    "first if you haven't synced this meeting yet."
+                ),
+            )
             return
-
-        stream.write(f"# TDoc `{record.tdoc.tdoc_id}`\n\n")
-        stream.write("## Metadata\n\n")
-        for f in dataclass_fields(record.tdoc):
-            value = _serialise_show_value(getattr(record.tdoc, f.name))
-            if value is None:
-                rendered = "—"
-            else:
-                rendered = str(value)
-            stream.write(f"- **{f.name}**: {rendered}\n")
-
-        if (
-            record.cover is None
-            and record.ttcn is None
-            and record.extracted_at is None
-        ):
-            stream.write("\n## Extracted Details\n\n")
-            stream.write(
-                "_No extracted details; run "
-                "`doc3gpp tdoc parse --tdoc <id>` first._\n"
-            )
-        else:
-            if record.cover is not None:
-                stream.write("\n## Extracted Cover Details\n\n")
-                for f in dataclass_fields(record.cover):
-                    # Defensive: the slim cover dataclass no longer carries
-                    # ``details`` or ``parser_version``, but skip defensively in
-                    # case a stale code path slips through.
-                    if f.name in {"details", "parser_version"}:
-                        continue
-                    value = getattr(record.cover, f.name)
-                    formatted = _serialise_show_value(value)
-                    rendered = "—" if formatted is None else str(formatted)
-                    stream.write(f"- **{f.name}**: {rendered}\n")
-                if record.extracted_at is not None:
-                    stream.write(f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n")
-
-            if record.ttcn is not None:
-                stream.write("\n## TTCN Details\n\n")
-                for f in dataclass_fields(record.ttcn):
-                    value = getattr(record.ttcn, f.name)
-                    if f.name == "required_changes" and isinstance(value, list):
-                        stream.write(f"- **{f.name}**:\n\n```json\n")
-                        stream.write(
-                            json.dumps(value, ensure_ascii=False, indent=2)
-                        )
-                        stream.write("\n```\n")
-                        continue
-                    if f.name == "changed_functions" and isinstance(value, list):
-                        if not value:
-                            stream.write(f"- **{f.name}**: —\n")
-                        else:
-                            stream.write(f"- **{f.name}**:\n")
-                            for entry in value:
-                                stream.write(f"  * {entry}\n")
-                        continue
-                    formatted = _serialise_show_value(value)
-                    rendered = "—" if formatted is None else str(formatted)
-                    stream.write(f"- **{f.name}**: {rendered}\n")
-
-            if record.changes is not None:
-                stream.write("\n## Change Details\n\n")
-                stream.write(f"- **clauses**: {', '.join(record.changes.clauses) or '—'}\n")
-                stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
-                for idx, block in enumerate(record.changes.changes, start=1):
-                    stream.write(f"\n  * block {idx}:\n")
-                    if block["clauses"]:
-                        stream.write(
-                            f"    * clauses: {', '.join(block['clauses'])}\n"
-                        )
-                    if block["text"]:
-                        stream.write(f"    * Changes:\n")
-                        for ln in block["text"].split("\n"):
-                            stream.write(f">{ln}\n")
-                        stream.write(f"\n")
-
-        stream.write("\n## Auxiliary Files\n\n")
-        if not record.files:
-            stream.write(
-                "_No auxiliary files; run "
+        _render_tdoc_show_markdown_full(
+            stream, record,
+            header_line=f"# TDoc `{record.tdoc.tdoc_id}`",
+            tdoc_heading="## Metadata",
+            tdoc_missing_note=None,
+            parse_hint="--tdoc <id>",
+            show_extracted_details_fallback=False,
+            files_missing_hint=(
+                "No auxiliary files; run "
                 "`doc3gpp tdoc sync` first if you haven't synced "
-                "this meeting yet._\n"
-            )
-        else:
-            for file in record.files:
-                stream.write(f"- **type**: {file.type}\n")
-                stream.write(f"  - **file**: {file.file}\n")
-                stream.write(f"  - **ftp_url**: {file.ftp_url}\n")
-                uploaded = (
-                    file.uploaded_date.isoformat()
-                    if file.uploaded_date is not None
-                    else "—"
-                )
-                stream.write(f"  - **uploaded_date**: {uploaded}\n")
+                "this meeting yet."
+            ),
+        )
     finally:
         if close_after:
             stream.close()
+
+
+def _render_tdoc_show_table_body(
+    stream: TextIO,
+    record: TDocShowRecord | TDocShowRecordByUrl,
+    *,
+    parse_hint: str,
+    tdoc_missing_msg: str | None = None,
+) -> None:
+    """Write the shared table body for the show renderers.
+
+    The by-id and by-url table renderers share the same per-block
+    (tdoc / cover / ttcn / changes / files) line-oriented layout;
+    the only differences are the parse-hint text baked into the
+    "no extracted details" placeholder and whether the tdoc block
+    has a fallback "no tdocs row" message (by-url) or always
+    renders the parent row (by-id, ``tdoc_missing_msg=None``).
+
+    The optional ``[FTP URL]`` header is the by-url renderer's
+    responsibility — see :func:`_render_tdoc_show_by_url_table`.
+    """
+    if record.tdoc is not None:
+        stream.write("[TDoc]\n")
+        for f in dataclass_fields(record.tdoc):
+            value = getattr(record.tdoc, f.name)
+            if value is None:
+                value = "-"
+            elif hasattr(value, "isoformat"):
+                value = value.isoformat()
+            else:
+                value = str(value)
+            stream.write(f"{f.name}: {value}\n")
+    elif tdoc_missing_msg is not None:
+        stream.write(f"{tdoc_missing_msg}\n")
+
+    if record.cover is None:
+        # No cover row exists for the URL — skip the
+        # ``[Extracted Details]`` section header so the placeholder
+        # message is the only thing rendered under the ``[TDoc]``
+        # block (by-id) or after the [FTP URL] anchor (by-url). The
+        # header re-appears once a real cover row surfaces (see the
+        # ``record.cover is not None`` branch below).
+        stream.write(
+            f"No extracted details; run `doc3gpp tdoc parse {parse_hint}` first.\n"
+        )
+        if record.extracted_at is not None:
+            stream.write(
+                f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+            )
+        else:
+            stream.write("extracted_at: -\n")
+
+    if record.cover is not None:
+        details = record.cover
+        stream.write("[Extracted Details]\n")
+        if details.ftp_url:
+            stream.write(f"ftp_url: {details.ftp_url}\n")
+        stream.write(f"spec: {details.spec or '-'}\n")
+        stream.write(f"cr_num: {details.cr_num or '-'}\n")
+        stream.write(f"rev: {details.rev or '-'}\n")
+        stream.write(f"version: {details.version or '-'}\n")
+        stream.write(f"title: {details.title or '-'}\n")
+        stream.write(f"source: {details.source or '-'}\n")
+        stream.write(f"tsg: {details.tsg or '-'}\n")
+        stream.write(f"related_wis: {details.related_wis or '-'}\n")
+        stream.write(f"date: {details.date or '-'}\n")
+        stream.write(f"cr_cat: {details.cr_cat or '-'}\n")
+        stream.write(f"release: {details.release or '-'}\n")
+        stream.write(
+            "reason_for_change: "
+            f"{_truncate_for_display(details.reason_for_change)}\n"
+        )
+        stream.write(
+            "consequences_if_not_approved: "
+            f"{_truncate_for_display(details.consequences_if_not_approved)}\n"
+        )
+        stream.write(
+            f"clauses_affected: {details.clauses_affected or '-'}\n"
+        )
+        if record.extracted_at is not None:
+            stream.write(f"extracted_at: {_fmt_dt(record.extracted_at)}\n")
+        else:
+            stream.write("extracted_at: -\n")
+
+    if record.ttcn is not None:
+        ttcn = record.ttcn
+        stream.write("[TTCN Details]\n")
+        if ttcn.ftp_url:
+            stream.write(f"ftp_url: {ttcn.ftp_url}\n")
+        stream.write(f"testcase: {ttcn.testcase or '-'}\n")
+        stream.write(f"ue: {ttcn.ue or '-'}\n")
+        stream.write(f"ss: {ttcn.ss or '-'}\n")
+        stream.write(f"ats_version: {ttcn.ats_version or '-'}\n")
+        stream.write(f"ttcn_release: {ttcn.ttcn_release or '-'}\n")
+        stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
+        count = len(ttcn.required_changes)
+        stream.write(f"required_changes: {count} item(s)\n")
+        if ttcn.changed_functions is None:
+            stream.write("changed_functions: -\n")
+        elif not ttcn.changed_functions:
+            stream.write("changed_functions: 0 item(s)\n")
+        else:
+            count = len(ttcn.changed_functions)
+            stream.write(f"changed_functions: {count} item(s)\n")
+            for entry in ttcn.changed_functions:
+                stream.write(f"  - {entry}\n")
+
+    if record.changes is not None:
+        stream.write("\n[Change Details]\n")
+        stream.write(
+            f"clauses: {len(record.changes.clauses)} clause(s)\n"
+        )
+        stream.write(
+            f"changes: {len(record.changes.changes)} change block(s)\n"
+        )
+
+    if record.files:
+        stream.write("[Auxiliary Files]\n")
+        for file in record.files:
+            # Drop ``id`` (autoincrement PK) and ``tdoc_id``
+            # (match key, already in the ``[TDoc]`` block) —
+            # both are noise in this output.
+            stream.write(f"type: {file.type}\n")
+            stream.write(f"file: {file.file}\n")
+            stream.write(f"ftp_url: {file.ftp_url}\n")
+            uploaded = (
+                file.uploaded_date.isoformat()
+                if file.uploaded_date is not None
+                else "-"
+            )
+            stream.write(f"uploaded_date: {uploaded}\n")
+    else:
+        # No header on the empty case — placeholder line alone.
+        # Hint points to ``tdoc sync`` (not ``tdoc parse``)
+        # because the file table is populated by the sync flow.
+        stream.write(
+            "No auxiliary files; run `doc3gpp tdoc sync` first "
+            "if you haven't synced this meeting yet.\n"
+        )
 
 
 def _render_tdoc_show_table(
@@ -2597,121 +2862,7 @@ def _render_tdoc_show_table(
     """
     stream, close_after = _open_output(output)
     try:
-        stream.write("[TDoc]\n")
-        for f in dataclass_fields(record.tdoc):
-            value = getattr(record.tdoc, f.name)
-            if value is None:
-                value = "-"
-            elif hasattr(value, "isoformat"):
-                value = value.isoformat()
-            else:
-                value = str(value)
-            stream.write(f"{f.name}: {value}\n")
-
-        if record.cover is None:
-            # No cover row exists for ``tdoc.ftp_url`` — skip the
-            # ``[Extracted Details]`` section header so the placeholder
-            # message is the only thing rendered under the ``[TDoc]``
-            # block. The header re-appears once a real cover row
-            # surfaces (see the ``record.cover is not None`` branch
-            # below).
-            stream.write(
-                "No extracted details; run `doc3gpp tdoc parse --tdoc <id>` first.\n"
-            )
-            if record.extracted_at is not None:
-                stream.write(
-                    f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
-                )
-            else:
-                stream.write("extracted_at: -\n")
-
-        if record.cover is not None:
-            details = record.cover
-            stream.write("[Extracted Details]\n")
-            if details.ftp_url:
-                stream.write(f"ftp_url: {details.ftp_url}\n")
-            stream.write(f"spec: {details.spec or '-'}\n")
-            stream.write(f"cr_num: {details.cr_num or '-'}\n")
-            stream.write(f"rev: {details.rev or '-'}\n")
-            stream.write(f"version: {details.version or '-'}\n")
-            stream.write(f"title: {details.title or '-'}\n")
-            stream.write(f"source: {details.source or '-'}\n")
-            stream.write(f"tsg: {details.tsg or '-'}\n")
-            stream.write(f"related_wis: {details.related_wis or '-'}\n")
-            stream.write(f"date: {details.date or '-'}\n")
-            stream.write(f"cr_cat: {details.cr_cat or '-'}\n")
-            stream.write(f"release: {details.release or '-'}\n")
-            stream.write(
-                "reason_for_change: "
-                f"{_truncate_for_display(details.reason_for_change)}\n"
-            )
-            stream.write(
-                "consequences_if_not_approved: "
-                f"{_truncate_for_display(details.consequences_if_not_approved)}\n"
-            )
-            stream.write(
-                f"clauses_affected: {details.clauses_affected or '-'}\n"
-            )
-            if record.extracted_at is not None:
-                stream.write(f"extracted_at: {_fmt_dt(record.extracted_at)}\n")
-            else:
-                stream.write("extracted_at: -\n")
-
-        if record.ttcn is not None:
-            ttcn = record.ttcn
-            stream.write("[TTCN Details]\n")
-            if ttcn.ftp_url:
-                stream.write(f"ftp_url: {ttcn.ftp_url}\n")
-            stream.write(f"testcase: {ttcn.testcase or '-'}\n")
-            stream.write(f"ue: {ttcn.ue or '-'}\n")
-            stream.write(f"ss: {ttcn.ss or '-'}\n")
-            stream.write(f"ats_version: {ttcn.ats_version or '-'}\n")
-            stream.write(f"ttcn_release: {ttcn.ttcn_release or '-'}\n")
-            stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
-            count = len(ttcn.required_changes)
-            stream.write(f"required_changes: {count} item(s)\n")
-            if ttcn.changed_functions is None:
-                stream.write("changed_functions: -\n")
-            elif not ttcn.changed_functions:
-                stream.write("changed_functions: 0 item(s)\n")
-            else:
-                count = len(ttcn.changed_functions)
-                stream.write(f"changed_functions: {count} item(s)\n")
-                for entry in ttcn.changed_functions:
-                    stream.write(f"  - {entry}\n")
-
-        if record.changes is not None:
-            stream.write("\n[Change Details]\n")
-            stream.write(
-                f"clauses: {len(record.changes.clauses)} clause(s)\n"
-            )
-            stream.write(
-                f"changes: {len(record.changes.changes)} change block(s)\n"
-            )
-
-        if record.files:
-            stream.write("[Auxiliary Files]\n")
-            for file in record.files:
-                # Drop ``id`` (autoincrement PK) and ``tdoc_id``
-                # (match key, already in the ``[TDoc]`` block) —
-                # both are noise in this output.
-                stream.write(f"type: {file.type}\n")
-                stream.write(f"file: {file.file}\n")
-                stream.write(f"ftp_url: {file.ftp_url}\n")
-                uploaded = (
-                    file.uploaded_date.isoformat()
-                    if file.uploaded_date is not None
-                    else "-"
-                )
-                stream.write(f"uploaded_date: {uploaded}\n")
-        else:
-            # No header on the empty case — placeholder line alone.
-            # Hint points to ``tdoc sync`` (not ``tdoc parse``)
-            # because the file table is populated by the sync flow.
-            stream.write(
-                "No auxiliary files; run `doc3gpp tdoc sync` first "
-                "if you haven't synced this meeting yet.\n"
-            )
+        _render_tdoc_show_table_body(stream, record, parse_hint="--tdoc <id>")
     finally:
         if close_after:
             stream.close()
@@ -2905,52 +3056,10 @@ def _render_tdoc_show_by_url_json(
     no operator-space, and no trailing newline — sized for tight
     log/scan pipelines instead of human reading.
     """
-    payload: dict[str, object] = {
-        "ftp_url": record.ftp_url,
-    }
-    if record.tdoc is not None:
-        payload["tdoc"] = {
-            f.name: _serialise_show_value(getattr(record.tdoc, f.name))
-            for f in dataclass_fields(record.tdoc)
-        }
-    if record.cover is not None:
-        payload["cover"] = {
-            f.name: _serialise_show_value(getattr(record.cover, f.name))
-            for f in dataclass_fields(record.cover)
-        }
-    if record.ttcn is not None:
-        payload["ttcn"] = {
-            f.name: _serialise_show_value(getattr(record.ttcn, f.name))
-            for f in dataclass_fields(record.ttcn)
-        }
-    if record.changes is not None:
-        payload["changes"] = {
-            "clauses": list(record.changes.clauses),
-            "changes": [
-                {"clauses": list(b["clauses"]), "text": b["text"]}
-                for b in record.changes.changes
-            ],
-        }
-    if record.extracted_at is not None:
-        payload["extracted_at"] = _serialise_show_value(record.extracted_at)
-    if record.files:
-        payload["files"] = [
-            {
-                f.name: _serialise_show_value(getattr(file, f.name))
-                for f in dataclass_fields(file)
-            }
-            for file in record.files
-        ]
-    stream, close_after = _open_output(output)
-    try:
-        if compact:
-            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
-            return
-        json.dump(payload, stream, ensure_ascii=False, indent=2)
-        stream.write("\n")
-    finally:
-        if close_after:
-            stream.close()
+    payload = _build_show_payload(
+        record, anchor_key="ftp_url", anchor_value=record.ftp_url,
+    )
+    _dump_show_json(payload, output, compact=compact)
 
 
 def _render_tdoc_show_by_url_markdown(
@@ -2983,191 +3092,36 @@ def _render_tdoc_show_by_url_markdown(
     stream, close_after = _open_output(output)
     try:
         if compact:
-            stream.write(f"ftp_url: {record.ftp_url}\n")
-
-            if record.tdoc is not None:
-                for f in dataclass_fields(record.tdoc):
-                    value = _serialise_show_value(getattr(record.tdoc, f.name))
-                    rendered = "-" if value is None else str(value)
-                    stream.write(f"{f.name}: {rendered}\n")
-            else:
-                stream.write(
-                    "\nnote: No tdocs row matches this URL; the URL "
+            _render_tdoc_show_markdown_compact(
+                stream, record,
+                anchor_field="ftp_url",
+                anchor_value=record.ftp_url,
+                tdoc_missing_note=(
+                    "note: No tdocs row matches this URL; the URL "
                     "still surfaces in tdoc_cr_cover_page / "
                     "tdoc_cr_ttcn_details / tdoc_files because the "
                     "upstream document appeared in a sync but no "
-                    "parent TDoc row was stored.\n"
-                )
-
-            if (
-                record.cover is None
-                and record.ttcn is None
-                and record.extracted_at is None
-                and record.changes is None
-            ):
-                stream.write(
-                    "\nnote: No extracted details; run "
-                    "doc3gpp tdoc parse --from-url <url> first.\n"
-                )
-            else:
-                if record.cover is not None:
-                    stream.write("\n")
-                    for f in dataclass_fields(record.cover):
-                        if f.name in {"details", "parser_version"}:
-                            continue
-                        value = getattr(record.cover, f.name)
-                        formatted = _serialise_show_value(value)
-                        rendered = "-" if formatted is None else str(formatted)
-                        stream.write(f"{f.name}: {rendered}\n")
-                    if record.extracted_at is not None:
-                        stream.write(
-                            f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
-                        )
-
-                if record.ttcn is not None:
-                    stream.write("\n")
-                    for f in dataclass_fields(record.ttcn):
-                        value = getattr(record.ttcn, f.name)
-                        if f.name == "required_changes" and isinstance(value, list):
-                            inline = json.dumps(
-                                value, ensure_ascii=False, separators=(",", ":")
-                            )
-                            stream.write(f"{f.name}: {inline}\n")
-                            continue
-                        if f.name == "changed_functions" and isinstance(value, list):
-                            if not value:
-                                stream.write(f"{f.name}: -\n")
-                            else:
-                                stream.write(f"{f.name}: {', '.join(value)}\n")
-                            continue
-                        formatted = _serialise_show_value(value)
-                        rendered = "-" if formatted is None else str(formatted)
-                        stream.write(f"{f.name}: {rendered}\n")
-
-            if record.changes is not None:
-                stream.write("\n")
-                stream.write(
-                    f"changes: {len(record.changes.changes)} block(s), "
-                    f"{len(record.changes.clauses)} clause(s)\n"
-                )
-                for idx, block in enumerate(record.changes.changes, start=1):
-                    stream.write(f"- block[{idx}]:\n")
-                    if block["clauses"]:
-                        stream.write(
-                            f"  - clauses[{idx}]: {', '.join(block['clauses'])}\n"
-                        )
-                    if block["text"]:
-                        stream.write(f"  - changes[{idx}]: \n{block['text']}\n")
-                    stream.write(f"\n")
-
-            stream.write("\n")
-            if not record.files:
-                stream.write(
-                    "note: No auxiliary files match this URL.\n"
-                )
-            else:
-                for file in record.files:
-                    stream.write(f"type: {file.type}\n")
-                    stream.write(f"file: {file.file}\n")
-                    stream.write(f"ftp_url: {file.ftp_url}\n")
-                    uploaded = (
-                        file.uploaded_date.isoformat()
-                        if file.uploaded_date is not None
-                        else "-"
-                    )
-                    stream.write(f"uploaded_date: {uploaded}\n")
+                    "parent TDoc row was stored."
+                ),
+                parse_hint="--from-url <url>",
+                files_missing_hint="No auxiliary files match this URL.",
+            )
             return
-
-        stream.write(f"# FTP URL `{record.ftp_url}`\n\n")
-
-        if record.tdoc is not None:
-            stream.write("## TDoc\n\n")
-            for f in dataclass_fields(record.tdoc):
-                value = _serialise_show_value(getattr(record.tdoc, f.name))
-                rendered = "—" if value is None else str(value)
-                stream.write(f"- **{f.name}**: {rendered}\n")
-        else:
-            stream.write(
+        _render_tdoc_show_markdown_full(
+            stream, record,
+            header_line=f"# FTP URL `{record.ftp_url}`",
+            tdoc_heading="## TDoc",
+            tdoc_missing_note=(
                 "_No `tdocs` row matches this URL. The URL still "
                 "surfaces in `tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` "
                 "/ `tdoc_files` because the upstream document appeared "
-                "in a sync but no parent TDoc row was stored._\n\n"
-            )
-
-        if record.cover is not None:
-            stream.write("\n## Extracted Cover Details\n\n")
-            for f in dataclass_fields(record.cover):
-                if f.name in {"details", "parser_version"}:
-                    continue
-                value = getattr(record.cover, f.name)
-                formatted = _serialise_show_value(value)
-                rendered = "—" if formatted is None else str(formatted)
-                stream.write(f"- **{f.name}**: {rendered}\n")
-            if record.extracted_at is not None:
-                stream.write(
-                    f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n"
-                )
-        elif record.extracted_at is not None:
-            stream.write("\n## Extracted Details\n\n")
-            stream.write(
-                f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n"
-            )
-
-        if record.ttcn is not None:
-            stream.write("\n## TTCN Details\n\n")
-            for f in dataclass_fields(record.ttcn):
-                value = getattr(record.ttcn, f.name)
-                if f.name == "required_changes" and isinstance(value, list):
-                    stream.write(f"- **{f.name}**:\n\n```json\n")
-                    stream.write(
-                        json.dumps(value, ensure_ascii=False, indent=2)
-                    )
-                    stream.write("\n```\n")
-                    continue
-                if f.name == "changed_functions" and isinstance(value, list):
-                    if not value:
-                        stream.write(f"- **{f.name}**: —\n")
-                    else:
-                        stream.write(f"- **{f.name}**:\n")
-                        for entry in value:
-                            stream.write(f"  * {entry}\n")
-                    continue
-                formatted = _serialise_show_value(value)
-                rendered = "—" if formatted is None else str(formatted)
-                stream.write(f"- **{f.name}**: {rendered}\n")
-
-            if record.changes is not None:
-                stream.write("\n## Change Details\n\n")
-                stream.write(f"- **clauses**: {', '.join(record.changes.clauses) or '—'}\n")
-                stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
-                for idx, block in enumerate(record.changes.changes, start=1):
-                    stream.write(f"\n  * block {idx}:\n")
-                    if block["clauses"]:
-                        stream.write(
-                            f"    * clauses: {', '.join(block['clauses'])}\n"
-                        )
-                    if block["text"]:
-                        stream.write(f"    * Changes:\n")
-                        for ln in block["text"].split("\n"):
-                            stream.write(f">{ln}\n")
-                        stream.write(f"\n")
-
-        if record.files:
-            stream.write("\n## Auxiliary Files\n\n")
-            for file in record.files:
-                stream.write(f"- **type**: {file.type}\n")
-                stream.write(f"  - **file**: {file.file}\n")
-                stream.write(f"  - **ftp_url**: {file.ftp_url}\n")
-                uploaded = (
-                    file.uploaded_date.isoformat()
-                    if file.uploaded_date is not None
-                    else "—"
-                )
-                stream.write(f"  - **uploaded_date**: {uploaded}\n")
-        else:
-            stream.write(
-                "\n_No auxiliary files match this URL._\n"
-            )
+                "in a sync but no parent TDoc row was stored._"
+            ),
+            parse_hint="--from-url <url>",
+            show_extracted_details_fallback=True,
+            files_missing_hint="No auxiliary files match this URL.",
+            omit_files_heading_when_empty=True,
+        )
     finally:
         if close_after:
             stream.close()
@@ -3195,117 +3149,12 @@ def _render_tdoc_show_by_url_table(
     try:
         stream.write("[FTP URL]\n")
         stream.write(f"ftp_url: {record.ftp_url}\n")
-
-        if record.tdoc is not None:
-            stream.write("[TDoc]\n")
-            for f in dataclass_fields(record.tdoc):
-                value = getattr(record.tdoc, f.name)
-                if value is None:
-                    value = "-"
-                elif hasattr(value, "isoformat"):
-                    value = value.isoformat()
-                else:
-                    value = str(value)
-                stream.write(f"{f.name}: {value}\n")
-        else:
-            stream.write(
-                "No tdocs row matches this URL.\n"
-            )
-
-        if record.cover is None:
-            stream.write(
-                "No extracted details; run `doc3gpp tdoc parse "
-                "--from-url <url>` first.\n"
-            )
-            if record.extracted_at is not None:
-                stream.write(
-                    f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
-                )
-            else:
-                stream.write("extracted_at: -\n")
-        else:
-            details = record.cover
-            stream.write("[Extracted Details]\n")
-            if details.ftp_url:
-                stream.write(f"ftp_url: {details.ftp_url}\n")
-            stream.write(f"spec: {details.spec or '-'}\n")
-            stream.write(f"cr_num: {details.cr_num or '-'}\n")
-            stream.write(f"rev: {details.rev or '-'}\n")
-            stream.write(f"version: {details.version or '-'}\n")
-            stream.write(f"title: {details.title or '-'}\n")
-            stream.write(f"source: {details.source or '-'}\n")
-            stream.write(f"tsg: {details.tsg or '-'}\n")
-            stream.write(f"related_wis: {details.related_wis or '-'}\n")
-            stream.write(f"date: {details.date or '-'}\n")
-            stream.write(f"cr_cat: {details.cr_cat or '-'}\n")
-            stream.write(f"release: {details.release or '-'}\n")
-            stream.write(
-                "reason_for_change: "
-                f"{_truncate_for_display(details.reason_for_change)}\n"
-            )
-            stream.write(
-                "consequences_if_not_approved: "
-                f"{_truncate_for_display(details.consequences_if_not_approved)}\n"
-            )
-            stream.write(
-                f"clauses_affected: {details.clauses_affected or '-'}\n"
-            )
-            if record.extracted_at is not None:
-                stream.write(
-                    f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
-                )
-            else:
-                stream.write("extracted_at: -\n")
-
-        if record.ttcn is not None:
-            ttcn = record.ttcn
-            stream.write("[TTCN Details]\n")
-            if ttcn.ftp_url:
-                stream.write(f"ftp_url: {ttcn.ftp_url}\n")
-            stream.write(f"testcase: {ttcn.testcase or '-'}\n")
-            stream.write(f"ue: {ttcn.ue or '-'}\n")
-            stream.write(f"ss: {ttcn.ss or '-'}\n")
-            stream.write(f"ats_version: {ttcn.ats_version or '-'}\n")
-            stream.write(f"ttcn_release: {ttcn.ttcn_release or '-'}\n")
-            stream.write(f"test_suite: {ttcn.test_suite or '-'}\n")
-            count = len(ttcn.required_changes)
-            stream.write(f"required_changes: {count} item(s)\n")
-            if ttcn.changed_functions is None:
-                stream.write("changed_functions: -\n")
-            elif not ttcn.changed_functions:
-                stream.write("changed_functions: 0 item(s)\n")
-            else:
-                count = len(ttcn.changed_functions)
-                stream.write(f"changed_functions: {count} item(s)\n")
-                for entry in ttcn.changed_functions:
-                    stream.write(f"  - {entry}\n")
-
-        if record.changes is not None:
-            stream.write("\n[Change Details]\n")
-            stream.write(
-                f"clauses: {len(record.changes.clauses)} clause(s)\n"
-            )
-            stream.write(
-                f"changes: {len(record.changes.changes)} change block(s)\n"
-            )
-
-        if record.files:
-            stream.write("[Auxiliary Files]\n")
-            for file in record.files:
-                stream.write(f"type: {file.type}\n")
-                stream.write(f"file: {file.file}\n")
-                stream.write(f"ftp_url: {file.ftp_url}\n")
-                uploaded = (
-                    file.uploaded_date.isoformat()
-                    if file.uploaded_date is not None
-                    else "-"
-                )
-                stream.write(f"uploaded_date: {uploaded}\n")
-        else:
-            stream.write(
-                "No auxiliary files; run `doc3gpp tdoc sync` first "
-                "if you haven't synced this meeting yet.\n"
-            )
+        _render_tdoc_show_table_body(
+            stream,
+            record,
+            parse_hint="--from-url <url>",
+            tdoc_missing_msg="No tdocs row matches this URL.",
+        )
     finally:
         if close_after:
             stream.close()

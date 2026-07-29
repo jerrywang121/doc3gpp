@@ -434,7 +434,13 @@ def test_render_tdoc_show_markdown_compact_emits_changes_when_only_changes_popul
     text = stream.getvalue()
     # The compact branch must surface the changes block.
     assert "changes: 1 block(s), 1 clause(s)" in text
-    assert "block[1]: [F] add clause" in text
+    # The compact renderer prints the per-block layout with clauses first
+    # and the change text on its own line. The change text must appear
+    # under the block[1]: / clauses[1]: / changes[1]: sub-tree.
+    assert "- block[1]:" in text
+    assert "- clauses[1]: 5.4.2" in text
+    assert "- changes[1]:" in text
+    assert "[F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
     assert "note: No extracted details" not in text
@@ -482,7 +488,13 @@ def test_render_tdoc_show_by_url_markdown_compact_emits_changes_when_only_change
     text = stream.getvalue()
     # The compact branch must surface the changes block.
     assert "changes: 1 block(s), 1 clause(s)" in text
-    assert "block[1]: [F] add clause" in text
+    # The compact renderer prints the per-block layout with clauses first
+    # and the change text on its own line. The change text must appear
+    # under the block[1]: / clauses[1]: / changes[1]: sub-tree.
+    assert "- block[1]:" in text
+    assert "- clauses[1]: 5.4.2" in text
+    assert "- changes[1]:" in text
+    assert "[F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
     assert "note: No extracted details" not in text

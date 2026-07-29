@@ -119,11 +119,12 @@ class CRParserBase(TDocParser):
             header_blob,
             re.IGNORECASE,
         ):
-            logger.warning(
-                "CR header does not match the expected "
-                "'3GPP TSG-<WG> Meeting #<YEAR>-TTCN email' layout; "
-                "extraction may be incomplete"
-            )
+            if is_ttcn_tdoc(tdoc_id):
+                logger.warning(
+                    "CR header does not match the expected "
+                    "'3GPP TSG-<WG> Meeting #<YEAR>-TTCN email' layout; "
+                    "extraction may be incomplete"
+                )
 
         _ok, cover_details, _adv = self._cover.parse(
             lines, max_text_length=max_text_length

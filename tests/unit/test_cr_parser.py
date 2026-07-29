@@ -1442,3 +1442,78 @@ def test_parse_cr_details_extracts_release_long_form_with_space_tdoc_id() -> Non
     assert cover.spec == "36.521-2"
     assert cover.cr_num == "0042"
     assert cover.version == "16.5.0"
+
+
+# ---------------------------------------------------------------------------
+# TTCN layout check: only TTCN CRs should warn about a non-conforming
+# ``3GPP TSG-<WG> Meeting #<YEAR>-TTCN email`` header. Non-TTCN CRs
+# (e.g. ``R4-``/``C6-``) legitimately lack the ``TTCN email`` token and
+# the warning was spurious — it was emitted for every non-TTCN CR
+# (e.g. R4-2607568 / 38.133 CRs from TSGR4_119) even though the
+# non-TTCN ``CRParser`` branch never consults that part of the header.
+# ---------------------------------------------------------------------------
+
+
+def test_non_ttcn_cr_does_not_warn_about_missing_ttcn_email_token(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-TTCN CR (e.g. ``R4-``) with a normal ``3GPP TSG-`` header but no
+    ``TTCN email`` token must not emit the "extraction may be incomplete"
+    warning. The TTCN layout check is only meaningful for TTCN CRs.
+    """
+    md = "\n".join(_NON_TTCN_HEADER_LINES)
+    with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr.cr_parsers"):
+        parsed = parse_cr_details(md, tdoc_id="R4-2607568")
+    assert parsed.cover.tdoc_id == "R4-2607568"
+    layout_warnings = [
+        record
+        for record in caplog.records
+        if "extraction may be incomplete" in record.getMessage()
+    ]
+    assert layout_warnings == [], (
+        "non-TTCN CRs must not emit the TTCN layout warning; got: "
+        f"{[r.getMessage() for r in layout_warnings]}"
+    )
+
+
+def test_ttcn_cr_with_mismatched_layout_still_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A TTCN CR (``R5s``) with a ``3GPP TSG-`` header but no
+    ``TTCN email`` token SHOULD still emit the layout warning — the
+    check guards the TTCN extraction path that consumes the cover
+    banner.
+    """
+    md = "\n".join(_NON_TTCN_HEADER_LINES)
+    with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr.cr_parsers"):
+        parse_cr_details(md, tdoc_id="R5s260009")
+    layout_warnings = [
+        record
+        for record in caplog.records
+        if "extraction may be incomplete" in record.getMessage()
+    ]
+    assert layout_warnings, (
+        "TTCN CRs with a non-conforming cover banner must still warn"
+    )
+
+
+def test_ttcn_cr_with_conforming_layout_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A TTCN CR whose cover banner matches the canonical
+    ``3GPP TSG-<WG> Meeting #<YEAR>-TTCN email`` layout must not emit
+    the layout warning.
+    """
+    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES))
+    with caplog.at_level("WARNING", logger="doc3gpp.parsers.cr.cr_parsers"):
+        parsed = parse_cr_details(md, tdoc_id="R5s260009")
+    assert parsed.ttcn is not None
+    layout_warnings = [
+        record
+        for record in caplog.records
+        if "extraction may be incomplete" in record.getMessage()
+    ]
+    assert layout_warnings == [], (
+        "well-formed TTCN CR cover banners must not warn; got: "
+        f"{[r.getMessage() for r in layout_warnings]}"
+    )

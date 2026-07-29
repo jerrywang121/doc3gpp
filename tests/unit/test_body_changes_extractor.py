@@ -8,7 +8,7 @@ from doc3gpp.parsers.cr.body_changes import extract_body_changes
 
 def test_empty_input() -> None:
     result = extract_body_changes([])
-    assert result == TDocCRChangeDetails(ftp_url="", tdoc_id="")
+    assert result == TDocCRChangeDetails(ftp_url=None, tdoc_id=None)
 
 
 def test_no_marker_lines_returns_empty() -> None:

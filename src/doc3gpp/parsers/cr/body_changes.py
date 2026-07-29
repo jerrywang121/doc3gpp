@@ -14,8 +14,9 @@ configurable amount of plain context on each side, and records the
 heading / table-number clauses that contextualise each block.
 
 The output is a :class:`TDocCRChangeDetails` with
-``ftp_url=""`` and ``tdoc_id=""`` — the service layer fills those
-in once the immutable download URL is known.
+``ftp_url=None`` and ``tdoc_id=None`` — the "unknown yet" sentinels
+the service layer fills in via :func:`dataclasses.replace` once the
+immutable download URL and the parent TDoc id are known.
 """
 
 from __future__ import annotations
@@ -83,9 +84,11 @@ def extract_body_changes(
             lines + gap-bridge.
 
     Returns:
-        A :class:`TDocCRChangeDetails` with ``ftp_url=""`` and
-        ``tdoc_id=""``. Empty ``clauses`` / ``changes`` when no
-        revision marks are present.
+        A :class:`TDocCRChangeDetails` with ``ftp_url=None`` and
+        ``tdoc_id=None`` (the parser-side "unknown yet" sentinels the
+        service layer fills in via :func:`dataclasses.replace`).
+        Empty ``clauses`` / ``changes`` when no revision marks are
+        present.
     """
     if gap_window < 0:
         raise ValueError("gap_window must be >= 0")
@@ -163,8 +166,8 @@ def extract_body_changes(
     flush()
 
     return TDocCRChangeDetails(
-        ftp_url="",
-        tdoc_id="",
+        ftp_url=None,
+        tdoc_id=None,
         clauses=tuple(sorted(all_clauses)),
         changes=tuple(blocks),
     )

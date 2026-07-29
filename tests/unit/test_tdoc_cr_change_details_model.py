@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 
 
@@ -28,18 +30,34 @@ def test_changes_are_tuple_of_tuples() -> None:
     assert d.changes == (("line one", "line two"), ("line three",))
 
 
-def test_empty_ftp_url_accepted() -> None:
-    """The parser constructs values with empty ``ftp_url``; the
-    service layer fills it in once the download URL is known."""
-    d = TDocCRChangeDetails(ftp_url="", tdoc_id="R5-1")
-    assert d.ftp_url == ""
+def test_ftp_url_none_is_accepted() -> None:
+    """``None`` is the parser-side "unknown yet" sentinel; the service
+    layer fills in the URL via :func:`dataclasses.replace` before
+    persistence."""
+    d = TDocCRChangeDetails(ftp_url=None, tdoc_id="R5-1")
+    assert d.ftp_url is None
 
 
-def test_empty_tdoc_id_accepted() -> None:
-    """The parser constructs values with empty ``tdoc_id``; the
-    service layer fills it in once the parent TDoc row is known."""
-    d = TDocCRChangeDetails(ftp_url="u", tdoc_id="")
-    assert d.tdoc_id == ""
+def test_tdoc_id_none_is_accepted() -> None:
+    """``None`` is the parser-side "unknown yet" sentinel; the service
+    layer fills in the TDoc id via :func:`dataclasses.replace` before
+    persistence."""
+    d = TDocCRChangeDetails(ftp_url="u", tdoc_id=None)
+    assert d.tdoc_id is None
+
+
+def test_empty_ftp_url_rejected() -> None:
+    """An empty string is still a programmer error — the validation
+    only relaxes for ``None``."""
+    with pytest.raises(ValueError, match="non-empty ftp_url"):
+        TDocCRChangeDetails(ftp_url="", tdoc_id="R5-1")
+
+
+def test_empty_tdoc_id_rejected() -> None:
+    """An empty string is still a programmer error — the validation
+    only relaxes for ``None``."""
+    with pytest.raises(ValueError, match="non-empty tdoc_id"):
+        TDocCRChangeDetails(ftp_url="u", tdoc_id="")
 
 
 def test_whitespace_stripped() -> None:

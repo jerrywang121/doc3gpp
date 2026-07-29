@@ -157,3 +157,128 @@ def validate_tdoc_id(value: str) -> None:
     same as the one raised by :func:`parse_tdoc_id`.
     """
     parse_tdoc_id(value)
+
+
+# FTS5 stopwords we want to refuse as the only token(s). The list
+# mirrors the FTS5 default stopword set; matching on it stops
+# accidental "the a" queries that would return every row.
+_FTS5_STOPWORDS = frozenset(
+    {
+        "a", "and", "are", "as", "at", "be", "but", "by", "for",
+        "if", "in", "into", "is", "it", "no", "not", "of", "on",
+        "or", "such", "that", "the", "their", "then", "there",
+        "these", "they", "this", "to", "was", "will", "with",
+    },
+)
+
+# Characters that FTS5 treats as special syntax inside a ``MATCH``
+# expression. When the user's query does NOT contain an operator
+# (one of AND / OR / NOT / NEAR / * / a quote) we wrap the whole
+# query in double quotes after escaping any of these characters with
+# a backslash — this is the documented FTS5 escape recipe.
+_FTS5_SPECIAL_CHARS = frozenset({"(", ")", ":", "*", "\\"})
+
+# FTS5 operator markers. When ANY of these substrings appear in the
+# user input, we treat the query as an FTS5 expression and pass it
+# through unchanged (FTS5 will reject it if it's malformed).
+_FTS5_OPERATORS = (" AND ", " OR ", " NOT ", '"', "*", "NEAR")
+
+
+def parse_date_filter(value: str) -> None:
+    """Validate a ``YYYY-MM-DD`` date literal for ``--since`` / ``--until``.
+
+    Accepts the literal forms ``YYYY-MM-DD``, plus the nullable
+    sentinel ``null`` / ``not-null`` (matching the convention in
+    :func:`validate_date_filter`). Anything else raises
+    :class:`ValueError`.
+    """
+    v = value.strip()
+    if v.lower() in (NULL_TOKEN, NOT_NULL_TOKEN):
+        return
+    try:
+        from datetime import date
+        date.fromisoformat(v)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid date filter {value!r}. Expected 'YYYY-MM-DD', "
+            f"'null', or 'not-null'."
+        ) from exc
+
+
+def parse_release_filter(value: str) -> None:
+    """Validate a release string for ``--release`` (e.g. ``Rel-17``)."""
+    v = value.strip()
+    if not v:
+        raise ValueError("Release filter must not be empty.")
+    if len(v) > 32:
+        raise ValueError("Release filter too long (max 32 characters).")
+
+
+def parse_spec_filter(value: str) -> None:
+    """Validate a spec number for ``--spec`` (e.g. ``38.300``)."""
+    v = value.strip()
+    if not re.fullmatch(r"\d+\.\d+(?:-\d+)?", v):
+        raise ValueError(
+            f"Invalid spec filter {value!r}. Expected digits.digits, "
+            f"optionally followed by -digits (e.g. '38.300', '38.300-1')."
+        )
+
+
+class SearchQueryBuilder:
+    """Normalize a user query into an FTS5 ``MATCH`` expression.
+
+    Rules (per spec §"Search query syntax"):
+
+    * Plain text is wrapped in double quotes (``"…"``) after
+      escaping FTS5 special characters.
+    * Queries containing FTS5 operators (``AND``, ``OR``, ``NOT``,
+      ``NEAR``, ``*``, or a ``"``) pass through unchanged — but
+      each whitespace-separated token is still run through
+      :func:`doc3gpp.storage.db.fts5_query.normalize_query` so
+      spec-id / TDoc-id normalization is applied uniformly.
+    * Empty input or stopwords-only input raises
+      :class:`SearchQueryError`.
+    """
+
+    def __init__(self, query: str) -> None:
+        self._query = query.strip()
+
+    def build(self) -> str:
+        if not self._query:
+            from doc3gpp.models.search import SearchQueryError
+            raise SearchQueryError("query required")
+        if self._is_stopwords_only():
+            from doc3gpp.models.search import SearchQueryError
+            raise SearchQueryError("query has only stopwords")
+        if self._is_operator_passthrough():
+            return self._normalize_each_token(self._query)
+        escaped = self._escape_specials(self._normalize_each_token(self._query))
+        return f'"{escaped}"'
+
+    def _is_operator_passthrough(self) -> bool:
+        return any(op in self._query for op in _FTS5_OPERATORS)
+
+    def _is_stopwords_only(self) -> bool:
+        tokens = re.findall(r"\w+", self._query.lower())
+        return bool(tokens) and all(t in _FTS5_STOPWORDS for t in tokens)
+
+    def _normalize_each_token(self, text: str) -> str:
+        """Apply ``normalize_query`` to each whitespace-separated token.
+
+        Whole-string ``normalize_query`` would also work for plain
+        text; for operator-passthrough queries we need per-token
+        normalization so ``R5-1234567 AND 38.300`` becomes
+        ``R5-1234567 R5-1234567 AND 38_300`` (the AND is preserved
+        but each operand is normalized).
+        """
+        from doc3gpp.storage.db.fts5_query import normalize_query
+        return " ".join(normalize_query(tok) for tok in text.split())
+
+    def _escape_specials(self, text: str) -> str:
+        out = []
+        for ch in text:
+            if ch in _FTS5_SPECIAL_CHARS:
+                out.append("\\" + ch)
+            else:
+                out.append(ch)
+        return "".join(out)

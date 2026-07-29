@@ -24,21 +24,21 @@ from doc3gpp.settings.schema import SearchSettings, Settings
 
 class CapturingRepo(SearchIndexRepository):
     def __init__(self) -> None:
-        self.upserts: list[int] = []
+        self.upserts: list[str] = []
 
-    def upsert(self, tdoc_id: int) -> None:
+    def upsert(self, tdoc_id: str) -> None:
         self.upserts.append(tdoc_id)
 
-    def remove(self, tdoc_id: int) -> None: ...
+    def remove(self, tdoc_id: str) -> None: ...
     def search(
         self, query: str, filters: SearchFilters,
     ) -> list[Any]: return []
     def rebuild_batch(
-        self, batch_size: int, after_id: int | None, stale_only: bool,
-    ) -> Iterable[list[int]]: return iter([])
+        self, batch_size: int, after_id: str | None, stale_only: bool,
+    ) -> Iterable[list[str]]: return iter([])
     def count_tdocs_to_index(self, stale_only: bool) -> int: return 0
-    def get_resume_cursor(self) -> int | None: return None
-    def set_resume_cursor(self, tdoc_id: int) -> None: ...
+    def get_resume_cursor(self) -> str | None: return None
+    def set_resume_cursor(self, tdoc_id: str) -> None: ...
     def status(self) -> Any: ...
 
 
@@ -48,8 +48,8 @@ def test_hook_fires_after_parse(sqlite_env) -> None:
     service = build_tdoc_cr_service()
     service._search_service = svc  # type: ignore[attr-defined]
     service._settings = Settings()  # type: ignore[attr-defined]
-    service._index_after_parse(1)  # type: ignore[attr-defined]
-    assert repo.upserts == [1]
+    service._index_after_parse("R5-1234567")  # type: ignore[attr-defined]
+    assert repo.upserts == ["R5-1234567"]
 
 
 def test_hook_skips_when_disabled(sqlite_env) -> None:
@@ -60,7 +60,7 @@ def test_hook_skips_when_disabled(sqlite_env) -> None:
     service._settings = Settings(  # type: ignore[attr-defined]
         search=SearchSettings(auto_index_on_parse=False),
     )
-    service._index_after_parse(1)  # type: ignore[attr-defined]
+    service._index_after_parse("R5-1234567")  # type: ignore[attr-defined]
     assert repo.upserts == []
 
 
@@ -68,4 +68,4 @@ def test_hook_skips_when_service_none(sqlite_env) -> None:
     service = build_tdoc_cr_service()
     service._search_service = None  # type: ignore[attr-defined]
     # Should not raise even when no service is wired.
-    service._index_after_parse(1)  # type: ignore[attr-defined]
+    service._index_after_parse("R5-1234567")  # type: ignore[attr-defined]

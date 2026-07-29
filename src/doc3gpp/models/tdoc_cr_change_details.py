@@ -3,13 +3,38 @@
 A frozen dataclass mirroring the ``tdoc_cr_change_details`` SQL
 table. Carries the immutable download URL the row is keyed on, the
 ``tdoc_id`` FK, the sorted/unique clause numbers observed across
-the body, and the captured change blocks (each a tuple of the
-literal markdown lines that surround the revision marks).
+the body, and the captured change blocks.
+
+Each change block is a ``dict[str, str | list[str]]`` with two keys:
+
+* ``clauses``: a list of clause labels attributed to the block.
+  Each label is one of:
+
+  - a bare clause number for clauses seen above the block, e.g.
+    ``"5.2.3"``;
+  - a ``Table ``-prefixed number for table captions seen above the
+    block, e.g. ``"Table 5.2.3-1"``;
+  - a number or ``Table ``-prefixed number with a ``(new)`` suffix
+    when the heading / table caption lives inside a ``<ins>`` marker
+    line within the block, e.g. ``"5.2.4 (new)"`` or
+    ``"Table 5.3.1-2 (new)"``;
+  - the same with a ``(del)`` suffix when the heading / table caption
+    lives inside a ``<del>`` marker line, e.g. ``"5.2.5 (del)"``.
+* ``text``: the captured lines (marker lines + gap-window bridge +
+  context-padding plain lines) joined with ``\\n``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypedDict
+
+
+class ChangeBlock(TypedDict):
+    """One captured body-change block."""
+
+    clauses: list[str]
+    text: str
 
 
 @dataclass(slots=True, frozen=True)
@@ -34,20 +59,18 @@ class TDocCRChangeDetails:
         tdoc_id: Canonical TDoc identifier (FK into ``tdocs.tdoc_id``).
             ``None`` in the parser (the service layer fills it in);
             non-empty on the persisted row.
-        clauses: Sorted, unique clause numbers observed in the body
+        clauses: Sorted, unique clause labels observed in the body
             that belong to a captured change block. Stored as
             newline-delimited text on the table; reconstructed from
             ``splitlines()`` on read.
-        changes: One tuple per captured change block. Each block is
-            itself a tuple of the original markdown lines (marker
-            lines + gap-window bridge + context-padding plain lines).
-            The outer structure round-trips as gzip-JSON.
+        changes: One :class:`ChangeBlock` per captured block. The
+            outer structure round-trips as gzip-JSON.
     """
 
     ftp_url: str | None = None
     tdoc_id: str | None = None
     clauses: tuple[str, ...] = ()
-    changes: tuple[tuple[str, ...], ...] = ()
+    changes: tuple[ChangeBlock, ...] = ()
 
     def __post_init__(self) -> None:
         # Mirror TDocCRTTCNDetails' invariant: the URL is the row
@@ -69,3 +92,6 @@ class TDocCRChangeDetails:
                 )
             if stripped_id != self.tdoc_id:
                 object.__setattr__(self, "tdoc_id", stripped_id)
+
+
+__all__ = ["ChangeBlock", "TDocCRChangeDetails"]

@@ -106,9 +106,19 @@ def _details_to_orm(target: TDocCrChangeDetailOrm, details: TDocCRChangeDetails)
 
     Excludes ``ftp_url`` (PK) and ``tdoc_id`` (FK, handled by
     :meth:`upsert`).
+
+    The ``changes`` column stores the per-block dicts as a list of
+    ``{"clauses": [...], "text": "..."}`` records in gzip-compressed
+    UTF-8 JSON.
     """
     target.clauses = "\n".join(details.clauses) if details.clauses else None
-    target.changes = compress_json([list(b) for b in details.changes]) if details.changes else None
+    target.changes = (
+        compress_json(
+            [{"clauses": list(b["clauses"]), "text": b["text"]} for b in details.changes]
+        )
+        if details.changes
+        else None
+    )
 
 
 def _orm_to_details(row: TDocCrChangeDetailOrm) -> TDocCRChangeDetails:
@@ -117,7 +127,16 @@ def _orm_to_details(row: TDocCrChangeDetailOrm) -> TDocCRChangeDetails:
     changes_raw = decompress_json(row.changes) if row.changes else []
     if not isinstance(changes_raw, list):
         changes_raw = []
-    changes = tuple(tuple(block) for block in changes_raw if isinstance(block, list))
+    blocks: list[tuple[str, list[str]]] = []
+    for entry in changes_raw:
+        if not isinstance(entry, dict):
+            continue
+        clauses_list = entry.get("clauses") or []
+        text = entry.get("text") or ""
+        if not isinstance(clauses_list, list) or not isinstance(text, str):
+            continue
+        blocks.append((text, [str(c) for c in clauses_list]))
+    changes = tuple({"clauses": cs, "text": tx} for tx, cs in blocks)
     return TDocCRChangeDetails(
         ftp_url=row.ftp_url,
         tdoc_id=row.tdoc_id,

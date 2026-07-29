@@ -41,6 +41,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocCRTTCNDetails,
 )
+from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -56,6 +57,7 @@ from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
+    build_tdoc_cr_change_details_repository,
     build_tdoc_cr_repository,
     build_tdoc_cr_service,
     build_tdoc_cr_ttcn_repository,
@@ -2214,6 +2216,7 @@ class TDocShowRecord:
     tdoc: TDoc
     cover: TDocCRDetails | None = None
     ttcn: TDocCRTTCNDetails | None = None
+    changes: TDocCRChangeDetails | None = None
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
 
@@ -2251,6 +2254,7 @@ class TDocShowRecordByUrl:
     tdoc: TDoc | None = None
     cover: TDocCRDetails | None = None
     ttcn: TDocCRTTCNDetails | None = None
+    changes: TDocCRChangeDetails | None = None
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
 
@@ -2307,6 +2311,11 @@ def _render_tdoc_show_json(
         payload["ttcn"] = {
             f.name: _serialise_show_value(getattr(record.ttcn, f.name))
             for f in dataclass_fields(record.ttcn)
+        }
+    if record.changes is not None:
+        payload["changes"] = {
+            "clauses": list(record.changes.clauses),
+            "changes": [list(b) for b in record.changes.changes],
         }
     if record.extracted_at is not None:
         payload["extracted_at"] = _serialise_show_value(record.extracted_at)
@@ -2417,6 +2426,16 @@ def _render_tdoc_show_markdown(
                         rendered = "-" if formatted is None else str(formatted)
                         stream.write(f"{f.name}: {rendered}\n")
 
+                if record.changes is not None:
+                    stream.write("\n")
+                    stream.write(
+                        f"changes: {len(record.changes.changes)} block(s), "
+                        f"{len(record.changes.clauses)} clause(s)\n"
+                    )
+                    for idx, block in enumerate(record.changes.changes, start=1):
+                        for ln in block:
+                            stream.write(f"line[{idx}]: {ln}\n")
+
             stream.write("\n")
             if not record.files:
                 stream.write(
@@ -2494,6 +2513,15 @@ def _render_tdoc_show_markdown(
                     formatted = _serialise_show_value(value)
                     rendered = "—" if formatted is None else str(formatted)
                     stream.write(f"- **{f.name}**: {rendered}\n")
+
+            if record.changes is not None:
+                stream.write("\n## Change Details\n\n")
+                stream.write(f"- **clauses**: {', '.join(record.changes.clauses) or '—'}\n")
+                stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
+                for idx, block in enumerate(record.changes.changes, start=1):
+                    stream.write(f"\n  * block {idx}:\n")
+                    for ln in block:
+                        stream.write(f"    * {ln}\n")
 
         stream.write("\n## Auxiliary Files\n\n")
         if not record.files:
@@ -2635,6 +2663,15 @@ def _render_tdoc_show_table(
                 for entry in ttcn.changed_functions:
                     stream.write(f"  - {entry}\n")
 
+        if record.changes is not None:
+            stream.write("\n[Change Details]\n")
+            stream.write(
+                f"clauses: {len(record.changes.clauses)} clause(s)\n"
+            )
+            stream.write(
+                f"changes: {len(record.changes.changes)} change block(s)\n"
+            )
+
         if record.files:
             stream.write("[Auxiliary Files]\n")
             for file in record.files:
@@ -2759,6 +2796,7 @@ def _tdoc_show_by_ftp_url(
     tdoc_repo = build_tdoc_repository()
     cr_repo = build_tdoc_cr_repository()
     cr_ttcn_repo = build_tdoc_cr_ttcn_repository()
+    cr_change_details_repo = build_tdoc_cr_change_details_repository()
     file_repo = build_tdoc_file_repository()
 
     tdoc = tdoc_repo.get_by_ftp_url(url)
@@ -2768,6 +2806,7 @@ def _tdoc_show_by_ftp_url(
     # TTCN sidecar can only exist when the URL has a cover row
     # (the cover parser is what produces it), so gate the lookup.
     ttcn = cr_ttcn_repo.get_by_url(url) if cover is not None else None
+    changes = cr_change_details_repo.get_by_url(url)
     files = tuple(file_repo.get_by_ftp_url(url))
 
     if (
@@ -2775,6 +2814,7 @@ def _tdoc_show_by_ftp_url(
         and cover is None
         and meta is None
         and ttcn is None
+        and changes is None
         and not files
     ):
         raise typer.BadParameter(
@@ -2787,6 +2827,7 @@ def _tdoc_show_by_ftp_url(
         tdoc=tdoc,
         cover=cover,
         ttcn=ttcn,
+        changes=changes,
         extracted_at=extracted_at,
         files=files,
     )
@@ -2864,6 +2905,11 @@ def _render_tdoc_show_by_url_json(
         payload["ttcn"] = {
             f.name: _serialise_show_value(getattr(record.ttcn, f.name))
             for f in dataclass_fields(record.ttcn)
+        }
+    if record.changes is not None:
+        payload["changes"] = {
+            "clauses": list(record.changes.clauses),
+            "changes": [list(b) for b in record.changes.changes],
         }
     if record.extracted_at is not None:
         payload["extracted_at"] = _serialise_show_value(record.extracted_at)
@@ -2977,6 +3023,16 @@ def _render_tdoc_show_by_url_markdown(
                         rendered = "-" if formatted is None else str(formatted)
                         stream.write(f"{f.name}: {rendered}\n")
 
+                if record.changes is not None:
+                    stream.write("\n")
+                    stream.write(
+                        f"changes: {len(record.changes.changes)} block(s), "
+                        f"{len(record.changes.clauses)} clause(s)\n"
+                    )
+                    for idx, block in enumerate(record.changes.changes, start=1):
+                        for ln in block:
+                            stream.write(f"line[{idx}]: {ln}\n")
+
             stream.write("\n")
             if not record.files:
                 stream.write(
@@ -3052,6 +3108,15 @@ def _render_tdoc_show_by_url_markdown(
                 formatted = _serialise_show_value(value)
                 rendered = "—" if formatted is None else str(formatted)
                 stream.write(f"- **{f.name}**: {rendered}\n")
+
+        if record.changes is not None:
+            stream.write("\n## Change Details\n\n")
+            stream.write(f"- **clauses**: {', '.join(record.changes.clauses) or '—'}\n")
+            stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
+            for idx, block in enumerate(record.changes.changes, start=1):
+                stream.write(f"\n  * block {idx}:\n")
+                for ln in block:
+                    stream.write(f"    * {ln}\n")
 
         if record.files:
             stream.write("\n## Auxiliary Files\n\n")
@@ -3180,6 +3245,15 @@ def _render_tdoc_show_by_url_table(
                 stream.write(f"changed_functions: {count} item(s)\n")
                 for entry in ttcn.changed_functions:
                     stream.write(f"  - {entry}\n")
+
+        if record.changes is not None:
+            stream.write("\n[Change Details]\n")
+            stream.write(
+                f"clauses: {len(record.changes.clauses)} clause(s)\n"
+            )
+            stream.write(
+                f"changes: {len(record.changes.changes)} change block(s)\n"
+            )
 
         if record.files:
             stream.write("[Auxiliary Files]\n")
@@ -3735,11 +3809,13 @@ def tdoc_show(
 
     cr_repo = build_tdoc_cr_repository()
     cr_ttcn_repo = build_tdoc_cr_ttcn_repository()
+    cr_change_details_repo = build_tdoc_cr_change_details_repository()
     file_repo = build_tdoc_file_repository()
 
     cover: TDocCRDetails | None = None
     extracted_at: datetime | None = None
     ttcn: TDocCRTTCNDetails | None = None
+    changes: TDocCRChangeDetails | None = None
     if record.ftp_url:
         cover = cr_repo.get_by_url(record.ftp_url)
         meta = cr_repo.get_extract_meta_by_url(record.ftp_url)
@@ -3747,6 +3823,8 @@ def tdoc_show(
             extracted_at = meta.extracted_at
         if is_ttcn_tdoc(record.tdoc_id):
             ttcn = cr_ttcn_repo.get_by_url(record.ftp_url)
+        change_details = cr_change_details_repo.get_for_tdoc_id(record.tdoc_id)
+        changes = change_details[0] if change_details else None
 
     files = tuple(file_repo.get_for_tdoc_id(record.tdoc_id))
 
@@ -3754,6 +3832,7 @@ def tdoc_show(
         tdoc=record,
         cover=cover,
         ttcn=ttcn,
+        changes=changes,
         extracted_at=extracted_at,
         files=files,
     )

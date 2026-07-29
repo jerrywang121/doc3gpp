@@ -6,7 +6,10 @@ letting callers depend only on the Protocol-typed service interface.
 
 from __future__ import annotations
 
-from doc3gpp.repository.protocols import TDocCrTTCNDetailRepository
+from doc3gpp.repository.protocols import (
+    TDocCrChangeDetailsRepository,
+    TDocCrTTCNDetailRepository,
+)
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.services.meetings_service import MeetingService
@@ -18,6 +21,9 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+    SQLAlchemyTDocCrChangeDetailsRepository,
+)
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
@@ -71,6 +77,15 @@ def build_tdoc_cr_ttcn_repository() -> SQLAlchemyTDocCrTtcnRepository:
     return SQLAlchemyTDocCrTtcnRepository()
 
 
+def build_tdoc_cr_change_details_repository() -> SQLAlchemyTDocCrChangeDetailsRepository:
+    """Construct a :class:`SQLAlchemyTDocCrChangeDetailsRepository` for direct lookups.
+
+    Used by the ``tdoc show`` CLI command to surface body-derived
+    change details next to the cover page and the TTCN sidecar.
+    """
+    return SQLAlchemyTDocCrChangeDetailsRepository()
+
+
 def build_tdoc_file_repository() -> SQLAlchemyTDocFileRepository:
     """Construct a :class:`SQLAlchemyTDocFileRepository` for direct lookups.
 
@@ -118,6 +133,7 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
 
 def build_tdoc_cr_service(
     cr_ttcn_repository: TDocCrTTCNDetailRepository | None = None,
+    cr_change_details_repository: TDocCrChangeDetailsRepository | None = None,
     *,
     max_tdoc_size_bytes: int | None = None,
 ) -> TDocCrService:
@@ -134,6 +150,8 @@ def build_tdoc_cr_service(
       for the cover-page detail table.
     * :class:`~doc3gpp.storage.repositories.tdoc_cr_ttcn_sql.SQLAlchemyTDocCrTtcnRepository`
       for the TTCN sidecar table.
+    * :class:`~doc3gpp.storage.repositories.tdoc_cr_change_details_sql.SQLAlchemyTDocCrChangeDetailsRepository`
+      for the body-derived change-details sidecar.
     * :class:`~doc3gpp.storage.repositories.tdoc_sql.SQLAlchemyTDocRepository`
       for read-only ``tdocs`` lookups (type guard) and for the FK
       probe that gates ``tdoc_extracts`` / ``tdoc_cr_cover_page`` writes
@@ -151,6 +169,9 @@ def build_tdoc_cr_service(
     Args:
         cr_ttcn_repository: Optional override for the TTCN sidecar
             repository (tests inject a stub here).
+        cr_change_details_repository: Optional override for the
+            body-derived change-details sidecar repository (tests
+            inject a stub here).
         max_tdoc_size_bytes: Optional explicit cap (bytes). When
             ``None`` (default), the factory resolves from
             ``settings.tdoc_parse.max_tdoc_size_kb * 1024``. When an
@@ -171,6 +192,10 @@ def build_tdoc_cr_service(
         scraper_client=ScraperClient(),
         cr_repository=SQLAlchemyTDocCrRepository(),
         cr_ttcn_repository=cr_ttcn_repository or build_tdoc_cr_ttcn_repository(),  # type: ignore[call-arg]
+        cr_change_details_repository=(
+            cr_change_details_repository
+            or build_tdoc_cr_change_details_repository()  # type: ignore[call-arg]
+        ),
         tdoc_repository=SQLAlchemyTDocRepository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
     )

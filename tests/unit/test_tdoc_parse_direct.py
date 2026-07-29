@@ -432,6 +432,7 @@ def _build_service_with_fake_repos(
         scraper_client=scraper,
         cr_repository=cr_repo,
         cr_ttcn_repository=cr_ttcn_repo,
+        cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
     )
     return service, scraper, cache, cr_repo, cr_ttcn_repo, tdoc_repo

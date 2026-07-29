@@ -39,6 +39,9 @@ from doc3gpp.services.tdoc_cr_service import (
 )
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+    SQLAlchemyTDocCrChangeDetailsRepository,
+)
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
@@ -110,12 +113,14 @@ def _build_service(
 
     cr_repo = SQLAlchemyTDocCrRepository()
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
+    cr_change_details_repo = SQLAlchemyTDocCrChangeDetailsRepository()
     tdoc_repo = SQLAlchemyTDocRepository()
     service = TDocCrService(
         cache=cache,
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
         cr_ttcn_repository=cr_ttcn_repo,
+        cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
     )
     return service, scraper_mock, cache, cr_repo, cr_ttcn_repo, tdoc_repo
@@ -723,6 +728,7 @@ def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
@@ -780,6 +786,7 @@ def test_extract_falls_back_to_template_when_primary_url_fails(
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
@@ -827,6 +834,7 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
     )
     # Seed the parent TDoc row. Under the post-T3 contract every row
@@ -887,6 +895,7 @@ def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> No
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(
@@ -946,6 +955,7 @@ def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> N
         scraper_client=scraper_mock,
         cr_repository=cr_repo,
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
     )
     tdoc_repo.upsert_many(

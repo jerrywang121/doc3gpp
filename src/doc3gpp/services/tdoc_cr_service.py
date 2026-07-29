@@ -76,6 +76,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
     extract_docx_from_zip,
@@ -94,6 +95,7 @@ from doc3gpp.parsers.tdoc_parsers import (
     build_default_registry,
 )
 from doc3gpp.repository.protocols import (
+    TDocCrChangeDetailsRepository,
     TDocCrDetailRepository,
     TDocCrTTCNDetailRepository,
     TDocRepository,
@@ -384,6 +386,7 @@ class TDocCrService:
         scraper_client: "ScraperClient",
         cr_repository: TDocCrDetailRepository,
         cr_ttcn_repository: TDocCrTTCNDetailRepository,
+        cr_change_details_repository: TDocCrChangeDetailsRepository,
         tdoc_repository: TDocRepository,
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
@@ -393,6 +396,7 @@ class TDocCrService:
         self._scraper = scraper_client
         self._repo = cr_repository
         self._cr_ttcn_repo = cr_ttcn_repository
+        self._change_details_repo = cr_change_details_repository
         self._tdoc_repo = tdoc_repository
         self._parser = parser
         self._parser_registry = parser_registry
@@ -593,6 +597,15 @@ class TDocCrService:
             if parsed.ttcn is not None
             else None
         )
+        changes: TDocCRChangeDetails | None = (
+            replace(
+                parsed.changes,
+                ftp_url=stored_ftp_url,
+                tdoc_id=normalised,
+            )
+            if parsed.changes is not None
+            else None
+        )
         meta = TDocExtractMeta(
             ftp_url=stored_ftp_url or "",
             tdoc_id=normalised,
@@ -602,6 +615,8 @@ class TDocCrService:
         self._repo.upsert(cover)
         if ttcn is not None:
             self._cr_ttcn_repo.upsert(ttcn)
+        if changes is not None:
+            self._change_details_repo.upsert(changes)
         self._repo.upsert_extract_meta(meta)
         logger.info(
             "Persisted CR details for TDoc %s at ftp_url %s (spec=%s cr_num=%s)",
@@ -1087,6 +1102,15 @@ class TDocCrService:
             if parsed.ttcn is not None
             else None
         )
+        changes: TDocCRChangeDetails | None = (
+            replace(
+                parsed.changes,
+                ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+            )
+            if parsed.changes is not None
+            else None
+        )
         meta = TDocExtractMeta(
             ftp_url=stored_ftp_url,
             tdoc_id=tdoc_id,
@@ -1096,6 +1120,8 @@ class TDocCrService:
         self._repo.upsert(cover)
         if ttcn is not None:
             self._cr_ttcn_repo.upsert(ttcn)
+        if changes is not None:
+            self._change_details_repo.upsert(changes)
         self._repo.upsert_extract_meta(meta)
         logger.info(
             "Persisted direct-parse CR details for tdoc_id %s at %s",

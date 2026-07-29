@@ -32,8 +32,11 @@ def test_upsert_and_get_round_trip(sqlite_env) -> None:
     details = TDocCRChangeDetails(
         ftp_url="tsg_wg1/CR123.zip",
         tdoc_id="R5-999999",
-        clauses=("5.2.3", "5.2.3-1"),
-        changes=(("line A", "line B"), ("line C",)),
+        clauses=("5.2.3", "Table 5.2.3-1"),
+        changes=(
+            {"clauses": ["5.2.3"], "text": "line A\nline B"},
+            {"clauses": ["5.2.3"], "text": "line C"},
+        ),
     )
     # FK needs the parent tdoc row; create one. Note: TDocORM has
     # no `tsg` column — that lives on the parent meeting row.
@@ -49,8 +52,11 @@ def test_upsert_and_get_round_trip(sqlite_env) -> None:
     fetched = repo.get_by_url("tsg_wg1/CR123.zip")
     assert fetched is not None
     assert fetched.tdoc_id == "R5-999999"
-    assert fetched.clauses == ("5.2.3", "5.2.3-1")
-    assert fetched.changes == (("line A", "line B"), ("line C",))
+    assert fetched.clauses == ("5.2.3", "Table 5.2.3-1")
+    assert fetched.changes == (
+        {"clauses": ["5.2.3"], "text": "line A\nline B"},
+        {"clauses": ["5.2.3"], "text": "line C"},
+    )
 
     by_id = repo.get_for_tdoc_id("R5-999999")
     assert len(by_id) == 1
@@ -85,7 +91,7 @@ def test_cascade_delete_with_parent_tdoc(sqlite_env) -> None:
         s.commit()
     repo.upsert(TDocCRChangeDetails(
         ftp_url="x/y.zip", tdoc_id="R5-CASCADE",
-        clauses=("1.0",), changes=(("a",),),
+        clauses=("1.0",), changes=({"clauses": ["1.0"], "text": "a"},),
     ))
     with sf() as s:
         s.query(TDocORM).filter_by(tdoc_id="R5-CASCADE").delete()
@@ -177,7 +183,7 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
                 changes=TDocCRChangeDetails(
                     ftp_url=None, tdoc_id=None,
                     clauses=("5.2.3",),
-                    changes=(("line A", "<ins>[Inserted: X]</ins>"),),
+                    changes=({"clauses": ["5.2.3"], "text": "line A\n<ins>X</ins>"},),
                 ),
             )
 

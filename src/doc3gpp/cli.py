@@ -2315,7 +2315,10 @@ def _render_tdoc_show_json(
     if record.changes is not None:
         payload["changes"] = {
             "clauses": list(record.changes.clauses),
-            "changes": [list(b) for b in record.changes.changes],
+            "changes": [
+                {"clauses": list(b["clauses"]), "text": b["text"]}
+                for b in record.changes.changes
+            ],
         }
     if record.extracted_at is not None:
         payload["extracted_at"] = _serialise_show_value(record.extracted_at)
@@ -2434,8 +2437,11 @@ def _render_tdoc_show_markdown(
                     f"{len(record.changes.clauses)} clause(s)\n"
                 )
                 for idx, block in enumerate(record.changes.changes, start=1):
-                    for ln in block:
-                        stream.write(f"line[{idx}]: {ln}\n")
+                    stream.write(f"block[{idx}]: {block['text']}\n")
+                    if block["clauses"]:
+                        stream.write(
+                            f"clauses[{idx}]: {', '.join(block['clauses'])}\n"
+                        )
 
             stream.write("\n")
             if not record.files:
@@ -2521,7 +2527,11 @@ def _render_tdoc_show_markdown(
                 stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
                 for idx, block in enumerate(record.changes.changes, start=1):
                     stream.write(f"\n  * block {idx}:\n")
-                    for ln in block:
+                    if block["clauses"]:
+                        stream.write(
+                            f"    * clauses: {', '.join(block['clauses'])}\n"
+                        )
+                    for ln in block["text"].split("\n"):
                         stream.write(f"    * {ln}\n")
 
         stream.write("\n## Auxiliary Files\n\n")
@@ -2910,7 +2920,10 @@ def _render_tdoc_show_by_url_json(
     if record.changes is not None:
         payload["changes"] = {
             "clauses": list(record.changes.clauses),
-            "changes": [list(b) for b in record.changes.changes],
+            "changes": [
+                {"clauses": list(b["clauses"]), "text": b["text"]}
+                for b in record.changes.changes
+            ],
         }
     if record.extracted_at is not None:
         payload["extracted_at"] = _serialise_show_value(record.extracted_at)
@@ -3032,8 +3045,11 @@ def _render_tdoc_show_by_url_markdown(
                     f"{len(record.changes.clauses)} clause(s)\n"
                 )
                 for idx, block in enumerate(record.changes.changes, start=1):
-                    for ln in block:
-                        stream.write(f"line[{idx}]: {ln}\n")
+                    stream.write(f"block[{idx}]: {block['text']}\n")
+                    if block["clauses"]:
+                        stream.write(
+                            f"clauses[{idx}]: {', '.join(block['clauses'])}\n"
+                        )
 
             stream.write("\n")
             if not record.files:
@@ -3111,14 +3127,18 @@ def _render_tdoc_show_by_url_markdown(
                 rendered = "—" if formatted is None else str(formatted)
                 stream.write(f"- **{f.name}**: {rendered}\n")
 
-        if record.changes is not None:
-            stream.write("\n## Change Details\n\n")
-            stream.write(f"- **clauses**: {', '.join(record.changes.clauses) or '—'}\n")
-            stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
-            for idx, block in enumerate(record.changes.changes, start=1):
-                stream.write(f"\n  * block {idx}:\n")
-                for ln in block:
-                    stream.write(f"    * {ln}\n")
+            if record.changes is not None:
+                stream.write("\n## Change Details\n\n")
+                stream.write(f"- **clauses**: {', '.join(record.changes.clauses) or '—'}\n")
+                stream.write(f"- **changes**: {len(record.changes.changes)} change block(s)\n")
+                for idx, block in enumerate(record.changes.changes, start=1):
+                    stream.write(f"\n  * block {idx}:\n")
+                    if block["clauses"]:
+                        stream.write(
+                            f"    * clauses: {', '.join(block['clauses'])}\n"
+                        )
+                    for ln in block["text"].split("\n"):
+                        stream.write(f"    * {ln}\n")
 
         if record.files:
             stream.write("\n## Auxiliary Files\n\n")

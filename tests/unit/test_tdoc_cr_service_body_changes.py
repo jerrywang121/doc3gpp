@@ -140,7 +140,7 @@ def test_extract_writes_change_details_when_present(tmp_path: Path) -> None:
         ftp_url=None,
         tdoc_id=None,
         clauses=("5.2.3",),
-        changes=(("line A", "<ins>[Inserted: X]</ins>"),),
+        changes=({"clauses": ["5.2.3"], "text": "line A\n<ins>X</ins>"},),
     )
     parser = _StubParser(TDocCRParseResult(cover=cover, ttcn=None, changes=changes))
 
@@ -162,7 +162,7 @@ def test_extract_writes_change_details_when_present(tmp_path: Path) -> None:
     assert written.ftp_url == "tsg_wg1/CR_R5s260009.zip"
     assert written.tdoc_id == "R5s260009"
     assert written.clauses == ("5.2.3",)
-    assert written.changes == (("line A", "<ins>[Inserted: X]</ins>"),)
+    assert written.changes == ({"clauses": ["5.2.3"], "text": "line A\n<ins>X</ins>"},)
 
     # The other upserts still fire (cover + extract meta) and the
     # TTCN sidecar is skipped because the stub parser returned

@@ -419,7 +419,7 @@ def test_render_tdoc_show_markdown_compact_emits_changes_when_only_changes_popul
         ftp_url="x/1",
         tdoc_id="R5s260001",
         clauses=("5.4.2",),
-        changes=(("[F] add clause",),),
+        changes=({"clauses": ["5.4.2"], "text": "[F] add clause"},),
     )
     record = TDocShowRecord(
         tdoc=tdoc,
@@ -434,7 +434,7 @@ def test_render_tdoc_show_markdown_compact_emits_changes_when_only_changes_popul
     text = stream.getvalue()
     # The compact branch must surface the changes block.
     assert "changes: 1 block(s), 1 clause(s)" in text
-    assert "line[1]: [F] add clause" in text
+    assert "block[1]: [F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
     assert "note: No extracted details" not in text
@@ -466,7 +466,7 @@ def test_render_tdoc_show_by_url_markdown_compact_emits_changes_when_only_change
         ftp_url="x/1",
         tdoc_id="R5s260001",
         clauses=("5.4.2",),
-        changes=(("[F] add clause",),),
+        changes=({"clauses": ["5.4.2"], "text": "[F] add clause"},),
     )
     record = TDocShowRecordByUrl(
         ftp_url="x/1",
@@ -482,7 +482,7 @@ def test_render_tdoc_show_by_url_markdown_compact_emits_changes_when_only_change
     text = stream.getvalue()
     # The compact branch must surface the changes block.
     assert "changes: 1 block(s), 1 clause(s)" in text
-    assert "line[1]: [F] add clause" in text
+    assert "block[1]: [F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
     assert "note: No extracted details" not in text

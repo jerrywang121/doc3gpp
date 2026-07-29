@@ -5,6 +5,7 @@ from sqlalchemy.exc import OperationalError
 
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import MeetingORM  # noqa: F401 - ensures model metadata is loaded
+from doc3gpp.storage.db.models import TDocCrChangeDetailOrm  # noqa: F401 - ensures model metadata is loaded
 from doc3gpp.storage.db.models import TDocCrDetailOrm  # noqa: F401 - ensures model metadata is loaded
 from doc3gpp.storage.db.models import TDocCrTtcnDetailOrm  # noqa: F401 - ensures model metadata is loaded
 from doc3gpp.storage.db.models import TDocExtractOrm  # noqa: F401 - ensures model metadata is loaded

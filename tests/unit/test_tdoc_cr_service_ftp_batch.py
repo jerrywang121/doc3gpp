@@ -102,6 +102,22 @@ class _FakeCrTtcnRepo:
         return []
 
 
+class _FakeCrChangeDetailsRepo:
+    """In-memory :class:`TDocCrChangeDetailsRepository` double."""
+
+    def __init__(self) -> None:
+        self.by_url: dict[str, Any] = {}
+
+    def upsert(self, details: Any) -> None:
+        self.by_url[details.ftp_url] = details
+
+    def get_by_url(self, url: str) -> Any | None:
+        return self.by_url.get(url)
+
+    def get_for_tdoc_id(self, tdoc_id: str) -> list[Any]:
+        return []
+
+
 class _FakeTDocRepo:
     def __init__(self, ids: set[str] | None = None) -> None:
         self.ids = ids or set()
@@ -134,6 +150,7 @@ def service(tmp_path: Path) -> TDocCrService:
         scraper_client=_FakeScraper({}),
         cr_repository=_FakeCrRepo(),
         cr_ttcn_repository=_FakeCrTtcnRepo(),
+        cr_change_details_repository=_FakeCrChangeDetailsRepo(),
         tdoc_repository=_FakeTDocRepo(),
     )
 

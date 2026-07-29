@@ -11,6 +11,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -454,4 +455,20 @@ class TDocCrTTCNDetailRepository(Protocol):
 
     def get_by_url(self, url: str) -> TDocCRTTCNDetails | None:
         """Return the TTCN detail row for an immutable ``url``, or ``None``."""
+        ...
+
+
+class TDocCrChangeDetailsRepository(Protocol):
+    """Storage operations for the body-change sidecar (one row per immutable ftp_url)."""
+
+    def upsert(self, details: TDocCRChangeDetails) -> None:
+        """Insert/update the body-change row in ``tdoc_cr_change_details``."""
+        ...
+
+    def get_by_url(self, url: str) -> TDocCRChangeDetails | None:
+        """Return the body-change row for an immutable ``url``, or ``None``."""
+        ...
+
+    def get_for_tdoc_id(self, tdoc_id: str) -> list[TDocCRChangeDetails]:
+        """Return every body-change row for ``tdoc_id``."""
         ...

@@ -258,6 +258,39 @@ class TDocCrTtcnDetailOrm(Base):
     changed_functions: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class TDocCrChangeDetailOrm(Base):
+    """Body-derived change details for a non-TTCN TDoc CR.
+
+    One row per **immutable download URL** — same identity contract
+    as :class:`TDocCrTtcnDetailOrm` and :class:`TDocCrDetailOrm`.
+    The ``clauses`` column holds a sorted, unique newline-delimited
+    list of clause numbers (e.g. ``5.2.3``, ``5.2.3-1``) that
+    belong to captured change blocks. The ``changes`` column holds
+    a gzip-JSON array of the captured change blocks, each block
+    being a list of original markdown lines.
+
+    ``tdoc_id`` is a non-PK foreign key into ``tdocs.tdoc_id`` with
+    ``ondelete="CASCADE"``; when the parent TDoc row is removed, the
+    sidecar row is removed with it. Extraction timestamps live in
+    :class:`TDocExtractOrm` — this table deliberately does **not**
+    carry an ``extracted_at`` column.
+    """
+
+    __tablename__ = "tdoc_cr_change_details"
+
+    ftp_url: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    clauses: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changes: Mapped[bytes | None] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=True,
+    )
+
+
 class TDocExtractOrm(Base):
     """Metadata-only sidecar recording that a TDoc has been extracted.
 

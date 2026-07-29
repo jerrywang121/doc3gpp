@@ -23,6 +23,8 @@ from datetime import date
 from datetime import datetime
 from typing import Any, Literal
 
+from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+
 
 _PARSER_VERSION = "1.0.0"
 
@@ -200,18 +202,23 @@ class TDocCRTTCNDetails:
 class TDocCRParseResult:
     """Bundle produced by a CR parser.
 
-    Wraps the cover-page details and the optional TTCN sidecar so the
-    service layer can route each slice to its own repository in one
-    pass.
+    Wraps the cover-page details, the optional TTCN sidecar, and the
+    optional body-derived change-details sidecar so the service
+    layer can route each slice to its own repository in one pass.
 
     Attributes:
         cover: Cover-page fields extracted from the CR document.
         ttcn: TTCN-specific sidecar when the parser recognised a TTCN CR;
             ``None`` for non-TTCN CRs.
+        changes: Body-derived change blocks for non-TTCN CRs;
+            ``None`` for TTCN CRs, when
+            ``Settings.tdoc_parse.body_change_enabled`` is ``False``,
+            or when no revision marks were detected in the body.
     """
 
     cover: TDocCRDetails
     ttcn: TDocCRTTCNDetails | None = None
+    changes: TDocCRChangeDetails | None = None
 
 
 @dataclass(slots=True, frozen=True)

@@ -66,6 +66,8 @@ def _build_service(
     cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
+    cr_change_details_repo = MagicMock()
+    cr_change_details_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = None
 
@@ -74,6 +76,7 @@ def _build_service(
         scraper_client=scraper,
         cr_repository=cr_repo,
         cr_ttcn_repository=cr_ttcn_repo,
+        cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
     )
     return service, scraper, cache, cr_repo, cr_ttcn_repo, tdoc_repo
@@ -672,6 +675,7 @@ def test_extract_raises_skip_when_ftp_url_is_null(tmp_path: Path) -> None:
         scraper_client=scraper,
         cr_repository=cr_repo,
         cr_ttcn_repository=cr_ttcn_repo,
+        cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
     )
 
@@ -722,6 +726,7 @@ def test_extract_many_routes_null_ftp_url_into_skip_bucket(
         scraper_client=scraper,
         cr_repository=cr_repo,
         cr_ttcn_repository=cr_ttcn_repo,
+        cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
     )
 
@@ -765,6 +770,7 @@ def test_extract_many_skipped_only_batch_exits_cleanly(
         scraper_client=scraper,
         cr_repository=cr_repo,
         cr_ttcn_repository=cr_ttcn_repo,
+        cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
     )
 
@@ -793,6 +799,7 @@ def test_constructor_default_max_tdoc_size_bytes_is_zero(tmp_path) -> None:
         scraper_client=MagicMock(),
         cr_repository=MagicMock(),
         cr_ttcn_repository=MagicMock(),
+        cr_change_details_repository=MagicMock(),
         tdoc_repository=MagicMock(),
     )
     assert service._max_tdoc_size_bytes == 0
@@ -805,6 +812,7 @@ def test_constructor_accepts_max_tdoc_size_bytes(tmp_path) -> None:
         scraper_client=MagicMock(),
         cr_repository=MagicMock(),
         cr_ttcn_repository=MagicMock(),
+        cr_change_details_repository=MagicMock(),
         tdoc_repository=MagicMock(),
         max_tdoc_size_bytes=2_500_000,
     )

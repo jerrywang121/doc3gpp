@@ -262,6 +262,33 @@ class TDocParseSettings(BaseModel):
             "bucket). 0 disables the limit."
         ),
     )
+    body_change_enabled: bool = Field(
+        default=True,
+        description=(
+            "Run the body-change extractor on non-TTCN CRs and persist "
+            "the result to tdoc_cr_change_details. Disable to skip the "
+            "extraction step entirely."
+        ),
+    )
+    body_change_gap_window: int = Field(
+        default=2,
+        ge=0,
+        le=20,
+        description=(
+            "Max number of plain (non-marker) lines that may sit between "
+            "two <ins>/<del> lines and still count as the same change "
+            "block. 0 = only consecutive marker lines count."
+        ),
+    )
+    body_change_context_padding: int = Field(
+        default=2,
+        ge=0,
+        le=50,
+        description=(
+            "Plain context lines captured before and after each change "
+            "block. 0 = no context, only the marker lines + bridge."
+        ),
+    )
 
 
 class SyncSettings(BaseModel):

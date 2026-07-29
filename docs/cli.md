@@ -577,6 +577,12 @@ Behavior:
   `null`) in the JSON payload when the corresponding row is
   absent. The legacy `details` / `parser_version` fields no longer
   appear in any output.
+- When a `tdoc_cr_change_details` row exists for the resolved URL,
+  the markdown renderer emits a `## Change Details` block listing
+  the captured clauses and the per-block captured lines (preserving
+  the `<ins>` / `<del>` markers). JSON output gains a `changes` key.
+  The table renderer emits a `[Change Details]` block with clause
+  + change-block counts.
 - `raw` bypasses the DB-row render entirely and reads the converted
   markdown from the cache. When the cache is cold, the extract
   pipeline runs (download zip, render markdown, persist across
@@ -968,8 +974,9 @@ The cap is set via `tdoc_parse.max_tdoc_size_kb` in the TOML config
 (default `1000` KB; `0` = unlimited) and can be overridden per
 invocation with `--max-tdoc-size-kb`. The field is **TOML-only** —
 mirroring the other `tdoc_parse.*` knobs (`max_batch`,
-`max_ftp_depth`) — so `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` is
-silently ignored.
+`max_ftp_depth`, `body_change_enabled`, `body_change_gap_window`,
+`body_change_context_padding`) — so
+`DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` is silently ignored.
 
 Gate points: the cap is enforced at four layers, all wired through
 `TDocCrService` and a single `TDocTooLargeError(source, size, limit)`

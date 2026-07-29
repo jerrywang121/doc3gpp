@@ -11,7 +11,7 @@ needs of TDoc CR extraction. In particular:
 - it removes certain fields tags from the output (e.g. TOC, PAGEREF, DOCPROPERTY)
 - it preserves tabs in the output, but normalises them to 4xspaces respectively
 - it preserves line breaks in tables, but normalises them to <br>, and preserves spaces in table cells - this is important for parsing tables with multiple lines in a single cell (e.g. cover-page, TTCN changes tables, etc.)
-- it tries to render inserted/deleted revision marks in a way that is parseable (e.g. <ins>[Inserted: ...]</ins> and <del>[Deleted: ...]</del>)
+- it tries to render inserted/deleted revision marks in a way that is parseable (e.g. <ins>...</ins> and <del>...</del>)
 
 
 * Reject anything that is not a ``.docx`` filename with ``ValueError``
@@ -143,7 +143,7 @@ def _render_revision(element, inserted: bool, bold: bool, italic: bool) -> str:
     content = content.strip()
     if not content:
         return ""
-    return f"<ins>[Inserted: {content}]</ins>" if inserted else f"<del>[Deleted: {content}]</del>"
+    return f"<ins>{content}</ins>" if inserted else f"<del>{content}</del>"
 
 
 def _render_children(element, bold: bool = False, italic: bool = False) -> str:

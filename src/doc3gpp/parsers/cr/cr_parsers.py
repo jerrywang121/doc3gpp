@@ -11,10 +11,12 @@ from datetime import datetime as _datetime
 from typing import Any
 
 from doc3gpp.models.tdoc_cr import (
+    TDocCRChangeDetails,
     TDocCRDetails,
     TDocCRParseResult,
     TDocCRTTCNDetails,
 )
+from doc3gpp.parsers.cr.body_changes import extract_body_changes
 from doc3gpp.parsers.cr.cover_page import CRCoverPageParser
 from doc3gpp.parsers.cr.header import (
     CRHeaderMissingError,
@@ -28,6 +30,7 @@ from doc3gpp.parsers.cr.ttcn_sections import (
     TTCNCorrectionsParser,
     TTCNOverviewParser,
 )
+from doc3gpp.settings.loader import get_settings
 
 
 logger = logging.getLogger(__name__)
@@ -185,7 +188,16 @@ class CRParserBase(TDocParser):
                 changed_functions=extract_changed_functions(corrections),
             )
 
-        return TDocCRParseResult(cover=cover, ttcn=ttcn)
+        settings = get_settings()
+        changes: TDocCRChangeDetails | None = None
+        if settings.tdoc_parse.body_change_enabled:
+            changes = extract_body_changes(
+                lines,
+                gap_window=settings.tdoc_parse.body_change_gap_window,
+                context_padding=settings.tdoc_parse.body_change_context_padding,
+            )
+
+        return TDocCRParseResult(cover=cover, ttcn=ttcn, changes=changes)
 
 
 class CRParser(CRParserBase):
@@ -220,3 +232,20 @@ class TTCNCRParser(CRParserBase):
         return super().supports(
             tdoc_id, tdoc_type=tdoc_type, spec=spec
         ) and is_ttcn_tdoc(tdoc_id)
+
+    def parse(
+        self,
+        markdown: str,
+        *,
+        tdoc_id: str,
+        max_text_length: int = 0,
+        full: bool = False,
+    ) -> TDocCRParseResult:
+        """TTCN CRs run the base extraction and then drop the body
+        sidecar (``changes=None``) — TTCN CRs write the
+        ``tdoc_cr_ttcn_details`` sidecar instead."""
+        result = super().parse(
+            markdown, tdoc_id=tdoc_id,
+            max_text_length=max_text_length, full=full,
+        )
+        return TDocCRParseResult(cover=result.cover, ttcn=result.ttcn, changes=None)

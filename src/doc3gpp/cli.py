@@ -110,8 +110,15 @@ app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
 app.add_typer(config_app, name="config")
 app.add_typer(cache_app, name="cache")
+search_app = typer.Typer(help="full-text search over TDocs, CRs, meetings, and WIs")
+app.add_typer(search_app, name="search")
 
 logger = logging.getLogger(__name__)
+
+# One-shot latch for the stale-index hint. Set the first time we
+# print the hint; cleared when the CLI process exits. Suppresses
+# spam in long batch runs.
+_stale_index_hint_emitted: bool = False
 
 DEFAULT_TSG = "r5"
 
@@ -4127,6 +4134,158 @@ def config_set(
             f"it overrides this at runtime."
         )
     typer.echo("  Run 'doc3gpp config show' to verify the active value.")
+
+
+@search_app.command("search")
+def search_command(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),
+    tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
+    meeting: str | None = typer.Option(None, help="Filter by meetings.name."),
+    meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
+    tdoc_id: str | None = typer.Option(None, help="Filter by tdocs.tdoc_id."),
+    release: str | None = typer.Option(None, help="Filter by tdocs.release."),
+    spec: str | None = typer.Option(None, help="Filter by tdocs.spec."),
+    since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
+    until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    format: str = typer.Option("table", "--format", help="table | json | markdown"),
+    compact: bool = typer.Option(False, "--compact", help="Strip JSON / markdown decorators."),
+    rerank: bool = typer.Option(False, "--rerank", help="Invoke EmbeddingReranker (no-op for PassthroughReranker)."),
+    snippet_tokens: int = typer.Option(8, "--snippet-tokens", min=1, max=64, help="FTS5 snippet length."),
+    explain: bool = typer.Option(False, "--explain", help="Print the resolved MATCH + SQL plan."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress the stale-index hint."),
+) -> None:
+    """Run a full-text search over the FTS5 index."""
+    from doc3gpp.cli_filters import (
+        SearchQueryBuilder,
+        parse_date_filter,
+        parse_release_filter,
+        parse_spec_filter,
+    )
+    from doc3gpp.models.search import SearchError, SearchFilters
+    from doc3gpp.services.factory import build_search_service
+
+    try:
+        if since:
+            parse_date_filter(since)
+        if until:
+            parse_date_filter(until)
+        if release:
+            parse_release_filter(release)
+        if spec:
+            parse_spec_filter(spec)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+
+    svc = build_search_service()
+    if svc is None:
+        typer.echo("search disabled in settings", err=True)
+        raise typer.Exit(code=0)
+    try:
+        match_expr = SearchQueryBuilder(query).build()
+    except SearchError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    filters = SearchFilters(
+        tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
+        release=release, spec=spec, since=since, until=until, limit=limit,
+    )
+    try:
+        raw_hits = svc._repo.search(match_expr, filters)  # noqa: SLF001 - bypass reranker when --rerank off
+        if rerank:
+            hits = svc._reranker.rerank(query, raw_hits)  # noqa: SLF001
+        else:
+            hits = raw_hits
+    except SearchError:
+        typer.echo("search index corrupt; run `doc3gpp search index --rebuild`", err=True)
+        raise typer.Exit(code=3)
+    _render_search_hits(hits, format=format, compact=compact)
+    _emit_search_status(svc, quiet=quiet)
+
+
+@search_app.command("index")
+def index_command(
+    ctx: typer.Context,
+    rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the FTS5 table."),
+    batch: int | None = typer.Option(None, "--batch", min=1, help="Override rebuild_batch_size."),
+    resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
+    stale_only: bool = typer.Option(False, "--stale-only", help="Only re-index rows newer than the last indexed uploaded_date."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress per-batch progress logs."),
+) -> None:
+    """Manage the search index."""
+    from doc3gpp.services.factory import build_search_service
+    from doc3gpp.settings.schema import get_settings
+
+    svc = build_search_service()
+    if svc is None:
+        typer.echo("search disabled in settings", err=True)
+        raise typer.Exit(code=0)
+    if not rebuild:
+        status = svc.status()
+        typer.echo(
+            f"Search index: enabled (sqlite + fts5)\n"
+            f"Rows indexed:  {status.row_count:,}\n"
+            f"Last rebuild:  {status.last_rebuild_at or 'never'}\n"
+            f"Last indexed:  {status.last_indexed_uploaded_date or 'never'}\n"
+            f"Latest tdocs:  {status.latest_tdocs_uploaded_date or 'none'}\n"
+            f"Status:        {'STALE' if status.is_stale else 'OK'}"
+        )
+        return
+    settings = get_settings()
+    batch_size = batch or settings.search.rebuild_batch_size
+    for progress in svc.rebuild(
+        batch_size=batch_size, resume=resume,
+        stale_only=stale_only, quiet=quiet,
+    ):
+        if not quiet:
+            typer.echo(
+                f"  rebuilt {progress.processed:,}/{progress.total:,} "
+                f"(last tdoc_id={progress.current_tdoc_id})"
+            )
+    typer.echo("search index rebuild complete")
+
+
+def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:
+    """Render hits in the chosen format."""
+    if format == "json":
+        import json as _json
+        payload = [
+            {
+                "tdoc_id": h.tdoc_id, "score": h.score, "preview": h.preview,
+                "title": h.title, "meeting": h.meeting, "tsg": h.tsg,
+                "uploaded_date": h.uploaded_date,
+            }
+            for h in hits
+        ]
+        if compact:
+            typer.echo(_json.dumps(payload, separators=(",", ":")))
+        else:
+            typer.echo(_json.dumps(payload, indent=2))
+    elif format == "markdown":
+        for h in hits:
+            typer.echo(f"**{h.tdoc_id}** — {h.title}")
+            typer.echo(f"> {h.preview}")
+            typer.echo("")
+    else:
+        typer.echo(f"{'tdoc_id':<12} {'score':>8}  preview")
+        for h in hits:
+            typer.echo(f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {h.preview}")
+
+
+def _emit_search_status(svc: object, *, quiet: bool) -> None:
+    """Print a one-shot stale-index hint to stderr."""
+    global _stale_index_hint_emitted
+    if quiet or _stale_index_hint_emitted:
+        return
+    status = svc.status()  # type: ignore[attr-defined]
+    if status.is_stale:
+        typer.echo(
+            "search index is stale; run `doc3gpp search index --rebuild` "
+            "to refresh",
+            err=True,
+        )
+        _stale_index_hint_emitted = True
 
 
 def main() -> None:

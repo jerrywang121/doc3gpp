@@ -59,14 +59,13 @@ the `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details` sidecars.
 
 The body extractor is a new function
 `extract_body_changes` in `src/doc3gpp/parsers/cr/body_changes.py`
-that consumes the converted markdown line list and returns a
-`TDocCRChangeDetails` domain object. The cover-page parser is
-updated to compute a `body_start` line index (the first line after
-the last `|` row of the cover-page table) and return it via a small
-side-channel attribute, so the body extractor does not have to
-re-implement the cover-page table detector. The body extractor runs
-on `lines[body_start:]` only; revision marks inside the cover-page
-table are out of scope (see Non-goals).
+that consumes the full converted markdown line list and returns a
+`TDocCRChangeDetails` domain object. We deliberately run on the
+*whole* line list (no `body_start` offset) — the cover-page table
+rows in real CRs do not contain `<w:ins>` / `<w:del>` revision marks,
+and the heading/table-number trackers reset on every new heading
+anyway, so any spurious matches inside the cover page are harmless.
+This keeps the cover-page parser signature unchanged.
 
 ```
                    ┌──────────────────────────┐

@@ -436,11 +436,11 @@ def test_render_tdoc_show_markdown_compact_emits_changes_when_only_changes_popul
     assert "changes: 1 block(s), 1 clause(s)" in text
     # The compact renderer prints the per-block layout with clauses first
     # and the change text on its own line. The change text must appear
-    # under the ``* block N:`` / ``\t* clauses:`` / ``\t* changes:``
+    # under the ``* block N:`` / ``  * clauses:`` / ``  * changes:``
     # sub-tree.
     assert "* block 1:" in text
-    assert "\t* clauses: 5.4.2" in text
-    assert "\t* changes:" in text
+    assert "  * clauses: 5.4.2" in text
+    assert "  * changes:" in text
     assert "[F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
@@ -491,11 +491,11 @@ def test_render_tdoc_show_by_url_markdown_compact_emits_changes_when_only_change
     assert "changes: 1 block(s), 1 clause(s)" in text
     # The compact renderer prints the per-block layout with clauses first
     # and the change text on its own line. The change text must appear
-    # under the ``* block N:`` / ``\t* clauses:`` / ``\t* changes:``
+    # under the ``* block N:`` / ``  * clauses:`` / ``  * changes:``
     # sub-tree.
     assert "* block 1:" in text
-    assert "\t* clauses: 5.4.2" in text
-    assert "\t* changes:" in text
+    assert "  * clauses: 5.4.2" in text
+    assert "  * changes:" in text
     assert "[F] add clause" in text
     # And it must NOT regress to the "no extracted details" placeholder,
     # because changes is populated.
@@ -550,13 +550,13 @@ def test_render_tdoc_show_markdown_full_emits_changes_when_only_changes_populate
     assert "## Change Details" in text
     # The clauses summary and the per-block layout. The block line is
     # flush-left at the first bullet level; the clauses / changes
-    # children are one tab in.
+    # children are indented with two spaces.
     assert "**clauses**" in text
     assert "5.4.2" in text
     assert "1 change block" in text
     assert "* block 1:" in text
-    assert "\t* clauses: 5.4.2" in text
-    assert "\t* Changes:" in text
+    assert "  * clauses: 5.4.2" in text
+    assert "  * Changes:" in text
     assert "[F] add clause" in text
     # And it must NOT regress to the "no extracted details"
     # placeholder, because changes is populated.
@@ -609,8 +609,8 @@ def test_render_tdoc_show_by_url_markdown_full_emits_changes_when_only_changes_p
     assert "5.4.2" in text
     assert "1 change block" in text
     assert "* block 1:" in text
-    assert "\t* clauses: 5.4.2" in text
-    assert "\t* Changes:" in text
+    assert "  * clauses: 5.4.2" in text
+    assert "  * Changes:" in text
     assert "[F] add clause" in text
 
 

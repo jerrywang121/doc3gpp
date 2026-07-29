@@ -2466,10 +2466,10 @@ def _render_tdoc_show_markdown_compact(
             stream.write(f"* block {idx}:\n")
             if block["clauses"]:
                 stream.write(
-                    f"\t* clauses: {', '.join(block['clauses'])}\n"
+                    f"  * clauses: {', '.join(block['clauses'])}\n"
                 )
             if block["text"]:
-                stream.write(f"\t* changes: \n{block['text']}\n")
+                stream.write(f"  * changes: \n{block['text']}\n")
             stream.write(f"\n")
 
     stream.write("\n")
@@ -2591,10 +2591,10 @@ def _render_tdoc_show_markdown_full(
             stream.write(f"\n* block {idx}:\n")
             if block["clauses"]:
                 stream.write(
-                    f"\t* clauses: {', '.join(block['clauses'])}\n"
+                    f"  * clauses: {', '.join(block['clauses'])}\n"
                 )
             if block["text"]:
-                stream.write(f"\t* Changes:\n")
+                stream.write(f"  * Changes:\n")
                 for ln in block["text"].split("\n"):
                     stream.write(f">{ln}\n")
                 stream.write(f"\n")

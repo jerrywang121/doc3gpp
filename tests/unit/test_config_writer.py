@@ -475,16 +475,12 @@ def test_tomli_w_is_importable() -> None:
 
 
 def test_load_default_template_returns_canonical_string() -> None:
-    """The packaged template ends with the ``tdoc_list_url_template`` line
+    """The packaged template ends with the ``snippet_tokens`` line
     and starts with the canonical comment header."""
     text = load_default_template()
 
     assert "# doc3gpp configuration file (TOML)" in text
-    assert text.rstrip().endswith(
-        'tdoc_list_url_template = "'
-        "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx"
-        '?meetingId={meeting_id}"'
-    )
+    assert text.rstrip().endswith("snippet_tokens = 8")
 
 
 def test_load_default_template_matches_packaged_file() -> None:

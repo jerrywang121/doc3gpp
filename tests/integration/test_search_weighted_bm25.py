@@ -203,8 +203,8 @@ def test_explicit_order_by_bm25_used(sqlite_env) -> None:
     assert weight_params == (10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0), (
         f"expected 8 weight params in w0..w7 order; got {weight_params!r}"
     )
-    assert params[8] == 2, (
-        f"expected col_idx=2 (title) at params[8]; got {params[8]!r}"
+    assert params[8] == 1, (
+        f"expected col_idx=1 (title) at params[8]; got {params[8]!r}"
     )
     assert params[9] == 8, (
         f"expected snippet_tokens=8 at params[9]; got {params[9]!r}"

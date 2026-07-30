@@ -42,12 +42,13 @@ from doc3gpp.storage.db.session import get_engine
 logger = logging.getLogger(__name__)
 
 
-# FTS5 is 1-based; ``tdoc_id`` is column 1 even though it is
-# UNINDEXED, so the first searchable column (``title``) lives at
-# index 2. See ``docs/superpowers/specs/2026-07-30-fts5-perf.md``
-# §"FTS5 column indices".
+# FTS5 ``snippet()`` and ``bm25()`` take a 0-based ``cid``. The
+# ``tdoc_search`` virtual table declares 9 columns in this order:
+# ``tdoc_id`` (UNINDEXED, cid 0), then ``title`` (cid 1) ..
+# ``ttcn_text`` (cid 8). The 8 indexed columns therefore occupy
+# cids 1..8 and the searchable name→cid map starts at offset 1.
 _SNIPPET_COLUMN_TO_IDX: dict[str, int] = {
-    name: i + 2 for i, name in enumerate(_SNIPPET_COLUMN_NAMES)
+    name: i + 1 for i, name in enumerate(_SNIPPET_COLUMN_NAMES)
 }
 
 

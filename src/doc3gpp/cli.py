@@ -4191,8 +4191,16 @@ def search_command(
         tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
         release=release, spec=spec, since=since, until=until, limit=limit,
     )
+    if explain:
+        _emit_explain(
+            match_expr=match_expr,
+            snippet_tokens=snippet_tokens,
+            repo=svc._repo,  # noqa: SLF001 - read the cached config the search will use
+        )
     try:
-        raw_hits = svc._repo.search(match_expr, filters)  # noqa: SLF001 - bypass reranker when --rerank off
+        raw_hits = svc._repo.search(  # noqa: SLF001 - bypass reranker when --rerank off
+            match_expr, filters, snippet_tokens=snippet_tokens,
+        )
         if rerank:
             hits = svc._reranker.rerank(query, raw_hits)  # noqa: SLF001
         else:
@@ -4286,6 +4294,37 @@ def _emit_search_status(svc: object, *, quiet: bool) -> None:
             err=True,
         )
         _stale_index_hint_emitted = True
+
+
+def _emit_explain(
+    *, match_expr: str, snippet_tokens: int, repo: object,
+) -> None:
+    """Print the resolved search config to stderr.
+
+    The block surfaces the FTS5 ``MATCH`` expression the CLI actually
+    sent, the cached ``snippet_column`` index, the snippet token
+    count (the per-call override from ``--snippet-tokens`` when
+    provided, otherwise the cached setting value), and the BM25
+    weight vector. The format matches the perf spec at
+    ``docs/superpowers/specs/2026-07-30-fts5-perf.md`` §"``--explain``
+    wire-up".
+    """
+    weights = getattr(repo, "_weights", ())
+    snippet_column = getattr(repo, "_snippet_column", "?")
+    snippet_column_idx = getattr(repo, "_snippet_column_idx", "?")
+    weights_str = "[" + ", ".join(str(w) for w in weights) + "]"
+    typer.echo("# search config", err=True)
+    # ``match_expr`` is the FTS5 MATCH expression the repo will
+    # receive (already wrapped in quotes by SearchQueryBuilder for
+    # plain text, or passed-through for operator queries); print it
+    # verbatim so operators can confirm what the CLI sent.
+    typer.echo(f"match:           {match_expr}", err=True)
+    typer.echo(
+        f"snippet_column:  {snippet_column} (col {snippet_column_idx})",
+        err=True,
+    )
+    typer.echo(f"snippet_tokens:  {snippet_tokens}", err=True)
+    typer.echo(f"bm25_weights:    {weights_str}", err=True)
 
 
 def main() -> None:

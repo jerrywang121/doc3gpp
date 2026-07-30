@@ -517,6 +517,7 @@ class SearchIndexRepository(Protocol):
 
     def search(
         self, query: str, filters: SearchFilters,
+        snippet_tokens: int | None = None,
     ) -> list[SearchHit]:
         """Run an FTS5 ``MATCH`` + filters + ``bm25()`` scoring.
 
@@ -524,6 +525,13 @@ class SearchIndexRepository(Protocol):
         ascending (lower = better in FTS5). Filters apply as
         additional ``AND`` clauses on the joined ``tdocs`` /
         ``meetings`` tables.
+
+        ``snippet_tokens`` is an optional per-call override for the
+        configured ``Settings.search.snippet_tokens`` knob. When
+        ``None`` the cached setting value is used; the CLI's
+        ``--snippet-tokens`` flag forwards the user-supplied value
+        so a single invocation can retune the preview length
+        without mutating the config.
         """
         ...
 

@@ -158,7 +158,21 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
 
     def search(
         self, query: str, filters: SearchFilters,
+        snippet_tokens: int | None = None,
     ) -> list[SearchHit]:
+        """Run the FTS5 ``MATCH`` + filters + scoring + rerank.
+
+        ``snippet_tokens`` is an optional per-call override for the
+        ``Settings.search.snippet_tokens`` cached value. When ``None``
+        (the default) the cached value is used; when provided, it
+        is forwarded to the ``snippet(...)`` call so the CLI's
+        ``--snippet-tokens`` flag can retune the preview length for
+        a single invocation without mutating settings.
+        """
+        effective_tokens = (
+            snippet_tokens if snippet_tokens is not None
+            else self._snippet_tokens
+        )
         sql = [
             "SELECT tdoc_search.tdoc_id,",
             "       bm25(tdoc_search, :w0, :w1, :w2, :w3, :w4, :w5, :w6, :w7)"
@@ -175,7 +189,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         params: dict[str, Any] = {
             "query": query,
             "col_idx": self._snippet_column_idx,
-            "tok": self._snippet_tokens,
+            "tok": effective_tokens,
         }
         for i, weight in enumerate(self._weights):
             params[f"w{i}"] = weight

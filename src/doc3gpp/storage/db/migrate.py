@@ -133,6 +133,32 @@ def _create_search_schema() -> None:
                 """
             )
         )
+        # Composite indexes for filter push-down on the regular
+        # ``tdocs`` and ``meetings`` tables. These complement the FTS5
+        # virtual table by accelerating the structured WHERE clauses
+        # the search executor issues alongside the BM25 ORDER BY:
+        # release/spec/date on tdocs and name/tsg on meetings. Plain
+        # CREATE INDEX works cross-dialect, but we keep them inside
+        # the sqlite + FTS5 gate for consistency with the FTS5 schema
+        # above (the search index itself is sqlite-only).
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_tdocs_release_spec "
+                "ON tdocs (release, spec)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_tdocs_uploaded_date "
+                "ON tdocs (uploaded_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_meetings_name_tsg "
+                "ON meetings (name, tsg)"
+            )
+        )
 
 
 def create_schema() -> None:

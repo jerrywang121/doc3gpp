@@ -4156,7 +4156,13 @@ def search_command(
     explain: bool = typer.Option(False, "--explain", help="Print the resolved MATCH + SQL plan."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress the stale-index hint."),
 ) -> None:
-    """Run a full-text search over the FTS5 index."""
+    """Run a full-text search over the FTS5 index.
+
+    Filter optional flags are combinable; the query is ANDed together:
+      --tsg, --meeting, --meeting-id, --tdoc-id, --release, --spec,
+      --since, --until
+    See docs/cli.md for full semantics and examples.
+    """
     from doc3gpp.cli_filters import (
         SearchQueryBuilder,
         parse_date_filter,
@@ -4221,7 +4227,16 @@ def index_command(
     stale_only: bool = typer.Option(False, "--stale-only", help="Only re-index rows newer than the last indexed uploaded_date."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress per-batch progress logs."),
 ) -> None:
-    """Manage the search index."""
+    """Manage the search index.
+
+    With no flags, prints the current index status (rows indexed,
+    last rebuild time, last indexed uploaded_date, latest uploaded_date
+    in tdocs, and whether the index is stale).
+
+    Index maintenance flags (combinable):
+      --rebuild, --batch, --resume, --stale-only, --quiet
+    See docs/cli.md for full semantics and examples.
+    """
     from doc3gpp.services.factory import build_search_service
     from doc3gpp.settings.loader import get_settings
 

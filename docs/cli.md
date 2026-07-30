@@ -1446,7 +1446,7 @@ doc3gpp cache purge --scope zips --yes
 doc3gpp cache purge --scope all --yes
 ```
 
-## `doc3gpp search QUERY [filters]`
+## `doc3gpp search query QUERY [filters]`
 
 Run a full-text search over the FTS5 index. The QUERY is either
 plain text (which the CLI wraps in FTS5 quotes after escaping

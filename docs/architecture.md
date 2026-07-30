@@ -336,7 +336,7 @@ and the TDoc CR extraction is the deepest.
   `DOC3GPP_CACHE__PURGE_CONFIRM` is outside the env-var allowlist)
   → `TDocCache.purge_subdir(scope)` for the scoped case, or
   `TDocCache.purge()` for `--scope all`.
-- `doc3gpp search "QUERY" [filters]` → `SearchService.search(query,
+- `doc3gpp search query "QUERY" [filters]` → `SearchService.search(query,
   filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
   `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →
   `list[SearchHit]` → CLI formatter. The ranking stage uses

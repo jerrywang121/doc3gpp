@@ -67,7 +67,7 @@ CLI subcommand ──► SearchService ──► SearchIndexRepository (Protocol
 | `services/search_service.py` | Orchestration: `upsert_for_tdoc`, `remove_for_tdoc`, `search`, `rebuild`, `status` |
 | `services/factory.py` (extend) | `build_search_service(settings, repo=None, reranker=None)` |
 | `services/tdoc_cr_service.py` (modify) | Two new call sites for `_index_after_parse(tdoc_id)` |
-| `cli.py` (extend) | `search_app` Typer sub-app with `search` and `search index` commands; CLI filter parsing; `--rerank`, `--snippet-tokens`, `--quiet`, `--explain` flags |
+| `cli.py` (extend) | `search_app` Typer sub-app with `query` and `index` commands; CLI filter parsing; `--rerank`, `--snippet-tokens`, `--quiet`, `--explain` flags |
 | `cli_filters.py` (extend) | `parse_date_filter`, `parse_release_filter`, `parse_spec_filter`; new `SearchQueryBuilder` for FTS5 query normalization |
 | `settings/schema.py` (extend) | New `Settings.search` section: `enabled`, `auto_index_on_parse`, `rebuild_batch_size`, `snippet_tokens` |
 
@@ -96,7 +96,7 @@ writes entirely per AGENTS.md and never reach the hook.
 ### Data flow — read path
 
 ```
-doc3gpp search "scheduling NR" [--tsg RAN1] ...
+doc3gpp search query "scheduling NR" [--tsg RAN1] ...
         │
         ▼
 SearchCommand.__call__(cli_filters)
@@ -486,10 +486,10 @@ Registered alongside the existing `meeting_app`, `tdoc_app`,
 `wi_app`, `config_app`, `db_app` in `src/doc3gpp/cli.py`. Two
 commands.
 
-### `doc3gpp search QUERY [filters]`
+### `doc3gpp search query QUERY [filters]`
 
 ```
-doc3gpp search "scheduling NR" [flags]
+doc3gpp search query "scheduling NR" [flags]
 ```
 
 Flags:
@@ -854,7 +854,7 @@ because they require hands-on testing rather than design decisions:
 - Auto-index hook fires from two call sites in `TDocCrService`
   (DB-mode `extract` happy path + direct-mode 3GPP-URL happy path);
   best-effort, never raises, gated behind `Settings.search.auto_index_on_parse`.
-- CLI: `doc3gpp search QUERY [filters]` + `doc3gpp search index
+- CLI: `doc3gpp search query QUERY [filters]` + `doc3gpp search index
   [--rebuild] [--resume] [--stale-only]`. Reuses existing
   `--format` / `--compact` semantics.
 - Three-layer graceful degradation: build is best-effort, hook is

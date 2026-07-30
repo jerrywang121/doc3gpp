@@ -361,6 +361,33 @@ class CacheSettings(BaseModel):
     purge_confirm: bool = Field(default=True)  # CLI guard for `cache purge`
 
 
+#: The 8 FTS5 indexed columns of the ``tdoc_search`` virtual table, in
+#: DDL order. Used to build the :attr:`SearchSettings.snippet_column`
+#: ``Literal`` and exposed for reuse by downstream callers (e.g. the
+#: search query builder) so the schema stays the single source of truth.
+_SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
+    "title",
+    "ftp_url",
+    "meeting_title",
+    "meeting_location",
+    "wis",
+    "cover_text",
+    "change_text",
+    "ttcn_text",
+)
+
+SnippetColumn = Literal[
+    "title",
+    "ftp_url",
+    "meeting_title",
+    "meeting_location",
+    "wis",
+    "cover_text",
+    "change_text",
+    "ttcn_text",
+]
+
+
 class SearchSettings(BaseModel):
     """Knobs for the FTS5 full-text search subsystem.
 
@@ -417,6 +444,33 @@ class SearchSettings(BaseModel):
             "this for a single invocation."
         ),
     )
+    bm25_weights: tuple[float, ...] = Field(
+        default=(10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0),
+        description=(
+            "Per-column BM25 weights applied via FTS5's "
+            "bm25() function. Order MUST match the 8 indexed "
+            "columns of the tdoc_search virtual table "
+            "(see :data:`_SNIPPET_COLUMN_NAMES`)."
+        ),
+    )
+    snippet_column: SnippetColumn = Field(
+        default="title",
+        description=(
+            "Which FTS5 column to pull the highlighted snippet "
+            "from. Must be one of the 8 indexed columns of the "
+            "tdoc_search virtual table."
+        ),
+    )
+
+    @field_validator("bm25_weights", mode="before")
+    @classmethod
+    def _validate_bm25_weights_length(cls, value: object) -> object:
+        if isinstance(value, (tuple, list)) and len(value) != 8:
+            raise ValueError(
+                f"bm25_weights must have exactly 8 entries (one per FTS5 "
+                f"column), got {len(value)}"
+            )
+        return value
 
 
 class Settings(BaseSettings):

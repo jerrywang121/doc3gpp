@@ -148,14 +148,16 @@ table below is for navigation only.
 
 ## Search subsystem (`src/doc3gpp/models/search.py`, `src/doc3gpp/services/search_service.py`, `src/doc3gpp/storage/db/fts5_query.py`, `src/doc3gpp/storage/repositories/search_sql.py`)
 
-| `doc3gpp.models.search.SearchHit` | One FTS5 hit joined back to `tdocs` + `meetings` |
-| `doc3gpp.models.search.SearchFilters` | Filter arguments for a search query |
-| `doc3gpp.models.search.SearchIndexStatus` | Snapshot of the index state for `search index` |
-| `doc3gpp.models.search.SearchError` (and 3 subclasses) | Error hierarchy for the search subsystem |
-| `doc3gpp.services.search_service.SearchService` | Orchestration: `upsert_for_tdoc`, `remove_for_tdoc`, `search`, `rebuild`, `status` |
-| `doc3gpp.services.search_service.PassthroughReranker` | Default `EmbeddingReranker` impl |
-| `doc3gpp.storage.db.fts5_query.normalize_query` | Index-time pre-processor for TDoc ID + spec ID recognition |
-| `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | Concrete FTS5-backed `SearchIndexRepository` impl |
+| Symbol | Kind | File | Role |
+| --- | --- | --- | --- |
+| `doc3gpp.models.search.SearchHit` | dataclass | `models/search.py` | One FTS5 hit joined back to `tdocs` + `meetings` |
+| `doc3gpp.models.search.SearchFilters` | dataclass | `models/search.py` | Filter arguments for a search query |
+| `doc3gpp.models.search.SearchIndexStatus` | dataclass | `models/search.py` | Snapshot of the index state for `search index` |
+| `doc3gpp.models.search.SearchError` (+ 3 subclasses) | exception hierarchy | `models/search.py` | `SearchUnavailableError`, `SearchQueryError`, `SearchIndexCorruptError` for the search subsystem |
+| `doc3gpp.services.search_service.SearchService` | service | `services/search_service.py` | Orchestration: `upsert_for_tdoc`, `remove_for_tdoc`, `search`, `rebuild`, `status` |
+| `doc3gpp.services.search_service.PassthroughReranker` | service | `services/search_service.py` | Default `EmbeddingReranker` impl |
+| `doc3gpp.storage.db.fts5_query.normalize_query` | function | `storage/db/fts5_query.py` | Index-time pre-processor for TDoc ID + spec ID recognition |
+| `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | repository | `storage/repositories/search_sql.py` | Concrete FTS5-backed `SearchIndexRepository` impl |
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 

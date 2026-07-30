@@ -412,8 +412,8 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `extracted_at` or `parser_version` — the sidecar is purely the
       parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
-| `tdoc_search` | FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python) | yes |
-| `tdoc_search_meta` | Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`) | — |
+- `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python).
+- `tdoc_search_meta`: Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity
       convention as `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details`)

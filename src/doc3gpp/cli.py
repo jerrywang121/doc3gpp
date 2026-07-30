@@ -4223,7 +4223,7 @@ def index_command(
 ) -> None:
     """Manage the search index."""
     from doc3gpp.services.factory import build_search_service
-    from doc3gpp.settings.schema import get_settings
+    from doc3gpp.settings.loader import get_settings
 
     svc = build_search_service()
     if svc is None:

@@ -475,12 +475,12 @@ def test_tomli_w_is_importable() -> None:
 
 
 def test_load_default_template_returns_canonical_string() -> None:
-    """The packaged template ends with the ``snippet_tokens`` line
+    """The packaged template ends with the ``snippet_column`` line
     and starts with the canonical comment header."""
     text = load_default_template()
 
     assert "# doc3gpp configuration file (TOML)" in text
-    assert text.rstrip().endswith("snippet_tokens = 8")
+    assert text.rstrip().endswith('snippet_column = "title"')
 
 
 def test_load_default_template_matches_packaged_file() -> None:

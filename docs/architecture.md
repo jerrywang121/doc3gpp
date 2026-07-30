@@ -339,8 +339,12 @@ and the TDoc CR extraction is the deepest.
 - `doc3gpp search "QUERY" [filters]` → `SearchService.search(query,
   filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
   `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →
-  `list[SearchHit]` → CLI formatter. Fires the stale-index hint on
-  the side (one-shot, gated on `--quiet`).
+  `list[SearchHit]` → CLI formatter. The ranking stage uses
+  `bm25(tdoc_search, ...)` with the configurable column-weight
+  vector in `Settings.search.bm25_weights` (see the `tdoc_search`
+  schema below for the column order); `Settings.search.snippet_column`
+  selects which indexed column `snippet()` highlights. Fires the
+  stale-index hint on the side (one-shot, gated on `--quiet`).
 - `doc3gpp search index --rebuild` → `SearchService.rebuild(...)`
   generator → `repo.rebuild_batch(...)` per batch → per-row
   `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
@@ -412,7 +416,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `extracted_at` or `parser_version` — the sidecar is purely the
       parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
-- `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python).
+- `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).
 - `tdoc_search_meta`: Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity

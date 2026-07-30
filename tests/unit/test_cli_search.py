@@ -13,7 +13,7 @@ from doc3gpp.cli import app
 
 def test_search_help_lists_filters() -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["search", "search", "--help"])
+    result = runner.invoke(app, ["search", "query", "--help"])
     assert result.exit_code == 0
     for flag in (
         "--tsg", "--meeting", "--meeting-id", "--tdoc-id",
@@ -108,7 +108,7 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
 
     result = runner.invoke(
-        app, ["search", "search", "alpha", "--explain", "--format", "json"]
+        app, ["search", "query", "alpha", "--explain", "--format", "json"]
     )
     assert result.exit_code == 0, result.output
 
@@ -208,7 +208,7 @@ def test_snippet_tokens_overrides_setting(
             result = CliRunner().invoke(
                 app,
                 [
-                    "search", "search", "alpha",
+                    "search", "query", "alpha",
                     "--snippet-tokens", "4",
                     "--format", "json",
                 ],

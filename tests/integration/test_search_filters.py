@@ -63,7 +63,7 @@ def test_search_with_filters(sqlite_env) -> None:
     result = runner.invoke(
         app,
         [
-            "search", "search", "NB-IoT",
+            "search", "query", "NB-IoT",
             "--tsg", "RAN1",
             "--release", "Rel-17",
             "--spec", "38.300",

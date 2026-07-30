@@ -2477,7 +2477,7 @@ def _render_tdoc_show_markdown_compact(
                 )
             if block["text"]:
                 stream.write(f"  * changes: \n{block['text']}\n")
-            stream.write(f"\n")
+            stream.write("\n")
 
     stream.write("\n")
     if not record.files:
@@ -2601,10 +2601,10 @@ def _render_tdoc_show_markdown_full(
                     f"  * clauses: {', '.join(block['clauses'])}\n"
                 )
             if block["text"]:
-                stream.write(f"  * Changes:\n")
+                stream.write("  * Changes:\n")
                 for ln in block["text"].split("\n"):
                     stream.write(f">{ln}\n")
-                stream.write(f"\n")
+                stream.write("\n")
 
     if record.files:
         stream.write("\n## Auxiliary Files\n\n")
@@ -4136,7 +4136,7 @@ def config_set(
     typer.echo("  Run 'doc3gpp config show' to verify the active value.")
 
 
-@search_app.command("search")
+@search_app.command("query")
 def search_command(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),

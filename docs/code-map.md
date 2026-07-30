@@ -146,6 +146,17 @@ table below is for navigation only.
 | `_looks_like_3gpp_file_url` | function | `cli_url_helpers.py` | True when the URL ends with `.docx` or `.zip` (3GPP file shape). |
 | `_looks_like_3gpp_folder_url` | function | `cli_url_helpers.py` | True when the URL ends with `/` (3GPP folder shape). |
 
+## Search subsystem (`src/doc3gpp/models/search.py`, `src/doc3gpp/services/search_service.py`, `src/doc3gpp/storage/db/fts5_query.py`, `src/doc3gpp/storage/repositories/search_sql.py`)
+
+| `doc3gpp.models.search.SearchHit` | One FTS5 hit joined back to `tdocs` + `meetings` |
+| `doc3gpp.models.search.SearchFilters` | Filter arguments for a search query |
+| `doc3gpp.models.search.SearchIndexStatus` | Snapshot of the index state for `search index` |
+| `doc3gpp.models.search.SearchError` (and 3 subclasses) | Error hierarchy for the search subsystem |
+| `doc3gpp.services.search_service.SearchService` | Orchestration: `upsert_for_tdoc`, `remove_for_tdoc`, `search`, `rebuild`, `status` |
+| `doc3gpp.services.search_service.PassthroughReranker` | Default `EmbeddingReranker` impl |
+| `doc3gpp.storage.db.fts5_query.normalize_query` | Index-time pre-processor for TDoc ID + spec ID recognition |
+| `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | Concrete FTS5-backed `SearchIndexRepository` impl |
+
 ## CLI entry (`src/doc3gpp/cli.py`)
 
 Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).

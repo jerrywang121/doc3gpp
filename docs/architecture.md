@@ -149,6 +149,10 @@ Per-layer modules:
       `SQLAlchemy*Repository` classes (the cover-page repo also
       owns `tdoc_extracts` writes via `upsert_extract_meta`)
 
+| `services/search_service.py` | orchestration; injected with a `SearchIndexRepository` impl + `EmbeddingReranker` via `services/factory.build_search_service` |
+| `storage/db/fts5_query.py` | `normalize_query` index-time pre-processor (T3); applies TDoc-ID base+full duplication + spec-id `dot→underscore` rejoin |
+| `storage/repositories/search_sql.py` | SQL impl of `SearchIndexRepository`; FTS5 DDL/DML; gzip decompression at index time |
+
 ## Runtime Data Flow
 
 The CLI composes a service via the factory, the service drives the
@@ -332,6 +336,15 @@ and the TDoc CR extraction is the deepest.
   `DOC3GPP_CACHE__PURGE_CONFIRM` is outside the env-var allowlist)
   → `TDocCache.purge_subdir(scope)` for the scoped case, or
   `TDocCache.purge()` for `--scope all`.
+- `doc3gpp search "QUERY" [filters]` → `SearchService.search(query,
+  filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
+  `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →
+  `list[SearchHit]` → CLI formatter. Fires the stale-index hint on
+  the side (one-shot, gated on `--quiet`).
+- `doc3gpp search index --rebuild` → `SearchService.rebuild(...)`
+  generator → `repo.rebuild_batch(...)` per batch → per-row
+  `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
+  Resumable via `--resume`; cheap incremental via `--stale-only`.
 
 ## Database Schema
 
@@ -399,6 +412,8 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `extracted_at` or `parser_version` — the sidecar is purely the
       parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
+| `tdoc_search` | FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python) | yes |
+| `tdoc_search_meta` | Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`) | — |
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity
       convention as `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details`)

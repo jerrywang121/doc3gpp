@@ -113,3 +113,22 @@
 # tdoc_list_sync_interval = "30m" # skip TDoc list sync if last sync is newer than this
 # tdoc_list_closed_window = "90d" # skip TDoc list sync when meeting end_date is older than this
 # tdoc_list_url_template = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}"
+
+# ── Full-text search (FTS5) ─────────────────────────────────────────────────
+# Full-text search (FTS5) subsystem knobs.
+[search]
+# Master switch for the search subsystem. False disables the CLI
+# commands, the auto-index hook, and the tdoc_search DDL creation.
+enabled = true
+
+# When true, every successful tdoc parse calls
+# SearchService.upsert_for_tdoc(tdoc_id) so the index stays in sync.
+auto_index_on_parse = true
+
+# TDocs per batch during `search index --rebuild`. Smaller values
+# reduce peak memory; larger values finish faster.
+rebuild_batch_size = 500
+
+# Approximate number of tokens per FTS5 snippet(...) output. The
+# CLI's --snippet-tokens flag overrides this for a single invocation.
+snippet_tokens = 8

@@ -75,6 +75,8 @@ For the full symbol-to-file table, see
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
 | Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
+| Add a search command / hook | `src/doc3gpp/cli.py` (`search_app`) + `src/doc3gpp/services/search_service.py` + `src/doc3gpp/storage/repositories/search_sql.py` | FTS5 over sqlite + index-time normalize_query; rebuild resume via `tdoc_search_meta` |
+| Add a domain keyword / NER | `src/doc3gpp/services/search_service.py` (`EmbeddingReranker`) | PassthroughReranker default; swap for a real impl when the embedding spec lands |
 
 For deeper conventions (filter grammar, settings caching, anti-patterns,
 commit policy), see [`docs/conventions.md`](docs/conventions.md).
@@ -289,6 +291,8 @@ so tests resolve `doc3gpp.*` without an editable install.
 | Filter grammar, settings caching, commit policy, anti-patterns, unique styles | [`docs/conventions.md`](docs/conventions.md) |
 | Open limitations (schema bootstrap, hardcoded FTP URL, R5-/C6- URL templates, test surface, …) | [`docs/known-constraints.md`](docs/known-constraints.md) |
 | Per-knob TOML schema reference | [`doc3gpp.toml.example`](doc3gpp.toml.example) |
+| Search index design + spec contract | [`docs/superpowers/specs/2026-07-29-fts5-search-design.md`](docs/superpowers/specs/2026-07-29-fts5-search-design.md) |
+| FTS5 implementation plan | [`docs/superpowers/plans/2026-07-29-fts5-search.md`](docs/superpowers/plans/2026-07-29-fts5-search.md) |
 
 Update `README.md`, `AGENTS.md`, and the relevant `docs/*.md` in the
 same change set when CLI surface or behaviour changes — see

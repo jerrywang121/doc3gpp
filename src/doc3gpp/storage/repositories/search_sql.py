@@ -33,11 +33,22 @@ from doc3gpp.models.search import (
     SearchIndexStatus,
 )
 from doc3gpp.repository.protocols import SearchIndexRepository
+from doc3gpp.settings.loader import get_settings
+from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.fts5_query import normalize_query
 from doc3gpp.storage.db.session import get_engine
 
 logger = logging.getLogger(__name__)
+
+
+# FTS5 is 1-based; ``tdoc_id`` is column 1 even though it is
+# UNINDEXED, so the first searchable column (``title``) lives at
+# index 2. See ``docs/superpowers/specs/2026-07-30-fts5-perf.md``
+# §"FTS5 column indices".
+_SNIPPET_COLUMN_TO_IDX: dict[str, int] = {
+    name: i + 2 for i, name in enumerate(_SNIPPET_COLUMN_NAMES)
+}
 
 
 def _check_fts5(engine: Engine) -> None:
@@ -73,6 +84,13 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     def __init__(self) -> None:
         self._engine = get_engine()
         _check_fts5(self._engine)
+        settings = get_settings().search
+        self._weights: tuple[float, ...] = tuple(settings.bm25_weights)
+        self._snippet_column: str = settings.snippet_column
+        self._snippet_tokens: int = settings.snippet_tokens
+        self._snippet_column_idx: int = _SNIPPET_COLUMN_TO_IDX[
+            self._snippet_column
+        ]
 
     # ------------------------------------------------------------------
     # Write paths
@@ -142,8 +160,11 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         self, query: str, filters: SearchFilters,
     ) -> list[SearchHit]:
         sql = [
-            "SELECT tdoc_search.tdoc_id, bm25(tdoc_search) AS score,",
-            "       snippet(tdoc_search, 1, '<<', '>>', '…', 8) AS preview,",
+            "SELECT tdoc_search.tdoc_id,",
+            "       bm25(tdoc_search, :w0, :w1, :w2, :w3, :w4, :w5, :w6, :w7)"
+            " AS score,",
+            "       snippet(tdoc_search, :col_idx, '<<', '>>', '…', :tok)"
+            " AS preview,",
             "       t.title, m.title AS meeting, m.tsg AS tsg,",
             "       t.uploaded_date",
             "  FROM tdoc_search",
@@ -151,7 +172,13 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             "  JOIN meetings m ON t.meeting_id = m.meeting_id",
             " WHERE tdoc_search MATCH :query",
         ]
-        params: dict[str, Any] = {"query": query}
+        params: dict[str, Any] = {
+            "query": query,
+            "col_idx": self._snippet_column_idx,
+            "tok": self._snippet_tokens,
+        }
+        for i, weight in enumerate(self._weights):
+            params[f"w{i}"] = weight
         if filters.tsg:
             sql.append("   AND m.tsg = :tsg")
             params["tsg"] = filters.tsg
@@ -176,7 +203,10 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         if filters.until:
             sql.append("   AND t.uploaded_date <= :until")
             params["until"] = filters.until
-        sql.append(" ORDER BY score LIMIT :limit")
+        sql.append(
+            " ORDER BY bm25(tdoc_search, :w0, :w1, :w2, :w3, :w4, "
+            ":w5, :w6, :w7) LIMIT :limit"
+        )
         params["limit"] = max(filters.limit, 0)
         with self._engine.begin() as conn:
             rows = conn.execute(text("\n".join(sql)), params).all()

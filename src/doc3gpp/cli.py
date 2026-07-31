@@ -4293,7 +4293,15 @@ def index_command(
                 pass
         else:
             from tqdm import tqdm
-            total = fts5_svc._repo.count_tdocs_to_index(stale_only=stale_only)
+            # Mirror rebuild: total must account for the resume
+            # cursor when --resume is passed, otherwise the bar ends
+            # short and looks stuck.
+            after_id = (
+                fts5_svc._repo.get_resume_cursor() if resume else None
+            )
+            total = fts5_svc._repo.count_tdocs_to_index(
+                stale_only=stale_only, after_id=after_id,
+            )
             with tqdm(
                 total=total,
                 desc="rebuild",
@@ -4325,7 +4333,13 @@ def index_command(
                 pass
         else:
             from tqdm import tqdm
-            total = sem_svc._vec.count_tdocs_to_index(stale_only=stale_only)
+            # Mirror rebuild_embeddings: total must account for the
+            # resume cursor so the bar ends at 100% when the rebuild
+            # completes (otherwise it stops short and looks stuck).
+            after_id = sem_svc._vec.get_resume_cursor()
+            total = sem_svc._vec.count_tdocs_to_index(
+                stale_only=stale_only, after_id=after_id,
+            )
             with tqdm(
                 total=total,
                 desc="embed",

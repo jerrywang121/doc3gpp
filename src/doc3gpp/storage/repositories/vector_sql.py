@@ -128,7 +128,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 f"requested={query_vec.shape[-1]}"
             )
         sql = [
-            "SELECT chunk_id, tdoc_id, chunk_index, distance",
+            "SELECT chunk_id, vec_tdoc_embeddings.tdoc_id AS tdoc_id, "
+            "chunk_index, distance",
             "  FROM vec_tdoc_embeddings",
         ]
         params: dict = {

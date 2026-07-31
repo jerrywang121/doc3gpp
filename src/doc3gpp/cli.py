@@ -4329,15 +4329,23 @@ def index_command(
         batch_size = batch or settings.search.rebuild_batch_size
         if quiet:
             for _progress in sem_svc.rebuild_embeddings(
-                batch_size=batch_size, stale_only=stale_only, quiet=True,
+                batch_size=batch_size,
+                stale_only=stale_only,
+                quiet=True,
+                resume=resume,
             ):
                 pass
         else:
             from tqdm import tqdm
             # Mirror rebuild_embeddings: total must account for the
-            # resume cursor so the bar ends at 100% when the rebuild
-            # completes (otherwise it stops short and looks stuck).
-            after_id = sem_svc._vec.get_resume_cursor()
+            # resume cursor when --resume is passed so the bar ends
+            # at 100% (otherwise it stops short and looks stuck).
+            # When --resume is NOT passed, the service clears the
+            # cursor first so total reflects a fresh full-corpus
+            # rebuild.
+            after_id = (
+                sem_svc._vec.get_resume_cursor() if resume else None
+            )
             total = sem_svc._vec.count_tdocs_to_index(
                 stale_only=stale_only, after_id=after_id,
             )
@@ -4348,7 +4356,10 @@ def index_command(
                 dynamic_ncols=True,
             ) as bar:
                 for progress in sem_svc.rebuild_embeddings(
-                    batch_size=batch_size, stale_only=stale_only, quiet=False,
+                    batch_size=batch_size,
+                    stale_only=stale_only,
+                    quiet=False,
+                    resume=resume,
                 ):
                     bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
                     bar.update(progress.processed - bar.n)

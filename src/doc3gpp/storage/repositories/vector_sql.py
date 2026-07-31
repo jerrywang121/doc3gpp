@@ -234,6 +234,23 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 {"v": tdoc_id},
             )
 
+    def clear_resume_cursor(self) -> None:
+        """Remove the resume cursor from ``vec_meta``.
+
+        Called by :meth:`SemanticSearchService.rebuild_embeddings`
+        when the operator runs ``search index --rebuild-embeddings``
+        without ``--resume`` to force a fresh start from the very
+        first TDoc. Mirrors
+        :meth:`SQLAlchemySearchIndexRepository.clear_resume_cursor`.
+        """
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "DELETE FROM vec_meta "
+                    "WHERE key = 'last_rebuild_last_tdoc_id'"
+                ),
+            )
+
     def status(self) -> SearchIndexStatus:
         with self._engine.begin() as conn:
             row_count = int(

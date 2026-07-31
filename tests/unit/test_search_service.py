@@ -67,6 +67,10 @@ class MockRepo(SearchIndexRepository):
     def set_resume_cursor(self, tdoc_id: str) -> None:
         self.cursor = tdoc_id
 
+    def clear_resume_cursor(self) -> None:
+        self.cursor = None
+        self.cleared = True
+
     def status(self) -> SearchIndexStatus:
         return SearchIndexStatus(
             enabled=True,
@@ -181,6 +185,42 @@ def test_rebuild_yields_every_tdoc_for_small_corpus() -> None:
     assert len(progresses) == 50
     assert [p.processed for p in progresses] == list(range(1, 51))
     assert progresses[-1].total == 50
+
+
+def test_rebuild_without_resume_clears_existing_cursor() -> None:
+    """A rebuild invoked without --resume must clear any persisted
+    cursor first so a subsequent --resume starts truly from
+    scratch. Without this, a stale cursor from a prior interrupted
+    run silently shadows the new rebuild and the operator has no
+    way to force a fresh start.
+    """
+    repo = MockRepo()
+    repo.total = 3
+    repo.cursor = "C3-stale-cursor"  # pre-existing cursor
+    repo.batches = [["R5-1", "R5-2", "R5-3"]]
+    svc = SearchService(repo=repo, reranker=PassthroughReranker())
+    list(svc.rebuild(batch_size=10, resume=False, stale_only=False, quiet=True))
+    # Cursor was cleared at start, then re-set to the last batch.
+    assert repo.cleared is True
+    assert repo.cursor == "R5-3"
+
+
+def test_rebuild_with_resume_does_not_clear_cursor() -> None:
+    """A rebuild invoked with --resume must NOT clear the cursor —
+    the whole point of --resume is to honor the existing cursor
+    and pick up from where the previous run was interrupted.
+    """
+    repo = MockRepo()
+    repo.total = 3
+    repo.cursor = "C3-resume-point"
+    repo.batches = [["R5-1", "R5-2", "R5-3"]]
+    svc = SearchService(repo=repo, reranker=PassthroughReranker())
+    list(svc.rebuild(batch_size=10, resume=True, stale_only=False, quiet=True))
+    # The pre-existing cursor must still be there — clear was NOT
+    # called.
+    assert getattr(repo, "cleared", False) is False
+    # The rebuild advanced the cursor to the last batch.
+    assert repo.cursor == "R5-3"
 
 
 def test_rebuild_yields_nothing_for_zero_corpus() -> None:

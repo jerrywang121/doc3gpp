@@ -141,6 +141,60 @@ def test_index_for_tdoc_encodes_all_chunks_in_one_call(monkeypatch):
     assert len(args[0][1]) == 12
 
 
+def test_rebuild_embeddings_clears_cursor_when_resume_false() -> None:
+    """When the vector rebuild is invoked with resume=False (the
+    default), it must clear any existing cursor first so a fresh
+    start picks up from the very first TDoc.
+    """
+    vec = MagicMock()
+    vec.count_tdocs_to_index.return_value = 3
+    vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
+    vec.get_resume_cursor.return_value = "C3-stale"
+    mp = pytest.MonkeyPatch()
+    mp.setattr(
+        "doc3gpp.services.semantic_search_service._build_embed_text",
+        lambda tid: "text",
+    )
+    svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
+    list(
+        svc.rebuild_embeddings(
+            batch_size=10, stale_only=False, quiet=True, resume=False,
+        ),
+    )
+    vec.clear_resume_cursor.assert_called_once()
+    # After clear, get_resume_cursor must have been called and its
+    # return value (None, after clear) used as after_id.
+    vec.set_resume_cursor.assert_called_once_with("R5-3")
+    mp.undo()
+
+
+def test_rebuild_embeddings_honors_cursor_when_resume_true() -> None:
+    """When the vector rebuild is invoked with resume=True, it must
+    NOT clear the cursor and must use the cursor's value as
+    after_id.
+    """
+    vec = MagicMock()
+    vec.count_tdocs_to_index.return_value = 3
+    vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
+    vec.get_resume_cursor.return_value = "C3-resume-point"
+    mp = pytest.MonkeyPatch()
+    mp.setattr(
+        "doc3gpp.services.semantic_search_service._build_embed_text",
+        lambda tid: "text",
+    )
+    svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
+    list(
+        svc.rebuild_embeddings(
+            batch_size=10, stale_only=False, quiet=True, resume=True,
+        ),
+    )
+    vec.clear_resume_cursor.assert_not_called()
+    # set_resume_cursor was still called to advance the cursor
+    # forward.
+    vec.set_resume_cursor.assert_called_once_with("R5-3")
+    mp.undo()
+
+
 def test_remove_for_tdoc_calls_repo():
     vec = MagicMock()
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())

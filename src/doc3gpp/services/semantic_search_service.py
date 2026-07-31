@@ -169,7 +169,11 @@ class SemanticSearchService:
         self._vec.remove_for_tdoc(tdoc_id)
 
     def rebuild_embeddings(
-        self, batch_size: int, stale_only: bool, quiet: bool,
+        self,
+        batch_size: int,
+        stale_only: bool,
+        quiet: bool,
+        resume: bool = False,
     ) -> Iterator[RebuildProgress]:
         """Yield per-1%-of-progress updates during an embedding
         rebuild.
@@ -179,8 +183,17 @@ class SemanticSearchService:
         The CLI renders this as a tqdm bar with `bar.update(delta)`.
         Cursor is persisted to ``vec_meta`` per batch so a crashed
         rebuild can resume.
+
+        ``resume=True`` picks up from the persisted cursor;
+        ``resume=False`` (default) clears the cursor first so a
+        fresh start processes every TDoc from the very first one.
         """
-        after_id = self._vec.get_resume_cursor()
+        if resume:
+            after_id = self._vec.get_resume_cursor()
+        else:
+            # Force a fresh start regardless of any stale cursor.
+            self._vec.clear_resume_cursor()
+            after_id = None
         total = self._vec.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,
         )

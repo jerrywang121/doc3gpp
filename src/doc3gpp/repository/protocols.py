@@ -582,6 +582,17 @@ class SearchIndexRepository(Protocol):
         """
         ...
 
+    def clear_resume_cursor(self) -> None:
+        """Remove the resume cursor so the next rebuild starts at
+        the first TDoc.
+
+        ``search index --rebuild`` (no ``--resume``) calls this at
+        the start of a rebuild to force a truly fresh start; the
+        first successful batch upsert then writes a new cursor via
+        :meth:`set_resume_cursor`.
+        """
+        ...
+
     def status(self) -> SearchIndexStatus:
         """Return a :class:`SearchIndexStatus` snapshot for ``search index``.
 
@@ -687,6 +698,8 @@ class VectorIndexRepository(Protocol):
     def get_resume_cursor(self) -> "str | None": ...
 
     def set_resume_cursor(self, tdoc_id: str) -> None: ...
+
+    def clear_resume_cursor(self) -> None: ...
 
     def status(self) -> "SearchIndexStatus": ...
 

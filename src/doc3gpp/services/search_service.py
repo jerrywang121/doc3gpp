@@ -113,6 +113,13 @@ class SearchService:
         crashed rebuild can resume.
         """
         after_id = self._repo.get_resume_cursor() if resume else None
+        # When the operator runs without --resume, they want a
+        # truly fresh start. Clear any stale cursor so a subsequent
+        # crash + --resume picks up where this rebuild was
+        # interrupted, not from some long-ago cursor.
+        if not resume:
+            self._repo.clear_resume_cursor()
+            after_id = None
         total = self._repo.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,
         )

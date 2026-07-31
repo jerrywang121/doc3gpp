@@ -59,7 +59,7 @@ Documentation = "https://github.com/jerrywang121/doc3gpp/tree/main/docs"
 Changelog = "https://github.com/jerrywang121/doc3gpp/releases"
 
 [project.optional-dependencies]
-cli = ["typer>=0.12.3"]
+cli = ["typer>=0.12.3", "tqdm>=4.66.0"]
 extract = ["python-docx>=0.8.11"]
 search = []
 semantic = [

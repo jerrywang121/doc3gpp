@@ -4275,15 +4275,27 @@ def index_command(
     if do_fts5 and fts5_svc is not None:
         settings = get_settings()
         batch_size = batch or settings.search.rebuild_batch_size
-        for progress in fts5_svc.rebuild(
-            batch_size=batch_size, resume=resume,
-            stale_only=stale_only, quiet=quiet,
-        ):
-            if not quiet:
-                typer.echo(
-                    f"  rebuilt {progress.processed:,}/{progress.total:,} "
-                    f"(last tdoc_id={progress.current_tdoc_id})"
-                )
+        if quiet:
+            for _progress in fts5_svc.rebuild(
+                batch_size=batch_size, resume=resume,
+                stale_only=stale_only, quiet=True,
+            ):
+                pass
+        else:
+            from tqdm import tqdm
+            total = fts5_svc._repo.count_tdocs_to_index(stale_only=stale_only)
+            with tqdm(
+                total=total,
+                desc="rebuild",
+                unit="tdoc",
+                dynamic_ncols=True,
+            ) as bar:
+                for progress in fts5_svc.rebuild(
+                    batch_size=batch_size, resume=resume,
+                    stale_only=stale_only, quiet=False,
+                ):
+                    bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
+                    bar.update(progress.processed - bar.n)
         typer.echo("search index rebuild complete")
     if do_vec:
         sem_svc = build_semantic_search_service()
@@ -4296,14 +4308,25 @@ def index_command(
             raise typer.Exit(code=1)
         settings = get_settings()
         batch_size = batch or settings.search.rebuild_batch_size
-        for progress in sem_svc.rebuild_embeddings(
-            batch_size=batch_size, stale_only=stale_only, quiet=quiet,
-        ):
-            if not quiet:
-                typer.echo(
-                    f"  embedded {progress.processed:,}/{progress.total:,} "
-                    f"(last tdoc_id={progress.current_tdoc_id})"
-                )
+        if quiet:
+            for _progress in sem_svc.rebuild_embeddings(
+                batch_size=batch_size, stale_only=stale_only, quiet=True,
+            ):
+                pass
+        else:
+            from tqdm import tqdm
+            total = sem_svc._vec.count_tdocs_to_index(stale_only=stale_only)
+            with tqdm(
+                total=total,
+                desc="embed",
+                unit="tdoc",
+                dynamic_ncols=True,
+            ) as bar:
+                for progress in sem_svc.rebuild_embeddings(
+                    batch_size=batch_size, stale_only=stale_only, quiet=False,
+                ):
+                    bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
+                    bar.update(1)
         typer.echo("search index embedding rebuild complete")
 
 

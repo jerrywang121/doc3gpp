@@ -187,10 +187,14 @@ class SemanticSearchService:
                         tdoc_id, exc,
                     )
                 processed += 1
+                # Yield once per TDoc so the CLI can render a tqdm
+                # progress bar that updates continuously instead of
+                # every batch (a single batch may hold hundreds of
+                # TDocs and take minutes to embed).
+                yield RebuildProgress(
+                    processed=processed, total=total, current_tdoc_id=tdoc_id,
+                )
             self._vec.set_resume_cursor(batch[-1])
-            yield RebuildProgress(
-                processed=processed, total=total, current_tdoc_id=batch[-1],
-            )
 
     def status(self) -> SearchIndexStatus:
         return self._vec.status()

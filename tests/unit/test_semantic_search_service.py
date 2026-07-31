@@ -159,9 +159,35 @@ def test_rebuild_embeddings_yields_progress(monkeypatch):
     )
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(svc.rebuild_embeddings(batch_size=10, stale_only=False, quiet=True))
-    assert len(progress) == 1
-    assert progress[0].processed == 3
-    assert progress[0].total == 3
+    assert len(progress) == 3
+    assert [p.processed for p in progress] == [1, 2, 3]
+    assert all(p.total == 3 for p in progress)
+
+
+def test_rebuild_embeddings_processed_is_monotonic(monkeypatch):
+    """rebuild_embeddings must yield once per TDoc so the CLI can render
+    a tqdm progress bar that updates continuously rather than once
+    per batch (which can be hundreds of TDocs).
+    """
+    vec = MagicMock()
+    vec.count_tdocs_to_index.return_value = 7
+    vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"], ["R5-4", "R5-5", "R5-6", "R5-7"]])
+    vec.get_resume_cursor.return_value = None
+    monkeypatch.setattr(
+        "doc3gpp.services.semantic_search_service._build_embed_text",
+        lambda tid: "text",
+    )
+    svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
+    progress = list(svc.rebuild_embeddings(batch_size=3, stale_only=False, quiet=True))
+    # 3 + 4 = 7 yields, one per TDoc; processed is strictly increasing.
+    assert len(progress) == 7
+    assert [p.processed for p in progress] == [1, 2, 3, 4, 5, 6, 7]
+    assert all(p.total == 7 for p in progress)
+    # last_tdoc_id tracks the actual tdoc_id just embedded, not the
+    # batch tail (so the bar can show "now embedding X").
+    assert [p.current_tdoc_id for p in progress] == [
+        "R5-1", "R5-2", "R5-3", "R5-4", "R5-5", "R5-6", "R5-7",
+    ]
 
 
 def test_search_synthesizes_fts5_hit_for_vector_only_tdoc(monkeypatch):

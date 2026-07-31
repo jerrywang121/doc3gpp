@@ -5,14 +5,14 @@ The FTS5 search subsystem declares 8 indexed columns
 a length-8 weight tuple; a column with weight ``0.0`` is intentionally
 silenced (the FTS5 scoring and snippet both skip it).
 
-The CLI previously printed only the configured
-``Settings.search.snippet_column`` (default ``title``) as the single
-``preview`` field. The new contract is: every column with
-``bm25_weights[i] > 0`` gets its own ``snippet(tdoc_search, col_i, ...)``
-pulled from the FTS5 hit, returned as a ``{column_name: snippet_text}``
-mapping on the :class:`SearchHit`. Columns with weight ``0.0`` are
-absent from the mapping entirely (so the CLI never has to defend
-against empty placeholder strings).
+The CLI used to print only the configured ``Settings.search.snippet_column``
+(default ``title``) as the single ``preview`` field. The current
+contract is: every column with ``bm25_weights[i] > 0`` gets its own
+``snippet(tdoc_search, col_i, ...)`` pulled from the FTS5 hit,
+returned as a ``{column_name: snippet_text}`` mapping on the
+:class:`SearchHit`. Columns with weight ``0.0`` are absent from the
+mapping entirely (so the CLI never has to defend against empty
+placeholder strings).
 
 These tests pin the contract end-to-end:
 

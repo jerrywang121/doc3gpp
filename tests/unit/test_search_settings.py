@@ -24,15 +24,3 @@ def test_bm25_weights_rejects_wrong_length() -> None:
         SearchSettings(
             bm25_weights=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
         )
-
-
-def test_snippet_column_default_is_title() -> None:
-    """``snippet_column`` defaults to ``"title"`` per spec."""
-    settings = SearchSettings()
-    assert settings.snippet_column == "title"
-
-
-def test_snippet_column_rejects_unknown_column() -> None:
-    """``snippet_column`` must be one of the 8 indexed FTS5 columns."""
-    with pytest.raises(ValidationError):
-        SearchSettings(snippet_column="not_a_column")

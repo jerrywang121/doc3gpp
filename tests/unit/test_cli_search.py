@@ -53,8 +53,6 @@ class _CapturingRepo:
         # repo will use at search-time. Mirror the real repo's
         # attributes so the explain block is populated.
         self._weights = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
-        self._snippet_column = "title"
-        self._snippet_column_idx = 2
 
     def search(self, query: str, filters, snippet_tokens: int | None = None):
         self.search_calls.append(
@@ -94,7 +92,6 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
 
         # search config
         match:           "alpha"
-        snippet_column:  title (col 2)
         snippet_tokens:  8
         bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
     """
@@ -119,7 +116,6 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
     # Resolved MATCH expression: the SearchQueryBuilder wraps plain
     # text in double quotes after normalizing.
     assert 'match:           "alpha"' in result.output
-    assert "snippet_column:  title (col 2)" in result.output
     assert "snippet_tokens:  8" in result.output
     assert "[5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]" in result.output
 

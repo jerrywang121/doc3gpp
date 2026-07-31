@@ -362,9 +362,9 @@ class CacheSettings(BaseModel):
 
 
 #: The 8 FTS5 indexed columns of the ``tdoc_search`` virtual table, in
-#: DDL order. Used to build the :attr:`SearchSettings.snippet_column`
-#: ``Literal`` and exposed for reuse by downstream callers (e.g. the
-#: search query builder) so the schema stays the single source of truth.
+#: DDL order. Single source of truth for ``bm25_weights`` validation
+#: and the per-column snippet selection in the search repo. Keep in
+#: sync with the DDL in ``storage/db/create_schema.py``.
 _SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
     "title",
     "ftp_url",
@@ -375,17 +375,6 @@ _SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
     "change_text",
     "ttcn_text",
 )
-
-SnippetColumn = Literal[
-    "title",
-    "ftp_url",
-    "meeting_title",
-    "meeting_location",
-    "wis",
-    "cover_text",
-    "change_text",
-    "ttcn_text",
-]
 
 
 class SearchSettings(BaseModel):
@@ -450,15 +439,10 @@ class SearchSettings(BaseModel):
             "Per-column BM25 weights applied via FTS5's "
             "bm25() function. Order MUST match the 8 indexed "
             "columns of the tdoc_search virtual table "
-            "(see :data:`_SNIPPET_COLUMN_NAMES`)."
-        ),
-    )
-    snippet_column: SnippetColumn = Field(
-        default="title",
-        description=(
-            "Which FTS5 column to pull the highlighted snippet "
-            "from. Must be one of the 8 indexed columns of the "
-            "tdoc_search virtual table."
+            "(see :data:`_SNIPPET_COLUMN_NAMES`). Columns with "
+            "weight 0 are skipped in both ranking and snippet "
+            "selection; columns with weight > 0 each get their "
+            "own highlighted preview in query results."
         ),
     )
 

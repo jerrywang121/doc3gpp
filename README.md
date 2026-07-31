@@ -20,9 +20,9 @@ PostgreSQL available via configuration.
 - [Features](#features)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [CLI Usage](#cli-usage)
 - [Database Configuration](#database-configuration)
 - [Configuration File (TOML)](#configuration-file-toml)
-- [CLI Usage](#cli-usage)
 - [Architecture](#architecture)
 - [Testing](#testing)
 - [Roadmap](#roadmap)
@@ -43,22 +43,25 @@ PostgreSQL available via configuration.
   Auxiliary TDoc files are still scanned from the meeting's FTP folders.
 - **TDoc CR extraction** — optional `python-docx` pipeline that downloads,
   caches, and parses CR cover pages into structured records. The slim
-  `tdoc_cr_cover_page` table holds cover-page fields only; the new
-  `tdoc_cr_ttcn_details` sidecar persists the six TTCN overview fields
+  `tdoc_cr_cover_page` table holds cover-page fields; the
+  `tdoc_cr_ttcn_details` sidecar adds the six TTCN overview fields
   (`testcase`, `ue`, `ss`, `ats_version`, `ttcn_release`, `test_suite`)
   plus a gzip-compressed `required_changes` JSON blob and a
-  newline-delimited, SQL-searchable `changed_functions` aggregate
-  (sorted + deduped `<module>.<function>` entries auto-derived from
-  `required_changes`). When only the module basename is recoverable the
-  entry is recorded as `'<module>.'` (trailing-dot sentinel); when only
-  the function name is recoverable it is recorded as `'.<function>'`
-  (leading-dot sentinel); when neither is recoverable the correction
-  is dropped. Cache artefacts live in `tdoc_extracts`. `tdoc
-  show` automatically appends a TTCN section (`[TTCN Details]` in table,
-  `## TTCN Details` in markdown, a `ttcn` key in JSON) when the TDoc is
-  a TTCN CR, and an auxiliary files section (`[Auxiliary Files]` / `##
-  Auxiliary Files` / `files` key) listing every `tdoc_files` row whose
-  `tdoc_id` matches.
+  SQL-searchable `changed_functions` aggregate auto-derived from
+  `required_changes`. Cache artefacts live in `tdoc_extracts`. `tdoc
+  show` automatically appends a TTCN section when the TDoc is a TTCN
+  CR and an auxiliary files section listing every `tdoc_files` row
+  whose `tdoc_id` matches.
+- **Full-text search (FTS5 + BM25)** — built-in SQLite FTS5 virtual
+  table (`tdoc_search`) over every TDoc, CR cover page, change
+  details, TTCN details, meeting metadata, and related work items,
+  with BM25-ranked results and highlighted snippets. A Python-side
+  `normalize_query` keeps TDoc ids (`R5-1234567r2` → base + revision
+  tokens) and spec numbers (`38.300` → `38_300`) as single tokens so
+  identifier search works naturally. The index auto-refreshes after
+  every successful `tdoc parse` and can be rebuilt or status-checked
+  via the `search query` / `search index` subcommands. Optional
+  `[search]` extra; opt out with `Settings.search.enabled = false`.
 - **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
   SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
 - **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to
@@ -115,6 +118,7 @@ The `[dev]` extra includes `[cli]`, `pytest`, `pytest-cov`, and `ruff`.
 pip install "doc3gpp[mysql]"      # MySQL driver (pymysql)
 pip install "doc3gpp[postgres]"   # PostgreSQL driver (psycopg)
 pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
+pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
 ```
 
 ## Quick Start
@@ -153,6 +157,153 @@ doc3gpp tdoc parse --tdoc 'R5s26%' --yes   # pattern match, skip confirmation
 doc3gpp wi sync --tsg r5                   # scrape WI DynaReport for R5
 doc3gpp wi list --release "Rel-19" --limit 50
 ```
+
+## CLI Usage
+
+The CLI ships eight sub-apps. The most common
+entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
+(TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR cover
+pages), `tdoc show --format raw` (render the converted `.docx`
+markdown), and `search query` (FTS5 + BM25 full-text search).
+
+### `db` — database lifecycle
+
+```bash
+doc3gpp db init                # create schema + seed tsgs table
+doc3gpp db check               # verify connectivity
+doc3gpp db reset --yes         # destructive: wipe + recreate SQLite schema
+```
+
+### `tsg` — 3GPP TSG reference
+
+```bash
+doc3gpp tsg list               # show the canonical 3GPP TSG list
+doc3gpp tsg show --tsg r5      # show a single TSG record
+doc3gpp tsg seed               # re-seed the reference table
+```
+
+### `meeting` — 3GPP meeting calendar
+
+```bash
+doc3gpp meeting sync --tsg r5              # scrape DynaReport; --tsg validated against tsgs
+doc3gpp meeting list --limit 20
+doc3gpp meeting list --tdoc R5-260013      # find the meeting whose start_doc/end_doc brackets a TDoc
+```
+
+### `tdoc` — list, parse, show
+
+```bash
+# sync — every tracked meeting_id or one specific meeting
+doc3gpp tdoc sync                                # sync every distinct meeting_id in tdocs
+doc3gpp tdoc sync --meeting-id 85434
+doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
+
+# list — 18 filter flags combine freely
+doc3gpp tdoc list --limit 10
+doc3gpp tdoc list --tdoc 'R5%'                   # LIKE pattern on tdoc_id
+doc3gpp tdoc list --meeting-id 85434 --cr-cat F
+doc3gpp tdoc list --tdoc 'R5%' --meeting "%RAN3%"
+doc3gpp tdoc list --title '!%Sidelink%'          # NOT LIKE
+
+# parse (DB mode) — every flag is a filter
+doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts before batch (pending only)
+doc3gpp tdoc parse --tdoc 'R5s26%' --yes         # LIKE pattern; non-interactive
+doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --cr-cat F
+doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
+doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything (includes already-parsed)
+
+# parse (direct mode) — bypasses DB filters
+doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx                # local .docx → stdout
+doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../R5s260009.zip # 3GPP URL → cache + DB
+doc3gpp tdoc parse --from-url https://example.com/some.zip --format json -o /tmp/out.json  # non-3GPP URL → in-memory only
+doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json         # local batch
+doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --output ./parsed  # online batch
+
+# show — --tdoc and --ftp-url are mutually exclusive
+doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
+doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # converted .docx markdown
+doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
+doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
+```
+
+### `wi` — Work items
+
+```bash
+doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
+doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
+doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
+```
+
+### `search` — FTS5 + BM25 full-text search
+
+Requires the `doc3gpp[search]` extra (ships FTS5 helpers; sqlite-only).
+On MySQL/PostgreSQL or builds without FTS5, `search` reports
+unavailable with a one-liner and the rest of the CLI is unaffected.
+
+```bash
+# query — BM25-ranked hits with highlighted snippets
+doc3gpp search query "NB-IoT scheduling" --tsg RAN1 --limit 10
+doc3gpp search query "R5-1234567" --format json
+doc3gpp search query "scheduling NR" --spec 38.300 --since 2026-01-01
+
+# index — status, rebuild, resume, stale-only refresh
+doc3gpp search index                                  # show SearchIndexStatus
+doc3gpp search index --rebuild                        # drop + rebuild from scratch
+doc3gpp search index --rebuild --resume --batch 1000  # resume a crashed rebuild
+doc3gpp search index --rebuild --stale-only --quiet   # re-index only newer tdocs
+```
+
+The auto-index hook keeps the index fresh after every successful
+`tdoc parse`; tune or disable via the `[search]` section in
+`doc3gpp.toml` (`enabled`, `auto_index_on_parse`,
+`rebuild_batch_size`, `snippet_tokens`).
+
+### `config` — TOML config lifecycle
+
+```bash
+doc3gpp config init                              # bootstrap a TOML config file with full defaults
+doc3gpp config path                              # which file is in effect (or "(no config file found)")
+doc3gpp config show                              # fully-resolved Settings as JSON for diffing
+doc3gpp config set sync.auto_sync true           # write one setting into the active TOML config
+doc3gpp config set sync.auto_sync true --dry-run # preview the resulting TOML without writing
+```
+
+### `cache` — Local extraction cache
+
+```bash
+doc3gpp cache status                  # file count, total bytes, limit, per-subdir breakdown
+doc3gpp cache purge --yes             # delete cached markdown sidecars (default scope)
+doc3gpp cache purge --scope zips --yes # only the 3GPP-served zip blobs
+doc3gpp cache purge --scope all --yes  # both subtrees
+```
+
+### Common output options
+
+Every `* list` command accepts `--format {table,json,markdown}` and
+`-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list`
+additionally accept `--fields` to override the configured column set
+(`wi list` uses the configured `output.fields.wi` list):
+
+```bash
+doc3gpp tdoc list --format json -o tdocs.json
+doc3gpp meeting list --format markdown -o meetings.md
+doc3gpp tsg list --format json
+doc3gpp wi list --format markdown
+```
+
+`tdoc show` accepts the same `--format` + `-o/--output` pair plus
+`--format raw` for the converted `.docx` markdown body. The direct-mode
+`tdoc parse --from-path` / `--from-url` also accepts `--format raw` for
+local-batch use.
+
+- `--compact` — strip output formatting. JSON drops indent and operator
+  space (single line, `separators=(",", ":")`); Markdown drops CommonMark
+  decorators (bold, italic, headings, bullets, GFM tables, code fences)
+  and emits `key: value` lines with blank-line section separators. No-op
+  for `table` and `raw`. Default: `false`; opt in globally with
+  `[output] compact = true` in `doc3gpp.toml`.
+
+Full command reference: [`docs/cli.md`](docs/cli.md).
 
 ## Database Configuration
 
@@ -232,6 +383,19 @@ purge_confirm = true
 [tdoc_parse]
 max_batch = 100
 max_ftp_depth = 2
+
+[search]
+enabled = true                       # sqlite-only FTS5 + BM25 search; off = no-op
+auto_index_on_parse = true           # keep the index in sync after every parse
+snippet_tokens = 8                   # FTS5 snippet() length; --snippet-tokens overrides
+# Per-column BM25 weights — drive both ranking and snippet selection.
+# Order matches the 8 indexed FTS5 columns: (title, ftp_url,
+# meeting_title, meeting_location, wis, cover_text, change_text,
+# ttcn_text). Weight 0 excludes a column from ranking AND from
+# previews; weight > 0 gives it its own highlighted snippet (only
+# when the snippet actually contains a match). Tune via
+# `doc3gpp search --explain`.
+bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >
@@ -248,129 +412,6 @@ Edit values without hand-editing the TOML:
 doc3gpp config init                       # bootstrap a config file with full defaults
 doc3gpp config set sync.auto_sync true    # then edit individual keys
 ```
-
-## CLI Usage
-
-The CLI ships seven sub-apps and twenty commands. The most common
-entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
-(TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR cover
-pages), and `tdoc show --format raw` (render the converted `.docx`
-markdown).
-
-### `db` — database lifecycle
-
-```bash
-doc3gpp db init                # create schema + seed tsgs table
-doc3gpp db check               # verify connectivity
-doc3gpp db reset --yes         # destructive: wipe + recreate SQLite schema
-```
-
-### `tsg` — 3GPP TSG reference
-
-```bash
-doc3gpp tsg list               # show the canonical 3GPP TSG list
-doc3gpp tsg show --tsg r5      # show a single TSG record
-doc3gpp tsg seed               # re-seed the reference table
-```
-
-### `meeting` — 3GPP meeting calendar
-
-```bash
-doc3gpp meeting sync --tsg r5              # scrape DynaReport; --tsg validated against tsgs
-doc3gpp meeting list --limit 20
-doc3gpp meeting list --tdoc R5-260013      # find the meeting whose start_doc/end_doc brackets a TDoc
-```
-
-### `tdoc` — list, parse, show
-
-```bash
-# sync — every tracked meeting_id or one specific meeting
-doc3gpp tdoc sync                                # sync every distinct meeting_id in tdocs
-doc3gpp tdoc sync --meeting-id 85434
-doc3gpp tdoc sync --meeting "R5--TTCN Workshop#74"
-
-# list — 18 filter flags combine freely
-doc3gpp tdoc list --limit 10
-doc3gpp tdoc list --tdoc 'R5%'                   # LIKE pattern on tdoc_id
-doc3gpp tdoc list --meeting-id 85434 --cr-cat F
-doc3gpp tdoc list --tdoc 'R5%' --meeting "%RAN3%"
-doc3gpp tdoc list --title '!%Sidelink%'          # NOT LIKE
-
-# parse (DB mode) — every flag is a filter
-doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts before batch (pending only)
-doc3gpp tdoc parse --tdoc 'R5s26%' --yes         # LIKE pattern; non-interactive
-doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --cr-cat F
-doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
-doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything (includes already-parsed)
-
-# parse (direct mode) — bypasses DB filters
-doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx                # local .docx → stdout
-doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../R5s260009.zip # 3GPP URL → cache + DB
-doc3gpp tdoc parse --from-url https://example.com/some.zip --format json -o /tmp/out.json  # non-3GPP URL → in-memory only
-doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json         # local batch
-doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --output ./parsed  # online batch
-
-# show — --tdoc and --ftp-url are mutually exclusive
-doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
-doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # converted .docx markdown
-doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
-doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
-```
-
-### `wi` — Work items
-
-```bash
-doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
-doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
-doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
-```
-
-### `config` — TOML config lifecycle
-
-```bash
-doc3gpp config init                              # bootstrap a TOML config file with full defaults
-doc3gpp config path                              # which file is in effect (or "(no config file found)")
-doc3gpp config show                              # fully-resolved Settings as JSON for diffing
-doc3gpp config set sync.auto_sync true           # write one setting into the active TOML config
-doc3gpp config set sync.auto_sync true --dry-run # preview the resulting TOML without writing
-```
-
-### `cache` — Local extraction cache
-
-```bash
-doc3gpp cache status                  # file count, total bytes, limit, per-subdir breakdown
-doc3gpp cache purge --yes             # delete cached markdown sidecars (default scope)
-doc3gpp cache purge --scope zips --yes # only the 3GPP-served zip blobs
-doc3gpp cache purge --scope all --yes  # both subtrees
-```
-
-### Common output options
-
-Every `* list` command accepts `--format {table,json,markdown}` and
-`-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list`
-additionally accept `--fields` to override the configured column set
-(`wi list` uses the configured `output.fields.wi` list):
-
-```bash
-doc3gpp tdoc list --format json -o tdocs.json
-doc3gpp meeting list --format markdown -o meetings.md
-doc3gpp tsg list --format json
-doc3gpp wi list --format markdown
-```
-
-`tdoc show` accepts the same `--format` + `-o/--output` pair plus
-`--format raw` for the converted `.docx` markdown body. The direct-mode
-`tdoc parse --from-path` / `--from-url` also accepts `--format raw` for
-local-batch use.
-
-- `--compact` — strip output formatting. JSON drops indent and operator
-  space (single line, `separators=(",", ":")`); Markdown drops CommonMark
-  decorators (bold, italic, headings, bullets, GFM tables, code fences)
-  and emits `key: value` lines with blank-line section separators. No-op
-  for `table` and `raw`. Default: `false`; opt in globally with
-  `[output] compact = true` in `doc3gpp.toml`.
-
-Full command reference: [`docs/cli.md`](docs/cli.md).
 
 ## Architecture
 

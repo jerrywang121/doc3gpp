@@ -111,7 +111,6 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
             "rebuild_batch_size": 500,
             "snippet_tokens": 8,
             "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
-            "snippet_column": "title",
         }
     }
 
@@ -230,6 +229,5 @@ def test_config_init_force_overwrites(sqlite_env, tmp_path, monkeypatch) -> None
             "rebuild_batch_size": 500,
             "snippet_tokens": 8,
             "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
-            "snippet_column": "title",
         }
     }

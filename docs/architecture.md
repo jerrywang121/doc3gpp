@@ -342,9 +342,11 @@ and the TDoc CR extraction is the deepest.
   `list[SearchHit]` → CLI formatter. The ranking stage uses
   `bm25(tdoc_search, ...)` with the configurable column-weight
   vector in `Settings.search.bm25_weights` (see the `tdoc_search`
-  schema below for the column order); `Settings.search.snippet_column`
-  selects which indexed column `snippet()` highlights. Fires the
-  stale-index hint on the side (one-shot, gated on `--quiet`).
+  schema below for the column order); the same `bm25_weights`
+  vector drives snippet selection — one `snippet(...)` per
+  `weight > 0` column, and the result surfaces in the hit's
+  `previews` map only when the snippet contains a match. Fires
+  the stale-index hint on the side (one-shot, gated on `--quiet`).
 - `doc3gpp search index --rebuild` → `SearchService.rebuild(...)`
   generator → `repo.rebuild_batch(...)` per batch → per-row
   `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.

@@ -77,7 +77,7 @@ For the full symbol-to-file table, see
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
 | Add a search command / hook | `src/doc3gpp/cli.py` (`search_app`) + `src/doc3gpp/services/search_service.py` + `src/doc3gpp/storage/repositories/search_sql.py` | FTS5 over sqlite + index-time normalize_query; rebuild resume via `tdoc_search_meta` |
 | Add a domain keyword / NER | `src/doc3gpp/services/search_service.py` (`EmbeddingReranker`) | PassthroughReranker default; swap for a real impl when the embedding spec lands |
-| Tune the FTS5 search subsystem | `src/doc3gpp/settings/schema.py` (`SearchSettings`) | FTS5 search knobs (`enabled`, `auto_index_on_parse`, `rebuild_batch_size`, `snippet_tokens`, `bm25_weights`, `snippet_column`); TOML `[search]` block. |
+| Tune the FTS5 search subsystem | `src/doc3gpp/settings/schema.py` (`SearchSettings`) | FTS5 search knobs (`enabled`, `auto_index_on_parse`, `rebuild_batch_size`, `snippet_tokens`, `bm25_weights`); TOML `[search]` block. Per-column previews are driven by `bm25_weights` (weight>0 → snippet bound; match in snippet → surfaced; weight=0 → both skipped). |
 
 For deeper conventions (filter grammar, settings caching, anti-patterns,
 commit policy), see [`docs/conventions.md`](docs/conventions.md).

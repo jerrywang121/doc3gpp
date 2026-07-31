@@ -52,7 +52,7 @@ class _CapturingRepo:
         # The CLI's ``_emit_explain`` reads the cached config the
         # repo will use at search-time. Mirror the real repo's
         # attributes so the explain block is populated.
-        self._weights = (10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0)
+        self._weights = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
         self._snippet_column = "title"
         self._snippet_column_idx = 2
 
@@ -96,7 +96,7 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
         match:           "alpha"
         snippet_column:  title (col 2)
         snippet_tokens:  8
-        bm25_weights:    [10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0]
+        bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
     """
     runner = CliRunner()
     stub = _StubService()
@@ -121,7 +121,7 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
     assert 'match:           "alpha"' in result.output
     assert "snippet_column:  title (col 2)" in result.output
     assert "snippet_tokens:  8" in result.output
-    assert "[10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0]" in result.output
+    assert "[5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]" in result.output
 
 
 def test_snippet_tokens_overrides_setting(

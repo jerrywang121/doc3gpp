@@ -445,7 +445,7 @@ class SearchSettings(BaseModel):
         ),
     )
     bm25_weights: tuple[float, ...] = Field(
-        default=(10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0),
+        default=(5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0),
         description=(
             "Per-column BM25 weights applied via FTS5's "
             "bm25() function. Order MUST match the 8 indexed "

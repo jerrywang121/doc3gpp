@@ -43,6 +43,8 @@ class MockRepo(SearchIndexRepository):
                 meeting=None,
                 tsg=None,
                 uploaded_date=None,
+                ftp_url=None,
+                wis=None,
             ),
         ]
 

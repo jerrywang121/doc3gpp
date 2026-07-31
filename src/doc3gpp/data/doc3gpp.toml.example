@@ -138,7 +138,7 @@ snippet_tokens = 8
 # table: (title, ftp_url, meeting_title, meeting_location, wis,
 # cover_text, change_text, ttcn_text). Raise a column's weight to
 # boost hits there; tune interactively via `doc3gpp search --explain`.
-bm25_weights = [10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0]
+bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 
 # Which FTS5 column snippet() pulls the highlighted excerpt from.
 # Must be one of the 8 indexed columns (title, ftp_url, meeting_title,

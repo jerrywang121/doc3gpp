@@ -1489,7 +1489,7 @@ piped stdout) and looks exactly like this:
 match:           "tdoc"
 snippet_column:  title (col 0)
 snippet_tokens:  8
-bm25_weights:    [10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0]
+bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 ```
 
 - `match` is the literal FTS5 `MATCH` expression the SQL repository

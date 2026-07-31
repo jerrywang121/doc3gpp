@@ -181,7 +181,8 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             "       snippet(tdoc_search, :col_idx, '<<', '>>', '…', :tok)"
             " AS preview,",
             "       t.title, m.title AS meeting, m.tsg AS tsg,",
-            "       t.uploaded_date",
+            "       t.uploaded_date,",
+            "       tdoc_search.ftp_url, tdoc_search.wis",
             "  FROM tdoc_search",
             "  JOIN tdocs t   ON t.tdoc_id = tdoc_search.tdoc_id",
             "  JOIN meetings m ON t.meeting_id = m.meeting_id",
@@ -234,6 +235,8 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                 meeting=row[4],
                 tsg=row[5],
                 uploaded_date=row[6],
+                ftp_url=row[7],
+                wis=row[8],
             )
             for row in rows
         ]

@@ -4278,6 +4278,7 @@ def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:
                 "tdoc_id": h.tdoc_id, "score": h.score, "preview": h.preview,
                 "title": h.title, "meeting": h.meeting, "tsg": h.tsg,
                 "uploaded_date": h.uploaded_date,
+                "ftp_url": h.ftp_url, "wis": h.wis,
             }
             for h in hits
         ]
@@ -4288,12 +4289,21 @@ def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:
     elif format == "markdown":
         for h in hits:
             typer.echo(f"**{h.tdoc_id}** — {h.title}")
+            if h.ftp_url:
+                typer.echo(f"ftp_url: {h.ftp_url}")
+            if h.wis:
+                typer.echo(f"wis: {h.wis}")
             typer.echo(f"> {h.preview}")
             typer.echo("")
     else:
-        typer.echo(f"{'tdoc_id':<12} {'score':>8}  preview")
+        typer.echo(f"{'tdoc_id':<12} {'score':>8}  {'ftp_url':<48}  {'wis':<20}  preview")
         for h in hits:
-            typer.echo(f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {h.preview}")
+            ftp = h.ftp_url or "-"
+            wis = h.wis or "-"
+            typer.echo(
+                f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {ftp:<48.48}  "
+                f"{wis:<20.20}  {h.preview}"
+            )
 
 
 def _emit_search_status(svc: object, *, quiet: bool) -> None:

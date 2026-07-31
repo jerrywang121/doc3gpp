@@ -11,7 +11,7 @@ from doc3gpp.settings.schema import SearchSettings
 def test_bm25_weights_default_is_eight_floats() -> None:
     """``bm25_weights`` defaults to 8 floats matching the 8 FTS5 columns."""
     settings = SearchSettings()
-    assert settings.bm25_weights == (10.0, 1.0, 0.5, 0.5, 2.0, 4.0, 3.0, 3.0)
+    assert settings.bm25_weights == (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
     assert len(settings.bm25_weights) == 8
     assert all(isinstance(w, float) for w in settings.bm25_weights)
 

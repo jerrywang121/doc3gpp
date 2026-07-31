@@ -88,6 +88,8 @@ class SearchHit:
     meeting: str | None
     tsg: str | None
     uploaded_date: str | None
+    ftp_url: str | None
+    wis: str | None
 
 
 @dataclass(slots=True, frozen=True)

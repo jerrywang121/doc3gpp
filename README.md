@@ -62,6 +62,12 @@ PostgreSQL available via configuration.
   every successful `tdoc parse` and can be rebuilt or status-checked
   via the `search query` / `search index` subcommands. Optional
   `[search]` extra; opt out with `Settings.search.enabled = false`.
+- **Hybrid semantic search (FTS5 + embeddings)** — `doc3gpp search sem
+  QUERY` fans the query out to both the FTS5 index (after spaCy
+  stopword stripping) and a sqlite-vec embedding index, then merges
+  the two rankings with reciprocal-rank fusion (default
+  `--vector-weight=0.7`). Optional `[semantic]` extra (sqlite-only);
+  see `### search sem` below for details.
 - **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
   SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
 - **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to
@@ -119,6 +125,7 @@ pip install "doc3gpp[mysql]"      # MySQL driver (pymysql)
 pip install "doc3gpp[postgres]"   # PostgreSQL driver (psycopg)
 pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
 pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
+pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sentence-transformers, spaCy, sqlite-vec)
 ```
 
 ## Quick Start
@@ -258,6 +265,32 @@ The auto-index hook keeps the index fresh after every successful
 `doc3gpp.toml` (`enabled`, `auto_index_on_parse`,
 `rebuild_batch_size`, `snippet_tokens`).
 
+### `search sem` — hybrid FTS5 + embedding vector search
+
+Requires the `doc3gpp[semantic]` extra (`sentence-transformers`,
+`spaCy` + the `en_core_web_sm` model, `sqlite-vec`); sqlite-only.
+On MySQL/PostgreSQL or builds without sqlite-vec the command reports
+unavailable with a one-liner; `search query` (FTS5-only) still works.
+
+```bash
+# sem — RRF-fused FTS5 + vector ranking (default --vector-weight=0.7)
+doc3gpp search sem "what CRs touch NB-IoT power saving" --limit 10
+doc3gpp search sem "scheduling NR for FR2" --spec 38.300 --format json
+doc3gpp search sem "TTCN changes for R5-12345" --vector-weight 0.5
+
+# extend `search index` to manage the embedding index
+doc3gpp search index --rebuild-embeddings           # drop + rebuild vec_tdoc_embeddings
+doc3gpp search index --rebuild-embeddings --stale-only --quiet
+doc3gpp search index --rebuild-all                   # both FTS5 + vector in sequence
+```
+
+The auto-embed hook keeps `vec_tdoc_embeddings` fresh after every
+successful `tdoc parse` (skipped when `Settings.semantic_search.
+auto_embed_on_parse = false`). Tune via the `[semantic_search]`
+section in `doc3gpp.toml` (`enabled`, `embedding_model`, `chunk_size`,
+`chunk_overlap`, `rrf_k`, `vector_weight`, `fanout_multiplier`,
+`final_limit`, `max_chunks_per_tdoc`).
+
 ### `config` — TOML config lifecycle
 
 ```bash
@@ -396,6 +429,22 @@ snippet_tokens = 8                   # FTS5 snippet() length; --snippet-tokens o
 # when the snippet actually contains a match). Tune via
 # `doc3gpp search --explain`.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+
+# Hybrid search — only loaded when the `[semantic]` extra is installed.
+# sqlite-only; on MySQL/PostgreSQL the vector path is a no-op.
+[semantic_search]
+enabled = true                       # master switch for `search sem` + auto-embed
+auto_embed_on_parse = true           # upsert embeddings after every successful parse
+embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # 384-dim
+chunk_size = 800                     # whitespace tokens per chunk
+chunk_overlap = 100                  # trailing tokens repeated at next chunk start
+rrf_k = 60                           # RRF k constant
+vector_weight = 0.7                  # 0.0 = FTS5-only, 1.0 = vector-only
+fanout_multiplier = 2                # internal_limit = limit * fanout per side
+final_limit = 20                     # default `--limit` for `search sem`
+max_chunks_per_tdoc = 32             # cap on chunks per TDoc
+user_defined_stop_words = []         # extra tokens to drop from the FTS5 query
+keep_negation_words = ["not"]        # tokens to retain even if spaCy marks them stopwords
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >

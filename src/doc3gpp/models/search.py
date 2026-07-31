@@ -75,15 +75,16 @@ class SearchHit:
     """A single FTS5 hit joined back to ``tdocs`` + ``meetings``.
 
     ``score`` is the raw ``bm25(tdoc_search)`` value (lower = better
-    match in FTS5). ``preview`` is the FTS5 ``snippet(...)`` output
-    with ``<<...>>`` markers around matches; the CLI renders it as a
-    separate column in ``table`` and as an inline ``>`` blockquote in
-    ``markdown``.
+    match in FTS5). ``previews`` maps every column whose
+    ``bm25_weights[i] > 0`` to its FTS5 ``snippet(...)`` output (with
+    ``<<...>>`` markers around matches); weight=0 columns are absent
+    from the mapping. The CLI renders each entry as a labeled block
+    in ``table`` / ``markdown`` and as a nested object in ``json``.
     """
 
     tdoc_id: str
     score: float
-    preview: str
+    previews: dict[str, str]
     title: str
     meeting: str | None
     tsg: str | None

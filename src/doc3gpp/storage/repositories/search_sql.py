@@ -169,17 +169,49 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         is forwarded to the ``snippet(...)`` call so the CLI's
         ``--snippet-tokens`` flag can retune the preview length for
         a single invocation without mutating settings.
+
+        The SELECT emits one ``snippet(tdoc_search, col_idx, ...)``
+        per column whose ``bm25_weights[i] > 0`` so each weight>0
+        column surfaces its own highlighted span in the result
+        ``previews`` mapping. Weight=0 columns are skipped entirely
+        (no extra snippet() call, no placeholder).
         """
         effective_tokens = (
             snippet_tokens if snippet_tokens is not None
             else self._snippet_tokens
         )
+        # Identify the weight>0 columns and bind a ``:col_i_<n>``
+        # parameter to each so the SQL is fully parameterised
+        # (sqlite sees ``?`` placeholders for the column index).
+        snippet_columns: list[tuple[str, int]] = [
+            (name, _SNIPPET_COLUMN_TO_IDX[name])
+            for i, (name, weight) in enumerate(
+                zip(_SNIPPET_COLUMN_NAMES, self._weights, strict=True)
+            )
+            if weight > 0
+        ]
         sql = [
             "SELECT tdoc_search.tdoc_id,",
             "       bm25(tdoc_search, :w0, :w1, :w2, :w3, :w4, :w5, :w6, :w7)"
             " AS score,",
-            "       snippet(tdoc_search, :col_idx, '<<', '>>', '…', :tok)"
-            " AS preview,",
+        ]
+        params: dict[str, Any] = {
+            "query": query,
+            "tok": effective_tokens,
+        }
+        for i, weight in enumerate(self._weights):
+            params[f"w{i}"] = weight
+        # One snippet() per weight>0 column. Bind each col idx as a
+        # named param so the order is independent of the dict
+        # iteration order.
+        for n, (_name, col_idx) in enumerate(snippet_columns):
+            param = f"col_{n}"
+            sql.append(
+                f"       snippet(tdoc_search, :{param}, '<<', '>>', '…', :tok)"
+                f" AS snippet_{n},"
+            )
+            params[param] = col_idx
+        sql.extend([
             "       t.title, m.title AS meeting, m.tsg AS tsg,",
             "       t.uploaded_date,",
             "       tdoc_search.ftp_url, tdoc_search.wis",
@@ -187,14 +219,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             "  JOIN tdocs t   ON t.tdoc_id = tdoc_search.tdoc_id",
             "  JOIN meetings m ON t.meeting_id = m.meeting_id",
             " WHERE tdoc_search MATCH :query",
-        ]
-        params: dict[str, Any] = {
-            "query": query,
-            "col_idx": self._snippet_column_idx,
-            "tok": effective_tokens,
-        }
-        for i, weight in enumerate(self._weights):
-            params[f"w{i}"] = weight
+        ])
         if filters.tsg:
             sql.append("   AND m.tsg = :tsg")
             params["tsg"] = filters.tsg
@@ -226,20 +251,35 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         params["limit"] = max(filters.limit, 0)
         with self._engine.begin() as conn:
             rows = conn.execute(text("\n".join(sql)), params).all()
-        return [
-            SearchHit(
-                tdoc_id=row[0],
-                score=row[1],
-                preview=row[2],
-                title=row[3],
-                meeting=row[4],
-                tsg=row[5],
-                uploaded_date=row[6],
-                ftp_url=row[7],
-                wis=row[8],
+        hits: list[SearchHit] = []
+        for row in rows:
+            previews: dict[str, str] = {}
+            for n, (name, _col_idx) in enumerate(snippet_columns):
+                value = row[2 + n]
+                # A column belongs in ``previews`` only when its
+                # FTS5 ``snippet()`` actually surfaced a match —
+                # the contract is ``weight>0 AND matching snippet``.
+                # FTS5 returns the closest context for the column
+                # even when the column itself has no match; the
+                # only reliable signal of a real match is the
+                # presence of the snippet markers (``<<`` and
+                # ``>>``) emitted around the matched tokens.
+                if value and "<<" in value and ">>" in value:
+                    previews[name] = value
+            hits.append(
+                SearchHit(
+                    tdoc_id=row[0],
+                    score=row[1],
+                    previews=previews,
+                    title=row[2 + len(snippet_columns)],
+                    meeting=row[3 + len(snippet_columns)],
+                    tsg=row[4 + len(snippet_columns)],
+                    uploaded_date=row[5 + len(snippet_columns)],
+                    ftp_url=row[6 + len(snippet_columns)],
+                    wis=row[7 + len(snippet_columns)],
+                )
             )
-            for row in rows
-        ]
+        return hits
 
     # ------------------------------------------------------------------
     # Maintenance

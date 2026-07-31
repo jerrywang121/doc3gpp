@@ -38,7 +38,7 @@ class MockRepo(SearchIndexRepository):
             SearchHit(
                 tdoc_id="R5-000001",
                 score=-1.0,
-                preview="hit-1",
+                previews={"title": "hit-1"},
                 title="hit-1",
                 meeting=None,
                 tsg=None,

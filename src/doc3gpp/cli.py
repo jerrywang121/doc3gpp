@@ -4270,12 +4270,20 @@ def index_command(
 
 
 def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:
-    """Render hits in the chosen format."""
+    """Render hits in the chosen format.
+
+    Each hit carries a ``previews`` dict mapping every column whose
+    ``bm25_weights[i] > 0`` to its FTS5 ``snippet(...)`` output. All
+    three renderers (json / markdown / table) emit one snippet per
+    weight>0 column; weight=0 columns are absent (so the
+    ``previews`` dict is the source of truth for the column list).
+    """
     if format == "json":
         import json as _json
         payload = [
             {
-                "tdoc_id": h.tdoc_id, "score": h.score, "preview": h.preview,
+                "tdoc_id": h.tdoc_id, "score": h.score,
+                "previews": h.previews,
                 "title": h.title, "meeting": h.meeting, "tsg": h.tsg,
                 "uploaded_date": h.uploaded_date,
                 "ftp_url": h.ftp_url, "wis": h.wis,
@@ -4293,17 +4301,37 @@ def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:
                 typer.echo(f"ftp_url: {h.ftp_url}")
             if h.wis:
                 typer.echo(f"wis: {h.wis}")
-            typer.echo(f"> {h.preview}")
+            for col, snippet in h.previews.items():
+                typer.echo(f"> {col}: {snippet}")
             typer.echo("")
     else:
-        typer.echo(f"{'tdoc_id':<12} {'score':>8}  {'ftp_url':<48}  {'wis':<20}  preview")
+        typer.echo(
+            f"{'tdoc_id':<12} {'score':>8}  {'ftp_url':<48}  {'wis':<20}  preview"
+        )
         for h in hits:
             ftp = h.ftp_url or "-"
             wis = h.wis or "-"
-            typer.echo(
-                f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {ftp:<48.48}  "
-                f"{wis:<20.20}  {h.preview}"
-            )
+            # Render every weight>0 column's snippet. The first
+            # column's snippet fills the table-row "preview" slot
+            # (no leading label, to keep the table header stable);
+            # every other weight>0 column is emitted on a
+            # continuation line with an explicit
+            # ``<column_name>: <snippet>`` label so operators can
+            # still tell the columns apart.
+            items = list(h.previews.items())
+            if items:
+                first_col, first_snip = items[0]
+                typer.echo(
+                    f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {ftp:<48.48}  "
+                    f"{wis:<20.20}  {first_col}: {first_snip}"
+                )
+                for col, snippet in items[1:]:
+                    typer.echo(f"  {col + ':':<14} {snippet}")
+            else:
+                typer.echo(
+                    f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {ftp:<48.48}  "
+                    f"{wis:<20.20}  -"
+                )
 
 
 def _emit_search_status(svc: object, *, quiet: bool) -> None:

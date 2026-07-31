@@ -212,6 +212,7 @@ def build_tdoc_cr_service(
         tdoc_repository=SQLAlchemyTDocRepository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
         search_service=build_search_service(),
+        semantic_service=build_semantic_search_service(),
     )
 
 
@@ -234,6 +235,7 @@ def build_semantic_search_service(
         SpacyUnavailableError,
         VectorIndexUnavailableError,
     )
+    from sqlalchemy.exc import OperationalError as SAOperationalError
     from doc3gpp.storage.repositories.vector_sql import (
         SQLAlchemyVectorIndexRepository,
     )
@@ -261,6 +263,7 @@ def build_semantic_search_service(
         VectorIndexUnavailableError,
         EmbedderUnavailableError,
         SpacyUnavailableError,
+        SAOperationalError,
     ):
         return None
 

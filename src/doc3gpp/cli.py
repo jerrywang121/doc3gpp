@@ -141,7 +141,9 @@ def _configure_logging() -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    logging.getLogger("httpx").setLevel(level)
+    # `httpx` (huggingface_hub dependency) logs every cache probe at
+    # INFO; that noise drowns out the rebuild progress line.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     logger.debug("Logging configured at %s", logging.getLevelName(level))
 
 

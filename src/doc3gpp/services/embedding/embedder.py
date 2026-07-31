@@ -56,7 +56,11 @@ class SentenceTransformerEmbedder:
                 raise EmbedderUnavailableError(
                     f"failed to load embedding model {self._model_name!r}: {exc}"
                 ) from exc
-        vec = self._model.encode(texts, convert_to_numpy=True)
+        vec = self._model.encode(
+            texts,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
         return vec.astype(np.float32, copy=False)
 
     @property

@@ -4222,6 +4222,14 @@ def search_command(
 def index_command(
     ctx: typer.Context,
     rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the FTS5 table."),
+    rebuild_embeddings: bool = typer.Option(
+        False, "--rebuild-embeddings",
+        help="Drop and rebuild the vec_tdoc_embeddings table.",
+    ),
+    rebuild_all: bool = typer.Option(
+        False, "--rebuild-all",
+        help="Rebuild both the FTS5 and the vector index.",
+    ),
     batch: int | None = typer.Option(None, "--batch", min=1, help="Override rebuild_batch_size."),
     resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
     stale_only: bool = typer.Option(False, "--stale-only", help="Only re-index rows newer than the last indexed uploaded_date."),
@@ -4234,18 +4242,23 @@ def index_command(
     in tdocs, and whether the index is stale).
 
     Index maintenance flags (combinable):
-      --rebuild, --batch, --resume, --stale-only, --quiet
+      --rebuild, --rebuild-embeddings, --rebuild-all, --batch, --resume,
+      --stale-only, --quiet
     See docs/cli.md for full semantics and examples.
     """
-    from doc3gpp.services.factory import build_search_service
+    from doc3gpp.services.factory import (
+        build_search_service, build_semantic_search_service,
+    )
     from doc3gpp.settings.loader import get_settings
 
-    svc = build_search_service()
-    if svc is None:
+    do_fts5 = rebuild or rebuild_all
+    do_vec = rebuild_embeddings or rebuild_all
+    fts5_svc = build_search_service()
+    if fts5_svc is None and not do_vec:
         typer.echo("search disabled in settings", err=True)
         raise typer.Exit(code=0)
-    if not rebuild:
-        status = svc.status()
+    if not do_fts5 and not do_vec:
+        status = fts5_svc.status()
         typer.echo(
             f"Search index: enabled (sqlite + fts5)\n"
             f"Rows indexed:  {status.row_count:,}\n"
@@ -4255,18 +4268,202 @@ def index_command(
             f"Status:        {'STALE' if status.is_stale else 'OK'}"
         )
         return
-    settings = get_settings()
-    batch_size = batch or settings.search.rebuild_batch_size
-    for progress in svc.rebuild(
-        batch_size=batch_size, resume=resume,
-        stale_only=stale_only, quiet=quiet,
-    ):
-        if not quiet:
+    if do_fts5:
+        if fts5_svc is None:
+            typer.echo("search disabled in settings", err=True)
+            raise typer.Exit(code=1)
+        settings = get_settings()
+        batch_size = batch or settings.search.rebuild_batch_size
+        for progress in fts5_svc.rebuild(
+            batch_size=batch_size, resume=resume,
+            stale_only=stale_only, quiet=quiet,
+        ):
+            if not quiet:
+                typer.echo(
+                    f"  rebuilt {progress.processed:,}/{progress.total:,} "
+                    f"(last tdoc_id={progress.current_tdoc_id})"
+                )
+        typer.echo("search index rebuild complete")
+    if do_vec:
+        sem_svc = build_semantic_search_service()
+        if sem_svc is None:
             typer.echo(
-                f"  rebuilt {progress.processed:,}/{progress.total:,} "
-                f"(last tdoc_id={progress.current_tdoc_id})"
+                "semantic search unavailable; "
+                "run `pip install doc3gpp[semantic]`",
+                err=True,
             )
-    typer.echo("search index rebuild complete")
+            raise typer.Exit(code=1)
+        settings = get_settings()
+        batch_size = batch or settings.search.rebuild_batch_size
+        for progress in sem_svc.rebuild_embeddings(
+            batch_size=batch_size, stale_only=stale_only, quiet=quiet,
+        ):
+            if not quiet:
+                typer.echo(
+                    f"  embedded {progress.processed:,}/{progress.total:,} "
+                    f"(last tdoc_id={progress.current_tdoc_id})"
+                )
+        typer.echo("search index embedding rebuild complete")
+
+
+@search_app.command("sem")
+def sem_command(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Natural-language query."),
+    tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
+    meeting: str | None = typer.Option(None, help="Filter by meetings.name."),
+    meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
+    tdoc_id: str | None = typer.Option(None, help="Filter by tdocs.tdoc_id."),
+    release: str | None = typer.Option(None, help="Filter by tdocs.release."),
+    spec: str | None = typer.Option(None, help="Filter by tdocs.spec."),
+    since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
+    until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results after RRF."),
+    vector_weight: float = typer.Option(
+        0.7, "--vector-weight", min=0.0, max=1.0,
+        help="Blend weight for vector rank (0.0..1.0).",
+    ),
+    format: str = typer.Option("table", "--format", help="table | json | markdown"),
+    compact: bool = typer.Option(False, "--compact", help="Strip decorators."),
+    explain: bool = typer.Option(False, "--explain", help="Print RRF config + best chunk."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress stale-index hint."),
+) -> None:
+    """Run a semantic (FTS5 + embedding vector) search over TDocs.
+
+    The query is stripped of stopwords + lemmatized for the FTS5 path;
+    the embedding path uses the ORIGINAL query. Results are merged
+    via reciprocal-rank fusion (RRF) and truncated to --limit.
+    """
+    from doc3gpp.cli_filters import (
+        parse_date_filter, parse_release_filter, parse_spec_filter,
+    )
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.models.semantic_search import (
+        EmbedderUnavailableError, SemanticSearchQueryError,
+        SemanticSearchUnavailableError, SpacyUnavailableError,
+        VectorIndexUnavailableError,
+    )
+    from doc3gpp.services.factory import build_semantic_search_service
+
+    try:
+        if since:
+            parse_date_filter(since)
+        if until:
+            parse_date_filter(until)
+        if release:
+            parse_release_filter(release)
+        if spec:
+            parse_spec_filter(spec)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+
+    svc = build_semantic_search_service()
+    if svc is None:
+        typer.echo(
+            "search sem unavailable; run `pip install doc3gpp[semantic]`",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    filters = SearchFilters(
+        tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
+        release=release, spec=spec, since=since, until=until, limit=limit,
+    )
+    try:
+        hits = svc.search(
+            query, filters, limit=limit, vector_weight=vector_weight,
+        )
+    except SemanticSearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SpacyUnavailableError:
+        typer.echo(
+            "spaCy model not installed; "
+            "run `python -m spacy download en_core_web_sm`",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    except EmbedderUnavailableError as exc:
+        typer.echo(f"embedding model load failed: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except VectorIndexUnavailableError as exc:
+        typer.echo(f"vector index unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except SemanticSearchUnavailableError as exc:
+        typer.echo(f"search sem unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    if explain:
+        typer.echo("# semantic search config", err=True)
+        typer.echo(f"vector_weight:   {vector_weight}", err=True)
+        typer.echo(f"limit:           {limit}", err=True)
+        typer.echo(
+            f"rrf_k:           {svc._settings.semantic_search.rrf_k}",
+            err=True,
+        )
+        typer.echo(
+            f"fanout:          "
+            f"{svc._settings.semantic_search.fanout_multiplier}",
+            err=True,
+        )
+    _render_semantic_hits(hits, format=format, compact=compact)
+    _emit_search_status(svc, quiet=quiet)
+
+
+def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
+    """Render :class:`SemanticSearchHit` list in table / json / markdown.
+
+    Mirrors :func:`_render_search_hits` — three renderers sharing
+    the same hit-shape so callers can pick a presentation without
+    touching the upstream service. The ``fts5_hit`` sub-record is
+    embedded under its own key in JSON and as a labelled continuation
+    in markdown / table.
+    """
+    if format == "json":
+        import json as _json
+        payload = [
+            {
+                "tdoc_id": h.tdoc_id, "rrf_score": h.rrf_score,
+                "rank_fts5": h.rank_fts5, "rank_vec": h.rank_vec,
+                "min_chunk_distance": h.min_chunk_distance,
+                "best_chunk_id": h.best_chunk_id,
+                "fts5_hit": {
+                    "tdoc_id": h.fts5_hit.tdoc_id, "title": h.fts5_hit.title,
+                    "ftp_url": h.fts5_hit.ftp_url, "wis": h.fts5_hit.wis,
+                },
+            }
+            for h in hits
+        ]
+        if compact:
+            typer.echo(_json.dumps(payload, separators=(",", ":")))
+        else:
+            typer.echo(_json.dumps(payload, indent=2))
+    elif format == "markdown":
+        for i, h in enumerate(hits, 1):
+            typer.echo(f"{i}. **{h.tdoc_id}** — rrf={h.rrf_score:.4f}")
+            if h.best_chunk_id:
+                typer.echo(
+                    f"   best chunk: {h.best_chunk_id} "
+                    f"(dist={h.min_chunk_distance:.4f})"
+                )
+            if h.fts5_hit.title:
+                typer.echo(f"   title: {h.fts5_hit.title}")
+            typer.echo("")
+    else:
+        typer.echo(
+            f"{'rank':>4} {'tdoc_id':<14} {'rrf':>8} {'fts':>4} {'vec':>4} "
+            f"{'dist':>8}  title"
+        )
+        for i, h in enumerate(hits, 1):
+            fts = str(h.rank_fts5) if h.rank_fts5 is not None else "-"
+            vec = str(h.rank_vec) if h.rank_vec is not None else "-"
+            dist = (
+                f"{h.min_chunk_distance:.4f}"
+                if h.min_chunk_distance is not None else "-"
+            )
+            title = (h.fts5_hit.title or "")[:40]
+            typer.echo(
+                f"{i:>4} {h.tdoc_id:<14} {h.rrf_score:>8.4f} {fts:>4} "
+                f"{vec:>4} {dist:>8}  {title}"
+            )
 
 
 def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:

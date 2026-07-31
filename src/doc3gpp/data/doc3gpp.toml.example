@@ -125,8 +125,11 @@ enabled = true
 # SearchService.upsert_for_tdoc(tdoc_id) so the index stays in sync.
 auto_index_on_parse = true
 
-# TDocs per batch during `search index --rebuild`. Smaller values
-# reduce peak memory; larger values finish faster.
+# TDocs per SQL page during `search index --rebuild`. Smaller
+# values reduce the worst-case duplicate work on Ctrl-C
+# (the cursor only advances per page); larger values save SQL
+# round-trips. Progress is reported per TDoc via a tqdm bar
+# regardless of this value.
 rebuild_batch_size = 500
 
 # Approximate number of tokens per FTS5 snippet(...) output. The

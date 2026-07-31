@@ -4235,7 +4235,14 @@ def index_command(
         False, "--rebuild-all",
         help="Rebuild both the FTS5 and the vector index.",
     ),
-    batch: int | None = typer.Option(None, "--batch", min=1, help="Override rebuild_batch_size."),
+    batch: int | None = typer.Option(
+        None, "--batch", min=1,
+        help=(
+            "TDocs per SQL page (default: Settings.search.rebuild_batch_size = 500). "
+            "Smaller = finer-grained crash recovery; larger = fewer round-trips. "
+            "Progress is reported per TDoc regardless."
+        ),
+    ),
     resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
     stale_only: bool = typer.Option(False, "--stale-only", help="Only re-index rows newer than the last indexed uploaded_date."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress per-batch progress logs."),

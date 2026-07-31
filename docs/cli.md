@@ -1520,11 +1520,11 @@ the index by walking every `tdocs` row.
 | Flag | Effect |
 | --- | --- |
 | `--rebuild` | Drop and rebuild the FTS5 table by walking every `tdocs` row. |
-| `--batch INT` | Override `Settings.search.rebuild_batch_size` for this run. |
+| `--batch INT` | Override `Settings.search.rebuild_batch_size` (default 500). Controls how many TDocs are fetched per SQL page; smaller = finer-grained crash recovery (cursor advances per page), larger = fewer round-trips. Progress is reported per TDoc regardless of this value. |
 | `--resume` | Continue from the last `tdoc_id` in `tdoc_search_meta` instead of starting at zero. Implies `--rebuild`. |
 | `--stale-only` | Only re-index rows whose `tdocs.uploaded_date > last_indexed_uploaded_date`. |
-| `--quiet` | Suppress per-batch progress logs; print only the final summary. |
-| `--rebuild-embeddings` | Drop and rebuild the vector (`vec_tdoc_embeddings`) index. Walks every `tdocs` row and re-embeds each one. Use `--stale-only` for incremental refresh, `--resume` to continue from the last `tdoc_id` in `vec_meta`, `--batch N` to override `Settings.semantic_search.rebuild_batch_size`, `--quiet` to suppress per-batch progress. Gated on the sqlite + sqlite-vec support matrix. |
+| `--quiet` | Suppress the tqdm progress bar; print only the final summary. |
+| `--rebuild-embeddings` | Drop and rebuild the vector (`vec_tdoc_embeddings`) index. Walks every `tdocs` row and re-embeds each one. Use `--stale-only` for incremental refresh, `--resume` to continue from the last `tdoc_id` in `vec_meta`, `--batch N` to override `Settings.search.rebuild_batch_size`, `--quiet` to suppress the tqdm bar. Gated on the sqlite + sqlite-vec support matrix. |
 | `--rebuild-all` | Run both the FTS5 rebuild and the vector rebuild in sequence. Implies `--rebuild` and `--rebuild-embeddings`. |
 
 ## `doc3gpp search sem QUERY [filters]`

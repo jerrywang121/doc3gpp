@@ -80,6 +80,7 @@ testpaths = ["tests"]
 markers = [
   "online: tests that access live internet endpoints (for example 3gpp.org)",
   "mysql: tests that require a mysql backend",
+  "semantic: requires sentence-transformers + spaCy + en_core_web_sm",
 ]
 
 [tool.ruff]

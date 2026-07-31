@@ -4,15 +4,17 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.storage.db.base import Base
-from doc3gpp.storage.db.models import MeetingORM  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import TDocCrChangeDetailOrm  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import TDocCrDetailOrm  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import TDocCrTtcnDetailOrm  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import TDocExtractOrm  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import TDocFileORM  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import TDocORM  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import TsgORM  # noqa: F401 - ensures model metadata is loaded
-from doc3gpp.storage.db.models import WiORM  # noqa: F401 - ensures model metadata is loaded
+from doc3gpp.storage.db.models import (
+    MeetingORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
+    TDocCrDetailOrm,  # noqa: F401 - ensures model metadata is loaded
+    TDocCrTtcnDetailOrm,  # noqa: F401 - ensures model metadata is loaded
+    TDocExtractOrm,  # noqa: F401 - ensures model metadata is loaded
+    TDocFileORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocORM,  # noqa: F401 - ensures model metadata is loaded
+    TsgORM,  # noqa: F401 - ensures model metadata is loaded
+    WiORM,  # noqa: F401 - ensures model metadata is loaded
+)
 from doc3gpp.storage.db.session import get_engine
 
 
@@ -99,7 +101,7 @@ def _create_search_schema() -> None:
     with engine.begin() as conn:
         try:
             opts = conn.execute(text("PRAGMA compile_options")).all()
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort schema creation
             return
         fts5_available = any(
             row[0] == "ENABLE_FTS5" for row in opts
@@ -133,14 +135,68 @@ def _create_search_schema() -> None:
                 """
             )
         )
+
+
+def _create_vector_schema() -> None:
+    """Create the sqlite-vec virtual table + meta sidecar.
+
+    Gated on the engine dialect being sqlite and on the runtime
+    availability of the sqlite-vec extension — on every other path
+    this is a no-op. The check tries to import ``sqlite_vec`` and
+    load it into the underlying pysqlite connection, mirroring the
+    runtime probe in
+    :class:`~doc3gpp.storage.repositories.vector_sql.SQLAlchemyVectorIndexRepository`.
+
+    The DDL matches ``docs/superpowers/specs/2026-07-31-embedding-search-design.md``
+    §"Vector schema". The virtual table stores one row per chunk and the
+    dimension is pinned at table-creation time to the default embedding
+    dimension (384 for ``all-MiniLM-L6-v2``).
+
+    Idempotent: ``IF NOT EXISTS`` makes a second ``create_schema`` call
+    a no-op.
+    """
+    engine = get_engine()
+    if engine.dialect.name != "sqlite":
+        return
+    try:
+        import sqlite_vec
+    except ImportError:
+        return
+    with engine.begin() as conn:
+        try:
+            sqlite_vec.load(conn.connection.driver_connection)
+        except Exception:  # noqa: BLE001 - best-effort schema creation
+            return
+        conn.execute(
+            text(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS vec_tdoc_embeddings USING vec0(
+                    chunk_id TEXT PRIMARY KEY,
+                    tdoc_id TEXT,
+                    chunk_index INTEGER,
+                    embedding FLOAT[384] distance_metric=cosine
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS vec_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+        )
         # Composite indexes for filter push-down on the regular
-        # ``tdocs`` and ``meetings`` tables. These complement the FTS5
-        # virtual table by accelerating the structured WHERE clauses
-        # the search executor issues alongside the BM25 ORDER BY:
-        # release/spec/date on tdocs and name/tsg on meetings. Plain
-        # CREATE INDEX works cross-dialect, but we keep them inside
-        # the sqlite + FTS5 gate for consistency with the FTS5 schema
-        # above (the search index itself is sqlite-only).
+        # ``tdocs`` and ``meetings`` tables. These complement both the
+        # FTS5 virtual table and the sqlite-vec KNN path by accelerating
+        # the structured WHERE clauses issued alongside vector/FTS5
+        # queries: release/spec/date on tdocs and name/tsg on meetings.
+        # Plain CREATE INDEX works cross-dialect, but we keep them inside
+        # the sqlite + sqlite-vec gate for consistency with the vector
+        # schema above.
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS idx_tdocs_release_spec "
@@ -168,3 +224,4 @@ def create_schema() -> None:
     _migrate_rename_tdoc_cr_details()
     Base.metadata.create_all(bind=engine)
     _create_search_schema()
+    _create_vector_schema()

@@ -56,8 +56,10 @@ class MockRepo(SearchIndexRepository):
     ) -> Iterable[list[str]]:
         return iter(self.batches)
 
-    def count_tdocs_to_index(self, stale_only: bool) -> int:
-        return 3
+    def count_tdocs_to_index(
+        self, stale_only: bool, after_id: str | None = None,
+    ) -> int:
+        return getattr(self, "total", 3)
 
     def get_resume_cursor(self) -> str | None:
         return self.cursor
@@ -113,26 +115,92 @@ def test_search_runs_reranker() -> None:
     assert reranker.queries == ["anything"]
 
 
-def test_rebuild_yields_progress_per_batch() -> None:
+def test_rebuild_yields_progress_per_one_percent() -> None:
+    """rebuild must yield at most once per 1% of progress so the
+    CLI tqdm bar updates ~100 times for a 13,693-tdoc rebuild
+    instead of 27 (per batch) or 13,693 (per tdoc).
+    """
+    # 1000 tdocs across 5 batches of 200 → 100 yields at 1% each.
     repo = MockRepo()
+    repo.total = 1000
     repo.batches = [
-        ["R5-000001", "R5-000002", "R5-000003"],
-        ["R5-000004", "R5-000005"],
+        [f"R5-{i:06d}" for i in range(1, 201)],
+        [f"R5-{i:06d}" for i in range(201, 401)],
+        [f"R5-{i:06d}" for i in range(401, 601)],
+        [f"R5-{i:06d}" for i in range(601, 801)],
+        [f"R5-{i:06d}" for i in range(801, 1001)],
     ]
     svc = SearchService(repo=repo, reranker=PassthroughReranker())
-    progresses = list(svc.rebuild(batch_size=3, resume=False, stale_only=False, quiet=True))
-    assert len(progresses) == 2
-    assert progresses[0].processed == 3
-    assert progresses[0].total == 3
-    assert progresses[1].processed == 5
-    assert repo.upserts == [
-        "R5-000001",
-        "R5-000002",
-        "R5-000003",
-        "R5-000004",
-        "R5-000005",
-    ]
-    assert repo.cursor == "R5-000005"
+    progresses = list(svc.rebuild(batch_size=200, resume=False, stale_only=False, quiet=True))
+    # For total=1000 the 1% boundary fires at processed = 10, 20,
+    # ..., 1000 → exactly 100 yields. (No "0%" yield at processed=1.)
+    assert len(progresses) == 100
+    assert [p.processed for p in progresses] == list(range(10, 1001, 10))
+    assert all(p.total == 1000 for p in progresses)
+    # The final yield reports the last TDoc embedded.
+    assert progresses[-1].current_tdoc_id == "R5-001000"
+    # All 1000 upserts happened; cursor set to the last TDoc.
+    assert len(repo.upserts) == 1000
+    assert repo.cursor == "R5-001000"
+
+
+def test_rebuild_yields_at_actual_percent_crossings_for_13k_corpus() -> None:
+    """Real corpus size (13,693 tdocs) must yield exactly 100 times
+    — one per integer-pct crossing — and the final yield must be
+    at processed = 13,693 (the corpus total).
+    """
+    total = 13693
+    repo = MockRepo()
+    repo.total = total
+    repo.batches = [[f"R5-{i:06d}" for i in range(1, total + 1)]]
+    svc = SearchService(repo=repo, reranker=PassthroughReranker())
+    progresses = list(svc.rebuild(batch_size=total, resume=False, stale_only=False, quiet=True))
+    # Compute the actual integer-pct crossings from the same
+    # formula the production code uses.
+    expected_processed = []
+    last_pct = 0
+    for p in range(1, total + 1):
+        pct = p * 100 // total
+        if pct > last_pct:
+            expected_processed.append(p)
+            last_pct = pct
+    assert len(progresses) == 100
+    assert [p.processed for p in progresses] == expected_processed
+    assert progresses[-1].current_tdoc_id == f"R5-{total:06d}"
+
+
+def test_rebuild_yields_every_tdoc_for_small_corpus() -> None:
+    """Small corpora (total < 100) cannot hit 1% granularity, so
+    every TDoc fires a yield. For 50 tdocs we expect 50 yields.
+    """
+    repo = MockRepo()
+    repo.total = 50
+    repo.batches = [[f"R5-{i:06d}" for i in range(1, 51)]]
+    svc = SearchService(repo=repo, reranker=PassthroughReranker())
+    progresses = list(svc.rebuild(batch_size=50, resume=False, stale_only=False, quiet=True))
+    assert len(progresses) == 50
+    assert [p.processed for p in progresses] == list(range(1, 51))
+    assert progresses[-1].total == 50
+
+
+def test_rebuild_yields_nothing_for_zero_corpus() -> None:
+    """An empty corpus must yield no progress (and still update
+    metadata via _touch_*).
+    """
+    repo = MockRepo()
+    repo.total = 0
+    repo.batches = []
+    svc = SearchService(repo=repo, reranker=PassthroughReranker())
+    touched_rebuild = []
+    touched_uploaded = []
+    svc._touch_rebuild_at = lambda: touched_rebuild.append(True)
+    svc._touch_indexed_uploaded_date = lambda: touched_uploaded.append(True)
+    progresses = list(svc.rebuild(batch_size=100, resume=False, stale_only=False, quiet=True))
+    assert progresses == []
+    # Cursor and metadata still get touched so the index is marked
+    # fresh even when there was nothing to index.
+    assert touched_rebuild == [True]
+    assert touched_uploaded == [True]
 
 
 def test_status_returns_repo_status() -> None:

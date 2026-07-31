@@ -104,16 +104,22 @@ class SearchService:
         stale_only: bool,
         quiet: bool,
     ) -> Iterator[RebuildProgress]:
-        """Yield per-batch progress during an index rebuild.
+        """Yield per-1%-of-progress updates during an index rebuild.
 
-        The generator returns ``RebuildProgress(processed, total,
-        current_tdoc_id)`` after each batch. The CLI prints the
-        progress line unless ``quiet=True``; in both cases the
-        cursor is persisted to ``tdoc_search_meta`` so a crashed
-        rebuild can resume.
+        For a corpus of ``N`` TDocs, yields ~100 times (one per 1%
+        boundary crossed), plus a guaranteed final yield at 100%.
+        The CLI renders this as a tqdm bar with `bar.update(delta)`.
+        Cursor is persisted to ``tdoc_search_meta`` per batch so a
+        crashed rebuild can resume.
         """
-        total = self._repo.count_tdocs_to_index(stale_only=stale_only)
         after_id = self._repo.get_resume_cursor() if resume else None
+        total = self._repo.count_tdocs_to_index(
+            stale_only=stale_only, after_id=after_id,
+        )
+        # Last percent value we yielded at (so we yield once per
+        # 1% crossing). Start at 0 so we don't fire a "0%" yield
+        # when processed=1 and total=13693 (1*100//13693=0).
+        last_yielded_pct = 0
         processed = 0
         batches = self._repo.rebuild_batch(
             batch_size=batch_size, after_id=after_id, stale_only=stale_only,
@@ -122,12 +128,17 @@ class SearchService:
             for tdoc_id in batch:
                 self.upsert_for_tdoc(tdoc_id)
                 processed += 1
+                # Guard against total=0 (shouldn't happen if there
+                # is work, but stay defensive).
+                pct = (processed * 100 // total) if total > 0 else 100
+                if pct > last_yielded_pct:
+                    yield RebuildProgress(
+                        processed=processed,
+                        total=total,
+                        current_tdoc_id=tdoc_id,
+                    )
+                    last_yielded_pct = pct
             self._repo.set_resume_cursor(batch[-1])
-            yield RebuildProgress(
-                processed=processed,
-                total=total,
-                current_tdoc_id=batch[-1],
-            )
         self._touch_rebuild_at()
         self._touch_indexed_uploaded_date()
         if not quiet:

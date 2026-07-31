@@ -149,6 +149,9 @@ def test_remove_for_tdoc_calls_repo():
 
 
 def test_rebuild_embeddings_yields_progress(monkeypatch):
+    """Small corpora (total < 100) yield once per TDoc because
+    integer-pct granularity exceeds 1.
+    """
     vec = MagicMock()
     vec.count_tdocs_to_index.return_value = 3
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
@@ -164,10 +167,44 @@ def test_rebuild_embeddings_yields_progress(monkeypatch):
     assert all(p.total == 3 for p in progress)
 
 
+def test_rebuild_embeddings_yields_per_one_percent_for_13k_corpus(monkeypatch):
+    """Real corpus size (13,693 tdocs) must yield exactly 100 times
+    — once per integer-pct crossing. The final yield must be at
+    processed = 13,693 (the corpus total).
+    """
+    total = 13693
+    vec = MagicMock()
+    vec.count_tdocs_to_index.return_value = total
+    vec.rebuild_batch.return_value = iter([
+        [f"R5-{i:06d}" for i in range(1, total + 1)],
+    ])
+    vec.get_resume_cursor.return_value = None
+    monkeypatch.setattr(
+        "doc3gpp.services.semantic_search_service._build_embed_text",
+        lambda tid: "text",
+    )
+    svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
+    progress = list(
+        svc.rebuild_embeddings(batch_size=total, stale_only=False, quiet=True),
+    )
+    # Compute the actual integer-pct crossings from the same
+    # formula the production code uses.
+    expected_processed = []
+    last_pct = 0
+    for p in range(1, total + 1):
+        pct = p * 100 // total
+        if pct > last_pct:
+            expected_processed.append(p)
+            last_pct = pct
+    assert len(progress) == 100
+    assert [p.processed for p in progress] == expected_processed
+    assert progress[-1].current_tdoc_id == f"R5-{total:06d}"
+
+
 def test_rebuild_embeddings_processed_is_monotonic(monkeypatch):
-    """rebuild_embeddings must yield once per TDoc so the CLI can render
-    a tqdm progress bar that updates continuously rather than once
-    per batch (which can be hundreds of TDocs).
+    """rebuild_embeddings must yield processed values strictly
+    increasing and total constant; the bar relies on processed
+    climbing monotonically.
     """
     vec = MagicMock()
     vec.count_tdocs_to_index.return_value = 7
@@ -179,12 +216,11 @@ def test_rebuild_embeddings_processed_is_monotonic(monkeypatch):
     )
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(svc.rebuild_embeddings(batch_size=3, stale_only=False, quiet=True))
-    # 3 + 4 = 7 yields, one per TDoc; processed is strictly increasing.
+    # For total=7, pct crosses at every TDoc → 7 yields.
     assert len(progress) == 7
     assert [p.processed for p in progress] == [1, 2, 3, 4, 5, 6, 7]
     assert all(p.total == 7 for p in progress)
-    # last_tdoc_id tracks the actual tdoc_id just embedded, not the
-    # batch tail (so the bar can show "now embedding X").
+    # current_tdoc_id tracks the actual TDoc just embedded.
     assert [p.current_tdoc_id for p in progress] == [
         "R5-1", "R5-2", "R5-3", "R5-4", "R5-5", "R5-6", "R5-7",
     ]

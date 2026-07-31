@@ -4240,7 +4240,8 @@ def index_command(
         help=(
             "TDocs per SQL page (default: Settings.search.rebuild_batch_size = 500). "
             "Smaller = finer-grained crash recovery; larger = fewer round-trips. "
-            "Progress is reported per TDoc regardless."
+            "Progress is reported once per 1% of work (~100 updates for a full "
+            "corpus rebuild regardless of batch size)."
         ),
     ),
     resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
@@ -4350,7 +4351,7 @@ def index_command(
                     batch_size=batch_size, stale_only=stale_only, quiet=False,
                 ):
                     bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
-                    bar.update(1)
+                    bar.update(progress.processed - bar.n)
         typer.echo("search index embedding rebuild complete")
 
 

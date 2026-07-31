@@ -171,10 +171,22 @@ class SemanticSearchService:
     def rebuild_embeddings(
         self, batch_size: int, stale_only: bool, quiet: bool,
     ) -> Iterator[RebuildProgress]:
+        """Yield per-1%-of-progress updates during an embedding
+        rebuild.
+
+        For a corpus of ``N`` TDocs, yields ~100 times (one per 1%
+        boundary crossed), plus a guaranteed final yield at 100%.
+        The CLI renders this as a tqdm bar with `bar.update(delta)`.
+        Cursor is persisted to ``vec_meta`` per batch so a crashed
+        rebuild can resume.
+        """
         after_id = self._vec.get_resume_cursor()
         total = self._vec.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,
         )
+        # Start at 0 so we don't fire a "0%" yield when processed=1
+        # and total=13693 (1*100//13693=0).
+        last_yielded_pct = 0
         processed = 0
         batches = self._vec.rebuild_batch(
             batch_size=batch_size, after_id=after_id, stale_only=stale_only,
@@ -189,13 +201,14 @@ class SemanticSearchService:
                         tdoc_id, exc,
                     )
                 processed += 1
-                # Yield once per TDoc so the CLI can render a tqdm
-                # progress bar that updates continuously instead of
-                # every batch (a single batch may hold hundreds of
-                # TDocs and take minutes to embed).
-                yield RebuildProgress(
-                    processed=processed, total=total, current_tdoc_id=tdoc_id,
-                )
+                pct = (processed * 100 // total) if total > 0 else 100
+                if pct > last_yielded_pct:
+                    yield RebuildProgress(
+                        processed=processed,
+                        total=total,
+                        current_tdoc_id=tdoc_id,
+                    )
+                    last_yielded_pct = pct
             self._vec.set_resume_cursor(batch[-1])
 
     def status(self) -> SearchIndexStatus:

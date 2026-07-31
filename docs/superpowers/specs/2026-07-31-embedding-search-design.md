@@ -317,6 +317,46 @@ def strip_stopwords(text: str) -> str:
   tells the user to run `python -m spacy download en_core_web_sm`
   and exits 1.
 
+#### Custom stopword set
+
+The effective stopword set is composed per-call as
+`spacy.Defaults.stop_words | user_defined_stop_words -
+set(keep_negation_words)`:
+
+- `user_defined_stop_words: list[str]` (default `[]`) — extra
+  tokens to drop, used to remove 3GPP-domain noise (e.g.
+  `"tdoc"`, `"cr"`, `"3gpp"`, `"spec"`, `"meeting"`, `"agenda"`
+  when the user has 100k+ TDocs and those tokens drown out the
+  real signal). The list is matched case-insensitively against
+  each token's lowercased form. The user composes the default
+  list by running the stripper over a real-corpus sample and
+  eyeballing the high-frequency low-signal tokens; the setting
+  is empty until that exercise is done.
+- `keep_negation_words: list[str]` (default `["not"]`) — tokens
+  that the user wants to **retain** even though spaCy treats
+  them as stopwords. Negation is the canonical case: stripping
+  `not` from `"which CRs do not relate to NB-IoT"` leaves
+  `"relate NB-IoT"`, which inverts the user's intent. The
+  default of `["not"]` is the v1 safe choice; users running
+  their own negation-aware rerank can set this to `[]` to
+  restore spaCy's full default stopword set.
+
+Implementation:
+
+```python
+def _effective_stopwords() -> frozenset[str]:
+    base = set(spacy.Defaults.stop_words)
+    base -= {w.lower() for w in settings.semantic_search.keep_negation_words}
+    base |= {w.lower() for w in settings.semantic_search.user_defined_stop_words}
+    return frozenset(base)
+```
+
+The result is cached at process start (keyed on the resolved
+settings hash) and reused on every `strip_stopwords` call.
+`strip_stopwords` does the membership check against the cached
+frozenset; spaCy's `Doc` is still created per call (the cost is
+the `Doc` constructor + tokenizer, not the stopword lookup).
+
 ### `services/embedding/embedder.py`
 
 ```python
@@ -627,6 +667,9 @@ class SemanticSearchSettings(BaseModel):
     vector_weight: float = 0.7
     fanout_multiplier: int = 2
     final_limit: int = 20
+    # Stopword-set customization (see "Custom stopword set").
+    user_defined_stop_words: list[str] = []
+    keep_negation_words: list[str] = ["not"]
 ```
 
 The CLI's `--limit` and `--vector-weight` flags override the
@@ -703,7 +746,7 @@ check is extended to check both indexes. The hint mentions
 | File | Covers |
 |---|---|
 | `tests/unit/test_chunker.py` | Chunk size + overlap corpus; boundary cases (empty, single chunk, text shorter than size, long text); `overlap >= size` raises `ValueError`. |
-| `tests/unit/test_stopwords.py` | spaCy strip corpus with a small fixture text; lemma output; empty / punctuation-only inputs. Mock the spaCy pipeline via `spacy.util.minibatch` patching to keep tests deterministic and fast. |
+| `tests/unit/test_stopwords.py` | spaCy strip corpus with a small fixture text; lemma output; empty / punctuation-only inputs. `user_defined_stop_words` corpus (default-empty → `"tdoc"` token kept; with `["tdoc"]` → `"tdoc"` token dropped). `keep_negation_words` corpus (`["not"]` default → `"not"` retained in `"do not relate"`; `[]` → `"not"` stripped). Mock the spaCy pipeline via `spacy.util.minibatch` patching to keep tests deterministic and fast. |
 | `tests/unit/test_embedder.py` | Mock `SentenceTransformer.encode`; dim + dtype checks; lazy model load. |
 | `tests/unit/test_rrf.py` | RRF merge corpus: known ranked inputs → known merged output; min(distance) per tdoc_id; `vector_weight=0.0` / `1.0` degenerate cases. |
 | `tests/unit/test_semantic_search_service.py` | Mock FTS5 service + mock vector repo + mock embedder; full `search(...)` flow; empty-after-strip error; both-side-empty result. |
@@ -777,6 +820,17 @@ by a separate, opt-in integration test).
     created (the embed runs **after** all four FTS5 upserts
     return successfully; the same DB transaction boundary
     protects both indexes).
+16. `search sem "which CRs do not relate to NB-IoT"` with
+    default `keep_negation_words=["not"]` → stripped query
+    keeps `"not"` (and `"relate"`, `"NB-IoT"`, `"CRs"`); the
+    FTS5 match then honors the negation. With
+    `keep_negation_words=[]` → `"not"` is dropped, the query
+    becomes `"relate NB-IoT"`, and the FTS5 match inverts the
+    user intent. Test pins both.
+17. `user_defined_stop_words=["tdoc"]` → `"tdoc"` (and `"tdocs"`,
+    case-insensitive) is dropped from the strip; with the
+    default empty list, the same token survives. Test pins
+    both.
 
 ### Coverage targets
 
@@ -791,7 +845,7 @@ the three highest-risk pure functions.
 | `models/semantic_search.py` (new) | `SemanticSearchHit`, `SemanticSearchError`, `SemanticSearchUnavailableError`, `SemanticSearchQueryError`, `SpacyUnavailableError`, `EmbedderUnavailableError`, `VectorIndexUnavailableError` |
 | `repository/protocols.py` (extend) | `Embedder`, `VectorIndexRepository` |
 | `services/embedding/chunker.py` (new) | `_chunks`, `CHUNK_SIZE_DEFAULT`, `CHUNK_OVERLAP_DEFAULT` |
-| `services/embedding/stopwords.py` (new) | `strip_stopwords`, `_get_spacy_pipeline` (cached loader) |
+| `services/embedding/stopwords.py` (new) | `strip_stopwords`, `_get_spacy_pipeline` (cached loader), `_effective_stopwords` (cached composed set) |
 | `services/embedding/embedder.py` (new) | `Embedder` (re-exported from `protocols` for typing), `SentenceTransformerEmbedder` |
 | `services/semantic_search_service.py` (new) | `SemanticSearchService`, `rrf_merge` |
 | `storage/repositories/vector_sql.py` (new) | `SQLAlchemyVectorIndexRepository`, `_check_sqlite_vec`, `_build_embed_text` |

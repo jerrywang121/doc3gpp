@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
@@ -615,4 +618,75 @@ class EmbeddingReranker(Protocol):
         can do its own tokenization.
         """
         ...
+
+
+class Embedder(Protocol):
+    """Embedding backend for the semantic search subsystem.
+
+    The v1 default :class:`~doc3gpp.services.embedding.embedder.SentenceTransformerEmbedder`
+    loads a HuggingFace sentence-transformers model lazily on first
+    ``.encode()`` call. A future hosted-API impl plugs in here
+    without any change to :class:`SemanticSearchService` or the CLI.
+    """
+
+    def encode(self, texts: list[str]) -> "np.ndarray":
+        """Return shape ``(len(texts), dim)``, dtype float32."""
+        ...
+
+    @property
+    def dim(self) -> int:
+        """The model's embedding dimension (e.g. 384 for all-MiniLM-L6-v2)."""
+        ...
+
+
+class VectorIndexRepository(Protocol):
+    """sqlite-vec backed vector index for ``tdocs``.
+
+    All write paths are idempotent (``DELETE`` + ``INSERT``). One
+    ``tdoc_id`` maps to N chunk rows (``chunk_id = "{tdoc_id}#{i}"``).
+    Implementations are dialect-aware: on sqlite with sqlite-vec
+    enabled everything works; on non-sqlite or sqlite-vec-less builds
+    every method raises :class:`VectorIndexUnavailableError`. The
+    factory layer catches that error once at startup and returns
+    ``None`` so callers can degrade gracefully.
+    """
+
+    def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None:
+        """Replace all chunk rows for ``tdoc_id`` with the new embeddings.
+
+        Deletes existing chunks for ``tdoc_id`` then inserts the new
+        chunk rows in a single transaction. ``chunk_id`` is
+        ``f"{tdoc_id}#{i}"`` for ``i`` in ``range(len(embeddings))``.
+        """
+        ...
+
+    def remove_for_tdoc(self, tdoc_id: str) -> None:
+        """Delete all chunk rows for ``tdoc_id``. No-op if absent."""
+        ...
+
+    def knn(
+        self, query_vec: "np.ndarray", limit: int,
+        filters: "SearchFilters | None" = None,
+    ) -> list[tuple[str, str, int, float]]:
+        """KNN by cosine distance; returns ``(tdoc_id, chunk_id, chunk_index, distance)``.
+
+        Joins to ``tdocs`` / ``meetings`` for filters. ``limit`` caps
+        the chunk count (NOT the tdoc count — the service reduces
+        chunks to tdocs via ``min(distance)``).
+        """
+        ...
+
+    def rebuild_batch(
+        self, batch_size: int, after_id: "str | None", stale_only: bool,
+    ) -> Iterable[list[str]]:
+        """Yield batches of ``tdoc_id`` strings in ``ORDER BY tdoc_id ASC``."""
+        ...
+
+    def count_tdocs_to_index(self, stale_only: bool) -> int: ...
+
+    def get_resume_cursor(self) -> "str | None": ...
+
+    def set_resume_cursor(self, tdoc_id: str) -> None: ...
+
+    def status(self) -> "SearchIndexStatus": ...
 

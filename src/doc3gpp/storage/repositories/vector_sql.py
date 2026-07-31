@@ -176,20 +176,24 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     def rebuild_batch(
         self, batch_size: int, after_id: str | None, stale_only: bool,
     ) -> Iterable[list[str]]:
-        sql = ["SELECT tdoc_id FROM tdocs"]
-        params: dict = {"limit": batch_size}
-        if stale_only:
-            sql.append(
-                " WHERE uploaded_date > "
-                "(SELECT value FROM vec_meta WHERE key='last_indexed_uploaded_date')"
-            )
-        if after_id is not None:
-            sql.append("   AND tdoc_id > :after" if stale_only else " WHERE tdoc_id > :after")
-            params["after"] = after_id
-        sql.append("  ORDER BY tdoc_id ASC LIMIT :limit")
-        with self._engine.begin() as conn:
-            rows = conn.execute(text("\n".join(sql)), params).all()
-        yield [r[0] for r in rows]
+        last_id = after_id if after_id is not None else ""
+        while True:
+            sql = ["SELECT tdoc_id FROM tdocs WHERE tdoc_id > :last_id"]
+            params: dict[str, object] = {"last_id": last_id, "limit": batch_size}
+            if stale_only:
+                sql.append(
+                    " AND uploaded_date > ("
+                    " SELECT value FROM vec_meta "
+                    " WHERE key = 'last_indexed_uploaded_date')"
+                )
+            sql.append(" ORDER BY tdoc_id ASC LIMIT :limit")
+            with self._engine.begin() as conn:
+                rows = conn.execute(text(" ".join(sql)), params).all()
+            ids = [r[0] for r in rows]
+            if not ids:
+                return
+            yield ids
+            last_id = ids[-1]
 
     def count_tdocs_to_index(self, stale_only: bool) -> int:
         sql = ["SELECT COUNT(*) FROM tdocs"]

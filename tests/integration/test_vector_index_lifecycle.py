@@ -87,3 +87,126 @@ def test_resume_cursor_round_trip(repo):
     assert repo.get_resume_cursor() is None
     repo.set_resume_cursor("R5-123")
     assert repo.get_resume_cursor() == "R5-123"
+
+
+def test_rebuild_batch_walks_all_tdocs(sqlite_env, monkeypatch):
+    """rebuild_batch must yield ALL TDocs in pages, not just the first batch.
+
+    The vector repo previously yielded a single batch and stopped,
+    breaking `search index --rebuild-embeddings` for any corpus larger
+    than one batch. Mirror the FTS5 sibling (`search_sql.py:283-310`)
+    that loops until `ids` is empty.
+
+    Seed 7 tdocs with ascending ids, ask for 3 at a time, and expect
+    three batches of [3, 3, 1].
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+    from sqlalchemy import text
+
+    create_schema()
+    eng = get_engine()
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO tsgs (tsg_name, short_name, description) "
+                "VALUES ('RAN WG1', 'RAN1', '')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO meetings (meeting_id, name, title, location, tsg, "
+                "start_date, end_date, ftp_url, tdoc_list_last_sync) "
+                "VALUES (1, 'RAN1#120', 'RAN1 #120', 'Athens', 'RAN1', "
+                "'2026-03-01', '2026-03-05', 'https://x/ran1-120', "
+                "'2026-03-05T00:00:00')"
+            )
+        )
+        for tid in [f"R5-{i:06d}" for i in range(1, 8)]:
+            conn.execute(
+                text(
+                    "INSERT INTO tdocs (tdoc_id, meeting_id, title, ftp_url, "
+                    "type, source, uploaded_date, release, spec) "
+                    "VALUES (:tid, 1, :t, :ftp, 'CR', 'TSG', "
+                    "'2026-03-02', 'Rel-17', '38.300')"
+                ),
+                {"tid": tid, "t": f"title-{tid}", "ftp": f"https://x/{tid}.zip"},
+            )
+
+    repo = SQLAlchemyVectorIndexRepository()
+    batches = list(
+        repo.rebuild_batch(batch_size=3, after_id=None, stale_only=False),
+    )
+    assert [len(b) for b in batches] == [3, 3, 1], (
+        f"expected 3+3+1 batches for 7 tdocs at batch_size=3, got {[len(b) for b in batches]}"
+    )
+    assert sum(len(b) for b in batches) == 7
+    assert sorted(sum(batches, [])) == [f"R5-{i:06d}" for i in range(1, 8)]
+
+
+def test_rebuild_batch_resumes_from_after_id(sqlite_env):
+    """after_id cursor must skip already-seen tdocs in the next call."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+    from sqlalchemy import text
+
+    create_schema()
+    eng = get_engine()
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO tsgs (tsg_name, short_name, description) "
+                "VALUES ('RAN WG1', 'RAN1', '')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO meetings (meeting_id, name, title, location, tsg, "
+                "start_date, end_date, ftp_url, tdoc_list_last_sync) "
+                "VALUES (1, 'RAN1#120', 'RAN1 #120', 'Athens', 'RAN1', "
+                "'2026-03-01', '2026-03-05', 'https://x/ran1-120', "
+                "'2026-03-05T00:00:00')"
+            )
+        )
+        for tid in [f"R5-{i:06d}" for i in range(1, 6)]:
+            conn.execute(
+                text(
+                    "INSERT INTO tdocs (tdoc_id, meeting_id, title, ftp_url, "
+                    "type, source, uploaded_date, release, spec) "
+                    "VALUES (:tid, 1, :t, :ftp, 'CR', 'TSG', "
+                    "'2026-03-02', 'Rel-17', '38.300')"
+                ),
+                {"tid": tid, "t": f"title-{tid}", "ftp": f"https://x/{tid}.zip"},
+            )
+
+    repo = SQLAlchemyVectorIndexRepository()
+    first = list(
+        repo.rebuild_batch(batch_size=2, after_id=None, stale_only=False),
+    )
+    assert [len(b) for b in first] == [2, 2, 1]
+    last_seen = sum(first, [])[-1]
+    # 5 rows total; first call yielded all 5. A second call past the
+    # last id must return an empty list (no more rows).
+    second = list(
+        repo.rebuild_batch(batch_size=2, after_id=last_seen, stale_only=False),
+    )
+    assert sum(second, []) == [], (
+        f"after_id={last_seen} is past the last row; expected [], got {sum(second, [])}"
+    )
+
+    # Now check the real resume semantics: after the first batch of 2
+    # rows, the next call with after_id=batch[-1] must yield only the
+    # rows strictly past that cursor.
+    mid_seen = first[0][-1]  # 'R5-000002'
+    tail = list(
+        repo.rebuild_batch(batch_size=2, after_id=mid_seen, stale_only=False),
+    )
+    assert sum(tail, []) == ["R5-000003", "R5-000004", "R5-000005"], (
+        f"after_id={mid_seen} must skip R5-000001..R5-000002; got {sum(tail, [])}"
+    )

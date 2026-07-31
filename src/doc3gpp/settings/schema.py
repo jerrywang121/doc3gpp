@@ -415,11 +415,12 @@ class SearchSettings(BaseModel):
         ),
     )
     rebuild_batch_size: int = Field(
-        default=500,
+        default=100,
         ge=1,
         description=(
             "TDocs per batch during `search index --rebuild`. "
-            "Smaller values reduce peak memory; larger values "
+            "Smaller values reduce peak memory and crash-recovery "
+            "loss (cursor advances per batch); larger values "
             "finish faster."
         ),
     )

@@ -1520,7 +1520,7 @@ the index by walking every `tdocs` row.
 | Flag | Effect |
 | --- | --- |
 | `--rebuild` | Drop and rebuild the FTS5 table by walking every `tdocs` row. |
-| `--batch INT` | Override `Settings.search.rebuild_batch_size` (default 500). Controls how many TDocs are fetched per SQL page; smaller = finer-grained crash recovery (cursor advances per page), larger = fewer round-trips. Progress is reported per TDoc regardless of this value. |
+| `--batch INT` | Override `Settings.search.rebuild_batch_size` (default 100). Controls how many TDocs are fetched per SQL page; smaller = finer-grained crash recovery (cursor advances per page), larger = fewer round-trips. Progress is reported once per 1% of work. |
 | `--resume` | Continue from the last `tdoc_id` in `tdoc_search_meta` instead of starting at zero. Implies `--rebuild`. |
 | `--stale-only` | Only re-index rows whose `tdocs.uploaded_date > last_indexed_uploaded_date`. |
 | `--quiet` | Suppress the tqdm progress bar; print only the final summary. |

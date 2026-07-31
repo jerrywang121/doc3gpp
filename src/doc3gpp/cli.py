@@ -4238,7 +4238,7 @@ def index_command(
     batch: int | None = typer.Option(
         None, "--batch", min=1,
         help=(
-            "TDocs per SQL page (default: Settings.search.rebuild_batch_size = 500). "
+            "TDocs per SQL page (default: Settings.search.rebuild_batch_size = 100). "
             "Smaller = finer-grained crash recovery; larger = fewer round-trips. "
             "Progress is reported once per 1% of work (~100 updates for a full "
             "corpus rebuild regardless of batch size)."

@@ -130,7 +130,7 @@ auto_index_on_parse = true
 # (the cursor only advances per page); larger values save SQL
 # round-trips. Progress is reported per TDoc via a tqdm bar
 # regardless of this value.
-rebuild_batch_size = 500
+rebuild_batch_size = 100
 
 # Approximate number of tokens per FTS5 snippet(...) output. The
 # CLI's --snippet-tokens flag overrides this for a single invocation.

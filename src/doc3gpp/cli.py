@@ -4268,10 +4268,9 @@ def index_command(
             f"Status:        {'STALE' if status.is_stale else 'OK'}"
         )
         return
-    if do_fts5:
-        if fts5_svc is None:
-            typer.echo("search disabled in settings", err=True)
-            raise typer.Exit(code=1)
+    if do_fts5 and fts5_svc is None:
+        typer.echo("FTS5 search unavailable; skipping FTS5 rebuild", err=True)
+    if do_fts5 and fts5_svc is not None:
         settings = get_settings()
         batch_size = batch or settings.search.rebuild_batch_size
         for progress in fts5_svc.rebuild(

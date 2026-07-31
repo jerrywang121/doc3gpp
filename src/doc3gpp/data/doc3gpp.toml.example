@@ -152,61 +152,61 @@ bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 # matrix; on MySQL / PostgreSQL or when sqlite-vec is unavailable,
 # only the FTS5 path is active and the vector path is a no-op.
 
-[semantic_search]
+# [semantic_search]
 # Master switch for the semantic search subsystem. False disables the
 # `search sem` command, the auto-embed hook, and the
 # `vec_tdoc_embeddings` DDL creation.
-enabled = true
+# enabled = true
 
 # When true, every successful tdoc parse embeds the new content into
 # the vector index so hybrid search sees the latest rows. Mirrors
 # `[search].auto_index_on_parse`.
-auto_embed_on_parse = true
+# auto_embed_on_parse = true
 
 # Hugging Face model id used for embeddings. Must produce a vector
 # dimension that matches the `vec_tdoc_embeddings` schema at creation
 # time; changing this on a populated index requires
 # `search index --rebuild-embeddings`.
-embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+# embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Approximate chunk size in characters passed to the text chunker.
-# Each TDoc is split into windows of `chunk_size` characters with
-# `chunk_overlap` characters of overlap to preserve context across
-# boundaries.
-chunk_size = 800
+# Approximate chunk size in whitespace tokens passed to the text
+# chunker. Each TDoc is split into windows of `chunk_size` whitespace
+# tokens with `chunk_overlap` tokens of overlap to preserve context
+# across boundaries. Mirrors `_chunks(text, size, overlap)` in
+# `services/embedding/chunker.py`.
+# chunk_size = 800
 
-# Overlap between consecutive chunks (in characters). Mirrors
-# `_chunks(text, size, overlap)` in `services/embedding/chunker.py`.
-chunk_overlap = 100
+# Overlap between consecutive chunks (in whitespace tokens).
+# chunk_overlap = 100
 
 # RRF `k` constant. The blend is
 #   rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec) * W
 # with `W = vector_weight`. Larger `k` flattens the contribution of
 # low-ranked candidates; smaller `k` sharpens the top.
-rrf_k = 60
+# rrf_k = 60
 
 # Default `--vector-weight` for `search sem`. Range 0.0..1.0;
 # 0.0 is FTS5-only, 1.0 is vector-only.
-vector_weight = 0.7
+# vector_weight = 0.7
 
 # Fan-out multiplier for the FTS5 and vector paths. Each path
 # retrieves `fanout_multiplier * final_limit` candidates before RRF
 # merge and truncation.
-fanout_multiplier = 2
+# fanout_multiplier = 2
 
 # Default `--limit` for `search sem` (also the per-path fan-out base).
-final_limit = 20
+# final_limit = 20
 
 # Additional stopwords appended to the spaCy stopword set used for
 # the FTS5 query path. Useful for project-specific boilerplate
 # (e.g. `["3gpp", "tdoc"]`).
-user_defined_stop_words = []
+# user_defined_stop_words = []
 
 # Stopwords that must NOT be stripped even when they appear in the
 # default stopword set. Negation words (`not`, `no`) belong here so
 # "not redcap" still differentiates from "redcap".
-keep_negation_words = ["not"]
+# keep_negation_words = ["not"]
 
 # Hard cap on the number of chunks indexed per TDoc. Prevents
 # pathological TDoc bodies from dominating the index.
-max_chunks_per_tdoc = 32
+# max_chunks_per_tdoc = 32

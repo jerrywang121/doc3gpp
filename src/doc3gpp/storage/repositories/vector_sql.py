@@ -91,6 +91,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
 
     def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None:
         self._check_dim(embeddings)
+        # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:emb).
         with self._engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM vec_tdoc_embeddings WHERE tdoc_id = :id"),
@@ -165,6 +166,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                     sql.append("   AND t.uploaded_date <= :until")
                     params["until"] = filters.until
         sql.append(" WHERE embedding MATCH :q AND k = :k")
+        # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:q).
         sql.append("  ORDER BY distance IS NULL, distance ASC, chunk_id ASC")
         with self._engine.begin() as conn:
             rows = conn.execute(text("\n".join(sql)), params).all()

@@ -135,6 +135,33 @@ def _create_search_schema() -> None:
                 """
             )
         )
+        # Composite indexes for filter push-down on the regular
+        # ``tdocs`` and ``meetings`` tables. These complement both the
+        # FTS5 virtual table and the sqlite-vec KNN path by accelerating
+        # the structured WHERE clauses issued alongside vector/FTS5
+        # queries: release/spec/date on tdocs and name/tsg on meetings.
+        # Plain CREATE INDEX works cross-dialect, but the surrounding
+        # FTS5 gate narrows this to sqlite — FTS5 is sqlite-only by
+        # convention. Locked down by
+        # ``tests/integration/test_search_indexes.py``.
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_tdocs_release_spec "
+                "ON tdocs (release, spec)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_tdocs_uploaded_date "
+                "ON tdocs (uploaded_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_meetings_name_tsg "
+                "ON meetings (name, tsg)"
+            )
+        )
 
 
 def _create_vector_schema() -> None:
@@ -187,32 +214,6 @@ def _create_vector_schema() -> None:
                     value TEXT NOT NULL
                 )
                 """
-            )
-        )
-        # Composite indexes for filter push-down on the regular
-        # ``tdocs`` and ``meetings`` tables. These complement both the
-        # FTS5 virtual table and the sqlite-vec KNN path by accelerating
-        # the structured WHERE clauses issued alongside vector/FTS5
-        # queries: release/spec/date on tdocs and name/tsg on meetings.
-        # Plain CREATE INDEX works cross-dialect, but we keep them inside
-        # the sqlite + sqlite-vec gate for consistency with the vector
-        # schema above.
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS idx_tdocs_release_spec "
-                "ON tdocs (release, spec)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS idx_tdocs_uploaded_date "
-                "ON tdocs (uploaded_date)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS idx_meetings_name_tsg "
-                "ON meetings (name, tsg)"
             )
         )
 

@@ -19,6 +19,7 @@ meeting title.
 
 from __future__ import annotations
 
+import json as _json
 import logging
 from collections.abc import Iterable
 
@@ -294,19 +295,39 @@ def _build_embed_text(tdoc_id: str) -> str | None:
         if cover is not None and cover[0]:
             parts.append(cover[0])
         ttcn = conn.execute(
-            text("SELECT required_changes_text FROM tdoc_cr_ttcn_details WHERE tdoc_id = :id"),
+            text(
+                """
+                SELECT testcase, ue, ss, ats_version, ttcn_release,
+                       test_suite, required_changes, changed_functions
+                  FROM tdoc_cr_ttcn_details
+                 WHERE tdoc_id = :id
+                """
+            ),
             {"id": tdoc_id},
         ).first()
-        if ttcn is not None and ttcn[0]:
-            decoded = decompress_json(ttcn[0])
+        if ttcn is not None:
+            flat = " ".join(str(v) for v in ttcn[:6] if v is not None)
+            if flat:
+                parts.append(flat)
+            decoded = decompress_json(ttcn[6])
             if decoded is not None:
                 parts.append(str(decoded)[:2000])
+            if ttcn[7]:
+                parts.append(ttcn[7].replace("\n", " "))
         changes = conn.execute(
-            text("SELECT change_text FROM tdoc_cr_change_details WHERE tdoc_id = :id"),
+            text(
+                "SELECT clauses, changes FROM tdoc_cr_change_details "
+                "WHERE tdoc_id = :id"
+            ),
             {"id": tdoc_id},
         ).first()
-        if changes is not None and changes[0]:
-            decoded = decompress_json(changes[0])
-            if decoded is not None:
+        if changes is not None:
+            if changes[0]:
+                parts.append(changes[0].replace("\n", " "))
+            decoded = decompress_json(changes[1])
+            if isinstance(decoded, list):
+                for c in decoded:
+                    parts.append(_json.dumps(c, ensure_ascii=False))
+            elif decoded is not None:
                 parts.append(str(decoded)[:2000])
     return " :: ".join(p for p in parts if p)

@@ -207,4 +207,32 @@ def test_search_sem_vector_weight_zero_is_fts5_only(semantic_service):
     _ = rrf_merge  # silence unused-import warning
 
 
+def test_build_embed_text_against_real_corpus(semantic_search_corpus):
+    """Regression: _build_embed_text must not crash on real tdoc_cr_* columns.
+
+    The corpus seeds rows into ``tdoc_cr_ttcn_details`` (with the real
+    ``required_changes`` blob column) and ``tdoc_cr_change_details``
+    (with the real ``changes`` blob column). Earlier the helper queried
+    non-existent ``required_changes_text`` / ``change_text`` columns,
+    raising ``OperationalError`` and silently dropping every TDoc from
+    the rebuild. This test calls the helper directly so the regression
+    surfaces as a hard assertion failure rather than a swallowed
+    WARNING in the rebuild log.
+    """
+    from doc3gpp.storage.repositories.vector_sql import _build_embed_text
+    from tests.fixtures.semantic_search_corpus import ROWS
+
+    # ROWS[*][7] is the `kinds` tuple — populated TDoc IDs include at
+    # least one TTCN-only, one CHG-only, and one with both sidecars.
+    target_ids = [row[0] for row in ROWS if "ttcn" in row[7] or "chg" in row[7]]
+    assert target_ids, "corpus must seed at least one TTCN or CHG TDoc"
+
+    for tid in target_ids:
+        text = _build_embed_text(tid)
+        assert isinstance(text, str), (
+            f"_build_embed_text({tid!r}) must return str, got {type(text).__name__}"
+        )
+        assert text, f"_build_embed_text({tid!r}) returned empty string"
+
+
 _ = np  # keep numpy import alive for type-checkers scanning fixtures

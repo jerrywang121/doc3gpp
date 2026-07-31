@@ -4355,16 +4355,13 @@ def _emit_explain(
     """Print the resolved search config to stderr.
 
     The block surfaces the FTS5 ``MATCH`` expression the CLI actually
-    sent, the cached ``snippet_column`` index, the snippet token
-    count (the per-call override from ``--snippet-tokens`` when
-    provided, otherwise the cached setting value), and the BM25
-    weight vector. The format matches the perf spec at
-    ``docs/superpowers/specs/2026-07-30-fts5-perf.md`` §"``--explain``
+    sent, the snippet token count (the per-call override from
+    ``--snippet-tokens`` when provided, otherwise the cached setting
+    value), and the BM25 weight vector. The format matches the perf
+    spec at ``docs/superpowers/specs/2026-07-30-fts5-perf.md`` §"``--explain``
     wire-up".
     """
     weights = getattr(repo, "_weights", ())
-    snippet_column = getattr(repo, "_snippet_column", "?")
-    snippet_column_idx = getattr(repo, "_snippet_column_idx", "?")
     weights_str = "[" + ", ".join(str(w) for w in weights) + "]"
     typer.echo("# search config", err=True)
     # ``match_expr`` is the FTS5 MATCH expression the repo will
@@ -4372,10 +4369,6 @@ def _emit_explain(
     # plain text, or passed-through for operator queries); print it
     # verbatim so operators can confirm what the CLI sent.
     typer.echo(f"match:           {match_expr}", err=True)
-    typer.echo(
-        f"snippet_column:  {snippet_column} (col {snippet_column_idx})",
-        err=True,
-    )
     typer.echo(f"snippet_tokens:  {snippet_tokens}", err=True)
     typer.echo(f"bm25_weights:    {weights_str}", err=True)
 

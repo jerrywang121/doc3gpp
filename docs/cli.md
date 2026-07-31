@@ -1487,7 +1487,6 @@ piped stdout) and looks exactly like this:
 ```
 # search config
 match:           "tdoc"
-snippet_column:  title (col 0)
 snippet_tokens:  8
 bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 ```
@@ -1496,21 +1495,21 @@ bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
   receives — plain-text input is wrapped in quotes via
   `SearchQueryBuilder`; operator queries (`AND`, `OR`, `NOT`, `NEAR`,
   `*`, quoted phrases) pass through unchanged.
-- `snippet_column` reports the resolved column name (from
-  `Settings.search.snippet_column`) plus its 0-based index in the
-  `tdoc_search` virtual table — the index is what
-  `snippet(... , col_index)` actually needs.
 - `snippet_tokens` echoes the per-call value (the `--snippet-tokens`
   CLI flag when supplied, otherwise the cached
   `Settings.search.snippet_tokens`).
 - `bm25_weights` is the literal 8-float vector forwarded to
-  `bm25(tdoc_search, ...)` for this query.
+  `bm25(tdoc_search, ...)` for this query. It also drives snippet
+  selection: the repo binds one `snippet(...)` per `weight > 0`
+  column and surfaces the result in the hit's `previews` map only
+  when the snippet contains a match (so weight 0 = skip both
+  ranking and previews).
 
 Two retunable knobs are useful here: the `--snippet-tokens` CLI
 flag above overrides the cached `Settings.search.snippet_tokens`
 per-invocation; `--explain` is the canonical way to discover what
-`Settings.search.bm25_weights` and `snippet_column` are firing for
-a given query before editing them in `doc3gpp.toml`.
+`Settings.search.bm25_weights` is firing for a given query before
+editing it in `doc3gpp.toml`.
 
 ## `doc3gpp search index [flags]`
 

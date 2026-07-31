@@ -46,10 +46,9 @@ logger = logging.getLogger(__name__)
 # ``tdoc_search`` virtual table declares 9 columns in this order:
 # ``tdoc_id`` (UNINDEXED, cid 0), then ``title`` (cid 1) ..
 # ``ttcn_text`` (cid 8). The 8 indexed columns therefore occupy
-# cids 1..8 and the searchable name→cid map starts at offset 1.
-_SNIPPET_COLUMN_TO_IDX: dict[str, int] = {
-    name: i + 1 for i, name in enumerate(_SNIPPET_COLUMN_NAMES)
-}
+# cids 1..8.
+def _snippet_column_cid(name: str) -> int:
+    return _SNIPPET_COLUMN_NAMES.index(name) + 1
 
 
 def _check_fts5(engine: Engine) -> None:
@@ -87,11 +86,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         _check_fts5(self._engine)
         settings = get_settings().search
         self._weights: tuple[float, ...] = tuple(settings.bm25_weights)
-        self._snippet_column: str = settings.snippet_column
         self._snippet_tokens: int = settings.snippet_tokens
-        self._snippet_column_idx: int = _SNIPPET_COLUMN_TO_IDX[
-            self._snippet_column
-        ]
 
     # ------------------------------------------------------------------
     # Write paths
@@ -184,9 +179,9 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         # parameter to each so the SQL is fully parameterised
         # (sqlite sees ``?`` placeholders for the column index).
         snippet_columns: list[tuple[str, int]] = [
-            (name, _SNIPPET_COLUMN_TO_IDX[name])
-            for i, (name, weight) in enumerate(
-                zip(_SNIPPET_COLUMN_NAMES, self._weights, strict=True)
+            (name, _snippet_column_cid(name))
+            for name, weight in zip(
+                _SNIPPET_COLUMN_NAMES, self._weights, strict=True
             )
             if weight > 0
         ]

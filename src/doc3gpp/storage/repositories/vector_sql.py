@@ -195,15 +195,27 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             yield ids
             last_id = ids[-1]
 
-    def count_tdocs_to_index(self, stale_only: bool) -> int:
+    def count_tdocs_to_index(
+        self, stale_only: bool, after_id: str | None = None,
+    ) -> int:
         sql = ["SELECT COUNT(*) FROM tdocs"]
+        params: dict[str, object] = {}
+        clauses: list[str] = []
+        if after_id is not None:
+            clauses.append("tdoc_id > :after_id")
+            params["after_id"] = after_id
         if stale_only:
-            sql.append(
-                " WHERE uploaded_date > "
-                "(SELECT value FROM vec_meta WHERE key='last_indexed_uploaded_date')"
+            clauses.append(
+                "uploaded_date > ("
+                "SELECT value FROM vec_meta "
+                " WHERE key = 'last_indexed_uploaded_date')"
             )
+        if clauses:
+            sql.append(" WHERE " + " AND ".join(clauses))
         with self._engine.begin() as conn:
-            return int(conn.execute(text("\n".join(sql))).scalar() or 0)
+            return int(
+                conn.execute(text(" ".join(sql)), params).scalar() or 0,
+            )
 
     def get_resume_cursor(self) -> str | None:
         with self._engine.begin() as conn:

@@ -171,8 +171,10 @@ class SemanticSearchService:
     def rebuild_embeddings(
         self, batch_size: int, stale_only: bool, quiet: bool,
     ) -> Iterator[RebuildProgress]:
-        total = self._vec.count_tdocs_to_index(stale_only=stale_only)
         after_id = self._vec.get_resume_cursor()
+        total = self._vec.count_tdocs_to_index(
+            stale_only=stale_only, after_id=after_id,
+        )
         processed = 0
         batches = self._vec.rebuild_batch(
             batch_size=batch_size, after_id=after_id, stale_only=stale_only,

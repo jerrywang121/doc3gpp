@@ -210,3 +210,55 @@ def test_rebuild_batch_resumes_from_after_id(sqlite_env):
     assert sum(tail, []) == ["R5-000003", "R5-000004", "R5-000005"], (
         f"after_id={mid_seen} must skip R5-000001..R5-000002; got {sum(tail, [])}"
     )
+
+
+def test_count_tdocs_to_index_respects_after_id(sqlite_env):
+    """Regression: count_tdocs_to_index must honor the resume cursor.
+
+    Without this, the tqdm bar reads total=13,693 but processed
+    stops at 4,193 (the resume tail) — looks like 31% complete when
+    the rebuild actually finished every TDoc past the cursor.
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+    from sqlalchemy import text
+
+    create_schema()
+    eng = get_engine()
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO tsgs (tsg_name, short_name, description) "
+                "VALUES ('RAN WG1', 'RAN1', '')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO meetings (meeting_id, name, title, location, tsg, "
+                "start_date, end_date, ftp_url, tdoc_list_last_sync) "
+                "VALUES (1, 'RAN1#120', 'RAN1 #120', 'Athens', 'RAN1', "
+                "'2026-03-01', '2026-03-05', 'https://x/ran1-120', "
+                "'2026-03-05T00:00:00')"
+            )
+        )
+        for tid in [f"R5-{i:06d}" for i in range(1, 8)]:
+            conn.execute(
+                text(
+                    "INSERT INTO tdocs (tdoc_id, meeting_id, title, ftp_url, "
+                    "type, source, uploaded_date, release, spec) "
+                    "VALUES (:tid, 1, :t, :ftp, 'CR', 'TSG', "
+                    "'2026-03-02', 'Rel-17', '38.300')"
+                ),
+                {"tid": tid, "t": f"title-{tid}", "ftp": f"https://x/{tid}.zip"},
+            )
+
+    repo = SQLAlchemyVectorIndexRepository()
+    # Without after_id: full count = 7
+    assert repo.count_tdocs_to_index(stale_only=False, after_id=None) == 7
+    # With after_id at the 3rd row: only rows strictly past it
+    assert repo.count_tdocs_to_index(stale_only=False, after_id="R5-000003") == 4
+    # With after_id at the last row: zero
+    assert repo.count_tdocs_to_index(stale_only=False, after_id="R5-000007") == 0

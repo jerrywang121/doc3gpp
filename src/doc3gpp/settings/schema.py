@@ -457,6 +457,69 @@ class SearchSettings(BaseModel):
         return value
 
 
+class SemanticSearchSettings(BaseModel):
+    """Knobs for the semantic (embedding + vector) search subsystem.
+
+    Defaults match the conservative end: ``enabled`` and
+    ``auto_embed_on_parse`` both default to True so the vector index
+    stays in sync with every successful ``tdoc parse`` until the
+    operator opts out. The embedding model name is pluggable; the
+    default ``all-MiniLM-L6-v2`` is 384-dim, ~80MB, fast on CPU.
+
+    TOML-only (no env overrides). The presence of the sqlite-vec
+    extension + spaCy model is gated by the ``[semantic]`` pyproject
+    extra; on builds without it the runtime probe raises
+    :class:`VectorIndexUnavailableError` which the factory catches
+    once at startup.
+    """
+
+    enabled: bool = Field(default=True, description="Master switch.")
+    auto_embed_on_parse: bool = Field(
+        default=True,
+        description="When true, every successful tdoc parse calls "
+        "SemanticSearchService.index_for_tdoc(tdoc_id).",
+    )
+    embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="HuggingFace sentence-transformers repo id.",
+    )
+    chunk_size: int = Field(default=800, ge=1, description="Whitespace tokens per chunk.")
+    chunk_overlap: int = Field(
+        default=100, ge=0,
+        description="Trailing tokens repeated at next chunk start. Must be < chunk_size.",
+    )
+    rrf_k: int = Field(default=60, ge=1, description="RRF k constant.")
+    vector_weight: float = Field(
+        default=0.7, ge=0.0, le=1.0,
+        description="Blend weight for vector rank in RRF (0.0..1.0).",
+    )
+    fanout_multiplier: int = Field(
+        default=2, ge=1,
+        description="Internal fan-out factor (limit * fanout per side).",
+    )
+    final_limit: int = Field(default=20, ge=0, description="Default --limit for `search sem`.")
+    user_defined_stop_words: list[str] = Field(
+        default_factory=list,
+        description="Extra tokens to drop from FTS5 query (case-insensitive).",
+    )
+    keep_negation_words: list[str] = Field(
+        default_factory=lambda: ["not"],
+        description="Tokens to retain even though spaCy treats them as stopwords.",
+    )
+    max_chunks_per_tdoc: int = Field(
+        default=32, ge=1,
+        description="Cap on chunks per TDoc to bound parse latency on long covers.",
+    )
+
+    @field_validator("chunk_overlap")
+    @classmethod
+    def _overlap_less_than_size(cls, v, info):
+        size = info.data.get("chunk_size", 800)
+        if v >= size:
+            raise ValueError(f"chunk_overlap ({v}) must be < chunk_size ({size})")
+        return v
+
+
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
@@ -488,6 +551,7 @@ class Settings(BaseSettings):
     tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)
     sync: SyncSettings = Field(default_factory=SyncSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
+    semantic_search: SemanticSearchSettings = Field(default_factory=SemanticSearchSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="DOC3GPP_",

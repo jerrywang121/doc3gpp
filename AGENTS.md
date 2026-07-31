@@ -78,6 +78,10 @@ For the full symbol-to-file table, see
 | Add a search command / hook | `src/doc3gpp/cli.py` (`search_app`) + `src/doc3gpp/services/search_service.py` + `src/doc3gpp/storage/repositories/search_sql.py` | FTS5 over sqlite + index-time normalize_query; rebuild resume via `tdoc_search_meta` |
 | Add a domain keyword / NER | `src/doc3gpp/services/search_service.py` (`EmbeddingReranker`) | PassthroughReranker default; swap for a real impl when the embedding spec lands |
 | Tune the FTS5 search subsystem | `src/doc3gpp/settings/schema.py` (`SearchSettings`) | FTS5 search knobs (`enabled`, `auto_index_on_parse`, `rebuild_batch_size`, `snippet_tokens`, `bm25_weights`); TOML `[search]` block. Per-column previews are driven by `bm25_weights` (weight>0 → snippet bound; match in snippet → surfaced; weight=0 → both skipped). |
+| Add a semantic search knob | `src/doc3gpp/settings/schema.py` (`SemanticSearchSettings`) | TOML `[semantic_search]` block. |
+| Add a `search sem` flag | `src/doc3gpp/cli.py` (`sem_command`) | Mirror `search_command` pattern. |
+| Add an embedding model | `src/doc3gpp/services/embedding/embedder.py` | Lazy model load; `Embedder` Protocol in `repository/protocols.py`. |
+| Add a vector DDL change | `src/doc3gpp/storage/db/migrate.py` (`_create_vector_schema`) + `src/doc3gpp/storage/repositories/vector_sql.py` | Gated on sqlite + sqlite-vec. |
 
 For deeper conventions (filter grammar, settings caching, anti-patterns,
 commit policy), see [`docs/conventions.md`](docs/conventions.md).
@@ -235,6 +239,34 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `# FTP URL` / `[FTP URL]` anchor; the renderer contract follows
   the same omit-when-null convention as the `--tdoc` path's
   `TDocShowRecord`.
+- `doc3gpp search query "QUERY" [filters]` → `SearchService.search(query,
+  filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
+  `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →
+  `list[SearchHit]` → CLI formatter. The ranking stage uses
+  `bm25(tdoc_search, ...)` with the configurable column-weight
+  vector in `Settings.search.bm25_weights` (see the `tdoc_search`
+  schema below for the column order); the same `bm25_weights`
+  vector drives snippet selection — one `snippet(...)` per
+  `weight > 0` column, and the result surfaces in the hit's
+  `previews` map only when the snippet contains a match. Fires
+  the stale-index hint on the side (one-shot, gated on `--quiet`).
+- `doc3gpp search index --rebuild` → `SearchService.rebuild(...)`
+  generator → `repo.rebuild_batch(...)` per batch → per-row
+  `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
+  Resumable via `--resume`; cheap incremental via `--stale-only`.
+- `doc3gpp search sem QUERY [filters]` →
+  `SemanticSearchService.search` → spaCy stopword strip (FTS5 path) +
+  original query embedding (vector path) → FTS5 fan-out (`2N`) +
+  vector KNN fan-out (`2N`) → `rrf_merge` → truncate to `--limit`
+  (default 20). `--vector-weight` (0.0..1.0, default 0.7) blends the
+  two ranks via `rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec)
+  * W` (`k=60`). `search query` (FTS5-only) is unchanged.
+- `doc3gpp search index --rebuild-embeddings [--stale-only] [--batch N]
+  [--resume] [--quiet]` → `SemanticSearchService.rebuild_embeddings`
+  → drops + recreates `vec_tdoc_embeddings`; iterates every `tdocs`
+  row, calls `index_for_tdoc` per id (build embed text → chunk →
+  embed → upsert); updates `vec_meta` for resume + staleness.
+  `--rebuild-all` runs both FTS5 and vector rebuilds in sequence.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against `doc3gpp.toml.example`.
 - `doc3gpp config init --target <auto|project|user> [--force]` writes

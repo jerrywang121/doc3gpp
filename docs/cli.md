@@ -1524,6 +1524,56 @@ the index by walking every `tdocs` row.
 | `--resume` | Continue from the last `tdoc_id` in `tdoc_search_meta` instead of starting at zero. Implies `--rebuild`. |
 | `--stale-only` | Only re-index rows whose `tdocs.uploaded_date > last_indexed_uploaded_date`. |
 | `--quiet` | Suppress per-batch progress logs; print only the final summary. |
+| `--rebuild-embeddings` | Drop and rebuild the vector (`vec_tdoc_embeddings`) index. Walks every `tdocs` row and re-embeds each one. Use `--stale-only` for incremental refresh, `--resume` to continue from the last `tdoc_id` in `vec_meta`, `--batch N` to override `Settings.semantic_search.rebuild_batch_size`, `--quiet` to suppress per-batch progress. Gated on the sqlite + sqlite-vec support matrix. |
+| `--rebuild-all` | Run both the FTS5 rebuild and the vector rebuild in sequence. Implies `--rebuild` and `--rebuild-embeddings`. |
+
+## `doc3gpp search sem QUERY [filters]`
+
+Run a hybrid (FTS5 + vector) search that merges lexical and semantic
+matches with Reciprocal Rank Fusion (RRF). The query is dispatched
+down two paths in parallel: an FTS5 path (with the same spaCy +
+custom-stopword strip the FTS5 index was built with) and a vector path
+(the raw query is embedded against the same model used at index time).
+Both paths fan out to `2N` candidates, are merged via `rrf_merge`, and
+truncated to `--limit`. `search query` (FTS5-only) is unchanged.
+
+| Flag | Effect |
+| --- | --- |
+| `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). |
+| `--tsg TEXT` | `meetings.tsg` filter. |
+| `--meeting TEXT` | `meetings.name` filter. |
+| `--meeting-id INT` | `meetings.meeting_id` filter. |
+| `--tdoc-id TEXT` | exact `tdocs.tdoc_id` filter. |
+| `--release TEXT` | `tdocs.release` filter. |
+| `--spec TEXT` | spec-number filter (`38.300`, `38.300-1`). |
+| `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD). |
+| `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD). |
+| `--limit INT` | max results (default `20`). |
+| `--vector-weight FLOAT` | Blend weight `W` for the vector rank in the RRF formula. Range `0.0..1.0`, default `0.7`. The FTS5 path is weighted `1 - W`; `0.0` is FTS5-only, `1.0` is vector-only. |
+| `--format table\|json\|markdown` | output format (default `table`). |
+| `--compact` | strip JSON / markdown decorators. |
+| `--explain` | Print the resolved FTS5 MATCH expression, snippet column, BM25 weight vector, and the RRF config (k, vector_weight, fanout_multiplier) to stderr. |
+| `--quiet` | suppress the stale-index hint. |
+
+The merge is `rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec) * W`
+with `k = Settings.semantic_search.rrf_k` (default `60`). Each hit
+carries its FTS5 rank, vector rank, RRF score, and the closest chunk
+distance / id so downstream consumers can inspect either source.
+
+The hybrid search degrades gracefully across three layers:
+
+1. FTS5 path: when `Settings.search.enabled = false`, the FTS5 fan-out
+   returns an empty list and only the vector rank contributes to the
+   RRF score. `--explain` surfaces the missing FTS5 side.
+2. Vector path: when `Settings.semantic_search.enabled = false` or
+   the sqlite-vec extension is unavailable, the vector fan-out returns
+   an empty list and the FTS5 rank drives the result.
+3. Auto-embed hook: when `Settings.semantic_search.auto_embed_on_parse = false`,
+   newly-parsed TDocs are not embedded automatically; the vector path
+   reflects only what was indexed up to the last manual rebuild.
+
+The TOML knobs live under the `[semantic_search]` block — see
+`doc3gpp.toml.example` for every field with its default.
 
 ## tsg Commands
 

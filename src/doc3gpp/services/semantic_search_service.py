@@ -158,7 +158,11 @@ class SemanticSearchService:
         if not chunks:
             self._vec.remove_for_tdoc(tdoc_id)
             return
-        embeddings = [self._embedder.encode([c])[0] for c in chunks]
+        # Batch all chunks for one TDoc into a single embedder call.
+        # sentence-transformers has ~1s per-call overhead, so calling
+        # encode() per chunk would be O(chunks) wall-time per TDoc.
+        embeddings_array = self._embedder.encode(chunks)
+        embeddings = [embeddings_array[i] for i in range(len(chunks))]
         self._vec.upsert_chunks(tdoc_id, embeddings)
 
     def remove_for_tdoc(self, tdoc_id: str) -> None:

@@ -109,6 +109,38 @@ def test_index_for_tdoc_calls_upsert_chunks(monkeypatch):
     assert isinstance(args[0][1], list)
 
 
+def test_index_for_tdoc_encodes_all_chunks_in_one_call(monkeypatch):
+    """Regression: chunks for one TDoc must be batched into a single
+    ``embedder.encode([...])`` call, not one call per chunk. The
+    sentence-transformers model has ~1s per-call overhead, so
+    looping kills the rebuild (1 tdoc/sec instead of hundreds).
+    """
+    import numpy as np
+
+    vec = MagicMock()
+    fts5 = MagicMock()
+    monkeypatch.setattr(
+        "doc3gpp.services.semantic_search_service._build_embed_text",
+        lambda tid: "long text " * 4000,  # -> 5 chunks of ~800 tokens
+    )
+    embedder = MagicMock()
+    embedder.dim = 384
+    # encode() returns one row per chunk; 4000 whitespace tokens at
+    # default size=800 / overlap=100 yields 12 chunks.
+    embedder.encode.return_value = np.zeros((12, 384), dtype=np.float32)
+    svc = SemanticSearchService(fts5, embedder, vec, _settings())
+    svc.index_for_tdoc("R5-1")
+    # exactly one encode() call for all 12 chunks
+    embedder.encode.assert_called_once()
+    call_args = embedder.encode.call_args
+    # single positional arg = list of chunks
+    assert len(call_args[0][0]) == 12
+    # and the resulting embeddings land in upsert_chunks
+    args = vec.upsert_chunks.call_args
+    assert args[0][0] == "R5-1"
+    assert len(args[0][1]) == 12
+
+
 def test_remove_for_tdoc_calls_repo():
     vec = MagicMock()
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())

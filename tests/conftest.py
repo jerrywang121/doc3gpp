@@ -15,3 +15,28 @@ def sqlite_env(tmp_path, monkeypatch):
     yield db_path
     get_engine.cache_clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture()
+def search_corpus(sqlite_env):
+    """Populate a sqlite engine with the FTS5 search-corpus rows.
+
+    Depends on the existing ``sqlite_env`` fixture (which points the
+    engine at a temporary file). Yields the engine so callers can
+    also run their own asserts against it. The FTS5 index is
+    pre-populated so tests that don't care about the indexing loop
+    can go straight to ``search``.
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+    from tests.fixtures.search_corpus import build_corpus
+
+    create_schema()
+    engine = get_engine()
+    tdoc_ids = build_corpus(engine)
+    repo = SQLAlchemySearchIndexRepository()
+    for tdoc_id in tdoc_ids:
+        repo.upsert(tdoc_id)
+    yield engine

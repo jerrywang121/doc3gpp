@@ -113,3 +113,35 @@
 # tdoc_list_sync_interval = "30m" # skip TDoc list sync if last sync is newer than this
 # tdoc_list_closed_window = "90d" # skip TDoc list sync when meeting end_date is older than this
 # tdoc_list_url_template = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}"
+
+# ── Full-text search (FTS5) ─────────────────────────────────────────────────
+# Full-text search (FTS5) subsystem knobs.
+[search]
+# Master switch for the search subsystem. False disables the CLI
+# commands, the auto-index hook, and the tdoc_search DDL creation.
+enabled = true
+
+# When true, every successful tdoc parse calls
+# SearchService.upsert_for_tdoc(tdoc_id) so the index stays in sync.
+auto_index_on_parse = true
+
+# TDocs per batch during `search index --rebuild`. Smaller values
+# reduce peak memory; larger values finish faster.
+rebuild_batch_size = 500
+
+# Approximate number of tokens per FTS5 snippet(...) output. The
+# CLI's --snippet-tokens flag overrides this for a single invocation.
+snippet_tokens = 8
+
+# Per-column BM25 weights passed to FTS5's bm25() ranking function.
+# Order MUST match the 8 indexed columns of the tdoc_search virtual
+# table: (title, ftp_url, meeting_title, meeting_location, wis,
+# cover_text, change_text, ttcn_text). Raise a column's weight to
+# boost hits there; tune interactively via `doc3gpp search --explain`.
+bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+
+# Which FTS5 column snippet() pulls the highlighted excerpt from.
+# Must be one of the 8 indexed columns (title, ftp_url, meeting_title,
+# meeting_location, wis, cover_text, change_text, ttcn_text). Pick a
+# column that's typically non-empty for the matches you expect.
+snippet_column = "title"

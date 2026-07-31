@@ -84,10 +84,11 @@ def _seed_project_root(tmp_path: Path, monkeypatch) -> None:
 def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -> None:
     """Given a fresh project root with ``pyproject.toml``, ``config init``
     creates ``./doc3gpp.toml`` populated with the packaged template;
-    ``load_config_data()`` parses it cleanly (the template is
-    all-comments so the dict is empty); and ``config show`` then dumps
-    JSON that matches ``Settings().model_dump(mode="json")`` — proving
-    the cache cleared and the file is wired into the loader.
+    ``load_config_data()`` parses it cleanly (every commented-out table
+    disappears into the dict; the active ``[search]`` block surfaces
+    with its default values); and ``config show`` then dumps JSON that
+    matches ``Settings().model_dump(mode="json")`` — proving the cache
+    cleared and the file is wired into the loader.
     """
     _seed_project_root(tmp_path, monkeypatch)
 
@@ -100,8 +101,19 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
     # And: the file parses cleanly via the public loader.
     path, data = load_config_data()
     assert path is not None and path.name == "doc3gpp.toml"
-    # The packaged template is all comments — tomllib surfaces an empty dict.
-    assert data == {}
+    # The packaged template is all comments except the active [search]
+    # block, so the parsed dict surfaces search defaults — every other
+    # table is commented out and disappears into the dict.
+    assert data == {
+        "search": {
+            "enabled": True,
+            "auto_index_on_parse": True,
+            "rebuild_batch_size": 500,
+            "snippet_tokens": 8,
+            "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
+            "snippet_column": "title",
+        }
+    }
 
     # Then: config show reflects the settings cache after init cleared it.
     show_result = Runner().invoke(app, ["config", "show"])
@@ -211,4 +223,13 @@ def test_config_init_force_overwrites(sqlite_env, tmp_path, monkeypatch) -> None
     # And: the loader parses the rewritten file cleanly.
     path, data = load_config_data()
     assert path is not None and path.name == "doc3gpp.toml"
-    assert data == {}
+    assert data == {
+        "search": {
+            "enabled": True,
+            "auto_index_on_parse": True,
+            "rebuild_batch_size": 500,
+            "snippet_tokens": 8,
+            "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
+            "snippet_column": "title",
+        }
+    }

@@ -146,6 +146,19 @@ table below is for navigation only.
 | `_looks_like_3gpp_file_url` | function | `cli_url_helpers.py` | True when the URL ends with `.docx` or `.zip` (3GPP file shape). |
 | `_looks_like_3gpp_folder_url` | function | `cli_url_helpers.py` | True when the URL ends with `/` (3GPP folder shape). |
 
+## Search subsystem (`src/doc3gpp/models/search.py`, `src/doc3gpp/services/search_service.py`, `src/doc3gpp/storage/db/fts5_query.py`, `src/doc3gpp/storage/repositories/search_sql.py`)
+
+| Symbol | Kind | File | Role |
+| --- | --- | --- | --- |
+| `doc3gpp.models.search.SearchHit` | dataclass | `models/search.py` | One FTS5 hit joined back to `tdocs` + `meetings` |
+| `doc3gpp.models.search.SearchFilters` | dataclass | `models/search.py` | Filter arguments for a search query |
+| `doc3gpp.models.search.SearchIndexStatus` | dataclass | `models/search.py` | Snapshot of the index state for `search index` |
+| `doc3gpp.models.search.SearchError` (+ 3 subclasses) | exception hierarchy | `models/search.py` | `SearchUnavailableError`, `SearchQueryError`, `SearchIndexCorruptError` for the search subsystem |
+| `doc3gpp.services.search_service.SearchService` | service | `services/search_service.py` | Orchestration: `upsert_for_tdoc`, `remove_for_tdoc`, `search`, `rebuild`, `status` |
+| `doc3gpp.services.search_service.PassthroughReranker` | service | `services/search_service.py` | Default `EmbeddingReranker` impl |
+| `doc3gpp.storage.db.fts5_query.normalize_query` | function | `storage/db/fts5_query.py` | Index-time pre-processor for TDoc ID + spec ID recognition |
+| `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | repository | `storage/repositories/search_sql.py` | Concrete FTS5-backed `SearchIndexRepository` impl |
+
 ## CLI entry (`src/doc3gpp/cli.py`)
 
 Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).

@@ -1446,6 +1446,86 @@ doc3gpp cache purge --scope zips --yes
 doc3gpp cache purge --scope all --yes
 ```
 
+## `doc3gpp search query QUERY [filters]`
+
+Run a full-text search over the FTS5 index. The QUERY is either
+plain text (which the CLI wraps in FTS5 quotes after escaping
+special characters) or an FTS5 expression with `AND`, `OR`, `NOT`,
+`NEAR`, `*`, or quoted phrases passed through unchanged. Both
+plain and operator queries are normalized via
+`normalize_query` so user input matches indexed text token-for-token
+(TDoc ID base + full; spec ID dot replaced with underscore).
+
+Filters (all optional, AND-combined):
+
+| Flag | Effect |
+| --- | --- |
+| `--tsg TEXT` | `meetings.tsg` filter |
+| `--meeting TEXT` | `meetings.name` filter |
+| `--meeting-id INT` | `meetings.meeting_id` filter |
+| `--tdoc-id TEXT` | exact `tdocs.tdoc_id` filter |
+| `--release TEXT` | `tdocs.release` filter |
+| `--spec TEXT` | spec-number filter (`38.300`, `38.300-1`) |
+| `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD) |
+| `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD) |
+| `--limit INT` | max results (default 20) |
+| `--format table|json|markdown` | output format (default `table`) |
+| `--compact` | strip JSON / markdown decorators |
+| `--rerank` | invoke `EmbeddingReranker.rerank` (no-op with `PassthroughReranker`) |
+| `--snippet-tokens INT` | Override `Settings.search.snippet_tokens` for this single invocation. Range 1-64. |
+| `--explain` | Print the resolved FTS5 MATCH expression, snippet column, and BM25 weight vector to stderr (output format below). Useful for tuning `bm25_weights` in `doc3gpp.toml`. |
+| `--quiet` | suppress the stale-index hint |
+
+Exit codes: `0` success, `2` bad query, `3` index corrupt. When
+the FTS5 module is unavailable (wrong dialect, missing extra,
+`Settings.search.enabled = false`), the CLI prints
+`search disabled in settings` and exits 0.
+
+The `--explain` block is emitted to stderr (so it doesn't pollute
+piped stdout) and looks exactly like this:
+
+```
+# search config
+match:           "tdoc"
+snippet_column:  title (col 0)
+snippet_tokens:  8
+bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+```
+
+- `match` is the literal FTS5 `MATCH` expression the SQL repository
+  receives — plain-text input is wrapped in quotes via
+  `SearchQueryBuilder`; operator queries (`AND`, `OR`, `NOT`, `NEAR`,
+  `*`, quoted phrases) pass through unchanged.
+- `snippet_column` reports the resolved column name (from
+  `Settings.search.snippet_column`) plus its 0-based index in the
+  `tdoc_search` virtual table — the index is what
+  `snippet(... , col_index)` actually needs.
+- `snippet_tokens` echoes the per-call value (the `--snippet-tokens`
+  CLI flag when supplied, otherwise the cached
+  `Settings.search.snippet_tokens`).
+- `bm25_weights` is the literal 8-float vector forwarded to
+  `bm25(tdoc_search, ...)` for this query.
+
+Two retunable knobs are useful here: the `--snippet-tokens` CLI
+flag above overrides the cached `Settings.search.snippet_tokens`
+per-invocation; `--explain` is the canonical way to discover what
+`Settings.search.bm25_weights` and `snippet_column` are firing for
+a given query before editing them in `doc3gpp.toml`.
+
+## `doc3gpp search index [flags]`
+
+Manage the FTS5 index. With no flags, prints the
+`SearchIndexStatus` snapshot. With `--rebuild`, drops and rebuilds
+the index by walking every `tdocs` row.
+
+| Flag | Effect |
+| --- | --- |
+| `--rebuild` | Drop and rebuild the FTS5 table by walking every `tdocs` row. |
+| `--batch INT` | Override `Settings.search.rebuild_batch_size` for this run. |
+| `--resume` | Continue from the last `tdoc_id` in `tdoc_search_meta` instead of starting at zero. Implies `--rebuild`. |
+| `--stale-only` | Only re-index rows whose `tdocs.uploaded_date > last_indexed_uploaded_date`. |
+| `--quiet` | Suppress per-batch progress logs; print only the final summary. |
+
 ## tsg Commands
 
 The `tsg` sub-app exposes the canonical 3GPP TSG reference table. The table

@@ -71,9 +71,100 @@ def _migrate_rename_tdoc_cr_details() -> None:
                     raise
 
 
+def _create_search_schema() -> None:
+    """Create the FTS5 virtual table + meta sidecar.
+
+    Gated on the engine dialect being sqlite and on the runtime
+    availability of FTS5 — on every other path this is a no-op.
+    The check uses ``PRAGMA compile_options`` (FTS5 is reported as
+    ``ENABLE_FTS5`` when compiled in) and is wrapped in a
+    ``try/except`` so an older sqlite without FTS5 (very rare) does
+    not block the rest of ``create_schema``.
+
+    The DDL itself matches
+    ``docs/superpowers/specs/2026-07-29-fts5-search-design.md`` §"FTS5
+    schema". We use stock sqlite's ``unicode61`` tokenizer (no
+    ``tokenize=`` directive) — Python's bundled sqlite lacks
+    ``ENABLE_FTS5_TOKENIZER`` so a custom Python tokenizer
+    registered via ``fts5_tokenizer()`` is unavailable. The
+    index-time normalization that fills the gap lives in
+    :mod:`doc3gpp.storage.db.fts5_query`.
+
+    Idempotent: ``IF NOT EXISTS`` makes a second ``create_schema``
+    call a no-op.
+    """
+    engine = get_engine()
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as conn:
+        try:
+            opts = conn.execute(text("PRAGMA compile_options")).all()
+        except Exception:
+            return
+        fts5_available = any(
+            row[0] == "ENABLE_FTS5" for row in opts
+        )
+        if not fts5_available:
+            return
+        conn.execute(
+            text(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS tdoc_search USING fts5(
+                    tdoc_id UNINDEXED,
+                    title,
+                    ftp_url,
+                    meeting_title,
+                    meeting_location,
+                    wis,
+                    cover_text,
+                    change_text,
+                    ttcn_text
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS tdoc_search_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+        )
+        # Composite indexes for filter push-down on the regular
+        # ``tdocs`` and ``meetings`` tables. These complement the FTS5
+        # virtual table by accelerating the structured WHERE clauses
+        # the search executor issues alongside the BM25 ORDER BY:
+        # release/spec/date on tdocs and name/tsg on meetings. Plain
+        # CREATE INDEX works cross-dialect, but we keep them inside
+        # the sqlite + FTS5 gate for consistency with the FTS5 schema
+        # above (the search index itself is sqlite-only).
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_tdocs_release_spec "
+                "ON tdocs (release, spec)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_tdocs_uploaded_date "
+                "ON tdocs (uploaded_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_meetings_name_tsg "
+                "ON meetings (name, tsg)"
+            )
+        )
+
+
 def create_schema() -> None:
     """Create database tables for configured backend."""
 
     engine = get_engine()
     _migrate_rename_tdoc_cr_details()
     Base.metadata.create_all(bind=engine)
+    _create_search_schema()

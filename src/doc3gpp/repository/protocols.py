@@ -19,6 +19,7 @@ from doc3gpp.models.search import (
     SearchFilters,
     SearchHit,
     SearchIndexStatus,
+    TDocMeta,
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
@@ -702,4 +703,21 @@ class VectorIndexRepository(Protocol):
     def clear_resume_cursor(self) -> None: ...
 
     def status(self) -> "SearchIndexStatus": ...
+
+    def get_tdocs_metadata(
+        self, tdoc_ids: list[str],
+    ) -> dict[str, TDocMeta]:
+        """Batch-fetch ``tdocs`` + ``meetings`` metadata for the given ids.
+
+        Used by the search service to enrich vector-only hits with
+        ``title``, ``ftp_url``, ``wis``, ``meeting``, ``tsg``, and
+        ``uploaded_date`` so the CLI can render real data instead
+        of a blank stub when FTS5 missed the hit. Returns an empty
+        dict for tdoc_ids that no longer exist (deleted between
+        index and query).
+
+        TDoc ids are bound individually as named parameters (no
+        string interpolation) so the call is SQL-injection safe.
+        """
+        ...
 

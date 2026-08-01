@@ -87,6 +87,28 @@ def rrf_merge(
     return scored[:limit]
 
 
+def _build_fts5_stub(tdoc_id: str, meta):
+    """Synthesize a ``SearchHit`` from ``TDocMeta`` (or empty if missing).
+
+    When ``meta`` is ``None`` (tdoc was deleted between index and
+    query), returns the empty stub so the CLI still surfaces the
+    hit — operators can decide whether to dig deeper. ``SearchHit``
+    is frozen so we have to construct rather than mutate.
+    """
+    if meta is None:
+        return SearchHit(
+            tdoc_id=tdoc_id, score=0.0, previews={},
+            title="", meeting=None, tsg=None,
+            uploaded_date=None, ftp_url=None, wis=None,
+        )
+    return SearchHit(
+        tdoc_id=tdoc_id, score=0.0, previews={},
+        title=meta.title, meeting=meta.meeting, tsg=meta.tsg,
+        uploaded_date=meta.uploaded_date,
+        ftp_url=meta.ftp_url, wis=meta.wis,
+    )
+
+
 class SemanticSearchService:
     def __init__(
         self,
@@ -128,15 +150,20 @@ class SemanticSearchService:
             vector_weight=vector_weight,
             limit=limit,
         )
-        # Synthesize minimal SearchHit for vector-only tdogs
+        # Vector-only hits (FTS5 missed them — common for the
+        # 12,561 title-only TDocs that have no parsed cover or
+        # extract) need real metadata or the CLI renders an
+        # empty stub. Fetch ``tdocs`` + ``meetings`` once for all
+        # such hits in a single batched SQL trip, then populate
+        # the synthesized ``fts5_hit`` from the join result.
+        vector_only_ids = [
+            h.tdoc_id for h in merged if h.fts5_hit is None
+        ]
+        metadata_by_id = self._vec.get_tdocs_metadata(vector_only_ids)
         merged = [
             dataclasses.replace(
                 h,
-                fts5_hit=SearchHit(
-                    tdoc_id=h.tdoc_id, score=0.0, previews={},
-                    title="", meeting=None, tsg=None,
-                    uploaded_date=None, ftp_url=None, wis=None,
-                ),
+                fts5_hit=_build_fts5_stub(h.tdoc_id, metadata_by_id.get(h.tdoc_id)),
             ) if h.fts5_hit is None else h
             for h in merged
         ]

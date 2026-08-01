@@ -27,7 +27,7 @@ import numpy as np
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from doc3gpp.models.search import SearchFilters, SearchIndexStatus
+from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
 from doc3gpp.models.semantic_search import VectorIndexUnavailableError
 from doc3gpp.repository.protocols import VectorIndexRepository
 from doc3gpp.storage.compression import decompress_json
@@ -274,6 +274,49 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             latest_tdocs_uploaded_date=_dt.fromisoformat(str(latest)) if latest else None,
             is_stale=bool(latest and (not last_indexed or str(latest) > last_indexed)),
         )
+
+    def get_tdocs_metadata(
+        self, tdoc_ids: list[str],
+    ) -> dict[str, TDocMeta]:
+        """Batch-fetch ``tdocs`` + ``meetings`` metadata.
+
+        Returns an empty dict when ``tdoc_ids`` is empty or no row
+        matches. Unknown tdoc_ids are silently omitted (they may
+        have been deleted between index and query). TDoc ids are
+        bound individually as named parameters — no string
+        interpolation, so the call is SQL-injection safe.
+        """
+        out: dict[str, TDocMeta] = {}
+        if not tdoc_ids:
+            return out
+        # Build ``(t.id_0, t.id_1, ...) = (:id_0, :id_1, ...)``
+        # placeholders. SQLite allows ~999 bound params by default
+        # so chunk the list defensively.
+        chunk_size = 500
+        with self._engine.begin() as conn:
+            for start in range(0, len(tdoc_ids), chunk_size):
+                chunk = tdoc_ids[start:start + chunk_size]
+                placeholders = ", ".join(f":id_{i}" for i in range(len(chunk)))
+                sql = (
+                    "SELECT t.tdoc_id, t.title, t.ftp_url, t.related_wis AS wis,"
+                    "       m.title AS meeting, m.tsg, t.uploaded_date "
+                    "  FROM tdocs t "
+                    "  LEFT JOIN meetings m ON t.meeting_id = m.meeting_id "
+                    f" WHERE t.tdoc_id IN ({placeholders})"
+                )
+                params = {f"id_{i}": v for i, v in enumerate(chunk)}
+                for row in conn.execute(text(sql), params):
+                    tdoc_id = row[0]
+                    out[tdoc_id] = TDocMeta(
+                        tdoc_id=tdoc_id,
+                        title=row[1] or "",
+                        ftp_url=row[2],
+                        wis=row[3],
+                        meeting=row[4],
+                        tsg=row[5],
+                        uploaded_date=row[6],
+                    )
+        return out
 
 
 def _build_embed_text(tdoc_id: str) -> str | None:

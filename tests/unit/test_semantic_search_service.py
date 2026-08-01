@@ -63,6 +63,166 @@ def test_search_raises_on_empty_after_strip(monkeypatch):
         svc.search("   ", SearchFilters(), limit=10, vector_weight=0.7)
 
 
+def test_search_vector_only_hit_populates_metadata_from_tdocs(monkeypatch):
+    """When the vector KNN returns a hit that FTS5 missed (e.g.
+    the TDoc has no parsed cover/extract — title-only indexing
+    covers 12,561 of 13,693 TDocs in real corpora), the
+    synthesized ``fts5_hit`` stub must still carry the real
+    ``title``, ``ftp_url``, ``meeting``, ``tsg``, ``uploaded_date``,
+    and ``wis`` from ``tdocs``/``meetings``. Otherwise the CLI
+    shows ``title=""``, ``ftp_url=null`` and the user can't tell
+    what the hit actually is.
+    """
+    from dataclasses import dataclass
+    monkeypatch.setattr(
+        "doc3gpp.services.semantic_search_service.strip_stopwords",
+        lambda q: "valid query",
+    )
+
+    @dataclass
+    class _Meta:
+        title: str
+        ftp_url: str
+        wis: str | None
+        meeting: str | None
+        tsg: str | None
+        uploaded_date: str | None
+
+    class _VecRepo:
+        def __init__(self) -> None:
+            self.knn_calls = []
+            self.metadata_calls = []
+
+        def knn(self, qv, limit, filters):
+            self.knn_calls.append((qv, limit, filters))
+            return [("R4-2605982", "R4-2605982#0", 0, 0.78)]
+
+        def get_tdocs_metadata(self, tdoc_ids):
+            self.metadata_calls.append(list(tdoc_ids))
+            return {
+                "R4-2605982": _Meta(
+                    title="CR of Introduction of PC1.5 for NB-IoT based IoT-NTN",
+                    ftp_url="tsg_ran/WG4_Radio/TSGR4_119/Docs/R4-2605982.zip",
+                    wis="NB-IOT_NTN",
+                    meeting="TSG-RAN WG4 #119",
+                    tsg="RAN",
+                    uploaded_date="2026-07-22",
+                ),
+            }
+
+    fts5 = MagicMock()
+    fts5.search.return_value = []  # FTS5 missed this hit
+    vec = _VecRepo()
+    svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
+    out = svc.search(
+        "nb-iot", SearchFilters(), limit=10, vector_weight=0.7,
+    )
+    assert len(out) == 1
+    hit = out[0]
+    assert hit.tdoc_id == "R4-2605982"
+    # The synthesized stub must now be populated, not empty.
+    assert hit.fts5_hit is not None
+    assert hit.fts5_hit.title == (
+        "CR of Introduction of PC1.5 for NB-IoT based IoT-NTN"
+    )
+    assert hit.fts5_hit.ftp_url == (
+        "tsg_ran/WG4_Radio/TSGR4_119/Docs/R4-2605982.zip"
+    )
+    assert hit.fts5_hit.wis == "NB-IOT_NTN"
+    assert hit.fts5_hit.meeting == "TSG-RAN WG4 #119"
+    assert hit.fts5_hit.tsg == "RAN"
+    assert hit.fts5_hit.uploaded_date == "2026-07-22"
+    # The metadata lookup must have been called exactly once,
+    # with the vector-only tdoc_ids (not with tdoc_ids that
+    # already had FTS5 hits).
+    assert vec.metadata_calls == [["R4-2605982"]]
+
+
+def test_search_mixed_hits_only_looks_up_metadata_for_vector_only(monkeypatch):
+    """Vector-only hits need the metadata JOIN; FTS5 hits already
+    carry it. The service must not call the metadata lookup for
+    tdoc_ids that already have FTS5 coverage — that would be
+    wasted work.
+    """
+    from dataclasses import dataclass
+    monkeypatch.setattr(
+        "doc3gpp.services.semantic_search_service.strip_stopwords",
+        lambda q: "valid query",
+    )
+
+    @dataclass
+    class _Meta:
+        title: str
+        ftp_url: str | None
+        wis: str | None
+        meeting: str | None
+        tsg: str | None
+        uploaded_date: str | None
+
+    class _VecRepo:
+        def __init__(self) -> None:
+            self.metadata_calls: list[list[str]] = []
+
+        def knn(self, qv, limit, filters):
+            # Two vector hits: R5-1 (already in FTS5) and R4-2 (vector-only).
+            return [
+                ("R5-1", "R5-1#0", 0, 0.1),
+                ("R4-2", "R4-2#0", 1, 0.2),
+            ]
+
+        def get_tdocs_metadata(self, tdoc_ids):
+            self.metadata_calls.append(list(tdoc_ids))
+            return {
+                "R4-2": _Meta(
+                    title="R4-2 title", ftp_url="r4-2.zip", wis=None,
+                    meeting=None, tsg=None, uploaded_date=None,
+                ),
+            }
+
+    fts5 = MagicMock()
+    fts5.search.return_value = [_hit("R5-1")]
+    vec = _VecRepo()
+    svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
+    svc.search("q", SearchFilters(), limit=10, vector_weight=0.7)
+    # Only R4-2 needed the lookup; R5-1 already had FTS5 coverage.
+    assert vec.metadata_calls == [["R4-2"]]
+
+
+def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty(monkeypatch):
+    """Edge case: the vector KNN returns a tdoc_id that no longer
+    exists in ``tdocs`` (deleted between index and query). The
+    stub stays as today — empty fields — so the CLI can still
+    surface the hit (with whatever metadata the index knew),
+    and no spurious "unknown tdoc" error blocks the result list.
+    """
+    monkeypatch.setattr(
+        "doc3gpp.services.semantic_search_service.strip_stopwords",
+        lambda q: "valid query",
+    )
+
+    class _VecRepo:
+        def __init__(self) -> None:
+            self.metadata_calls: list[list[str]] = []
+
+        def knn(self, qv, limit, filters):
+            return [("GHOST-1", "GHOST-1#0", 0, 0.5)]
+
+        def get_tdocs_metadata(self, tdoc_ids):
+            self.metadata_calls.append(list(tdoc_ids))
+            return {}  # tdoc was deleted
+
+    fts5 = MagicMock()
+    fts5.search.return_value = []
+    vec = _VecRepo()
+    svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
+    out = svc.search("q", SearchFilters(), limit=10, vector_weight=0.7)
+    assert len(out) == 1
+    # Stub is empty but the hit is still surfaced.
+    assert out[0].fts5_hit is not None
+    assert out[0].fts5_hit.title == ""
+    assert out[0].fts5_hit.ftp_url is None
+
+
 def test_search_both_sides_empty_returns_empty(monkeypatch):
     monkeypatch.setattr(
         "doc3gpp.services.semantic_search_service.strip_stopwords",

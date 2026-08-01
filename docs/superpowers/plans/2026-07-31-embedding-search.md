@@ -79,7 +79,7 @@
 
 **Interfaces:**
 - Consumes: `doc3gpp.models.search.SearchError` (existing base), `doc3gpp.models.search.SearchHit` (existing frozen dataclass).
-- Produces: `SemanticSearchHit` (frozen dataclass with fields `tdoc_id: str`, `rrf_score: float`, `rank_fts5: int | None`, `rank_vec: int | None`, `min_chunk_distance: float | None`, `best_chunk_id: str | None`, `fts5_hit: SearchHit`); error classes `SemanticSearchError` (extends `SearchError`), `SemanticSearchUnavailableError`, `SemanticSearchQueryError`, `SpacyUnavailableError`, `EmbedderUnavailableError`, `VectorIndexUnavailableError`. Later tasks import these by name.
+- Produces: `SemanticSearchHit` (frozen dataclass with fields `tdoc_id: str`, `rrf_score: float`, `rank_fts5: int | None`, `rank_vec: int | None`, `min_chunk_distance: float | None`, `best_chunk_id: str | None`, `hit: SearchHit`); error classes `SemanticSearchError` (extends `SearchError`), `SemanticSearchUnavailableError`, `SemanticSearchQueryError`, `SpacyUnavailableError`, `EmbedderUnavailableError`, `VectorIndexUnavailableError`. Later tasks import these by name.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -112,17 +112,17 @@ def _hit(tdoc_id: str = "R5-1") -> SearchHit:
 def test_semantic_search_hit_is_frozen():
     h = SemanticSearchHit(
         tdoc_id="R5-1", rrf_score=0.5, rank_fts5=0, rank_vec=1,
-        min_chunk_distance=0.2, best_chunk_id="R5-1#3", fts5_hit=_hit(),
+        min_chunk_distance=0.2, best_chunk_id="R5-1#3", hit=_hit(),
     )
     with pytest.raises(Exception):
         h.tdoc_id = "R5-2"  # frozen dataclass
     assert h.rank_fts5 == 0
-    assert h.fts5_hit.tdoc_id == "R5-1"
+    assert h.hit.tdoc_id == "R5-1"
 
 
 def test_semantic_search_hit_optional_ranks_default_none():
     h = SemanticSearchHit(
-        tdoc_id="R5-1", rrf_score=0.5, fts5_hit=_hit(),
+        tdoc_id="R5-1", rrf_score=0.5, hit=_hit(),
     )
     assert h.rank_fts5 is None
     assert h.rank_vec is None
@@ -205,7 +205,7 @@ class SemanticSearchHit:
     lowest cosine distance across all chunks for this ``tdoc_id``
     (``None`` when the tdoc had no vector rows). ``best_chunk_id`` is
     the chunk that produced the min distance (for ``--explain``
-    rendering). ``fts5_hit`` is the existing :class:`SearchHit`
+    rendering). ``hit`` is the existing :class:`SearchHit`
     sub-record; when the tdoc was vector-only, the service synthesizes
     a minimal :class:`SearchHit` from the ``tdocs`` JOIN so the
     renderer can reuse the existing shape.
@@ -213,7 +213,7 @@ class SemanticSearchHit:
 
     tdoc_id: str
     rrf_score: float
-    fts5_hit: SearchHit
+    hit: SearchHit
     rank_fts5: int | None = None
     rank_vec: int | None = None
     min_chunk_distance: float | None = None
@@ -1493,8 +1493,8 @@ def test_rrf_synthesizes_fts5_hit_for_vector_only_tdoc():
     vec = [("A", "A#0", 0, 0.1)]
     out = rrf_merge(fts5, vec, k=60, vector_weight=1.0, limit=10)
     assert out[0].tdoc_id == "A"
-    # fts5_hit is None for vector-only; service fills it later
-    assert out[0].fts5_hit is None
+    # hit is None for vector-only; service fills it later
+    assert out[0].hit is None
 ```
 
 - [ ] **Step 1b: Write the failing test (service)**
@@ -1698,7 +1698,7 @@ def rrf_merge(
         rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec) * W
 
     A tdoc_id present in only one side contributes 0 from the other
-    side's rank. ``fts5_hit`` is ``None`` for vector-only tdogs; the
+    side's rank. ``hit`` is ``None`` for vector-only tdogs; the
     service synthesizes a minimal :class:`SearchHit` from the JOIN
     before returning to the CLI.
     """
@@ -1723,7 +1723,7 @@ def rrf_merge(
         scored.append(SemanticSearchHit(
             tdoc_id=tdoc_id,
             rrf_score=score,
-            fts5_hit=fts5_by_id.get(tdoc_id),  # None for vector-only
+            hit=fts5_by_id.get(tdoc_id),  # None for vector-only
             rank_fts5=r_fts,
             rank_vec=r_vec,
             min_chunk_distance=r_vec_tup[2] if r_vec_tup else None,
@@ -1776,10 +1776,10 @@ class SemanticSearchService:
         )
         # Synthesize minimal SearchHit for vector-only tdogs
         for h in merged:
-            if h.fts5_hit is None:
+            if h.hit is None:
                 h = SemanticSearchHit(
                     tdoc_id=h.tdoc_id, rrf_score=h.rrf_score,
-                    fts5_hit=SearchHit(
+                    hit=SearchHit(
                         tdoc_id=h.tdoc_id, score=0.0, previews={},
                         title="", meeting=None, tsg=None,
                         uploaded_date=None, ftp_url=None, wis=None,
@@ -1844,7 +1844,7 @@ class SemanticSearchService:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_rrf.py tests/unit/test_semantic_search_service.py -v`
-Expected: PASS (all). Note: `test_search_synthesizes_fts5_hit_for_vector_only_tdoc` in `test_rrf.py` asserts `fts5_hit is None` for vector-only — confirm the `rrf_merge` impl matches (it sets `fts5_hit=None` for vector-only; the service synthesizes AFTER merge in `search()`). Adjust the test assertion if needed.
+Expected: PASS (all). Note: `test_search_synthesizes_fts5_hit_for_vector_only_tdoc` in `test_rrf.py` asserts `hit is None` for vector-only — confirm the `rrf_merge` impl matches (it sets `hit=None` for vector-only; the service synthesizes AFTER merge in `search()`). Adjust the test assertion if needed.
 
 - [ ] **Step 5: Commit**
 
@@ -2638,9 +2638,9 @@ def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
                 "rank_fts5": h.rank_fts5, "rank_vec": h.rank_vec,
                 "min_chunk_distance": h.min_chunk_distance,
                 "best_chunk_id": h.best_chunk_id,
-                "fts5_hit": {
-                    "tdoc_id": h.fts5_hit.tdoc_id, "title": h.fts5_hit.title,
-                    "ftp_url": h.fts5_hit.ftp_url, "wis": h.fts5_hit.wis,
+                "hit": {
+                    "tdoc_id": h.hit.tdoc_id, "title": h.hit.title,
+                    "ftp_url": h.hit.ftp_url, "wis": h.hit.wis,
                 },
             }
             for h in hits
@@ -2654,8 +2654,8 @@ def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
             typer.echo(f"{i}. **{h.tdoc_id}** — rrf={h.rrf_score:.4f}")
             if h.best_chunk_id:
                 typer.echo(f"   best chunk: {h.best_chunk_id} (dist={h.min_chunk_distance:.4f})")
-            if h.fts5_hit.title:
-                typer.echo(f"   title: {h.fts5_hit.title}")
+            if h.hit.title:
+                typer.echo(f"   title: {h.hit.title}")
             typer.echo("")
     else:
         typer.echo(
@@ -2665,7 +2665,7 @@ def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
             fts = str(h.rank_fts5) if h.rank_fts5 is not None else "-"
             vec = str(h.rank_vec) if h.rank_vec is not None else "-"
             dist = f"{h.min_chunk_distance:.4f}" if h.min_chunk_distance is not None else "-"
-            title = (h.fts5_hit.title or "")[:40]
+            title = (h.hit.title or "")[:40]
             typer.echo(
                 f"{i:>4} {h.tdoc_id:<14} {h.rrf_score:>8.4f} {fts:>4} {vec:>4} {dist:>8}  {title}"
             )
@@ -2951,7 +2951,7 @@ git commit -m "docs(search): document semantic search subsystem"
 **2. Placeholder scan:** No "TBD"/"TODO"/"fill in". The `pytest.skip` placeholders in T11 and T13 are explicit test scaffolding that the implementer fills in by mirroring the existing FTS5 test patterns (`test_search_after_parse.py`, `test_search_filters.py`) — not placeholder text.
 
 **3. Type consistency:**
-- `SemanticSearchHit` fields: `tdoc_id, rrf_score, fts5_hit, rank_fts5, rank_vec, min_chunk_distance, best_chunk_id` — consistent across T1, T7, T12.
+- `SemanticSearchHit` fields: `tdoc_id, rrf_score, hit, rank_fts5, rank_vec, min_chunk_distance, best_chunk_id` — consistent across T1, T7, T12.
 - `rrf_merge` signature: `(fts5_hits, vec_hits, *, k, vector_weight, limit)` — consistent across T7, T12.
 - `VectorIndexRepository.knn` returns `list[tuple[str, str, int, float]]` = `(tdoc_id, chunk_id, chunk_index, distance)` — consistent across T5, T6, T7.
 - `build_semantic_search_service(settings, fts5_service, embedder, vector_repo) -> SemanticSearchService | None` — consistent across T9, T12.

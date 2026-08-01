@@ -563,12 +563,12 @@ class SemanticSearchHit:
     rank_vec: int | None          # None if not in vector fan-out
     min_chunk_distance: float | None
     best_chunk_id: str | None     # for --explain rendering
-    fts5_hit: SearchHit           # reused from the FTS5 spec
+    hit: SearchHit           # reused from the FTS5 spec
 ```
 
-`fts5_hit` is the existing `SearchHit` dataclass (title, meeting,
+`hit` is the existing `SearchHit` dataclass (title, meeting,
 tsg, uploaded_date, ftp_url, wis, previews). The CLI renders
-`fts5_hit` as a sub-section; `rrf_score` and the rank provenance
+`hit` as a sub-section; `rrf_score` and the rank provenance
 are the new fields.
 
 ### Error hierarchy
@@ -622,9 +622,9 @@ Output formats:
   (or `–` if not in that side's fan-out); `dist` is the
   `min_chunk_distance` (or `–`).
 - **`json`**: full `SemanticSearchHit` records (including
-  `fts5_hit` sub-record). `--compact` → single-line JSON.
+  `hit` sub-record). `--compact` → single-line JSON.
 - **`markdown`**: human-friendly list with bolded `tdoc_id`,
-  RRF score, and the existing `fts5_hit.previews` blockquote.
+  RRF score, and the existing `hit.previews` blockquote.
   `--compact` strips per the existing convention.
 
 ### `doc3gpp search index` extensions

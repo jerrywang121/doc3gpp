@@ -125,7 +125,7 @@ CLI subcommand
         └─ If fts5_query is None:
               skip FTS5 + skip RRF
               return top --limit vec hits dressed as SemanticSearchHit
-                          (fts5_hit synthesized, rank_fts5=None)
+                          (hit synthesized, rank_fts5=None)
 ```
 
 The auto-embed-on-parse wiring (`TDocCrService._embed_after_parse`),
@@ -221,7 +221,7 @@ DDL are unchanged.
         │      for each (tdoc_id, chunk_id, chunk_index, distance):
         │          synthesize SemanticSearchHit(
         │              tdoc_id, rrf_score = -distance,    (rank-by-distance)
-        │              fts5_hit = _build_fts5_stub(...),  (metadata JOIN)
+        │              hit = _build_fts5_stub(...),  (metadata JOIN)
         │              rank_fts5 = None,
         │              rank_vec = i,
         │              min_chunk_distance = distance,
@@ -252,12 +252,12 @@ choice is one of three:
    through the CLI's table / json / markdown output paths.
 3. **Skip RRF entirely; rank by raw distance and synthesize
    `SemanticSearchHit` directly**. The DTO shape stays
-   uniform; only `rank_fts5` and the `fts5_hit` sub-record tell
+   uniform; only `rank_fts5` and the `hit` sub-record tell
    the story.
 
 This spec picks option **3**. The renderer doesn't need a new
 field; the user already opted out of FTS5 by omitting
-`--fts5-query`. The `fts5_hit` sub-record is still synthesized
+`--fts5-query`. The `hit` sub-record is still synthesized
 from the `tdocs` / `meetings` JOIN so the table output stays
 the same shape.
 

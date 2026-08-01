@@ -195,8 +195,8 @@ def test_search_without_fts5_query_vector_only_populates_metadata():
         MagicMock(), _mock_embedder(), _VecRepo(), _settings(),
     )
     out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=10, fts5_weight=0.5)
-    assert out[0].fts5_hit.title == "real title"
-    assert out[0].fts5_hit.ftp_url == "real.zip"
+    assert out[0].hit.title == "real title"
+    assert out[0].hit.ftp_url == "real.zip"
 
 
 def test_search_with_fts5_query_uses_one_minus_fts5_weight_for_rrf():
@@ -291,7 +291,7 @@ def search(
                 rank_vec=rank,
                 min_chunk_distance=distance,
                 best_chunk_id=chunk_id,
-                fts5_hit=None,  # populated below
+                hit=None,  # populated below
             )
             for rank, (tdoc_id, chunk_id, _idx, distance) in enumerate(vec_hits)
         ]
@@ -324,24 +324,24 @@ def _populate_metadata_stubs(
     self,
     hits: list[SemanticSearchHit],
 ) -> list[SemanticSearchHit]:
-    """Synthesize the ``fts5_hit`` SearchHit for hits missing one.
+    """Synthesize the ``hit`` SearchHit for hits missing one.
 
     Vector-only hits (no FTS5 fan-out hit, or FTS5 path was skipped)
     need real metadata or the CLI renders an empty stub. Fetch
     ``tdocs`` + ``meetings`` once for all such hits in a single
-    batched SQL trip, then populate the synthesized ``fts5_hit`` from
-    the JOIN result. Returns the same list with each ``fts5_hit``
+    batched SQL trip, then populate the synthesized ``hit`` from
+    the JOIN result. Returns the same list with each ``hit``
     field filled in (either preserved from the original hit or
     populated from the JOIN).
     """
-    missing_ids = [h.tdoc_id for h in hits if h.fts5_hit is None]
+    missing_ids = [h.tdoc_id for h in hits if h.hit is None]
     if not missing_ids:
         return hits
     metadata_by_id = self._vec.get_tdocs_metadata(missing_ids)
     return [
         dataclasses.replace(
             h,
-            fts5_hit=h.fts5_hit or _build_fts5_stub(
+            hit=h.hit or _build_fts5_stub(
                 h.tdoc_id, metadata_by_id.get(h.tdoc_id),
             ),
         )
@@ -942,7 +942,7 @@ def test_search_sem_without_fts5_query_returns_pure_vector_results(semantic_serv
     for h in hits:
         assert h.rank_fts5 is None
         assert h.rrf_score < 0              # -distance
-        assert h.fts5_hit is not None       # synthesized stub populated
+        assert h.hit is not None       # synthesized stub populated
 
 
 def test_search_sem_with_fts5_query_returns_rrf_merged_results(semantic_service):

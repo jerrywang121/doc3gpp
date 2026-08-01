@@ -51,7 +51,7 @@ def rrf_merge(
         rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec) * W
 
     A tdoc_id present in only one side contributes 0 from the other
-    side's rank. ``fts5_hit`` is ``None`` for vector-only tdogs; the
+    side's rank. ``hit`` is ``None`` for vector-only tdogs; the
     service synthesizes a minimal :class:`SearchHit` from the JOIN
     before returning to the CLI.
     """
@@ -76,7 +76,7 @@ def rrf_merge(
         scored.append(SemanticSearchHit(
             tdoc_id=tdoc_id,
             rrf_score=score,
-            fts5_hit=fts5_by_id.get(tdoc_id),  # None for vector-only
+            hit=fts5_by_id.get(tdoc_id),  # None for vector-only
             rank_fts5=r_fts,
             rank_vec=r_vec,
             min_chunk_distance=r_vec_tup[2] if r_vec_tup else None,
@@ -158,7 +158,7 @@ class SemanticSearchService:
                     rank_vec=rank,
                     min_chunk_distance=distance,
                     best_chunk_id=chunk_id,
-                    fts5_hit=None,  # populated below
+                    hit=None,  # populated below
                 )
                 for rank, (tdoc_id, chunk_id, _idx, distance) in enumerate(vec_hits)
             ]
@@ -190,24 +190,24 @@ class SemanticSearchService:
         self,
         hits: list[SemanticSearchHit],
     ) -> list[SemanticSearchHit]:
-        """Synthesize the ``fts5_hit`` SearchHit for hits missing one.
+        """Synthesize the ``hit`` SearchHit for hits missing one.
 
         Vector-only hits (no FTS5 fan-out hit, or FTS5 path was skipped)
         need real metadata or the CLI renders an empty stub. Fetch
         ``tdocs`` + ``meetings`` once for all such hits in a single
-        batched SQL trip, then populate the synthesized ``fts5_hit`` from
-        the JOIN result. Returns the same list with each ``fts5_hit``
+        batched SQL trip, then populate the synthesized ``hit`` from
+        the JOIN result. Returns the same list with each ``hit``
         field filled in (either preserved from the original hit or
         populated from the JOIN).
         """
-        missing_ids = [h.tdoc_id for h in hits if h.fts5_hit is None]
+        missing_ids = [h.tdoc_id for h in hits if h.hit is None]
         if not missing_ids:
             return hits
         metadata_by_id = self._vec.get_tdocs_metadata(missing_ids)
         return [
             dataclasses.replace(
                 h,
-                fts5_hit=h.fts5_hit or _build_fts5_stub(
+                hit=h.hit or _build_fts5_stub(
                     h.tdoc_id, metadata_by_id.get(h.tdoc_id),
                 ),
             )

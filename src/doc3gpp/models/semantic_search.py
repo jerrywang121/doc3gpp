@@ -45,15 +45,16 @@ class SemanticSearchHit:
     lowest cosine distance across all chunks for this ``tdoc_id``
     (``None`` when the tdoc had no vector rows). ``best_chunk_id`` is
     the chunk that produced the min distance (for ``--explain``
-    rendering). ``fts5_hit`` is the existing :class:`SearchHit`
-    sub-record; when the tdoc was vector-only, the service synthesizes
-    a minimal :class:`SearchHit` from the ``tdocs`` JOIN so the
-    renderer can reuse the existing shape.
+    rendering). ``hit`` is the existing :class:`SearchHit` sub-record
+    carrying the TDoc's metadata bag (title, ftp_url, meeting, tsg,
+    uploaded_date, wis, previews); when the tdoc was vector-only, the
+    service synthesizes a minimal :class:`SearchHit` from the
+    ``tdocs`` JOIN so the renderer can reuse the existing shape.
     """
 
     tdoc_id: str
     rrf_score: float
-    fts5_hit: SearchHit
+    hit: SearchHit
     rank_fts5: int | None = None
     rank_vec: int | None = None
     min_chunk_distance: float | None = None

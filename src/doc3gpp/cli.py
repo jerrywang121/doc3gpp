@@ -4505,7 +4505,7 @@ def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
 
     Mirrors :func:`_render_search_hits` — three renderers sharing
     the same hit-shape so callers can pick a presentation without
-    touching the upstream service. The ``fts5_hit`` sub-record is
+    touching the upstream service. The ``hit`` sub-record is
     embedded under its own key in JSON and as a labelled continuation
     in markdown / table.
     """
@@ -4517,9 +4517,9 @@ def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
                 "rank_fts5": h.rank_fts5, "rank_vec": h.rank_vec,
                 "min_chunk_distance": h.min_chunk_distance,
                 "best_chunk_id": h.best_chunk_id,
-                "fts5_hit": {
-                    "tdoc_id": h.fts5_hit.tdoc_id, "title": h.fts5_hit.title,
-                    "ftp_url": h.fts5_hit.ftp_url, "wis": h.fts5_hit.wis,
+                "hit": {
+                    "tdoc_id": h.hit.tdoc_id, "title": h.hit.title,
+                    "ftp_url": h.hit.ftp_url, "wis": h.hit.wis,
                 },
             }
             for h in hits
@@ -4536,8 +4536,8 @@ def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
                     f"   best chunk: {h.best_chunk_id} "
                     f"(dist={h.min_chunk_distance:.4f})"
                 )
-            if h.fts5_hit.title:
-                typer.echo(f"   title: {h.fts5_hit.title}")
+            if h.hit.title:
+                typer.echo(f"   title: {h.hit.title}")
             typer.echo("")
     else:
         typer.echo(
@@ -4551,7 +4551,7 @@ def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
                 f"{h.min_chunk_distance:.4f}"
                 if h.min_chunk_distance is not None else "-"
             )
-            title = (h.fts5_hit.title or "")[:40]
+            title = (h.hit.title or "")[:40]
             typer.echo(
                 f"{i:>4} {h.tdoc_id:<14} {h.rrf_score:>8.4f} {fts:>4} "
                 f"{vec:>4} {dist:>8}  {title}"

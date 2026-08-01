@@ -9,7 +9,6 @@ from doc3gpp.models.semantic_search import (
     SemanticSearchHit,
     SemanticSearchQueryError,
     SemanticSearchUnavailableError,
-    SpacyUnavailableError,
     VectorIndexUnavailableError,
 )
 
@@ -48,13 +47,11 @@ def test_error_hierarchy_extends_search_error():
         SemanticSearchError,
         SemanticSearchUnavailableError,
         SemanticSearchQueryError,
-        SpacyUnavailableError,
         EmbedderUnavailableError,
         VectorIndexUnavailableError,
     ):
         assert issubclass(cls, SearchError), cls
     assert issubclass(SemanticSearchUnavailableError, SemanticSearchError)
     assert issubclass(SemanticSearchQueryError, SemanticSearchError)
-    assert issubclass(SpacyUnavailableError, SemanticSearchError)
     assert issubclass(EmbedderUnavailableError, SemanticSearchError)
     assert issubclass(VectorIndexUnavailableError, SemanticSearchError)

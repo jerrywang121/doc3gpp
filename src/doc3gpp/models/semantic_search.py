@@ -25,10 +25,6 @@ class SemanticSearchQueryError(SemanticSearchError):
     """The user-supplied query is empty after stopword stripping. Exit code 2."""
 
 
-class SpacyUnavailableError(SemanticSearchError):
-    """The spaCy ``en_core_web_sm`` model is not installed. Exit code 1."""
-
-
 class EmbedderUnavailableError(SemanticSearchError):
     """The embedding model failed to load. Exit code 1."""
 
@@ -68,6 +64,5 @@ __all__ = [
     "SemanticSearchHit",
     "SemanticSearchQueryError",
     "SemanticSearchUnavailableError",
-    "SpacyUnavailableError",
     "VectorIndexUnavailableError",
-]
+] 

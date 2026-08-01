@@ -225,14 +225,13 @@ def build_semantic_search_service(
     """Build a :class:`SemanticSearchService` or return ``None`` if unavailable.
 
     Best-effort: catches :class:`VectorIndexUnavailableError`,
-    :class:`EmbedderUnavailableError`, :class:`SpacyUnavailableError`
+    :class:`EmbedderUnavailableError`
     raised by the collaborators and returns ``None``. FTS5 is the
     foundation — if :func:`build_search_service` returns ``None`` this
     returns ``None`` too.
     """
     from doc3gpp.models.semantic_search import (
         EmbedderUnavailableError,
-        SpacyUnavailableError,
         VectorIndexUnavailableError,
     )
     from sqlalchemy.exc import OperationalError as SAOperationalError
@@ -262,7 +261,6 @@ def build_semantic_search_service(
     except (
         VectorIndexUnavailableError,
         EmbedderUnavailableError,
-        SpacyUnavailableError,
         SAOperationalError,
     ):
         return None

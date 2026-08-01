@@ -247,3 +247,38 @@ def test_status_returns_repo_status() -> None:
     repo = MockRepo()
     svc = SearchService(repo=repo, reranker=PassthroughReranker())
     assert svc.status().row_count == 3
+
+
+def test_passthrough_reranker_returns_list_copy():
+    from doc3gpp.models.search import SearchHit
+    from doc3gpp.services.search_service import PassthroughReranker
+    h = SearchHit(
+        tdoc_id="R5-1", score=0.0, previews={}, title="t", meeting="m",
+        tsg="S1", uploaded_date="2026-01-01", ftp_url="https://x", wis=(),
+    )
+    r = PassthroughReranker()
+    out = r.rerank("anything", [h])
+    assert out == [h]
+    assert out is not [h]  # noqa: F632 — copy, not the same list (identity check)
+
+
+def test_passthrough_reranker_honors_final_limit():
+    from doc3gpp.models.search import SearchHit
+    from doc3gpp.services.search_service import PassthroughReranker
+
+    def _hit(t):
+        return SearchHit(
+            tdoc_id=t, score=0.0, previews={}, title="t", meeting="m",
+            tsg="S1", uploaded_date="2026-01-01", ftp_url="https://x", wis=(),
+        )
+    hits = [_hit("R5-1"), _hit("R5-2"), _hit("R5-3")]
+    r = PassthroughReranker()
+    out = r.rerank("anything", hits, final_limit=2)
+    assert [h.tdoc_id for h in out] == ["R5-1", "R5-2"]
+
+
+def test_passthrough_reranker_empty_input():
+    from doc3gpp.services.search_service import PassthroughReranker
+    r = PassthroughReranker()
+    assert r.rerank("anything", []) == []
+    assert r.rerank("anything", [], final_limit=5) == []

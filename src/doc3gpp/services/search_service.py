@@ -43,16 +43,24 @@ logger = logging.getLogger(__name__)
 class PassthroughReranker(EmbeddingReranker):
     """Default reranker that returns hits unchanged.
 
-    Exists so the service contract is fully testable before the
-    embedding spec lands. When that spec ships, a new impl plugs in
-    here without any change to :class:`SearchService` or the CLI.
+    Used when the semantic search stack is not available
+    (no ``[semantic]`` extra, no sqlite-vec, ``enabled=False``).
+    Returns a *copy* of the input so callers may mutate the
+    reranker's output without disturbing the upstream list.
+    Honors ``final_limit`` by slicing.
     """
 
     def rerank(
-        self, query: str, hits: list[SearchHit],
+        self,
+        semantic_query: str,
+        hits: list[SearchHit],
+        final_limit: int | None = None,
     ) -> list[SearchHit]:
-        _ = query
-        return list(hits)
+        _ = semantic_query
+        copied = list(hits)
+        if final_limit is not None:
+            return copied[:final_limit]
+        return copied
 
 
 class SearchService:

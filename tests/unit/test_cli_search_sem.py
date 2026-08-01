@@ -75,7 +75,7 @@ def test_search_sem_query_error_exit_2(monkeypatch):
     from unittest.mock import MagicMock
     from doc3gpp.models.semantic_search import SemanticSearchQueryError
     svc = MagicMock()
-    svc.search.side_effect = SemanticSearchQueryError("empty after strip")
+    svc.search.side_effect = SemanticSearchQueryError("query empty")
     from doc3gpp.services import factory
     monkeypatch.setattr(factory, "build_semantic_search_service", lambda *a, **kw: svc)
     result = runner.invoke(app, ["search", "sem", "   "])

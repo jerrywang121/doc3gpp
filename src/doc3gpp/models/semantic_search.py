@@ -22,7 +22,9 @@ class SemanticSearchUnavailableError(SemanticSearchError):
 
 
 class SemanticSearchQueryError(SemanticSearchError):
-    """The user-supplied query is empty after stopword stripping. Exit code 2."""
+    """The user-supplied `--fts5-query` string yields no indexable tokens
+    after ``SearchQueryBuilder.build()`` (e.g. `--fts5-query "the and of"`).
+    Exit code 2."""
 
 
 class EmbedderUnavailableError(SemanticSearchError):
@@ -65,4 +67,4 @@ __all__ = [
     "SemanticSearchQueryError",
     "SemanticSearchUnavailableError",
     "VectorIndexUnavailableError",
-] 
+]

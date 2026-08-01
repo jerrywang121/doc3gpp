@@ -27,10 +27,7 @@ from doc3gpp.cli_filters import SearchQueryBuilder
 from doc3gpp.models.search import (
     RebuildProgress, SearchFilters, SearchHit, SearchIndexStatus,
 )
-from doc3gpp.models.semantic_search import (
-    SemanticSearchHit,
-    SemanticSearchQueryError,  # noqa: F401  -- Task 3 deletes the class; kept here until then so ruff stays clean.
-)
+from doc3gpp.models.semantic_search import SemanticSearchHit
 from doc3gpp.services.embedding.chunker import _chunks
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.storage.repositories.vector_sql import _build_embed_text

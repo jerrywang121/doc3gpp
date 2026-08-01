@@ -352,12 +352,18 @@ and the TDoc CR extraction is the deepest.
   `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
   Resumable via `--resume`; cheap incremental via `--stale-only`.
 - `doc3gpp search sem QUERY [filters]` →
-  `SemanticSearchService.search` → spaCy stopword strip (FTS5 path) +
-  original query embedding (vector path) → FTS5 fan-out (`2N`) +
-  vector KNN fan-out (`2N`) → `rrf_merge` → truncate to `--limit`
-  (default 20). `--vector-weight` (0.0..1.0, default 0.7) blends the
-  two ranks via `rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec)
-  * W` (`k=60`). `search query` (FTS5-only) is unchanged.
+  `SemanticSearchService.search` → original `QUERY` embedding (vector
+  path, always on) → opt-in FTS5 path (the explicit `--fts5-query`
+  string is preprocessed by `SearchQueryBuilder` — no stopword strip)
+  → when `--fts5-query` is supplied, FTS5 fan-out (`2N`) and vector
+  KNN fan-out (`2N`) flow through `rrf_merge` and the result is
+  truncated to `--limit` (default 20); when `--fts5-query` is absent,
+  FTS5 + RRF are skipped and pure vector KNN results return, dressed
+  as `SemanticSearchHit` with `rank_fts5=None`. `--fts5-weight`
+  (0.0..1.0, default 0.5) blends the two ranks via
+  `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) *
+  (1 - fts5_weight)` (`k=60`); the flag is ignored when `--fts5-query`
+  is omitted. `search query` (FTS5-only) is unchanged.
 - `doc3gpp search index --rebuild-embeddings [--stale-only] [--batch N]
   [--resume] [--quiet]` → `SemanticSearchService.rebuild_embeddings`
   → drops + recreates `vec_tdoc_embeddings`; iterates every `tdocs`

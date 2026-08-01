@@ -63,11 +63,15 @@ PostgreSQL available via configuration.
   via the `search query` / `search index` subcommands. Optional
   `[search]` extra; opt out with `Settings.search.enabled = false`.
 - **Hybrid semantic search (FTS5 + embeddings)** — `doc3gpp search sem
-  QUERY` fans the query out to both the FTS5 index (after spaCy
-  stopword stripping) and a sqlite-vec embedding index, then merges
-  the two rankings with reciprocal-rank fusion (default
-  `--vector-weight=0.7`). Optional `[semantic]` extra (sqlite-only);
-  see `### search sem` below for details.
+  QUERY` always embeds the natural-language positional `QUERY`
+  against the sqlite-vec embedding index. An opt-in `--fts5-query`
+  string additionally drives the FTS5 fan-out (preprocessed by
+  `SearchQueryBuilder`, same as `search query`); when supplied, the
+  two rankings are merged with reciprocal-rank fusion (default
+  `--fts5-weight=0.5`, vector weight = `1 - fts5_weight`); when
+  omitted, only vector KNN returns — no FTS5 fan-out, no RRF.
+  Optional `[semantic]` extra (sqlite-only); see `### search sem`
+  below for details.
 - **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
   SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
 - **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to
@@ -125,7 +129,7 @@ pip install "doc3gpp[mysql]"      # MySQL driver (pymysql)
 pip install "doc3gpp[postgres]"   # PostgreSQL driver (psycopg)
 pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
 pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
-pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sentence-transformers, spaCy, sqlite-vec)
+pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sentence-transformers, sqlite-vec)
 ```
 
 ## Quick Start
@@ -268,17 +272,18 @@ The auto-index hook keeps the index fresh after every successful
 ### `search sem` — hybrid FTS5 + embedding vector search
 
 Requires the `doc3gpp[semantic]` extra (`sentence-transformers`,
-`spaCy` + the bundled `en_core_web_sm` model, `sqlite-vec`); sqlite-only.
-The model is pulled as a direct wheel URL by `pip install`, so the
-single install command sets up the library and the model together.
-On MySQL/PostgreSQL or builds without sqlite-vec the command reports
-unavailable with a one-liner; `search query` (FTS5-only) still works.
+`sqlite-vec`); sqlite-only. The `sentence-transformers` model is
+pulled automatically by `pip install`, so the single install command
+sets up the library and the model together. On MySQL/PostgreSQL or
+builds without sqlite-vec the command reports unavailable with a
+one-liner; `search query` (FTS5-only) still works.
 
 ```bash
-# sem — RRF-fused FTS5 + vector ranking (default --vector-weight=0.7)
+# sem — vector-only by default; opt into FTS5 via --fts5-query
 doc3gpp search sem "what CRs touch NB-IoT power saving" --limit 10
 doc3gpp search sem "scheduling NR for FR2" --spec 38.300 --format json
-doc3gpp search sem "TTCN changes for R5-12345" --vector-weight 0.5
+doc3gpp search sem "TTCN changes for R5-12345" \
+  --fts5-query "R5-12345" --fts5-weight 0.5
 
 # extend `search index` to manage the embedding index
 doc3gpp search index --rebuild-embeddings           # drop + rebuild vec_tdoc_embeddings
@@ -290,7 +295,7 @@ The auto-embed hook keeps `vec_tdoc_embeddings` fresh after every
 successful `tdoc parse` (skipped when `Settings.semantic_search.
 auto_embed_on_parse = false`). Tune via the `[semantic_search]`
 section in `doc3gpp.toml` (`enabled`, `embedding_model`, `chunk_size`,
-`chunk_overlap`, `rrf_k`, `vector_weight`, `fanout_multiplier`,
+`chunk_overlap`, `rrf_k`, `fts5_weight`, `fanout_multiplier`,
 `final_limit`, `max_chunks_per_tdoc`).
 
 ### `config` — TOML config lifecycle
@@ -441,12 +446,10 @@ embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # 384-dim
 chunk_size = 800                     # whitespace tokens per chunk
 chunk_overlap = 100                  # trailing tokens repeated at next chunk start
 rrf_k = 60                           # RRF k constant
-vector_weight = 0.7                  # 0.0 = FTS5-only, 1.0 = vector-only
+fts5_weight = 0.5                    # 0.0 = vector-only, 1.0 = FTS5-only (vector weight = 1 - fts5_weight)
 fanout_multiplier = 2                # internal_limit = limit * fanout per side
 final_limit = 20                     # default `--limit` for `search sem`
 max_chunks_per_tdoc = 32             # cap on chunks per TDoc
-user_defined_stop_words = []         # extra tokens to drop from the FTS5 query
-keep_negation_words = ["not"]        # tokens to retain even if spaCy marks them stopwords
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >

@@ -149,7 +149,6 @@ def test_search_sem_filter_by_tsg(semantic_service):
 
 def test_search_sem_fts5_weight_zero_is_fts5_only(semantic_service):
     from doc3gpp.models.search import SearchFilters
-    from doc3gpp.services.semantic_search_service import rrf_merge
 
     # With ``fts5_weight=1.0`` (i.e. vector weight = 0) the RRF score
     # collapses to the FTS5-only formula (``1/(k+rank_fts5)``);
@@ -194,7 +193,6 @@ def test_search_sem_fts5_weight_zero_is_fts5_only(semantic_service):
     assert fts5_tdoc_ids & {"SEM-NB-001", "SEM-NB-002"}, (
         f"FTS5 fan-out should surface an NB-IoT TDoc; got {fts5_tdoc_ids}"
     )
-    _ = rrf_merge  # silence unused-import warning
 
 
 def test_build_embed_text_against_real_corpus(semantic_search_corpus):

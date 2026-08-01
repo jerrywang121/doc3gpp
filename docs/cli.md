@@ -1530,16 +1530,19 @@ the index by walking every `tdocs` row.
 ## `doc3gpp search sem QUERY [filters]`
 
 Run a hybrid (FTS5 + vector) search that merges lexical and semantic
-matches with Reciprocal Rank Fusion (RRF). The query is dispatched
-down two paths in parallel: an FTS5 path (with the same spaCy +
-custom-stopword strip the FTS5 index was built with) and a vector path
-(the raw query is embedded against the same model used at index time).
-Both paths fan out to `2N` candidates, are merged via `rrf_merge`, and
-truncated to `--limit`. `search query` (FTS5-only) is unchanged.
+matches with Reciprocal Rank Fusion (RRF). The positional `QUERY`
+is always embedded by the vector path (the same model used at index
+time); when `--fts5-query` is supplied, it is preprocessed by
+`SearchQueryBuilder` (same semantics as `search query`) and feeds
+the FTS5 fan-out. Both paths fan out to `2N` candidates, are merged
+via `rrf_merge`, and truncated to `--limit`. When `--fts5-query` is
+omitted, FTS5 + RRF are skipped — only vector KNN results return.
+`search query` (FTS5-only) is unchanged.
 
 | Flag | Effect |
 | --- | --- |
-| `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). |
+| `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). Always embedded. |
+| `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
 | `--tsg TEXT` | `meetings.tsg` filter. |
 | `--meeting TEXT` | `meetings.name` filter. |
 | `--meeting-id INT` | `meetings.meeting_id` filter. |
@@ -1549,13 +1552,13 @@ truncated to `--limit`. `search query` (FTS5-only) is unchanged.
 | `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD). |
 | `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD). |
 | `--limit INT` | max results (default `20`). |
-| `--vector-weight FLOAT` | Blend weight `W` for the vector rank in the RRF formula. Range `0.0..1.0`, default `0.7`. The FTS5 path is weighted `1 - W`; `0.0` is FTS5-only, `1.0` is vector-only. |
+| `--fts5-weight FLOAT` | FTS5 weight in the RRF blend (default `0.5`); the vector weight is `1 - fts5_weight`. `0.0` = vector-only, `1.0` = FTS5-only. Ignored when `--fts5-query` is omitted. |
 | `--format table\|json\|markdown` | output format (default `table`). |
 | `--compact` | strip JSON / markdown decorators. |
-| `--explain` | Print the resolved FTS5 MATCH expression, snippet column, BM25 weight vector, and the RRF config (k, vector_weight, fanout_multiplier) to stderr. |
+| `--explain` | Print the resolved FTS5 MATCH expression (when applicable), snippet column, BM25 weight vector, and the RRF config (`fts5_weight`, `1 - fts5_weight`, `rrf_k`, `fanout_multiplier`) to stderr. |
 | `--quiet` | suppress the stale-index hint. |
 
-The merge is `rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec) * W`
+The merge is `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) * (1 - fts5_weight)`
 with `k = Settings.semantic_search.rrf_k` (default `60`). Each hit
 carries its FTS5 rank, vector rank, RRF score, and the closest chunk
 distance / id so downstream consumers can inspect either source.

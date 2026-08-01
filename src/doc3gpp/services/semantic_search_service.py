@@ -2,10 +2,13 @@
 
 :class:`SemanticSearchService` owns four responsibilities:
 
-1. **Read path** — :meth:`search` strips stopwords for the FTS5 query,
-   embeds the ORIGINAL query for the vector path, fans out to both
-   indexes with an enlarged ``internal_limit = limit * fanout``,
-   then merges via :func:`rrf_merge` and truncates to ``limit``.
+1. **Read path** — :meth:`search` always embeds the natural-language
+   ``query``; the FTS5 path is opt-in via ``fts5_query`` and is
+   preprocessed by ``SearchQueryBuilder`` (NOT spaCy). When
+   ``fts5_query`` is provided, the service runs FTS5 + vector fan-out
+   and RRF with ``vector_weight = 1 - fts5_weight``; when omitted, the
+   service returns pure vector KNN top-``limit`` results dressed as
+   :class:`SemanticSearchHit` (no RRF, no FTS5 fan-out).
 2. **Write paths** — :meth:`index_for_tdoc` builds the embed text,
    chunks it, embeds the chunks, and upserts. :meth:`remove_for_tdoc`
    deletes the chunk rows.
@@ -26,10 +29,9 @@ from doc3gpp.models.search import (
 )
 from doc3gpp.models.semantic_search import (
     SemanticSearchHit,
-    SemanticSearchQueryError,
+    SemanticSearchQueryError,  # noqa: F401  -- Task 3 deletes the class; kept here until then so ruff stays clean.
 )
 from doc3gpp.services.embedding.chunker import _chunks
-from doc3gpp.services.embedding.stopwords import strip_stopwords
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.storage.repositories.vector_sql import _build_embed_text
 
@@ -123,15 +125,51 @@ class SemanticSearchService:
         self._settings = settings
 
     def search(
-        self, query: str, filters: SearchFilters,
-        limit: int, vector_weight: float,
+        self,
+        query: str,
+        fts5_query: str | None,
+        filters: SearchFilters,
+        limit: int,
+        fts5_weight: float,
     ) -> list[SemanticSearchHit]:
-        stripped = strip_stopwords(query)
-        if not stripped:
-            raise SemanticSearchQueryError(
-                "query has no content after stopword stripping"
-            )
-        fts5_expr = SearchQueryBuilder(stripped).build()
+        """Vector-only or hybrid (FTS5 + vector) read path.
+
+        ``query`` is always embedded; it never feeds FTS5. ``fts5_query``,
+        when provided, runs through :class:`SearchQueryBuilder` (same
+        preprocessing as ``doc3gpp search query``) and feeds the FTS5
+        path; when ``None``, the FTS5 path and RRF are skipped — only
+        vector KNN results return, ranked by cosine distance, dressed as
+        :class:`SemanticSearchHit` with synthesized metadata stubs.
+
+        ``fts5_weight`` is the FTS5 weight in the RRF blend; the
+        vector weight is ``1 - fts5_weight``. Ignored when
+        ``fts5_query is None``.
+        """
+        query_vec = self._embedder.encode([query])[0]
+        if fts5_query is None:
+            vec_hits = self._vec.knn(query_vec, limit=limit, filters=filters)
+            if not vec_hits:
+                return []
+            # Rank vec hits by distance, dress as SemanticSearchHit with
+            # rank_fts5=None, rrf_score=-distance. Same DTO so the CLI
+            # renderer branches uniformly between the two paths.
+            hits = [
+                SemanticSearchHit(
+                    tdoc_id=tdoc_id,
+                    rrf_score=-distance,
+                    rank_fts5=None,
+                    rank_vec=rank,
+                    min_chunk_distance=distance,
+                    best_chunk_id=chunk_id,
+                    fts5_hit=None,  # populated below
+                )
+                for rank, (tdoc_id, chunk_id, _idx, distance) in enumerate(vec_hits)
+            ]
+            hits.sort(key=lambda h: h.rrf_score, reverse=True)  # least-negative = best
+            hits = hits[:limit]
+            return self._populate_metadata_stubs(hits)
+
+        fts5_expr = SearchQueryBuilder(fts5_query).build()
         fanout = self._settings.semantic_search.fanout_multiplier
         internal_limit = max(limit * fanout, 0)
         fts5_filters = SearchFilters(
@@ -142,32 +180,43 @@ class SemanticSearchService:
             limit=internal_limit,
         )
         fts5_hits = self._fts5.search(fts5_expr, fts5_filters)
-        query_vec = self._embedder.encode([query])[0]
         vec_hits = self._vec.knn(query_vec, limit=internal_limit, filters=filters)
         merged = rrf_merge(
             fts5_hits, vec_hits,
             k=self._settings.semantic_search.rrf_k,
-            vector_weight=vector_weight,
+            vector_weight=1.0 - fts5_weight,
             limit=limit,
         )
-        # Vector-only hits (FTS5 missed them — common for the
-        # 12,561 title-only TDocs that have no parsed cover or
-        # extract) need real metadata or the CLI renders an
-        # empty stub. Fetch ``tdocs`` + ``meetings`` once for all
-        # such hits in a single batched SQL trip, then populate
-        # the synthesized ``fts5_hit`` from the join result.
-        vector_only_ids = [
-            h.tdoc_id for h in merged if h.fts5_hit is None
-        ]
-        metadata_by_id = self._vec.get_tdocs_metadata(vector_only_ids)
-        merged = [
+        return self._populate_metadata_stubs(merged)
+
+    def _populate_metadata_stubs(
+        self,
+        hits: list[SemanticSearchHit],
+    ) -> list[SemanticSearchHit]:
+        """Synthesize the ``fts5_hit`` SearchHit for hits missing one.
+
+        Vector-only hits (no FTS5 fan-out hit, or FTS5 path was skipped)
+        need real metadata or the CLI renders an empty stub. Fetch
+        ``tdocs`` + ``meetings`` once for all such hits in a single
+        batched SQL trip, then populate the synthesized ``fts5_hit`` from
+        the JOIN result. Returns the same list with each ``fts5_hit``
+        field filled in (either preserved from the original hit or
+        populated from the JOIN).
+        """
+        missing_ids = [h.tdoc_id for h in hits if h.fts5_hit is None]
+        if not missing_ids:
+            return hits
+        metadata_by_id = self._vec.get_tdocs_metadata(missing_ids)
+        return [
             dataclasses.replace(
                 h,
-                fts5_hit=_build_fts5_stub(h.tdoc_id, metadata_by_id.get(h.tdoc_id)),
-            ) if h.fts5_hit is None else h
-            for h in merged
+                fts5_hit=h.fts5_hit or _build_fts5_stub(
+                    h.tdoc_id, metadata_by_id.get(h.tdoc_id),
+                ),
+            )
+            for h in hits
         ]
-        return merged
+
 
     def index_for_tdoc(self, tdoc_id: str) -> None:
         embed_text = _build_embed_text(tdoc_id)

@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from doc3gpp.models.search import SearchFilters, SearchHit
-from doc3gpp.models.semantic_search import SemanticSearchQueryError
 from doc3gpp.services.semantic_search_service import SemanticSearchService
 
 
@@ -34,18 +33,20 @@ def _mock_embedder():
     return e
 
 
-def test_search_strips_query_for_fts5_and_uses_original_for_vector(monkeypatch):
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "CR touch NB-IoT power save",
-    )
+def test_search_strips_query_for_fts5_and_uses_original_for_vector():
     fts5 = MagicMock()
     fts5.search.return_value = [_hit("R5-1")]
     vec = MagicMock()
     vec.knn.return_value = [("R5-1", "R5-1#0", 0, 0.1)]
     emb = _mock_embedder()
     svc = SemanticSearchService(fts5, emb, vec, _settings())
-    out = svc.search("what CRs touch NB-IoT power saving", SearchFilters(), limit=10, vector_weight=0.7)
+    out = svc.search(
+        "what CRs touch NB-IoT power saving",
+        fts5_query="valid query",
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.7,
+    )
     assert len(out) == 1
     assert out[0].tdoc_id == "R5-1"
     # Embedder received the ORIGINAL query
@@ -53,17 +54,7 @@ def test_search_strips_query_for_fts5_and_uses_original_for_vector(monkeypatch):
     assert emb.encode.call_args[0][0] == ["what CRs touch NB-IoT power saving"]
 
 
-def test_search_raises_on_empty_after_strip(monkeypatch):
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "",
-    )
-    svc = SemanticSearchService(MagicMock(), _mock_embedder(), MagicMock(), _settings())
-    with pytest.raises(SemanticSearchQueryError):
-        svc.search("   ", SearchFilters(), limit=10, vector_weight=0.7)
-
-
-def test_search_vector_only_hit_populates_metadata_from_tdocs(monkeypatch):
+def test_search_vector_only_hit_populates_metadata_from_tdocs():
     """When the vector KNN returns a hit that FTS5 missed (e.g.
     the TDoc has no parsed cover/extract — title-only indexing
     covers 12,561 of 13,693 TDocs in real corpora), the
@@ -74,10 +65,6 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs(monkeypatch):
     what the hit actually is.
     """
     from dataclasses import dataclass
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "valid query",
-    )
 
     @dataclass
     class _Meta:
@@ -115,7 +102,11 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs(monkeypatch):
     vec = _VecRepo()
     svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
     out = svc.search(
-        "nb-iot", SearchFilters(), limit=10, vector_weight=0.7,
+        "nb-iot",
+        fts5_query="valid query",
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.7,
     )
     assert len(out) == 1
     hit = out[0]
@@ -138,17 +129,13 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs(monkeypatch):
     assert vec.metadata_calls == [["R4-2605982"]]
 
 
-def test_search_mixed_hits_only_looks_up_metadata_for_vector_only(monkeypatch):
+def test_search_mixed_hits_only_looks_up_metadata_for_vector_only():
     """Vector-only hits need the metadata JOIN; FTS5 hits already
     carry it. The service must not call the metadata lookup for
     tdoc_ids that already have FTS5 coverage — that would be
     wasted work.
     """
     from dataclasses import dataclass
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "valid query",
-    )
 
     @dataclass
     class _Meta:
@@ -183,23 +170,24 @@ def test_search_mixed_hits_only_looks_up_metadata_for_vector_only(monkeypatch):
     fts5.search.return_value = [_hit("R5-1")]
     vec = _VecRepo()
     svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
-    svc.search("q", SearchFilters(), limit=10, vector_weight=0.7)
+    svc.search(
+        "q",
+        fts5_query="valid query",
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.7,
+    )
     # Only R4-2 needed the lookup; R5-1 already had FTS5 coverage.
     assert vec.metadata_calls == [["R4-2"]]
 
 
-def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty(monkeypatch):
+def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty():
     """Edge case: the vector KNN returns a tdoc_id that no longer
     exists in ``tdocs`` (deleted between index and query). The
     stub stays as today — empty fields — so the CLI can still
     surface the hit (with whatever metadata the index knew),
     and no spurious "unknown tdoc" error blocks the result list.
     """
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "valid query",
-    )
-
     class _VecRepo:
         def __init__(self) -> None:
             self.metadata_calls: list[list[str]] = []
@@ -215,7 +203,13 @@ def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty(monkeypatch):
     fts5.search.return_value = []
     vec = _VecRepo()
     svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
-    out = svc.search("q", SearchFilters(), limit=10, vector_weight=0.7)
+    out = svc.search(
+        "q",
+        fts5_query="valid query",
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.7,
+    )
     assert len(out) == 1
     # Stub is empty but the hit is still surfaced.
     assert out[0].fts5_hit is not None
@@ -223,34 +217,59 @@ def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty(monkeypatch):
     assert out[0].fts5_hit.ftp_url is None
 
 
-def test_search_both_sides_empty_returns_empty(monkeypatch):
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "valid query",
-    )
+def test_search_both_sides_empty_returns_empty():
     fts5 = MagicMock()
     fts5.search.return_value = []
     vec = MagicMock()
     vec.knn.return_value = []
     svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
-    out = svc.search("valid query", SearchFilters(), limit=10, vector_weight=0.7)
+    out = svc.search(
+        "valid query",
+        fts5_query="valid query",
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.7,
+    )
     assert out == []
 
 
-def test_search_uses_fanout_multiplier(monkeypatch):
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "q",
-    )
+def test_search_uses_fanout_multiplier():
     fts5 = MagicMock()
     fts5.search.return_value = []
     vec = MagicMock()
     vec.knn.return_value = []
     svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
-    svc.search("q", SearchFilters(), limit=20, vector_weight=0.7)
+    svc.search(
+        "q",
+        fts5_query="q",
+        filters=SearchFilters(),
+        limit=20,
+        fts5_weight=0.7,
+    )
     # internal_limit = 20 * 2 = 40
     assert fts5.search.call_args[0][1].limit == 40
     assert vec.knn.call_args[1]["limit"] == 40
+
+
+def test_search_synthesizes_fts5_hit_for_vector_only_tdoc():
+    """Vector-only tdoc (not in FTS5 fan-out) must still carry a real SearchHit."""
+    fts5 = MagicMock()
+    fts5.search.return_value = []
+    vec = MagicMock()
+    vec.knn.return_value = [("R5-1", "R5-1#0", 0, 0.1)]
+    svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
+    out = svc.search(
+        "valid",
+        fts5_query="valid",
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.7,
+    )
+    assert len(out) == 1
+    assert out[0].tdoc_id == "R5-1"
+    assert out[0].fts5_hit is not None
+    assert isinstance(out[0].fts5_hit, SearchHit)
+    assert out[0].fts5_hit.tdoc_id == "R5-1"
 
 
 def test_index_for_tdoc_calls_upsert_chunks(monkeypatch):
@@ -440,20 +459,163 @@ def test_rebuild_embeddings_processed_is_monotonic(monkeypatch):
     ]
 
 
-def test_search_synthesizes_fts5_hit_for_vector_only_tdoc(monkeypatch):
-    """Vector-only tdoc (not in FTS5 fan-out) must still carry a real SearchHit."""
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        lambda q: "valid",
-    )
+def test_search_with_fts5_query_runs_search_service_with_builder_output(monkeypatch):
+    """When fts5_query is supplied, SemanticSearchService must:
+    1. Run it through SearchQueryBuilder.
+    2. Pass the builder's output to fts5_service.search, not the raw --fts5-query string.
+    3. Pass the ORIGINAL query to the embedder, not the fts5_query.
+    4. Call rrf_merge with vector_weight = 1 - fts5_weight.
+    """
+    from doc3gpp.cli_filters import SearchQueryBuilder
+    captured = {}
+
+    real_builder = SearchQueryBuilder.build
+
+    def spy(self):
+        captured["fts5_input"] = self._query
+        captured["fts5_output"] = real_builder(self)
+        return captured["fts5_output"]
+
+    monkeypatch.setattr(SearchQueryBuilder, "build", spy)
+
     fts5 = MagicMock()
-    fts5.search.return_value = []
+    fts5.search.return_value = [_hit("R5-1")]
     vec = MagicMock()
     vec.knn.return_value = [("R5-1", "R5-1#0", 0, 0.1)]
-    svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
-    out = svc.search("valid", SearchFilters(), limit=10, vector_weight=0.7)
+    emb = _mock_embedder()
+    svc = SemanticSearchService(fts5, emb, vec, _settings())
+    out = svc.search(
+        "natural language prose",
+        fts5_query="tsg:RP spec:38.300",
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.5,
+    )
     assert len(out) == 1
-    assert out[0].tdoc_id == "R5-1"
-    assert out[0].fts5_hit is not None
-    assert isinstance(out[0].fts5_hit, SearchHit)
-    assert out[0].fts5_hit.tdoc_id == "R5-1"
+    assert captured["fts5_input"] == "tsg:RP spec:38.300"
+    # fts5_service.search sees the BUILDER OUTPUT (not the raw string).
+    fts5.search.assert_called_once()
+    assert fts5.search.call_args[0][0] == captured["fts5_output"]
+    # The ORIGINAL query went to the embedder.
+    assert emb.encode.call_args[0][0] == ["natural language prose"]
+
+
+def test_search_without_fts5_query_skips_fts5_service(monkeypatch):
+    """When fts5_query is None, the service MUST NOT call fts5_service.search,
+    MUST NOT run SearchQueryBuilder, and MUST return top-`limit` vector hits
+    dressed as SemanticSearchHit with rank_fts5=None and rrf_score=-distance.
+    """
+    vec = MagicMock()
+    vec.knn.return_value = [
+        ("R5-1", "R5-1#0", 0, 0.1),
+        ("R5-2", "R5-2#0", 1, 0.4),
+        ("R5-3", "R5-3#0", 2, 0.9),
+    ]
+    fts5 = MagicMock()
+    emb = _mock_embedder()
+    svc = SemanticSearchService(fts5, emb, vec, _settings())
+    out = svc.search(
+        "natural prose",
+        fts5_query=None,
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.5,  # MUST be ignored
+    )
+    assert [h.tdoc_id for h in out] == ["R5-1", "R5-2", "R5-3"]
+    fts5.search.assert_not_called()
+    # Embedder was called with the natural-language query.
+    assert emb.encode.call_args[0][0] == ["natural prose"]
+    # All hits have rank_fts5=None, rank_vec set, rrf_score = -distance.
+    assert all(h.rank_fts5 is None for h in out)
+    assert [h.rank_vec for h in out] == [0, 1, 2]
+    assert [h.min_chunk_distance for h in out] == [0.1, 0.4, 0.9]
+    assert [h.rrf_score for h in out] == [-0.1, -0.4, -0.9]
+
+
+def test_search_without_fts5_query_truncates_to_limit(monkeypatch):
+    """The pure-vector path must still respect --limit (no internal fanout)."""
+    vec = MagicMock()
+    vec.knn.return_value = [
+        (f"R5-{i}", f"R5-{i}#0", i, 0.1 * (i + 1)) for i in range(5)
+    ]
+    svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
+    out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=3, fts5_weight=0.5)
+    # vec.knn called with limit=3 (no internal fanout when FTS5 is skipped).
+    assert vec.knn.call_args[1]["limit"] == 3
+    assert len(out) == 3
+
+
+def test_search_without_fts5_query_vector_only_populates_metadata():
+    """Even without FTS5, vector-only hits must still carry a synthesized
+    SearchHit stub populated from tdocs/meetings via get_tdocs_metadata.
+    """
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Meta:
+        title: str
+        ftp_url: str | None
+        wis: str | None
+        meeting: str | None
+        tsg: str | None
+        uploaded_date: str | None
+
+    class _VecRepo:
+        def knn(self, qv, limit, filters):
+            return [("R5-1", "R5-1#0", 0, 0.1)]
+
+        def get_tdocs_metadata(self, tdoc_ids):
+            return {
+                "R5-1": _Meta(
+                    title="real title", ftp_url="real.zip", wis=None,
+                    meeting=None, tsg=None, uploaded_date=None,
+                ),
+            }
+
+    svc = SemanticSearchService(
+        MagicMock(), _mock_embedder(), _VecRepo(), _settings(),
+    )
+    out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=10, fts5_weight=0.5)
+    assert out[0].fts5_hit.title == "real title"
+    assert out[0].fts5_hit.ftp_url == "real.zip"
+
+
+def test_search_with_fts5_query_uses_one_minus_fts5_weight_for_rrf():
+    """fts5_weight=0.7 in CLI must reach rrf_merge as vector_weight=0.3."""
+    captured = {}
+    real_merge = __import__(
+        "doc3gpp.services.semantic_search_service",
+        fromlist=["rrf_merge"],
+    ).rrf_merge
+
+    def spy_merge(fts5_hits, vec_hits, *, k, vector_weight, limit):
+        captured["vector_weight"] = vector_weight
+        return real_merge(
+            fts5_hits, vec_hits, k=k,
+            vector_weight=vector_weight, limit=limit,
+        )
+
+    import doc3gpp.services.semantic_search_service as svc_mod
+    monkey = __import__("pytest").MonkeyPatch()
+    monkey.setattr(svc_mod, "rrf_merge", spy_merge)
+    try:
+        fts5 = MagicMock()
+        fts5.search.return_value = [_hit("R5-1")]
+        vec = MagicMock()
+        vec.knn.return_value = [("R5-1", "R5-1#0", 0, 0.1)]
+        svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
+        svc.search(
+            "q", fts5_query="R5-1",
+            filters=SearchFilters(), limit=10, fts5_weight=0.7,
+        )
+        assert captured["vector_weight"] == pytest.approx(0.3)
+    finally:
+        monkey.undo()
+
+
+def test_search_without_fts5_query_empty_vector_returns_empty():
+    vec = MagicMock()
+    vec.knn.return_value = []
+    svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
+    out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=10, fts5_weight=0.5)
+    assert out == []

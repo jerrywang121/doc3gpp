@@ -30,3 +30,5 @@ tempCodeRunnerFile.py
 .serena/
 .logs/
 .codegraph/
+
+.worktrees/

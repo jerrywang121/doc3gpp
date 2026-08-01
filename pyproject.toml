@@ -67,12 +67,6 @@ extract = ["python-docx>=0.8.11"]
 search = []
 semantic = [
   "sentence-transformers>=2.7.0",
-  "spacy>=3.8.0,<3.9.0",
-  # spaCy ships models separately from the library; pinning the
-  # wheel URL here means `pip install doc3gpp[semantic]` installs
-  # the model in the same step instead of leaving users with a
-  # `SpacyUnavailableError` and a second command to run.
-  "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
   "sqlite-vec>=0.1.0",
 ]
 mysql = ["pymysql>=1.1.1"]
@@ -93,7 +87,7 @@ testpaths = ["tests"]
 markers = [
   "online: tests that access live internet endpoints (for example 3gpp.org)",
   "mysql: tests that require a mysql backend",
-  "semantic: tests that require the [semantic] extra (sentence-transformers, spacy, sqlite-vec)",
+  "semantic: tests that require the [semantic] extra (sentence-transformers, sqlite-vec)",
 ]
 
 [tool.ruff]

@@ -4381,7 +4381,16 @@ def index_command(
 @search_app.command("sem")
 def sem_command(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="Natural-language query."),
+    query: str = typer.Argument(..., help="Natural-language query (embedded only; not used for FTS5)."),
+    fts5_query: str | None = typer.Option(
+        None, "--fts5-query",
+        help=(
+            "Optional FTS5 MATCH expression. When omitted, the FTS5 "
+            "path is skipped (only embedding-KNN runs; no RRF). When "
+            "supplied, it is processed exactly like `search query` "
+            "(SearchQueryBuilder; no stopword stripping)."
+        ),
+    ),
     tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
     meeting: str | None = typer.Option(None, help="Filter by meetings.name."),
     meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
@@ -4390,30 +4399,37 @@ def sem_command(
     spec: str | None = typer.Option(None, help="Filter by tdocs.spec."),
     since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
     until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results after RRF."),
-    vector_weight: float = typer.Option(
-        0.7, "--vector-weight", min=0.0, max=1.0,
-        help="Blend weight for vector rank (0.0..1.0).",
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    fts5_weight: float = typer.Option(
+        0.5, "--fts5-weight", min=0.0, max=1.0,
+        help=(
+            "Blend weight for FTS5 rank in RRF (0.0..1.0). "
+            "The vector weight is 1 - fts5_weight. "
+            "Ignored when --fts5-query is omitted."
+        ),
     ),
     format: str = typer.Option("table", "--format", help="table | json | markdown"),
     compact: bool = typer.Option(False, "--compact", help="Strip decorators."),
     explain: bool = typer.Option(False, "--explain", help="Print RRF config + best chunk."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress stale-index hint."),
 ) -> None:
-    """Run a semantic (FTS5 + embedding vector) search over TDocs.
+    """Run a semantic (embedding + optional FTS5) search over TDocs.
 
-    The query is stripped of stopwords + lemmatized for the FTS5 path;
-    the embedding path uses the ORIGINAL query. Results are merged
-    via reciprocal-rank fusion (RRF) and truncated to --limit.
+    The natural-language ``QUERY`` is embedded and matched against the
+    vector KNN index. When ``--fts5-query`` is supplied, that string is
+    run through ``SearchQueryBuilder`` and matched against the FTS5
+    index; results from both paths are merged via reciprocal-rank
+    fusion (RRF) and truncated to ``--limit``. When ``--fts5-query``
+    is omitted, the FTS5 path and RRF are skipped — only top
+    ``--limit`` vector hits return, ranked by cosine distance.
     """
     from doc3gpp.cli_filters import (
         parse_date_filter, parse_release_filter, parse_spec_filter,
     )
-    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.models.search import SearchError, SearchFilters
     from doc3gpp.models.semantic_search import (
         EmbedderUnavailableError, SemanticSearchQueryError,
-        SemanticSearchUnavailableError, SpacyUnavailableError,
-        VectorIndexUnavailableError,
+        SemanticSearchUnavailableError, VectorIndexUnavailableError,
     )
     from doc3gpp.services.factory import build_semantic_search_service
 
@@ -4442,21 +4458,15 @@ def sem_command(
     )
     try:
         hits = svc.search(
-            query, filters, limit=limit, vector_weight=vector_weight,
+            query, fts5_query=fts5_query, filters=filters,
+            limit=limit, fts5_weight=fts5_weight,
         )
+    except SearchError as exc:
+        typer.echo(f"bad fts5 query: {exc}", err=True)
+        raise typer.Exit(code=2)
     except SemanticSearchQueryError as exc:
         typer.echo(f"bad query: {exc}", err=True)
         raise typer.Exit(code=2)
-    except SpacyUnavailableError:
-        typer.echo(
-            "spaCy model not installed; "
-            "run `pip install doc3gpp[semantic]` "
-            "(the model is bundled), or manually run "
-            "`python -m spacy download en_core_web_sm` "
-            "if you installed spaCy outside of pip",
-            err=True,
-        )
-        raise typer.Exit(code=1)
     except EmbedderUnavailableError as exc:
         typer.echo(f"embedding model load failed: {exc}", err=True)
         raise typer.Exit(code=1)
@@ -4468,7 +4478,9 @@ def sem_command(
         raise typer.Exit(code=1)
     if explain:
         typer.echo("# semantic search config", err=True)
-        typer.echo(f"vector_weight:   {vector_weight}", err=True)
+        typer.echo(f"fts5_query:      {fts5_query!r}", err=True)
+        typer.echo(f"fts5_weight:     {fts5_weight}", err=True)
+        typer.echo(f"vector_weight:   {1.0 - fts5_weight:.4f}", err=True)
         typer.echo(f"limit:           {limit}", err=True)
         typer.echo(
             f"rrf_k:           {svc._settings.semantic_search.rrf_k}",
@@ -4477,6 +4489,11 @@ def sem_command(
         typer.echo(
             f"fanout:          "
             f"{svc._settings.semantic_search.fanout_multiplier}",
+            err=True,
+        )
+        typer.echo(
+            f"fts5 path:       "
+            f"{'hybrid (FTS5 + RRF)' if fts5_query is not None else 'skipped (pure vector)'}",
             err=True,
         )
     _render_semantic_hits(hits, format=format, compact=compact)

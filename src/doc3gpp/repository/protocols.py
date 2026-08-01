@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Protocol, TYPE_CHECKING
 
@@ -726,9 +726,30 @@ class VectorIndexRepository(Protocol):
         of a blank stub when FTS5 missed the hit. Returns an empty
         dict for tdoc_ids that no longer exist (deleted between
         index and query).
-
         TDoc ids are bound individually as named parameters (no
         string interpolation) so the call is SQL-injection safe.
+        """
+        ...
+
+    def get_min_distance_for_tdocs(
+        self,
+        tdoc_ids: Sequence[str],
+        query_vec: Sequence[float],
+    ) -> dict[str, tuple[float, str] | None]:
+        """For each tdoc_id, return the closest-chunk distance to ``query_vec``.
+
+        Returns a dict keyed by tdoc_id; each value is either
+        ``(min_distance, best_chunk_id)`` for the row with the
+        smallest cosine distance to ``query_vec``, or ``None`` if the
+        tdoc has no rows in ``vec_tdoc_embeddings``.
+
+        The implementation must issue a single batched SQL trip.
+        TDoc ids with no rows are not an error — they map to ``None``
+        so the caller can apply its missing-candidate policy
+        (e.g. ``SemanticReranker`` uses ``MISSING_FLOOR``).
+
+        Empty ``tdoc_ids`` returns an empty dict without touching
+        the database.
         """
         ...
 

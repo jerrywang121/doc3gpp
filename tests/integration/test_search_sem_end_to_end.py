@@ -241,7 +241,7 @@ def test_search_sem_without_fts5_query_returns_pure_vector_results(semantic_serv
     for h in hits:
         assert h.rank_fts5 is None
         assert h.rrf_score < 0
-        assert h.fts5_hit is not None
+        assert h.hit is not None
 
 
 def test_search_sem_with_fts5_query_returns_rrf_merged_results(semantic_service):

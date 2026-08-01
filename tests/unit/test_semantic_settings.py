@@ -13,11 +13,9 @@ def test_defaults():
     assert s.chunk_size == 800
     assert s.chunk_overlap == 100
     assert s.rrf_k == 60
-    assert s.vector_weight == 0.7
+    assert s.fts5_weight == 0.5
     assert s.fanout_multiplier == 2
     assert s.final_limit == 20
-    assert s.user_defined_stop_words == []
-    assert s.keep_negation_words == ["not"]
     assert s.max_chunks_per_tdoc == 32
 
 
@@ -35,13 +33,13 @@ def test_chunk_overlap_must_be_less_than_size():
         SemanticSearchSettings(chunk_size=800, chunk_overlap=801)
 
 
-def test_vector_weight_range():
-    SemanticSearchSettings(vector_weight=0.0)
-    SemanticSearchSettings(vector_weight=1.0)
+def test_fts5_weight_range():
+    SemanticSearchSettings(fts5_weight=0.0)
+    SemanticSearchSettings(fts5_weight=1.0)
     with pytest.raises(Exception):
-        SemanticSearchSettings(vector_weight=-0.1)
+        SemanticSearchSettings(fts5_weight=-0.1)
     with pytest.raises(Exception):
-        SemanticSearchSettings(vector_weight=1.5)
+        SemanticSearchSettings(fts5_weight=1.5)
 
 
 def test_fanout_multiplier_at_least_one():

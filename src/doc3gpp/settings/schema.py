@@ -459,19 +459,18 @@ class SearchSettings(BaseModel):
 
 
 class SemanticSearchSettings(BaseModel):
-    """Knobs for the semantic (embedding + vector) search subsystem.
-
-    Defaults match the conservative end: ``enabled`` and
-    ``auto_embed_on_parse`` both default to True so the vector index
-    stays in sync with every successful ``tdoc parse`` until the
-    operator opts out. The embedding model name is pluggable; the
-    default ``all-MiniLM-L6-v2`` is 384-dim, ~80MB, fast on CPU.
+    """Configuration for the semantic (embedding + vector) search subsystem.
 
     TOML-only (no env overrides). The presence of the sqlite-vec
-    extension + spaCy model is gated by the ``[semantic]`` pyproject
-    extra; on builds without it the runtime probe raises
+    extension is gated by the ``[semantic]`` pyproject extra; on
+    builds without it the runtime probe raises
     :class:`VectorIndexUnavailableError` which the factory catches
     once at startup.
+
+    As of the 2026-08-01 design revision, spaCy is no longer
+    used; the FTS5 path runs the explicit ``--fts5-query`` string
+    through :class:`doc3gpp.cli_filters.SearchQueryBuilder` without
+    any stopword stripping.
     """
 
     enabled: bool = Field(default=True, description="Master switch.")
@@ -490,23 +489,19 @@ class SemanticSearchSettings(BaseModel):
         description="Trailing tokens repeated at next chunk start. Must be < chunk_size.",
     )
     rrf_k: int = Field(default=60, ge=1, description="RRF k constant.")
-    vector_weight: float = Field(
-        default=0.7, ge=0.0, le=1.0,
-        description="Blend weight for vector rank in RRF (0.0..1.0).",
+    fts5_weight: float = Field(
+        default=0.5, ge=0.0, le=1.0,
+        description=(
+            "Blend weight for the FTS5 rank in RRF (0.0..1.0). The "
+            "vector weight is 1 - fts5_weight. 0.0 is pure vector; "
+            "1.0 is pure FTS5. Ignored when --fts5-query is omitted."
+        ),
     )
     fanout_multiplier: int = Field(
         default=2, ge=1,
         description="Internal fan-out factor (limit * fanout per side).",
     )
     final_limit: int = Field(default=20, ge=0, description="Default --limit for `search sem`.")
-    user_defined_stop_words: list[str] = Field(
-        default_factory=list,
-        description="Extra tokens to drop from FTS5 query (case-insensitive).",
-    )
-    keep_negation_words: list[str] = Field(
-        default_factory=lambda: ["not"],
-        description="Tokens to retain even though spaCy treats them as stopwords.",
-    )
     max_chunks_per_tdoc: int = Field(
         default=32, ge=1,
         description="Cap on chunks per TDoc to bound parse latency on long covers.",

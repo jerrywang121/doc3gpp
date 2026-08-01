@@ -3,14 +3,16 @@
 
 The pipeline (``en_core_web_sm``) is loaded once per process and cached
 on the module. The effective stopword set is composed once per process
-from ``spacy.Defaults.stop_words ∪ user_defined_stop_words −
+from ``spacy.lang.en.stop_words.STOP_WORDS ∪ user_defined_stop_words −
 keep_negation_words`` and cached on the module; ``strip_stopwords``
 does the membership check against the cached frozenset so the
 per-call cost is dominated by ``Doc`` creation, not model load.
 
-The spaCy model is NOT auto-downloaded. A missing model raises
-:class:`SpacyUnavailableError` and the CLI tells the user to run
-``python -m spacy download en_core_web_sm``.
+The spaCy model is bundled with the ``[semantic]`` extra (pinned
+direct wheel URL in ``pyproject.toml``); if a user installs spaCy
+outside of pip (e.g. conda) without the model, a missing model
+raises :class:`SpacyUnavailableError` and the CLI tells the user
+to run ``python -m spacy download en_core_web_sm``.
 """
 
 from __future__ import annotations
@@ -53,8 +55,14 @@ def _effective_stopwords() -> frozenset[str]:
     )
     if _cached_stopwords is not None and _cached_settings_key == key:
         return _cached_stopwords
-    import spacy
-    base = set(spacy.Defaults.stop_words)
+    # spaCy 3.7+ removed `spacy.Defaults.stop_words`; the canonical
+    # English stopword set now lives at
+    # `spacy.lang.en.stop_words.STOP_WORDS`. Importing the symbol
+    # (rather than poking a top-level attribute) keeps us
+    # version-portable across the 3.7/3.8 series the [semantic]
+    # extra supports.
+    from spacy.lang.en.stop_words import STOP_WORDS
+    base = set(STOP_WORDS)
     base -= {w.lower() for w in sem.keep_negation_words}
     base |= {w.lower() for w in sem.user_defined_stop_words}
     _cached_stopwords = frozenset(base)

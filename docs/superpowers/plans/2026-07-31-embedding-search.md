@@ -566,7 +566,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'doc3gpp.services.embe
 
 The pipeline (``en_core_web_sm``) is loaded once per process and cached
 on the module. The effective stopword set is composed once per process
-from ``spacy.Defaults.stop_words ∪ user_defined_stop_words −
+from ``spacy.lang.en.stop_words.STOP_WORDS ∪ user_defined_stop_words −
 keep_negation_words`` and cached on the module; ``strip_stopwords``
 does the membership check against the cached frozenset so the
 per-call cost is dominated by ``Doc`` creation, not model load.
@@ -617,7 +617,8 @@ def _effective_stopwords() -> frozenset[str]:
     if _cached_stopwords is not None and _cached_settings_key == key:
         return _cached_stopwords
     import spacy
-    base = set(spacy.Defaults.stop_words)
+    from spacy.lang.en.stop_words import STOP_WORDS
+    base = set(STOP_WORDS)
     base -= {w.lower() for w in sem.keep_negation_words}
     base |= {w.lower() for w in sem.user_defined_stop_words}
     _cached_stopwords = frozenset(base)

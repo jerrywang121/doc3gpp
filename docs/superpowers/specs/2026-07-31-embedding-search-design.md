@@ -320,7 +320,7 @@ def strip_stopwords(text: str) -> str:
 #### Custom stopword set
 
 The effective stopword set is composed per-call as
-`spacy.Defaults.stop_words | user_defined_stop_words -
+`spacy.lang.en.stop_words.STOP_WORDS | user_defined_stop_words -
 set(keep_negation_words)`:
 
 - `user_defined_stop_words: list[str]` (default `[]`) — extra
@@ -345,7 +345,8 @@ Implementation:
 
 ```python
 def _effective_stopwords() -> frozenset[str]:
-    base = set(spacy.Defaults.stop_words)
+    from spacy.lang.en.stop_words import STOP_WORDS
+    base = set(STOP_WORDS)
     base -= {w.lower() for w in settings.semantic_search.keep_negation_words}
     base |= {w.lower() for w in settings.semantic_search.user_defined_stop_words}
     return frozenset(base)
@@ -878,12 +879,20 @@ the three highest-risk pure functions.
 1. **`sqlite_vec.load()` import path.** The PyPI package is
    `sqlite-vec` (with a hyphen); the import is `import sqlite_vec`
    (with an underscore). Implementation phase verifies.
-2. **`en_core_web_sm` download UX.** `build_semantic_search_service`
-   does **not** auto-download the spaCy model. The CLI tells the
-   user to run `python -m spacy download en_core_web_sm` and
-   exits 1. This is a one-time op; auto-downloading in a CLI
-   surprises users. (Tradeoff: a `Settings.semantic_search.auto_download_spacy_model`
-   flag could enable the auto path, but v1 ships fail-fast only.)
+2. **`en_core_web_sm` download UX.** Originally `build_semantic_search_service`
+   did **not** auto-download the spaCy model and the CLI told the
+   user to run `python -m spacy download en_core_web_sm`. In
+   practice this caused two-step installs (`pip install ...`
+   + `python -m spacy download ...`) that confused users, since
+   `[semantic]` *seemed* complete after pip but the search path
+   still errored at runtime. Updated packaging bundles
+   `en_core_web_sm-3.8.0` via a direct wheel URL in
+   `pyproject.toml`'s `[semantic]` extras (with
+   `[tool.hatch.metadata] allow-direct-references = true`), so a
+   single `pip install doc3gpp[semantic]` installs both the
+   spaCy library and the model. The CLI still surfaces the
+   `python -m spacy download en_core_web_sm` hint as a fallback
+   for users on conda or non-pip installs.
 3. **`vec_meta.embedding_dim` upgrade story.** The migration
    writes the dim on first `CREATE VIRTUAL TABLE`; on a model
    swap to a different dim, the next embed upsert detects the

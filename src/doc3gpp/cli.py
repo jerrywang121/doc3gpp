@@ -4450,7 +4450,10 @@ def sem_command(
     except SpacyUnavailableError:
         typer.echo(
             "spaCy model not installed; "
-            "run `python -m spacy download en_core_web_sm`",
+            "run `pip install doc3gpp[semantic]` "
+            "(the model is bundled), or manually run "
+            "`python -m spacy download en_core_web_sm` "
+            "if you installed spaCy outside of pip",
             err=True,
         )
         raise typer.Exit(code=1)

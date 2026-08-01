@@ -268,7 +268,9 @@ The auto-index hook keeps the index fresh after every successful
 ### `search sem` — hybrid FTS5 + embedding vector search
 
 Requires the `doc3gpp[semantic]` extra (`sentence-transformers`,
-`spaCy` + the `en_core_web_sm` model, `sqlite-vec`); sqlite-only.
+`spaCy` + the bundled `en_core_web_sm` model, `sqlite-vec`); sqlite-only.
+The model is pulled as a direct wheel URL by `pip install`, so the
+single install command sets up the library and the model together.
 On MySQL/PostgreSQL or builds without sqlite-vec the command reports
 unavailable with a one-liner; `search query` (FTS5-only) still works.
 

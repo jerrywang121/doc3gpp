@@ -26,11 +26,17 @@ SPACY_SKIP = pytest.mark.skipif(
 @SEMANTIC
 @SPACY_SKIP
 def test_strip_drops_punctuation_and_stopwords(monkeypatch):
-    # "the" and "is" are spaCy stopwords; "CR" and "NB-IoT" are not.
-    out = strip_stopwords("the CR is about NB-IoT")
+    # "the", "is", "and", "about" are spaCy English stopwords;
+    # "CR" and "NB-IoT" are not. The English stopword list lives
+    # at ``spacy.lang.en.stop_words.STOP_WORDS`` since spaCy 3.7;
+    # this test guards against regressing to the removed
+    # ``spacy.Defaults.stop_words`` attribute.
+    out = strip_stopwords("the CR is about NB-IoT and power saving")
     tokens = out.split()
     assert "the" not in tokens
     assert "is" not in tokens
+    assert "and" not in tokens
+    assert "about" not in tokens
     assert "cr" in tokens  # lowercased lemma
     assert "nb-iot" in tokens or "nb" in tokens  # tokenizer-dependent
 
@@ -38,11 +44,16 @@ def test_strip_drops_punctuation_and_stopwords(monkeypatch):
 @SEMANTIC
 @SPACY_SKIP
 def test_strip_emits_lemmas(monkeypatch):
-    out = strip_stopwords("CRs touching power saving")
+    # Phrase is unambiguous so the verb lemmas are stable
+    # across spaCy model versions. ``"saving"`` in a noun
+    # phrase (``power saving``) keeps its surface form as the
+    # NOUN lemma, so we use a verb-only phrase instead.
+    out = strip_stopwords("walking saved power")
     tokens = out.split()
-    # lemma of "touching" is "touch"; "saving" -> "save"
-    assert "touch" in tokens
+    # lemma of "walking" is "walk"; "saved" -> "save"
+    assert "walk" in tokens
     assert "save" in tokens
+    assert "power" in tokens
 
 
 @SEMANTIC
@@ -129,14 +140,14 @@ class _FakeSettings:
 
 
 def _make_settings(*, user_defined_stop_words=None, keep_negation_words=None):
+    # Pass the stopword knobs as bare kwargs so the inner ``S``
+    # class has them as direct attributes (matching the real
+    # ``SemanticSearchSettings`` shape that ``_effective_stopwords``
+    # reads via ``sem.user_defined_stop_words`` /
+    # ``sem.keep_negation_words``).
     return _FakeSettings(
-        semantic_search=type(
-            "S", (),
-            {
-                "user_defined_stop_words": user_defined_stop_words or [],
-                "keep_negation_words": keep_negation_words
-                if keep_negation_words is not None
-                else ["not"],
-            },
-        )(),
+        user_defined_stop_words=user_defined_stop_words or [],
+        keep_negation_words=keep_negation_words
+        if keep_negation_words is not None
+        else ["not"],
     )

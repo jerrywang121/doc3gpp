@@ -67,7 +67,7 @@ def test_rrf_empty_both_sides():
     assert out == []
 
 
-def test_rrf_synthesizes_fts5_hit_for_vector_only_tdoc():
+def test_rrf_synthesizes_hit_for_vector_only_tdoc():
     # When a tdoc is only in vector fan-out, the service synthesizes a
     # minimal SearchHit. rrf_merge itself does NOT synthesize — it
     # carries None and the service fills it. Test the contract:
@@ -75,5 +75,5 @@ def test_rrf_synthesizes_fts5_hit_for_vector_only_tdoc():
     vec = [("A", "A#0", 0, 0.1)]
     out = rrf_merge(fts5, vec, k=60, vector_weight=1.0, limit=10)
     assert out[0].tdoc_id == "A"
-    # fts5_hit is None for vector-only; service fills it later
-    assert out[0].fts5_hit is None
+    # hit is None for vector-only; service fills it later
+    assert out[0].hit is None

@@ -58,7 +58,7 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs():
     """When the vector KNN returns a hit that FTS5 missed (e.g.
     the TDoc has no parsed cover/extract — title-only indexing
     covers 12,561 of 13,693 TDocs in real corpora), the
-    synthesized ``fts5_hit`` stub must still carry the real
+    synthesized ``hit`` stub must still carry the real
     ``title``, ``ftp_url``, ``meeting``, ``tsg``, ``uploaded_date``,
     and ``wis`` from ``tdocs``/``meetings``. Otherwise the CLI
     shows ``title=""``, ``ftp_url=null`` and the user can't tell
@@ -112,17 +112,17 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs():
     hit = out[0]
     assert hit.tdoc_id == "R4-2605982"
     # The synthesized stub must now be populated, not empty.
-    assert hit.fts5_hit is not None
-    assert hit.fts5_hit.title == (
+    assert hit.hit is not None
+    assert hit.hit.title == (
         "CR of Introduction of PC1.5 for NB-IoT based IoT-NTN"
     )
-    assert hit.fts5_hit.ftp_url == (
+    assert hit.hit.ftp_url == (
         "tsg_ran/WG4_Radio/TSGR4_119/Docs/R4-2605982.zip"
     )
-    assert hit.fts5_hit.wis == "NB-IOT_NTN"
-    assert hit.fts5_hit.meeting == "TSG-RAN WG4 #119"
-    assert hit.fts5_hit.tsg == "RAN"
-    assert hit.fts5_hit.uploaded_date == "2026-07-22"
+    assert hit.hit.wis == "NB-IOT_NTN"
+    assert hit.hit.meeting == "TSG-RAN WG4 #119"
+    assert hit.hit.tsg == "RAN"
+    assert hit.hit.uploaded_date == "2026-07-22"
     # The metadata lookup must have been called exactly once,
     # with the vector-only tdoc_ids (not with tdoc_ids that
     # already had FTS5 hits).
@@ -212,9 +212,9 @@ def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty():
     )
     assert len(out) == 1
     # Stub is empty but the hit is still surfaced.
-    assert out[0].fts5_hit is not None
-    assert out[0].fts5_hit.title == ""
-    assert out[0].fts5_hit.ftp_url is None
+    assert out[0].hit is not None
+    assert out[0].hit.title == ""
+    assert out[0].hit.ftp_url is None
 
 
 def test_search_both_sides_empty_returns_empty():
@@ -267,9 +267,9 @@ def test_search_synthesizes_fts5_hit_for_vector_only_tdoc():
     )
     assert len(out) == 1
     assert out[0].tdoc_id == "R5-1"
-    assert out[0].fts5_hit is not None
-    assert isinstance(out[0].fts5_hit, SearchHit)
-    assert out[0].fts5_hit.tdoc_id == "R5-1"
+    assert out[0].hit is not None
+    assert isinstance(out[0].hit, SearchHit)
+    assert out[0].hit.tdoc_id == "R5-1"
 
 
 def test_index_for_tdoc_calls_upsert_chunks(monkeypatch):
@@ -576,8 +576,8 @@ def test_search_without_fts5_query_vector_only_populates_metadata():
         MagicMock(), _mock_embedder(), _VecRepo(), _settings(),
     )
     out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=10, fts5_weight=0.5)
-    assert out[0].fts5_hit.title == "real title"
-    assert out[0].fts5_hit.ftp_url == "real.zip"
+    assert out[0].hit.title == "real title"
+    assert out[0].hit.ftp_url == "real.zip"
 
 
 def test_search_with_fts5_query_uses_one_minus_fts5_weight_for_rrf():

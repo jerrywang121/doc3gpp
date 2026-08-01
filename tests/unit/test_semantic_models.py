@@ -24,17 +24,17 @@ def _hit(tdoc_id: str = "R5-1") -> SearchHit:
 def test_semantic_search_hit_is_frozen():
     h = SemanticSearchHit(
         tdoc_id="R5-1", rrf_score=0.5, rank_fts5=0, rank_vec=1,
-        min_chunk_distance=0.2, best_chunk_id="R5-1#3", fts5_hit=_hit(),
+        min_chunk_distance=0.2, best_chunk_id="R5-1#3", hit=_hit(),
     )
     with pytest.raises(Exception):
         h.tdoc_id = "R5-2"  # frozen dataclass
     assert h.rank_fts5 == 0
-    assert h.fts5_hit.tdoc_id == "R5-1"
+    assert h.hit.tdoc_id == "R5-1"
 
 
 def test_semantic_search_hit_optional_ranks_default_none():
     h = SemanticSearchHit(
-        tdoc_id="R5-1", rrf_score=0.5, fts5_hit=_hit(),
+        tdoc_id="R5-1", rrf_score=0.5, hit=_hit(),
     )
     assert h.rank_fts5 is None
     assert h.rank_vec is None

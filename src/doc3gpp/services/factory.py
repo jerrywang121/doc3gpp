@@ -15,8 +15,10 @@ from doc3gpp.repository.protocols import (
 from doc3gpp.models.search import SearchUnavailableError
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
+from doc3gpp.services.embedding.embedder import SentenceTransformerEmbedder
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
+from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_file_service import TDocFileService
 from doc3gpp.services.tdoc_service import TDocService
@@ -210,7 +212,58 @@ def build_tdoc_cr_service(
         tdoc_repository=SQLAlchemyTDocRepository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
         search_service=build_search_service(),
+        semantic_service=build_semantic_search_service(),
     )
+
+
+def build_semantic_search_service(
+    settings: Settings | None = None,
+    fts5_service: SearchService | None = None,
+    embedder: Embedder | None = None,  # noqa: F821
+    vector_repo: VectorIndexRepository | None = None,  # noqa: F821
+) -> SemanticSearchService | None:
+    """Build a :class:`SemanticSearchService` or return ``None`` if unavailable.
+
+    Best-effort: catches :class:`VectorIndexUnavailableError`,
+    :class:`EmbedderUnavailableError`
+    raised by the collaborators and returns ``None``. FTS5 is the
+    foundation — if :func:`build_search_service` returns ``None`` this
+    returns ``None`` too.
+    """
+    from doc3gpp.models.semantic_search import (
+        EmbedderUnavailableError,
+        VectorIndexUnavailableError,
+    )
+    from sqlalchemy.exc import OperationalError as SAOperationalError
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+
+    if settings is None:
+        settings = get_settings()
+    if not settings.semantic_search.enabled:
+        return None
+    try:
+        if fts5_service is None:
+            fts5_service = build_search_service(settings)
+        if fts5_service is None:
+            return None
+        if embedder is None:
+            embedder = SentenceTransformerEmbedder(
+                settings.semantic_search.embedding_model,
+            )
+        if vector_repo is None:
+            vector_repo = SQLAlchemyVectorIndexRepository()
+        return SemanticSearchService(
+            fts5_service=fts5_service, embedder=embedder,
+            vector_repo=vector_repo, settings=settings,
+        )
+    except (
+        VectorIndexUnavailableError,
+        EmbedderUnavailableError,
+        SAOperationalError,
+    ):
+        return None
 
 
 def build_search_service(

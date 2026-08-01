@@ -94,6 +94,27 @@ class SearchHit:
 
 
 @dataclass(slots=True, frozen=True)
+class TDocMeta:
+    """``tdocs`` + ``meetings`` metadata for a single TDoc id.
+
+    Returned by :meth:`VectorIndexRepository.get_tdocs_metadata`
+    so the search service can enrich vector-only hits with real
+    data (title, ftp_url, wis, meeting, tsg, uploaded_date)
+    instead of synthesising an empty stub. Mirrors the column
+    subset the FTS5 path's ``SearchHit`` carries, so the same
+    downstream renderer can consume both.
+    """
+
+    tdoc_id: str
+    title: str
+    ftp_url: str | None
+    wis: str | None
+    meeting: str | None
+    tsg: str | None
+    uploaded_date: str | None
+
+
+@dataclass(slots=True, frozen=True)
 class RebuildProgress:
     """One batch of the ``search index --rebuild`` generator.
 

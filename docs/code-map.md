@@ -159,6 +159,19 @@ table below is for navigation only.
 | `doc3gpp.storage.db.fts5_query.normalize_query` | function | `storage/db/fts5_query.py` | Index-time pre-processor for TDoc ID + spec ID recognition |
 | `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | repository | `storage/repositories/search_sql.py` | Concrete FTS5-backed `SearchIndexRepository` impl |
 
+## Semantic search subsystem (`src/doc3gpp/models/semantic_search.py`, `src/doc3gpp/services/semantic_search_service.py`, `src/doc3gpp/services/embedding/`, `src/doc3gpp/storage/repositories/vector_sql.py`)
+
+| Symbol | Kind | File | Role |
+| --- | --- | --- | --- |
+| `doc3gpp.models.semantic_search.SemanticSearchHit` | dataclass | `models/semantic_search.py` | One hybrid (FTS5 + vector) hit with merged `rrf_score` and per-source ranks |
+| `doc3gpp.models.semantic_search.SemanticSearchFilters` | dataclass | `models/semantic_search.py` | Filter arguments for `search sem` |
+| `doc3gpp.models.semantic_search.SemanticSearchError` (+ subclasses) | exception hierarchy | `models/semantic_search.py` | Errors raised by the semantic-search subsystem (incl. dim mismatch) |
+| `doc3gpp.services.semantic_search_service.SemanticSearchService` | service | `services/semantic_search_service.py` | Hybrid RRF orchestration: `search`, `index_for_tdoc`, `rebuild_embeddings`, `status` |
+| `doc3gpp.services.embedding.chunker.chunk_text` | function | `services/embedding/chunker.py` | Pure `_chunks(text, size, overlap)` window splitter |
+| `doc3gpp.services.embedding.embedder.SentenceTransformerEmbedder` | class | `services/embedding/embedder.py` | Concrete `Embedder` impl using sentence-transformers (lazy model load) |
+| `doc3gpp.services.embedding.stopwords.strip_stopwords` | function | `services/embedding/stopwords.py` | spaCy + custom-stopword strip; respects `user_defined_stop_words` and `keep_negation_words` |
+| `doc3gpp.storage.repositories.vector_sql.SQLAlchemyVectorIndexRepository` | repository | `storage/repositories/vector_sql.py` | Concrete `VectorIndexRepository` impl backed by sqlite-vec (`vec_tdoc_embeddings` + `vec_meta`) |
+
 ## CLI entry (`src/doc3gpp/cli.py`)
 
 Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).

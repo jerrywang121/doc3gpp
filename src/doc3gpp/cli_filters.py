@@ -184,6 +184,13 @@ _FTS5_SPECIAL_CHARS = frozenset({"(", ")", ":", "*", "\\"})
 _FTS5_OPERATORS = (" AND ", " OR ", " NOT ", '"', "*", "NEAR")
 
 
+# Whitespace-separated FTS5 keywords. After splitting on whitespace,
+# a token that exactly matches one of these is an operator and must
+# not be wrapped in quotes. ``NEAR`` is multi-word so it appears in
+# ``_FTS5_OPERATORS`` (substring check) rather than here.
+_FTS5_KEYWORDS = frozenset({"AND", "OR", "NOT"})
+
+
 def parse_date_filter(value: str) -> None:
     """Validate a ``YYYY-MM-DD`` date literal for ``--since`` / ``--until``.
 
@@ -251,9 +258,33 @@ class SearchQueryBuilder:
             from doc3gpp.models.search import SearchQueryError
             raise SearchQueryError("query has only stopwords")
         if self._is_operator_passthrough():
-            return self._normalize_each_token(self._query)
+            return self._quote_jargon(self._normalize_each_token(self._query))
         escaped = self._escape_specials(self._normalize_each_token(self._query))
         return f'"{escaped}"'
+
+    @staticmethod
+    def _quote_jargon(text: str) -> str:
+        """Wrap any bare ``-``/``.``-bearing operand in double quotes.
+
+        Only used on the operator-passthrough branch (plain text
+        gets wrapped wholesale by :meth:`build`). FTS5 parses ``-``
+        as a column separator and ``.`` as a column name qualifier,
+        so bare jargon like ``nb-iot`` or ``3gpp.tsg`` would crash
+        with ``no such column: iot``. FTS5 keywords
+        (``AND``/``OR``/``NOT``) and already-quoted phrases are
+        passed through.
+        """
+        out: list[str] = []
+        for tok in text.split():
+            if (
+                tok not in _FTS5_KEYWORDS
+                and not tok.startswith('"')
+                and not tok.endswith('"')
+                and ("-" in tok or "." in tok)
+            ):
+                tok = f'"{tok}"'
+            out.append(tok)
+        return " ".join(out)
 
     def _is_operator_passthrough(self) -> bool:
         return any(op in self._query for op in _FTS5_OPERATORS)
@@ -270,6 +301,14 @@ class SearchQueryBuilder:
         normalization so ``R5-1234567 AND 38.300`` becomes
         ``R5-1234567 R5-1234567 AND 38_300`` (the AND is preserved
         but each operand is normalized).
+
+        Note: a single raw token may itself expand into multiple
+        tokens after ``normalize_query`` (e.g. ``R5-1234567r2``
+        becomes ``R5-1234567 R5-1234567r2``). The whitespace
+        boundary between the expanded tokens survives because the
+        underlying regex substitution writes a literal space, so
+        the outer caller still sees a single whitespace-delimited
+        stream.
         """
         from doc3gpp.storage.db.fts5_query import normalize_query
         return " ".join(normalize_query(tok) for tok in text.split())

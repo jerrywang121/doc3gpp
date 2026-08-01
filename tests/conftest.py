@@ -40,3 +40,43 @@ def search_corpus(sqlite_env):
     for tdoc_id in tdoc_ids:
         repo.upsert(tdoc_id)
     yield engine
+
+
+@pytest.fixture()
+def semantic_search_corpus(sqlite_env):
+    """Populate a sqlite engine with the semantic-search corpus rows.
+
+    Mirrors :func:`search_corpus` but in addition to FTS5 indexing
+    inserts pre-computed embedding vectors through
+    :class:`SQLAlchemyVectorIndexRepository` so KNN lookups return
+    deterministic results without loading a sentence-transformers
+    model.
+
+    Yields the sqlite engine so callers can layer more assertions on
+    top.
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+    from tests.fixtures.semantic_search_corpus import (
+        PRECOMPUTED_EMBEDDINGS,
+        build_semantic_corpus,
+    )
+
+    create_schema()
+    engine = get_engine()
+    tdoc_ids = build_semantic_corpus(engine)
+
+    fts5_repo = SQLAlchemySearchIndexRepository()
+    for tdoc_id in tdoc_ids:
+        fts5_repo.upsert(tdoc_id)
+
+    vec_repo = SQLAlchemyVectorIndexRepository()
+    for tdoc_id in tdoc_ids:
+        vec_repo.upsert_chunks(tdoc_id, PRECOMPUTED_EMBEDDINGS[tdoc_id])
+
+    yield engine

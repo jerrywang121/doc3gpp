@@ -141,7 +141,12 @@ def _configure_logging() -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    logging.getLogger("httpx").setLevel(level)
+    # `httpx` (huggingface_hub dependency) logs every cache probe at
+    # INFO; `huggingface_hub.utils._http` logs the same HEAD/GET
+    # chatter at WARNING when unauthenticated. Silence both so the
+    # rebuild progress line is readable.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
     logger.debug("Logging configured at %s", logging.getLevelName(level))
 
 
@@ -4222,7 +4227,23 @@ def search_command(
 def index_command(
     ctx: typer.Context,
     rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the FTS5 table."),
-    batch: int | None = typer.Option(None, "--batch", min=1, help="Override rebuild_batch_size."),
+    rebuild_embeddings: bool = typer.Option(
+        False, "--rebuild-embeddings",
+        help="Drop and rebuild the vec_tdoc_embeddings table.",
+    ),
+    rebuild_all: bool = typer.Option(
+        False, "--rebuild-all",
+        help="Rebuild both the FTS5 and the vector index.",
+    ),
+    batch: int | None = typer.Option(
+        None, "--batch", min=1,
+        help=(
+            "TDocs per SQL page (default: Settings.search.rebuild_batch_size = 100). "
+            "Smaller = finer-grained crash recovery; larger = fewer round-trips. "
+            "Progress is reported once per 1% of work (~100 updates for a full "
+            "corpus rebuild regardless of batch size)."
+        ),
+    ),
     resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
     stale_only: bool = typer.Option(False, "--stale-only", help="Only re-index rows newer than the last indexed uploaded_date."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress per-batch progress logs."),
@@ -4234,39 +4255,307 @@ def index_command(
     in tdocs, and whether the index is stale).
 
     Index maintenance flags (combinable):
-      --rebuild, --batch, --resume, --stale-only, --quiet
+      --rebuild, --rebuild-embeddings, --rebuild-all, --batch, --resume,
+      --stale-only, --quiet
     See docs/cli.md for full semantics and examples.
     """
-    from doc3gpp.services.factory import build_search_service
+    from doc3gpp.services.factory import (
+        build_search_service, build_semantic_search_service,
+    )
     from doc3gpp.settings.loader import get_settings
 
-    svc = build_search_service()
-    if svc is None:
+    do_fts5 = rebuild or rebuild_all
+    do_vec = rebuild_embeddings or rebuild_all
+    fts5_svc = build_search_service()
+    if fts5_svc is None and not do_vec:
         typer.echo("search disabled in settings", err=True)
         raise typer.Exit(code=0)
-    if not rebuild:
-        status = svc.status()
+    if not do_fts5 and not do_vec:
+        status = fts5_svc.status()
+        sem_svc = build_semantic_search_service()
+        # The vector row count lives on a separate
+        # vec_tdoc_embeddings table; surface it alongside the FTS5
+        # row count so operators don't confuse the two indexes when
+        # the panel shows only one number.
+        vec_status_block = ""
+        if sem_svc is not None:
+            vec_status = sem_svc.status()
+            vec_status_block = (
+                f"\nVector rows:    {vec_status.row_count:,}"
+            )
         typer.echo(
             f"Search index: enabled (sqlite + fts5)\n"
-            f"Rows indexed:  {status.row_count:,}\n"
+            f"FTS5 rows:      {status.row_count:,}"
+            f"{vec_status_block}\n"
             f"Last rebuild:  {status.last_rebuild_at or 'never'}\n"
             f"Last indexed:  {status.last_indexed_uploaded_date or 'never'}\n"
             f"Latest tdocs:  {status.latest_tdocs_uploaded_date or 'none'}\n"
             f"Status:        {'STALE' if status.is_stale else 'OK'}"
         )
         return
-    settings = get_settings()
-    batch_size = batch or settings.search.rebuild_batch_size
-    for progress in svc.rebuild(
-        batch_size=batch_size, resume=resume,
-        stale_only=stale_only, quiet=quiet,
-    ):
-        if not quiet:
-            typer.echo(
-                f"  rebuilt {progress.processed:,}/{progress.total:,} "
-                f"(last tdoc_id={progress.current_tdoc_id})"
+    if do_fts5 and fts5_svc is None:
+        typer.echo("FTS5 search unavailable; skipping FTS5 rebuild", err=True)
+    if do_fts5 and fts5_svc is not None:
+        settings = get_settings()
+        batch_size = batch or settings.search.rebuild_batch_size
+        if quiet:
+            for _progress in fts5_svc.rebuild(
+                batch_size=batch_size, resume=resume,
+                stale_only=stale_only, quiet=True,
+            ):
+                pass
+        else:
+            from tqdm import tqdm
+            # Mirror rebuild: total must account for the resume
+            # cursor when --resume is passed, otherwise the bar ends
+            # short and looks stuck.
+            after_id = (
+                fts5_svc._repo.get_resume_cursor() if resume else None
             )
-    typer.echo("search index rebuild complete")
+            total = fts5_svc._repo.count_tdocs_to_index(
+                stale_only=stale_only, after_id=after_id,
+            )
+            with tqdm(
+                total=total,
+                desc="rebuild",
+                unit="tdoc",
+                dynamic_ncols=True,
+            ) as bar:
+                for progress in fts5_svc.rebuild(
+                    batch_size=batch_size, resume=resume,
+                    stale_only=stale_only, quiet=False,
+                ):
+                    bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
+                    bar.update(progress.processed - bar.n)
+        typer.echo("search index rebuild complete")
+    if do_vec:
+        sem_svc = build_semantic_search_service()
+        if sem_svc is None:
+            typer.echo(
+                "semantic search unavailable; "
+                "run `pip install doc3gpp[semantic]`",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        settings = get_settings()
+        batch_size = batch or settings.search.rebuild_batch_size
+        if quiet:
+            for _progress in sem_svc.rebuild_embeddings(
+                batch_size=batch_size,
+                stale_only=stale_only,
+                quiet=True,
+                resume=resume,
+            ):
+                pass
+        else:
+            from tqdm import tqdm
+            # Mirror rebuild_embeddings: total must account for the
+            # resume cursor when --resume is passed so the bar ends
+            # at 100% (otherwise it stops short and looks stuck).
+            # When --resume is NOT passed, the service clears the
+            # cursor first so total reflects a fresh full-corpus
+            # rebuild.
+            after_id = (
+                sem_svc._vec.get_resume_cursor() if resume else None
+            )
+            total = sem_svc._vec.count_tdocs_to_index(
+                stale_only=stale_only, after_id=after_id,
+            )
+            with tqdm(
+                total=total,
+                desc="embed",
+                unit="tdoc",
+                dynamic_ncols=True,
+            ) as bar:
+                for progress in sem_svc.rebuild_embeddings(
+                    batch_size=batch_size,
+                    stale_only=stale_only,
+                    quiet=False,
+                    resume=resume,
+                ):
+                    bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
+                    bar.update(progress.processed - bar.n)
+        typer.echo("search index embedding rebuild complete")
+
+
+@search_app.command("sem")
+def sem_command(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Natural-language query (embedded only; not used for FTS5)."),
+    fts5_query: str | None = typer.Option(
+        None, "--fts5-query",
+        help=(
+            "Optional FTS5 MATCH expression. When omitted, the FTS5 "
+            "path is skipped (only embedding-KNN runs; no RRF). When "
+            "supplied, it is processed exactly like `search query` "
+            "(SearchQueryBuilder; no stopword stripping)."
+        ),
+    ),
+    tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
+    meeting: str | None = typer.Option(None, help="Filter by meetings.name."),
+    meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
+    tdoc_id: str | None = typer.Option(None, help="Filter by tdocs.tdoc_id."),
+    release: str | None = typer.Option(None, help="Filter by tdocs.release."),
+    spec: str | None = typer.Option(None, help="Filter by tdocs.spec."),
+    since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
+    until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    fts5_weight: float = typer.Option(
+        0.5, "--fts5-weight", min=0.0, max=1.0,
+        help=(
+            "Blend weight for FTS5 rank in RRF (0.0..1.0). "
+            "The vector weight is 1 - fts5_weight. "
+            "Ignored when --fts5-query is omitted."
+        ),
+    ),
+    format: str = typer.Option("table", "--format", help="table | json | markdown"),
+    compact: bool = typer.Option(False, "--compact", help="Strip decorators."),
+    explain: bool = typer.Option(False, "--explain", help="Print RRF config + best chunk."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress stale-index hint."),
+) -> None:
+    """Run a semantic (embedding + optional FTS5) search over TDocs.
+
+    The natural-language ``QUERY`` is embedded and matched against the
+    vector KNN index. When ``--fts5-query`` is supplied, that string is
+    run through ``SearchQueryBuilder`` and matched against the FTS5
+    index; results from both paths are merged via reciprocal-rank
+    fusion (RRF) and truncated to ``--limit``. When ``--fts5-query``
+    is omitted, the FTS5 path and RRF are skipped — only top
+    ``--limit`` vector hits return, ranked by cosine distance.
+    """
+    from doc3gpp.cli_filters import (
+        parse_date_filter, parse_release_filter, parse_spec_filter,
+    )
+    from doc3gpp.models.search import SearchError, SearchFilters
+    from doc3gpp.models.semantic_search import (
+        EmbedderUnavailableError, SemanticSearchQueryError,
+        SemanticSearchUnavailableError, VectorIndexUnavailableError,
+    )
+    from doc3gpp.services.factory import build_semantic_search_service
+
+    try:
+        if since:
+            parse_date_filter(since)
+        if until:
+            parse_date_filter(until)
+        if release:
+            parse_release_filter(release)
+        if spec:
+            parse_spec_filter(spec)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+
+    svc = build_semantic_search_service()
+    if svc is None:
+        typer.echo(
+            "search sem unavailable; run `pip install doc3gpp[semantic]`",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    filters = SearchFilters(
+        tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
+        release=release, spec=spec, since=since, until=until, limit=limit,
+    )
+    try:
+        hits = svc.search(
+            query, fts5_query=fts5_query, filters=filters,
+            limit=limit, fts5_weight=fts5_weight,
+        )
+    except SearchError as exc:
+        typer.echo(f"bad fts5 query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SemanticSearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except EmbedderUnavailableError as exc:
+        typer.echo(f"embedding model load failed: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except VectorIndexUnavailableError as exc:
+        typer.echo(f"vector index unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except SemanticSearchUnavailableError as exc:
+        typer.echo(f"search sem unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    if explain:
+        typer.echo("# semantic search config", err=True)
+        typer.echo(f"fts5_query:      {fts5_query!r}", err=True)
+        typer.echo(f"fts5_weight:     {fts5_weight}", err=True)
+        typer.echo(f"vector_weight:   {1.0 - fts5_weight:.4f}", err=True)
+        typer.echo(f"limit:           {limit}", err=True)
+        typer.echo(
+            f"rrf_k:           {svc._settings.semantic_search.rrf_k}",
+            err=True,
+        )
+        typer.echo(
+            f"fanout:          "
+            f"{svc._settings.semantic_search.fanout_multiplier}",
+            err=True,
+        )
+        typer.echo(
+            f"fts5 path:       "
+            f"{'hybrid (FTS5 + RRF)' if fts5_query is not None else 'skipped (pure vector)'}",
+            err=True,
+        )
+    _render_semantic_hits(hits, format=format, compact=compact)
+    _emit_search_status(svc, quiet=quiet)
+
+
+def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
+    """Render :class:`SemanticSearchHit` list in table / json / markdown.
+
+    Mirrors :func:`_render_search_hits` — three renderers sharing
+    the same hit-shape so callers can pick a presentation without
+    touching the upstream service. The ``hit`` sub-record is
+    embedded under its own key in JSON and as a labelled continuation
+    in markdown / table.
+    """
+    if format == "json":
+        import json as _json
+        payload = [
+            {
+                "tdoc_id": h.tdoc_id, "rrf_score": h.rrf_score,
+                "rank_fts5": h.rank_fts5, "rank_vec": h.rank_vec,
+                "min_chunk_distance": h.min_chunk_distance,
+                "best_chunk_id": h.best_chunk_id,
+                "hit": {
+                    "tdoc_id": h.hit.tdoc_id, "title": h.hit.title,
+                    "ftp_url": h.hit.ftp_url, "wis": h.hit.wis,
+                },
+            }
+            for h in hits
+        ]
+        if compact:
+            typer.echo(_json.dumps(payload, separators=(",", ":")))
+        else:
+            typer.echo(_json.dumps(payload, indent=2))
+    elif format == "markdown":
+        for i, h in enumerate(hits, 1):
+            typer.echo(f"{i}. **{h.tdoc_id}** — rrf={h.rrf_score:.4f}")
+            if h.best_chunk_id:
+                typer.echo(
+                    f"   best chunk: {h.best_chunk_id} "
+                    f"(dist={h.min_chunk_distance:.4f})"
+                )
+            if h.hit.title:
+                typer.echo(f"   title: {h.hit.title}")
+            typer.echo("")
+    else:
+        typer.echo(
+            f"{'rank':>4} {'tdoc_id':<14} {'rrf':>8} {'fts':>4} {'vec':>4} "
+            f"{'dist':>8}  title"
+        )
+        for i, h in enumerate(hits, 1):
+            fts = str(h.rank_fts5) if h.rank_fts5 is not None else "-"
+            vec = str(h.rank_vec) if h.rank_vec is not None else "-"
+            dist = (
+                f"{h.min_chunk_distance:.4f}"
+                if h.min_chunk_distance is not None else "-"
+            )
+            title = (h.hit.title or "")[:40]
+            typer.echo(
+                f"{i:>4} {h.tdoc_id:<14} {h.rrf_score:>8.4f} {fts:>4} "
+                f"{vec:>4} {dist:>8}  {title}"
+            )
 
 
 def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:

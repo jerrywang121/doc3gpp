@@ -351,6 +351,25 @@ and the TDoc CR extraction is the deepest.
   generator → `repo.rebuild_batch(...)` per batch → per-row
   `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
   Resumable via `--resume`; cheap incremental via `--stale-only`.
+- `doc3gpp search sem QUERY [filters]` →
+  `SemanticSearchService.search` → original `QUERY` embedding (vector
+  path, always on) → opt-in FTS5 path (the explicit `--fts5-query`
+  string is preprocessed by `SearchQueryBuilder` — no stopword strip)
+  → when `--fts5-query` is supplied, FTS5 fan-out (`2N`) and vector
+  KNN fan-out (`2N`) flow through `rrf_merge` and the result is
+  truncated to `--limit` (default 20); when `--fts5-query` is absent,
+  FTS5 + RRF are skipped and pure vector KNN results return, dressed
+  as `SemanticSearchHit` with `rank_fts5=None`. `--fts5-weight`
+  (0.0..1.0, default 0.5) blends the two ranks via
+  `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) *
+  (1 - fts5_weight)` (`k=60`); the flag is ignored when `--fts5-query`
+  is omitted. `search query` (FTS5-only) is unchanged.
+- `doc3gpp search index --rebuild-embeddings [--stale-only] [--batch N]
+  [--resume] [--quiet]` → `SemanticSearchService.rebuild_embeddings`
+  → drops + recreates `vec_tdoc_embeddings`; iterates every `tdocs`
+  row, calls `index_for_tdoc` per id (build embed text → chunk →
+  embed → upsert); updates `vec_meta` for resume + staleness.
+  `--rebuild-all` runs both FTS5 and vector rebuilds in sequence.
 
 ## Database Schema
 
@@ -420,6 +439,8 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `tdoc_extracts`.
 - `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).
 - `tdoc_search_meta`: Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
+- `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`; one row per embedding chunk produced by the semantic-search subsystem. Schema is gated on the sqlite + sqlite-vec support matrix (created by `_create_vector_schema` in `storage/db/migrate.py`; silently skipped on MySQL / PostgreSQL and when the sqlite-vec extension is unavailable). Dimensions match the active `SemanticSearchSettings.embedding_model`.
+- `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity
       convention as `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details`)

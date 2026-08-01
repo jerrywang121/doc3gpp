@@ -38,8 +38,15 @@ def test_parse_spec_filter_rejects_bare_digits() -> None:
 
 
 def test_query_builder_passes_operators_through() -> None:
+    """``NB-IoT`` contains a bare ``-`` which FTS5 would parse as a
+    column separator (``no such column: IoT``); the operator-
+    passthrough branch now wraps each hyphenated operand in
+    quotes so the FTS5 expression is safe. ``"5G NR"`` is
+    already quoted by the user so the builder passes it through.
+    """
     assert (
-        SearchQueryBuilder('NB-IoT AND "5G NR"').build() == 'NB-IoT AND "5G NR"'
+        SearchQueryBuilder('NB-IoT AND "5G NR"').build()
+        == '"NB-IoT" AND "5G NR"'
     )
 
 
@@ -82,8 +89,52 @@ def test_query_builder_normalizes_spec_id() -> None:
 def test_query_builder_passthrough_normalizes_too() -> None:
     """Even operator-passthrough queries get normalize_query applied
     to each token so the user can write ``R5-1234567 AND 38.300``
-    and the FTS5 expression matches the indexed text."""
+    and the FTS5 expression matches the indexed text.
+
+    ``R5-1234567`` (after TDoc-id normalization: ``R5-1234567
+    R5-1234567``) is also wrapped per-operand in quotes because
+    each half still contains a ``-`` — FTS5 would otherwise parse
+    the first as ``R5``-column / ``1234567``-operand and crash
+    with ``no such column: 1234567``. The quoted form is a safe
+    FTS5 phrase.
+    """
     assert (
         SearchQueryBuilder("R5-1234567 AND 38.300").build()
-        == "R5-1234567 R5-1234567 AND 38_300"
+        == '"R5-1234567" "R5-1234567" AND 38_300'
     )
+
+
+def test_query_builder_quotes_hyphenated_jargon_in_operator_query() -> None:
+    """User reports: ``nb-iot AND ims`` crashes FTS5 with
+    ``no such column: iot`` because FTS5 treats ``-`` as a column
+    separator. The fix: hyphenated jargon (``NB-IoT``, ``5G NR``
+    would not apply since it has no hyphen, but ``38.300`` IS
+    already handled by spec-id normalization) must be quoted when
+    it appears in an operator-passthrough query so the column
+    separator is suppressed.
+
+    After the fix:
+    - Bare hyphenated jargon is quoted (``nb-iot`` → ``"nb-iot"``)
+    - Bare spec-id jargon is left alone (already handled by
+      ``normalize_query``: ``38.300`` → ``38_300``)
+    - Operators (``AND``/``OR``/``NOT``/``NEAR``) are not quoted.
+    - Already-quoted phrases are passed through.
+    """
+    # Primary user-reported bug.
+    assert (
+        SearchQueryBuilder("nb-iot AND ims").build()
+        == '"nb-iot" AND ims'
+    )
+    # Capitalised variant (matches index-time casing).
+    assert (
+        SearchQueryBuilder('NB-IoT AND "5G NR"').build()
+        == '"NB-IoT" AND "5G NR"'
+    )
+    # Three-term case.
+    assert (
+        SearchQueryBuilder("nb-iot OR nb-iot AND ims").build()
+        == '"nb-iot" OR "nb-iot" AND ims'
+    )
+    # Hyphenated jargon without operator still gets the quote-wrap
+    # from the existing branch (no regression).
+    assert SearchQueryBuilder("nb-iot").build() == '"nb-iot"'

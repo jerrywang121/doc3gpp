@@ -129,6 +129,7 @@ __all__ = [
 if TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
     from doc3gpp.services.search_service import SearchService
+    from doc3gpp.services.semantic_search_service import SemanticSearchService
 
 logger = logging.getLogger(__name__)
 
@@ -393,6 +394,7 @@ class TDocCrService:
         parser_registry: TDocParserRegistry | None = None,
         max_tdoc_size_bytes: int = 0,
         search_service: "SearchService | None" = None,
+        semantic_service: "SemanticSearchService | None" = None,
     ) -> None:
         self._cache = cache
         self._scraper = scraper_client
@@ -404,6 +406,7 @@ class TDocCrService:
         self._parser_registry = parser_registry
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
         self._search_service = search_service
+        self._semantic_service = semantic_service
         from doc3gpp.settings.loader import get_settings as _gs
         self._settings = _gs()
 
@@ -443,6 +446,34 @@ class TDocCrService:
         except Exception as exc:
             logger.warning(
                 "failed to update search index for tdoc_id=%s: %s",
+                tdoc_id, exc,
+            )
+
+    def _embed_after_parse(self, tdoc_id: str) -> None:
+        """Best-effort embedding upsert after a successful parse.
+
+        Sibling of :meth:`_index_after_parse`; fires from the same two
+        call sites so the vector index stays in sync with both the
+        DB-mode ``extract`` happy path and the direct-mode
+        ``_extract_from_3gpp_url`` happy path. Skipped when
+        ``Settings.semantic_search.auto_embed_on_parse`` is False or
+        when the semantic extra is not installed
+        (``_semantic_service`` is ``None``).
+
+        Best-effort: every exception is caught and logged. A failing
+        embed never aborts a successful parse — a stale FTS5/vector
+        index can always be rebuilt via :meth:`SearchService.rebuild`
+        / :meth:`SemanticSearchService.rebuild_embeddings`.
+        """
+        if not self._settings.semantic_search.auto_embed_on_parse:
+            return
+        if self._semantic_service is None:
+            return
+        try:
+            self._semantic_service.index_for_tdoc(tdoc_id)
+        except Exception as exc:  # noqa: BLE001 - best-effort hook must not abort a successful parse
+            logger.warning(
+                "failed to update embedding index for tdoc_id=%s: %s",
                 tdoc_id, exc,
             )
 
@@ -650,6 +681,7 @@ class TDocCrService:
             self._change_details_repo.upsert(changes)
         self._repo.upsert_extract_meta(meta)
         self._index_after_parse(normalised)
+        self._embed_after_parse(normalised)
         logger.info(
             "Persisted CR details for TDoc %s at ftp_url %s (spec=%s cr_num=%s)",
             normalised,
@@ -1156,6 +1188,7 @@ class TDocCrService:
             self._change_details_repo.upsert(changes)
         self._repo.upsert_extract_meta(meta)
         self._index_after_parse(tdoc_id)
+        self._embed_after_parse(tdoc_id)
         logger.info(
             "Persisted direct-parse CR details for tdoc_id %s at %s",
             tdoc_id,

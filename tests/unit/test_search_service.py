@@ -282,3 +282,98 @@ def test_passthrough_reranker_empty_input():
     r = PassthroughReranker()
     assert r.rerank("anything", []) == []
     assert r.rerank("anything", [], final_limit=5) == []
+
+
+def test_factory_chooses_semantic_reranker_when_both_enabled(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import SearchService
+    from doc3gpp.services.semantic_reranker import SemanticReranker
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = True
+            embedding_model = "fake-model"
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_embedder = MagicMock()
+    fake_vector_repo = MagicMock()
+    monkeypatch.setattr(
+        f, "SentenceTransformerEmbedder", lambda _model: fake_embedder,
+    )
+    monkeypatch.setattr(
+        f, "SQLAlchemyVectorIndexRepository", lambda: fake_vector_repo,
+    )
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "sqlite"
+    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+
+    svc = f.build_search_service(FakeSettings())
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, SemanticReranker)
+
+
+def test_factory_falls_back_to_passthrough_when_semantic_disabled(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import PassthroughReranker, SearchService
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = False
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "sqlite"
+    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+
+    svc = f.build_search_service(FakeSettings())
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, PassthroughReranker)
+
+
+def test_factory_falls_back_to_passthrough_when_embedder_unavailable(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from doc3gpp.models.semantic_search import EmbedderUnavailableError
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import PassthroughReranker, SearchService
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = True
+            embedding_model = "fake-model"
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "sqlite"
+    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+
+    def _raise(_model):
+        raise EmbedderUnavailableError("nope")
+
+    monkeypatch.setattr(f, "SentenceTransformerEmbedder", _raise)
+
+    svc = f.build_search_service(FakeSettings())
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, PassthroughReranker)

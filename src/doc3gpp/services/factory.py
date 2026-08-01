@@ -29,6 +29,7 @@ from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
@@ -37,6 +38,7 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRe
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
+from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
 from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
 
 
@@ -301,17 +303,35 @@ def build_search_service(
                 f"{resolved_engine.dialect.name!r}"
             )
         if repo is None:
-            from doc3gpp.storage.repositories.search_sql import (
-                SQLAlchemySearchIndexRepository,
-            )
-
             repo = SQLAlchemySearchIndexRepository()
         if reranker is None:
-            from doc3gpp.services.search_service import (
-                PassthroughReranker,
+            from doc3gpp.models.semantic_search import (
+                EmbedderUnavailableError,
+                VectorIndexUnavailableError,
             )
+            from doc3gpp.services.search_service import PassthroughReranker
+            from doc3gpp.services.semantic_reranker import SemanticReranker
 
-            reranker = PassthroughReranker()
+            if (
+                settings.search.enabled
+                and settings.semantic_search.enabled
+            ):
+                try:
+                    embedder = SentenceTransformerEmbedder(
+                        settings.semantic_search.embedding_model,
+                    )
+                    vector_repo = SQLAlchemyVectorIndexRepository()
+                    reranker = SemanticReranker(
+                        embedder=embedder, vector_repo=vector_repo,
+                        settings=settings,
+                    )
+                except (
+                    VectorIndexUnavailableError,
+                    EmbedderUnavailableError,
+                ):
+                    reranker = PassthroughReranker()
+            else:
+                reranker = PassthroughReranker()
         return SearchService(repo=repo, reranker=reranker)
     except SearchUnavailableError:
         return None

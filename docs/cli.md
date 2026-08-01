@@ -1471,8 +1471,8 @@ Filters (all optional, AND-combined):
 | `--limit INT` | max results (default 20) |
 | `--format table|json|markdown` | output format (default `table`) |
 | `--compact` | strip JSON / markdown decorators |
-| `--rerank` | invoke `EmbeddingReranker.rerank` (no-op with `PassthroughReranker`) |
 | `--snippet-tokens INT` | Override `Settings.search.snippet_tokens` for this single invocation. Range 1-64. |
+| `--sem-query STR` | Reorder hits by cosine similarity to STR. Requires the [semantic] extra + vec_tdoc_embeddings. See `search.search_fanout_factor`. |
 | `--explain` | Print the resolved FTS5 MATCH expression, snippet column, and BM25 weight vector to stderr (output format below). Useful for tuning `bm25_weights` in `doc3gpp.toml`. |
 | `--quiet` | suppress the stale-index hint |
 
@@ -1510,6 +1510,39 @@ flag above overrides the cached `Settings.search.snippet_tokens`
 per-invocation; `--explain` is the canonical way to discover what
 `Settings.search.bm25_weights` is firing for a given query before
 editing it in `doc3gpp.toml`.
+
+### Semantic rerank
+
+When `--sem-query STR` is supplied, `search query` reorders the FTS5
+hits by cosine similarity to the embedded form of `STR`. The FTS5
+path first fetches `limit * search_fanout_factor` candidates
+(`Settings.search.search_fanout_factor`, default `4`, range `1..64`),
+the `SemanticReranker` re-orders them by cosine distance to the
+embedded query, and the result is truncated back to `--limit`.
+Higher `search_fanout_factor` values give the reranker more to work
+with at the cost of more vector lookups per query; lower values
+sharpen the FTS5 dominance. The knob is only consulted when
+`--sem-query` is set — with no `--sem-query`, the FTS5 path runs
+directly with the user's `--limit`.
+
+`--sem-query` requires the `[semantic]` pyproject extra
+(`pip install "doc3gpp[semantic]"`) and a populated
+`vec_tdoc_embeddings` table. On a build without the extra, the
+CLI prints `search sem rerank unavailable; run \`pip install
+doc3gpp[semantic]\`` to stderr and exits 1. The empty-vector
+fallback applies to TDoc rows that have no vector chunks indexed
+yet: `SemanticReranker` assigns them a sentinel
+`MISSING_FLOOR` distance so they sort to the bottom of the rerank
+rather than being silently skipped. A warning surfaces in the
+stale-index hint side-channel when the miss rate is high; the
+rerank still returns them so the FTS5 order is preserved as a
+backstop.
+
+The previous `--rerank` flag is **removed**. It was a no-op against
+the default `PassthroughReranker` and would have collided with the
+new semantic rerank. Old callers passing `--rerank` now see
+`typer.BadParameter` pointing at `--sem-query` for the migration
+path.
 
 ## `doc3gpp search index [flags]`
 

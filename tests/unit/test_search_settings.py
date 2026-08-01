@@ -24,3 +24,29 @@ def test_bm25_weights_rejects_wrong_length() -> None:
         SearchSettings(
             bm25_weights=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
         )
+
+
+def test_search_fanout_factor_default_is_4():
+    from doc3gpp.settings.schema import SearchSettings
+    s = SearchSettings()
+    assert s.search_fanout_factor == 4
+
+
+def test_search_fanout_factor_accepts_bounds():
+    from doc3gpp.settings.schema import SearchSettings
+    assert SearchSettings(search_fanout_factor=1).search_fanout_factor == 1
+    assert SearchSettings(search_fanout_factor=64).search_fanout_factor == 64
+
+
+def test_search_fanout_factor_rejects_below_one():
+    import pytest
+    from doc3gpp.settings.schema import SearchSettings
+    with pytest.raises(ValueError):
+        SearchSettings(search_fanout_factor=0)
+
+
+def test_search_fanout_factor_rejects_above_64():
+    import pytest
+    from doc3gpp.settings.schema import SearchSettings
+    with pytest.raises(ValueError):
+        SearchSettings(search_fanout_factor=65)

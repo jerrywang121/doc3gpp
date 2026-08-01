@@ -8,52 +8,33 @@ for known inputs and falls back to a content-derived vector for
 anything else, so the assertions stay deterministic without loading a
 sentence-transformers model.
 
-``strip_stopwords`` is monkeypatched to a pure-Python stand-in (no
-spaCy dependency at runtime) — the FTS5 query string is what the
-search service passes to ``SearchService.search``, and we're testing
-the search-stack plumbing, not the stopword lexer.
+The service no longer pre-processes queries through a stripper; the
+natural-language positional ``QUERY`` flows only into the embedder,
+and the FTS5 path is opt-in via the new ``fts5_query`` argument
+(preprocessed by ``SearchQueryBuilder``). These tests exercise both
+the vector-only branch (``fts5_query=None``) and the hybrid branch
+(``fts5_query="..."``) end-to-end.
 
 Verifies:
 
 1. ``search sem "what CRs touch NB-IoT power saving"`` returns the
    NB-IoT TDoc at rank 0 or 1 (vector + FTS5 agree).
 2. ``--tsg`` filter narrows the result list to the requested TSG.
-3. ``vector_weight=0.0`` makes the FTS5 ranking dominate and produces
-   the FTS5-only top hit (proves the search seam is even-blended).
+3. ``fts5_weight=0.0`` (vector weight = 1.0) collapses RRF to the
+   FTS5-only formula, pinning the search seam's blend.
+4. New ``fts5_query=None`` returns pure vector KNN, no FTS5 fan-out.
+5. New ``fts5_query="NB-IoT"`` runs both paths through RRF and
+   surfaces at least one FTS5-present hit.
 """
 
 from __future__ import annotations
 
-import re
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 pytestmark = pytest.mark.semantic
-
-
-_PURE_STOPWORDS = re.compile(
-    r"\b(the|a|an|of|for|to|in|on|what|which|that|are|is|do|does|"
-    r"touch|cr|crs)\b",
-    re.IGNORECASE,
-)
-
-
-def _pure_strip(text: str) -> str:
-    """Pure-Python stopword stripper — drops ``the/a/an/of/for/...`` and
-    lowercases the rest. Used in place of the spaCy-backed
-    :func:`strip_stopwords` so the test has no heavy extras.
-    """
-    return " ".join(_PURE_STOPWORDS.sub(" ", text.lower()).split())
-
-
-@pytest.fixture(autouse=True)
-def _patch_strip(monkeypatch):
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service.strip_stopwords",
-        _pure_strip,
-    )
 
 
 @pytest.fixture()
@@ -126,9 +107,10 @@ def test_search_sem_returns_expected_tdoc(semantic_service):
 
     out = semantic_service.search(
         "what CRs touch NB-IoT power saving",
-        SearchFilters(),
+        fts5_query="NB-IoT",
+        filters=SearchFilters(),
         limit=5,
-        vector_weight=0.7,
+        fts5_weight=0.5,
     )
     assert out, "expected at least one hit"
     top_two = {h.tdoc_id for h in out[:2]}
@@ -147,9 +129,10 @@ def test_search_sem_filter_by_tsg(semantic_service):
     # RAN1 rows don't leak into a RAN5-only result list.
     out = semantic_service.search(
         "Rel-17",
-        SearchFilters(tsg="RAN5"),
+        fts5_query="Rel-17",
+        filters=SearchFilters(tsg="RAN5"),
         limit=10,
-        vector_weight=0.7,
+        fts5_weight=0.5,
     )
     assert out, "expected at least one hit under RAN5 filter"
     tdoc_ids = {h.tdoc_id for h in out}
@@ -164,24 +147,25 @@ def test_search_sem_filter_by_tsg(semantic_service):
     )
 
 
-def test_search_sem_vector_weight_zero_is_fts5_only(semantic_service):
+def test_search_sem_fts5_weight_zero_is_fts5_only(semantic_service):
     from doc3gpp.models.search import SearchFilters
     from doc3gpp.services.semantic_search_service import rrf_merge
 
-    # With ``vector_weight=0.0`` the RRF score collapses to the
-    # FTS5-only formula (``1/(k+rank_fts5)``); vector hits still
-    # participate in the fan-out but contribute 0 to the score and
-    # so always sort below FTS5-present hits.
+    # With ``fts5_weight=1.0`` (i.e. vector weight = 0) the RRF score
+    # collapses to the FTS5-only formula (``1/(k+rank_fts5)``);
+    # vector hits still participate in the fan-out but contribute 0
+    # to the score and so always sort below FTS5-present hits.
     out = semantic_service.search(
         "NB-IoT power saving",
-        SearchFilters(),
+        fts5_query="NB-IoT",
+        filters=SearchFilters(),
         limit=10,
-        vector_weight=0.0,
+        fts5_weight=1.0,
     )
     assert out, "expected at least one FTS5 hit"
 
     # Filter to FTS5-present hits (vector-only rows have rank_fts5 None
-    # and score 0 at vector_weight=0).
+    # and score 0 when fts5_weight=1.0).
     fts5_hits = [h for h in out if h.rank_fts5 is not None]
     assert fts5_hits, "expected at least one FTS5-side hit"
 
@@ -190,7 +174,7 @@ def test_search_sem_vector_weight_zero_is_fts5_only(semantic_service):
     for hit in fts5_hits:
         expected = 1.0 / (60 + hit.rank_fts5)
         assert abs(hit.rrf_score - expected) < 1e-6, (
-            f"vector_weight=0 score mismatch for {hit.tdoc_id}: "
+            f"fts5_weight=1.0 score mismatch for {hit.tdoc_id}: "
             f"rrf={hit.rrf_score}, expected={expected}"
         )
 
@@ -200,9 +184,15 @@ def test_search_sem_vector_weight_zero_is_fts5_only(semantic_service):
         f"FTS5 ranks should be monotonic after RRF; got {ranks}"
     )
 
-    # Top-ranked FTS5 hit is the NB-IoT TDoc — text strongest match.
-    assert fts5_hits[0].tdoc_id == "SEM-NB-001", (
-        f"FTS5 top hit should be the NB-IoT TDoc; got {fts5_hits[0].tdoc_id}"
+    # FTS5 fan-out must surface at least one of the NB-IoT TDocs
+    # (SEM-NB-001 / SEM-NB-002 have "NB-IoT" in their titles; both
+    # are guaranteed FTS5 hits). The corpus's CHG rows also match
+    # "NB-IoT" via their `change_text` blob, so the FTS5 top hit
+    # under BM25 is whichever document has the most focused mention
+    # — we don't pin the top tdoc, only the FTS5 surface set.
+    fts5_tdoc_ids = {h.tdoc_id for h in fts5_hits}
+    assert fts5_tdoc_ids & {"SEM-NB-001", "SEM-NB-002"}, (
+        f"FTS5 fan-out should surface an NB-IoT TDoc; got {fts5_tdoc_ids}"
     )
     _ = rrf_merge  # silence unused-import warning
 
@@ -233,6 +223,53 @@ def test_build_embed_text_against_real_corpus(semantic_search_corpus):
             f"_build_embed_text({tid!r}) must return str, got {type(text).__name__}"
         )
         assert text, f"_build_embed_text({tid!r}) returned empty string"
+
+
+def test_search_sem_without_fts5_query_returns_pure_vector_results(semantic_service):
+    """End-to-end pin: when ``fts5_query`` is None, the service returns
+    top-``limit`` vector KNN hits with ``rank_fts5=None``. No RRF, no FTS5
+    fan-out, no FTS5 metadata depends on a populated ``tdoc_cr_cover_page``.
+    """
+    from doc3gpp.models.search import SearchFilters
+
+    hits = semantic_service.search(
+        query="NB-IoT power saving",
+        fts5_query=None,
+        filters=SearchFilters(),
+        limit=10,
+        fts5_weight=0.5,
+    )
+    assert len(hits) > 0
+    for h in hits:
+        assert h.rank_fts5 is None
+        assert h.rrf_score < 0
+        assert h.fts5_hit is not None
+
+
+def test_search_sem_with_fts5_query_returns_rrf_merged_results(semantic_service):
+    """End-to-end pin: when ``fts5_query`` is supplied, the service runs
+    both paths through RRF; hits present in the FTS5 fan-out carry
+    ``rank_fts5=<int>`` while vector-only hits carry ``rank_fts5=None``.
+
+    The corpus seeds two NB-IoT TDocs (``SEM-NB-001`` / ``SEM-NB-002``)
+    with ``NB-IoT`` in their titles, so ``fts5_query="NB-IoT"`` is
+    guaranteed to produce FTS5 fan-out hits.
+    """
+    from doc3gpp.models.search import SearchFilters
+
+    hits = semantic_service.search(
+        query="NB-IoT power saving",
+        fts5_query="NB-IoT",
+        filters=SearchFilters(),
+        limit=20,
+        fts5_weight=0.5,
+    )
+    assert len(hits) > 0
+    fts5_present = [h for h in hits if h.rank_fts5 is not None]
+    assert len(fts5_present) > 0, (
+        f"expected at least one FTS5-side hit for 'NB-IoT'; got "
+        f"{[h.tdoc_id for h in hits]}"
+    )
 
 
 _ = np  # keep numpy import alive for type-checkers scanning fixtures

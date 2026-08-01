@@ -4272,9 +4272,21 @@ def index_command(
         raise typer.Exit(code=0)
     if not do_fts5 and not do_vec:
         status = fts5_svc.status()
+        sem_svc = build_semantic_search_service()
+        # The vector row count lives on a separate
+        # vec_tdoc_embeddings table; surface it alongside the FTS5
+        # row count so operators don't confuse the two indexes when
+        # the panel shows only one number.
+        vec_status_block = ""
+        if sem_svc is not None:
+            vec_status = sem_svc.status()
+            vec_status_block = (
+                f"\nVector rows:    {vec_status.row_count:,}"
+            )
         typer.echo(
             f"Search index: enabled (sqlite + fts5)\n"
-            f"Rows indexed:  {status.row_count:,}\n"
+            f"FTS5 rows:      {status.row_count:,}"
+            f"{vec_status_block}\n"
             f"Last rebuild:  {status.last_rebuild_at or 'never'}\n"
             f"Last indexed:  {status.last_indexed_uploaded_date or 'never'}\n"
             f"Latest tdocs:  {status.latest_tdocs_uploaded_date or 'none'}\n"

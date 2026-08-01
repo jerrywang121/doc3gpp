@@ -68,10 +68,8 @@ class _StubService:
         self._repo = _CapturingRepo()
         from doc3gpp.services.search_service import PassthroughReranker
         self._reranker = PassthroughReranker()
-
-    def status(self):
         from doc3gpp.models.search import SearchIndexStatus
-        return SearchIndexStatus(
+        self._status = SearchIndexStatus(
             enabled=True,
             row_count=0,
             last_rebuild_at=None,
@@ -79,6 +77,9 @@ class _StubService:
             latest_tdocs_uploaded_date=None,
             is_stale=False,
         )
+
+    def status(self):
+        return self._status
 
 
 def test_explain_prints_match_and_weights(monkeypatch) -> None:
@@ -233,3 +234,93 @@ def test_snippet_tokens_overrides_setting(
         )
     finally:
         get_settings.cache_clear()
+
+
+# ----------------------------------------------------------------------
+# Status panel: `doc3gpp search index` (no args) must surface the
+# vector row count when the semantic service is available, and
+# must clearly label the existing FTS5 row count.
+# ----------------------------------------------------------------------
+
+
+def test_search_index_status_panel_includes_vector_rows(monkeypatch) -> None:
+    """When the semantic service is available, the status panel
+    must include the vector row count alongside the FTS5 row count.
+    Otherwise operators see "Rows indexed: 13,693" and assume it
+    covers both indexes — but vec_tdoc_embeddings can be empty
+    after a fresh schema.
+    """
+    from dataclasses import replace
+
+    runner = CliRunner()
+    fts5_stub = _StubService()
+    fts5_stub._status = replace(
+        fts5_stub.status(),
+        row_count=13_693,
+        last_rebuild_at="2026-07-31 23:01:53",
+        is_stale=False,
+    )
+
+    class _VecStub:
+        def __init__(self) -> None:
+            from doc3gpp.models.search import SearchIndexStatus
+            self._status = SearchIndexStatus(
+                enabled=True,
+                row_count=3_842,
+                last_rebuild_at="2026-07-31 22:50:15",
+                last_indexed_uploaded_date="2026-05-08",
+                latest_tdocs_uploaded_date="2026-07-22",
+                is_stale=True,
+            )
+
+        def status(self):
+            return self._status
+
+    sem_stub = _VecStub()
+
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_search_service", lambda: fts5_stub,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_semantic_search_service",
+        lambda: sem_stub,
+    )
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+
+    result = runner.invoke(app, ["search", "index"])
+    assert result.exit_code == 0, result.output
+    assert "FTS5 rows:" in result.output, (
+        f"missing FTS5 row label in panel; output was:\n{result.output}"
+    )
+    assert "13,693" in result.output
+    assert "Vector rows:" in result.output, (
+        f"missing vector row label in panel; output was:\n{result.output}"
+    )
+    assert "3,842" in result.output
+
+
+def test_search_index_status_panel_omits_vector_when_service_none(monkeypatch) -> None:
+    """When the semantic service is unavailable (no [semantic]
+    extra installed, sqlite-vec missing, etc.), the panel must
+    not print a Vector rows line. FTS5 still prints.
+    """
+    from dataclasses import replace
+
+    runner = CliRunner()
+    fts5_stub = _StubService()
+    fts5_stub._status = replace(fts5_stub.status(), row_count=100)
+
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_search_service", lambda: fts5_stub,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_semantic_search_service",
+        lambda: None,
+    )
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+
+    result = runner.invoke(app, ["search", "index"])
+    assert result.exit_code == 0, result.output
+    assert "FTS5 rows:" in result.output
+    assert "100" in result.output
+    assert "Vector rows" not in result.output

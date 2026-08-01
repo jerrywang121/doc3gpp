@@ -44,7 +44,7 @@ def test_non_sqlite_returns_none() -> None:
 def test_unavailable_error_returns_none() -> None:
     settings = Settings()
     with patch(
-        "doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository",
+        "doc3gpp.services.factory.SQLAlchemySearchIndexRepository",
         side_effect=SearchUnavailableError("nope"),
     ):
         assert build_search_service(settings) is None

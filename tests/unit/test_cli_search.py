@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 from sqlalchemy import event, text
 from typer.testing import CliRunner
@@ -18,10 +19,15 @@ def test_search_help_lists_filters() -> None:
     for flag in (
         "--tsg", "--meeting", "--meeting-id", "--tdoc-id",
         "--release", "--spec", "--since", "--until",
-        "--limit", "--format", "--compact", "--rerank",
+        "--limit", "--format", "--compact", "--sem-query",
         "--snippet-tokens", "--explain", "--quiet",
     ):
         assert flag in result.output, f"missing flag {flag} in search help"
+    # The old --rerank flag is gone; the new --sem-query is the
+    # only semantic-rerank switch.
+    assert "--rerank" not in result.output, (
+        "--rerank must be removed from search query help; use --sem-query"
+    )
 
 
 def test_index_help_lists_rebuild_flags() -> None:
@@ -324,3 +330,94 @@ def test_search_index_status_panel_omits_vector_when_service_none(monkeypatch) -
     assert "FTS5 rows:" in result.output
     assert "100" in result.output
     assert "Vector rows" not in result.output
+
+
+# ----------------------------------------------------------------------
+# Task 6: --sem-query fanout wiring + removed --rerank flag
+# ----------------------------------------------------------------------
+
+
+def test_search_query_no_sem_query_does_not_invoke_reranker(monkeypatch) -> None:
+    """Without ``--sem-query`` the CLI bypasses the reranker (today's behaviour)."""
+    from doc3gpp.cli import search_app
+
+    runner = CliRunner()
+    fake_svc = MagicMock()
+    fake_svc._repo.search.return_value = []  # type: ignore[attr-defined]
+    fake_svc.status.return_value = MagicMock(is_stale=False)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_search_service",
+        lambda: fake_svc,
+    )
+    result = runner.invoke(search_app, ["query", "anything"])
+    assert result.exit_code == 0, result.output
+    fake_svc._reranker.rerank.assert_not_called()  # type: ignore[attr-defined]
+
+
+def test_search_query_sem_query_invokes_reranker_with_fanout(monkeypatch) -> None:
+    """``--sem-query`` triggers fanout filters and a rerank call."""
+    from doc3gpp.cli import search_app
+    from doc3gpp.models.search import SearchFilters
+
+    fake_svc = MagicMock()
+    fake_svc._repo.search.return_value = []  # type: ignore[attr-defined]
+    fake_svc.status.return_value = MagicMock(is_stale=False)
+
+    captured: dict = {}
+
+    def _capture_rerank(semantic_query, hits, final_limit=None):
+        captured["semantic_query"] = semantic_query
+        captured["hits"] = hits
+        captured["final_limit"] = final_limit
+        return []
+
+    fake_svc._reranker.rerank.side_effect = _capture_rerank  # type: ignore[attr-defined]
+
+    fake_settings = MagicMock()
+    fake_settings.search.search_fanout_factor = 4
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_search_service", lambda: fake_svc,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.cli.get_settings", lambda: fake_settings,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        search_app, ["query", "R5-1", "--sem-query", "TTCN handover"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["semantic_query"] == "TTCN handover"
+    assert captured["final_limit"] == 20  # default --limit
+    # The repo was called with filters whose limit == 20 * 4 == 80.
+    call_args = fake_svc._repo.search.call_args  # type: ignore[attr-defined]
+    filters = call_args[0][1]
+    assert isinstance(filters, SearchFilters)
+    assert filters.limit == 80
+
+
+def test_search_query_sem_query_empty_string_treated_as_none(monkeypatch) -> None:
+    """``--sem-query ''`` is a no-op (no rerank, no embedder call)."""
+    from doc3gpp.cli import search_app
+
+    fake_svc = MagicMock()
+    fake_svc._repo.search.return_value = []  # type: ignore[attr-defined]
+    fake_svc.status.return_value = MagicMock(is_stale=False)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_search_service",
+        lambda: fake_svc,
+    )
+    runner = CliRunner()
+    result = runner.invoke(search_app, ["query", "R5-1", "--sem-query", ""])
+    assert result.exit_code == 0, result.output
+    fake_svc._reranker.rerank.assert_not_called()  # type: ignore[attr-defined]
+
+
+def test_search_query_rerank_flag_raises_bad_parameter() -> None:
+    """The removed ``--rerank`` flag must raise a clear migration error."""
+    from doc3gpp.cli import search_app
+
+    runner = CliRunner()
+    result = runner.invoke(search_app, ["query", "R5-1", "--rerank"])
+    assert result.exit_code != 0
+    assert "--rerank" in (result.output + (result.stderr or ""))

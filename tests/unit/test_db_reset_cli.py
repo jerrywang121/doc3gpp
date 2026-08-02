@@ -133,6 +133,21 @@ def test_db_reset_in_memory_sqlite_just_reinits(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_db_reset_refuses_non_sqlite_url(monkeypatch) -> None:
+    """A non-SQLite URL is rejected before anything is touched."""
+    monkeypatch.setenv("DOC3GPP_DATABASE_URL", "oracle://user:pass@localhost/db")
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    try:
+        runner = CliRunner()
+        result = runner.invoke(app, ["db", "reset", "--yes"])
+        assert result.exit_code != 0
+        assert "only supports SQLite backends" in result.output
+    finally:
+        get_engine.cache_clear()
+        get_settings.cache_clear()
+
+
 def test_db_reset_handles_missing_file(sqlite_env) -> None:
     """No prior init — reset creates the file from scratch."""
     db_path = sqlite_env

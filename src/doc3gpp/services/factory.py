@@ -27,7 +27,6 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import Settings
-from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
@@ -168,9 +167,9 @@ def build_tdoc_cr_service(
       in the ``--from-url`` direct-mode path.
     * :func:`build_search_service` — wired through to
       :class:`TDocCrService` so successful parses can keep the FTS5
-      index in sync. Returns ``None`` when search is disabled, the
-      dialect is non-sqlite, or FTS5 is missing; in those cases the
-      service simply skips the auto-index hook.
+      index in sync. Returns ``None`` when search is disabled or
+      FTS5 is missing; in those cases the service simply skips the
+      auto-index hook.
 
     The factory is shared by both the filter-based batch path
     (existing ``tdoc parse --tdoc/--meeting-id`` flow) and the new
@@ -278,8 +277,8 @@ def build_search_service(
     """Build a :class:`SearchService` or return ``None`` if unavailable.
 
     The factory is best-effort: any :class:`SearchUnavailableError`
-    raised by the repo (wrong dialect, missing FTS5, missing extra)
-    is caught here once at startup and returned as ``None``. The
+    raised by the repo (missing FTS5, missing extra) is caught here
+    once at startup and returned as ``None``. The
     CLI and the :class:`TDocCrService` hook both treat ``None`` as
     "search is not available" and skip.
 
@@ -302,12 +301,6 @@ def build_search_service(
     if not settings.search.enabled:
         return None
     try:
-        resolved_engine = get_engine()
-        if resolved_engine.dialect.name != "sqlite":
-            raise SearchUnavailableError(
-                f"search requires sqlite FTS5; current dialect is "
-                f"{resolved_engine.dialect.name!r}"
-            )
         if repo is None:
             repo = SQLAlchemySearchIndexRepository()
         if reranker is None:

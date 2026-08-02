@@ -89,6 +89,8 @@ class StubReranker(EmbeddingReranker):
 
     def rerank(
         self, query: str, hits: list[SearchHit],
+        final_limit: int | None = None,
+        quiet: bool = False,
     ) -> list[SearchHit]:
         self.queries.append(query)
         self.invocations += 1
@@ -247,3 +249,133 @@ def test_status_returns_repo_status() -> None:
     repo = MockRepo()
     svc = SearchService(repo=repo, reranker=PassthroughReranker())
     assert svc.status().row_count == 3
+
+
+def test_passthrough_reranker_returns_list_copy():
+    from doc3gpp.models.search import SearchHit
+    from doc3gpp.services.search_service import PassthroughReranker
+    h = SearchHit(
+        tdoc_id="R5-1", score=0.0, previews={}, title="t", meeting="m",
+        tsg="S1", uploaded_date="2026-01-01", ftp_url="https://x", wis=(),
+    )
+    r = PassthroughReranker()
+    out = r.rerank("anything", [h])
+    assert out == [h]
+    assert out is not [h]  # noqa: F632 — copy, not the same list (identity check)
+
+
+def test_passthrough_reranker_honors_final_limit():
+    from doc3gpp.models.search import SearchHit
+    from doc3gpp.services.search_service import PassthroughReranker
+
+    def _hit(t):
+        return SearchHit(
+            tdoc_id=t, score=0.0, previews={}, title="t", meeting="m",
+            tsg="S1", uploaded_date="2026-01-01", ftp_url="https://x", wis=(),
+        )
+    hits = [_hit("R5-1"), _hit("R5-2"), _hit("R5-3")]
+    r = PassthroughReranker()
+    out = r.rerank("anything", hits, final_limit=2)
+    assert [h.tdoc_id for h in out] == ["R5-1", "R5-2"]
+
+
+def test_passthrough_reranker_empty_input():
+    from doc3gpp.services.search_service import PassthroughReranker
+    r = PassthroughReranker()
+    assert r.rerank("anything", []) == []
+    assert r.rerank("anything", [], final_limit=5) == []
+
+
+def test_factory_chooses_semantic_reranker_when_both_enabled(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import SearchService
+    from doc3gpp.services.semantic_reranker import SemanticReranker
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = True
+            embedding_model = "fake-model"
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_embedder = MagicMock()
+    fake_vector_repo = MagicMock()
+    monkeypatch.setattr(
+        f, "SentenceTransformerEmbedder", lambda _model: fake_embedder,
+    )
+    monkeypatch.setattr(
+        f, "SQLAlchemyVectorIndexRepository", lambda: fake_vector_repo,
+    )
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "sqlite"
+    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+
+    svc = f.build_search_service(FakeSettings())
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, SemanticReranker)
+
+
+def test_factory_falls_back_to_passthrough_when_semantic_disabled(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import PassthroughReranker, SearchService
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = False
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "sqlite"
+    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+
+    svc = f.build_search_service(FakeSettings())
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, PassthroughReranker)
+
+
+def test_factory_falls_back_to_passthrough_when_embedder_unavailable(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from doc3gpp.models.semantic_search import EmbedderUnavailableError
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import PassthroughReranker, SearchService
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = True
+            embedding_model = "fake-model"
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "sqlite"
+    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+
+    def _raise(_model):
+        raise EmbedderUnavailableError("nope")
+
+    monkeypatch.setattr(f, "SentenceTransformerEmbedder", _raise)
+
+    svc = f.build_search_service(FakeSettings())
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, PassthroughReranker)

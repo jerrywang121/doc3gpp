@@ -146,6 +146,13 @@ snippet_tokens = 8
 # a match). Tune interactively via `doc3gpp search --explain`.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 
+# When `search query --sem-query` is used, the FTS5 path fetches
+# limit * search_fanout_factor candidates before the semantic
+# reranker truncates back to limit. Higher values give the
+# reranker more to work with at the cost of more vector lookups
+# per query. Only honored when --sem-query is supplied.
+search_fanout_factor = 4
+
 # ── Semantic search (hybrid FTS5 + vector) ──────────────────────────────────
 # Hybrid search subsystem: sentence-transformers embeddings + sqlite-vec
 # KNN, fused with Reciprocal Rank Fusion (RRF) over the FTS5 + vector

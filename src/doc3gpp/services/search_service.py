@@ -43,16 +43,26 @@ logger = logging.getLogger(__name__)
 class PassthroughReranker(EmbeddingReranker):
     """Default reranker that returns hits unchanged.
 
-    Exists so the service contract is fully testable before the
-    embedding spec lands. When that spec ships, a new impl plugs in
-    here without any change to :class:`SearchService` or the CLI.
+    Used when the semantic search stack is not available
+    (no ``[semantic]`` extra, no sqlite-vec, ``enabled=False``).
+    Returns a *copy* of the input so callers may mutate the
+    reranker's output without disturbing the upstream list.
+    Honors ``final_limit`` by slicing.
     """
 
     def rerank(
-        self, query: str, hits: list[SearchHit],
+        self,
+        semantic_query: str,
+        hits: list[SearchHit],
+        final_limit: int | None = None,
+        quiet: bool = False,
     ) -> list[SearchHit]:
-        _ = query
-        return list(hits)
+        _ = semantic_query
+        _ = quiet  # Passthrough never warns; flag accepted for Protocol parity.
+        copied = list(hits)
+        if final_limit is not None:
+            return copied[:final_limit]
+        return copied
 
 
 class SearchService:
@@ -62,9 +72,11 @@ class SearchService:
         self,
         repo: SearchIndexRepository,
         reranker: EmbeddingReranker,
+        quiet: bool = False,
     ) -> None:
         self._repo = repo
         self._reranker = reranker
+        self._quiet = quiet
 
     def upsert_for_tdoc(self, tdoc_id: str) -> None:
         """Rebuild the FTS5 row for ``tdoc_id``.
@@ -93,9 +105,15 @@ class SearchService:
     def search(
         self, query: str, filters: SearchFilters,
     ) -> list[SearchHit]:
-        """Run FTS5 ``MATCH`` + rerank + return hits."""
+        """Run FTS5 ``MATCH`` + rerank + return hits.
+
+        Forwards :attr:`_quiet` to :meth:`EmbeddingReranker.rerank` so
+        the :class:`SemanticReranker`'s one-shot empty-vector warning
+        is suppressed under ``--quiet``. ``PassthroughReranker``
+        accepts and ignores the flag.
+        """
         hits = self._repo.search(query, filters)
-        return self._reranker.rerank(query, hits)
+        return self._reranker.rerank(query, hits, quiet=self._quiet)
 
     def rebuild(
         self,

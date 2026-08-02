@@ -457,6 +457,18 @@ class SearchSettings(BaseModel):
             )
         return value
 
+    search_fanout_factor: int = Field(
+        default=4, ge=1, le=64,
+        description=(
+            "When `search query --sem-query` is used, the FTS5 path "
+            "fetches limit * search_fanout_factor candidates before "
+            "the semantic reranker truncates back to limit. Higher "
+            "values give the reranker more to work with at the cost "
+            "of more vector lookups per query. Only honored when "
+            "--sem-query is supplied. Default 4. Range 1..64."
+        ),
+    )
+
 
 class SemanticSearchSettings(BaseModel):
     """Configuration for the semantic (embedding + vector) search subsystem.

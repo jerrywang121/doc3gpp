@@ -34,52 +34,11 @@ PostgreSQL available via configuration.
 
 ## Features
 
-- **Meeting sync** — fetch the 3GPP DynaReport calendar (`meetings` table) and
-  persist it to your store of choice. The `--tsg` flag is stamped onto every
-  row as a foreign key into `tsgs.short_name`, powering the `meeting list
-  --tsg` filter.
-- **TDoc sync** — download a meeting's TDoc-list XLSX from the 3GPP portal
-  (`GenerateDocumentList.aspx?meetingId={meeting_id}`) and persist the rows.
-  Auxiliary TDoc files are still scanned from the meeting's FTP folders.
-- **TDoc CR extraction** — optional `python-docx` pipeline that downloads,
-  caches, and parses CR cover pages into structured records. The slim
-  `tdoc_cr_cover_page` table holds cover-page fields; the
-  `tdoc_cr_ttcn_details` sidecar adds the six TTCN overview fields
-  (`testcase`, `ue`, `ss`, `ats_version`, `ttcn_release`, `test_suite`)
-  plus a gzip-compressed `required_changes` JSON blob and a
-  SQL-searchable `changed_functions` aggregate auto-derived from
-  `required_changes`. Cache artefacts live in `tdoc_extracts`. `tdoc
-  show` automatically appends a TTCN section when the TDoc is a TTCN
-  CR and an auxiliary files section listing every `tdoc_files` row
-  whose `tdoc_id` matches.
-- **Full-text search (FTS5 + BM25)** — built-in SQLite FTS5 virtual
-  table (`tdoc_search`) over every TDoc, CR cover page, change
-  details, TTCN details, meeting metadata, and related work items,
-  with BM25-ranked results and highlighted snippets. A Python-side
-  `normalize_query` keeps TDoc ids (`R5-1234567r2` → base + revision
-  tokens) and spec numbers (`38.300` → `38_300`) as single tokens so
-  identifier search works naturally. The index auto-refreshes after
-  every successful `tdoc parse` and can be rebuilt or status-checked
-  via the `search query` / `search index` subcommands. Optional
-  `[search]` extra; opt out with `Settings.search.enabled = false`.
-- **Hybrid semantic search (FTS5 + embeddings)** — `doc3gpp search sem
-  QUERY` always embeds the natural-language positional `QUERY`
-  against the sqlite-vec embedding index. An opt-in `--fts5-query`
-  string additionally drives the FTS5 fan-out (preprocessed by
-  `SearchQueryBuilder`, same as `search query`); when supplied, the
-  two rankings are merged with reciprocal-rank fusion (default
-  `--fts5-weight=0.5`, vector weight = `1 - fts5_weight`); when
-  omitted, only vector KNN returns — no FTS5 fan-out, no RRF.
-  Optional `[semantic]` extra (sqlite-only); see `### search sem`
-  below for details.
-- **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
-  SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
-- **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to
-  validate `--tsg` flags across `meeting sync` and `wi sync`.
-- **Multi-backend storage** — SQLite (default), MySQL, and PostgreSQL via
-  SQLAlchemy 2.0.
-- **Layered architecture** — strict separation between `scraping/`,
-  `parsers/`, `services/`, `repository/`, and `storage/`.
+- **Meeting / TDoc / WI sync** — fetch the 3GPP Meetings, TDocs, and Work Items List.
+- **TDoc CR extraction** — Download and parse TDoc CR into structured records.
+- **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
+- **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
+- **Multi-backend storage** — SQLite (default), MySQL, and PostgreSQL via SQLAlchemy 2.0.
 
 ## Installation
 
@@ -257,6 +216,12 @@ doc3gpp search query "NB-IoT scheduling" --tsg RAN1 --limit 10
 doc3gpp search query "R5-1234567" --format json
 doc3gpp search query "scheduling NR" --spec 38.300 --since 2026-01-01
 
+# query --sem-query — rerank FTS5 hits by cosine similarity
+doc3gpp search query "NB-IoT scheduling" --tsg RAN1 \
+  --sem-query "power saving for NB-IoT UEs" --limit 10
+doc3gpp search query "scheduling NR" --spec 38.300 \
+  --sem-query "FR2 scheduler design" --quiet
+
 # index — status, rebuild, resume, stale-only refresh
 doc3gpp search index                                  # show SearchIndexStatus
 doc3gpp search index --rebuild                        # drop + rebuild from scratch
@@ -267,7 +232,23 @@ doc3gpp search index --rebuild --stale-only --quiet   # re-index only newer tdoc
 The auto-index hook keeps the index fresh after every successful
 `tdoc parse`; tune or disable via the `[search]` section in
 `doc3gpp.toml` (`enabled`, `auto_index_on_parse`,
-`rebuild_batch_size`, `snippet_tokens`).
+`rebuild_batch_size`, `snippet_tokens`, `search_fanout_factor`).
+
+#### `search query --sem-query`
+
+Optional `--sem-query STR` reranks the BM25 hits by cosine similarity
+to a natural-language string. The FTS5 path fetches
+`limit * search_fanout_factor` candidates (default 4×) before the
+reranker truncates back to `--limit`. Missing candidates receive a
+`-inf` score and sink to the bottom; on a fully empty
+`vec_tdoc_embeddings` the FTS5 order is preserved and a one-shot
+`WARNING` is logged (suppress with `--quiet`). Empty `--sem-query ""`
+is a no-op. Requires the `[semantic]` extra and a populated
+`vec_tdoc_embeddings` index — build it with
+`doc3gpp search index --rebuild-embeddings` first.
+
+The legacy `--rerank` flag was removed; callers should switch to
+`--sem-query`.
 
 ### `search sem` — hybrid FTS5 + embedding vector search
 
@@ -436,6 +417,12 @@ snippet_tokens = 8                   # FTS5 snippet() length; --snippet-tokens o
 # when the snippet actually contains a match). Tune via
 # `doc3gpp search --explain`.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+
+# Multiplier for the candidate pool fed into semantic rerank via
+# `search query --sem-query`. FTS5 fetches `limit * search_fanout_factor`
+# rows; the reranker then truncates back to `--limit`. Only consulted
+# when `--sem-query` is supplied. Default 4. Range 1..64.
+search_fanout_factor = 4
 
 # Hybrid search — only loaded when the `[semantic]` extra is installed.
 # sqlite-only; on MySQL/PostgreSQL the vector path is a no-op.

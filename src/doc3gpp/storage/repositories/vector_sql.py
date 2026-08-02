@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 from sqlalchemy import text
@@ -36,6 +36,7 @@ from doc3gpp.storage.db.session import get_engine
 logger = logging.getLogger(__name__)
 
 DEFAULT_DIM = 384
+MAX_CHUNKS_PER_TDOC = 32
 
 
 def _check_sqlite_vec(engine: Engine) -> None:
@@ -316,6 +317,56 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                         tsg=row[5],
                         uploaded_date=row[6],
                     )
+        return out
+
+    def get_min_distance_for_tdocs(
+        self,
+        tdoc_ids: Sequence[str],
+        query_vec: Sequence[float],
+    ) -> dict[str, tuple[float, str] | None]:
+        if not tdoc_ids:
+            return {}
+        q = np.asarray(query_vec, dtype=np.float32)
+        if q.shape[-1] != self._dim:
+            raise VectorIndexUnavailableError(
+                f"query dim mismatch: stored={self._dim} "
+                f"requested={q.shape[-1]}"
+            )
+        # sqlite-vec KNN: per-row ``distance`` column, K=1 per tdoc_id.
+        # We request K = number of distinct chunks for the asked tdoc_ids,
+        # then group-by in Python (cheaper than a CTE, fewer sqlite-vec
+        # version dependencies). Bounded to len(tdoc_ids) * 32 chunks
+        # worst case; the common case is << that.
+        from sqlalchemy import bindparam, text
+        sql = [
+            "SELECT tdoc_id, chunk_id, distance",
+            "  FROM vec_tdoc_embeddings",
+            " WHERE tdoc_id IN :tdoc_ids",
+            "   AND embedding MATCH :q",
+            "   AND k = :k",
+            " ORDER BY distance IS NULL, distance ASC, chunk_id ASC",
+        ]
+        params: dict = {
+            "tdoc_ids": tuple(tdoc_ids),
+            "q": q.tobytes(),
+            "k": len(tdoc_ids) * MAX_CHUNKS_PER_TDOC,
+        }
+        stmt = text("\n".join(sql)).bindparams(
+            bindparam("tdoc_ids", expanding=True),
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt, params).all()
+        # Pick the closest chunk per tdoc_id. Initialize all asked
+        # ids to None so the caller can distinguish "no rows" from
+        # "rows with inf distance" (sqlite-vec returns NULL when
+        # the row is far enough to be effectively irrelevant).
+        out: dict[str, tuple[float, str] | None] = {tid: None for tid in tdoc_ids}
+        for tdoc_id, chunk_id, distance in rows:
+            if out[tdoc_id] is not None:
+                continue
+            if distance is None:
+                continue
+            out[tdoc_id] = (float(distance), chunk_id)
         return out
 
 

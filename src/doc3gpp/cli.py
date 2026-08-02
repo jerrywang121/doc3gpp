@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import logging
@@ -4156,10 +4157,33 @@ def search_command(
     limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
     format: str = typer.Option("table", "--format", help="table | json | markdown"),
     compact: bool = typer.Option(False, "--compact", help="Strip JSON / markdown decorators."),
-    rerank: bool = typer.Option(False, "--rerank", help="Invoke EmbeddingReranker (no-op for PassthroughReranker)."),
+    sem_query: str | None = typer.Option(
+        None, "--sem-query",
+        help=(
+            "Reorder the FTS5 hit list by cosine similarity to this "
+            "natural-language string. The FTS5 path fetches "
+            "`limit * search.search_fanout_factor` candidates "
+            "(default 4x) before the reranker truncates back to "
+            "`limit`. Requires the [semantic] extra + vector "
+            "index; otherwise the command exits with code 1."
+        ),
+    ),
+    # NOTE: the old --rerank flag was removed. We declare a hidden
+    # option so the parser still accepts the flag (otherwise Typer
+    # would reject it before the body runs) and raise a clear
+    # migration message from the body when a caller supplies it.
+    rerank: bool = typer.Option(
+        False, "--rerank", hidden=True, help=argparse.SUPPRESS,
+    ),
     snippet_tokens: int = typer.Option(8, "--snippet-tokens", min=1, max=64, help="FTS5 snippet length."),
     explain: bool = typer.Option(False, "--explain", help="Print the resolved MATCH + SQL plan."),
-    quiet: bool = typer.Option(False, "--quiet", help="Suppress the stale-index hint."),
+    quiet: bool = typer.Option(
+        False, "--quiet",
+        help=(
+            "Suppress the stale-index hint and the one-shot "
+            "semantic-rerank empty-vector warning."
+        ),
+    ),
 ) -> None:
     """Run a full-text search over the FTS5 index.
 
@@ -4177,6 +4201,12 @@ def search_command(
     from doc3gpp.models.search import SearchError, SearchFilters
     from doc3gpp.services.factory import build_search_service
 
+    # Reject the removed --rerank flag with a clear migration message.
+    if rerank:
+        raise typer.BadParameter(
+            "--rerank was removed; use --sem-query to enable semantic rerank"
+        )
+
     try:
         if since:
             parse_date_filter(since)
@@ -4189,7 +4219,7 @@ def search_command(
     except ValueError as exc:
         raise typer.BadParameter(str(exc))
 
-    svc = build_search_service()
+    svc = build_search_service(quiet=quiet)
     if svc is None:
         typer.echo("search disabled in settings", err=True)
         raise typer.Exit(code=0)
@@ -4198,9 +4228,12 @@ def search_command(
     except SearchError as exc:
         typer.echo(f"bad query: {exc}", err=True)
         raise typer.Exit(code=2)
+    settings = get_settings()
+    fanout = limit * settings.search.search_fanout_factor
     filters = SearchFilters(
         tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
-        release=release, spec=spec, since=since, until=until, limit=limit,
+        release=release, spec=spec, since=since, until=until,
+        limit=fanout if sem_query else limit,
     )
     if explain:
         _emit_explain(
@@ -4209,11 +4242,14 @@ def search_command(
             repo=svc._repo,  # noqa: SLF001 - read the cached config the search will use
         )
     try:
-        raw_hits = svc._repo.search(  # noqa: SLF001 - bypass reranker when --rerank off
+        raw_hits = svc._repo.search(  # noqa: SLF001 - bypass reranker when --sem-query off
             match_expr, filters, snippet_tokens=snippet_tokens,
         )
-        if rerank:
-            hits = svc._reranker.rerank(query, raw_hits)  # noqa: SLF001
+        if sem_query:
+            hits = svc._reranker.rerank(  # noqa: SLF001
+                semantic_query=sem_query, hits=raw_hits,
+                final_limit=limit, quiet=svc._quiet,  # noqa: SLF001
+            )
         else:
             hits = raw_hits
     except SearchError:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Protocol, TYPE_CHECKING
 
@@ -618,16 +618,36 @@ class EmbeddingReranker(Protocol):
     """
 
     def rerank(
-        self, query: str, hits: list[SearchHit],
+        self,
+        semantic_query: str,
+        hits: list[SearchHit],
+        final_limit: int | None = None,
+        quiet: bool = False,
     ) -> list[SearchHit]:
         """Return ``hits`` re-ordered (and possibly truncated) by relevance.
 
-        ``PassthroughReranker`` returns ``hits`` verbatim. A future
-        embedding impl would return the same list re-ordered by
-        cosine similarity between the query embedding and each
-        hit's content embedding. The ``query`` parameter is the
-        raw user input (not the FTS5 expression) so the reranker
-        can do its own tokenization.
+        ``semantic_query`` is the *embedding* input — distinct from any
+        FTS5 expression. The default ``PassthroughReranker`` returns
+        ``hits`` verbatim (a copy, sliced to ``final_limit`` if given).
+        ``SemanticReranker`` encodes ``semantic_query`` once, looks up
+        each candidate's closest chunk in ``vec_tdoc_embeddings`` via
+        :meth:`VectorIndexRepository.get_min_distance_for_tdocs`,
+        sorts by ``-min_distance`` desc, and truncates to
+        ``final_limit``.
+
+        ``final_limit`` is the user-visible output count (e.g. the
+        ``--limit`` value from ``search query --sem-query``).
+        The caller (CLI) is responsible for asking the upstream
+        FTS5 repo for a *wider* candidate bag, then letting the
+        reranker trim back to ``final_limit``.
+
+        ``quiet`` gates the one-shot ``logger.warning`` that
+        ``SemanticReranker`` emits when every candidate maps to
+        ``MISSING_FLOOR`` (empty ``vec_tdoc_embeddings``). The flag
+        is forwarded from the CLI's ``--quiet`` so scripted users
+        can opt out of the side-channel warning without changing
+        the visible output order. The default ``PassthroughReranker``
+        never warns, so it accepts and ignores the flag.
         """
         ...
 
@@ -715,9 +735,30 @@ class VectorIndexRepository(Protocol):
         of a blank stub when FTS5 missed the hit. Returns an empty
         dict for tdoc_ids that no longer exist (deleted between
         index and query).
-
         TDoc ids are bound individually as named parameters (no
         string interpolation) so the call is SQL-injection safe.
+        """
+        ...
+
+    def get_min_distance_for_tdocs(
+        self,
+        tdoc_ids: Sequence[str],
+        query_vec: Sequence[float],
+    ) -> dict[str, tuple[float, str] | None]:
+        """For each tdoc_id, return the closest-chunk distance to ``query_vec``.
+
+        Returns a dict keyed by tdoc_id; each value is either
+        ``(min_distance, best_chunk_id)`` for the row with the
+        smallest cosine distance to ``query_vec``, or ``None`` if the
+        tdoc has no rows in ``vec_tdoc_embeddings``.
+
+        The implementation must issue a single batched SQL trip.
+        TDoc ids with no rows are not an error — they map to ``None``
+        so the caller can apply its missing-candidate policy
+        (e.g. ``SemanticReranker`` uses ``MISSING_FLOOR``).
+
+        Empty ``tdoc_ids`` returns an empty dict without touching
+        the database.
         """
         ...
 

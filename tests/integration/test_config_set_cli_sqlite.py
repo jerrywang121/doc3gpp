@@ -15,8 +15,7 @@ on writer internals. The bootstrap path (``config init`` /
 
 These tests are sqlite-only by construction: they reuse the
 ``sqlite_env`` fixture from :mod:`tests.conftest`, exercise no
-network or non-sqlite backend, and carry no ``online``/``mysql``
-marker.
+network or non-sqlite backend, and carry no ``online`` marker.
 """
 
 from __future__ import annotations

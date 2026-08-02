@@ -26,7 +26,6 @@ Pydantic v2 + pydantic-settings, httpx, BeautifulSoup4 + lxml, openpyxl,
 alembic (installed but not wired). Optional extras:
 
 - `.[cli]` — Typer CLI (also in `[dev]`).
-- `.[mysql]` / `.[postgres]` — DB drivers.
 - `.[extract]` — `python-docx` for the TDoc extraction pipeline.
 
 `pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"`
@@ -53,7 +52,7 @@ doc3gpp/
 │   └── cli_filters.py    # shared filter / TDoc-id grammar
 ├── tests/
 │   ├── unit/             # mock external calls
-│   ├── integration/      # sqlite by default; online + mysql opt-in
+│   ├── integration/      # sqlite by default; online opt-in
 │   └── fixtures/         # sample HTML + XLSX + zip docs
 ├── docs/                 # architecture, CLI ref, conventions, code map, constraints
 └── scripts/              # test_sqlite.sh, dev_run.sh
@@ -303,14 +302,11 @@ Workflows in one line (full prose in `docs/architecture.md`):
 # Lint (ruff is the only configured tool)
 ruff check .
 
-# Full sqlite test suite (unit + integration, excludes online + mysql)
+# Full sqlite test suite (unit + integration, excludes online)
 ./scripts/test_sqlite.sh
 
 # Online tests (opt-in, hits live 3gpp.org and FTP)
 python -m pytest -m online -rs
-
-# MySQL tests (needs DOC3GPP_TEST_MYSQL_URL)
-python -m pytest -m mysql
 
 # Bootstrap dev environment
 ./scripts/dev_run.sh

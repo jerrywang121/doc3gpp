@@ -12,8 +12,7 @@
 `doc3gpp` scrapes 3GPP meeting calendars, work items (WIs), and TDocs from
 [3gpp.org](https://www.3gpp.org) and persists them to a relational database
 for programmatic access. It ships as both a Python library (SDK) and a
-Typer-based CLI (`doc3gpp`), with SQLite as the default store and MySQL /
-PostgreSQL available via configuration.
+Typer-based CLI (`doc3gpp`), with SQLite as the sole storage backend.
 
 ## Table of Contents
 
@@ -38,7 +37,7 @@ PostgreSQL available via configuration.
 - **TDoc CR extraction** — Download and parse TDoc CR into structured records.
 - **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
 - **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
-- **Multi-backend storage** — SQLite (default), MySQL, and PostgreSQL via SQLAlchemy 2.0.
+- **SQLite storage backend** — via SQLAlchemy 2.0.
 
 ## Installation
 
@@ -84,8 +83,6 @@ The `[dev]` extra includes `[cli]`, `pytest`, `pytest-cov`, and `ruff`.
 ### Optional extras
 
 ```bash
-pip install "doc3gpp[mysql]"      # MySQL driver (pymysql)
-pip install "doc3gpp[postgres]"   # PostgreSQL driver (psycopg)
 pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
 pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
 pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sentence-transformers, sqlite-vec)
@@ -207,7 +204,7 @@ doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
 ### `search` — FTS5 + BM25 full-text search
 
 Requires the `doc3gpp[search]` extra (ships FTS5 helpers; sqlite-only).
-On MySQL/PostgreSQL or builds without FTS5, `search` reports
+On builds without FTS5, `search` reports
 unavailable with a one-liner and the rest of the CLI is unaffected.
 
 ```bash
@@ -255,7 +252,7 @@ The legacy `--rerank` flag was removed; callers should switch to
 Requires the `doc3gpp[semantic]` extra (`sentence-transformers`,
 `sqlite-vec`); sqlite-only. The `sentence-transformers` model is
 pulled automatically by `pip install`, so the single install command
-sets up the library and the model together. On MySQL/PostgreSQL or
+sets up the library and the model together. On
 builds without sqlite-vec the command reports unavailable with a
 one-liner; `search query` (FTS5-only) still works.
 
@@ -348,21 +345,15 @@ env var is silently ignored; configure those values via TOML instead.
 
 The remaining settings (`cache.size_limit_mb`, `cache.purge_confirm`,
 `tdoc_parse.max_batch`, `tdoc_parse.max_ftp_depth`, `sync.*`,
-`output.*`, `db_pool_size`, `db_auto_migrate`, `http_max_retries`,
+`output.*`, `db_auto_migrate`, `http_max_retries`,
 `http_retry_backoff`, …) are TOML-only — see the example file.
 
 Examples:
 
 ```bash
-# default sqlite (omit DOC3GPP_DATABASE_URL to use the pydantic default,
+# sqlite (omit DOC3GPP_DATABASE_URL to use the pydantic default,
 # which resolves to ~/.local/share/doc3gpp/doc3gpp.db)
 DOC3GPP_DATABASE_URL=sqlite+pysqlite:////absolute/path/to/doc3gpp.db
-
-# mysql
-DOC3GPP_DATABASE_URL=mysql+pymysql://user:pass@localhost:3306/doc3gpp
-
-# postgresql
-DOC3GPP_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/doc3gpp
 ```
 
 ## Configuration File (TOML)
@@ -425,7 +416,7 @@ bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 search_fanout_factor = 4
 
 # Hybrid search — only loaded when the `[semantic]` extra is installed.
-# sqlite-only; on MySQL/PostgreSQL the vector path is a no-op.
+# sqlite-only; on builds without sqlite-vec the vector path is a no-op.
 [semantic_search]
 enabled = true                       # master switch for `search sem` + auto-embed
 auto_embed_on_parse = true           # upsert embeddings after every successful parse
@@ -477,10 +468,10 @@ document and module map.
 pytest
 ```
 
-SQLite-only profile (excludes `mysql` and `online` markers):
+SQLite-only profile (excludes `online` markers):
 
 ```bash
-python -m pytest -q --cov=src/doc3gpp --cov-report=term-missing -m "not mysql and not online"
+python -m pytest -q --cov=src/doc3gpp --cov-report=term-missing -m "not online"
 ```
 
 Equivalent helper script:
@@ -493,12 +484,6 @@ Online tests (opt-in, hits live 3gpp.org and FTP):
 
 ```bash
 python -m pytest -q -m online -rs
-```
-
-MySQL tests (requires `DOC3GPP_TEST_MYSQL_URL`):
-
-```bash
-python -m pytest -m mysql
 ```
 
 ## Roadmap

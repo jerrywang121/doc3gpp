@@ -14,10 +14,9 @@ change set so the docs stay honest.
   bootstrap. `db_auto_migrate` is a TOML-only field (see
   `doc3gpp.settings.schema.ALLOWED_ENV_VARS`) that does **not** run
   migrations. After pulling an ORM shape change, **existing SQLite
-  installs must run `doc3gpp db reset --yes`** (or a backend-native
-  migration for MySQL / PostgreSQL) — otherwise the live schema stays
-  out of sync and SQL repos raise `OperationalError`. The single
-  exception is `docs/db/migrate.py::_migrate_rename_tdoc_cr_details`,
+  installs must run `doc3gpp db reset --yes`** — otherwise the live
+  schema stays out of sync and SQL repos raise `OperationalError`.
+  The single exception is `docs/db/migrate.py::_migrate_rename_tdoc_cr_details`,
   a one-shot idempotent rename that bridges legacy `tdoc_cr_details`
   callers to the current `tdoc_cr_cover_page` table; nothing else
   in the bootstrap is allowed to mutate an existing table in place.
@@ -159,10 +158,7 @@ change set so the docs stay honest.
 - **`online` tests access live `3gpp.org` + FTP** and are flaky.
   Always run with `-rs` to surface skip reasons; do not gate CI on
   them. They live behind the `online` pytest marker so the default
-  profile (`pytest -m "not mysql and not online"`) skips them.
-- **MySQL tests are double-gated** (`pytestmark` marker +
-  `@pytest.mark.skipif` on `DOC3GPP_TEST_MYSQL_URL`). They do not
-  run in the default profile.
+  profile (`pytest -m "not online"`) skips them.
 - **No CI pipeline exists.** The project relies on local
   `scripts/test_sqlite.sh` runs. There is no `.github/workflows/`,
   no Makefile, no Dockerfile.

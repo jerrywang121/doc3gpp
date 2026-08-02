@@ -6,7 +6,7 @@ layer below it; cross-layer imports flow strictly downward.
 
 Current scope:
 
-- Configurable SQL backends (sqlite default, mysql, postgres).
+- SQLite storage backend (sole backend).
 - Calendar scraping from the 3GPP DynaReport meetings pages.
 - TDoc list scraping from the 3GPP portal
   (`GenerateDocumentList.aspx?meetingId={meeting_id}`); auxiliary TDoc
@@ -143,7 +143,7 @@ Per-layer modules:
     - `storage/db/migrate.py` — `create_schema` (calls
       `Base.metadata.create_all`)
     - `storage/db/migrations/` — placeholder for future Alembic
-    - `storage/backends/{sqlite,mysql,postgres}.py` — engine kwargs
+    - `storage/backends/sqlite.py` — engine kwargs
     - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
       and `storage/repositories/tdoc_cr_ttcn_sql.py` — concrete
       `SQLAlchemy*Repository` classes (the cover-page repo also
@@ -439,7 +439,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `tdoc_extracts`.
 - `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).
 - `tdoc_search_meta`: Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
-- `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`; one row per embedding chunk produced by the semantic-search subsystem. Schema is gated on the sqlite + sqlite-vec support matrix (created by `_create_vector_schema` in `storage/db/migrate.py`; silently skipped on MySQL / PostgreSQL and when the sqlite-vec extension is unavailable). Dimensions match the active `SemanticSearchSettings.embedding_model`.
+- `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`; one row per embedding chunk produced by the semantic-search subsystem. Schema is gated on the sqlite + sqlite-vec support matrix (created by `_create_vector_schema` in `storage/db/migrate.py`; silently skipped when the sqlite-vec extension is unavailable). Dimensions match the active `SemanticSearchSettings.embedding_model`.
 - `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity
@@ -508,19 +508,14 @@ default is OFF).
 
 ## Backend Selection
 
-The active backend is selected from the allowlisted
+The backend is selected from the allowlisted
 `DOC3GPP_DATABASE_URL` env var (or its TOML counterpart):
 
-- sqlite default: `sqlite+pysqlite:///~/.local/share/doc3gpp/doc3gpp.db`
-- mysql example: `mysql+pymysql://user:pass@localhost:3306/doc3gpp`
-- postgres example: `postgresql+psycopg://user:pass@localhost:5432/doc3gpp`
+- sqlite: `sqlite+pysqlite:///~/.local/share/doc3gpp/doc3gpp.db`
 
-Backend-specific engine kwargs are applied in
-`src/doc3gpp/storage/db/session.py` via:
+Engine kwargs are applied in `src/doc3gpp/storage/db/session.py` via:
 
 - `src/doc3gpp/storage/backends/sqlite.py`
-- `src/doc3gpp/storage/backends/mysql.py`
-- `src/doc3gpp/storage/backends/postgres.py`
 
 ## CLI Surface
 
@@ -657,7 +652,7 @@ service stack.
       `test_tdoc_sync_cli.py`, `test_tdoc_parse_cli.py`,
       `test_cache_cli.py`, `test_wi_cli.py`, `test_tsg_cli.py`,
       `test_db_reset_cli.py`)
-- `tests/integration/` — sqlite-only by default; online + mysql
+- `tests/integration/` — sqlite-only by default; online
   opt-in. Coverage includes:
     - `test_sqlite_backend.py`, `test_sdk_integration.py`,
       `test_cli_sqlite.py`, `test_db_reset_sqlite.py`
@@ -667,15 +662,13 @@ service stack.
     - `test_online_3gpp_calendar.py`, `test_online_tdoc_parse.py`,
       `test_online_tdoc_fetch_r5.py` (live 3GPP endpoints,
       `@pytest.mark.online`)
-    - `test_mysql_backend.py` (gated on
-      `DOC3GPP_TEST_MYSQL_URL`)
 - `tests/fixtures/tdoc_cr_doc/` — 7 CR zip fixtures
   (`C6-250028.zip`, `R5-227476.zip`, `R5-253079.zip`,
   `R5s260009.zip`, `R5s260051.zip`, `R5s260135.zip`,
   `R5s260176.zip`). Regression corpus for `cr_parser` and
   `tdoc_cr_service`.
-- Pytest markers: `online`, `mysql`. The sqlite profile is
-  `pytest -m "not mysql and not online"`; `./scripts/test_sqlite.sh`
+- Pytest markers: `online`. The sqlite profile is
+  `pytest -m "not online"`; `./scripts/test_sqlite.sh`
   is the canonical wrapper.
 
 ## Cross-cutting design rules

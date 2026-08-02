@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
 
+from doc3gpp.models.jobs import Job, JobKind, JobStatus, JSONValue
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tdoc_cr import (
@@ -759,6 +760,117 @@ class VectorIndexRepository(Protocol):
 
         Empty ``tdoc_ids`` returns an empty dict without touching
         the database.
+        """
+        ...
+
+
+class JobRepository(Protocol):
+    """Storage operations for background-job records.
+
+    Pure persistence layer over the ``jobs`` SQL table. The HTTP and
+    MCP routes plus the asyncio worker (T7) share this contract so
+    any backend (sqlite, postgres) can be swapped without rewriting
+    the route / handler code.
+
+    Lifecycle methods (``mark_running``, ``mark_succeeded``,
+    ``mark_failed``, ``mark_cancelled``) are the only way to
+    transition a job's ``status``; the repository stamps the matching
+    ``started_at`` / ``finished_at`` timestamp automatically so the
+    caller never has to remember to set it.
+    """
+
+    def create(self, kind: JobKind, params: Mapping[str, JSONValue]) -> Job:
+        """Persist a fresh ``QUEUED`` row and return the resulting ``Job``.
+
+        Mints a new UUID4 hex ``id`` and stamps ``created_at`` with
+        the current UTC time. ``status`` is always ``QUEUED`` on
+        return; ``log_lines`` is an empty tuple; ``result_summary``
+        / ``error`` / ``started_at`` / ``finished_at`` are ``None``.
+        """
+        ...
+
+    def get(self, job_id: str) -> Job | None:
+        """Return the job row for ``job_id``, or ``None`` when absent."""
+        ...
+
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        status: JobStatus | None = None,
+    ) -> list[Job]:
+        """Return recent job rows ordered by descending ``created_at``.
+
+        ``limit`` caps the result count (default 50). When ``status``
+        is supplied the rows are filtered to that lifecycle state.
+        The composite ``(status, created_at DESC)`` index covers
+        the filtered case; the unfiltered case falls back to a full
+        scan ordered by ``created_at`` because no single-column
+        index on ``created_at`` is needed for the v1 dashboard.
+        """
+        ...
+
+    def mark_running(self, job_id: str, *, message: str = "starting") -> Job:
+        """Transition ``job_id`` from ``QUEUED`` to ``RUNNING``.
+
+        Stamps ``started_at`` with the current UTC time and
+        appends ``message`` to ``log_lines``. Returns the refreshed
+        job; callers that need the prior state should have read it
+        via :meth:`get` before calling this method.
+        """
+        ...
+
+    def append_log(self, job_id: str, *, line: str) -> None:
+        """Append ``line`` to ``log_lines``, capping the buffer at 50 entries.
+
+        FIFO eviction — the oldest entry is dropped when the buffer
+        is full so the column never grows unboundedly. The cap is
+        enforced in the repository, not the dataclass, so the
+        :class:`doc3gpp.models.jobs.Job` value object remains a
+        pure projection of the persisted state.
+        """
+        ...
+
+    def mark_succeeded(
+        self,
+        job_id: str,
+        *,
+        summary: Mapping[str, JSONValue],
+    ) -> Job:
+        """Transition ``job_id`` to ``SUCCEEDED`` with ``summary``.
+
+        Stamps ``finished_at`` with the current UTC time and writes
+        ``summary`` into ``result_summary``. Returns the refreshed
+        job.
+        """
+        ...
+
+    def mark_failed(self, job_id: str, *, error: str) -> Job:
+        """Transition ``job_id`` to ``FAILED`` with ``error``.
+
+        Stamps ``finished_at`` with the current UTC time and writes
+        ``error`` into the ``error`` column. Returns the refreshed
+        job.
+        """
+        ...
+
+    def mark_cancelled(self, job_id: str) -> Job:
+        """Transition ``job_id`` to ``CANCELLED``.
+
+        Stamps ``finished_at`` with the current UTC time. Returns
+        the refreshed job. ``error`` is left ``None`` — cancellation
+        is an operator decision, not a failure.
+        """
+        ...
+
+    def delete_older_than(self, cutoff: datetime) -> int:
+        """Delete terminal jobs older than ``cutoff``; return the row count.
+
+        Only ``SUCCEEDED``, ``FAILED``, and ``CANCELLED`` rows whose
+        ``finished_at`` is strictly older than ``cutoff`` are
+        removed. ``QUEUED`` and ``RUNNING`` rows are left alone
+        because the worker may still be reading them. The method
+        returns the number of rows actually deleted.
         """
         ...
 

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -324,4 +325,63 @@ class TDocExtractOrm(Base):
     )
     parser_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="1.0.0"
+    )
+
+
+class JobORM(Base):
+    """Persisted background-job record exposed by the HTTP / MCP server.
+
+    One row per long-running job (sync, parse, search-rebuild,
+    cache-purge). Identity is a UUID4 hex string so the worker can
+    mint an id without a round-trip; the HTTP and MCP routes use it
+    as the lookup key.
+
+    ``kind`` and ``status`` are stored as plain TEXT — the
+    :class:`doc3gpp.models.jobs.JobKind` / :class:`JobStatus`
+    enums provide the in-memory shape, and the repository layer is
+    responsible for the enum / string translation.
+
+    ``params``, ``log_lines``, and ``result_summary`` are TEXT
+    columns carrying JSON-encoded payloads (``params`` /
+    ``result_summary`` are JSON objects; ``log_lines`` is a JSON
+    array of strings). The repository serialises them with
+    ``json.dumps`` and parses them with ``json.loads`` on every
+    read / write so the cross-dialect round-trip stays consistent
+    (sqlite stores JSON in TEXT under the hood anyway, so this
+    matches the dialect-native shape without relying on
+    SQLAlchemy's dialect-aware ``JSON`` type). The
+    :meth:`doc3gpp.storage.repositories.jobs_sql.SQLAlchemyJobRepository.append_log`
+    method enforces the 50-entry FIFO cap on the ``log_lines``
+    array.
+
+    The two composite indexes speed up the two hot read patterns:
+
+    * ``list(status=...)`` ordered by ``created_at DESC`` — the
+      status dashboard (e.g. ``status=FAILED``).
+    * ``list(kind=...)`` ordered by ``created_at DESC`` — the
+      per-kind history view.
+    """
+
+    __tablename__ = "jobs"
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    params: Mapped[str] = mapped_column(Text, nullable=False)
+    log_lines: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("idx_jobs_status_created_at", "status", "created_at"),
+        Index("idx_jobs_kind_created_at", "kind", "created_at"),
     )

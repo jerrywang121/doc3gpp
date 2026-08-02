@@ -83,6 +83,20 @@ def test_dim_mismatch_raises(repo):
         repo.upsert_chunks("R5-1", bad)
 
 
+def test_constructor_raises_vector_index_unavailable_when_meta_missing(sqlite_env) -> None:
+    """Construction must degrade via VectorIndexUnavailableError when
+    the schema is not yet created (vec_meta missing), matching the
+    documented contract (vector_sql.py:5-9) so the factory can catch it.
+    """
+    from doc3gpp.models.semantic_search import VectorIndexUnavailableError
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+
+    with pytest.raises(VectorIndexUnavailableError):
+        SQLAlchemyVectorIndexRepository()
+
+
 def test_resume_cursor_round_trip(repo):
     assert repo.get_resume_cursor() is None
     repo.set_resume_cursor("R5-123")

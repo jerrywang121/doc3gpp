@@ -26,6 +26,7 @@ from collections.abc import Iterable, Sequence
 import numpy as np
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
 from doc3gpp.models.semantic_search import VectorIndexUnavailableError
@@ -69,18 +70,24 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
 
     def _read_or_init_dim(self) -> int:
         with self._engine.begin() as conn:
-            row = conn.execute(
-                text("SELECT value FROM vec_meta WHERE key = 'embedding_dim'")
-            ).scalar()
-            if row is None:
-                conn.execute(
-                    text(
-                        "INSERT INTO vec_meta (key, value) VALUES ('embedding_dim', :d)"
-                    ),
-                    {"d": str(DEFAULT_DIM)},
-                )
-                return DEFAULT_DIM
-            return int(row)
+            try:
+                row = conn.execute(
+                    text("SELECT value FROM vec_meta WHERE key = 'embedding_dim'")
+                ).scalar()
+                if row is None:
+                    conn.execute(
+                        text(
+                            "INSERT INTO vec_meta (key, value) VALUES ('embedding_dim', :d)"
+                        ),
+                        {"d": str(DEFAULT_DIM)},
+                    )
+                    return DEFAULT_DIM
+                return int(row)
+            except OperationalError as exc:
+                raise VectorIndexUnavailableError(
+                    "vector schema is not initialized; run `doc3gpp db init` "
+                    f"or `doc3gpp db reset` first: {exc}"
+                ) from exc
 
     def _check_dim(self, embeddings: list[np.ndarray]) -> None:
         for v in embeddings:

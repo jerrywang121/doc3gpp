@@ -15,7 +15,6 @@ def test_defaults():
     assert s.rrf_k == 60
     assert s.fts5_weight == 0.5
     assert s.fanout_multiplier == 4
-    assert s.final_limit == 20
     assert s.max_chunks_per_tdoc == 8
 
 

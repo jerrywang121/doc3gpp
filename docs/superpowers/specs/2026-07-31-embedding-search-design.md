@@ -667,14 +667,16 @@ class SemanticSearchSettings(BaseModel):
     rrf_k: int = 60
     vector_weight: float = 0.7
     fanout_multiplier: int = 2
-    final_limit: int = 20
+    # DROPPED: final_limit (the CLI's --limit is the only limit; the
+    #         hybrid fan-out base is limit * fanout_multiplier, mirroring
+    #         search.search_fanout_factor for `search query --sem-query`)
     # Stopword-set customization (see "Custom stopword set").
     user_defined_stop_words: list[str] = []
     keep_negation_words: list[str] = ["not"]
 ```
 
 The CLI's `--limit` and `--vector-weight` flags override the
-`final_limit` and `vector_weight` settings on a per-call basis;
+`final_limit` (removed) and `vector_weight` settings on a per-call basis;
 the rest are config-only (no CLI surface in v1). Pydantic
 validates `chunk_size > 0`, `0 <= chunk_overlap < chunk_size`,
 `0.0 <= vector_weight <= 1.0`, `fanout_multiplier >= 1`,

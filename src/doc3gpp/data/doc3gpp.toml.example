@@ -205,13 +205,13 @@ search_fanout_factor = 4
 # 1.0 is pure FTS5. Ignored when `--fts5-query` is omitted.
 # fts5_weight = 0.5
 
-# Fan-out multiplier for the FTS5 and vector paths. Each path
-# retrieves `fanout_multiplier * final_limit` candidates before RRF
-# merge and truncation.
+# Fan-out multiplier for the hybrid FTS5 + vector paths of
+# `search sem`. When `--fts5-query` is supplied, each side
+# retrieves `fanout_multiplier * --limit` candidates before RRF
+# merge and truncation. Ignored when `--fts5-query` is omitted
+# (pure-vector path). Mirrors `search.search_fanout_factor` for
+# `search query --sem-query`.
 # fanout_multiplier = 4
-
-# Default `--limit` for `search sem` (also the per-path fan-out base).
-# final_limit = 20
 
 # Hard cap on the number of chunks indexed per TDoc. Prevents
 # pathological TDoc bodies from dominating the index.

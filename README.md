@@ -277,7 +277,7 @@ successful `tdoc parse` (skipped when `Settings.semantic_search.
 auto_embed_on_parse = false`). Tune via the `[semantic_search]`
 section in `doc3gpp.toml` (`enabled`, `embedding_model`, `chunk_size`,
 `chunk_overlap`, `rrf_k`, `fts5_weight`, `fanout_multiplier`,
-`final_limit`, `max_chunks_per_tdoc`).
+`max_chunks_per_tdoc`).
 
 ### `config` — TOML config lifecycle
 
@@ -434,8 +434,7 @@ chunk_size = 200                     # whitespace tokens per chunk
 chunk_overlap = 20                   # trailing tokens repeated at next chunk start
 rrf_k = 60                           # RRF k constant
 fts5_weight = 0.5                    # 0.0 = vector-only, 1.0 = FTS5-only (vector weight = 1 - fts5_weight)
-fanout_multiplier = 4                # internal_limit = limit * fanout per side
-final_limit = 20                     # default `--limit` for `search sem`
+fanout_multiplier = 4                # hybrid-path fanout: limit * fanout per side
 max_chunks_per_tdoc = 8              # cap on chunks per TDoc
 ```
 

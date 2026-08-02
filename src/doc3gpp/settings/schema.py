@@ -511,9 +511,14 @@ class SemanticSearchSettings(BaseModel):
     )
     fanout_multiplier: int = Field(
         default=4, ge=1,
-        description="Internal fan-out factor (limit * fanout per side).",
+        description=(
+            "Internal fan-out factor for the hybrid `search sem` path. "
+            "When --fts5-query is supplied, each side fetches "
+            "limit * fanout_multiplier candidates before RRF merge; "
+            "ignored on the pure-vector path. Mirrors "
+            "search.search_fanout_factor for `search query --sem-query`."
+        ),
     )
-    final_limit: int = Field(default=20, ge=0, description="Default --limit for `search sem`.")
     max_chunks_per_tdoc: int = Field(
         default=8, ge=1,
         description="Cap on chunks per TDoc to bound parse latency on long covers.",

@@ -361,7 +361,8 @@ class SemanticSearchSettings(BaseModel):
     rrf_k: int = 60
     fts5_weight: float = 0.5            # was vector_weight: 0.7
     fanout_multiplier: int = 2
-    final_limit: int = 20
+    # DROPPED: final_limit (CLI --limit is the only limit; fan-out base
+    #         is limit * fanout_multiplier, mirroring search_fanout_factor)
     # DROPPED: user_defined_stop_words (no stripper)
     # DROPPED: keep_negation_words  (no stripper)
     max_chunks_per_tdoc: int = 32
@@ -372,7 +373,7 @@ CLI overrides per call:
 | Setting | CLI flag |
 |---|---|
 | `fts5_weight` | `--fts5-weight` |
-| `final_limit` (per-path base) | `--limit` (terminal truncation) |
+| `fanout_multiplier` (per-path base, hybrid only) | `--limit` (fan-out base + terminal truncation) |
 
 The `fts5_weight` validator is unchanged: `0.0 <= fts5_weight <= 1.0`.
 Pydantic surface key is `fts5_weight`; the TOML key is also

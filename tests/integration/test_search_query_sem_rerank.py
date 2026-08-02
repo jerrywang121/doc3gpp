@@ -317,3 +317,42 @@ def test_sem_query_fts5_zero_results_does_not_encode(seeded_engine):
     # SemanticReranker.rerank short-circuits on `if not hits: return []`
     # so the embedder is never called when FTS5 returns zero hits.
     assert embedder.calls == []
+
+
+# ----------------------------------------------------------------------
+# Final-review fix (Task F1): --quiet must suppress the empty-vector
+# warning in the integration path too. The unit test pins the
+# SemanticReranker contract; this integration test pins the
+# CLI → factory → reranker plumbing end-to-end.
+# ----------------------------------------------------------------------
+
+
+def test_sem_query_quiet_suppresses_warning(seeded_engine, caplog):
+    """``--quiet`` suppresses the empty-vector WARNING end-to-end.
+
+    The vector index is empty, so the reranker would normally emit
+    ``"semantic rerank: no rows in vec_tdoc_embeddings; falling back
+    to FTS5 order"``. With ``--quiet`` the warning is silent and the
+    FTS5 order is still preserved (the suppression is a side-channel
+    gate, not a behaviour change for the visible output).
+    """
+    _seed_vectors({})
+    embedder = _FakeEmbedder([0.0, 0.0, 0.0, 0.0])
+    init_patch, encode_patch = _patch_embedder(embedder)
+    with init_patch, encode_patch, caplog.at_level(
+        logging.WARNING, logger="doc3gpp.services.semantic_reranker",
+    ):
+        result = CliRunner().invoke(
+            search_app,
+            ["query", "R5*", "--sem-query", "anything", "--quiet"],
+        )
+    assert result.exit_code == 0, result.output
+    warnings = [
+        rec for rec in caplog.records
+        if rec.levelno == logging.WARNING
+        and "no rows in vec_tdoc_embeddings" in rec.message
+    ]
+    assert warnings == [], (
+        f"expected no empty-vector WARNING under --quiet; got: "
+        f"{[r.message for r in caplog.records]}"
+    )

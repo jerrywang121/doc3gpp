@@ -4177,7 +4177,13 @@ def search_command(
     ),
     snippet_tokens: int = typer.Option(8, "--snippet-tokens", min=1, max=64, help="FTS5 snippet length."),
     explain: bool = typer.Option(False, "--explain", help="Print the resolved MATCH + SQL plan."),
-    quiet: bool = typer.Option(False, "--quiet", help="Suppress the stale-index hint."),
+    quiet: bool = typer.Option(
+        False, "--quiet",
+        help=(
+            "Suppress the stale-index hint and the one-shot "
+            "semantic-rerank empty-vector warning."
+        ),
+    ),
 ) -> None:
     """Run a full-text search over the FTS5 index.
 
@@ -4213,7 +4219,7 @@ def search_command(
     except ValueError as exc:
         raise typer.BadParameter(str(exc))
 
-    svc = build_search_service()
+    svc = build_search_service(quiet=quiet)
     if svc is None:
         typer.echo("search disabled in settings", err=True)
         raise typer.Exit(code=0)
@@ -4242,7 +4248,7 @@ def search_command(
         if sem_query:
             hits = svc._reranker.rerank(  # noqa: SLF001
                 semantic_query=sem_query, hits=raw_hits,
-                final_limit=limit,
+                final_limit=limit, quiet=svc._quiet,  # noqa: SLF001
             )
         else:
             hits = raw_hits

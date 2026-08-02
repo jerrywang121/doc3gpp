@@ -272,6 +272,8 @@ def build_search_service(
     settings: Settings | None = None,
     repo: SearchIndexRepository | None = None,
     reranker: EmbeddingReranker | None = None,
+    *,
+    quiet: bool = False,
 ) -> SearchService | None:
     """Build a :class:`SearchService` or return ``None`` if unavailable.
 
@@ -290,6 +292,10 @@ def build_search_service(
         reranker: Optional explicit reranker. When ``None``, the
             factory constructs the default
             :class:`PassthroughReranker`.
+        quiet: Forwarded to :class:`SearchService` so the
+            :class:`SemanticReranker`'s one-shot empty-vector
+            ``logger.warning`` is suppressed under ``--quiet``.
+            Default ``False`` preserves every existing caller.
     """
     if settings is None:
         settings = get_settings()
@@ -332,6 +338,6 @@ def build_search_service(
                     reranker = PassthroughReranker()
             else:
                 reranker = PassthroughReranker()
-        return SearchService(repo=repo, reranker=reranker)
+        return SearchService(repo=repo, reranker=reranker, quiet=quiet)
     except SearchUnavailableError:
         return None

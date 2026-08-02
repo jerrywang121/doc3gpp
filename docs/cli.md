@@ -1474,7 +1474,7 @@ Filters (all optional, AND-combined):
 | `--snippet-tokens INT` | Override `Settings.search.snippet_tokens` for this single invocation. Range 1-64. |
 | `--sem-query STR` | Reorder hits by cosine similarity to STR. Requires the [semantic] extra + vec_tdoc_embeddings. See `search.search_fanout_factor`. |
 | `--explain` | Print the resolved FTS5 MATCH expression, snippet column, and BM25 weight vector to stderr (output format below). Useful for tuning `bm25_weights` in `doc3gpp.toml`. |
-| `--quiet` | suppress the stale-index hint |
+| `--quiet` | suppress the stale-index hint and the one-shot semantic-rerank empty-vector warning |
 
 Exit codes: `0` success, `2` bad query, `3` index corrupt. When
 the FTS5 module is unavailable (wrong dialect, missing extra,
@@ -1533,10 +1533,10 @@ doc3gpp[semantic]\`` to stderr and exits 1. The empty-vector
 fallback applies to TDoc rows that have no vector chunks indexed
 yet: `SemanticReranker` assigns them a sentinel
 `MISSING_FLOOR` distance so they sort to the bottom of the rerank
-rather than being silently skipped. A warning surfaces in the
-stale-index hint side-channel when the miss rate is high; the
-rerank still returns them so the FTS5 order is preserved as a
-backstop.
+rather than being silently skipped. On a fully empty
+`vec_tdoc_embeddings`, `SemanticReranker` emits a one-shot
+`WARNING` to `stderr` unless `--quiet` is set. With `--quiet`,
+the FTS5 order is preserved silently.
 
 The previous `--rerank` flag is **removed**. It was a no-op against
 the default `PassthroughReranker` and would have collided with the

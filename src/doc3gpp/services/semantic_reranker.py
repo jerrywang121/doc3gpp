@@ -29,8 +29,9 @@ class SemanticReranker:
 
     The class is duck-typed against the
     :class:`~doc3gpp.repository.protocols.EmbeddingReranker` Protocol
-    (it implements the same ``rerank(semantic_query, hits, final_limit)``
-    signature). It is NOT declared as ``EmbeddingReranker`` in the
+    (it implements the same
+    ``rerank(semantic_query, hits, final_limit, quiet)`` signature).
+    It is NOT declared as ``EmbeddingReranker`` in the
     type annotation because ``build_search_service`` constructs the
     instance lazily and tests inject mock embedders / vector repos
     via constructor injection.
@@ -53,6 +54,7 @@ class SemanticReranker:
         semantic_query: str,
         hits: list[SearchHit],
         final_limit: int | None = None,
+        quiet: bool = False,
     ) -> list[SearchHit]:
         if not hits:
             return []
@@ -70,7 +72,7 @@ class SemanticReranker:
                 score = -entry[0]  # higher = better
                 any_real = True
             decorated.append((score, idx, hit))
-        if not any_real:
+        if not any_real and not quiet:
             logger.warning(
                 "semantic rerank: no rows in vec_tdoc_embeddings; "
                 "falling back to FTS5 order"

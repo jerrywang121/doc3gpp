@@ -622,6 +622,7 @@ class EmbeddingReranker(Protocol):
         semantic_query: str,
         hits: list[SearchHit],
         final_limit: int | None = None,
+        quiet: bool = False,
     ) -> list[SearchHit]:
         """Return ``hits`` re-ordered (and possibly truncated) by relevance.
 
@@ -639,6 +640,14 @@ class EmbeddingReranker(Protocol):
         The caller (CLI) is responsible for asking the upstream
         FTS5 repo for a *wider* candidate bag, then letting the
         reranker trim back to ``final_limit``.
+
+        ``quiet`` gates the one-shot ``logger.warning`` that
+        ``SemanticReranker`` emits when every candidate maps to
+        ``MISSING_FLOOR`` (empty ``vec_tdoc_embeddings``). The flag
+        is forwarded from the CLI's ``--quiet`` so scripted users
+        can opt out of the side-channel warning without changing
+        the visible output order. The default ``PassthroughReranker``
+        never warns, so it accepts and ignores the flag.
         """
         ...
 

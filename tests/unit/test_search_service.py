@@ -89,6 +89,8 @@ class StubReranker(EmbeddingReranker):
 
     def rerank(
         self, query: str, hits: list[SearchHit],
+        final_limit: int | None = None,
+        quiet: bool = False,
     ) -> list[SearchHit]:
         self.queries.append(query)
         self.invocations += 1

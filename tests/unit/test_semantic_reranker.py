@@ -1,6 +1,7 @@
 """Unit tests for SemanticReranker (no live model, no DB)."""
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -132,3 +133,90 @@ def test_all_missing_preserves_input_order():
 
 def test_missing_floor_constant_is_negative_infinity():
     assert SemanticReranker.MISSING_FLOOR == float("-inf")
+
+
+# ----------------------------------------------------------------------
+# Final-review fix (Task F1): --quiet gate on the empty-vector warning.
+# The spec/plan both require the warning to fire once per invocation in
+# non-`--quiet` mode and be suppressed under `quiet=True`. Passthrough
+# never warns, but `SemanticReranker` does — those two code paths share
+# the same Protocol signature, so we add `quiet` as a Protocol kwarg
+# with a default of `False` (preserves every existing caller).
+# ----------------------------------------------------------------------
+
+
+def test_all_missing_warning_fires_by_default(caplog) -> None:
+    """Without ``quiet=True`` the empty-vector warning is emitted."""
+    emb = _mock_embedder()
+    vec = MagicMock()
+    vec.get_min_distance_for_tdocs.return_value = {
+        "R5-1": None,
+        "R5-2": None,
+    }
+    svc = SemanticReranker(emb, vec, _settings())
+    hits = [_hit("R5-1"), _hit("R5-2")]
+    with caplog.at_level(logging.WARNING, logger="doc3gpp.services.semantic_reranker"):
+        svc.rerank("query", hits)
+    warning_records = [
+        rec for rec in caplog.records
+        if rec.levelno == logging.WARNING
+        and "no rows in vec_tdoc_embeddings" in rec.message
+    ]
+    assert warning_records, (
+        f"expected one-shot WARNING on all-missing; got: "
+        f"{[r.message for r in caplog.records]}"
+    )
+
+
+def test_quiet_flag_suppresses_warning(caplog) -> None:
+    """``quiet=True`` suppresses the empty-vector warning entirely.
+
+    The output order is unchanged (still FTS5 order, since every
+    candidate maps to ``MISSING_FLOOR``); only the side-channel
+    WARNING is silenced. Mirrors the spec wording: "One-shot
+    ``logger.warning`` in non-``--quiet`` mode."
+    """
+    emb = _mock_embedder()
+    vec = MagicMock()
+    vec.get_min_distance_for_tdocs.return_value = {
+        "R5-1": None,
+        "R5-2": None,
+    }
+    svc = SemanticReranker(emb, vec, _settings())
+    hits = [_hit("R5-1"), _hit("R5-2")]
+    with caplog.at_level(logging.WARNING, logger="doc3gpp.services.semantic_reranker"):
+        out = svc.rerank("query", hits, quiet=True)
+    warning_records = [
+        rec for rec in caplog.records if rec.levelno == logging.WARNING
+    ]
+    assert warning_records == [], (
+        f"expected zero WARNING records under quiet=True; got: "
+        f"{[r.message for r in caplog.records]}"
+    )
+    # Sanity: the output is still the FTS5 order (the warn suppression
+    # does not change ordering behaviour).
+    assert [h.tdoc_id for h in out] == ["R5-1", "R5-2"]
+
+
+def test_quiet_flag_does_not_suppress_real_scores(caplog) -> None:
+    """``quiet=True`` is a no-op when candidates have real scores.
+
+    Only the empty-vector branch should be gated. With real scores
+    present the warning is not in the firing path regardless of
+    ``quiet`` — this test pins the contract that adding ``quiet``
+    does not accidentally silence the normal sort path.
+    """
+    emb = _mock_embedder()
+    vec = MagicMock()
+    vec.get_min_distance_for_tdocs.return_value = {
+        "R5-1": (0.1, "R5-1#0"),
+        "R5-2": (0.2, "R5-2#0"),
+    }
+    svc = SemanticReranker(emb, vec, _settings())
+    hits = [_hit("R5-1"), _hit("R5-2")]
+    with caplog.at_level(logging.WARNING, logger="doc3gpp.services.semantic_reranker"):
+        out = svc.rerank("query", hits, quiet=True)
+    assert [h.tdoc_id for h in out] == ["R5-1", "R5-2"]
+    assert not any(
+        rec.levelno == logging.WARNING for rec in caplog.records
+    )

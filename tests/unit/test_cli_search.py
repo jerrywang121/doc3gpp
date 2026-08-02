@@ -107,7 +107,7 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
     # The CLI imports ``build_search_service`` lazily inside
     # ``search_command``; monkeypatch the resolved import site.
     monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", lambda: stub,
+        "doc3gpp.services.factory.build_search_service", lambda *a, **kw: stub,
     )
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
 
@@ -285,7 +285,7 @@ def test_search_index_status_panel_includes_vector_rows(monkeypatch) -> None:
     sem_stub = _VecStub()
 
     monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", lambda: fts5_stub,
+        "doc3gpp.services.factory.build_search_service", lambda *a, **kw: fts5_stub,
     )
     monkeypatch.setattr(
         "doc3gpp.services.factory.build_semantic_search_service",
@@ -317,7 +317,7 @@ def test_search_index_status_panel_omits_vector_when_service_none(monkeypatch) -
     fts5_stub._status = replace(fts5_stub.status(), row_count=100)
 
     monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", lambda: fts5_stub,
+        "doc3gpp.services.factory.build_search_service", lambda *a, **kw: fts5_stub,
     )
     monkeypatch.setattr(
         "doc3gpp.services.factory.build_semantic_search_service",
@@ -347,7 +347,7 @@ def test_search_query_no_sem_query_does_not_invoke_reranker(monkeypatch) -> None
     fake_svc.status.return_value = MagicMock(is_stale=False)
     monkeypatch.setattr(
         "doc3gpp.services.factory.build_search_service",
-        lambda: fake_svc,
+        lambda *a, **kw: fake_svc,
     )
     result = runner.invoke(search_app, ["query", "anything"])
     assert result.exit_code == 0, result.output
@@ -359,24 +359,37 @@ def test_search_query_sem_query_invokes_reranker_with_fanout(monkeypatch) -> Non
     from doc3gpp.cli import search_app
     from doc3gpp.models.search import SearchFilters
 
-    fake_svc = MagicMock()
-    fake_svc._repo.search.return_value = []  # type: ignore[attr-defined]
-    fake_svc.status.return_value = MagicMock(is_stale=False)
+    class _FakeSvc:
+        """Service double with a real ``_quiet`` attribute."""
+
+        def __init__(self) -> None:
+            self._reranker = MagicMock()
+            self._repo = MagicMock()
+            self._repo.search.return_value = []
+            self.status = MagicMock(return_value=MagicMock(is_stale=False))
+            self._quiet = False
+
+    fake_svc = _FakeSvc()
 
     captured: dict = {}
 
-    def _capture_rerank(semantic_query, hits, final_limit=None):
+    def _capture_rerank(semantic_query, hits, final_limit=None, quiet=False):
         captured["semantic_query"] = semantic_query
         captured["hits"] = hits
         captured["final_limit"] = final_limit
+        captured["quiet"] = quiet
         return []
 
     fake_svc._reranker.rerank.side_effect = _capture_rerank  # type: ignore[attr-defined]
 
+    def _factory(quiet: bool = False):
+        fake_svc._quiet = quiet
+        return fake_svc
+
     fake_settings = MagicMock()
     fake_settings.search.search_fanout_factor = 4
     monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", lambda: fake_svc,
+        "doc3gpp.services.factory.build_search_service", _factory,
     )
     monkeypatch.setattr(
         "doc3gpp.cli.get_settings", lambda: fake_settings,
@@ -389,11 +402,84 @@ def test_search_query_sem_query_invokes_reranker_with_fanout(monkeypatch) -> Non
     assert result.exit_code == 0, result.output
     assert captured["semantic_query"] == "TTCN handover"
     assert captured["final_limit"] == 20  # default --limit
+    # Default --quiet=False: the rerank must see quiet=False so the
+    # empty-vector warning can fire if it ever trips.
+    assert captured["quiet"] is False
     # The repo was called with filters whose limit == 20 * 4 == 80.
     call_args = fake_svc._repo.search.call_args  # type: ignore[attr-defined]
     filters = call_args[0][1]
     assert isinstance(filters, SearchFilters)
     assert filters.limit == 80
+
+
+def test_search_query_quiet_flag_reaches_reranker(monkeypatch) -> None:
+    """``--quiet`` on ``search query`` must reach the reranker as ``quiet=True``.
+
+    Pins the CLI → factory → reranker plumbing for the empty-vector
+    warning gate introduced in the final review. Without ``--quiet``
+    the default is ``False``; with ``--quiet`` the reranker sees
+    ``quiet=True`` and skips the one-shot WARNING.
+    """
+    from doc3gpp.cli import search_app
+
+    class _FakeSvc:
+        """Bare-bones service double with real ``_quiet`` attribute.
+
+        A :class:`MagicMock` is unsuitable because the CLI reads
+        ``svc._quiet`` (a real ``bool``), not a method call; on a
+        Mock the attribute would be another child Mock and would
+        compare truthy regardless of the input flag.
+        """
+
+        def __init__(self) -> None:
+            self._reranker = MagicMock()
+            self._repo = MagicMock()
+            self._repo.search.return_value = []
+            self.status = MagicMock(return_value=MagicMock(is_stale=False))
+            self._quiet = False  # mutated per-test
+
+    fake_svc = _FakeSvc()
+
+    captured: dict = {}
+
+    def _capture_rerank(
+        semantic_query, hits, final_limit=None, quiet=False,
+    ):
+        captured["semantic_query"] = semantic_query
+        captured["final_limit"] = final_limit
+        captured["quiet"] = quiet
+        return []
+
+    fake_svc._reranker.rerank.side_effect = _capture_rerank  # type: ignore[attr-defined]
+
+    def _factory(quiet: bool = False):
+        fake_svc._quiet = quiet
+        return fake_svc
+
+    fake_settings = MagicMock()
+    fake_settings.search.search_fanout_factor = 4
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_search_service", _factory,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.cli.get_settings", lambda: fake_settings,
+    )
+
+    result = CliRunner().invoke(
+        search_app,
+        ["query", "R5-1", "--sem-query", "TTCN", "--quiet"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["quiet"] is True
+
+    # The default (no --quiet) must thread quiet=False so existing
+    # callers see no behaviour change.
+    captured.clear()
+    result_default = CliRunner().invoke(
+        search_app, ["query", "R5-1", "--sem-query", "TTCN"],
+    )
+    assert result_default.exit_code == 0, result_default.output
+    assert captured["quiet"] is False
 
 
 def test_search_query_sem_query_empty_string_treated_as_none(monkeypatch) -> None:
@@ -405,7 +491,7 @@ def test_search_query_sem_query_empty_string_treated_as_none(monkeypatch) -> Non
     fake_svc.status.return_value = MagicMock(is_stale=False)
     monkeypatch.setattr(
         "doc3gpp.services.factory.build_search_service",
-        lambda: fake_svc,
+        lambda *a, **kw: fake_svc,
     )
     runner = CliRunner()
     result = runner.invoke(search_app, ["query", "R5-1", "--sem-query", ""])

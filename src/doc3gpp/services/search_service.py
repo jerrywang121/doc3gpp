@@ -55,8 +55,10 @@ class PassthroughReranker(EmbeddingReranker):
         semantic_query: str,
         hits: list[SearchHit],
         final_limit: int | None = None,
+        quiet: bool = False,
     ) -> list[SearchHit]:
         _ = semantic_query
+        _ = quiet  # Passthrough never warns; flag accepted for Protocol parity.
         copied = list(hits)
         if final_limit is not None:
             return copied[:final_limit]
@@ -70,9 +72,11 @@ class SearchService:
         self,
         repo: SearchIndexRepository,
         reranker: EmbeddingReranker,
+        quiet: bool = False,
     ) -> None:
         self._repo = repo
         self._reranker = reranker
+        self._quiet = quiet
 
     def upsert_for_tdoc(self, tdoc_id: str) -> None:
         """Rebuild the FTS5 row for ``tdoc_id``.
@@ -101,9 +105,15 @@ class SearchService:
     def search(
         self, query: str, filters: SearchFilters,
     ) -> list[SearchHit]:
-        """Run FTS5 ``MATCH`` + rerank + return hits."""
+        """Run FTS5 ``MATCH`` + rerank + return hits.
+
+        Forwards :attr:`_quiet` to :meth:`EmbeddingReranker.rerank` so
+        the :class:`SemanticReranker`'s one-shot empty-vector warning
+        is suppressed under ``--quiet``. ``PassthroughReranker``
+        accepts and ignores the flag.
+        """
         hits = self._repo.search(query, filters)
-        return self._reranker.rerank(query, hits)
+        return self._reranker.rerank(query, hits, quiet=self._quiet)
 
     def rebuild(
         self,

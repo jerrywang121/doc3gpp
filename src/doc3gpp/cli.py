@@ -619,7 +619,7 @@ def db_reset(
 ) -> None:
     """Delete the SQLite database file and recreate the schema.
 
-    Destructive: all data is wiped. SQLite URLs only; MySQL/PostgreSQL are
+    Destructive: all data is wiped. SQLite URLs only; non-SQLite URLs are
     rejected. Prompts for confirmation unless ``--yes`` is passed. After
     reset the ``tsgs`` reference table is re-seeded.
     """
@@ -630,8 +630,7 @@ def db_reset(
     if not parsed.drivername.startswith("sqlite"):
         raise typer.BadParameter(
             f"'db reset' only supports SQLite backends "
-            f"(configured URL: {settings.database_url}). "
-            "Use the backend-native schema reset for MySQL or PostgreSQL."
+            f"(configured URL: {settings.database_url})."
         )
 
     db_file: Path | None = None

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 import numpy as np
 
-from doc3gpp.models.search import SearchFilters, SearchIndexStatus
+from doc3gpp.models.search import SearchIndexStatus
 from doc3gpp.repository.protocols import Embedder, VectorIndexRepository
 
 

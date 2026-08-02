@@ -5,4 +5,4 @@ set -euo pipefail
 python -m pytest -q \
   --cov=src/doc3gpp \
   --cov-report=term-missing \
-  -m "not online"
+  -m "not online" "$@"

@@ -475,13 +475,13 @@ def test_tomli_w_is_importable() -> None:
 
 
 def test_load_default_template_returns_canonical_string() -> None:
-    """The packaged template ends with the ``max_chunks_per_tdoc``
-    line (the last knob in the commented-out ``[semantic_search]``
-    block) and starts with the canonical comment header."""
+    """The packaged template ends with the ``sse_queue_size``
+    line (the last knob in the commented-out ``[mcp]`` block) and
+    starts with the canonical comment header."""
     text = load_default_template()
 
     assert "# doc3gpp configuration file (TOML)" in text
-    assert text.rstrip().endswith("max_chunks_per_tdoc = 8")
+    assert text.rstrip().endswith("sse_queue_size = 100")
 
 
 def test_load_default_template_matches_packaged_file() -> None:

@@ -215,3 +215,57 @@ search_fanout_factor = 4
 # Hard cap on the number of chunks indexed per TDoc. Prevents
 # pathological TDoc bodies from dominating the index.
 # max_chunks_per_tdoc = 8
+
+# ── HTTP server (`doc3gpp server`) ───────────────────────────────────────────
+# Knobs for the optional FastAPI/uvicorn HTTP surface mounted by the
+# `doc3gpp server` CLI sub-app. The server is disabled by default so a
+# fresh install does not open a port without an explicit operator
+# opt-in. Requires the `[web]` pyproject extra
+# (`pip install "doc3gpp[web]"`) for fastapi + uvicorn + mcp.
+
+# [server]
+# Master switch for the `doc3gpp server` sub-app. False rejects every
+# server subcommand at the CLI gate with a hint to flip this flag.
+# enabled = false
+
+# Bind address. Defaults to loopback so the server is not reachable
+# from the network until the operator binds a public address.
+# host = "127.0.0.1"
+# port = 8765
+
+# Caps on the in-process job worker. `max_concurrent_jobs` is bounded
+# at 1..16 to keep sqlite writer contention predictable; raise it for
+# high-throughput operators.
+# max_concurrent_jobs = 1
+# cleanup_interval_seconds = 300
+
+# Retention window for completed-job log files. Parsed by
+# humanfriendly.parse_timespan so values like `7d`, `24h`, `30m` are
+# accepted.
+# log_retention = "7d"
+
+# Optional subdirectory under [cache].dir for server-side artifacts
+# (job bundles, transient uploads). None uses the cache root directly.
+# cache_subdir = "server"
+
+# PID + log file paths. None defaults to {cache.dir}/server.pid and
+# {cache.dir}/server.log at startup.
+# pid_file = "/var/run/doc3gpp/server.pid"
+# log_file = "/var/log/doc3gpp/server.log"
+
+# ── MCP sub-app mount ───────────────────────────────────────────────────────
+# Knobs for the Model Context Protocol (MCP) sub-app mounted under the
+# HTTP server. Effective only when [server].enabled is also true.
+
+# [mcp]
+# Per-side MCP switch. False disables the MCP mount without touching
+# the rest of the server (the FastAPI surface stays up).
+# enabled = true
+
+# HTTP transport used by the MCP mount. v1 ships streamable_http only;
+# older transports are intentionally absent.
+# transport = "streamable_http"
+
+# Per-session event queue length for the SSE pipe. Values below 10
+# cause dropouts under modest load.
+# sse_queue_size = 100

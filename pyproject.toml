@@ -69,11 +69,21 @@ semantic = [
   "sentence-transformers>=2.7.0",
   "sqlite-vec>=0.1.0",
 ]
+web = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "jinja2>=3.1.4",
+  "mcp>=1.0.0",
+  "markdown-it-py>=3.0.0",
+  "pygments>=2.18.0",
+  "humanfriendly>=10.0",
+]
 all = [
   "doc3gpp[cli]",
   "doc3gpp[extract]",
   "doc3gpp[search]",
   "doc3gpp[semantic]",
+  "doc3gpp[web]",
 ]
 dev = [
   "doc3gpp[cli]",

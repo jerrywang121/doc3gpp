@@ -16,7 +16,7 @@ change set so the docs stay honest.
   migrations. After pulling an ORM shape change, **existing SQLite
   installs must run `doc3gpp db reset --yes`** — otherwise the live
   schema stays out of sync and SQL repos raise `OperationalError`.
-  The single exception is `docs/db/migrate.py::_migrate_rename_tdoc_cr_details`,
+  The single exception is `src/doc3gpp/storage/db/migrate.py::_migrate_rename_tdoc_cr_details`,
   a one-shot idempotent rename that bridges legacy `tdoc_cr_details`
   callers to the current `tdoc_cr_cover_page` table; nothing else
   in the bootstrap is allowed to mutate an existing table in place.

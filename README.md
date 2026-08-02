@@ -34,60 +34,11 @@ PostgreSQL available via configuration.
 
 ## Features
 
-- **Meeting sync** — fetch the 3GPP DynaReport calendar (`meetings` table) and
-  persist it to your store of choice. The `--tsg` flag is stamped onto every
-  row as a foreign key into `tsgs.short_name`, powering the `meeting list
-  --tsg` filter.
-- **TDoc sync** — download a meeting's TDoc-list XLSX from the 3GPP portal
-  (`GenerateDocumentList.aspx?meetingId={meeting_id}`) and persist the rows.
-  Auxiliary TDoc files are still scanned from the meeting's FTP folders.
-- **TDoc CR extraction** — optional `python-docx` pipeline that downloads,
-  caches, and parses CR cover pages into structured records. The slim
-  `tdoc_cr_cover_page` table holds cover-page fields; the
-  `tdoc_cr_ttcn_details` sidecar adds the six TTCN overview fields
-  (`testcase`, `ue`, `ss`, `ats_version`, `ttcn_release`, `test_suite`)
-  plus a gzip-compressed `required_changes` JSON blob and a
-  SQL-searchable `changed_functions` aggregate auto-derived from
-  `required_changes`. Cache artefacts live in `tdoc_extracts`. `tdoc
-  show` automatically appends a TTCN section when the TDoc is a TTCN
-  CR and an auxiliary files section listing every `tdoc_files` row
-  whose `tdoc_id` matches.
-- **Full-text search (FTS5 + BM25)** — built-in SQLite FTS5 virtual
-  table (`tdoc_search`) over every TDoc, CR cover page, change
-  details, TTCN details, meeting metadata, and related work items,
-  with BM25-ranked results and highlighted snippets. A Python-side
-  `normalize_query` keeps TDoc ids (`R5-1234567r2` → base + revision
-  tokens) and spec numbers (`38.300` → `38_300`) as single tokens so
-  identifier search works naturally. The index auto-refreshes after
-  every successful `tdoc parse` and can be rebuilt or status-checked
-  via the `search query` / `search index` subcommands. Optional
-  `[search]` extra; opt out with `Settings.search.enabled = false`.
-- **Semantic rerank of FTS5 hits** — `search query --sem-query "..."`
-  reorders BM25 hits by cosine similarity to a natural-language
-  string. The FTS5 path fetches `limit * search_fanout_factor`
-  candidates (default 4×) before the reranker truncates back to
-  `limit`. Missing candidates get a `-inf` floor and sink to the
-  bottom; on a fully empty vector index, FTS5 order is preserved
-  (with a one-shot `WARNING` unless `--quiet` is set). Requires the
-  `[semantic]` extra + a populated `vec_tdoc_embeddings` index.
-- **Hybrid semantic search (FTS5 + embeddings)** — `doc3gpp search sem
-  QUERY` always embeds the natural-language positional `QUERY`
-  against the sqlite-vec embedding index. An opt-in `--fts5-query`
-  string additionally drives the FTS5 fan-out (preprocessed by
-  `SearchQueryBuilder`, same as `search query`); when supplied, the
-  two rankings are merged with reciprocal-rank fusion (default
-  `--fts5-weight=0.5`, vector weight = `1 - fts5_weight`); when
-  omitted, only vector KNN returns — no FTS5 fan-out, no RRF.
-  Optional `[semantic]` extra (sqlite-only); see `### search sem`
-  below for details.
-- **Work Items (WIs)** — scrape the DynaReport WI list per TSG and list with
-  SQL `LIKE` filters (`--tsg`, `--release`, `--acronym`).
-- **TSG reference data** — seeded with the canonical 19 3GPP TSGs and used to
-  validate `--tsg` flags across `meeting sync` and `wi sync`.
-- **Multi-backend storage** — SQLite (default), MySQL, and PostgreSQL via
-  SQLAlchemy 2.0.
-- **Layered architecture** — strict separation between `scraping/`,
-  `parsers/`, `services/`, `repository/`, and `storage/`.
+- **Meeting / TDoc / WI sync** — fetch the 3GPP Meetings, TDocs, and Work Items List.
+- **TDoc CR extraction** — Download and parse TDoc CR into structured records.
+- **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
+- **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
+- **Multi-backend storage** — SQLite (default), MySQL, and PostgreSQL via SQLAlchemy 2.0.
 
 ## Installation
 

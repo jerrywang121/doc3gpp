@@ -310,9 +310,6 @@ def test_factory_chooses_semantic_reranker_when_both_enabled(monkeypatch):
     monkeypatch.setattr(
         f, "SQLAlchemyVectorIndexRepository", lambda: fake_vector_repo,
     )
-    fake_engine = MagicMock()
-    fake_engine.dialect.name = "sqlite"
-    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
     monkeypatch.setattr(
         f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
     )
@@ -336,9 +333,6 @@ def test_factory_falls_back_to_passthrough_when_semantic_disabled(monkeypatch):
             enabled = False
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
-    fake_engine = MagicMock()
-    fake_engine.dialect.name = "sqlite"
-    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
     monkeypatch.setattr(
         f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
     )
@@ -364,9 +358,6 @@ def test_factory_falls_back_to_passthrough_when_embedder_unavailable(monkeypatch
             embedding_model = "fake-model"
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
-    fake_engine = MagicMock()
-    fake_engine.dialect.name = "sqlite"
-    monkeypatch.setattr(f, "get_engine", lambda: fake_engine)
     monkeypatch.setattr(
         f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
     )

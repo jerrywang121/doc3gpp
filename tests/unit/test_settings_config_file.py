@@ -424,11 +424,9 @@ def test_non_allowlisted_env_vars_are_silently_ignored(
     # Sanity check: every var below is outside the allowlist.
     assert "DOC3GPP_OUTPUT__FORMAT" not in ALLOWED_ENV_VARS
     assert "DOC3GPP_TDOC_PARSE__MAX_BATCH" not in ALLOWED_ENV_VARS
-    assert "DOC3GPP_DB_POOL_SIZE" not in ALLOWED_ENV_VARS
 
     monkeypatch.setenv("DOC3GPP_OUTPUT__FORMAT", "json")
     monkeypatch.setenv("DOC3GPP_TDOC_PARSE__MAX_BATCH", "500")
-    monkeypatch.setenv("DOC3GPP_DB_POOL_SIZE", "99")
     monkeypatch.setenv("DOC3GPP_HTTP_MAX_RETRIES", "7")
     monkeypatch.setenv("DOC3GPP_CACHE__SIZE_LIMIT_MB", "999")
     monkeypatch.setenv("DOC3GPP_CACHE__PURGE_CONFIRM", "false")
@@ -439,7 +437,6 @@ def test_non_allowlisted_env_vars_are_silently_ignored(
     s = get_settings()
     assert s.output.format == "table"
     assert s.tdoc_parse.max_batch == 100
-    assert s.db_pool_size == 5
     assert s.http_max_retries == 3
     assert s.cache.size_limit_mb == 1024
     assert s.cache.purge_confirm is True

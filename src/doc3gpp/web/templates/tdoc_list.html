@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · tdocs{% endblock %}
+{% block content %}
+  <h1>TDocs</h1>
+  <p class="meta">{{ total }} matching TDoc{{ '' if total == 1 else 's' }}.</p>
+
+  {% include "partials/tdoc_filters.html" %}
+
+  <div id="results" hx-target="this" hx-swap="outerHTML">
+    {% if tdocs %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Meeting</th>
+            <th>Type</th>
+            <th>Spec</th>
+            <th>Release</th>
+            <th>Uploaded</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in tdocs %}
+            <tr>
+              <td><code>{{ row.tdoc.tdoc_id }}</code></td>
+              <td>{{ row.tdoc.title or '-' }}</td>
+              <td>{{ row.meeting_name or '-' }}</td>
+              <td>{{ row.tdoc.type or '-' }}</td>
+              <td>{{ row.tdoc.spec or '-' }}</td>
+              <td>{{ row.tdoc.release or '-' }}</td>
+              <td>{{ row.tdoc.uploaded_date.isoformat() if row.tdoc.uploaded_date else '-' }}</td>
+              <td><a href="/tdocs/{{ row.tdoc.tdoc_id }}">show</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% include "partials/pagination.html" %}
+    {% else %}
+      <p class="empty">No TDocs match these filters.</p>
+    {% endif %}
+  </div>
+{% endblock %}

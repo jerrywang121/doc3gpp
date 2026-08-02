@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · home{% endblock %}
+{% block content %}
+  <h1>doc3gpp web</h1>
+  <p class="lead">Read-only HTTP surface for the local doc3gpp database.</p>
+  <ul class="section-list">
+    {% for section in sections %}
+      <li>
+        <a href="{{ section.href }}">{{ section.label }}</a>
+        <span class="section-desc">{{ section.description }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+{% endblock %}

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · tdoc {{ tdoc_id }} · content{% endblock %}
+{% block content %}
+  <h1>TDoc <code>{{ tdoc_id }}</code> · content</h1>
+  <div class="tdoc-content">
+    {{ html_content | safe }}
+  </div>
+{% endblock %}

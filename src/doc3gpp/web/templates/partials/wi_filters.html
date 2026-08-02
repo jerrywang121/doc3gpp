@@ -1,0 +1,22 @@
+<form
+  hx-get="/wis"
+  hx-target="#results"
+  hx-trigger="change, submit"
+  hx-swap="outerHTML"
+  class="filters"
+>
+  <label>TSG
+    <input type="text" name="tsg" value="{{ filters.tsg or '' }}">
+  </label>
+  <label>Name
+    <input type="text" name="name" value="{{ filters.name or '' }}">
+  </label>
+  <label>ID
+    <input type="text" name="id" value="{{ filters.id or '' }}">
+  </label>
+  <label>Limit
+    <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
+  </label>
+  <input type="hidden" name="offset" value="0">
+  <button type="submit" class="btn">Apply</button>
+</form>

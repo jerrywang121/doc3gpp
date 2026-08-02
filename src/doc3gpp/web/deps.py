@@ -16,10 +16,11 @@ from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_service import TDocService
+from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
-from doc3gpp.web.app import JobWorkerHandle, ServiceContainer, WebState
+from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
 
 
 def get_state(request: Request) -> WebState:
@@ -58,6 +59,17 @@ def get_wi_service(request: Request) -> WiService:
     return get_services(request).wi
 
 
+def get_tsg_service(request: Request) -> TsgService:
+    """Return the wired :class:`TsgService`.
+
+    The TSG service lives outside the per-app :class:`ServiceContainer`
+    today — TSGs are a tiny reference table — but the deps helper
+    keeps the route-handler API consistent with every other service.
+    """
+    from doc3gpp.services.factory import build_tsg_service
+    return build_tsg_service()
+
+
 def get_search_service(request: Request) -> SearchService | None:
     return get_services(request).search
 
@@ -92,5 +104,6 @@ __all__ = [
     "get_tdoc_cr_service",
     "get_tdoc_file_repo",
     "get_tdoc_service",
+    "get_tsg_service",
     "get_wi_service",
 ]

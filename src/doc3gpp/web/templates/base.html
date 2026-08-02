@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}doc3gpp{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <nav class="topnav">
+    <span class="brand">doc3gpp</span>
+    <a href="/" class="{% if active_nav == 'home' %}active{% endif %}">Home</a>
+    <a href="/meetings" class="{% if active_nav == 'meetings' %}active{% endif %}">Meetings</a>
+    <a href="/tdocs" class="{% if active_nav == 'tdocs' %}active{% endif %}">TDocs</a>
+    <a href="/tsgs" class="{% if active_nav == 'tsgs' %}active{% endif %}">TSGs</a>
+    <a href="/wis" class="{% if active_nav == 'wis' %}active{% endif %}">WIs</a>
+    <a href="/search" class="{% if active_nav == 'search' %}active{% endif %}">Search</a>
+    <a href="/jobs" class="{% if active_nav == 'jobs' %}active{% endif %}">Jobs</a>
+  </nav>
+
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>doc3gpp web · {% block footer_text %}read-only interface{% endblock %}</span>
+  </footer>
+</body>
+</html>

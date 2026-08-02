@@ -1,0 +1,49 @@
+<form
+  hx-get="/tdocs"
+  hx-target="#results"
+  hx-trigger="change, submit"
+  hx-swap="outerHTML"
+  class="filters"
+>
+  <label>TDoc
+    <input type="text" name="tdoc_id" value="{{ filters.tdoc_id or '' }}">
+  </label>
+  <label>Meeting ID
+    <input type="number" name="meeting_id" value="{{ filters.meeting_id or '' }}">
+  </label>
+  <label>Agenda item
+    <input type="text" name="agenda_item" value="{{ filters.agenda_item or '' }}">
+  </label>
+  <label>Type
+    <input type="text" name="type" value="{{ filters.type or '' }}">
+  </label>
+  <label>Source
+    <input type="text" name="source" value="{{ filters.source or '' }}">
+  </label>
+  <label>For
+    <input type="text" name="for_decision" value="{{ filters.for_decision or '' }}">
+  </label>
+  <label>Against
+    <input type="text" name="against_decision" value="{{ filters.against_decision or '' }}">
+  </label>
+  <label>Decision
+    <input type="text" name="decision" value="{{ filters.decision or '' }}">
+  </label>
+  <label>Work item
+    <input type="text" name="work_item" value="{{ filters.work_item or '' }}">
+  </label>
+  <label>Version
+    <input type="text" name="version" value="{{ filters.version or '' }}">
+  </label>
+  <label>Start after
+    <input type="text" name="start_after" placeholder="YYYY-MM-DD" value="{{ filters.start_after or '' }}">
+  </label>
+  <label>Start before
+    <input type="text" name="start_before" placeholder="YYYY-MM-DD" value="{{ filters.start_before or '' }}">
+  </label>
+  <label>Limit
+    <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
+  </label>
+  <input type="hidden" name="offset" value="0">
+  <button type="submit" class="btn">Apply</button>
+</form>

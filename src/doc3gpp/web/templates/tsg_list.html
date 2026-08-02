@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · tsgs{% endblock %}
+{% block content %}
+  <h1>TSGs</h1>
+  <p class="meta">{{ tsgs | length }} TSG reference record{{ '' if tsgs | length == 1 else 's' }}.</p>
+
+  {% if tsgs %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Short</th>
+          <th>Description</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tsg in tsgs %}
+          <tr>
+            <td>{{ tsg.tsg_name }}</td>
+            <td><code>{{ tsg.short_name }}</code></td>
+            <td>{{ tsg.description or '-' }}</td>
+            <td><a href="/tsgs/{{ tsg.short_name }}">show</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="empty">No TSGs stored. Seed via <code>doc3gpp tsg sync</code>.</p>
+  {% endif %}
+{% endblock %}

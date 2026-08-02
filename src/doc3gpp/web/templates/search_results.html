@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · search{% endblock %}
+{% block content %}
+  <h1>Search</h1>
+
+  {% include "partials/search_form.html" %}
+
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+
+  {% if query %}
+    <p class="meta">
+      Query <code>{{ query }}</code> ·
+      {% if mode == 'sem' %}
+        semantic rerank
+      {% else %}
+        {{ total }} FTS5 hit{{ '' if total == 1 else 's' }}
+      {% endif %}
+    </p>
+
+    {% if hits %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>TDoc</th>
+            <th>Title</th>
+            <th>Meeting</th>
+            <th>TSG</th>
+            {% if mode == 'sem' %}<th>RRF</th><th>FTS5 rank</th><th>vec rank</th>{% else %}<th>Score</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for hit in hits %}
+            <tr>
+              <td><a href="/tdocs/{{ hit.tdoc_id }}"><code>{{ hit.tdoc_id }}</code></a></td>
+              <td>{{ hit.title or '-' }}</td>
+              <td>{{ hit.meeting or '-' }}</td>
+              <td>{{ hit.tsg or '-' }}</td>
+              {% if mode == 'sem' %}
+                <td>{{ '%.4f' | format(hit.rrf_score) }}</td>
+                <td>{{ hit.rank_fts5 if hit.rank_fts5 is not none else '-' }}</td>
+                <td>{{ hit.rank_vec if hit.rank_vec is not none else '-' }}</td>
+              {% else %}
+                <td>{{ '%.4f' | format(hit.score) }}</td>
+              {% endif %}
+            </tr>
+            {% if hit.previews %}
+              <tr class="preview-row">
+                <td colspan="6">
+                  {% for col, snippet in hit.previews.items() %}
+                    <details>
+                      <summary>{{ col }}</summary>
+                      <pre>{{ snippet }}</pre>
+                    </details>
+                  {% endfor %}
+                </td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No matches.</p>
+    {% endif %}
+  {% endif %}
+{% endblock %}

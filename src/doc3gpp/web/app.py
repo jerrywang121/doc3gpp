@@ -1,19 +1,16 @@
 """FastAPI app factory + lifespan wiring for the ``doc3gpp server`` surface.
 
-T4 implements only the skeleton:
+T4 + T6 surface:
 
-* :class:`WebState` — the per-app state container (settings, engine,
-  composed services, placeholder job worker).
-* :class:`ServiceContainer` — the bag of wired services composed from
-  the existing :mod:`doc3gpp.services.factory` builders. T4 builds it
-  inline (in :func:`build_state`); T7 / T8 / T9 reuse it.
-* :class:`JobWorkerHandle` — minimal sentinel so the lifespan can
-  attach a placeholder to ``app.state.web`` today. T7 replaces it with
-  the real implementation (background task + per-job queues).
+* :class:`WebState` / :class:`ServiceContainer` /
+  :class:`JobWorkerHandle` — see :mod:`doc3gpp.web.state` (extracted
+  so :mod:`doc3gpp.web.deps` can type-check against the state shape
+  without an ``app``-level circular import).
 * :func:`build_app` — constructs the FastAPI app, registers the health
-  endpoint, mounts T6 routers (placeholder), conditionally mounts the
-  MCP sub-app at ``/mcp`` when both ``[server].enabled`` and
-  ``[mcp].enabled`` are true (T9 fills in the real MCP server).
+  endpoint, mounts the T6 routers, mounts the vendored static assets
+  (``/static/htmx.min.js`` + ``/static/style.css``), and conditionally
+  mounts the MCP sub-app at ``/mcp`` when both ``[server].enabled``
+  and ``[mcp].enabled`` are true.
 * :func:`build_state` — synchronous helper used by the lifespan to
   wire :class:`WebState` once on startup.
 
@@ -24,75 +21,24 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
-from sqlalchemy.engine import Engine
 
 from doc3gpp.config import get_settings
 from doc3gpp.services import factory
-from doc3gpp.services.meetings_service import MeetingService
-from doc3gpp.services.search_service import SearchService
-from doc3gpp.services.semantic_search_service import SemanticSearchService
-from doc3gpp.services.tdoc_cr_service import TDocCrService
-from doc3gpp.services.tdoc_service import TDocService
-from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
-from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.web.errors import register_error_handlers
+from doc3gpp.web.routes import all_routers
+from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
+from doc3gpp.web.templates_setup import mount_static
 
 if TYPE_CHECKING:
-    from doc3gpp.repository.protocols import JobRepository
+    pass
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class JobWorkerHandle:
-    """Placeholder handle for the background job worker (replaced in T7).
-
-    T4 attaches one of these to :attr:`WebState.jobs` so downstream
-    code (route handlers, the MCP mount) can already type-check against
-    the eventual real handle. T7 swaps the placeholder for the real
-    implementation without changing the field type.
-    """
-
-
-@dataclass(slots=True)
-class ServiceContainer:
-    """Bag of wired services composed at lifespan startup.
-
-    Each field holds the live instance the lifespan built via
-    :mod:`doc3gpp.services.factory`. Routes depend on individual fields
-    via the helpers in :mod:`doc3gpp.web.deps`.
-    """
-
-    meeting: MeetingService
-    tdoc: TDocService
-    tdoc_cr: TDocCrService
-    wi: WiService
-    search: SearchService | None
-    semantic_search: SemanticSearchService | None
-    tdoc_file_repo: SQLAlchemyTDocFileRepository
-    job_repo: "JobRepository"
-
-
-@dataclass(slots=True)
-class WebState:
-    """Per-app state container attached to ``app.state.web``.
-
-    Holds the resolved :class:`Settings`, the singleton SQLAlchemy
-    :class:`Engine`, the :class:`ServiceContainer` of wired services,
-    and a placeholder :class:`JobWorkerHandle` (replaced by T7).
-    """
-
-    settings: Settings
-    engine: Engine
-    services: ServiceContainer
-    jobs: JobWorkerHandle
 
 
 def build_state(settings: Settings) -> WebState:
@@ -106,10 +52,11 @@ def build_state(settings: Settings) -> WebState:
         meeting=factory.build_meeting_service(),
         tdoc=factory.build_tdoc_service(),
         tdoc_cr=factory.build_tdoc_cr_service(),
+        tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
         search=factory.build_search_service(),
         semantic_search=factory.build_semantic_search_service(),
-        tdoc_file_repo=SQLAlchemyTDocFileRepository(),
+        tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
     )
     return WebState(
@@ -166,10 +113,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="doc3gpp", lifespan=lifespan)
     register_error_handlers(app)
+    mount_static(app)
 
     @app.get("/healthz")
     def healthz() -> dict[str, bool]:
         return {"ok": True}
+
+    for router in all_routers():
+        app.include_router(router)
 
     _maybe_mount_mcp(app, settings)
     return app

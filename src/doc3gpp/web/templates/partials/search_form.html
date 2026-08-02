@@ -1,0 +1,45 @@
+<form
+  hx-get="{{ '/search/sem' if mode == 'sem' else '/search' }}"
+  hx-target="#results"
+  hx-trigger="submit"
+  hx-swap="outerHTML"
+  class="filters"
+>
+  <label>Query
+    <input type="text" name="q" value="{{ query or '' }}" autofocus>
+  </label>
+  {% if mode == 'sem' %}
+    <label>FTS5 query
+      <input type="text" name="fts5_query" value="{{ fts5_query or '' }}">
+    </label>
+    <label>FTS5 weight
+      <input type="number" step="0.1" min="0" max="1" name="fts5_weight" value="{{ fts5_weight }}">
+    </label>
+    <label>Limit
+      <input type="number" name="limit" value="{{ limit }}" min="1" max="200">
+    </label>
+  {% else %}
+    <label>TSG
+      <input type="text" name="tsg" value="{{ filters.tsg or '' }}">
+    </label>
+    <label>Meeting
+      <input type="text" name="meeting" value="{{ filters.meeting or '' }}">
+    </label>
+    <label>Release
+      <input type="text" name="release" value="{{ filters.release or '' }}">
+    </label>
+    <label>Spec
+      <input type="text" name="spec" value="{{ filters.spec or '' }}">
+    </label>
+    <label>Since
+      <input type="text" name="since" placeholder="YYYY-MM-DD" value="{{ filters.since or '' }}">
+    </label>
+    <label>Until
+      <input type="text" name="until" placeholder="YYYY-MM-DD" value="{{ filters.until or '' }}">
+    </label>
+    <label>Limit
+      <input type="number" name="limit" value="{{ limit }}" min="1" max="200">
+    </label>
+  {% endif %}
+  <button type="submit" class="btn">Search</button>
+</form>

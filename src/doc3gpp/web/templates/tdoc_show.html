@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · tdoc {{ record.tdoc.tdoc_id }}{% endblock %}
+{% block content %}
+  <h1>TDoc <code>{{ record.tdoc.tdoc_id }}</code></h1>
+  <p class="meta">
+    {% if record.tdoc.title %}<span>{{ record.tdoc.title }}</span>{% endif %}
+  </p>
+
+  <section class="card">
+    <h2>TDoc</h2>
+    <dl class="kv">
+      <dt>Meeting ID</dt><dd>{{ record.tdoc.meeting_id or '-' }}</dd>
+      <dt>Type</dt><dd>{{ record.tdoc.type or '-' }}</dd>
+      <dt>Status</dt><dd>{{ record.tdoc.status or '-' }}</dd>
+      <dt>Spec</dt><dd>{{ record.tdoc.spec or '-' }}</dd>
+      <dt>Version</dt><dd>{{ record.tdoc.version or '-' }}</dd>
+      <dt>Release</dt><dd>{{ record.tdoc.release or '-' }}</dd>
+      <dt>CR Num</dt><dd>{{ record.tdoc.cr_num or '-' }}</dd>
+      <dt>CR Cat</dt><dd>{{ record.tdoc.cr_cat or '-' }}</dd>
+      <dt>FTP URL</dt><dd><code>{{ record.tdoc.ftp_url or '-' }}</code></dd>
+      <dt>Uploaded</dt><dd>{{ record.tdoc.uploaded_date.isoformat() if record.tdoc.uploaded_date else '-' }}</dd>
+    </dl>
+    {% if record.tdoc.ftp_url %}
+      <p>
+        <a class="btn" href="/tdocs/{{ record.tdoc.tdoc_id }}/content?format=html">View as HTML</a>
+        <a class="btn" href="/tdocs/{{ record.tdoc.tdoc_id }}/content?format=markdown">Download markdown</a>
+      </p>
+    {% endif %}
+  </section>
+
+  {% if record.cover %}
+    <section class="card">
+      <h2>Cover page</h2>
+      <dl class="kv">
+        <dt>Spec</dt><dd>{{ record.cover.spec or '-' }}</dd>
+        <dt>CR Num</dt><dd>{{ record.cover.cr_num or '-' }}</dd>
+        <dt>Rev</dt><dd>{{ record.cover.rev or '-' }}</dd>
+        <dt>Version</dt><dd>{{ record.cover.version or '-' }}</dd>
+        <dt>Title</dt><dd>{{ record.cover.title or '-' }}</dd>
+        <dt>Source</dt><dd>{{ record.cover.source or '-' }}</dd>
+        <dt>Related WIs</dt><dd>{{ record.cover.related_wis or '-' }}</dd>
+        <dt>Release</dt><dd>{{ record.cover.release or '-' }}</dd>
+        <dt>CR Cat</dt><dd>{{ record.cover.cr_cat or '-' }}</dd>
+        <dt>Date</dt><dd>{{ record.cover.date.isoformat() if record.cover.date else '-' }}</dd>
+      </dl>
+    </section>
+  {% else %}
+    <section class="card placeholder">
+      <h2>Cover page</h2>
+      <p>Not yet extracted. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code> to populate.</p>
+    </section>
+  {% endif %}
+
+  {% if record.ttcn %}
+    <section class="card">
+      <h2>TTCN</h2>
+      <dl class="kv">
+        <dt>Testcase</dt><dd>{{ record.ttcn.testcase or '-' }}</dd>
+        <dt>UE</dt><dd>{{ record.ttcn.ue or '-' }}</dd>
+        <dt>SS</dt><dd>{{ record.ttcn.ss or '-' }}</dd>
+        <dt>ATS version</dt><dd>{{ record.ttcn.ats_version or '-' }}</dd>
+        <dt>TTCN release</dt><dd>{{ record.ttcn.ttcn_release or '-' }}</dd>
+        <dt>Test suite</dt><dd>{{ record.ttcn.test_suite or '-' }}</dd>
+      </dl>
+    </section>
+  {% endif %}
+
+  {% if record.extracted_at %}
+    <section class="card">
+      <h2>Extracted at</h2>
+      <p><code>{{ record.extracted_at.isoformat() }}</code></p>
+    </section>
+  {% endif %}
+
+  {% if record.files %}
+    <section class="card">
+      <h2>Auxiliary files</h2>
+      <ul>
+        {% for file in record.files %}
+          <li><code>{{ file.ftp_url }}</code> ({{ file.type }})</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <section class="card placeholder">
+      <h2>Auxiliary files</h2>
+      <p>No auxiliary files attached.</p>
+    </section>
+  {% endif %}
+{% endblock %}

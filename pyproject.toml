@@ -69,8 +69,12 @@ semantic = [
   "sentence-transformers>=2.7.0",
   "sqlite-vec>=0.1.0",
 ]
-mysql = ["pymysql>=1.1.1"]
-postgres = ["psycopg[binary]>=3.2.0"]
+all = [
+  "doc3gpp[cli]",
+  "doc3gpp[extract]",
+  "doc3gpp[search]",
+  "doc3gpp[semantic]",
+]
 dev = [
   "doc3gpp[cli]",
   "pytest>=8.2.0",
@@ -86,7 +90,6 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
   "online: tests that access live internet endpoints (for example 3gpp.org)",
-  "mysql: tests that require a mysql backend",
   "semantic: tests that require the [semantic] extra (sentence-transformers, sqlite-vec)",
 ]
 

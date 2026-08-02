@@ -4,7 +4,7 @@ The reset command is destructive: it deletes the on-disk SQLite database
 file and recreates the schema from scratch. These tests pin its
 contract —
 
-* only SQLite backends are accepted (MySQL/Postgres raise an error);
+* only SQLite backends are accepted (non-SQLite URLs raise an error);
 * the file is actually removed and recreated empty;
 * WAL/journal sidecars are cleaned up;
 * the ``tsgs`` reference table is re-seeded;
@@ -115,43 +115,6 @@ def test_db_reset_accepts_confirmation_and_runs(sqlite_env) -> None:
     assert _count_tsgs() == 19
 
 
-def test_db_reset_refuses_mysql_url(monkeypatch, tmp_path) -> None:
-    """MySQL URLs are rejected up front — never touch the file system."""
-    from doc3gpp.settings.loader import get_settings
-
-    monkeypatch.setenv(
-        "DOC3GPP_DATABASE_URL", "mysql+pymysql://user:pass@localhost:3306/doc3gpp"
-    )
-    get_settings.cache_clear()
-    get_engine.cache_clear()
-    try:
-        runner = CliRunner()
-        result = runner.invoke(app, ["db", "reset", "--yes"])
-        assert result.exit_code != 0
-        assert "only supports SQLite backends" in result.output
-        assert "mysql+pymysql" in result.output
-    finally:
-        get_engine.cache_clear()
-        get_settings.cache_clear()
-
-
-def test_db_reset_refuses_postgres_url(monkeypatch) -> None:
-    """Postgres URLs are also rejected up front."""
-    monkeypatch.setenv(
-        "DOC3GPP_DATABASE_URL", "postgresql+psycopg://user:pass@localhost:5432/doc3gpp"
-    )
-    get_settings.cache_clear()
-    get_engine.cache_clear()
-    try:
-        runner = CliRunner()
-        result = runner.invoke(app, ["db", "reset", "--yes"])
-        assert result.exit_code != 0
-        assert "only supports SQLite backends" in result.output
-    finally:
-        get_engine.cache_clear()
-        get_settings.cache_clear()
-
-
 def test_db_reset_in_memory_sqlite_just_reinits(monkeypatch) -> None:
     """``sqlite:///:memory:`` has no file — reset skips delete, runs init."""
     monkeypatch.setenv("DOC3GPP_DATABASE_URL", "sqlite+pysqlite:///:memory:")
@@ -165,6 +128,21 @@ def test_db_reset_in_memory_sqlite_just_reinits(monkeypatch) -> None:
         assert "No existing SQLite file to delete" in result.output
         assert "Database reset complete" in result.output
         assert _count_tsgs() == 19
+    finally:
+        get_engine.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_db_reset_refuses_non_sqlite_url(monkeypatch) -> None:
+    """A non-SQLite URL is rejected before anything is touched."""
+    monkeypatch.setenv("DOC3GPP_DATABASE_URL", "oracle://user:pass@localhost/db")
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    try:
+        runner = CliRunner()
+        result = runner.invoke(app, ["db", "reset", "--yes"])
+        assert result.exit_code != 0
+        assert "only supports SQLite backends" in result.output
     finally:
         get_engine.cache_clear()
         get_settings.cache_clear()

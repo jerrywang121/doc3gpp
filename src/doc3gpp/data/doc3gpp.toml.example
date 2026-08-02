@@ -25,7 +25,6 @@
 
 # database_url = "sqlite+pysqlite:////home/you/.local/share/doc3gpp/doc3gpp.db"
 # db_echo = false
-# db_pool_size = 5
 # db_auto_migrate = true
 
 # ── HTTP scraping ───────────────────────────────────────────────────────────
@@ -159,7 +158,7 @@ search_fanout_factor = 4
 # fan-out. Requires the `[semantic]` pyproject extra
 # (`pip install "doc3gpp[semantic]"`) for the embedding model + the
 # sqlite-vec extension. Schema is gated on the sqlite + sqlite-vec
-# support matrix; on MySQL / PostgreSQL or when sqlite-vec is
+# support matrix; when sqlite-vec is
 # unavailable, only the FTS5 path is active and the vector path is a
 # no-op.
 #

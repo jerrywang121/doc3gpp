@@ -14,9 +14,8 @@ These tests assert both halves of that contract:
 * **Idempotent** : a database already on the new schema runs
   ``create_schema`` again with no error and no destructive change.
 
-The tests are SQLite-only because the SQLite branch is the only one
-unit-tested here. MySQL / PostgreSQL use the native ``RENAME TABLE``
-statement and rely on the engine dialect branching in
+The tests are SQLite-only — SQLite is the sole backend, and the
+rename relies on the SQLite ``ALTER TABLE ... RENAME TO`` branch in
 ``_migrate_rename_tdoc_cr_details``.
 """
 

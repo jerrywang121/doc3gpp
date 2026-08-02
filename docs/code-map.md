@@ -94,7 +94,7 @@ table below is for navigation only.
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of `TsgRepository`. |
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of `WiRepository`. |
 | `_apply_text_filter` / `_apply_date_filter` | helpers | `storage/repositories/tdoc_sql.py` | SQLAlchemy helpers that consume `cli_filters.DATE_FILTER_RE` and the rich-filter grammar. |
-| `*_engine_kwargs` | functions | `storage/backends/{sqlite,mysql,postgres}.py` | Per-dialect engine configuration. |
+| `configure_sqlite_engine` | function | `storage/backends/sqlite.py` | SQLite engine configuration (sole backend). |
 
 ## Settings / config (`src/doc3gpp/settings/`)
 

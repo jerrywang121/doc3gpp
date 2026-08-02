@@ -34,7 +34,7 @@ def _docx_available() -> bool:
     """Return True iff ``python-docx`` imports cleanly.
 
     Used by ``@pytest.mark.skipif`` to keep the install-required tests in
-    the default pool (pytest.ini excludes ``online`` and ``mysql`` but
+    the default pool (pytest.ini excludes ``online`` but
     not these) while still auto-skipping in environments that haven't
     installed the ``[extract]`` extra.
     """

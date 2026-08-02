@@ -51,10 +51,9 @@ _HUMAN_DELTA_RE = re.compile(r"^(?P<value>[+-]?\d+(?:\.\d+)?)(?P<unit>[smhd])$",
 #: (``doc3gpp config set ...`` or a hand-edited ``doc3gpp.toml``) for
 #: the remaining fields.
 #:
-#: ``DOC3GPP_CONFIG`` (TOML config file location pin) and
-#: ``DOC3GPP_TEST_MYSQL_URL`` (test-only MySQL URL) are read directly
-#: by :mod:`doc3gpp.settings.config_source` and the test fixtures,
-#: respectively, and are intentionally **not** part of this allowlist.
+#: ``DOC3GPP_CONFIG`` (TOML config file location pin) is read directly
+#: by :mod:`doc3gpp.settings.config_source` and is intentionally
+#: **not** part of this allowlist.
 ALLOWED_ENV_VARS: frozenset[str] = frozenset(
     {
         "DOC3GPP_DATABASE_URL",
@@ -552,7 +551,6 @@ class Settings(BaseSettings):
         validation_alias="DOC3GPP_DATABASE_URL",
     )
     db_echo: bool = Field(default=False, validation_alias="DOC3GPP_DB_ECHO")
-    db_pool_size: int = Field(default=5)
     db_auto_migrate: bool = Field(default=True)
     log_level: str = Field(default="INFO", validation_alias="DOC3GPP_LOG_LEVEL")
     http_verify: bool = Field(default=False, validation_alias="DOC3GPP_HTTP_VERIFY")

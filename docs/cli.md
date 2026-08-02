@@ -13,6 +13,9 @@ pip install "doc3gpp[cli]"
 # via pipx (isolated environment)
 pipx install "doc3gpp[cli]"
 
+# everything (CLI + extract + search + semantic)
+pip install "doc3gpp[all]"
+
 # development (editable install)
 pip install -e ".[dev]"
 ```
@@ -100,8 +103,7 @@ Options:
 
 Behavior:
 
-- Refuses to run on MySQL or PostgreSQL URLs (use the backend-native
-  `DROP DATABASE` / `CREATE DATABASE` workflow instead).
+- Refuses to run on non-SQLite URLs.
 - For file-based SQLite URLs (`sqlite:///...` /
   `sqlite+pysqlite:///...`): deletes the on-disk `.db` file plus any
   WAL / SHM / journal sidecars, then re-runs `create_schema` +

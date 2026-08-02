@@ -12,12 +12,10 @@ gets updated alongside the fix.
 - `pyproject.toml [tool.pytest.ini_options]` sets
   `pythonpath = ["src"]`, so tests resolve `doc3gpp.*` without an
   editable install.
-- Default `pytest` excludes both `online` and `mysql` markers. New tests
-  stay in the default pool unless they need network or a MySQL server.
-- MySQL tests are double-gated (`pytestmark` marker +
-  `@pytest.mark.skipif` on `DOC3GPP_TEST_MYSQL_URL`); online tests hit
-  live 3gpp.org + FTP and are flaky — run with `-rs` to surface skip
-  reasons.
+- Default `pytest` excludes the `online` marker. New tests stay in
+  the default pool unless they need network.
+- Online tests hit live 3gpp.org + FTP and are flaky — run with
+  `-rs` to surface skip reasons.
 
 ## Lint / static analysis
 
@@ -179,10 +177,7 @@ governed by this allowlist:
 ```
 DOC3GPP_CONFIG             # pin a TOML config file or directory
 XDG_CONFIG_HOME            # XDG root for the user-wide config fallback
-DOC3GPP_TEST_MYSQL_URL     # MySQL integration test fixture (test-only)
 ```
-
-MySQL tests additionally use `DOC3GPP_TEST_MYSQL_URL`.
 
 The `tdoc_parse.*` knobs (`max_batch`, `max_ftp_depth`,
 `max_tdoc_size_kb`) are **TOML-only** by convention. None of them
@@ -322,7 +317,7 @@ Matching rules:
 
 Prefix matching is implemented with
 `func.upper(func.substr(...)) == prefix.upper()` so it works on SQLite
-/ MySQL / Postgres without a dialect-specific `ILIKE`.
+without a dialect-specific `ILIKE`.
 
 ## Anti-patterns (this project)
 

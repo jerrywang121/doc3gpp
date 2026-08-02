@@ -20,16 +20,16 @@ def _settings():
     s = MagicMock()
     s.semantic_search.fanout_multiplier = 2
     s.semantic_search.rrf_k = 60
-    s.semantic_search.chunk_size = 800
-    s.semantic_search.chunk_overlap = 100
-    s.semantic_search.max_chunks_per_tdoc = 32
+    s.semantic_search.chunk_size = 200
+    s.semantic_search.chunk_overlap = 20
+    s.semantic_search.max_chunks_per_tdoc = 8
     return s
 
 
-def _mock_embedder():
+def _mock_embedder(n_chunks: int = 1):
     e = MagicMock()
     e.dim = 384
-    e.encode.return_value = np.zeros((1, 384), dtype=np.float32)
+    e.encode.return_value = np.zeros((n_chunks, 384), dtype=np.float32)
     return e
 
 
@@ -279,7 +279,7 @@ def test_index_for_tdoc_calls_upsert_chunks(monkeypatch):
         "doc3gpp.services.semantic_search_service._build_embed_text",
         lambda tid: "long text " * 200,
     )
-    svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
+    svc = SemanticSearchService(fts5, _mock_embedder(n_chunks=3), vec, _settings())
     svc.index_for_tdoc("R5-1")
     vec.upsert_chunks.assert_called_once()
     args = vec.upsert_chunks.call_args
@@ -300,24 +300,25 @@ def test_index_for_tdoc_encodes_all_chunks_in_one_call(monkeypatch):
     fts5 = MagicMock()
     monkeypatch.setattr(
         "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "long text " * 4000,  # -> 5 chunks of ~800 tokens
+        lambda tid: "long text " * 4000,  # -> 8 chunks capped by max_chunks_per_tdoc
     )
     embedder = MagicMock()
     embedder.dim = 384
     # encode() returns one row per chunk; 4000 whitespace tokens at
-    # default size=800 / overlap=100 yields 12 chunks.
-    embedder.encode.return_value = np.zeros((12, 384), dtype=np.float32)
+    # default size=200 / overlap=20 yields 22 chunks, capped at 8 by
+    # max_chunks_per_tdoc.
+    embedder.encode.return_value = np.zeros((8, 384), dtype=np.float32)
     svc = SemanticSearchService(fts5, embedder, vec, _settings())
     svc.index_for_tdoc("R5-1")
-    # exactly one encode() call for all 12 chunks
+    # exactly one encode() call for all 8 chunks
     embedder.encode.assert_called_once()
     call_args = embedder.encode.call_args
     # single positional arg = list of chunks
-    assert len(call_args[0][0]) == 12
+    assert len(call_args[0][0]) == 8
     # and the resulting embeddings land in upsert_chunks
     args = vec.upsert_chunks.call_args
     assert args[0][0] == "R5-1"
-    assert len(args[0][1]) == 12
+    assert len(args[0][1]) == 8
 
 
 def test_rebuild_embeddings_clears_cursor_when_resume_false() -> None:

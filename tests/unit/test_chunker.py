@@ -10,8 +10,8 @@ from doc3gpp.services.embedding.chunker import (
 
 
 def test_defaults():
-    assert CHUNK_SIZE_DEFAULT == 800
-    assert CHUNK_OVERLAP_DEFAULT == 100
+    assert CHUNK_SIZE_DEFAULT == 200
+    assert CHUNK_OVERLAP_DEFAULT == 20
 
 
 def test_empty_string_returns_empty_list():

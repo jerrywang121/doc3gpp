@@ -495,9 +495,9 @@ class SemanticSearchSettings(BaseModel):
         default="sentence-transformers/all-MiniLM-L6-v2",
         description="HuggingFace sentence-transformers repo id.",
     )
-    chunk_size: int = Field(default=800, ge=1, description="Whitespace tokens per chunk.")
+    chunk_size: int = Field(default=200, ge=1, description="Whitespace tokens per chunk.")
     chunk_overlap: int = Field(
-        default=100, ge=0,
+        default=20, ge=0,
         description="Trailing tokens repeated at next chunk start. Must be < chunk_size.",
     )
     rrf_k: int = Field(default=60, ge=1, description="RRF k constant.")
@@ -510,19 +510,19 @@ class SemanticSearchSettings(BaseModel):
         ),
     )
     fanout_multiplier: int = Field(
-        default=2, ge=1,
+        default=4, ge=1,
         description="Internal fan-out factor (limit * fanout per side).",
     )
     final_limit: int = Field(default=20, ge=0, description="Default --limit for `search sem`.")
     max_chunks_per_tdoc: int = Field(
-        default=32, ge=1,
+        default=8, ge=1,
         description="Cap on chunks per TDoc to bound parse latency on long covers.",
     )
 
     @field_validator("chunk_overlap")
     @classmethod
     def _overlap_less_than_size(cls, v, info):
-        size = info.data.get("chunk_size", 800)
+        size = info.data.get("chunk_size", 200)
         if v >= size:
             raise ValueError(f"chunk_overlap ({v}) must be < chunk_size ({size})")
         return v

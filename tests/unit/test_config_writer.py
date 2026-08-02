@@ -481,7 +481,7 @@ def test_load_default_template_returns_canonical_string() -> None:
     text = load_default_template()
 
     assert "# doc3gpp configuration file (TOML)" in text
-    assert text.rstrip().endswith("max_chunks_per_tdoc = 32")
+    assert text.rstrip().endswith("max_chunks_per_tdoc = 8")
 
 
 def test_load_default_template_matches_packaged_file() -> None:

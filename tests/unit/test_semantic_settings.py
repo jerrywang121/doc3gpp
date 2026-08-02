@@ -10,13 +10,13 @@ def test_defaults():
     assert s.enabled is True
     assert s.auto_embed_on_parse is True
     assert s.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
-    assert s.chunk_size == 800
-    assert s.chunk_overlap == 100
+    assert s.chunk_size == 200
+    assert s.chunk_overlap == 20
     assert s.rrf_k == 60
     assert s.fts5_weight == 0.5
-    assert s.fanout_multiplier == 2
+    assert s.fanout_multiplier == 4
     assert s.final_limit == 20
-    assert s.max_chunks_per_tdoc == 32
+    assert s.max_chunks_per_tdoc == 8
 
 
 def test_chunk_size_must_be_positive():

@@ -430,13 +430,13 @@ search_fanout_factor = 4
 enabled = true                       # master switch for `search sem` + auto-embed
 auto_embed_on_parse = true           # upsert embeddings after every successful parse
 embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # 384-dim
-chunk_size = 800                     # whitespace tokens per chunk
-chunk_overlap = 100                  # trailing tokens repeated at next chunk start
+chunk_size = 200                     # whitespace tokens per chunk
+chunk_overlap = 20                   # trailing tokens repeated at next chunk start
 rrf_k = 60                           # RRF k constant
 fts5_weight = 0.5                    # 0.0 = vector-only, 1.0 = FTS5-only (vector weight = 1 - fts5_weight)
-fanout_multiplier = 2                # internal_limit = limit * fanout per side
+fanout_multiplier = 4                # internal_limit = limit * fanout per side
 final_limit = 20                     # default `--limit` for `search sem`
-max_chunks_per_tdoc = 32             # cap on chunks per TDoc
+max_chunks_per_tdoc = 8              # cap on chunks per TDoc
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >

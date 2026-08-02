@@ -225,7 +225,7 @@ class SemanticSearchService:
             self._settings.semantic_search.chunk_size,
             self._settings.semantic_search.chunk_overlap,
         )
-        max_chunks = getattr(self._settings.semantic_search, "max_chunks_per_tdoc", 32)
+        max_chunks = getattr(self._settings.semantic_search, "max_chunks_per_tdoc", 8)
         if len(chunks) > max_chunks:
             chunks = chunks[:max_chunks]
         if not chunks:

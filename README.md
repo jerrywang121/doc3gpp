@@ -86,6 +86,7 @@ The `[dev]` extra includes `[cli]`, `pytest`, `pytest-cov`, and `ruff`.
 pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
 pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
 pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sentence-transformers, sqlite-vec)
+pip install "doc3gpp[all]"        # every runtime extra: CLI, extraction, search, semantic
 ```
 
 ## Quick Start

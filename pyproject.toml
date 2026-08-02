@@ -69,6 +69,12 @@ semantic = [
   "sentence-transformers>=2.7.0",
   "sqlite-vec>=0.1.0",
 ]
+all = [
+  "doc3gpp[cli]",
+  "doc3gpp[extract]",
+  "doc3gpp[search]",
+  "doc3gpp[semantic]",
+]
 dev = [
   "doc3gpp[cli]",
   "pytest>=8.2.0",

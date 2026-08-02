@@ -27,6 +27,7 @@ alembic (installed but not wired). Optional extras:
 
 - `.[cli]` — Typer CLI (also in `[dev]`).
 - `.[extract]` — `python-docx` for the TDoc extraction pipeline.
+- `.[all]` — every runtime extra (CLI, extract, search, semantic).
 
 `pip install doc3gpp` installs the SDK only; `pip install "doc3gpp[cli]"`
 or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.

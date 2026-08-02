@@ -13,6 +13,9 @@ pip install "doc3gpp[cli]"
 # via pipx (isolated environment)
 pipx install "doc3gpp[cli]"
 
+# everything (CLI + extract + search + semantic)
+pip install "doc3gpp[all]"
+
 # development (editable install)
 pip install -e ".[dev]"
 ```

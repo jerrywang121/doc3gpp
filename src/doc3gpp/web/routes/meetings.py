@@ -103,6 +103,7 @@ async def list_meetings(
             "active_nav": "meetings",
             "meetings": meetings,
             "total": len(meetings),
+            "limit": parsed_limit,
             "offset": parsed_offset,
             "next_offset": next_offset,
             "filters": {

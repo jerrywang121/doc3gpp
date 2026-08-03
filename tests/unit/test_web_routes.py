@@ -574,6 +574,100 @@ def test_tdoc_list_empty_date_filter_returns_200(client: TestClient) -> None:
     assert response.status_code == 200
 
 
+def test_tdoc_list_pagination_renders_without_500(
+    app_with_fakes: FastAPI,
+) -> None:
+    """``GET /tdocs?offset=50`` renders the pagination block, no 500.
+
+    Regression for an UndefinedError: pagination.html references
+    ``{{ limit }}`` but the route only passed ``limit`` nested under
+    ``filters``. With pagination active (more rows than fit on the
+    page) the template evaluated ``offset - limit`` and Jinja raised
+    ``UndefinedError: 'limit' is undefined`` — the user saw a 500.
+    """
+
+    class _ManyRowsTDocService(FakeTDocService):
+        def list_recent_with_meeting(
+            self, *, limit: int = 50, offset: int = 0, **_kwargs: Any,
+        ) -> list[TDocWithMeeting]:
+            return [
+                TDocWithMeeting(
+                    tdoc=TDoc(
+                        tdoc_id=f"R5-{260001 + offset + i:06d}",
+                        title=f"row {offset + i}",
+                        meeting_id=1,
+                        ftp_url=f"R5/26.{(offset + i):03d}/R5-{260001 + offset + i:06d}.zip",
+                        spec="38.523-3",
+                        release="Rel-18",
+                        type="CR",
+                        uploaded_date=date(2026, 5, 2),
+                    ),
+                    meeting_name="RAN5#99-e",
+                )
+                for i in range(limit)
+            ]
+
+    app_with_fakes.dependency_overrides[get_tdoc_service] = (
+        lambda: _ManyRowsTDocService()
+    )
+    with TestClient(app_with_fakes) as c:
+        # offset=0 + limit=50 → pagination block must render with prev/next.
+        response = c.get("/tdocs?limit=50&offset=0")
+        assert response.status_code == 200
+        assert '<nav class="pagination">' in response.text
+        # offset=50 → next page; would have raised UndefinedError before
+        # the fix because pagination.html evaluated `offset - limit`.
+        response = c.get("/tdocs?limit=50&offset=50")
+        assert response.status_code == 200
+        assert '<nav class="pagination">' in response.text
+        assert "‹ prev" in response.text
+
+
+def test_tdoc_list_pagination_htmx_offset(
+    app_with_fakes: FastAPI,
+) -> None:
+    """``GET /tdocs`` with ``HX-Request`` and non-zero offset returns partial, 200."""
+
+    class _ManyRowsTDocService(FakeTDocService):
+        def list_recent_with_meeting(
+            self, *, limit: int = 50, offset: int = 0, **_kwargs: Any,
+        ) -> list[TDocWithMeeting]:
+            return [
+                TDocWithMeeting(
+                    tdoc=TDoc(
+                        tdoc_id=f"R5-{260001 + offset + i:06d}",
+                        title=f"row {offset + i}",
+                        meeting_id=1,
+                        ftp_url=f"R5/26.{(offset + i):03d}/R5-{260001 + offset + i:06d}.zip",
+                        spec="38.523-3",
+                        release="Rel-18",
+                        type="CR",
+                        uploaded_date=date(2026, 5, 2),
+                    ),
+                    meeting_name="RAN5#99-e",
+                )
+                for i in range(limit)
+            ]
+
+    app_with_fakes.dependency_overrides[get_tdoc_service] = (
+        lambda: _ManyRowsTDocService()
+    )
+    with TestClient(app_with_fakes) as c:
+        # The exact URL the user reported: offset=50 with all filter
+        # form fields blank. Must be 200 + fragment, not 500.
+        params = {
+            "tdoc_id": "", "meeting": "", "meeting_id": "", "title": "",
+            "type": "", "source": "", "spec": "", "wi": "", "cr-cat": "",
+            "status": "", "revision-of": "", "revised-to": "", "ftp-url": "",
+            "release": "", "version": "", "cr-num": "", "cr-pack": "",
+            "uploaded-date": "", "limit": "50", "offset": "50",
+        }
+        response = c.get("/tdocs", params=params, headers={"HX-Request": "true"})
+        assert response.status_code == 200
+        assert "<!DOCTYPE" not in response.text
+        assert '<nav class="pagination">' in response.text
+
+
 def test_tdoc_list_invalid_date_filter_returns_400(client: TestClient) -> None:
     """``GET /tdocs?uploaded-date=bogus`` is 400 with invalid_filter envelope."""
     response = client.get("/tdocs?uploaded-date=bogus")
@@ -634,6 +728,83 @@ def test_tdoc_content_html(client: TestClient, sqlite_env: Any, tmp_path: Any) -
     assert response.status_code == 200
     assert "Heading" in response.text
     assert "<strong>bold</strong>" in response.text
+
+
+def test_tdoc_content_markdown_zip_wrapped_cache(
+    client: TestClient, sqlite_env: Any, tmp_path: Any,
+) -> None:
+    """``GET /tdocs/{id}/content?format=markdown`` reads a real ZIP-wrapped cache.
+
+    Post-D10 the on-disk markdown cache is a real ZIP archive (see
+    ``_wrap_markdown_zip`` in ``tdoc_cr_service``), not a plain UTF-8
+    text file. The web route previously called ``read_text(encoding='utf-8')``
+    on the wrapped cache, which crashed with ``UnicodeDecodeError``
+    on the ``PK\\x03\\x04`` magic bytes — every TTCN TDoc hit a 500.
+    The route must now use ``_read_cached_markdown_path`` so it reads
+    the inner ``.md`` entry from the ZIP.
+    """
+    import io
+    import zipfile
+
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+
+    create_schema()
+    url = "TSG_RAN/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260231.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260231", ftp_url=url),
+    )
+    cache_file = derive_cache_file(url)
+    markdown_path = tmp_path / "markdown" / cache_file
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    # Write a real ZIP archive with a single ``R5s260231.md`` entry,
+    # matching what ``_wrap_markdown_zip`` produces on disk.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("R5s260231.md", "# TTCN heading\n\nSome markdown.")
+    markdown_path.write_bytes(buf.getvalue())
+
+    new_app = _build_app_with_fakes(cache_dir=tmp_path)
+    with TestClient(new_app) as new_client:
+        # ?format=markdown returns the inner .md payload, not the zip bytes.
+        response = new_client.get(
+            "/tdocs/R5s260231/content?format=markdown",
+        )
+    assert response.status_code == 200
+    assert "# TTCN heading" in response.text
+    assert "PK" not in response.text  # not the raw zip header
+
+
+def test_tdoc_content_html_zip_wrapped_cache(
+    client: TestClient, sqlite_env: Any, tmp_path: Any,
+) -> None:
+    """``GET /tdocs/{id}/content?format=html`` reads a real ZIP-wrapped cache."""
+    import io
+    import zipfile
+
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+
+    create_schema()
+    url = "TSG_RAN/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260231.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260231", ftp_url=url),
+    )
+    cache_file = derive_cache_file(url)
+    markdown_path = tmp_path / "markdown" / cache_file
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("R5s260231.md", "# TTCN heading\n\nSome markdown.")
+    markdown_path.write_bytes(buf.getvalue())
+
+    new_app = _build_app_with_fakes(cache_dir=tmp_path)
+    with TestClient(new_app) as new_client:
+        response = new_client.get("/tdocs/R5s260231/content?format=html")
+    assert response.status_code == 200
+    assert "TTCN heading" in response.text
 
 
 # ---------------------------------------------------------------------------

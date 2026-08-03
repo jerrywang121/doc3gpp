@@ -25,7 +25,7 @@ from markdown_it import MarkdownIt
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRepos
 from doc3gpp.scraping.cache_keys import derive_cache_file
-from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
+from doc3gpp.services.tdoc_cr_service import TDocNotFoundError, _read_cached_markdown_path
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
@@ -175,6 +175,7 @@ async def list_tdocs(
             "active_nav": "tdocs",
             "tdocs": rows,
             "total": len(rows),
+            "limit": parsed_limit,
             "offset": parsed_offset,
             "next_offset": next_offset,
             "filters": {
@@ -247,7 +248,21 @@ async def tdoc_content(
             f"No cached markdown for TDoc {tdoc_id}.",
             hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id}",
         )
-    markdown_text = markdown_path.read_text(encoding="utf-8")
+    # The on-disk cache file is a real ZIP archive (post-D10 fix:
+    # `_wrap_markdown_zip` in `tdoc_cr_service`) — _not_ a plain UTF-8
+    # text file. ``_read_cached_markdown_path`` decodes all three
+    # cache layouts (real ZIP, legacy gzip, legacy plain UTF-8) and
+    # returns ``""`` on any read/decode failure so the route degrades
+    # safely instead of 500-ing on a TTCN .docx with non-UTF8 chart
+    # bytes embedded in the markdown extract.
+    markdown_text = _read_cached_markdown_path(
+        cache_file, Path(settings.cache.dir)
+    )
+    if not markdown_text:
+        raise CacheMissError(
+            f"Failed to decode cached markdown for TDoc {tdoc_id}.",
+            hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id} --force",
+        )
 
     if format == "markdown":
         return Response(

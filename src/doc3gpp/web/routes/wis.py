@@ -74,6 +74,7 @@ async def list_wis(
             "active_nav": "wis",
             "wis": wis,
             "total": len(wis),
+            "limit": parsed_limit,
             "offset": 0,
             "next_offset": None,
             "filters": {

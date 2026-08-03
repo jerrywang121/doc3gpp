@@ -27,6 +27,7 @@ from doc3gpp.cli_server import (
     server_app,
 )
 from doc3gpp.settings.schema import ServerSettings, Settings
+from doc3gpp.settings.loader import get_settings
 
 
 EXPECTED_SUBCOMMAND_NAMES = ("start", "stop", "status", "logs", "install", "uninstall")
@@ -61,10 +62,25 @@ def test_guard_does_not_raise_when_enabled() -> None:
     assert _require_server_enabled(settings) is None
 
 
-def test_start_blocked_by_disabled_gate() -> None:
-    """Without ``[server] enabled = true``, ``server start`` is rejected by the guard."""
+def test_start_blocked_by_disabled_gate(tmp_path, monkeypatch) -> None:
+    """Without ``[server] enabled = true``, ``server start`` is rejected by the guard.
+
+    The real ``server start`` reads the ambient config through
+    ``get_settings()``, which falls through to the user-wide
+    ``~/.config/doc3gpp/config.toml`` when no ``DOC3GPP_CONFIG`` or
+    project ``doc3gpp.toml`` is present. Point ``DOC3GPP_CONFIG`` at an
+    empty temp file so the resolved settings keep the ``enabled = False``
+    default regardless of what the operator's real config contains.
+    """
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
+    get_settings.cache_clear()
     runner = CliRunner()
-    result = runner.invoke(server_app, ["start"])
+    try:
+        result = runner.invoke(server_app, ["start"])
+    finally:
+        get_settings.cache_clear()
     assert result.exit_code != 0, result.output
     assert isinstance(result.exception, click.UsageError)
     assert "[server] enabled = true" in str(result.exception), (

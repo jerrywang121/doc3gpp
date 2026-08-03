@@ -54,10 +54,15 @@ def _to_json(value: Any) -> str:
     results. Wrapping list (and other) payloads in a JSON string keeps a
     single ``TextContent`` item for every call and matches the HTTP
     ``?format=json`` surface byte-for-byte.
+
+    The compact separators and ``ensure_ascii=False`` deliberately mirror
+    Starlette's :class:`~starlette.responses.JSONResponse` (which is what
+    the HTTP ``?format=json`` routes render through) so the two surfaces
+    produce identical bytes.
     """
     import json
 
-    return json.dumps(value)
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
 def _fts5_hit_to_json(hit: Any) -> dict[str, Any]:

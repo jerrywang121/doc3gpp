@@ -148,3 +148,103 @@ def test_get_meeting_not_found_raises(sqlite_env) -> None:
 
     with pytest.raises(ToolError):
         asyncio.run(run())
+
+
+def _seed_corpus() -> None:
+    """Seed one meeting + one tdoc + one wi so read tools return rows."""
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tsg import Tsg
+    from doc3gpp.models.wi import Wi
+    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
+    from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
+
+    SQLAlchemyTsgRepository().upsert_many(
+        [Tsg(tsg_name="SA", short_name="SA", description="Services")],
+    )
+
+    SQLAlchemyMeetingRepository().upsert_many(
+        [
+            Meeting(
+                meeting_id=156,
+                name="SA2#156",
+                title="SA2 meeting 156",
+                location="online",
+                start_date=None,
+                end_date=None,
+            ),
+        ]
+    )
+    SQLAlchemyTDocRepository().upsert_many(
+        [
+            TDoc(
+                tdoc_id="S2-260001",
+                title="A test tdoc",
+                meeting_id=156,
+                ftp_url="TSG_SA/WG2_Arch/S2-260001.zip",
+                source="Ericsson",
+            ),
+        ]
+    )
+    SQLAlchemyWiRepository().upsert_many(
+        [Wi(wi_id=101, acronym="FS_NET", release="Rel-18", name="Network", tsg_short="SA")],
+    )
+
+
+def test_read_tools_parity_with_http_json(sqlite_env) -> None:
+    """Read tools' JSON bytes match the matching HTTP ``?format=json`` route.
+
+    This locks the AC9 byte-for-byte parity contract: the MCP tool result
+    and the corresponding HTTP route must serialize identically
+    (compact separators + ``ensure_ascii=False``).
+    """
+    import asyncio
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    _state_and_server()  # runs create_schema()
+    _seed_corpus()
+    state, server = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+        cases = [
+            ("list_meetings", {}, "/meetings?format=json"),
+            ("list_tsgs", {}, "/tsgs?format=json"),
+            ("list_wis", {}, "/wis?format=json"),
+            ("list_tdocs", {}, "/tdocs?format=json"),
+        ]
+
+        async def call(name: str, args: dict):
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        for tool_name, args, route in cases:
+            mcp_bytes = asyncio.run(call(tool_name, args))
+            http_resp = client.get(route)
+            assert http_resp.status_code == 200, http_resp.text
+            http_bytes = http_resp.content.decode("utf-8")
+            assert mcp_bytes == http_bytes, (
+                f"{tool_name} parity broke: MCP={mcp_bytes!r} HTTP={http_bytes!r}"
+            )
+
+        # get_meeting wraps in {"meeting": ...}
+        mcp_meeting = asyncio.run(call("get_meeting", {"meeting_id": 156}))
+        http_meeting = client.get("/meetings/156?format=json").content.decode("utf-8")
+        assert json.loads(mcp_meeting) == json.loads(http_meeting)
+
+    get_engine.cache_clear()
+    del state.engine

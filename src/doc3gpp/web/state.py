@@ -15,7 +15,8 @@ The shape mirrors the T4 contract:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from sqlalchemy.engine import Engine
@@ -36,13 +37,69 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class JobWorkerHandle:
-    """Placeholder handle for the background job worker (replaced in T7).
+    """Handle for the background job worker (T7).
 
-    T4 attaches one of these to :attr:`WebState.jobs` so downstream
-    code (route handlers, the MCP mount) can already type-check against
-    the eventual real handle. T7 swaps the placeholder for the real
-    implementation without changing the field type.
+    Attached to :attr:`WebState.jobs` so route handlers (T8) and the
+    MCP mount (T9) can drive the worker from request context without
+    reaching into the running :class:`JobWorker` task directly.
+
+    Attributes:
+        task: The asyncio task running the worker's ``run()`` loop, or
+            ``None`` before the lifespan starts it.
+        event_queues: Per-job ``asyncio.Queue`` of SSE event dicts,
+            keyed by ``job.id``. T8's ``/jobs/{id}/events`` stream
+            drains the queue for the requested job; the queue is
+            removed via :meth:`unregister_queue` when the job reaches
+            a terminal state.
+        cancel_events: Per-job ``asyncio.Event``, keyed by ``job.id``.
+            :meth:`cancel` sets the event to ask the running handler to
+            stop cooperatively.
+        max_concurrent_jobs: How many jobs may run concurrently (from
+            ``Settings.server.max_concurrent_jobs``).
     """
+
+    task: asyncio.Task | None = None
+    event_queues: dict[str, asyncio.Queue[dict]] = field(default_factory=dict)
+    cancel_events: dict[str, asyncio.Event] = field(default_factory=dict)
+    max_concurrent_jobs: int = 1
+
+    def register_queue(self, job_id: str, queue: asyncio.Queue[dict]) -> None:
+        """Attach an SSE event queue for ``job_id``."""
+        self.event_queues[job_id] = queue
+
+    def unregister_queue(self, job_id: str) -> None:
+        """Remove the SSE event queue for ``job_id`` (terminal state)."""
+        self.event_queues.pop(job_id, None)
+
+    def cancel(self, job_id: str) -> bool:
+        """Request cooperative cancellation for ``job_id``.
+
+        Returns ``True`` when a cancellation event was found and set,
+        ``False`` when the job has no registered event (already
+        finished, or never started).
+        """
+        event = self.cancel_events.get(job_id)
+        if event is None:
+            return False
+        event.set()
+        return True
+
+    async def shutdown(self) -> None:
+        """Request cancellation for every job and await the worker task.
+
+        Sets every registered cancellation event, then awaits the
+        worker's ``task`` with a bounded timeout so a stuck blocking
+        handler can't hang server shutdown forever.
+        """
+        for event in self.cancel_events.values():
+            event.set()
+        task = self.task
+        if task is None or task.done():
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+        except asyncio.TimeoutError:
+            task.cancel()
 
 
 @dataclass(slots=True)

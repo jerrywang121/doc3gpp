@@ -19,6 +19,7 @@ service is composed by delegating to ``services.factory.build_*``.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -34,6 +35,7 @@ from doc3gpp.web.errors import register_error_handlers
 from doc3gpp.web.routes import all_routers
 from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
 from doc3gpp.web.templates_setup import mount_static
+from doc3gpp.web.workers.job_worker import JobWorker
 
 if TYPE_CHECKING:
     pass
@@ -106,9 +108,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         state = build_state(settings)
         app.state.web = state
+        worker = JobWorker(state)
+        handle = JobWorkerHandle(max_concurrent_jobs=settings.server.max_concurrent_jobs)
+        handle.task = asyncio.create_task(worker.run())
+        state.jobs = handle
         try:
             yield
         finally:
+            await handle.shutdown()
             state.engine.dispose()
 
     app = FastAPI(title="doc3gpp", lifespan=lifespan)

@@ -25,7 +25,12 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.deps import get_meeting_service
-from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
+from doc3gpp.web.filters import (
+    is_htmx_request,
+    parse_int_query,
+    parse_tdoc_id_query,
+    parse_text_query,
+)
 from doc3gpp.web.render import meeting_rows, to_jsonable
 from doc3gpp.web.templates_setup import templates
 
@@ -56,6 +61,7 @@ async def list_meetings(
     tsg: str | None = Query(default=None),
     year: str | None = Query(default=None),
     location: str | None = Query(default=None),
+    tdoc: str | None = Query(default=None),
     limit: str | None = Query(default="50"),
     offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
@@ -80,6 +86,7 @@ async def list_meetings(
     parsed_tsg = parse_text_query(tsg)
     parsed_location = parse_text_query(location)
     parsed_year = parse_int_query(year, min=1970, max=2100)
+    parsed_tdoc = parse_tdoc_id_query(tdoc) if tdoc else None
 
     meetings = service.list_recent(
         limit=parsed_limit,
@@ -87,6 +94,7 @@ async def list_meetings(
         tsg=parsed_tsg,
         location_like=parsed_location,
         year=parsed_year,
+        tdoc_id=parsed_tdoc,
     )
 
     if format == "json":
@@ -110,6 +118,7 @@ async def list_meetings(
                 "tsg": parsed_tsg or "",
                 "year": year,
                 "location": parsed_location or "",
+                "tdoc": tdoc or "",
                 "limit": parsed_limit,
             },
         },

@@ -584,6 +584,32 @@ def test_meeting_list_filters_form_fields(client: TestClient) -> None:
     assert 'name="start_before"' not in html
 
 
+def test_meeting_list_filters_form_has_tdoc_input(client: TestClient) -> None:
+    """``GET /meetings`` renders the TDoc filter input."""
+    html = client.get("/meetings").text
+    assert 'name="tdoc"' in html
+
+
+def test_meetings_list_tdoc_filter_returns_200(client: TestClient) -> None:
+    """``GET /meetings?tdoc=R5-260013`` is 200 (pass-through to service)."""
+    response = client.get("/meetings?tdoc=R5-260013")
+    assert response.status_code == 200
+
+
+def test_meetings_list_empty_tdoc_filter_returns_200(client: TestClient) -> None:
+    """``GET /meetings?tdoc=`` is 200, not 422 (empty form field)."""
+    response = client.get("/meetings?tdoc=&tsg=c6")
+    assert response.status_code == 200
+
+
+def test_meetings_list_invalid_tdoc_filter_returns_400(client: TestClient) -> None:
+    """``GET /meetings?tdoc=not-a-tdoc`` is 400 with invalid_filter envelope."""
+    response = client.get("/meetings?tdoc=not-a-tdoc")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
 def test_meetings_list_empty_numeric_filter_returns_200(client: TestClient) -> None:
     """``GET /meetings?tsg=c6&year=`` is 200, not 422 (empty form fields).
 

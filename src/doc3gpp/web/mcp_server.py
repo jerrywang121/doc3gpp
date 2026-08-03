@@ -16,7 +16,8 @@ CLI most recently wrote.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import functools
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 from doc3gpp.models.jobs import JobKind
 from doc3gpp.web import render
@@ -29,6 +30,7 @@ from doc3gpp.web.errors import (
     SettingsDisabledError,
     TDocNotFoundError,
     TSGNotFoundError,
+    map_mcp_error,
 )
 
 if TYPE_CHECKING:
@@ -42,6 +44,38 @@ _TSG_FIELDS = ["tsg_name", "short_name", "description"]
 _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
 
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _mcp_error_guard(fn: _F) -> _F:
+    """Translate domain exceptions into MCP JSON-RPC protocol errors.
+
+    The MCP SDK's ``Tool.run`` re-raises any :class:`MCPError` raised by
+    a tool body as a JSON-RPC protocol error (so a client sees a proper
+    ``code``), whereas any other exception becomes an ``isError``
+    ``ToolError`` with no code. This decorator sits below
+    ``@server.tool(...)`` so every mapped domain exception surfaces with
+    the design spec's ``-320xx`` / ``-326xx`` codes instead of a bare
+    tool error. Unmapped exceptions are re-raised unchanged (the SDK
+    falls back to ``ToolError``).
+    """
+    from mcp.shared.exceptions import MCPError
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except MCPError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - deliberate transport boundary
+            mapped = map_mcp_error(exc)
+            if mapped is not None:
+                code, message, data = mapped
+                raise MCPError(code=code, message=message, data=data) from exc
+            raise
+
+    return wrapper  # type: ignore[return-value]
 
 
 def _to_json(value: Any) -> str:
@@ -130,6 +164,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     # ---- Meetings -------------------------------------------------
     @server.tool(name="list_meetings", description="List meetings, optionally filtered by TSG, name, location or year.")
+    @_mcp_error_guard
     def list_meetings(
         tsg: str | None = None,
         name: str | None = None,
@@ -149,6 +184,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.meeting_rows(meetings, _MEETING_FIELDS))
 
     @server.tool(name="get_meeting", description="Get a single meeting by its numeric meeting id.")
+    @_mcp_error_guard
     def get_meeting(meeting_id: int) -> str:
         meeting = services.meeting.get_by_id(meeting_id)
         if meeting is None:
@@ -157,6 +193,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     # ---- TDocs ----------------------------------------------------
     @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field.")
+    @_mcp_error_guard
     def list_tdocs(
         limit: int = 50,
         offset: int = 0,
@@ -200,6 +237,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.tdoc_rows(rows, _TDOC_FIELDS))
 
     @server.tool(name="get_tdoc", description="Get a single tdoc by id, including its cover-page and extract details.")
+    @_mcp_error_guard
     def get_tdoc(tdoc_id: str) -> str:
         from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
         from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import SQLAlchemyTDocCrChangeDetailsRepository
@@ -218,6 +256,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.to_jsonable(record))
 
     @server.tool(name="get_tdoc_content", description="Return the cached markdown body for a tdoc id.")
+    @_mcp_error_guard
     def get_tdoc_content(tdoc_id: str, format: str = "markdown") -> str:
         if format not in ("markdown", "html"):
             raise InvalidFilterError("format must be one of 'markdown'|'html'")
@@ -243,10 +282,12 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     # ---- TSGs -----------------------------------------------------
     @server.tool(name="list_tsgs", description="List all standardisation groups (TSGs).")
+    @_mcp_error_guard
     def list_tsgs() -> str:
         return _to_json(render.tsg_rows(services.tsg.list_all(), _TSG_FIELDS))
 
     @server.tool(name="get_tsg", description="Get a single TSG by short name, with its recent meetings.")
+    @_mcp_error_guard
     def get_tsg(short_name: str) -> str:
         tsg = services.tsg.get_by_short_name(short_name)
         if tsg is None:
@@ -256,6 +297,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     # ---- WIs ------------------------------------------------------
     @server.tool(name="list_wis", description="List work items, optionally filtered by TSG, name, acronym or release.")
+    @_mcp_error_guard
     def list_wis(
         tsg: str | None = None,
         name: str | None = None,
@@ -274,6 +316,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     # ---- Search ---------------------------------------------------
     @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text.")
+    @_mcp_error_guard
     def search_tdocs(
         query: str,
         tsg: str | None = None,
@@ -293,6 +336,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json([_fts5_hit_to_json(h) for h in hits])
 
     @server.tool(name="semantic_search_tdocs", description="Semantic (embedding) search over tdoc text.")
+    @_mcp_error_guard
     def semantic_search_tdocs(
         query: str,
         limit: int = 20,
@@ -310,28 +354,33 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     # ---- Jobs -----------------------------------------------------
     @server.tool(name="sync_meetings", description="Enqueue a meeting-calendar sync for a TSG.")
+    @_mcp_error_guard
     def sync_meetings(tsg: str) -> str:
         if not tsg:
             raise InvalidFilterError("tsg is required")
         return _enqueue(state, JobKind.SYNC_MEETINGS, {"tsg": tsg}, f"queued sync_meetings for TSG {tsg}")
 
     @server.tool(name="sync_tdocs", description="Enqueue a tdoc-list sync for a meeting id.")
+    @_mcp_error_guard
     def sync_tdocs(meeting_id: int | None = None) -> str:
         if meeting_id is None:
             raise InvalidFilterError("meeting_id is required")
         return _enqueue(state, JobKind.SYNC_TDOCS, {"meeting_id": meeting_id}, f"queued sync_tdocs for meeting {meeting_id}")
 
     @server.tool(name="sync_tdocs_by_meeting", description="Enqueue a tdoc-list sync for a meeting by name.")
+    @_mcp_error_guard
     def sync_tdocs_by_meeting(meeting: str | None = None) -> str:
         if not meeting:
             raise InvalidFilterError("meeting is required")
         return _enqueue(state, JobKind.SYNC_TDOCS, {"meeting_name": meeting}, f"queued sync_tdocs for meeting {meeting}")
 
     @server.tool(name="sync_all_tdocs", description="Enqueue a bulk sync of every tracked meeting's tdocs.")
+    @_mcp_error_guard
     def sync_all_tdocs() -> str:
         return _enqueue(state, JobKind.SYNC_TDOCS_ALL, {"force": False}, "queued sync_all_tdocs")
 
     @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages + change details.")
+    @_mcp_error_guard
     def parse_tdocs(
         filter: dict[str, Any] | None = None,
         force: bool = False,
@@ -346,10 +395,12 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _enqueue(state, JobKind.PARSE_TDOCS, params, "queued parse_tdocs")
 
     @server.tool(name="rebuild_search_index", description="Enqueue an FTS5 search-index rebuild.")
+    @_mcp_error_guard
     def rebuild_search_index(stale_only: bool = False, resume: bool = False) -> str:
         return _enqueue(state, JobKind.REBUILD_SEARCH, {"stale_only": stale_only, "resume": resume}, "queued rebuild_search_index")
 
     @server.tool(name="purge_cache", description="Enqueue a cache purge (scope: markdown, zips or all).")
+    @_mcp_error_guard
     def purge_cache(scope: str = "markdown", yes: bool = False) -> str:
         if not yes:
             raise InvalidFilterError("yes must be true to purge the cache")
@@ -358,6 +409,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _enqueue(state, JobKind.CACHE_PURGE, {"scope": scope}, f"queued purge_cache ({scope})")
 
     @server.tool(name="get_job", description="Get a job's full detail by id.")
+    @_mcp_error_guard
     def get_job(job_id: str) -> str:
         job = state.services.job_repo.get(job_id)
         if job is None:
@@ -367,6 +419,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(_envelope(job))
 
     @server.tool(name="cancel_job", description="Request cooperative cancellation of a queued or running job.")
+    @_mcp_error_guard
     def cancel_job(job_id: str) -> str:
         from doc3gpp.models.jobs import JobStatus
 
@@ -381,6 +434,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(_envelope(job))
 
     @server.tool(name="list_jobs", description="List recent jobs (newest first), optionally filtered by status.")
+    @_mcp_error_guard
     def list_jobs(status: str | None = None, limit: int = 50, offset: int = 0) -> str:
         from doc3gpp.models.jobs import JobStatus
         from doc3gpp.web.routes.jobs import _envelope

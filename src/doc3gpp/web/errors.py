@@ -74,6 +74,53 @@ class CacheMissError(LookupError):
         self.hint = hint
 
 
+# JSON-RPC error codes used on the MCP surface (see the design spec's
+# "Error mapping" section). -32000..-32099 are MCP-application-defined;
+# -32600..-32603 are the standard JSON-RPC codes.
+MCP_CODE_NOT_FOUND = -32004
+MCP_CODE_CACHE_MISS = -32005
+MCP_CODE_TOO_LARGE = -32006
+MCP_CODE_INVALID_PARAMS = -32602
+MCP_CODE_INTERNAL_ERROR = -32603
+
+# domain exception -> (resource slug, MCP code). The HTTP status is
+# derived separately via ``_STATUS_BY_EXC``; keeping the two tables in
+# lock-step is a deliberate invariant (the same exception class must map
+# to one canonical resource on both transports).
+_MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
+    TDocNotFoundError: ("tdoc", MCP_CODE_NOT_FOUND),
+    MeetingNotFoundError: ("meeting", MCP_CODE_NOT_FOUND),
+    TSGNotFoundError: ("tsg", MCP_CODE_NOT_FOUND),
+    WINotFoundError: ("wi", MCP_CODE_NOT_FOUND),
+    JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
+    CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
+    InvalidFilterError: ("filter", MCP_CODE_INVALID_PARAMS),
+}
+
+
+def map_mcp_error(exc: Exception) -> tuple[int, str, dict[str, Any]] | None:
+    """Map a domain exception to an MCP JSON-RPC error ``(code, message, data)``.
+
+    Returns ``None`` for exceptions with no MCP-specific mapping (they
+    bubble up as the generic ``-32603`` internal error from the caller).
+    The ``data`` payload mirrors the HTTP envelope: the canonical
+    ``error`` slug plus the ``detail`` message, with a ``resource`` /
+    ``hint`` where applicable so an AI client can correlate with a URL.
+    """
+    for exc_type, (resource, code) in _MCP_RESOURCE_BY_EXC.items():
+        if isinstance(exc, exc_type):
+            data: dict[str, Any] = {"error": _ERROR_SLUGS[exc_type], "detail": str(exc), "resource": resource}
+            if isinstance(exc, CacheMissError):
+                if exc.hint:
+                    data["hint"] = exc.hint
+            elif exc.args:
+                data["id"] = exc.args[0]
+            return (code, str(exc), data)
+    if isinstance(exc, (JobAlreadyTerminalError, SettingsDisabledError, httpx.HTTPError)):
+        return (MCP_CODE_INTERNAL_ERROR, str(exc), {"error": _ERROR_SLUGS.get(type(exc), "internal_error"), "detail": str(exc)})
+    return None
+
+
 _ERROR_SLUGS: dict[type[Exception], str] = {
     TDocNotFoundError: "tdoc_not_found",
     MeetingNotFoundError: "meeting_not_found",
@@ -166,6 +213,12 @@ __all__ = [
     "JobNotFoundError",
     "JobAlreadyTerminalError",
     "SettingsDisabledError",
+    "MCP_CODE_NOT_FOUND",
+    "MCP_CODE_CACHE_MISS",
+    "MCP_CODE_TOO_LARGE",
+    "MCP_CODE_INVALID_PARAMS",
+    "MCP_CODE_INTERNAL_ERROR",
+    "map_mcp_error",
     "map_domain_error",
     "register_error_handlers",
 ]

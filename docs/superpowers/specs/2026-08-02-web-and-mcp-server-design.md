@@ -381,19 +381,31 @@ class ServerSettings(BaseModel):
     enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 8765
-    log_level: str = "info"
-    max_concurrent_jobs: int = 1
-    job_retention_succeeded: str = "24h"
-    job_retention_failed: str = "7d"
+    max_concurrent_jobs: int = 1          # bounded 1..16
+    cleanup_interval_seconds: int = 300   # ge=10; period of the log-cleanup task
+    log_retention: str = "7d"             # humanfriendly duration for completed-job logs
     cache_subdir: str | None = None
-    auto_open_browser: bool = False
+    pid_file: str | None = None           # None -> {cache.dir}/server.pid at startup
+    log_file: str | None = None           # None -> {cache.dir}/server.log at startup
 
 class MCPSettings(BaseModel):
     enabled: bool = True
-    mount_path: str = "/mcp"
-    include_resources: bool = False
-    include_prompts: bool = False
+    transport: Literal["streamable_http"] = "streamable_http"
+    sse_queue_size: int = 100             # ge=10; per-session event queue
 ```
+
+> **Implementation note (shipped schema):** the spec originally named
+> `job_retention_succeeded` / `job_retention_failed` (per-status retention)
+> and `auto_open_browser`, plus MCP `mount_path` / `include_resources` /
+> `include_prompts`. The shipped code consolidates retention into a single
+> `log_retention` window (the worker recomputes the cutoff on every pass),
+> resolves `pid_file` / `log_file` at startup, and locks MCP to the
+> `streamable_http` transport. `auto_open_browser` was dropped in favour of
+> the explicit `--open` CLI flag. The mount path is fixed at `/mcp` and
+> resources / prompts are simply never registered (out of v1 scope), so no
+> `mount_path` / `include_*` knobs are needed. This file supersedes the
+> schema sketch below; `doc3gpp.toml.example`, `docs/web-server.md`, and the
+> implementation plan all describe the shipped schema.
 
 `Settings` exposes both via `server: ServerSettings` and
 `mcp: MCPSettings`. `[server].enabled = false` (default) keeps the
@@ -402,7 +414,8 @@ when `[server].enabled = true`; the MCP mount can't run standalone.
 
 `get_settings()` caching and CLI-flag-overrides-env-overrides-file
 precedence rules are unchanged — `--host` / `--port` on `server start`
-override the TOML values for that invocation.
+override the TOML values for that invocation. Both `[server]` and
+`[mcp]` fields are TOML-only (not in the env allowlist).
 
 ### `doc3gpp.toml` additions
 
@@ -411,18 +424,17 @@ override the TOML values for that invocation.
 enabled = true
 host = "127.0.0.1"
 port = 8765
-log_level = "info"
 max_concurrent_jobs = 1
-job_retention_succeeded = "24h"
-job_retention_failed = "7d"
+cleanup_interval_seconds = 300
+log_retention = "7d"
 cache_subdir = "web"
-auto_open_browser = false
+# pid_file = "/var/run/doc3gpp/server.pid"   # defaults to {cache.dir}/server.pid
+# log_file = "/var/log/doc3gpp/server.log"   # defaults to {cache.dir}/server.log
 
 [mcp]
 enabled = true
-mount_path = "/mcp"
-include_resources = false
-include_prompts = false
+transport = "streamable_http"
+sse_queue_size = 100
 ```
 
 ## CLI commands (new `server` group)
@@ -498,23 +510,48 @@ doc3gpp server status
 
 ## Error mapping
 
-`src/doc3gpp/web/errors.py` defines `map_domain_error(exc)` returning
-`(http_status, mcp_code, payload)` from any domain exception subclass.
-One source of truth for both transports.
+`src/doc3gpp/web/errors.py` is the single source of truth for both
+transports:
 
-| Domain exception | HTTP status | MCP code | Payload |
-| --- | --- | --- | --- |
-| `MeetingNotFoundError` | 404 | -32004 | `{resource: "meeting", id}` |
-| `TDocNotFoundError` | 404 | -32004 | `{resource: "tdoc", id}` |
-| `CacheMissError` (new) | 404 | -32005 | `{resource: "tdoc_content", hint}` |
-| `TDocTooLargeError` | 413 | -32006 | `{tdoc_id, size_kb, limit_kb}` |
-| `JobNotFoundError` | 404 | -32004 | `{resource: "job", id}` |
-| `FilterParseError` | 400 | -32602 | `{filter, message}` |
-| `SettingsError` | 500 | -32603 | `{message}` |
+- `map_domain_error(exc)` → a `JSONResponse` envelope `{error, detail, ...}`
+  (used by the FastAPI exception handlers).
+- `map_mcp_error(exc)` → `(code, message, data) | None` (used by the MCP
+  tool guard to raise `mcp.shared.exceptions.MCPError`).
 
-All other exceptions bubble up as `500` / `-32603`. FastAPI's
-exception handler converts the tuple into a `JSONResponse`; the MCP
-adapter wraps the same tuple into `mcp.shared.exceptions.McpError`.
+MCP codes: `-32000..-32099` are MCP-application-defined; `-32602` /
+`-32603` are the standard JSON-RPC codes. The MCP surface is realised by a
+`@_mcp_error_guard` decorator applied beneath every `@server.tool(...)`
+registration; the SDK's `Tool.run` re-raises an `MCPError` as a JSON-RPC
+protocol error (with a real `code`), whereas any other exception becomes a
+bare `ToolError` (`isError`, no code).
+
+| Domain exception | HTTP status | HTTP slug | MCP code | MCP `data.resource` |
+| --- | --- | --- | --- | --- |
+| `MeetingNotFoundError` | 404 | `meeting_not_found` | -32004 | `meeting` |
+| `TDocNotFoundError` | 404 | `tdoc_not_found` | -32004 | `tdoc` |
+| `TSGNotFoundError` | 404 | `tsg_not_found` | -32004 | `tsg` |
+| `WINotFoundError` | 404 | `wi_not_found` | -32004 | `wi` |
+| `JobNotFoundError` | 404 | `job_not_found` | -32004 | `job` |
+| `CacheMissError` | 404 | `cache_miss` | -32005 | `tdoc_content` (+`hint`) |
+| `InvalidFilterError` | 400 | `invalid_filter` | -32602 | `filter` |
+| `JobAlreadyTerminalError` | 409 | `job_already_terminal` | -32603 | — |
+| `SettingsDisabledError` | 503 | `settings_disabled` | -32603 | — |
+| `httpx.HTTPError` (subclasses) | 502 | `upstream_unavailable` | -32603 | — |
+
+> **Implementation note (shipped mapping):** the spec originally named
+> `TDocTooLargeError` (413 / -32006) and `FilterParseError` (400 / -32602).
+> The shipped code has no `TDocTooLargeError` on the web path — oversized
+> TDocs are routed to the skip bucket inside the parser, so the 413 case is
+> unused. `InvalidFilterError` is the single filter-error type (there is no
+> separate `FilterParseError`), and `TSGNotFoundError` / `WINotFoundError` /
+> `JobAlreadyTerminalError` / `SettingsDisabledError` were added to the
+> table during implementation. The `-32006` code remains defined but
+> unmapped.
+
+All other exceptions bubble up as `500` (`-32603` on MCP via the guard's
+fallback to `ToolError`, or as a bare protocol error from the SDK). FastAPI
+registers a handler per mapped class; the MCP guard wraps the same tuple
+into `mcp.shared.exceptions.MCPError`.
 
 ## Testing
 

@@ -135,19 +135,22 @@ def test_job_tools_enqueue_and_poll(sqlite_env) -> None:
 
 
 def test_get_meeting_not_found_raises(sqlite_env) -> None:
-    """Unknown meeting id propagates MeetingNotFoundError as a ToolError."""
+    """Unknown meeting id propagates MeetingNotFoundError as an MCP -32004 protocol error."""
     import asyncio
 
     import pytest
-    from mcp.server.mcpserver.exceptions import ToolError
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_NOT_FOUND
 
     _, server = _state_and_server()
 
     async def run():
         return await server.call_tool("get_meeting", {"meeting_id": 999999})
 
-    with pytest.raises(ToolError):
+    with pytest.raises(MCPError) as exc_info:
         asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_NOT_FOUND
 
 
 def _seed_corpus() -> None:

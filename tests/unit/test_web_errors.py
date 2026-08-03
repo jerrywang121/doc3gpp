@@ -20,7 +20,12 @@ from doc3gpp.web.errors import (
     SettingsDisabledError,
     TSGNotFoundError,
     WINotFoundError,
+    MCP_CODE_CACHE_MISS,
+    MCP_CODE_INTERNAL_ERROR,
+    MCP_CODE_INVALID_PARAMS,
+    MCP_CODE_NOT_FOUND,
     map_domain_error,
+    map_mcp_error,
     register_error_handlers,
 )
 
@@ -125,3 +130,50 @@ def test_register_error_handlers_attaches_handlers() -> None:
         Exception,
     ):
         assert exc_type in handlers, f"missing handler for {exc_type.__name__}"
+
+
+_MCP_MAPPING_CASES = [
+    pytest.param(TSGNotFoundError, "r5", MCP_CODE_NOT_FOUND, "tsg", id="tsg_not_found"),
+    pytest.param(WINotFoundError, "wi-7", MCP_CODE_NOT_FOUND, "wi", id="wi_not_found"),
+    pytest.param(InvalidFilterError, "bad filter", MCP_CODE_INVALID_PARAMS, "filter", id="invalid_filter"),
+    pytest.param(JobNotFoundError, "abc", MCP_CODE_NOT_FOUND, "job", id="job_not_found"),
+    pytest.param(MeetingNotFoundError, "bar", MCP_CODE_NOT_FOUND, "meeting", id="meeting_not_found"),
+]
+
+
+@pytest.mark.parametrize("exc_type, message, code, resource", _MCP_MAPPING_CASES)
+def test_map_mcp_error_mapped_exceptions(exc_type, message, code, resource) -> None:
+    """Mapped domain exceptions yield ``(code, message, data)`` with the canonical slug + resource."""
+    mapped = map_mcp_error(exc_type(message))
+    assert mapped is not None
+    mcode, mmsg, data = mapped
+    assert mcode == code
+    assert mmsg == message
+    assert data["resource"] == resource
+    assert "error" in data and "detail" in data
+
+
+def test_map_mcp_error_cache_miss_carries_hint() -> None:
+    """``CacheMissError`` maps to -32005 and surfaces the parse hint."""
+    mapped = map_mcp_error(
+        CacheMissError(
+            "No cached markdown for TDoc R5-260001.",
+            hint="run: doc3gpp tdoc parse --tdoc R5-260001",
+        )
+    )
+    assert mapped is not None
+    mcode, _mmsg, data = mapped
+    assert mcode == MCP_CODE_CACHE_MISS
+    assert data["resource"] == "tdoc_content"
+    assert data["hint"] == "run: doc3gpp tdoc parse --tdoc R5-260001"
+
+
+def test_map_mcp_error_terminal_and_disabled_map_to_internal() -> None:
+    """Terminal-cancel and disabled-feature map to the generic -32603 internal code."""
+    assert map_mcp_error(JobAlreadyTerminalError("done"))[0] == MCP_CODE_INTERNAL_ERROR
+    assert map_mcp_error(SettingsDisabledError("off"))[0] == MCP_CODE_INTERNAL_ERROR
+
+
+def test_map_mcp_error_unmapped_returns_none() -> None:
+    """A bare ``Exception`` has no MCP mapping and returns ``None``."""
+    assert map_mcp_error(RuntimeError("boom")) is None

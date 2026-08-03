@@ -8,7 +8,9 @@ nothing touches the real OS service manager or spawns a live server.
 """
 from __future__ import annotations
 
+import signal
 import sys
+import time
 
 import click
 import pytest
@@ -119,6 +121,85 @@ def test_logs_job_id(cli_server: Settings, sqlite_env, monkeypatch: pytest.Monke
     assert result.exit_code == 0, result.output
     assert "hello" in result.output
     assert "world" in result.output
+
+
+def test_stop_signals_and_removes_pidfile(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    import doc3gpp.cli_server as cli_server_module
+
+    pid_path = cli_server.cache.dir / "server.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("4242\n", encoding="utf-8")
+
+    signals: list[int] = []
+    dead = False
+
+    def fake_kill(pid: int, sig: int) -> None:
+        nonlocal dead
+        if sig == 0:
+            if dead:
+                raise ProcessLookupError()
+            return
+        signals.append(sig)
+        if sig == 15:  # SIGTERM
+            dead = True
+
+    monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
+    result = _invoke(["stop"])
+    assert result.exit_code == 0, result.output
+    assert signal.SIGTERM in signals
+    assert signal.SIGKILL not in signals
+    assert not pid_path.exists()
+    assert "stopped" in result.output
+
+
+def test_stop_escalates_to_sigkill_when_ungraceful(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    import doc3gpp.cli_server as cli_server_module
+
+    pid_path = cli_server.cache.dir / "server.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("4242\n", encoding="utf-8")
+
+    signals: list[int] = []
+    deadline = [time.monotonic() + 11.0]
+
+    def fake_kill(pid: int, sig: int) -> None:
+        signals.append(sig)
+        # Simulate a process that ignores SIGTERM but dies on SIGKILL:
+        if sig == signal.SIGTERM:
+            return
+        if sig == 0:
+            # pretend alive while the loop polls, then die after the timeout
+            if time.monotonic() > deadline[0]:
+                raise ProcessLookupError()
+
+    monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
+    monkeypatch.setattr(cli_server_module.time, "sleep", lambda s: None)
+    result = _invoke(["stop"])
+    assert result.exit_code == 0, result.output
+    assert signal.SIGTERM in signals
+    assert signal.SIGKILL in signals
+    assert not pid_path.exists()
+
+
+def test_status_os_service_line(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    import doc3gpp.cli_server as cli_server_module
+
+    pid_path = cli_server.cache.dir / "server.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("999999\n", encoding="utf-8")
+
+    monkeypatch.setattr(cli_server_module.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(cli_server_module, "_os_service_state", lambda: "active (running)")
+    result = _invoke(["status"])
+    assert result.exit_code == 0, result.output
+    assert "OS service: active (running)" in result.output
+
+
+def test_logs_job_conflicts_with_follow(cli_server: Settings) -> None:
+    result = _invoke(["logs", "--job", "abc", "--follow"])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, click.UsageError)
+    assert "--follow cannot be combined with --job" in str(result.exception)
 
 
 class _FakePopen:

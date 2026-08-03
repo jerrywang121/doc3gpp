@@ -79,8 +79,8 @@ def server_start(
     """Start the doc3gpp HTTP server (foreground with --reload, else background)."""
     settings = get_settings()
     _require_server_enabled(settings)
-    bind_host = host or settings.server.host
-    bind_port = port or settings.server.port
+    bind_host = settings.server.host if host is None else host
+    bind_port = settings.server.port if port is None else port
     url = f"http://{bind_host}:{bind_port}/"
     if reload:
         import uvicorn
@@ -135,8 +135,8 @@ def server_start(
         raise typer.Exit(code=1)
 
     click.echo(f"server running at {url}")
-    if no_open:
-        click.echo("suppressed browser open (--no-open)")
+    if no_open or open is False:
+        click.echo("suppressed browser open")
     else:
         _open_browser(url)
 
@@ -195,8 +195,12 @@ def server_status() -> None:
     bind_host = settings.server.host
     bind_port = settings.server.port
 
+    os_service = _os_service_state()
+
     if pid is None:
         click.echo("not-installed (no pid file)")
+        if os_service:
+            click.echo(f"  OS service: {os_service}")
         return
 
     alive = False
@@ -210,6 +214,8 @@ def server_status() -> None:
 
     if not alive:
         click.echo("stopped (pid file present but process is not alive)")
+        if os_service:
+            click.echo(f"  OS service: {os_service}")
         return
 
     uptime = "unknown"
@@ -218,9 +224,42 @@ def server_status() -> None:
         uptime = f"{int(age)}s"
 
     click.echo(f"running (pid {pid}, uptime {uptime})")
+    if os_service:
+        click.echo(f"  OS service: {os_service}")
     click.echo(f"  HTTP:  http://{bind_host}:{bind_port}/")
     click.echo(f"  MCP:   http://{bind_host}:{bind_port}/mcp")
     click.echo(f"  Last job: {_last_job_summary(settings)}")
+
+
+def _os_service_state() -> str | None:
+    """Best-effort probe of the systemd / launchd managed service state.
+
+    Returns a human string like ``active (running)`` or ``None`` when the
+    service manager is not reachable or the unit is not installed. Never
+    raises; used only to enrich the ``status`` output.
+    """
+    try:
+        if sys.platform == "darwin":
+            proc = subprocess.run(  # noqa: S603,S607
+                ["launchctl", "list"], capture_output=True, text=True, timeout=3
+            )
+            if "org.doc3gpp.server" in proc.stdout:
+                return "loaded (launchd)"
+            return None
+        proc = subprocess.run(  # noqa: S603,S607
+            ["systemctl", "--user", "is-active", "doc3gpp.service"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        state = proc.stdout.strip()
+        if not state:
+            return None
+        if proc.returncode != 0 and "inactive" not in state:
+            return None
+        return state or None
+    except Exception:  # noqa: BLE001 - best-effort probe
+        return None
 
 
 def _last_job_summary(settings: Settings) -> str:
@@ -240,11 +279,14 @@ def _last_job_summary(settings: Settings) -> str:
 @server_app.command("logs")
 def server_logs(
     job: str | None = typer.Option(None, "--job", help="Limit logs to a specific job id."),
-    follow: bool = typer.Option(False, "-f", help="Follow the log file (like `tail -f`)."),
+    follow: bool = typer.Option(False, "--follow/--no-follow", "-f", help="Follow the log file (like `tail -f`)."),
 ) -> None:
     """Print recent server logs (or follow them)."""
     settings = get_settings()
     _require_server_enabled(settings)
+
+    if job is not None and follow:
+        raise click.UsageError("--follow cannot be combined with --job")
 
     if job is not None:
         _print_job_logs(settings, job)
@@ -313,11 +355,14 @@ def server_uninstall(
     _require_server_enabled(settings)
     target_name = target.lower()
 
-    from doc3gpp.web.install import uninstall_launchd, uninstall_systemd
+    from doc3gpp.web.install import InstallNotManagedError, uninstall_launchd, uninstall_systemd
 
-    if target_name == "systemd":
-        uninstall_systemd(scope="system" if not scope else "user")
-    elif target_name == "launchd":
-        uninstall_launchd()
-    else:
-        raise click.UsageError(f"unknown target {target!r}; expected systemd or launchd")
+    try:
+        if target_name == "systemd":
+            uninstall_systemd(scope="system" if not scope else "user")
+        elif target_name == "launchd":
+            uninstall_launchd()
+        else:
+            raise click.UsageError(f"unknown target {target!r}; expected systemd or launchd")
+    except InstallNotManagedError as exc:
+        raise click.ClickException(str(exc)) from exc

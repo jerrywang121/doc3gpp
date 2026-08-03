@@ -37,9 +37,9 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.web.deps import get_settings, get_tdoc_file_repo, get_tdoc_service
-from doc3gpp.web.errors import InvalidFilterError
-from doc3gpp.web.filters import parse_int_query, parse_text_query
-from doc3gpp.web.render import to_jsonable
+from doc3gpp.web.errors import CacheMissError, InvalidFilterError
+from doc3gpp.web.filters import parse_date_query, parse_int_query, parse_text_query
+from doc3gpp.web.render import to_jsonable, tdoc_rows
 from doc3gpp.web.templates_setup import templates
 
 
@@ -51,6 +51,20 @@ router = APIRouter(prefix="/tdocs", tags=["tdocs"])
 
 _LIMIT_CAP = 200
 
+# The default field list mirrors ``settings.output.fields.tdoc``, which
+# is what ``doc3gpp tdoc list --format json`` emits by default.
+_TDOC_DEFAULT_FIELDS = [
+    "tdoc_id",
+    "meeting_name",
+    "title",
+    "source",
+    "type",
+    "status",
+    "cr_cat",
+    "spec",
+    "version",
+    "related_wis",
+]
 
 _MD_RENDERER = MarkdownIt("commonmark", {"html": True, "linkify": True}).enable("table")
 
@@ -82,43 +96,68 @@ def _build_show_repos(
 async def list_tdocs(
     request: Request,
     tdoc_id: str | None = Query(default=None),
+    meeting: str | None = Query(default=None),
     meeting_id: int | None = Query(default=None),
-    agenda_item: str | None = Query(default=None),
-    type: str | None = Query(default=None),
     source: str | None = Query(default=None),
-    for_decision: str | None = Query(default=None),
-    against_decision: str | None = Query(default=None),
-    decision: str | None = Query(default=None),
-    work_item: str | None = Query(default=None),
+    spec: str | None = Query(default=None),
+    wi: str | None = Query(default=None),
+    title: str | None = Query(default=None),
+    cr_cat: str | None = Query(default=None, alias="cr-cat"),
+    status: str | None = Query(default=None),
+    type: str | None = Query(default=None),
+    revision_of: str | None = Query(default=None, alias="revision-of"),
+    revised_to: str | None = Query(default=None, alias="revised-to"),
+    ftp_url: str | None = Query(default=None, alias="ftp-url"),
+    release: str | None = Query(default=None),
     version: str | None = Query(default=None),
-    start_after: str | None = Query(default=None),
-    start_before: str | None = Query(default=None),
+    cr_num: str | None = Query(default=None, alias="cr-num"),
+    cr_pack: str | None = Query(default=None, alias="cr-pack"),
+    uploaded_date: str | None = Query(default=None, alias="uploaded-date"),
     limit: int | None = Query(default=50),
     offset: int | None = Query(default=0),
     format: str | None = Query(default=None, alias="format"),
     service: TDocService = Depends(get_tdoc_service),
 ) -> Any:
-    """Render ``tdoc_list.html`` or a JSON list of TDoc rows."""
+    """Render ``tdoc_list.html`` or a JSON list of TDoc rows.
+
+    ``?format=json`` returns the same payload as
+    ``doc3gpp tdoc list --format json``: a bare array of field-selected
+    rows (``settings.output.fields.tdoc`` by default) with every cell
+    string-coerced via :func:`doc3gpp.web.render.tdoc_rows`.
+    """
     parsed_limit = parse_int_query(
         str(limit) if limit is not None else None, min=1, max=_LIMIT_CAP,
     ) or 50
     parsed_offset = parse_int_query(
         str(offset) if offset is not None else None, min=0,
     ) or 0
+    parsed_uploaded_date = parse_date_query(uploaded_date)
 
     rows = service.list_recent_with_meeting(
         limit=parsed_limit,
         offset=parsed_offset,
         tdoc_id=parse_text_query(tdoc_id),
+        meeting_like=parse_text_query(meeting),
         meeting_id=meeting_id,
-        title=parse_text_query(agenda_item),
+        title=parse_text_query(title),
         tdoc_type=parse_text_query(type),
         source=parse_text_query(source),
+        spec=parse_text_query(spec),
+        wi=parse_text_query(wi),
+        cr_cat=parse_text_query(cr_cat),
+        status=parse_text_query(status),
+        revision_of=parse_text_query(revision_of),
+        revised_to=parse_text_query(revised_to),
+        ftp_url=parse_text_query(ftp_url),
+        release=parse_text_query(release),
         version=parse_text_query(version),
+        cr_num=parse_text_query(cr_num),
+        cr_pack=parse_text_query(cr_pack),
+        uploaded_date=parsed_uploaded_date,
     )
 
     if format == "json":
-        return JSONResponse(content={"tdocs": to_jsonable(rows)})
+        return JSONResponse(content=tdoc_rows(rows, _TDOC_DEFAULT_FIELDS))
 
     next_offset = (
         parsed_offset + len(rows) if len(rows) == parsed_limit else None
@@ -134,17 +173,23 @@ async def list_tdocs(
             "next_offset": next_offset,
             "filters": {
                 "tdoc_id": tdoc_id or "",
+                "meeting": meeting or "",
                 "meeting_id": meeting_id,
-                "agenda_item": agenda_item or "",
+                "title": title or "",
                 "type": type or "",
                 "source": source or "",
-                "for_decision": for_decision or "",
-                "against_decision": against_decision or "",
-                "decision": decision or "",
-                "work_item": work_item or "",
+                "spec": spec or "",
+                "wi": wi or "",
+                "cr_cat": cr_cat or "",
+                "status": status or "",
+                "revision_of": revision_of or "",
+                "revised_to": revised_to or "",
+                "ftp_url": ftp_url or "",
+                "release": release or "",
                 "version": version or "",
-                "start_after": start_after or "",
-                "start_before": start_before or "",
+                "cr_num": cr_num or "",
+                "cr_pack": cr_pack or "",
+                "uploaded_date": uploaded_date or "",
                 "limit": parsed_limit,
             },
         },
@@ -156,17 +201,12 @@ async def show_tdoc(
     request: Request,
     tdoc_id: str = PathParam(...),
     format: str | None = Query(default=None, alias="format"),
-    service: TDocService = Depends(get_tdoc_service),
     file_repo: Any = Depends(get_tdoc_file_repo),
 ) -> Any:
     """Render ``tdoc_show.html`` or a :class:`TDocShowRecord` JSON payload."""
     repos = _build_show_repos(request, file_repo)
     # The composition is delegated to the models layer so HTTP and CLI
-    # JSON stay byte-identical. ``service`` is currently unused by the
-    # composition but is injected so future fields (e.g. an ETag-like
-    # last-sync hint) can pull from the service without changing the
-    # route signature.
-    _ = service
+    # JSON stay byte-identical.
     record = TDocShowRecord.from_tdoc_id(tdoc_id, repos)
 
     if format == "json":
@@ -197,9 +237,9 @@ async def tdoc_content(
     cache_file = derive_cache_file(tdoc.ftp_url)
     markdown_path = Path(settings.cache.dir) / "markdown" / cache_file
     if not markdown_path.exists():
-        raise TDocNotFoundError(
-            f"No cached markdown for TDoc {tdoc_id}. Run "
-            f"doc3gpp tdoc parse --tdoc {tdoc_id} first."
+        raise CacheMissError(
+            f"No cached markdown for TDoc {tdoc_id}.",
+            hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id}",
         )
     markdown_text = markdown_path.read_text(encoding="utf-8")
 

@@ -6,10 +6,11 @@
   supplies the actual handler; the form is wired today so the UI is
   complete by the time T8 lands).
 
-``?format=json`` returns the same payload as the underlying
-``MeetingService.list_recent`` / ``MeetingService.get_by_id`` calls —
-:func:`doc3gpp.web.render.to_jsonable` is the single source of truth
-for serialisation.
+``?format=json`` on the list route returns the same payload as
+``doc3gpp meeting list --format json`` (a bare array of field-selected,
+string-coerced rows via :func:`doc3gpp.web.render.meeting_rows`); the
+detail route returns the :func:`doc3gpp.web.render.to_jsonable`
+envelope of the meeting record.
 """
 from __future__ import annotations
 
@@ -24,8 +25,8 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.deps import get_meeting_service
-from doc3gpp.web.filters import parse_date_query, parse_int_query, parse_text_query
-from doc3gpp.web.render import to_jsonable
+from doc3gpp.web.filters import parse_int_query, parse_text_query
+from doc3gpp.web.render import meeting_rows, to_jsonable
 from doc3gpp.web.templates_setup import templates
 
 
@@ -34,6 +35,19 @@ router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 _LIMIT_CAP = 200
 
+# Mirrors ``settings.output.fields.meeting`` — what
+# ``doc3gpp meeting list --format json`` emits by default.
+_MEETING_DEFAULT_FIELDS = [
+    "meeting_id",
+    "name",
+    "location",
+    "start_date",
+    "end_date",
+    "ftp_url",
+    "start_doc",
+    "end_doc",
+]
+
 
 @router.get("", include_in_schema=False)
 @router.get("/", include_in_schema=False)
@@ -41,21 +55,24 @@ async def list_meetings(
     request: Request,
     tsg: str | None = Query(default=None),
     year: int | None = Query(default=None),
-    start_after: str | None = Query(default=None),
-    start_before: str | None = Query(default=None),
     location: str | None = Query(default=None),
     limit: int | None = Query(default=50),
     offset: int | None = Query(default=0),
     format: str | None = Query(default=None, alias="format"),
     service: MeetingService = Depends(get_meeting_service),
 ) -> Any:
-    """Render ``meeting_list.html`` or a JSON list of meetings."""
+    """Render ``meeting_list.html`` or a JSON list of meetings.
+
+    ``?format=json`` returns the same payload as
+    ``doc3gpp meeting list --format json``: a bare array of
+    field-selected rows (``settings.output.fields.meeting`` by
+    default) with every cell string-coerced via
+    :func:`doc3gpp.web.render.meeting_rows`.
+    """
     parsed_limit = parse_int_query(str(limit) if limit is not None else None,
                                     min=1, max=_LIMIT_CAP) or 50
     parsed_offset = parse_int_query(str(offset) if offset is not None else None,
                                     min=0) or 0
-    parsed_start_after = parse_date_query(start_after)
-    parsed_start_before = parse_date_query(start_before)
     parsed_tsg = parse_text_query(tsg)
     parsed_location = parse_text_query(location)
 
@@ -68,7 +85,7 @@ async def list_meetings(
     )
 
     if format == "json":
-        return JSONResponse(content={"meetings": to_jsonable(meetings)})
+        return JSONResponse(content=meeting_rows(meetings, _MEETING_DEFAULT_FIELDS))
 
     next_offset = parsed_offset + len(meetings) if len(meetings) == parsed_limit else None
     return templates.TemplateResponse(
@@ -83,8 +100,6 @@ async def list_meetings(
             "filters": {
                 "tsg": parsed_tsg or "",
                 "year": year,
-                "start_after": parsed_start_after or "",
-                "start_before": parsed_start_before or "",
                 "location": parsed_location or "",
                 "limit": parsed_limit,
             },

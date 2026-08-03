@@ -60,14 +60,8 @@ def get_wi_service(request: Request) -> WiService:
 
 
 def get_tsg_service(request: Request) -> TsgService:
-    """Return the wired :class:`TsgService`.
-
-    The TSG service lives outside the per-app :class:`ServiceContainer`
-    today — TSGs are a tiny reference table — but the deps helper
-    keeps the route-handler API consistent with every other service.
-    """
-    from doc3gpp.services.factory import build_tsg_service
-    return build_tsg_service()
+    """Return the wired :class:`TsgService` from the per-app container."""
+    return get_services(request).tsg
 
 
 def get_search_service(request: Request) -> SearchService | None:

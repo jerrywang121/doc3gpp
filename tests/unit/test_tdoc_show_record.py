@@ -169,6 +169,59 @@ def test_from_tdoc_id_includes_change_details_when_present() -> None:
     assert record.changes is changes
 
 
+def test_change_details_round_trip_matches_cli_renderer() -> None:
+    """The change-details sidecar serialises exactly like the CLI.
+
+    The CLI's ``_build_show_payload`` emits only the body-derived
+    fields (``clauses`` + ``changes``) for the sidecar and drops the
+    row-identity fields (``ftp_url`` / ``tdoc_id``). ``to_jsonable``
+    must reproduce that shape byte-for-byte, including the per-block
+    ``{clauses, text}`` structure.
+    """
+    tdoc = TDoc(
+        tdoc_id="R5-260001",
+        ftp_url="R5/26.001/R5-260001.zip",
+    )
+    changes = TDocCRChangeDetails(
+        ftp_url="R5/26.001/R5-260001.zip",
+        tdoc_id="R5-260001",
+        clauses=("7.1.3.5.3", "5.2.4 (new)"),
+        changes=(
+            {"clauses": ["7.1.3.5.3"], "text": "line one\nline two"},
+            {"clauses": ["5.2.4 (new)"], "text": "<ins>new heading</ins>"},
+        ),
+    )
+    repos = _make_fake_repos(
+        tdoc=tdoc,
+        cover=None,
+        meta_extracted_at=None,
+        ttcn=None,
+        changes=changes,
+        files=[],
+    )
+
+    record = TDocShowRecord.from_tdoc_id("R5-260001", repos)
+    assert record.changes is changes
+
+    from doc3gpp.cli import _build_show_payload
+    from doc3gpp.web.render import to_jsonable
+
+    cli_bytes = _canonicalise(_build_show_payload(record))
+    http_bytes = _canonicalise(to_jsonable(record))
+
+    assert cli_bytes == http_bytes
+
+    # The HTTP-side payload must NOT leak the row-identity fields.
+    payload = to_jsonable(record)
+    assert "ftp_url" not in payload["changes"]
+    assert "tdoc_id" not in payload["changes"]
+    assert payload["changes"]["clauses"] == ["7.1.3.5.3", "5.2.4 (new)"]
+    assert payload["changes"]["changes"] == [
+        {"clauses": ["7.1.3.5.3"], "text": "line one\nline two"},
+        {"clauses": ["5.2.4 (new)"], "text": "<ins>new heading</ins>"},
+    ]
+
+
 def test_from_ftp_url_round_trip() -> None:
     """``from_ftp_url`` mirrors the by-id composition across the same 5 repos."""
     url = "R5/26.001/R5-260001.zip"

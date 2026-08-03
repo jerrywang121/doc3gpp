@@ -42,7 +42,13 @@ from doc3gpp.web.deps import (
     get_tsg_service,
     get_wi_service,
 )
-from doc3gpp.web.render import to_jsonable
+from doc3gpp.web.render import (
+    meeting_rows,
+    tdoc_rows,
+    to_jsonable,
+    tsg_rows,
+    wi_rows,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -271,14 +277,21 @@ def test_meetings_list_renders_html(client: TestClient) -> None:
     assert "RAN5#99-e" in response.text
 
 
-def test_meetings_list_json_matches_service(client: TestClient) -> None:
-    """``GET /meetings?format=json`` returns the to_jsonable of the service list."""
+def test_meetings_list_json_matches_cli_rows(client: TestClient) -> None:
+    """``GET /meetings?format=json`` returns the CLI-shaped row array.
+
+    Ruling B: the payload must be the same bare array of
+    field-selected, string-coerced rows that
+    ``doc3gpp meeting list --format json`` prints (default columns
+    from ``settings.output.fields.meeting``).
+    """
+    from doc3gpp.settings.schema import OutputFieldsSettings
+
     response = client.get("/meetings?format=json")
     assert response.status_code == 200
-    body = response.json()
     service = FakeMeetingService()
-    expected = to_jsonable(service.list_recent())
-    assert body == {"meetings": expected}
+    fields = OutputFieldsSettings().meeting
+    assert response.json() == meeting_rows(service.list_recent(), fields)
 
 
 def test_meeting_show_renders_html(client: TestClient) -> None:
@@ -318,12 +331,43 @@ def test_tdoc_list_renders_html(client: TestClient) -> None:
 
 
 def test_tdoc_list_json(client: TestClient) -> None:
-    """``GET /tdocs?format=json`` returns the to_jsonable of the service rows."""
+    """``GET /tdocs?format=json`` returns the CLI-shaped row array.
+
+    Ruling B: the payload must be the same bare array of
+    field-selected, string-coerced rows that
+    ``doc3gpp tdoc list --format json`` prints (default columns from
+    ``settings.output.fields.tdoc``).
+    """
+    from doc3gpp.settings.schema import OutputFieldsSettings
+
     response = client.get("/tdocs?format=json")
     assert response.status_code == 200
     service = FakeTDocService()
-    expected = to_jsonable(service.list_recent_with_meeting())
-    assert response.json() == {"tdocs": expected}
+    fields = OutputFieldsSettings().tdoc
+    assert response.json() == tdoc_rows(
+        service.list_recent_with_meeting(), fields,
+    )
+
+
+def test_tdoc_list_json_drops_phantom_filters(client: TestClient) -> None:
+    """``GET /tdocs`` ignores filters the repository Protocol does not support.
+
+    Ruling A: only the repo-backed filter set is accepted; the phantom
+    params (``for_decision`` / ``work_item`` / ``start_after`` …) must
+    not affect the query. The route still responds 200 and the filter
+    form renders only the supported fields.
+    """
+    response = client.get(
+        "/tdocs?for_decision=1&work_item=foo&start_after=2026-01-01&format=json",
+    )
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+    html = client.get("/tdocs").text
+    assert 'name="for_decision"' not in html
+    assert 'name="work_item"' not in html
+    assert 'name="start_after"' not in html
+    assert 'name="agenda_item"' not in html
 
 
 def test_tdoc_show_renders_html(client: TestClient, sqlite_env: Any) -> None:
@@ -387,7 +431,12 @@ def test_tdoc_content_markdown_cache_hit(
 def test_tdoc_content_markdown_cache_miss_404(
     client: TestClient, sqlite_env: Any, tmp_path: Any,
 ) -> None:
-    """``GET /tdocs/{id}/content?format=markdown`` returns 404 on cache miss."""
+    """``GET /tdocs/{id}/content?format=markdown`` returns 404 on cache miss.
+
+    A cache miss (row present, markdown file absent) maps to the
+    dedicated ``cache_miss`` envelope with a hint, not to
+    ``tdoc_not_found``.
+    """
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -402,7 +451,22 @@ def test_tdoc_content_markdown_cache_miss_404(
         )
     assert response.status_code == 404
     body = response.json()
-    assert "doc3gpp tdoc parse --tdoc" in body["detail"]
+    assert body["error"] == "cache_miss"
+    assert body["hint"] == "run: doc3gpp tdoc parse --tdoc R5-260001"
+
+
+def test_meeting_list_filters_form_fields(client: TestClient) -> None:
+    """``GET /meetings`` renders only the repo-backed filter fields.
+
+    Ruling A: ``start_after`` / ``start_before`` are gone from both the
+    route and the filter form; ``tsg`` / ``year`` / ``location`` remain.
+    """
+    html = client.get("/meetings").text
+    assert 'name="tsg"' in html
+    assert 'name="year"' in html
+    assert 'name="location"' in html
+    assert 'name="start_after"' not in html
+    assert 'name="start_before"' not in html
 
 
 def test_tdoc_content_html(client: TestClient, sqlite_env: Any, tmp_path: Any) -> None:
@@ -440,11 +504,13 @@ def test_tsg_list_renders_html(client: TestClient) -> None:
 
 
 def test_tsg_list_json(client: TestClient) -> None:
-    """``GET /tsgs?format=json`` returns the to_jsonable of the service list."""
+    """``GET /tsgs?format=json`` returns the CLI-shaped row array."""
+    from doc3gpp.settings.schema import OutputFieldsSettings
+
     response = client.get("/tsgs?format=json")
     assert response.status_code == 200
-    expected = to_jsonable(FakeTsgService().list_all())
-    assert response.json() == {"tsgs": expected}
+    fields = OutputFieldsSettings().tsg
+    assert response.json() == tsg_rows(FakeTsgService().list_all(), fields)
 
 
 def test_tsg_show_renders_html(client: TestClient) -> None:
@@ -474,11 +540,30 @@ def test_wi_list_renders_html(client: TestClient) -> None:
 
 
 def test_wi_list_json(client: TestClient) -> None:
-    """``GET /wis?format=json`` returns the to_jsonable of the service list."""
+    """``GET /wis?format=json`` returns the CLI-shaped row array."""
+    from doc3gpp.settings.schema import OutputFieldsSettings
+
     response = client.get("/wis?format=json")
     assert response.status_code == 200
-    expected = to_jsonable(FakeWiService().list_recent())
-    assert response.json() == {"wis": expected}
+    fields = OutputFieldsSettings().wi
+    assert response.json() == wi_rows(FakeWiService().list_recent(), fields)
+
+
+def test_wi_list_uses_acronym_not_id(client: TestClient) -> None:
+    """``GET /wis`` filters by ``acronym`` / ``release``, never a bogus ``id``.
+
+    Ruling A: the WI route exposes only repo-backed filters
+    (``tsg`` / ``name`` / ``acronym`` / ``release``); the old ``id``
+    param and the form field are gone.
+    """
+    response = client.get("/wis?acronym=Test&release=Rel-18&format=json")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+    html = client.get("/wis").text
+    assert 'name="id"' not in html
+    assert 'name="acronym"' in html
+    assert 'name="release"' in html
 
 
 # ---------------------------------------------------------------------------
@@ -494,13 +579,30 @@ def test_search_query_renders_html(client: TestClient) -> None:
 
 
 def test_search_query_json(client: TestClient) -> None:
-    """``GET /search?q=foo&format=json`` returns the to_jsonable of hits."""
+    """``GET /search?q=foo&format=json`` returns the CLI-shaped hit array.
+
+    Ruling B: the payload must be a bare array of hit objects matching
+    ``doc3gpp search query --format json`` (tdoc_id / score / previews
+    / title / meeting / tsg / uploaded_date / ftp_url / wis).
+    """
     response = client.get("/search?q=foo&format=json")
     assert response.status_code == 200
     body = response.json()
-    assert "hits" in body
-    expected = to_jsonable(FakeSearchService().search("foo", None))
-    assert body["hits"] == expected
+    assert isinstance(body, list)
+    assert body[0]["tdoc_id"] == "R5-260001"
+    assert body[0]["previews"] == {"title": "<<NR>> measurement"}
+    assert set(body[0]) == {
+        "tdoc_id", "score", "previews", "title", "meeting", "tsg",
+        "uploaded_date", "ftp_url", "wis",
+    }
+
+
+def test_search_query_bad_date_filter_400(client: TestClient) -> None:
+    """``GET /search?since=<bad>`` returns 400 with the invalid_filter envelope."""
+    response = client.get("/search?q=foo&since=not-a-date")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
 
 
 def test_search_sem_renders_html(client: TestClient) -> None:
@@ -510,11 +612,23 @@ def test_search_sem_renders_html(client: TestClient) -> None:
 
 
 def test_search_sem_json(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&format=json`` returns the to_jsonable of hits."""
+    """``GET /search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
+
+    Ruling B: semantic hits mirror ``doc3gpp search sem --format json``
+    — RRF fields at the top level and the metadata bag nested under
+    ``hit``.
+    """
     response = client.get("/search/sem?q=foo&format=json")
     assert response.status_code == 200
     body = response.json()
-    assert "hits" in body
+    assert isinstance(body, list)
+    assert body[0]["tdoc_id"] == "R5-260001"
+    assert body[0]["rrf_score"] == 0.5
+    assert set(body[0]) == {
+        "tdoc_id", "rrf_score", "rank_fts5", "rank_vec",
+        "min_chunk_distance", "best_chunk_id", "hit",
+    }
+    assert set(body[0]["hit"]) == {"tdoc_id", "title", "ftp_url", "wis"}
 
 
 # ---------------------------------------------------------------------------

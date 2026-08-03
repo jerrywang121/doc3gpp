@@ -13,6 +13,7 @@ import pytest
 from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.errors import (
+    CacheMissError,
     InvalidFilterError,
     JobAlreadyTerminalError,
     JobNotFoundError,
@@ -31,6 +32,7 @@ _MAPPING_CASES = [
     pytest.param(JobNotFoundError, "abc", 404, "job_not_found", id="job_not_found"),
     pytest.param(JobAlreadyTerminalError, "succeeded", 409, "job_already_terminal", id="job_already_terminal"),
     pytest.param(SettingsDisabledError, "feature off", 503, "settings_disabled", id="settings_disabled"),
+    pytest.param(CacheMissError, "no cached markdown", 404, "cache_miss", id="cache_miss"),
 ]
 
 
@@ -77,6 +79,20 @@ def test_map_domain_error_httpx_http_error_returns_502() -> None:
     assert '"detail":"upstream down"' in body
 
 
+def test_map_domain_error_cache_miss_surfaces_hint() -> None:
+    """``CacheMissError`` carries the spec'd ``hint`` envelope field."""
+    response = map_domain_error(
+        CacheMissError(
+            "No cached markdown for TDoc R5-260001.",
+            hint="run: doc3gpp tdoc parse --tdoc R5-260001",
+        )
+    )
+    assert response.status_code == 404
+    body = response.body.decode("utf-8")
+    assert '"error":"cache_miss"' in body
+    assert '"hint":"run: doc3gpp tdoc parse --tdoc R5-260001"' in body
+
+
 def test_map_domain_error_generic_exception_returns_500() -> None:
     """A bare ``Exception`` maps to 500 + ``request_id`` correlation id."""
     response = map_domain_error(RuntimeError("boom"))
@@ -104,6 +120,7 @@ def test_register_error_handlers_attaches_handlers() -> None:
         JobNotFoundError,
         JobAlreadyTerminalError,
         SettingsDisabledError,
+        CacheMissError,
         httpx.HTTPError,
         Exception,
     ):

@@ -18,11 +18,16 @@ from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.web.deps import get_meeting_service, get_tsg_service
 from doc3gpp.web.errors import TSGNotFoundError
-from doc3gpp.web.render import to_jsonable
+from doc3gpp.web.render import to_jsonable, tsg_rows
 from doc3gpp.web.templates_setup import templates
 
 
 router = APIRouter(prefix="/tsgs", tags=["tsgs"])
+
+
+# Mirrors ``settings.output.fields.tsg`` — what
+# ``doc3gpp tsg list --format json`` emits by default.
+_TSG_DEFAULT_FIELDS = ["tsg_name", "short_name", "description"]
 
 
 @router.get("", include_in_schema=False)
@@ -32,10 +37,16 @@ async def list_tsgs(
     format: str | None = Query(default=None, alias="format"),
     service: TsgService = Depends(get_tsg_service),
 ) -> Any:
-    """Render ``tsg_list.html`` or a JSON list of TSGs."""
+    """Render ``tsg_list.html`` or a JSON list of TSGs.
+
+    ``?format=json`` returns the same payload as
+    ``doc3gpp tsg list --format json``: a bare array of field-selected
+    rows (``settings.output.fields.tsg`` by default) with every cell
+    string-coerced via :func:`doc3gpp.web.render.tsg_rows`.
+    """
     tsgs = service.list_all()
     if format == "json":
-        return JSONResponse(content={"tsgs": to_jsonable(tsgs)})
+        return JSONResponse(content=tsg_rows(tsgs, _TSG_DEFAULT_FIELDS))
     return templates.TemplateResponse(
         request=request,
         name="tsg_list.html",

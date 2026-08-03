@@ -61,6 +61,19 @@ class SettingsDisabledError(RuntimeError):
     """Raised when an HTTP route requires an opt-in feature that is disabled in settings."""
 
 
+class CacheMissError(LookupError):
+    """Raised when a cached artifact (e.g. markdown) is missing for a stored TDoc.
+
+    Carries an optional ``hint`` telling the operator how to populate
+    the cache; the hint is surfaced as the envelope's ``hint`` field
+    (spec: ``{"error": "cache_miss", "hint": "run: ..."}``).
+    """
+
+    def __init__(self, message: str, *, hint: str | None = None) -> None:
+        super().__init__(message)
+        self.hint = hint
+
+
 _ERROR_SLUGS: dict[type[Exception], str] = {
     TDocNotFoundError: "tdoc_not_found",
     MeetingNotFoundError: "meeting_not_found",
@@ -70,6 +83,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     JobNotFoundError: "job_not_found",
     JobAlreadyTerminalError: "job_already_terminal",
     SettingsDisabledError: "settings_disabled",
+    CacheMissError: "cache_miss",
 }
 
 
@@ -82,6 +96,7 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     JobNotFoundError: 404,
     JobAlreadyTerminalError: 409,
     SettingsDisabledError: 503,
+    CacheMissError: 404,
     httpx.HTTPError: 502,
 }
 
@@ -119,10 +134,10 @@ def map_domain_error(exc: Exception) -> JSONResponse:
             continue
         if isinstance(exc, exc_type):
             slug = _ERROR_SLUGS[exc_type]
-            return JSONResponse(
-                status_code=status,
-                content={"error": slug, "detail": str(exc)},
-            )
+            body: dict[str, Any] = {"error": slug, "detail": str(exc)}
+            if isinstance(exc, CacheMissError) and exc.hint:
+                body["hint"] = exc.hint
+            return JSONResponse(status_code=status, content=body)
 
     return _internal_error_response()
 
@@ -144,6 +159,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
 
 __all__ = [
+    "CacheMissError",
     "TSGNotFoundError",
     "WINotFoundError",
     "InvalidFilterError",

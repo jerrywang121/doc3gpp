@@ -8,11 +8,14 @@
   <label>TDoc
     <input type="text" name="tdoc_id" value="{{ filters.tdoc_id or '' }}">
   </label>
+  <label>Meeting
+    <input type="text" name="meeting" value="{{ filters.meeting or '' }}">
+  </label>
   <label>Meeting ID
     <input type="number" name="meeting_id" value="{{ filters.meeting_id or '' }}">
   </label>
-  <label>Agenda item
-    <input type="text" name="agenda_item" value="{{ filters.agenda_item or '' }}">
+  <label>Title
+    <input type="text" name="title" value="{{ filters.title or '' }}">
   </label>
   <label>Type
     <input type="text" name="type" value="{{ filters.type or '' }}">
@@ -20,26 +23,41 @@
   <label>Source
     <input type="text" name="source" value="{{ filters.source or '' }}">
   </label>
-  <label>For
-    <input type="text" name="for_decision" value="{{ filters.for_decision or '' }}">
+  <label>Spec
+    <input type="text" name="spec" value="{{ filters.spec or '' }}">
   </label>
-  <label>Against
-    <input type="text" name="against_decision" value="{{ filters.against_decision or '' }}">
+  <label>WI
+    <input type="text" name="wi" value="{{ filters.wi or '' }}">
   </label>
-  <label>Decision
-    <input type="text" name="decision" value="{{ filters.decision or '' }}">
+  <label>CR cat
+    <input type="text" name="cr-cat" value="{{ filters.cr_cat or '' }}">
   </label>
-  <label>Work item
-    <input type="text" name="work_item" value="{{ filters.work_item or '' }}">
+  <label>Status
+    <input type="text" name="status" value="{{ filters.status or '' }}">
+  </label>
+  <label>Revision of
+    <input type="text" name="revision-of" value="{{ filters.revision_of or '' }}">
+  </label>
+  <label>Revised to
+    <input type="text" name="revised-to" value="{{ filters.revised_to or '' }}">
+  </label>
+  <label>FTP URL
+    <input type="text" name="ftp-url" value="{{ filters.ftp_url or '' }}">
+  </label>
+  <label>Release
+    <input type="text" name="release" value="{{ filters.release or '' }}">
   </label>
   <label>Version
     <input type="text" name="version" value="{{ filters.version or '' }}">
   </label>
-  <label>Start after
-    <input type="text" name="start_after" placeholder="YYYY-MM-DD" value="{{ filters.start_after or '' }}">
+  <label>CR num
+    <input type="text" name="cr-num" value="{{ filters.cr_num or '' }}">
   </label>
-  <label>Start before
-    <input type="text" name="start_before" placeholder="YYYY-MM-DD" value="{{ filters.start_before or '' }}">
+  <label>CR pack
+    <input type="text" name="cr-pack" value="{{ filters.cr_pack or '' }}">
+  </label>
+  <label>Uploaded date
+    <input type="text" name="uploaded-date" placeholder=">= 'YYYY-MM-DD'" value="{{ filters.uploaded_date or '' }}">
   </label>
   <label>Limit
     <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">

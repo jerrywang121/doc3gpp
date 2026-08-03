@@ -240,7 +240,12 @@ async def post_sync_tdocs_flat(
         meeting = payload.get("meeting")
     params: dict[str, JSONValue] = {}
     if meeting_id is not None and meeting_id != "":
-        params["meeting_id"] = int(meeting_id)
+        try:
+            params["meeting_id"] = int(meeting_id)
+        except (ValueError, TypeError):
+            raise InvalidFilterError(
+                f"sync_tdocs 'meeting_id' must be an integer, got {meeting_id!r}"
+            )
     elif meeting is not None and meeting != "":
         params["meeting_name"] = meeting
     else:
@@ -360,17 +365,24 @@ async def job_events(
     _load_job(job_repo, job_id)  # 404 when unknown
 
     async def event_generator():
-        queue = asyncio.Queue()
-        handle.register_queue(job_id, queue)
+        # Reuse an already-registered queue when one exists so a live
+        # (RUNNING) job's worker keeps pushing to the SAME queue this
+        # stream drains. Registering a brand-new queue would clobber the
+        # worker's captured reference and the stream would never see the
+        # terminal event. Only create one when the job isn't claimed yet.
+        queue = handle.event_queues.get(job_id)
+        if queue is None:
+            queue = asyncio.Queue()
+            handle.register_queue(job_id, queue)
         try:
             # Replay current snapshot so the stream is useful to a
-            # client that connects mid-flight.
+            # client that connects mid-flight. The stream always opens
+            # with a ``running`` status frame (matching the spec's SSE
+            # contract) even when the job has since reached a terminal
+            # state.
+            yield _sse_frame({"event": "status", "data": {"status": "running"}})
             job = job_repo.get(job_id)
             if job is not None:
-                if job.status is JobStatus.RUNNING:
-                    yield _sse_frame(
-                        {"event": "status", "data": {"status": "running"}}
-                    )
                 for line in job.log_lines:
                     yield _sse_frame({"event": "log", "data": {"line": line}})
                 if job.status in _TERMINAL_STATUSES:

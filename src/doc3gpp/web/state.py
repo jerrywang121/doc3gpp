@@ -88,19 +88,28 @@ class JobWorkerHandle:
     async def shutdown(self) -> None:
         """Request cancellation for every job and await the worker task.
 
-        Sets every registered cancellation event, then awaits the
-        worker's ``task`` with a bounded timeout so a stuck blocking
-        handler can't hang server shutdown forever.
+        Sets every registered cancellation event, then cancels the
+        worker's ``task`` immediately so an idle loop (sleeping between
+        cleanup ticks) stops promptly. The bounded wait below only guards
+        against a stuck blocking handler taking longer to abort.
         """
         for event in self.cancel_events.values():
             event.set()
         task = self.task
         if task is None or task.done():
             return
+        task.cancel()
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+            # return_exceptions swallows the CancelledError raised when the
+            # cancelled task finishes, so shutdown never propagates it up to
+            # the server lifespan / TestClient teardown.
+            await asyncio.wait_for(
+                asyncio.shield(asyncio.gather(task, return_exceptions=True)),
+                timeout=5.0,
+            )
         except asyncio.TimeoutError:
-            task.cancel()
+            # A stuck handler ignored cancellation; nothing more to do.
+            pass
 
 
 @dataclass(slots=True)

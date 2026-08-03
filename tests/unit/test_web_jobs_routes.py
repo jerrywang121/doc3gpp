@@ -10,6 +10,7 @@ repository — so tests are deterministic.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -47,6 +48,13 @@ class _FakeJobWorkerHandle(JobWorkerHandle):
 
     def __init__(self) -> None:
         self.cancelled: list[str] = []
+        self.event_queues: dict[str, asyncio.Queue[dict]] = {}
+
+    def register_queue(self, job_id: str, queue: asyncio.Queue[dict]) -> None:
+        self.event_queues[job_id] = queue
+
+    def unregister_queue(self, job_id: str) -> None:
+        self.event_queues.pop(job_id, None)
 
     def cancel(self, job_id: str) -> bool:
         self.cancelled.append(job_id)
@@ -54,7 +62,9 @@ class _FakeJobWorkerHandle(JobWorkerHandle):
 
 
 @pytest.fixture()
-def client() -> tuple[TestClient, SQLAlchemyJobRepository, _FakeJobWorkerHandle]:
+def client(
+    sqlite_env: Any,
+) -> tuple[TestClient, SQLAlchemyJobRepository, _FakeJobWorkerHandle]:
     repo = _make_repo()
     handle = _FakeJobWorkerHandle()
     app: FastAPI = build_app()
@@ -203,6 +213,13 @@ def test_post_sync_tdocs_flat_requires_selector(client: Any) -> None:
     assert r.status_code == 400
 
 
+def test_post_sync_tdocs_flat_rejects_non_numeric_meeting_id(client: Any) -> None:
+    c, _, _ = client
+    r = c.post("/jobs/sync_tdocs", data={"meeting_id": "abc"})
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_filter"
+
+
 # ---------------------------------------------------------------------------
 # GET list + detail
 # ---------------------------------------------------------------------------
@@ -324,7 +341,30 @@ def test_events_stream_emits_terminal_replay(client: Any) -> None:
     assert "running" in text
     assert "fetched meeting SA2#156" in text
     assert "succeeded" in text
-    assert '"summary": {"meetings": 14}' in text.replace(" ", "")
+    assert '"summary":{"meetings":14}' in text.replace(" ", "")
+
+
+def test_events_stream_reuses_existing_queue_for_running_job(
+    client: Any,
+) -> None:
+    """Connecting to a mid-flight (RUNNING) job must drain the SAME queue
+    the worker already registered, not a fresh one (regression: clobbering
+    the registered queue would lose the worker's terminal event and hang)."""
+    c, repo, handle = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_running(job.id, message="starting")
+    pre_registered: asyncio.Queue[dict] = asyncio.Queue()
+    pre_registered.put_nowait(
+        {"event": "status", "data": {"status": "succeeded", "summary": {"meetings": 3}}}
+    )
+    handle.register_queue(job.id, pre_registered)
+
+    with c.stream("GET", f"/jobs/{job.id}/events") as r:
+        assert r.status_code == 200
+        text = "".join(r.iter_text())
+
+    assert "succeeded" in text
+    assert '"summary":{"meetings":3}' in text.replace(" ", "")
 
 
 def test_events_stream_404_for_unknown(client: Any) -> None:

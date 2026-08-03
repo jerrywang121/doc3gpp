@@ -25,12 +25,13 @@ from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 
 if TYPE_CHECKING:
-    from doc3gpp.repository.protocols import JobRepository
+    from doc3gpp.repository.protocols import JobRepository, TDocRepository
     from doc3gpp.services.meetings_service import MeetingService
     from doc3gpp.services.search_service import SearchService
     from doc3gpp.services.semantic_search_service import SemanticSearchService
     from doc3gpp.services.tdoc_cr_service import TDocCrService
     from doc3gpp.services.tdoc_service import TDocService
+    from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
     from doc3gpp.services.tsg_service import TsgService
     from doc3gpp.services.wi_service import WiService
 
@@ -114,6 +115,8 @@ class ServiceContainer:
     meeting: "MeetingService"
     tdoc: "TDocService"
     tdoc_cr: "TDocCrService"
+    tdoc_sync: "TDocSyncCoordinator"
+    tdoc_repo: "TDocRepository"
     tsg: "TsgService"
     wi: "WiService"
     search: "SearchService | None"

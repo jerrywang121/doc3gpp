@@ -41,6 +41,8 @@ def _make_state(repo: JobRepository, *, fail: bool = False) -> WebState:
         meeting=_FakeMeetingService(fail=fail),  # type: ignore[arg-type]
         tdoc=None,  # type: ignore[arg-type]
         tdoc_cr=None,  # type: ignore[arg-type]
+        tdoc_sync=None,  # type: ignore[arg-type]
+        tdoc_repo=None,  # type: ignore[arg-type]
         tsg=None,  # type: ignore[arg-type]
         wi=None,  # type: ignore[arg-type]
         search=None,

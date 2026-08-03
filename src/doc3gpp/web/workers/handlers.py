@@ -79,12 +79,10 @@ async def _sync_tdocs(
     progress: ProgressFn,
     cancel_event: asyncio.Event,
 ) -> Mapping[str, JSONValue]:
-    from doc3gpp.services import factory
-
-    coordinator = factory.build_tdoc_sync_coordinator()
     force = bool(job.params.get("force", False))
     meeting_id = job.params.get("meeting_id")
     meeting_name = job.params.get("meeting_name")
+    coordinator = services.tdoc_sync
     if meeting_id is not None:
         progress(f"syncing TDocs for meeting id {meeting_id}")
         outcome = coordinator.sync_for_meeting_id(int(meeting_id), force=force)
@@ -114,10 +112,7 @@ async def _sync_tdocs_all(
 ) -> Mapping[str, JSONValue]:
     force = bool(job.params.get("force", False))
     progress("syncing TDocs for all tracked meetings")
-    from doc3gpp.services import factory
-
-    coordinator = factory.build_tdoc_sync_coordinator()
-    outcome = coordinator.sync_all_tracked_meetings(force=force)
+    outcome = services.tdoc_sync.sync_all_tracked_meetings(force=force)
     progress(
         f"bulk sync complete: {outcome.synced_count} synced, "
         f"{outcome.skipped_count} skipped, {outcome.failed_count} failed"
@@ -146,8 +141,6 @@ async def _parse_tdocs(
     max_batch = job.params.get("max_batch")
     max_batch = int(max_batch) if max_batch is not None else settings.tdoc_parse.max_batch
 
-    from doc3gpp.services import factory
-
     _KNOWN_LIST_FILTERS = {
         "tdoc_id",
         "meeting_like",
@@ -168,8 +161,7 @@ async def _parse_tdocs(
         "cr_num",
         "cr_pack",
     }
-    tdoc_repo = factory.build_tdoc_repository()
-    tdocs = tdoc_repo.list(
+    tdocs = services.tdoc_repo.list(
         limit=max_batch,
         offset=0,
         exclude_parsed=not force,

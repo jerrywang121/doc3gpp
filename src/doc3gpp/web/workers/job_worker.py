@@ -33,7 +33,7 @@ from humanfriendly import InvalidTimespan, parse_timespan
 from doc3gpp.models.jobs import Job, JobKind, JobStatus
 from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.web.state import WebState
-from doc3gpp.web.workers.handlers import JobHandlers
+from doc3gpp.web.workers.handlers import Handler, JobHandlers
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class JobWorker:
         *,
         queue_size: int = 100,
         repo: JobRepository | None = None,
-        handlers: dict[JobKind, JobHandlers] | None = None,
+        handlers: dict[JobKind, Handler] | None = None,
     ) -> None:
         """Initialize the worker.
 
@@ -157,6 +157,10 @@ class JobWorker:
 
             try:
                 self._repo.mark_running(job.id, message="starting")
+                self._enqueue(
+                    queue,
+                    {"event": "status", "data": {"status": JobStatus.RUNNING.value}},
+                )
                 if cancel_event.is_set():
                     raise asyncio.CancelledError()
                 summary = handler(job, self._state.services, self._state.settings, progress=progress, cancel_event=cancel_event)

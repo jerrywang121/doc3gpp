@@ -95,17 +95,6 @@ def _job_url(job_id: str) -> str:
     return f"/jobs/{job_id}"
 
 
-def _queued_job_payload(job_id: str) -> dict[str, Any]:
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "links": {
-            "self": _job_url(job_id),
-            "events": f"{_job_url(job_id)}/events",
-        },
-    }
-
-
 def _enqueue(state: "WebState", kind: JobKind, params: dict[str, Any], message: str) -> dict[str, Any]:
     job = state.services.job_repo.create(kind, params)
     return {
@@ -162,7 +151,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     # ---- TDocs ----------------------------------------------------
     @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field.")
     def list_tdocs(
-        limit: int = 20,
+        limit: int = 50,
         offset: int = 0,
         tdoc_id: str | None = None,
         meeting_like: str | None = None,
@@ -304,6 +293,8 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     ) -> str:
         if services.semantic_search is None:
             raise SettingsDisabledError("semantic search is not available in this build")
+        if not 0.0 <= fts5_weight <= 1.0:
+            raise InvalidFilterError("fts5_weight must be between 0.0 and 1.0")
         from doc3gpp.services.search_service import SearchFilters
 
         filters = SearchFilters(limit=limit)
@@ -397,7 +388,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         jobs = fetched[offset : offset + limit]
         return {
             "jobs": [_envelope(j) for j in jobs],
-            "total": len(fetched),
+            "total": len(jobs),
             "limit": limit,
             "offset": offset,
         }

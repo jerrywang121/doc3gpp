@@ -100,17 +100,19 @@ def _job_url(job_id: str) -> str:
     return f"/jobs/{job_id}"
 
 
-def _enqueue(state: "WebState", kind: JobKind, params: dict[str, Any], message: str) -> dict[str, Any]:
+def _enqueue(state: "WebState", kind: JobKind, params: dict[str, Any], message: str) -> str:
     job = state.services.job_repo.create(kind, params)
-    return {
-        "job_id": job.id,
-        "status": job.status.value,
-        "message": message,
-        "links": {
-            "self": _job_url(job.id),
-            "events": f"{_job_url(job.id)}/events",
-        },
-    }
+    return _to_json(
+        {
+            "job_id": job.id,
+            "status": job.status.value,
+            "message": message,
+            "links": {
+                "self": _job_url(job.id),
+                "events": f"{_job_url(job.id)}/events",
+            },
+        }
+    )
 
 
 def build_mcp_server(state: "WebState") -> "MCPServer":
@@ -147,11 +149,11 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.meeting_rows(meetings, _MEETING_FIELDS))
 
     @server.tool(name="get_meeting", description="Get a single meeting by its numeric meeting id.")
-    def get_meeting(meeting_id: int) -> dict[str, Any]:
+    def get_meeting(meeting_id: int) -> str:
         meeting = services.meeting.get_by_id(meeting_id)
         if meeting is None:
             raise MeetingNotFoundError(str(meeting_id))
-        return {"meeting": render.to_jsonable(meeting)}
+        return _to_json({"meeting": render.to_jsonable(meeting)})
 
     # ---- TDocs ----------------------------------------------------
     @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field.")
@@ -198,7 +200,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.tdoc_rows(rows, _TDOC_FIELDS))
 
     @server.tool(name="get_tdoc", description="Get a single tdoc by id, including its cover-page and extract details.")
-    def get_tdoc(tdoc_id: str) -> dict[str, Any]:
+    def get_tdoc(tdoc_id: str) -> str:
         from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
         from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import SQLAlchemyTDocCrChangeDetailsRepository
         from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
@@ -213,7 +215,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             file=services.tdoc_file_repo,
         )
         record = TDocShowRecord.from_tdoc_id(tdoc_id, repos)
-        return render.to_jsonable(record)
+        return _to_json(render.to_jsonable(record))
 
     @server.tool(name="get_tdoc_content", description="Return the cached markdown body for a tdoc id.")
     def get_tdoc_content(tdoc_id: str, format: str = "markdown") -> str:
@@ -245,12 +247,12 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.tsg_rows(services.tsg.list_all(), _TSG_FIELDS))
 
     @server.tool(name="get_tsg", description="Get a single TSG by short name, with its recent meetings.")
-    def get_tsg(short_name: str) -> dict[str, Any]:
+    def get_tsg(short_name: str) -> str:
         tsg = services.tsg.get_by_short_name(short_name)
         if tsg is None:
             raise TSGNotFoundError(short_name)
         meetings = services.meeting.list_recent(tsg=tsg.short_name, limit=200)
-        return {"tsg": render.to_jsonable(tsg), "meetings": render.to_jsonable(meetings)}
+        return _to_json({"tsg": render.to_jsonable(tsg), "meetings": render.to_jsonable(meetings)})
 
     # ---- WIs ------------------------------------------------------
     @server.tool(name="list_wis", description="List work items, optionally filtered by TSG, name, acronym or release.")
@@ -308,25 +310,25 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     # ---- Jobs -----------------------------------------------------
     @server.tool(name="sync_meetings", description="Enqueue a meeting-calendar sync for a TSG.")
-    def sync_meetings(tsg: str) -> dict[str, Any]:
+    def sync_meetings(tsg: str) -> str:
         if not tsg:
             raise InvalidFilterError("tsg is required")
         return _enqueue(state, JobKind.SYNC_MEETINGS, {"tsg": tsg}, f"queued sync_meetings for TSG {tsg}")
 
     @server.tool(name="sync_tdocs", description="Enqueue a tdoc-list sync for a meeting id.")
-    def sync_tdocs(meeting_id: int | None = None) -> dict[str, Any]:
+    def sync_tdocs(meeting_id: int | None = None) -> str:
         if meeting_id is None:
             raise InvalidFilterError("meeting_id is required")
         return _enqueue(state, JobKind.SYNC_TDOCS, {"meeting_id": meeting_id}, f"queued sync_tdocs for meeting {meeting_id}")
 
     @server.tool(name="sync_tdocs_by_meeting", description="Enqueue a tdoc-list sync for a meeting by name.")
-    def sync_tdocs_by_meeting(meeting: str | None = None) -> dict[str, Any]:
+    def sync_tdocs_by_meeting(meeting: str | None = None) -> str:
         if not meeting:
             raise InvalidFilterError("meeting is required")
         return _enqueue(state, JobKind.SYNC_TDOCS, {"meeting_name": meeting}, f"queued sync_tdocs for meeting {meeting}")
 
     @server.tool(name="sync_all_tdocs", description="Enqueue a bulk sync of every tracked meeting's tdocs.")
-    def sync_all_tdocs() -> dict[str, Any]:
+    def sync_all_tdocs() -> str:
         return _enqueue(state, JobKind.SYNC_TDOCS_ALL, {"force": False}, "queued sync_all_tdocs")
 
     @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages + change details.")
@@ -335,7 +337,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         force: bool = False,
         full: bool = False,
         max_batch: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> str:
         if not filter:
             raise InvalidFilterError("filter is required")
         params: dict[str, Any] = {"filter": filter, "force": force, "full": full}
@@ -344,11 +346,11 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _enqueue(state, JobKind.PARSE_TDOCS, params, "queued parse_tdocs")
 
     @server.tool(name="rebuild_search_index", description="Enqueue an FTS5 search-index rebuild.")
-    def rebuild_search_index(stale_only: bool = False, resume: bool = False) -> dict[str, Any]:
+    def rebuild_search_index(stale_only: bool = False, resume: bool = False) -> str:
         return _enqueue(state, JobKind.REBUILD_SEARCH, {"stale_only": stale_only, "resume": resume}, "queued rebuild_search_index")
 
     @server.tool(name="purge_cache", description="Enqueue a cache purge (scope: markdown, zips or all).")
-    def purge_cache(scope: str = "markdown", yes: bool = False) -> dict[str, Any]:
+    def purge_cache(scope: str = "markdown", yes: bool = False) -> str:
         if not yes:
             raise InvalidFilterError("yes must be true to purge the cache")
         if scope not in ("markdown", "zips", "all"):
@@ -356,16 +358,16 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _enqueue(state, JobKind.CACHE_PURGE, {"scope": scope}, f"queued purge_cache ({scope})")
 
     @server.tool(name="get_job", description="Get a job's full detail by id.")
-    def get_job(job_id: str) -> dict[str, Any]:
+    def get_job(job_id: str) -> str:
         job = state.services.job_repo.get(job_id)
         if job is None:
             raise JobNotFoundError(job_id)
         from doc3gpp.web.routes.jobs import _envelope
 
-        return _envelope(job)
+        return _to_json(_envelope(job))
 
     @server.tool(name="cancel_job", description="Request cooperative cancellation of a queued or running job.")
-    def cancel_job(job_id: str) -> dict[str, Any]:
+    def cancel_job(job_id: str) -> str:
         from doc3gpp.models.jobs import JobStatus
 
         job = state.services.job_repo.get(job_id)
@@ -376,10 +378,10 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         state.jobs.cancel(job_id)
         from doc3gpp.web.routes.jobs import _envelope
 
-        return _envelope(job)
+        return _to_json(_envelope(job))
 
     @server.tool(name="list_jobs", description="List recent jobs (newest first), optionally filtered by status.")
-    def list_jobs(status: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_jobs(status: str | None = None, limit: int = 50, offset: int = 0) -> str:
         from doc3gpp.models.jobs import JobStatus
         from doc3gpp.web.routes.jobs import _envelope
 
@@ -391,12 +393,14 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
                 raise InvalidFilterError(f"unknown job status: {status!r}")
         fetched = state.services.job_repo.list(limit=limit + offset, status=parsed)
         jobs = fetched[offset : offset + limit]
-        return {
-            "jobs": [_envelope(j) for j in jobs],
-            "total": len(jobs),
-            "limit": limit,
-            "offset": offset,
-        }
+        return _to_json(
+            {
+                "jobs": [_envelope(j) for j in jobs],
+                "total": len(jobs),
+                "limit": limit,
+                "offset": offset,
+            }
+        )
 
     return server
 

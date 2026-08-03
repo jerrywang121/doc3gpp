@@ -70,6 +70,16 @@ def test_render_launchd_plist_includes_marker() -> None:
     assert "<true/>" in body
     assert "<key>KeepAlive</key>" in body
     assert LAUNCHD_LABEL in body
+    root = ET.fromstring(body)
+    dict_el = root.find("./dict")
+    current_key: str | None = None
+    label_value = None
+    for child in dict_el:
+        if child.tag == "key":
+            current_key = child.text
+        elif child.tag == "string" and current_key == "Label":
+            label_value = child.text
+    assert label_value == LAUNCHD_LABEL
 
 
 def test_install_systemd_dry_run_does_not_write(tmp_path, monkeypatch) -> None:

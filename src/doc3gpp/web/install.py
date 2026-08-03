@@ -127,13 +127,16 @@ def render_launchd_plist(
     Returns:
         The plist body as a string.
     """
-    from xml.sax.saxutils import quoteattr
+    from xml.sax.saxutils import escape
+
+    def esc(value: str) -> str:
+        return escape(value)
 
     env_items = "".join(
-        f"      <key>{key}</key>\n      <string>{value}</string>\n"
+        f"      <key>{esc(key)}</key>\n      <string>{esc(value)}</string>\n"
         for key, value in env.items()
     )
-    arg_items = "".join(f"      <string>{arg}</string>\n" for arg in program_args)
+    arg_items = "".join(f"      <string>{esc(arg)}</string>\n" for arg in program_args)
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -142,7 +145,7 @@ def render_launchd_plist(
         "<dict>\n"
         f"  <!-- {_MANAGED_MARKER}; pid_file: {pid_file} -->\n"
         "  <key>Label</key>\n"
-        f"  <string>{quoteattr(label)}</string>\n"
+        f"  <string>{esc(label)}</string>\n"
         "  <key>RunAtLoad</key>\n  <true/>\n"
         "  <key>KeepAlive</key>\n  <true/>\n"
         "  <key>ProgramArguments</key>\n"
@@ -150,11 +153,11 @@ def render_launchd_plist(
         f"{arg_items}"
         "  </array>\n"
         "  <key>WorkingDirectory</key>\n"
-        f"  <string>{working_dir}</string>\n"
+        f"  <string>{esc(working_dir)}</string>\n"
         "  <key>StandardOutPath</key>\n"
-        f"  <string>{log_file}</string>\n"
+        f"  <string>{esc(log_file)}</string>\n"
         "  <key>StandardErrorPath</key>\n"
-        f"  <string>{log_file}</string>\n"
+        f"  <string>{esc(log_file)}</string>\n"
         "  <key>EnvironmentVariables</key>\n"
         "  <dict>\n"
         f"{env_items}"

@@ -55,6 +55,60 @@ def _read_pid(settings: Settings) -> int | None:
         return None
 
 
+def _is_pid_alive(pid: int) -> bool:
+    """Return ``True`` if a process with ``pid`` is currently running.
+
+    Uses ``os.kill(pid, 0)`` (signal 0 = existence probe). Returns
+    ``False`` on ``ProcessLookupError`` (no such pid); propagates
+    ``PermissionError`` (a process exists but we cannot signal it — still
+    "alive" from the user's perspective).
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _launch_server(
+    bind_host: str,
+    bind_port: int,
+    env: dict[str, str],
+    log_path: Path,
+) -> subprocess.Popen:
+    """Spawn the uvicorn child process and return the live ``Popen``.
+
+    Pulled out of :func:`server_start` so tests can substitute a fake
+    process object without spawning uvicorn. The child inherits
+    ``env``, redirects stdout/stderr to ``log_path`` (append, binary),
+    and detaches into a new session so killing the parent does not
+    cascade into the child.
+    """
+    import builtins
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with builtins.open(log_path, "ab") as log_handle:
+        return subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "doc3gpp.web.app:build_app",
+                "--factory",
+                "--host",
+                bind_host,
+                "--port",
+                str(bind_port),
+            ],
+            env=env,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+
 def _wait_healthy(url: str, timeout: float = 15.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -68,6 +122,22 @@ def _wait_healthy(url: str, timeout: float = 15.0) -> bool:
     return False
 
 
+def _wait_for_child_exit(proc: subprocess.Popen, timeout: float = 2.0) -> int | None:
+    """Poll ``proc`` until it exits or ``timeout`` elapses.
+
+    Returns the exit code if the child exited within the window, else
+    ``None``. Used to catch early-startup crashes (e.g. bind failure)
+    before the parent writes a pid file or waits for a health URL.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        code = proc.poll()
+        if code is not None:
+            return code
+        time.sleep(0.05)
+    return proc.poll()
+
+
 @server_app.command("start")
 def server_start(
     host: str | None = typer.Option(None, "--host", help="Bind host (overrides the server.host setting)."),
@@ -75,6 +145,11 @@ def server_start(
     open: bool = typer.Option(None, "--open", help="Open the bound URL in a browser once the server is up."),
     reload: bool = typer.Option(False, "--reload", help="Run uvicorn in auto-reload mode (development only)."),
     no_open: bool = typer.Option(False, "--no-open", help="Suppress the auto-open behaviour even when configured."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing pid file even when it points to a live process. Use with care: starting against an already-bound port will fail anyway.",
+    ),
 ) -> None:
     """Start the doc3gpp HTTP server (foreground with --reload, else background)."""
     settings = get_settings()
@@ -101,6 +176,19 @@ def server_start(
     pid_path = _pid_file(settings)
     pid_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Refuse to start when a pid file already points to a live process.
+    # Without this guard, ``start`` would silently overwrite the live pid
+    # and immediately fail (the new process cannot bind the port), but
+    # leave the user with a stale ``server stop`` command and a confusing
+    # ``pid <X> is not alive`` message on the next stop. ``--force`` opts
+    # in to overwriting a live pid file.
+    existing_pid = _read_pid(settings)
+    if existing_pid is not None and _is_pid_alive(existing_pid) and not force:
+        raise click.ClickException(
+            f"a doc3gpp server is already running (pid {existing_pid}). "
+            f"Run `doc3gpp server stop` first, or pass --force to overwrite the pid file."
+        )
+
     from doc3gpp.settings.config_source import find_config_file
 
     config = find_config_file()
@@ -108,30 +196,33 @@ def server_start(
     if config is not None:
         env["DOC3GPP_CONFIG"] = str(config)
 
-    import builtins
+    proc = _launch_server(bind_host, bind_port, env, log_path)
 
-    with builtins.open(log_path, "ab") as log_handle:
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "doc3gpp.web.app:build_app",
-                "--factory",
-                "--host",
-                bind_host,
-                "--port",
-                str(bind_port),
-            ],
-            env=env,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
+    # Early crash detection. A uvicorn that exits almost immediately
+    # (e.g. ``[Errno 98] address already in use``) leaves the health URL
+    # answering 200 from the *previous* server still bound to the port.
+    # Without this probe we would happily write a pid file pointing at a
+    # dead process and report success against the old server's health
+    # response. Poll for up to 3s: long enough to catch bind failures
+    # (uvicorn import + bind attempt + error exit takes ~2.5s on a
+    # cold start) and short enough not to delay a healthy start.
+    if _wait_for_child_exit(proc, timeout=3.0) is not None:
+        log_tail = _tail_log(log_path, max_bytes=2000)
+        click.echo(
+            f"server child process exited (pid {proc.pid}, returncode {proc.returncode}) "
+            f"before becoming healthy. Log tail:\n{log_tail}",
+            err=True,
         )
+        raise typer.Exit(code=1)
+
     pid_path.write_text(f"{proc.pid}\n", encoding="utf-8")
 
     if not _wait_healthy(f"{url}healthz"):
-        click.echo(f"server started (pid {proc.pid}) but did not become healthy within the timeout.", err=True)
+        click.echo(
+            f"server started (pid {proc.pid}) but did not become healthy within the timeout. "
+            f"Check the log at {log_path} for details.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     click.echo(f"server running at {url}")
@@ -139,6 +230,17 @@ def server_start(
         click.echo("suppressed browser open")
     else:
         _open_browser(url)
+
+
+def _tail_log(path: Path, max_bytes: int = 2000) -> str:
+    """Return the last ``max_bytes`` of ``path`` as a string for error display."""
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return f"<could not read log at {path}: {exc}>"
+    if len(data) > max_bytes:
+        data = data[-max_bytes:]
+    return data.decode("utf-8", errors="replace")
 
 def _open_browser(url: str) -> None:
     import webbrowser

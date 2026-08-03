@@ -2004,15 +2004,35 @@ Start the HTTP server. Foreground with `--reload`, otherwise backgrounded.
 | `--port PORT` | Override `server.port`. |
 | `--open / --no-open` | Open the bound URL in a browser when ready (default open). |
 | `--reload` | Run uvicorn in auto-reload mode (development only; blocks). |
+| `--force` | Overwrite an existing pid file even when it points to a live process. Use with care: starting against an already-bound port will still fail. |
 
 Background mode writes a PID file to `server.pid_file` (or
 `{cache.dir}/server.pid`), appends logs to `server.log_file` (or
 `{cache.dir}/server.log`), and polls `/healthz` until healthy.
 
+**Failure modes the operator can hit:**
+
+- **Port already in use** — if the chosen port is bound by a *different*
+  process (including an older `doc3gpp server start` that survived),
+  the new uvicorn child exits with `[Errno 98]` before it can answer
+  `/healthz`. The CLI polls the child for up to 3s after launch; if it
+  exits inside that window the start command fails fast, surfaces the
+  log tail, and does **not** write a pid file pointing at the dead
+  child. Without this probe the user would see `server running at
+  http://...` against a port still owned by the *previous* process,
+  followed by a `pid <N> is not alive` cleanup the next time they ran
+  `stop` — a misleading lie. The fix detects the crash and exits
+  non-zero.
+- **Live pid file** — if a pid file is already present and points at a
+  live process, `start` refuses with a `ClickException` and names the
+  live pid. Pass `--force` to overwrite. This prevents `start` from
+  silently racing against an already-running server.
+
 ```bash
 doc3gpp server start
 doc3gpp server start --no-open
 doc3gpp server start --reload          # dev: auto-reload on web/ changes
+doc3gpp server start --force           # overwrite a stale or live pid file
 ```
 
 ### `doc3gpp server stop`

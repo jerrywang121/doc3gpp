@@ -205,3 +205,6 @@ def test_logs_job_conflicts_with_follow(cli_server: Settings) -> None:
 class _FakePopen:
     def __init__(self, pid: int) -> None:
         self.pid = pid
+
+    def poll(self) -> int | None:
+        return None

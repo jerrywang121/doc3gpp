@@ -33,6 +33,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from humanfriendly import parse_timespan
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
@@ -532,6 +533,146 @@ class SemanticSearchSettings(BaseModel):
         return v
 
 
+class ServerSettings(BaseModel):
+    """Knobs for ``doc3gpp server`` (FastAPI + uvicorn HTTP surface).
+
+    :attr:`enabled` is the master switch — the CLI's ``server_app`` rejects
+    every subcommand when this is ``False``. Defaults to ``False`` so a
+    fresh install does not open a port without an explicit operator opt-in.
+
+    :attr:`host` defaults to the loopback interface so the server is not
+    reachable from the network until the operator binds a public address.
+
+    :attr:`max_concurrent_jobs` caps how many job-worker slots run in
+    parallel; bounded at 1..16 to keep the sqlite writer contention
+    predictable on small machines.
+
+    :attr:`log_retention` is the only duration-style field on this model;
+    the validator routes it through :func:`humanfriendly.parse_timespan`
+    so operators can write ``7d``, ``30d``, ``24h``, etc. The string is
+    stored as-is so the worker can recompute the retention cutoff on
+    every cleanup pass without losing precision.
+
+    :attr:`pid_file` and :attr:`log_file` both default to ``None``; the
+    server resolves them at startup to ``{cache.dir}/server.pid`` and
+    ``{cache.dir}/server.log`` respectively so the CLI's ``start`` /
+    ``stop`` / ``logs`` commands land on predictable paths without
+    forcing every operator to set them explicitly.
+
+    TOML-only (the ``DOC3GPP_SERVER__*`` env vars are outside the
+    :data:`ALLOWED_ENV_VARS` allowlist, matching the sibling knobs).
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the `doc3gpp server` HTTP surface. False "
+            "rejects every `server` subcommand at the CLI gate so a "
+            "fresh install does not open a port without an explicit "
+            "operator opt-in via `[server] enabled = true`."
+        ),
+    )
+    host: str = Field(default="127.0.0.1")
+    port: int = Field(default=8765, ge=1, le=65535)
+    max_concurrent_jobs: int = Field(default=1, ge=1, le=16)
+    cleanup_interval_seconds: int = Field(default=300, ge=10)
+    log_retention: str = Field(
+        default="7d",
+        description=(
+            "Retention window for completed-job log files. Parsed by "
+            "humanfriendly.parse_timespan so values like `7d`, `24h`, "
+            "`30m` are accepted."
+        ),
+    )
+    cache_subdir: str | None = Field(
+        default=None,
+        description=(
+            "Optional subdirectory under {cache.dir} for server-side "
+            "artifacts (job bundles, transient uploads). None means "
+            "use the cache root directly."
+        ),
+    )
+    pid_file: str | None = Field(
+        default=None,
+        description=(
+            "Path to the PID file written by `server start`. None "
+            "defaults to {cache.dir}/server.pid at startup."
+        ),
+    )
+    log_file: str | None = Field(
+        default=None,
+        description=(
+            "Path to the structured log file written by the server "
+            "worker. None defaults to {cache.dir}/server.log at startup."
+        ),
+    )
+
+    @field_validator("log_retention", mode="before")
+    @classmethod
+    def _validate_log_retention(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"log_retention must be a string, got {type(value).__name__}")
+        text = value.strip()
+        if not text:
+            raise ValueError("log_retention must not be empty")
+        from humanfriendly import InvalidTimespan
+
+        try:
+            parse_timespan(text)
+        except (ValueError, InvalidTimespan) as exc:
+            raise ValueError(
+                f"invalid log_retention {value!r}; expected a humanfriendly "
+                f"timespan (e.g. 7d, 24h, 30m)"
+            ) from exc
+        return text
+
+
+class MCPSettings(BaseModel):
+    """Knobs for the MCP sub-app mounted under ``doc3gpp server``.
+
+    :attr:`enabled` defaults to ``True`` because MCP has no effect
+    until :class:`ServerSettings.enabled` is also ``True``; the
+    effective gate is the AND of the two. Keeping the per-side flag
+    lets operators stage a config that disables MCP before turning
+    the server on.
+
+    :attr:`transport` is locked to ``streamable_http`` for v1 — the
+    older SSE-only transport is deprecated upstream and the legacy
+    stdio transport would conflict with the per-request lifecycle
+    the HTTP surface expects. New transports become literals when
+    they ship.
+
+    :attr:`sse_queue_size` bounds the in-process queue length that
+    fans events out to active MCP sessions; values below 10 cause
+    dropouts under modest load, so the lower bound is 10.
+
+    TOML-only (the ``DOC3GPP_MCP__*`` env vars are outside the
+    :data:`ALLOWED_ENV_VARS` allowlist, matching the sibling knobs).
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Per-side MCP switch. Effective only when "
+            "[server].enabled is also true. False disables the MCP "
+            "mount without touching the rest of the server."
+        ),
+    )
+    transport: Literal["streamable_http"] = Field(
+        default="streamable_http",
+        description="HTTP transport used by the MCP mount.",
+    )
+    sse_queue_size: int = Field(
+        default=100,
+        ge=10,
+        description=(
+            "Per-session event queue length. Bounded at >= 10 to avoid "
+            "dropouts under modest load; raise for high-throughput "
+            "agents."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
@@ -563,6 +704,8 @@ class Settings(BaseSettings):
     sync: SyncSettings = Field(default_factory=SyncSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     semantic_search: SemanticSearchSettings = Field(default_factory=SemanticSearchSettings)
+    server: ServerSettings = Field(default_factory=ServerSettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="DOC3GPP_",

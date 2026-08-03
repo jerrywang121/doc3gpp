@@ -1,0 +1,31 @@
+{% if job %}
+  <div class="job-status" id="job-{{ job.id }}">
+    <p>
+      Job <code>{{ job.id }}</code> ·
+      <strong>{{ job.status.value }}</strong> ·
+      kind <code>{{ job.kind.value }}</code>
+    </p>
+    {% if job.error %}
+      <p class="error">{{ job.error }}</p>
+    {% endif %}
+    {% if job.log_lines %}
+      <ul class="job-log">
+        {% for line in job.log_lines %}
+          <li><code>{{ line }}</code></li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    {% if job.status.value not in ('succeeded', 'failed', 'cancelled') %}
+      <span
+        hx-get="/jobs/{{ job.id }}?format=html"
+        hx-trigger="every 2s"
+        hx-swap="outerHTML"
+        hx-target="#job-{{ job.id }}"
+      >
+        polling…
+      </span>
+    {% endif %}
+  </div>
+{% else %}
+  <p class="error">Job not found.</p>
+{% endif %}

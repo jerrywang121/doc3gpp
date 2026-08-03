@@ -1,0 +1,25 @@
+<form
+  hx-get="/meetings"
+  hx-target="#results"
+  hx-trigger="change, submit"
+  hx-swap="outerHTML"
+  class="filters"
+>
+  <label>TSG
+    <input type="text" name="tsg" value="{{ filters.tsg or '' }}">
+  </label>
+  <label>Year
+    <input type="number" name="year" value="{{ filters.year or '' }}">
+  </label>
+  <label>Location
+    <input type="text" name="location" value="{{ filters.location or '' }}">
+  </label>
+  <label>TDoc
+    <input type="text" name="tdoc" value="{{ filters.tdoc or '' }}">
+  </label>
+  <label>Limit
+    <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
+  </label>
+  <input type="hidden" name="offset" value="0">
+  <button type="submit" class="btn">Apply</button>
+</form>

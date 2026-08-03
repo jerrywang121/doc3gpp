@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · tsg {{ tsg.short_name }}{% endblock %}
+{% block content %}
+  <h1>{{ tsg.tsg_name }}</h1>
+  <p class="meta">Short name <code>{{ tsg.short_name }}</code></p>
+  {% if tsg.description %}<p>{{ tsg.description }}</p>{% endif %}
+  {% if tsg.url %}<p>URL: <a href="{{ tsg.url }}">{{ tsg.url }}</a></p>{% endif %}
+
+  <h2>Meetings</h2>
+  {% if meetings %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Start</th>
+          <th>End</th>
+          <th>Location</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for meeting in meetings %}
+          <tr>
+            <td>{{ meeting.meeting_id }}</td>
+            <td>{{ meeting.name }}</td>
+            <td>{{ meeting.start_date.isoformat() if meeting.start_date else '-' }}</td>
+            <td>{{ meeting.end_date.isoformat() if meeting.end_date else '-' }}</td>
+            <td>{{ meeting.location or '-' }}</td>
+            <td><a href="/meetings/{{ meeting.meeting_id }}">show</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="empty">No meetings stored for this TSG.</p>
+  {% endif %}
+{% endblock %}

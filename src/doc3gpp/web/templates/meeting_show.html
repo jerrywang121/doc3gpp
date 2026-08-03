@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · meeting {{ meeting.meeting_id }}{% endblock %}
+{% block content %}
+  <h1>{{ meeting.name }}</h1>
+  <p class="meta">
+    ID <code>{{ meeting.meeting_id }}</code>
+    {% if meeting.tsg %} · TSG <code>{{ meeting.tsg }}</code>{% endif %}
+  </p>
+
+  <dl class="kv">
+    {% if meeting.start_date %}<dt>Start</dt><dd>{{ meeting.start_date.isoformat() }}</dd>{% endif %}
+    {% if meeting.end_date %}<dt>End</dt><dd>{{ meeting.end_date.isoformat() }}</dd>{% endif %}
+    {% if meeting.start_doc %}<dt>Start doc</dt><dd>{{ meeting.start_doc }}</dd>{% endif %}
+    {% if meeting.end_doc %}<dt>End doc</dt><dd>{{ meeting.end_doc }}</dd>{% endif %}
+    {% if meeting.location %}<dt>Location</dt><dd>{{ meeting.location }}</dd>{% endif %}
+    {% if meeting.ftp_url %}<dt>FTP URL</dt><dd><code>{{ meeting.ftp_url }}</code></dd>{% endif %}
+    <dt>Last sync</dt>
+    <dd>{% if meeting.tdoc_list_last_sync %}{{ meeting.tdoc_list_last_sync | dt_short }} <span class="muted">UTC</span>{% else %}Never{% endif %}</dd>
+  </dl>
+
+  <p><a href="/tdocs?meeting_id={{ meeting.meeting_id }}&amp;limit=200">View TDocs for this meeting</a></p>
+
+  <form method="post" action="/jobs/sync_tdocs" class="sync-form">
+    <input type="hidden" name="meeting_id" value="{{ meeting.meeting_id }}">
+    <button type="submit" class="btn primary">Sync this meeting's TDocs</button>
+  </form>
+{% endblock %}

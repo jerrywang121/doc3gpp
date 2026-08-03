@@ -371,6 +371,37 @@ and the TDoc CR extraction is the deepest.
   embed → upsert); updates `vec_meta` for resume + staleness.
   `--rebuild-all` runs both FTS5 and vector rebuilds in sequence.
 
+### Web layer + MCP + Jobs
+
+The web layer (`src/doc3gpp/web/`) is a thin adapter over the same service
++ repository layer the CLI uses. A single process serves an HTMX/Jinja2 HTML
+interface and a Streamable HTTP MCP endpoint on one port (`127.0.0.1:8765`
+by default). It is disabled by default (`[server] enabled = false`); every
+`doc3gpp server` subcommand refuses to run while disabled.
+
+- `doc3gpp server start` → uvicorn runs `doc3gpp.web.app:build_app`
+  (`--factory`); the FastAPI lifespan calls `build_state(settings)` to
+  compose a `WebState` (engine + `ServiceContainer` of every service + job
+  repository), starts the `JobWorker`, mounts the MCP sub-app at `/mcp`
+  (only when `server.enabled` and `mcp.enabled`), and disposes the engine on
+  shutdown. `GET /healthz` returns `{"ok": true}`.
+- Browser → HTTP routes → `web/deps.py` request-scoped helpers → the same
+  services → the same repositories. Routes render HTML via Jinja2 or return
+  the CLI-equivalent JSON with `?format=json`.
+- AI client → `POST /mcp` (JSON-RPC) → `mcp_server.build_mcp_server(state)`
+  exposes the same read tools and enqueue the same jobs. For any read query,
+  the MCP tool result bytes are **byte-for-byte identical** to the equivalent
+  `?format=json` HTTP route (the job-enqueue envelope is the only exception —
+  it adds a `message` key). See `docs/web-server.md`.
+- `POST /jobs/...` / MCP job tools → enqueue a row in the SQLite `jobs` table
+  → the single `JobWorker` (`web/workers/job_worker.py`) claims it
+  (`queued → running → succeeded|failed|cancelled`), resolves a handler from
+  `web/workers/handlers.py::JobHandlers.KIND_TO_HANDLER`, streams progress as
+  `[{iso}]` log lines, and publishes Server-Sent Events to
+  `GET /jobs/{id}/events`. Cancellation is cooperative via an asyncio event.
+  The `jobs` table is created by schema bootstrap (no migration step).
+
+
 ## Database Schema
 
 Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
@@ -594,6 +625,17 @@ twenty commands):
     - `purge` — `[--scope {markdown,zips,all}]` (default `markdown`)
       selects which subtree to evict; `[--yes]` skips the interactive
       confirm; gated by `CacheSettings.purge_confirm` (TOML-only)
+- `server`:
+    - `start` — `--host`, `--port`, `--open/--no-open`, `--reload`;
+      backgrounded (PID + log file, `/healthz` wait) unless `--reload`
+    - `stop` — SIGTERM → 10s → SIGKILL; removes the PID file
+    - `status` — PID, uptime, OS service state, HTTP/MCP URLs, last job
+    - `logs` — `--job <id>` (from DB), `-f/--follow` (tail -f); mutually
+      exclusive
+    - `install systemd|launchd` — `--user/--system`, `--no-start`, `--dry-run`
+    - `uninstall systemd|launchd` — refuses non-managed units
+      (`InstallNotManagedError`)
+    - Every subcommand requires `[server] enabled = true`.
 
 Every `* list` command also accepts `--format table|json|markdown`
 and `-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list` also
@@ -633,6 +675,14 @@ size_limit_bytes=settings.cache.size_limit_mb * 1024 * 1024)` directly
 for the `cache status` / `cache purge` commands, which don't need the
 service stack.
 
+The web layer composes the same stack in-process: `web/app.py::build_state`
+calls the factory builders and wraps them in a `ServiceContainer`, and
+`web/deps.py` exposes request-scoped `Depends` helpers that read the
+`app.state.web` container. `cli_server.py` never instantiates repositories
+directly either — `server logs --job` uses `SQLAlchemyJobRepository()` and
+`server status` uses it best-effort, while `server start` shells out to
+uvicorn with `build_app`.
+
 ## Testing Layout
 
 - `tests/unit/` — pure-Python unit tests that mock external calls. Coverage
@@ -659,6 +709,8 @@ service stack.
     - `test_meeting_service_sqlite.py`,
       `test_tdoc_sqlite.py`, `test_tdoc_file_sqlite.py`,
       `test_tdoc_cr_sqlite.py`, `test_tsg_sqlite.py`, `test_wi_sqlite.py`
+    - web + MCP end-to-end (`test_web_end_to_end.py`,
+      `test_mcp_end_to_end.py`, `test_cli_server.py`)
     - `test_online_3gpp_calendar.py`, `test_online_tdoc_parse.py`,
       `test_online_tdoc_fetch_r5.py` (live 3GPP endpoints,
       `@pytest.mark.online`)

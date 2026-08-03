@@ -37,6 +37,7 @@ Typer-based CLI (`doc3gpp`), with SQLite as the sole storage backend.
 - **TDoc CR extraction** — Download and parse TDoc CR into structured records.
 - **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
 - **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
+- **Web server + MCP** — a single-port HTTP server (FastAPI + HTMX + Jinja2) for browsing and searching 3GPP data in a browser, plus a Streamable-HTTP Model Context Protocol endpoint (`/mcp`) exposing the same data to AI clients with byte-for-byte JSON parity with the HTTP `?format=json` routes. Background jobs (sync, parse, search rebuild, cache purge) run on a shared asyncio worker with live SSE progress.
 - **SQLite storage backend** — via SQLAlchemy 2.0.
 
 ## Installation
@@ -86,7 +87,8 @@ The `[dev]` extra includes `[cli]`, `pytest`, `pytest-cov`, and `ruff`.
 pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
 pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
 pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sentence-transformers, sqlite-vec)
-pip install "doc3gpp[all]"        # every runtime extra: CLI, extraction, search, semantic
+pip install "doc3gpp[web]"        # Web server + MCP (FastAPI, uvicorn, Jinja2 + HTMX, markdown-it-py)
+pip install "doc3gpp[all]"        # every runtime extra: CLI, extraction, search, semantic, web
 ```
 
 ## Quick Start
@@ -324,6 +326,30 @@ local-batch use.
 
 Full command reference: [`docs/cli.md`](docs/cli.md).
 
+### `server` — web server + MCP
+
+The optional `doc3gpp[web]` extra installs a single-port HTTP server that
+serves both a browsable HTMX UI and a Model Context Protocol endpoint.
+Enable it in the TOML config, install an OS service, then start it:
+
+```bash
+doc3gpp config set server.enabled true
+doc3gpp server install systemd --no-start     # or `launchd` on macOS
+doc3gpp server start                          # opens http://127.0.0.1:8765/
+```
+
+- **HTML UI** — browse meetings, TDocs, TSGs, WIs, and search results.
+- **JSON API** — every read route accepts `?format=json`, byte-for-byte
+  identical to the MCP tools.
+- **MCP** — `http://127.0.0.1:8765/mcp` (Streamable HTTP) exposes 20 tools
+  covering the same reads plus job lifecycle.
+- **Jobs** — sync, parse, search rebuild, and cache purge run on a shared
+  asyncio worker; watch live progress over SSE at `/jobs/{id}/events`.
+
+Manage the process with `doc3gpp server start|stop|status|logs`,
+`doc3gpp server install|uninstall systemd|launchd`. See
+[`docs/web-server.md`](docs/web-server.md) for the full guide.
+
 ## Database Configuration
 
 Configuration is read from a closed allowlist of environment variables
@@ -499,6 +525,7 @@ called out in `docs/architecture.md` §Out of scope (today).
 
 - [Architecture](docs/architecture.md)
 - [CLI reference](docs/cli.md)
+- [Web server + MCP](docs/web-server.md)
 - [3GPP knowledge base](docs/3gpp-knowledge.md)
 
 ## Contributing

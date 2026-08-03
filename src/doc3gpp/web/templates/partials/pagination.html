@@ -1,0 +1,11 @@
+{% if next_offset is not none or offset > 0 %}
+  <nav class="pagination">
+    {% if offset > 0 %}
+      <a href="{{ request.url.include_query_params(offset=offset - limit) if offset >= limit else request.url.remove_query_params('offset') }}">‹ prev</a>
+    {% endif %}
+    <span>Showing {{ offset + 1 }}–{{ offset + total }}</span>
+    {% if next_offset is not none %}
+      <a href="{{ request.url.include_query_params(offset=next_offset) }}">next ›</a>
+    {% endif %}
+  </nav>
+{% endif %}

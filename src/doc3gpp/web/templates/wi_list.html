@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · wis{% endblock %}
+{% block content %}
+  <h1>Work Items</h1>
+  <p class="meta">{{ total }} matching WI{{ '' if total == 1 else 's' }}.</p>
+
+  {% include "partials/wi_filters.html" %}
+
+  {% include "partials/wi_results.html" %}
+{% endblock %}

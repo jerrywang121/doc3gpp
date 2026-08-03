@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 import tempfile
-from dataclasses import dataclass, fields as dataclass_fields
+from dataclasses import fields as dataclass_fields
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, TextIO
@@ -29,6 +29,7 @@ from doc3gpp.cli_auto_sync import (
     trigger_auto_sync,
 )
 from doc3gpp.cli_filters import parse_tdoc_id, validate_date_filter
+from doc3gpp.cli_server import server_app
 from doc3gpp.cli_url_helpers import (
     _looks_like_3gpp_file_url,
     _looks_like_3gpp_folder_url,
@@ -40,10 +41,8 @@ from doc3gpp.models.sync import BulkSyncOutcome
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     TDocCRDetails,
-    TDocCRTTCNDetails,
 )
-from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
-from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl, TDocShowRepos
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
@@ -53,7 +52,6 @@ from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
     extract_tdoc_id_from_filename,
 )
-from doc3gpp.parsers.cr.header import is_ttcn_tdoc
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
@@ -113,6 +111,7 @@ app.add_typer(config_app, name="config")
 app.add_typer(cache_app, name="cache")
 search_app = typer.Typer(help="full-text search over TDocs, CRs, meetings, and WIs")
 app.add_typer(search_app, name="search")
+app.add_typer(server_app, name="server")
 
 logger = logging.getLogger(__name__)
 
@@ -2196,79 +2195,11 @@ def _serialise_show_value(value: object) -> object:
     return value
 
 
-@dataclass(slots=True, frozen=True)
-class TDocShowRecord:
-    """Bundled output of ``tdoc show`` for the JSON / markdown / table renderers.
-
-    Carries the parent :class:`TDoc`, the optional cover-page row keyed
-    by the stored ``tdoc.ftp_url`` (the slim ``TDocCRDetails`` shape),
-    the optional TTCN sidecar (only populated for TTCN CRs), the
-    extract ``extracted_at`` timestamp derived from ``tdoc_extracts``,
-    and every auxiliary ``tdoc_files`` row whose ``tdoc_id`` matches.
-    Keys are omitted (not null) in renderers when the corresponding
-    value is absent.
-
-    Attributes:
-        tdoc: The resolved parent TDoc row from the ``tdocs`` table.
-        cover: Slim cover-page fields keyed by ``tdoc.ftp_url``;
-            ``None`` when no extract row exists for that URL.
-        ttcn: TTCN sidecar keyed by ``tdoc.ftp_url``; ``None`` when no
-            sidecar row exists for that URL or when the TDoc is not
-            a TTCN CR.
-        extracted_at: Cache-extract timestamp for ``tdoc.ftp_url``;
-            ``None`` when no ``tdoc_extracts`` row exists for that URL.
-        files: Auxiliary ``tdoc_files`` rows matching ``tdoc_id``;
-            empty tuple when the parent TDoc has no auxiliary files.
-            The JSON renderer omits the top-level ``files`` key when
-            this is empty; the markdown and table renderers always
-            render their auxiliary-files section (markdown) or
-            placeholder (table) — see the renderer docstrings.
-    """
-
-    tdoc: TDoc
-    cover: TDocCRDetails | None = None
-    ttcn: TDocCRTTCNDetails | None = None
-    changes: TDocCRChangeDetails | None = None
-    extracted_at: datetime | None = None
-    files: tuple[TDocFile, ...] = ()
-
-
-@dataclass(slots=True, frozen=True)
-class TDocShowRecordByUrl:
-    """Bundled output of ``tdoc show --ftp-url`` for the JSON / markdown / table renderers.
-
-    Mirrors :class:`TDocShowRecord` but anchors on the URL rather than
-    on a parent ``TDoc``. The 1:1 invariant between ``ftp_url`` and
-    ``tdoc_id`` (enforced by the upload pipeline) means the parent
-    ``TDoc`` is optional from the caller's perspective — a URL may
-    surface a cover row, TTCN sidecar, extract meta, or auxiliary
-    files without a matching ``tdocs`` row.
-
-    ``ftp_url`` is always emitted (it's the selector). Optional keys
-    are omitted (not null) in renderers when the corresponding value
-    is absent.
-
-    Attributes:
-        ftp_url: The normalised URL the user supplied.
-        tdoc: The unique TDoc whose ``ftp_url`` matches (1:1 invariant);
-            ``None`` when no ``tdocs`` row exists for the URL.
-        cover: Slim cover-page fields keyed by ``ftp_url``;
-            ``None`` when no extract row exists.
-        ttcn: TTCN sidecar keyed by ``ftp_url``; ``None`` when no
-            sidecar row exists.
-        extracted_at: Cache-extract timestamp for ``ftp_url``;
-            ``None`` when no ``tdoc_extracts`` row exists.
-        files: Auxiliary ``tdoc_files`` rows matching ``ftp_url``;
-            empty tuple when no auxiliary file is attached.
-    """
-
-    ftp_url: str
-    tdoc: TDoc | None = None
-    cover: TDocCRDetails | None = None
-    ttcn: TDocCRTTCNDetails | None = None
-    changes: TDocCRChangeDetails | None = None
-    extracted_at: datetime | None = None
-    files: tuple[TDocFile, ...] = ()
+# ``TDocShowRecord`` / ``TDocShowRecordByUrl`` are imported from
+# ``doc3gpp.models.tdoc_show`` (re-exported above for backwards
+# compatibility with code that imports them from ``doc3gpp.cli``).
+# The composition lives in the models layer so the CLI and the
+# HTTP web route can share the same record-building path.
 
 
 def _build_show_payload(
@@ -2974,44 +2905,27 @@ def _tdoc_show_by_ftp_url(
         _render_tdoc_show_raw_by_url(url, output, compact=resolved_compact)
         return
 
-    tdoc_repo = build_tdoc_repository()
-    cr_repo = build_tdoc_cr_repository()
-    cr_ttcn_repo = build_tdoc_cr_ttcn_repository()
-    cr_change_details_repo = build_tdoc_cr_change_details_repository()
-    file_repo = build_tdoc_file_repository()
-
-    tdoc = tdoc_repo.get_by_ftp_url(url)
-    cover = cr_repo.get_by_url(url)
-    meta = cr_repo.get_extract_meta_by_url(url)
-    extracted_at = meta.extracted_at if meta is not None else None
-    # TTCN sidecar can only exist when the URL has a cover row
-    # (the cover parser is what produces it), so gate the lookup.
-    ttcn = cr_ttcn_repo.get_by_url(url) if cover is not None else None
-    changes = cr_change_details_repo.get_by_url(url)
-    files = tuple(file_repo.get_by_ftp_url(url))
+    show_repos = TDocShowRepos(
+        tdoc=build_tdoc_repository(),
+        cr=build_tdoc_cr_repository(),
+        cr_ttcn=build_tdoc_cr_ttcn_repository(),
+        cr_change_details=build_tdoc_cr_change_details_repository(),
+        file=build_tdoc_file_repository(),
+    )
+    record = TDocShowRecordByUrl.from_ftp_url(url, show_repos)
 
     if (
-        tdoc is None
-        and cover is None
-        and meta is None
-        and ttcn is None
-        and changes is None
-        and not files
+        record.tdoc is None
+        and record.cover is None
+        and record.extracted_at is None
+        and record.ttcn is None
+        and record.changes is None
+        and not record.files
     ):
         raise typer.BadParameter(
             f"No row in tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
             f"tdoc_cr_change_details, or tdoc_files matches ftp_url {url!r}."
         )
-
-    record = TDocShowRecordByUrl(
-        ftp_url=url,
-        tdoc=tdoc,
-        cover=cover,
-        ttcn=ttcn,
-        changes=changes,
-        extracted_at=extracted_at,
-        files=files,
-    )
 
     if fmt == "json":
         _render_tdoc_show_by_url_json(record, output, compact=resolved_compact)
@@ -3688,51 +3602,36 @@ def tdoc_show(
         tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
         tdoc=tdoc,
     )
-    repo = build_tdoc_repository()
-    record = repo.get_by_id(_normalise_cli_tdoc_id(tdoc))
-    if record is None:
-        raise typer.BadParameter(
-            f"Unknown TDoc '{tdoc}'. Run 'doc3gpp tdoc list' to see stored TDocs, "
-            f"or 'doc3gpp tdoc sync' to ingest a meeting's TDocs first."
-        )
+    normalised_tdoc_id = _normalise_cli_tdoc_id(tdoc)
 
     # Raw format takes a separate path: it doesn't render the DB rows,
     # it pulls the converted markdown from the cache (populating it via
-    # a fresh extract when the cache is cold).
+    # a fresh extract when the cache is cold). Resolved via the repo so
+    # the cache lookup has the canonical tdoc_id.
     if fmt == "raw":
-        _render_tdoc_show_raw(record.tdoc_id, output, compact=resolved_compact)
+        record_for_raw = build_tdoc_repository().get_by_id(normalised_tdoc_id)
+        if record_for_raw is None:
+            raise typer.BadParameter(
+                f"Unknown TDoc '{tdoc}'. Run 'doc3gpp tdoc list' to see stored "
+                "TDocs, or 'doc3gpp tdoc sync' to ingest a meeting's TDocs first."
+            )
+        _render_tdoc_show_raw(record_for_raw.tdoc_id, output, compact=resolved_compact)
         return
 
-    cr_repo = build_tdoc_cr_repository()
-    cr_ttcn_repo = build_tdoc_cr_ttcn_repository()
-    cr_change_details_repo = build_tdoc_cr_change_details_repository()
-    file_repo = build_tdoc_file_repository()
-
-    cover: TDocCRDetails | None = None
-    extracted_at: datetime | None = None
-    ttcn: TDocCRTTCNDetails | None = None
-    changes: TDocCRChangeDetails | None = None
-    if record.ftp_url:
-        cover = cr_repo.get_by_url(record.ftp_url)
-        meta = cr_repo.get_extract_meta_by_url(record.ftp_url)
-        if meta is not None:
-            extracted_at = meta.extracted_at
-        if is_ttcn_tdoc(record.tdoc_id):
-            ttcn = cr_ttcn_repo.get_by_url(record.ftp_url)
-        change_details = cr_change_details_repo.get_for_tdoc_id(record.tdoc_id)
-        changes = change_details[0] if change_details else None
-
-    files = tuple(file_repo.get_for_tdoc_id(record.tdoc_id))
-
-    show_record = TDocShowRecord(
-        tdoc=record,
-        cover=cover,
-        ttcn=ttcn,
-        changes=changes,
-        extracted_at=extracted_at,
-        files=files,
+    show_repos = TDocShowRepos(
+        tdoc=build_tdoc_repository(),
+        cr=build_tdoc_cr_repository(),
+        cr_ttcn=build_tdoc_cr_ttcn_repository(),
+        cr_change_details=build_tdoc_cr_change_details_repository(),
+        file=build_tdoc_file_repository(),
     )
-
+    try:
+        show_record = TDocShowRecord.from_tdoc_id(normalised_tdoc_id, show_repos)
+    except TDocNotFoundError:
+        raise typer.BadParameter(
+            f"Unknown TDoc '{tdoc}'. Run 'doc3gpp tdoc list' to see stored "
+            "TDocs, or 'doc3gpp tdoc sync' to ingest a meeting's TDocs first."
+        ) from None
     if fmt == "json":
         _render_tdoc_show_json(show_record, output, compact=resolved_compact)
     elif fmt == "markdown":

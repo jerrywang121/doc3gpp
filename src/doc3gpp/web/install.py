@@ -14,6 +14,7 @@ not touch the OS service manager.
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 import sys
@@ -277,7 +278,7 @@ def install_launchd(
     log_file, pid_file = _resolve_log_pid(get_settings())
     body = render_launchd_plist(
         label=LAUNCHD_LABEL,
-        program_args=exec_start.split(),
+        program_args=shlex.split(exec_start),
         working_dir=working_dir,
         log_file=log_file,
         pid_file=pid_file,

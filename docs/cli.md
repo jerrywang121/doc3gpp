@@ -2001,7 +2001,7 @@ Start the HTTP server. Foreground with `--reload`, otherwise backgrounded.
 | Flag | Description |
 | --- | --- |
 | `--host HOST` | Override `server.host`. |
-| `--port PORT` | Override `server.port`. Use `--port 0` for a random free port. |
+| `--port PORT` | Override `server.port`. |
 | `--open / --no-open` | Open the bound URL in a browser when ready (default open). |
 | `--reload` | Run uvicorn in auto-reload mode (development only; blocks). |
 
@@ -2011,7 +2011,7 @@ Background mode writes a PID file to `server.pid_file` (or
 
 ```bash
 doc3gpp server start
-doc3gpp server start --port 0 --no-open
+doc3gpp server start --no-open
 doc3gpp server start --reload          # dev: auto-reload on web/ changes
 ```
 

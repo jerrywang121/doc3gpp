@@ -71,32 +71,29 @@ def build_state(settings: Settings) -> WebState:
     )
 
 
-def _maybe_mount_mcp(app: FastAPI, settings: Settings) -> None:
-    """Mount the MCP sub-app at ``/mcp`` when both server + MCP are enabled.
+def _mount_mcp_in_lifespan(app: FastAPI) -> None:
+    """Build the real MCP server from ``app.state.web`` and mount at ``/mcp``.
 
-    T9 supplies the real :class:`MCPServer`; T4 wires the conditional
-    so flipping the two TOML flags later is a no-op here. When the
-    MCP package is not installed we log a warning and skip rather than
-    failing the import — the HTTP surface must stay bootable in any
-    environment. T9 also owns the constructor kwargs (``stateless_http``
-    etc.) so T4 keeps the placeholder minimal.
+    Only mounts when both ``[server].enabled`` and ``[mcp].enabled`` are
+    true and the ``mcp`` package is importable; otherwise silently no-ops.
+    Called from the lifespan after ``app.state.web`` is set so the tools
+    can reach the wired services.
     """
+    settings = app.state.web.settings
     if not (settings.mcp.enabled and settings.server.enabled):
         return
     try:
-        from mcp.server.mcpserver import MCPServer
+        from doc3gpp.web.mcp_server import build_mcp_server
+
+        server = build_mcp_server(app.state.web)
+        app.mount("/mcp", server.streamable_http_app())
     except ImportError:
         logger.warning(
             "doc3gpp.web.app: mcp package is not installed; skipping /mcp mount",
         )
-        return
-    try:
-        placeholder = MCPServer("doc3gpp")
-        app.mount("/mcp", placeholder.streamable_http_app())
     except Exception:
         logger.warning(
-            "doc3gpp.web.app: failed to construct MCP placeholder; "
-            "skipping /mcp mount",
+            "doc3gpp.web.app: failed to construct MCP server; skipping /mcp mount",
             exc_info=True,
         )
 
@@ -115,6 +112,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         handle.task = asyncio.create_task(worker.run())
         state.jobs = handle
         try:
+            _mount_mcp_in_lifespan(app)
             yield
         finally:
             await handle.shutdown()
@@ -131,7 +129,6 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     for router in all_routers():
         app.include_router(router)
 
-    _maybe_mount_mcp(app, settings)
     return app
 
 

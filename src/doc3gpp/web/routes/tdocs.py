@@ -38,7 +38,7 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.web.deps import get_settings, get_tdoc_file_repo, get_tdoc_service
 from doc3gpp.web.errors import CacheMissError, InvalidFilterError
-from doc3gpp.web.filters import parse_date_query, parse_int_query, parse_text_query
+from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
 from doc3gpp.web.render import to_jsonable, tdoc_rows
 from doc3gpp.web.templates_setup import templates
 
@@ -97,7 +97,7 @@ async def list_tdocs(
     request: Request,
     tdoc_id: str | None = Query(default=None),
     meeting: str | None = Query(default=None),
-    meeting_id: int | None = Query(default=None),
+    meeting_id: str | None = Query(default=None),
     source: str | None = Query(default=None),
     spec: str | None = Query(default=None),
     wi: str | None = Query(default=None),
@@ -113,8 +113,8 @@ async def list_tdocs(
     cr_num: str | None = Query(default=None, alias="cr-num"),
     cr_pack: str | None = Query(default=None, alias="cr-pack"),
     uploaded_date: str | None = Query(default=None, alias="uploaded-date"),
-    limit: int | None = Query(default=50),
-    offset: int | None = Query(default=0),
+    limit: str | None = Query(default="50"),
+    offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
     service: TDocService = Depends(get_tdoc_service),
 ) -> Any:
@@ -124,13 +124,16 @@ async def list_tdocs(
     ``doc3gpp tdoc list --format json``: a bare array of field-selected
     rows (``settings.output.fields.tdoc`` by default) with every cell
     string-coerced via :func:`doc3gpp.web.render.tdoc_rows`.
+
+    The numeric query params (``meeting_id``, ``limit``, ``offset``)
+    are declared as ``str`` so an empty form value (``meeting_id=``)
+    doesn't trigger a 422 — :func:`parse_int_query` treats ``""`` as
+    ``None`` and the route fills in the default. The CLI's typed path
+    accepts ints only; the HTTP path is a best-effort form-binding layer.
     """
-    parsed_limit = parse_int_query(
-        str(limit) if limit is not None else None, min=1, max=_LIMIT_CAP,
-    ) or 50
-    parsed_offset = parse_int_query(
-        str(offset) if offset is not None else None, min=0,
-    ) or 0
+    parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 50
+    parsed_offset = parse_int_query(offset, min=0) or 0
+    parsed_meeting_id = parse_int_query(meeting_id, min=1)
     parsed_uploaded_date = parse_date_query(uploaded_date)
 
     rows = service.list_recent_with_meeting(
@@ -138,7 +141,7 @@ async def list_tdocs(
         offset=parsed_offset,
         tdoc_id=parse_text_query(tdoc_id),
         meeting_like=parse_text_query(meeting),
-        meeting_id=meeting_id,
+        meeting_id=parsed_meeting_id,
         title=parse_text_query(title),
         tdoc_type=parse_text_query(type),
         source=parse_text_query(source),
@@ -162,9 +165,12 @@ async def list_tdocs(
     next_offset = (
         parsed_offset + len(rows) if len(rows) == parsed_limit else None
     )
+    template_name = (
+        "partials/tdoc_results.html" if is_htmx_request(request) else "tdoc_list.html"
+    )
     return templates.TemplateResponse(
         request=request,
-        name="tdoc_list.html",
+        name=template_name,
         context={
             "active_nav": "tdocs",
             "tdocs": rows,
@@ -174,7 +180,7 @@ async def list_tdocs(
             "filters": {
                 "tdoc_id": tdoc_id or "",
                 "meeting": meeting or "",
-                "meeting_id": meeting_id,
+                "meeting_id": parsed_meeting_id,
                 "title": title or "",
                 "type": type or "",
                 "source": source or "",

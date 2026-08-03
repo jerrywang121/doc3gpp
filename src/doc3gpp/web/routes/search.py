@@ -30,7 +30,7 @@ from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.web.deps import get_search_service, get_semantic_search_service
 from doc3gpp.web.errors import InvalidFilterError, SettingsDisabledError
-from doc3gpp.web.filters import parse_date_query, parse_int_query, parse_text_query
+from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
 from doc3gpp.web.templates_setup import templates
 
 
@@ -121,7 +121,7 @@ async def search_query(
     spec: str | None = Query(default=None),
     since: str | None = Query(default=None),
     until: str | None = Query(default=None),
-    limit: int | None = Query(default=20),
+    limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
     service: SearchService | None = Depends(get_search_service),
 ) -> Any:
@@ -130,9 +130,7 @@ async def search_query(
         raise SettingsDisabledError(
             "search is not enabled in settings (set [search].enabled = true)"
         )
-    parsed_limit = parse_int_query(
-        str(limit) if limit is not None else None, min=1, max=_LIMIT_CAP,
-    ) or 20
+    parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 20
     filters = _build_filters(
         tsg=tsg, meeting=meeting, release=release,
         spec=spec, since=since, until=until, limit=parsed_limit,
@@ -149,9 +147,12 @@ async def search_query(
             content=[_fts5_hit_to_json(h) for h in hits],
         )
 
+    template_name = (
+        "partials/search_results.html" if is_htmx_request(request) else "search_results.html"
+    )
     return templates.TemplateResponse(
         request=request,
-        name="search_results.html",
+        name=template_name,
         context={
             "active_nav": "search",
             "mode": "fts5",
@@ -178,7 +179,7 @@ async def search_semantic(
     q: str | None = Query(default=None),
     fts5_query: str | None = Query(default=None),
     fts5_weight: float | None = Query(default=0.5),
-    limit: int | None = Query(default=20),
+    limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
     service: SemanticSearchService | None = Depends(get_semantic_search_service),
 ) -> Any:
@@ -187,9 +188,7 @@ async def search_semantic(
         raise SettingsDisabledError(
             "semantic search is not enabled (set [semantic_search].enabled = true)"
         )
-    parsed_limit = parse_int_query(
-        str(limit) if limit is not None else None, min=1, max=_LIMIT_CAP,
-    ) or 20
+    parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 20
     if fts5_weight is None or not (0.0 <= fts5_weight <= 1.0):
         raise InvalidFilterError(
             f"fts5_weight must be between 0.0 and 1.0, got {fts5_weight!r}"
@@ -213,9 +212,12 @@ async def search_semantic(
             content=[_semantic_hit_to_json(h) for h in hits],
         )
 
+    template_name = (
+        "partials/search_results.html" if is_htmx_request(request) else "search_results.html"
+    )
     return templates.TemplateResponse(
         request=request,
-        name="search_results.html",
+        name=template_name,
         context={
             "active_nav": "search",
             "mode": "sem",

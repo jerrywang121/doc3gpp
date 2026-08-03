@@ -27,6 +27,16 @@ class TestParseTextQuery:
     def test_passthrough(self, value: str | None) -> None:
         assert parse_text_query(value) is value
 
+    def test_empty_string_passthrough_to_none(self) -> None:
+        """HTML forms leave optional fields blank (``""``); treat as ``None``.
+
+        An empty form value used to round-trip as ``""`` and silently
+        produce :sql:`LIKE ''` (which matches only empty strings and
+        drops every row). It must now round-trip as ``None`` so the
+        SQL filter is a no-op.
+        """
+        assert parse_text_query("") is None
+
 
 class TestParseDateQuery:
     """``parse_date_query`` validates via :func:`validate_date_filter`."""
@@ -45,6 +55,16 @@ class TestParseDateQuery:
 
     def test_none_passthrough(self) -> None:
         assert parse_date_query(None) is None
+
+    def test_empty_string_passthrough_to_none(self) -> None:
+        """HTML forms leave optional date fields blank (``""``); treat as ``None``.
+
+        Empty strings used to raise :class:`InvalidFilterError`, which
+        surfaced as HTTP 400 and made the user-visible filter form
+        appear to do nothing on click — the user clicked Apply and
+        saw the previous (unfiltered) list.
+        """
+        assert parse_date_query("") is None
 
     def test_invalid_raises(self) -> None:
         with pytest.raises(InvalidFilterError):
@@ -78,6 +98,16 @@ class TestParseIntQuery:
 
     def test_none_passthrough(self) -> None:
         assert parse_int_query(None) is None
+
+    def test_empty_string_passthrough_to_none(self) -> None:
+        """HTML forms leave optional numeric fields blank (``""``); treat as ``None``.
+
+        Empty strings used to raise :class:`InvalidFilterError`. The
+        caller already does ``or <default>`` to fall back to the
+        route's default, so round-tripping ``""`` as ``None`` lets the
+        default kick in.
+        """
+        assert parse_int_query("") is None
 
     def test_no_bounds_accepts_any_int(self) -> None:
         assert parse_int_query("0") == 0

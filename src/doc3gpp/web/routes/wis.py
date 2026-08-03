@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.web.deps import get_wi_service
-from doc3gpp.web.filters import parse_int_query, parse_text_query
+from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
 from doc3gpp.web.render import wi_rows
 from doc3gpp.web.templates_setup import templates
 
@@ -35,7 +35,7 @@ async def list_wis(
     name: str | None = Query(default=None),
     acronym: str | None = Query(default=None),
     release: str | None = Query(default=None),
-    limit: int | None = Query(default=50),
+    limit: str | None = Query(default="50"),
     format: str | None = Query(default=None, alias="format"),
     service: WiService = Depends(get_wi_service),
 ) -> Any:
@@ -45,10 +45,14 @@ async def list_wis(
     ``doc3gpp wi list --format json``: a bare array of field-selected
     rows (``settings.output.fields.wi`` by default) with every cell
     string-coerced via :func:`doc3gpp.web.render.wi_rows`.
+
+    ``limit`` is declared as ``str`` so an empty form value
+    (``limit=``) doesn't trigger a 422 — :func:`parse_int_query`
+    treats ``""`` as ``None`` and the route fills in the default. The
+    CLI's typed path accepts ints only; the HTTP path is a best-effort
+    form-binding layer.
     """
-    parsed_limit = parse_int_query(
-        str(limit) if limit is not None else None, min=1, max=_LIMIT_CAP,
-    ) or 50
+    parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 50
     wis = service.list_recent(
         limit=parsed_limit,
         tsg=parse_text_query(tsg),
@@ -60,9 +64,12 @@ async def list_wis(
     if format == "json":
         return JSONResponse(content=wi_rows(wis, _WI_DEFAULT_FIELDS))
 
+    template_name = (
+        "partials/wi_results.html" if is_htmx_request(request) else "wi_list.html"
+    )
     return templates.TemplateResponse(
         request=request,
-        name="wi_list.html",
+        name=template_name,
         context={
             "active_nav": "wis",
             "wis": wis,

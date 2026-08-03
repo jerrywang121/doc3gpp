@@ -25,7 +25,7 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.deps import get_meeting_service
-from doc3gpp.web.filters import parse_int_query, parse_text_query
+from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
 from doc3gpp.web.render import meeting_rows, to_jsonable
 from doc3gpp.web.templates_setup import templates
 
@@ -54,10 +54,10 @@ _MEETING_DEFAULT_FIELDS = [
 async def list_meetings(
     request: Request,
     tsg: str | None = Query(default=None),
-    year: int | None = Query(default=None),
+    year: str | None = Query(default=None),
     location: str | None = Query(default=None),
-    limit: int | None = Query(default=50),
-    offset: int | None = Query(default=0),
+    limit: str | None = Query(default="50"),
+    offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
     service: MeetingService = Depends(get_meeting_service),
 ) -> Any:
@@ -68,29 +68,37 @@ async def list_meetings(
     field-selected rows (``settings.output.fields.meeting`` by
     default) with every cell string-coerced via
     :func:`doc3gpp.web.render.meeting_rows`.
+
+    The numeric query params (``year``, ``limit``, ``offset``) are
+    declared as ``str`` so an empty form value (``year=``) doesn't
+    trigger a 422 — :func:`parse_int_query` treats ``""`` as ``None``
+    and the route fills in the default. The CLI's typed path accepts
+    ints only; the HTTP path is a best-effort form-binding layer.
     """
-    parsed_limit = parse_int_query(str(limit) if limit is not None else None,
-                                    min=1, max=_LIMIT_CAP) or 50
-    parsed_offset = parse_int_query(str(offset) if offset is not None else None,
-                                    min=0) or 0
+    parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 50
+    parsed_offset = parse_int_query(offset, min=0) or 0
     parsed_tsg = parse_text_query(tsg)
     parsed_location = parse_text_query(location)
+    parsed_year = parse_int_query(year, min=1970, max=2100)
 
     meetings = service.list_recent(
         limit=parsed_limit,
         offset=parsed_offset,
         tsg=parsed_tsg,
         location_like=parsed_location,
-        year=year,
+        year=parsed_year,
     )
 
     if format == "json":
         return JSONResponse(content=meeting_rows(meetings, _MEETING_DEFAULT_FIELDS))
 
     next_offset = parsed_offset + len(meetings) if len(meetings) == parsed_limit else None
+    template_name = (
+        "partials/meeting_results.html" if is_htmx_request(request) else "meeting_list.html"
+    )
     return templates.TemplateResponse(
         request=request,
-        name="meeting_list.html",
+        name=template_name,
         context={
             "active_nav": "meetings",
             "meetings": meetings,

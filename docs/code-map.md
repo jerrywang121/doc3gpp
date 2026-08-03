@@ -204,6 +204,7 @@ The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API +
 | `render_systemd_unit`/`render_launchd_plist`/`install_systemd`/`install_launchd`/`uninstall_systemd`/`uninstall_launchd` | function | `web/install.py` | OS service-unit install/uninstall helpers with `X-Doc3gpp-Managed` marker guard |
 | `InstallNotManagedError` | exception | `web/install.py` | Raised when uninstalling a missing/non-managed unit |
 | `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, tdocs, tsgs, wis, search, jobs]` |
+| `is_htmx_request` | function | `web/filters.py` | `request.headers["HX-Request"] == "true"` — list routes use this to switch between full page (no header) and `partials/<resource>_results.html` fragment (HTMX-driven swap target). |
 | `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue (sync/meetings, sync/tdocs, sync/tdocs/all, parse/tdocs, search/rebuild, cache/purge, sync_tdocs), list, get, SSE `/events`, cancel |
 | `JobWorker` | class | `web/workers/job_worker.py` | asyncio worker: claims `QUEUED` jobs, runs handlers, streams SSE, cooperative cancel |
 | `JobHandlers.KIND_TO_HANDLER` | mapping | `web/workers/handlers.py` | `JobKind`→async handler (network-touching sync/parse/rebuild/purge) |

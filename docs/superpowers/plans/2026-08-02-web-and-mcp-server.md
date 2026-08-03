@@ -384,7 +384,7 @@ ruff check .
 
 **Files:**
 - Create: `src/doc3gpp/web/routes/__init__.py`, `landing.py`, `meetings.py`, `tdocs.py`, `tsgs.py`, `wis.py`, `search.py`
-- Create: `src/doc3gpp/web/templates/base.html`, `landing.html`, `meeting_list.html`, `meeting_show.html`, `tdoc_list.html`, `tdoc_show.html`, `tdoc_content.html`, `tsg_list.html`, `tsg_show.html`, `wi_list.html`, `search_results.html`, `partials/job_status.html`, `partials/search_form.html`, `partials/tdoc_filters.html`
+- Create: `src/doc3gpp/web/templates/base.html`, `landing.html`, `meeting_list.html`, `meeting_show.html`, `tdoc_list.html`, `tdoc_show.html`, `tdoc_content.html`, `tsg_list.html`, `tsg_show.html`, `wi_list.html`, `search_results.html`, `partials/job_status.html`, `partials/search_form.html`, `partials/tdoc_filters.html`, `partials/meeting_filters.html`, `partials/wi_filters.html`, `partials/pagination.html`, `partials/meeting_results.html`, `partials/tdoc_results.html`, `partials/wi_results.html`, `partials/search_results.html`
 - Create: `src/doc3gpp/web/static/htmx.min.js`, `style.css`
 - Extend: `src/doc3gpp/web/app.py` (mount routers)
 - Create: `tests/unit/test_web_routes.py`
@@ -412,7 +412,7 @@ ruff check .
   - `GET /search/sem` → `SemanticSearchService.search(...)` with `?fts5_query=` opt-in FTS5 path; renders the same template with the rerank score column highlighted.
 - Templates:
   - `base.html`: navigation bar (links to each list), main content block, footer; HTMX 2.x script tag pointing to `/static/htmx.min.js`; links to `/static/style.css`.
-  - Each list page includes `partials/<resource>_filters.html` (HTMX-powered form that reloads the list on change).
+  - Each list page includes `partials/<resource>_filters.html` (HTMX-powered form with `hx-swap="outerHTML" hx-target="#results"`). On submit / change, HTMX re-fetches the same list URL with `HX-Request: true`; the route returns the matching `partials/<resource>_results.html` fragment (a single `<div id="results">` block) instead of the full page, so the swap replaces just the results region. Plain browser GETs (no `HX-Request`) still get the full HTML page.
   - `partials/job_status.html`: HTMX partial that swaps in via `hx-trigger="every 2s"` and polls `GET /jobs/{id}/status` until terminal.
 - Static:
   - `htmx.min.js`: vendored from the HTMX 2.x official release. Pin the URL (`https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js`) and a sha256 in the plan; the implementer downloads once via `httpx` (already a dep), writes the bytes to `src/doc3gpp/web/static/htmx.min.js`, and commits the file. No runtime download — the bundle ships in the wheel.

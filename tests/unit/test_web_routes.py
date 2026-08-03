@@ -301,6 +301,25 @@ def test_meeting_show_renders_html(client: TestClient) -> None:
     assert "RAN5#99-e" in response.text
 
 
+def test_meetings_list_htmx_returns_partial(client: TestClient) -> None:
+    """``GET /meetings`` with ``HX-Request: true`` returns the results partial.
+
+    The Apply button uses HTMX with ``hx-swap=\"outerHTML\" hx-target=\"#results\"``,
+    so the response must be the ``partials/meeting_results.html`` fragment
+    (a single ``<div id=\"results\">`` block) — not a full HTML document.
+    Returning the full page would replace the ``#results`` div with a
+    nested ``<!DOCTYPE html>`` and destroy the page chrome.
+    """
+    response = client.get("/meetings", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    body = response.text
+    assert "<!DOCTYPE" not in body
+    assert "<html" not in body
+    assert 'id="results"' in body
+    assert "<table" in body
+    assert "name=\"tsg\"" not in body
+
+
 def test_meeting_show_404(client: TestClient) -> None:
     """``GET /meetings/{unknown}`` returns 404 with the canonical envelope."""
     response = client.get("/meetings/9999")
@@ -328,6 +347,24 @@ def test_tdoc_list_renders_html(client: TestClient) -> None:
     response = client.get("/tdocs")
     assert response.status_code == 200
     assert "R5-260001" in response.text
+
+
+def test_tdoc_list_htmx_returns_partial(client: TestClient) -> None:
+    """``GET /tdocs`` with ``HX-Request: true`` returns the results partial.
+
+    The Apply button uses HTMX with ``hx-swap=\"outerHTML\" hx-target=\"#results\"``,
+    so the response must be the ``partials/tdoc_results.html`` fragment —
+    not a full HTML document (which would replace ``#results`` with a
+    nested ``<!DOCTYPE html>`` and destroy the page chrome).
+    """
+    response = client.get("/tdocs", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    body = response.text
+    assert "<!DOCTYPE" not in body
+    assert "<html" not in body
+    assert 'id="results"' in body
+    assert "<table" in body
+    assert "name=\"tdoc_id\"" not in body
 
 
 def test_tdoc_list_json(client: TestClient) -> None:
@@ -469,6 +506,114 @@ def test_meeting_list_filters_form_fields(client: TestClient) -> None:
     assert 'name="start_before"' not in html
 
 
+def test_meetings_list_empty_numeric_filter_returns_200(client: TestClient) -> None:
+    """``GET /meetings?tsg=c6&year=`` is 200, not 422 (empty form fields).
+
+    The HTML form serialises blank numeric inputs as ``year=`` (empty
+    string). FastAPI's ``int | None`` annotation rejects ``""`` with a
+    422 before the handler runs, which manifested in the UI as the
+    filter appearing to do nothing when ``year`` was left blank. The
+    route now declares the field as ``str`` and parses via
+    :func:`parse_int_query`, which treats ``""`` as ``None``.
+    """
+    response = client.get("/meetings?tsg=c6&year=&limit=&offset=")
+    assert response.status_code == 200
+
+
+def test_meetings_list_invalid_numeric_filter_returns_400(client: TestClient) -> None:
+    """``GET /meetings?year=abc`` is 400 with the invalid_filter envelope."""
+    response = client.get("/meetings?year=abc")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
+def test_tdoc_list_empty_numeric_filter_returns_200(client: TestClient) -> None:
+    """``GET /tdocs?meeting_id=`` is 200, not 422 (empty form field)."""
+    response = client.get("/tdocs?meeting_id=&limit=&offset=")
+    assert response.status_code == 200
+
+
+def test_tdoc_list_invalid_numeric_filter_returns_400(client: TestClient) -> None:
+    """``GET /tdocs?meeting_id=abc`` is 400 with the invalid_filter envelope."""
+    response = client.get("/tdocs?meeting_id=abc")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
+def test_wi_list_empty_numeric_filter_returns_200(client: TestClient) -> None:
+    """``GET /wis?limit=`` is 200, not 422 (empty form field)."""
+    response = client.get("/wis?limit=")
+    assert response.status_code == 200
+
+
+def test_wi_list_invalid_numeric_filter_returns_400(client: TestClient) -> None:
+    """``GET /wis?limit=abc`` is 400 with the invalid_filter envelope."""
+    response = client.get("/wis?limit=abc")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
+def test_search_query_empty_numeric_filter_returns_200(client: TestClient) -> None:
+    """``GET /search?q=foo&limit=`` is 200, not 422."""
+    response = client.get("/search?q=foo&limit=")
+    assert response.status_code == 200
+
+
+def test_tdoc_list_empty_date_filter_returns_200(client: TestClient) -> None:
+    """``GET /tdocs?uploaded-date=`` is 200, not 400 (empty form value).
+
+    The HTML form serialises blank date inputs as ``uploaded-date=``
+    (empty string). :func:`parse_date_query` now treats ``""`` as
+    ``None`` so the route doesn't 400 when the user clicks Apply with
+    the date field left blank.
+    """
+    response = client.get("/tdocs?uploaded-date=")
+    assert response.status_code == 200
+
+
+def test_tdoc_list_invalid_date_filter_returns_400(client: TestClient) -> None:
+    """``GET /tdocs?uploaded-date=bogus`` is 400 with invalid_filter envelope."""
+    response = client.get("/tdocs?uploaded-date=bogus")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
+def test_tdoc_list_empty_text_filter_returns_all_rows(client: TestClient) -> None:
+    """``GET /tdocs?tdoc_id=r5-%&type=&uploaded-date=`` is 200 and applies r5-%.
+
+    Empty text fields used to round-trip as ``""`` and silently
+    :sql:`LIKE ''` (matching only empty strings). Now they round-trip
+    as ``None`` and the SQL filter is a no-op, so the explicit
+    ``tdoc_id=r5-%`` filter alone produces the filtered result.
+    """
+    response = client.get("/tdocs?tdoc_id=R5-%25&type=&uploaded-date=")
+    assert response.status_code == 200
+
+
+def test_search_query_empty_date_filter_returns_200(client: TestClient) -> None:
+    """``GET /search?since=&until=`` is 200, not 400."""
+    response = client.get("/search?q=foo&since=&until=")
+    assert response.status_code == 200
+
+
+def test_search_query_invalid_date_filter_returns_400(client: TestClient) -> None:
+    """``GET /search?since=bogus`` is 400 with invalid_filter envelope."""
+    response = client.get("/search?since=bogus")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
+def test_search_sem_empty_numeric_filter_returns_200(client: TestClient) -> None:
+    """``GET /search/sem?q=foo&limit=`` is 200, not 422."""
+    response = client.get("/search/sem?q=foo&limit=")
+    assert response.status_code == 200
+
+
 def test_tdoc_content_html(client: TestClient, sqlite_env: Any, tmp_path: Any) -> None:
     """``GET /tdocs/{id}/content?format=html`` renders the markdown as HTML."""
     from doc3gpp.storage.db.migrate import create_schema
@@ -539,6 +684,22 @@ def test_wi_list_renders_html(client: TestClient) -> None:
     assert "TestWI" in response.text
 
 
+def test_wi_list_htmx_returns_partial(client: TestClient) -> None:
+    """``GET /wis`` with ``HX-Request: true`` returns the results partial.
+
+    Same contract as the meetings / tdocs list pages: HTMX must receive
+    a fragment that fits the ``#results`` swap target, not a full HTML
+    document.
+    """
+    response = client.get("/wis", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    body = response.text
+    assert "<!DOCTYPE" not in body
+    assert "<html" not in body
+    assert 'id="results"' in body
+    assert "<table" in body
+
+
 def test_wi_list_json(client: TestClient) -> None:
     """``GET /wis?format=json`` returns the CLI-shaped row array."""
     from doc3gpp.settings.schema import OutputFieldsSettings
@@ -576,6 +737,31 @@ def test_search_query_renders_html(client: TestClient) -> None:
     response = client.get("/search?q=foo")
     assert response.status_code == 200
     assert "R5-260001" in response.text
+
+
+def test_search_query_htmx_returns_partial(client: TestClient) -> None:
+    """``GET /search`` with ``HX-Request: true`` returns the results partial.
+
+    The Search button uses HTMX with ``hx-swap=\"outerHTML\" hx-target=\"#results\"``,
+    so the response must be the ``partials/search_results.html`` fragment
+    — a single ``<div id=\"results\">`` block — not a full HTML document.
+    """
+    response = client.get("/search?q=foo", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    body = response.text
+    assert "<!DOCTYPE" not in body
+    assert "<html" not in body
+    assert 'id="results"' in body
+
+
+def test_search_sem_htmx_returns_partial(client: TestClient) -> None:
+    """``GET /search/sem`` with ``HX-Request: true`` returns the results partial."""
+    response = client.get("/search/sem?q=foo", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    body = response.text
+    assert "<!DOCTYPE" not in body
+    assert "<html" not in body
+    assert 'id="results"' in body
 
 
 def test_search_query_json(client: TestClient) -> None:

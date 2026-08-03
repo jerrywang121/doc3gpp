@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from doc3gpp.web.routes.jobs import router as jobs_router
 from doc3gpp.web.routes.landing import router as landing_router
 from doc3gpp.web.routes.meetings import router as meetings_router
 from doc3gpp.web.routes.search import router as search_router
@@ -21,7 +22,7 @@ from doc3gpp.web.routes.wis import router as wis_router
 
 
 def all_routers() -> list[APIRouter]:
-    """Return every read router in the order they should be mounted."""
+    """Return every router in the order they should be mounted."""
     return [
         landing_router,
         meetings_router,
@@ -29,6 +30,7 @@ def all_routers() -> list[APIRouter]:
         tsgs_router,
         wis_router,
         search_router,
+        jobs_router,
     ]
 
 

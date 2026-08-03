@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · jobs{% endblock %}
+{% block content %}
+  <h1>Background jobs</h1>
+  <p class="meta">{{ total }} job{{ '' if total == 1 else 's' }}.</p>
+
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Kind</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+        <tr>
+          <td><code>{{ job.id[:8] }}</code></td>
+          <td>{{ job.kind.value }}</td>
+          <td>{{ job.status.value }}</td>
+          <td>{{ job.created_at.isoformat() }}</td>
+          <td><a href="/jobs/{{ job.id }}?format=html">show</a></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if next_offset %}
+    <a class="pagination-next" href="/jobs?limit={{ limit }}&offset={{ next_offset }}">next →</a>
+  {% endif %}
+{% endblock %}

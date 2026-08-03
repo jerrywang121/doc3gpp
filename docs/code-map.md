@@ -181,3 +181,46 @@ Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `li
 | `config_init` | Typer command | `cli.py` | Bootstrap a fresh TOML config file with the packaged default template at `--target` (auto / project / user); `--force` overwrites an existing file. Refuses while `DOC3GPP_CONFIG` is set. |
 | `config_set` | Typer command | `cli.py` | Write one dotted key into the active TOML config file (refuses when none is in use — run `config init` first); clears the settings cache so the new value is visible in the same process. |
 | `_resolve_compact` | function | `cli.py:247` | Resolve `--compact` against `Settings.output.compact` (CLI flag wins when `True`); keeps the Typer `Option` a plain `bool` without a `--no-compact` toggle. |
+
+## Web layer + MCP + Jobs (`src/doc3gpp/web/`, `src/doc3gpp/cli_server.py`)
+
+The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API + Streamable-HTTP MCP) with a shared asyncio job worker. `[server] enabled` gates every `server` subcommand and the MCP mount. CLI↔HTTP JSON parity is byte-for-byte (compact separators + `ensure_ascii=False`) — see [`docs/web-server.md`](web-server.md).
+
+| Symbol | Kind | File | Role |
+| --- | --- | --- | --- |
+| `build_app` | factory | `web/app.py` | Compose the FastAPI app: lifespan builds `WebState`, starts `JobWorker`, mounts `/mcp` (when `server.enabled` and `mcp.enabled`), registers error handlers + static + `all_routers()`; `GET /healthz` |
+| `build_state` | factory | `web/app.py` | Build `WebState(settings, engine, services, jobs)` via `services/factory.build_*` + `SQLAlchemyJobRepository` |
+| `WebState` | dataclass | `web/state.py` | Request-scoped app state: `settings`, `engine`, `services` (`ServiceContainer`), `jobs` (`JobWorkerHandle`) |
+| `ServiceContainer` | dataclass | `web/state.py` | Bundle of services/repos injected into routes |
+| `JobWorkerHandle` | class | `web/state.py` | asyncio handle over the worker: `enqueue`, `cancel`, `event_queues`, `register_queue`/`unregister_queue`, `shutdown` |
+| `get_state`/`get_settings`/`get_engine`/`get_services` | dependency | `web/deps.py` | FastAPI `Depends` helpers reading `request.app.state.web` |
+| `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_wi_service`/`get_tsg_service`/`get_search_service`/`get_semantic_search_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service `Depends` helpers |
+| `get_job_repo` / `get_job_worker` | dependency | `web/deps.py` | Job repository + worker-handle deps (overridden in tests) |
+| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 20 tools (10 read + 10 job) |
+| `_to_json` | function | `web/mcp_server.py` | `json.dumps(value, separators=(",", ":"), ensure_ascii=False)` — byte-matches Starlette `JSONResponse` |
+| `meeting_rows`/`tdoc_rows`/`tsg_rows`/`wi_rows` | function | `web/render.py` | List-of-dict rows matching CLI `--format json` (`_coerce_cell`: `None`→`"-"`, date→isoformat) |
+| `to_jsonable` | function | `web/render.py` | Recursively convert dataclasses/values to JSON-safe structures |
+| `register_error_handlers`/`map_domain_error` | function | `web/errors.py` | Map domain errors→HTTP status (404/400/409/503/502/500) with stable slugs |
+| `render_systemd_unit`/`render_launchd_plist`/`install_systemd`/`install_launchd`/`uninstall_systemd`/`uninstall_launchd` | function | `web/install.py` | OS service-unit install/uninstall helpers with `X-Doc3gpp-Managed` marker guard |
+| `InstallNotManagedError` | exception | `web/install.py` | Raised when uninstalling a missing/non-managed unit |
+| `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, tdocs, tsgs, wis, search, jobs]` |
+| `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue (sync/meetings, sync/tdocs, sync/tdocs/all, parse/tdocs, search/rebuild, cache/purge, sync_tdocs), list, get, SSE `/events`, cancel |
+| `JobWorker` | class | `web/workers/job_worker.py` | asyncio worker: claims `QUEUED` jobs, runs handlers, streams SSE, cooperative cancel |
+| `JobHandlers.KIND_TO_HANDLER` | mapping | `web/workers/handlers.py` | `JobKind`→async handler (network-touching sync/parse/rebuild/purge) |
+| `Job` | dataclass | `models/jobs.py` | `id, kind, status, params, log_lines, result_summary, error, created_at, started_at, finished_at` |
+| `JobKind` / `JobStatus` | enum | `models/jobs.py` | `SYNC_MEETINGS/SYNC_TDOCS/SYNC_TDOCS_ALL/PARSE_TDOCS/REBUILD_SEARCH/CACHE_PURGE`; `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED` |
+| `SQLAlchemyJobRepository` | repository | `storage/repositories/jobs_sql.py` | SQL impl of `JobRepository`: `create/get/list/mark_running/append_log/mark_succeeded/...` |
+| `server_app` (6 commands) | Typer group | `cli_server.py` | `server start|stop|status|logs|install|uninstall`; `_require_server_enabled` gates all |
+
+### Tests
+
+| Symbol | Kind | File | Role |
+| --- | --- | --- | --- |
+| `test_web_app.py` | module | `tests/unit/test_web_app.py` | `build_app` wiring + `/healthz` |
+| `test_web_routes.py` | module | `tests/unit/test_web_routes.py` | Read routes with fake services |
+| `test_web_jobs_routes.py` | module | `tests/unit/test_web_jobs_routes.py` | Job routes + SSE framing with fake repo/handle |
+| `test_web_install.py` | module | `tests/unit/test_web_install.py` | Install/uninstall render + marker guard |
+| `test_cli_server_stubs.py` | module | `tests/unit/test_cli_server_stubs.py` | `server` sub-app registration + gate |
+| `test_web_end_to_end.py` | module | `tests/integration/test_web_end_to_end.py` | Full lifecycle + cache-miss hint + cancel (real app, worker paused) |
+| `test_mcp_end_to_end.py` | module | `tests/integration/test_mcp_end_to_end.py` | MCP tools + byte-parity with HTTP `?format=json` |
+| `test_cli_server.py` | module | `tests/integration/test_cli_server.py` | CLI start/stop/status/logs/install/uninstall |

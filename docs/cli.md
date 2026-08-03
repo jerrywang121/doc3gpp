@@ -1988,6 +1988,89 @@ of `DOC3GPP_*` env vars overrides TOML values at runtime. Any other
 `DOC3GPP_<SECTION>__<FIELD>` is silently ignored. Precedence:
 CLI > allowlisted env > file > defaults.
 
+## server Commands
+
+The `doc3gpp server` group starts, inspects and supervises the HTTP server +
+MCP endpoint. Every subcommand refuses to run while `[server] enabled = false`.
+The full end-user guide lives in [`docs/web-server.md`](web-server.md).
+
+### `doc3gpp server start [flags]`
+
+Start the HTTP server. Foreground with `--reload`, otherwise backgrounded.
+
+| Flag | Description |
+| --- | --- |
+| `--host HOST` | Override `server.host`. |
+| `--port PORT` | Override `server.port`. Use `--port 0` for a random free port. |
+| `--open / --no-open` | Open the bound URL in a browser when ready (default open). |
+| `--reload` | Run uvicorn in auto-reload mode (development only; blocks). |
+
+Background mode writes a PID file to `server.pid_file` (or
+`{cache.dir}/server.pid`), appends logs to `server.log_file` (or
+`{cache.dir}/server.log`), and polls `/healthz` until healthy.
+
+```bash
+doc3gpp server start
+doc3gpp server start --port 0 --no-open
+doc3gpp server start --reload          # dev: auto-reload on web/ changes
+```
+
+### `doc3gpp server stop`
+
+Stop a running background server (SIGTERM → 10s → SIGKILL), remove the PID file.
+
+```bash
+doc3gpp server stop
+```
+
+### `doc3gpp server status`
+
+Report whether the server is running, its PID, uptime, the OS service state
+(systemd/launchd), the HTTP/MCP URLs, and the last job.
+
+```bash
+doc3gpp server status
+```
+
+### `doc3gpp server logs [flags]`
+
+Print recent server logs.
+
+| Flag | Description |
+| --- | --- |
+| `--job JOB_ID` | Print a specific job's log lines (from the DB). |
+| `-f, --follow/--no-follow` | Follow the log file (`tail -f`). Conflicts with `--job`. |
+
+```bash
+doc3gpp server logs
+doc3gpp server logs --job <job_id>
+doc3gpp server logs --follow
+```
+
+### `doc3gpp server install systemd|launchd [flags]`
+
+Install a service unit so the server is supervised.
+
+| Flag | Description |
+| --- | --- |
+| `--user / --system` | Install scope (default user). |
+| `--no-start` | Install only — do not start the service. |
+| `--dry-run` | Print the unit file instead of installing. |
+
+```bash
+doc3gpp server install systemd --no-start
+doc3gpp server install launchd --dry-run
+```
+
+### `doc3gpp server uninstall systemd|launchd [flags]`
+
+Remove a managed service unit. Refuses (via `InstallNotManagedError`) when
+the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
+
+```bash
+doc3gpp server uninstall systemd
+```
+
 ## Examples
 
 ```bash
@@ -2019,4 +2102,12 @@ doc3gpp wi list --format markdown -o wis.md
 # Inspect the resolved configuration
 doc3gpp config path
 doc3gpp config show
+
+# Run the web server + MCP
+doc3gpp server install systemd --no-start
+doc3gpp server start --no-open
+doc3gpp server status
+doc3gpp server logs --follow
+doc3gpp server stop
+doc3gpp server uninstall systemd
 ```

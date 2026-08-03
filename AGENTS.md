@@ -82,6 +82,12 @@ For the full symbol-to-file table, see
 | Add a `search sem` flag | `src/doc3gpp/cli.py` (`sem_command`) | Mirror `search_command` pattern. |
 | Add an embedding model | `src/doc3gpp/services/embedding/embedder.py` | Lazy model load; `Embedder` Protocol in `repository/protocols.py`. |
 | Add a vector DDL change | `src/doc3gpp/storage/db/migrate.py` (`_create_vector_schema`) + `src/doc3gpp/storage/repositories/vector_sql.py` | Gated on sqlite + sqlite-vec. |
+| Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. |
+| Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). |
+| Add a background job kind | `src/doc3gpp/models/jobs.py` (`JobKind`) + `src/doc3gpp/web/workers/handlers.py` (`KIND_TO_HANDLER`) + `src/doc3gpp/web/routes/jobs.py` | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; SSE progress via `append_log`/progress callbacks. |
+| Change job repo / worker | `src/doc3gpp/storage/repositories/jobs_sql.py` + `src/doc3gpp/web/workers/job_worker.py` + `src/doc3gpp/web/state.py` (`JobWorkerHandle`) | `get_job_repo` / `get_job_worker` deps in `web/deps.py`; tests override them. |
+| Add a `server` CLI command | `src/doc3gpp/cli_server.py` | Each subcommand starts with `_require_server_enabled(settings)`; OS install delegates to `web/install.py`. |
+| Change server/OS-settings or install helpers | `src/doc3gpp/web/install.py` + `src/doc3gpp/settings/schema.py` (`ServerSettings`/`MCPSettings`) | `[server]`/`[mcp]` TOML blocks; server settings are TOML-only (not in the env allowlist). |
 
 For deeper conventions (filter grammar, settings caching, anti-patterns,
 commit policy), see [`docs/conventions.md`](docs/conventions.md).
@@ -106,6 +112,7 @@ runtime data flow, and ORM schema.
 | `storage/repositories/` | SQL impls of the `repository/` Protocols |
 | `settings/` | env + TOML config (pydantic-settings; precedence: CLI > env > file > defaults) |
 | `cli.py` | thin Typer commands; never instantiate SQL repos directly |
+| `web/` | thin FastAPI adapters over services via `web/deps.py`; HTML/JSON/MCP output byte-consistent; MCP via `web/mcp_server.py`; background jobs via `web/workers/` |
 
 Workflows in one line (full prose in `docs/architecture.md`):
 
@@ -329,6 +336,7 @@ so tests resolve `doc3gpp.*` without an editable install.
 | Per-knob TOML schema reference | [`doc3gpp.toml.example`](doc3gpp.toml.example) |
 | Search index design + spec contract | [`docs/superpowers/specs/2026-07-29-fts5-search-design.md`](docs/superpowers/specs/2026-07-29-fts5-search-design.md) |
 | FTS5 implementation plan | [`docs/superpowers/plans/2026-07-29-fts5-search.md`](docs/superpowers/plans/2026-07-29-fts5-search.md) |
+| Web server + MCP + jobs end-user guide | [`docs/web-server.md`](docs/web-server.md) |
 
 Update `README.md`, `AGENTS.md`, and the relevant `docs/*.md` in the
 same change set when CLI surface or behaviour changes — see

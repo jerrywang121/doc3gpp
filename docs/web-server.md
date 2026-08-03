@@ -186,6 +186,13 @@ as the detail page's sync button). The meeting detail page shows
 `start_doc`/`end_doc`, the last-sync timestamp (`YYYY-MM-DD HH:MM UTC`), and
 a link to the meeting's TDocs.
 
+The filter form (submitted via HTMX to `GET /meetings`, swapping the
+`#results` partial) supports `tsg`, `year`, `location`, `tdoc`, and
+`limit`. The `tdoc` field is a text input accepting a CR-shape TDoc id
+(e.g. `R5-260013`); the list is narrowed to meetings whose `start_doc` /
+`end_doc` range brackets it. An empty value is ignored; a malformed value
+returns a 400 `invalid_filter` response.
+
 ## Jobs
 
 Long-running operations (meeting sync, TDoc sync, parse, search rebuild,

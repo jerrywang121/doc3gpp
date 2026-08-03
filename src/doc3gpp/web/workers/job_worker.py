@@ -139,6 +139,9 @@ class JobWorker:
             cancel_events = self._state.jobs.cancel_events
             if job.id not in cancel_events:
                 cancel_events[job.id] = asyncio.Event()
+            # Honour a cancel requested while the job was still queued.
+            if self._state.jobs.consume_cancel_request(job.id):
+                cancel_events[job.id].set()
             # Reuse an already-registered SSE queue (the route may attach
             # one before the worker picks the job up), else create one.
             queue = self._state.jobs.event_queues.get(job.id) or asyncio.Queue(

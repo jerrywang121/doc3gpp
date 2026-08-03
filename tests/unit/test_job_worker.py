@@ -60,12 +60,27 @@ class _JobWorkerHandleFake:
     def __init__(self) -> None:
         self.event_queues: dict[str, asyncio.Queue[dict]] = {}
         self.cancel_events: dict[str, asyncio.Event] = {}
+        self._cancel_requests: set[str] = set()
 
     def register_queue(self, job_id: str, queue: asyncio.Queue[dict]) -> None:
         self.event_queues[job_id] = queue
 
     def unregister_queue(self, job_id: str) -> None:
         self.event_queues.pop(job_id, None)
+
+    def cancel(self, job_id: str) -> bool:
+        event = self.cancel_events.get(job_id)
+        if event is not None:
+            event.set()
+            return True
+        self._cancel_requests.add(job_id)
+        return True
+
+    def consume_cancel_request(self, job_id: str) -> bool:
+        if job_id in self._cancel_requests:
+            self._cancel_requests.discard(job_id)
+            return True
+        return False
 
 
 def _make_repo() -> SQLAlchemyJobRepository:
@@ -157,6 +172,27 @@ def test_worker_cancels_on_event() -> None:
     assert done is not None
     assert done.status is JobStatus.CANCELLED
     assert done.error is None
+
+
+def test_worker_cancels_queued_job_on_pending_request() -> None:
+    """A cancel requested while the job is QUEUED is honoured on claim."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+
+    # Cancel before the worker claims the job: no running event exists,
+    # so the request is recorded as pending on the handle.
+    assert state.jobs.cancel(job.id) is True
+    assert job.id in state.jobs._cancel_requests  # type: ignore[attr-defined]
+
+    worker = JobWorker(state, repo=repo)
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.CANCELLED
+    assert done.error is None
+    assert job.id not in state.jobs._cancel_requests  # type: ignore[attr-defined]
 
 
 def test_worker_emits_named_sse_events() -> None:

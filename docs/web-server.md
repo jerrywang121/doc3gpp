@@ -156,7 +156,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | --- | --- | --- |
 | GET | `/healthz` | Liveness probe → `{"ok": true}`. |
 | GET | `/` | Landing page. |
-| GET | `/meetings` | List meetings (`?format=json`). |
+| GET | `/meetings` | List meetings (`?format=json`); shows `start_doc`/`end_doc` and a coloured, clickable sync symbol (`↻`) per meeting. |
 | GET | `/meetings/{id}` | Meeting detail (HTML or JSON). |
 | GET | `/tdocs` | List TDocs (`?format=json`). |
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
@@ -178,6 +178,13 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.
+
+The meeting list shows a `↻` sync symbol per meeting coloured by TDoc-list
+sync freshness — green (`≤ 24h` ago), orange (`> 24h` ago), grey (never
+synced). Clicking it enqueues the TDoc-list sync for that meeting (same job
+as the detail page's sync button). The meeting detail page shows
+`start_doc`/`end_doc`, the last-sync timestamp (`YYYY-MM-DD HH:MM UTC`), and
+a link to the meeting's TDocs.
 
 ## Jobs
 

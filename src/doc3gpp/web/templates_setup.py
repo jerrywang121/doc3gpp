@@ -8,6 +8,7 @@ can resolve static asset paths (``/static/htmx.min.js``,
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Request
@@ -36,6 +37,26 @@ def _url_for(request: Request, name: str) -> str:
 
 
 templates.env.globals["url_for"] = _url_for
+
+
+def dt_short(value: datetime | None) -> str | None:
+    """Format a (UTC) datetime as ``YYYY-MM-DD HH:MM``; ``None`` stays ``None``."""
+    if value is None:
+        return None
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def sync_state(value: datetime | None) -> str:
+    """Classify sync freshness: ``never`` / ``fresh`` (<=24h) / ``stale`` (>24h)."""
+    if value is None:
+        return "never"
+    if value >= datetime.now(timezone.utc) - timedelta(hours=24):
+        return "fresh"
+    return "stale"
+
+
+templates.env.filters["dt_short"] = dt_short
+templates.env.filters["sync_state"] = sync_state
 
 
 static_files = StaticFiles(directory=str(_STATIC_DIR))

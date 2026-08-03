@@ -261,3 +261,33 @@ dl.kv dd {
   padding: 0.75rem;
   margin-bottom: 1rem;
 }
+
+.sync-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.sync-fresh {
+  color: #1a7f37;
+}
+
+.sync-stale {
+  color: #bc4c00;
+}
+
+.sync-never {
+  color: #8c959f;
+}
+
+.sync-btn:hover {
+  opacity: 0.7;
+}
+
+.muted {
+  color: var(--muted);
+}

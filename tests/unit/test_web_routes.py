@@ -12,7 +12,7 @@ the CLI's ``--format json`` envelope is a spec violation.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -60,6 +60,7 @@ from doc3gpp.web.render import (
 
 class FakeMeetingService(MeetingService):
     def __init__(self) -> None:  # noqa: D401 - intentional override
+        self._now = datetime.now(timezone.utc)
         self._meetings = [
             Meeting(
                 meeting_id=1,
@@ -68,6 +69,8 @@ class FakeMeetingService(MeetingService):
                 location="Athens, Greece",
                 start_date=date(2026, 5, 1),
                 end_date=date(2026, 5, 5),
+                start_doc="R5-260001",
+                end_doc="R5-260500",
                 tsg="R5",
             ),
             Meeting(
@@ -77,7 +80,22 @@ class FakeMeetingService(MeetingService):
                 location="Online",
                 start_date=date(2026, 6, 1),
                 end_date=date(2026, 6, 5),
+                start_doc="S2-260001",
+                end_doc="S2-260400",
                 tsg="S2",
+                tdoc_list_last_sync=self._now - timedelta(hours=1),
+            ),
+            Meeting(
+                meeting_id=3,
+                name="CT1#140-e",
+                title="CT WG1 Meeting #140-e",
+                location="Online",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 3),
+                start_doc="C1-260001",
+                end_doc="C1-260200",
+                tsg="C1",
+                tdoc_list_last_sync=self._now - timedelta(hours=48),
             ),
         ]
 
@@ -320,6 +338,36 @@ def test_meetings_list_htmx_returns_partial(client: TestClient) -> None:
     assert "name=\"tsg\"" not in body
 
 
+def test_meetings_list_shows_sync_columns(client: TestClient) -> None:
+    """The list table carries Start doc / End doc / Sync columns and values."""
+    html = client.get("/meetings").text
+    assert "<th>Start doc</th>" in html
+    assert "<th>End doc</th>" in html
+    assert "<th>Sync</th>" in html
+    assert "R5-260001" in html
+    assert "R5-260500" in html
+    assert "S2-260001" in html
+    assert "S2-260400" in html
+
+
+def test_meetings_list_sync_button_freshness_classes(client: TestClient) -> None:
+    """Each row's sync button carries the freshness class (grey/green/orange)."""
+    html = client.get("/meetings").text
+    assert 'class="sync-btn sync-never"' in html
+    assert 'class="sync-btn sync-fresh"' in html
+    assert 'class="sync-btn sync-stale"' in html
+
+
+def test_meetings_list_sync_button_posts_meeting_id(client: TestClient) -> None:
+    """The sync button is an HTMX form posting the meeting_id to the job route."""
+    html = client.get("/meetings").text
+    assert 'hx-post="/jobs/sync_tdocs"' in html
+    assert 'hx-swap="none"' in html
+    assert "&#8635;" in html
+    for meeting_id in (1, 2, 3):
+        assert f'name="meeting_id" value="{meeting_id}"' in html
+
+
 def test_meeting_show_404(client: TestClient) -> None:
     """``GET /meetings/{unknown}`` returns 404 with the canonical envelope."""
     response = client.get("/meetings/9999")
@@ -335,6 +383,36 @@ def test_meeting_show_json(client: TestClient) -> None:
     service = FakeMeetingService()
     expected = to_jsonable(service.get_by_id(1))
     assert response.json() == {"meeting": expected}
+
+
+def test_meeting_show_renders_sync_fields(client: TestClient) -> None:
+    """The detail page shows Start doc / End doc / Last sync rows."""
+    html = client.get("/meetings/1").text
+    assert "<dt>Start doc</dt>" in html
+    assert "<dt>End doc</dt>" in html
+    assert "<dt>Last sync</dt>" in html
+    assert "<dd>Never</dd>" in html
+
+
+def test_meeting_show_renders_formatted_last_sync(client: TestClient) -> None:
+    """A synced meeting shows YYYY-MM-DD HH:MM UTC, never 'Never'."""
+    html = client.get("/meetings/2").text
+    last_sync = FakeMeetingService().get_by_id(2).tdoc_list_last_sync
+    assert last_sync is not None
+    formatted = last_sync.strftime("%Y-%m-%d %H:%M")
+    previous_minute = (last_sync - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M")
+    # The app's fake was built a moment before this service instance; tolerate
+    # a wall-clock minute rollover between the two constructions.
+    assert formatted in html or previous_minute in html
+    assert "UTC" in html
+    assert "Never" not in html
+
+
+def test_meeting_show_links_to_tdocs(client: TestClient) -> None:
+    """The detail page links to the meeting's TDocs pre-filtered by meeting id."""
+    html = client.get("/meetings/1").text
+    assert "View TDocs for this meeting" in html
+    assert 'href="/tdocs?meeting_id=1&amp;limit=200"' in html
 
 
 # ---------------------------------------------------------------------------

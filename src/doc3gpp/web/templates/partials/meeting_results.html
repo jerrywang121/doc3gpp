@@ -9,6 +9,9 @@
           <th>Start</th>
           <th>End</th>
           <th>Location</th>
+          <th>Start doc</th>
+          <th>End doc</th>
+          <th>Sync</th>
           <th></th>
         </tr>
       </thead>
@@ -21,6 +24,16 @@
             <td>{{ meeting.start_date.isoformat() if meeting.start_date else '-' }}</td>
             <td>{{ meeting.end_date.isoformat() if meeting.end_date else '-' }}</td>
             <td>{{ meeting.location or '-' }}</td>
+            <td>{{ meeting.start_doc or '-' }}</td>
+            <td>{{ meeting.end_doc or '-' }}</td>
+            <td>
+              <form hx-post="/jobs/sync_tdocs" hx-swap="none"
+                    title="Last sync: {{ meeting.tdoc_list_last_sync | dt_short or 'never' }}">
+                <input type="hidden" name="meeting_id" value="{{ meeting.meeting_id }}">
+                <button type="submit" class="sync-btn sync-{{ meeting.tdoc_list_last_sync | sync_state }}"
+                        aria-label="Sync TDocs for meeting {{ meeting.meeting_id }}">&#8635;</button>
+              </form>
+            </td>
             <td><a href="/meetings/{{ meeting.meeting_id }}">show</a></td>
           </tr>
         {% endfor %}

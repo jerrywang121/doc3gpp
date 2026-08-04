@@ -189,6 +189,7 @@ class FakeWiService(WiService):
 
 class FakeSearchService(SearchService):
     def __init__(self) -> None:  # noqa: D401
+        self.last_filters = None
         self._hits = [
             SearchHit(
                 tdoc_id="R5-260001",
@@ -204,11 +205,13 @@ class FakeSearchService(SearchService):
         ]
 
     def search(self, _query: str, _filters: Any) -> list[SearchHit]:
+        self.last_filters = _filters
         return list(self._hits)
 
 
 class FakeSemanticSearchService(SemanticSearchService):
     def __init__(self) -> None:  # noqa: D401
+        self.last_kwargs: dict[str, Any] = {}
         from doc3gpp.models.semantic_search import SemanticSearchHit
         self._hits = [
             SemanticSearchHit(
@@ -233,6 +236,7 @@ class FakeSemanticSearchService(SemanticSearchService):
         ]
 
     def search(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+        self.last_kwargs = dict(_kwargs)
         return list(self._hits)
 
 
@@ -1341,6 +1345,66 @@ def test_search_sem_json(client: TestClient) -> None:
         "min_chunk_distance", "best_chunk_id", "hit",
     }
     assert set(body[0]["hit"]) == {"tdoc_id", "title", "ftp_url", "wis"}
+
+
+def test_search_query_tdoc_id_filter_forwarded(client: TestClient) -> None:
+    """``GET /search?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&tdoc-id=R5-260001")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_filters is not None
+    assert service.last_filters.tdoc_id == "R5-260001"
+
+
+def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
+    """``GET /search?q=foo&tdoc-id=`` is 200 and tdoc_id stays None."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&tdoc-id=")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_filters is not None
+    assert service.last_filters.tdoc_id is None
+
+
+def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
+    """``GET /search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get("/search/sem?q=foo&tdoc-id=R5-260001")
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    filters = service.last_kwargs.get("filters")
+    assert filters is not None
+    assert filters.tdoc_id == "R5-260001"
+
+
+def test_search_form_renders_tdoc_input_fts5(client: TestClient) -> None:
+    """The FTS5 search form carries a tdoc-id input with the round-tripped value."""
+    html = client.get("/search?q=foo&tdoc-id=R5-260001").text
+    assert 'name="tdoc-id"' in html
+    assert 'value="R5-260001"' in html
+
+
+def test_search_form_renders_tdoc_input_sem(client: TestClient) -> None:
+    """The semantic search form carries a tdoc-id input with the round-tripped value."""
+    html = client.get("/search/sem?q=foo&tdoc-id=R5-260001").text
+    assert 'name="tdoc-id"' in html
+    assert 'value="R5-260001"' in html
 
 
 # ---------------------------------------------------------------------------

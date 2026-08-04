@@ -347,3 +347,12 @@ details.hit-details summary {
   margin: 0.25rem 0 0;
   overflow-x: auto;
 }
+
+/* TDoc list: status-derived row backgrounds (soft pastels, dark text) */
+tr.status-lgreen td { background: #e2f5d8; }
+tr.status-green td { background: #c8e6c9; }
+tr.status-vanilla td { background: #fff3cd; }
+tr.status-red td { background: #f8d7da; }
+tr.status-grey td { background: #e2e3e5; }
+tr.status-pink td { background: #fce4ec; }
+tr.status-lblue td { background: #d1ecf1; }

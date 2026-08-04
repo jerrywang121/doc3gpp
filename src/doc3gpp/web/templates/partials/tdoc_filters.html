@@ -59,6 +59,13 @@
   <label>Uploaded date
     <input type="text" name="uploaded-date" placeholder=">= 'YYYY-MM-DD'" value="{{ filters.uploaded_date or '' }}">
   </label>
+  <label>Columns
+    <select name="fields" multiple size="5">
+      {% for key, label in column_labels.items() %}
+        <option value="{{ key }}" {% if key in fields %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <label>Limit
     <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
   </label>

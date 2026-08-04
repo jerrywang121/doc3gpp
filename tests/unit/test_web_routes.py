@@ -126,6 +126,7 @@ class FakeTDocService(TDocService):
                     spec="38.523-3",
                     release="Rel-18",
                     type="CR",
+                    status="Approved",
                     uploaded_date=date(2026, 5, 2),
                 ),
                 meeting_name="RAN5#99-e",
@@ -139,6 +140,7 @@ class FakeTDocService(TDocService):
                     spec="38.523-3",
                     release="Rel-18",
                     type="CR",
+                    status="Revised",
                     uploaded_date=date(2026, 5, 3),
                 ),
                 meeting_name="RAN5#99-e",
@@ -1190,9 +1192,122 @@ def test_tdoc_content_html_zip_wrapped_cache(
     assert "TTCN heading" in response.text
 
 
+def test_tdoc_list_default_columns_use_status(client: TestClient) -> None:
+    """Default HTML columns: Status replaces Uploaded; no fields param needed."""
+    html = client.get("/tdocs").text
+    assert "<th>Status</th>" in html
+    assert "<th>Uploaded</th>" not in html
+
+
+def test_tdoc_list_status_row_colors(client: TestClient) -> None:
+    """Rows carry the status-derived class on the <tr>."""
+    html = client.get("/tdocs").text
+    assert '<tr class="status-green">' in html
+    assert '<tr class="status-vanilla">' in html
+
+
+def test_tdoc_list_custom_fields(client: TestClient) -> None:
+    """?fields=tdoc_id&fields=related_wis renders only those columns + action."""
+    html = client.get(
+        "/tdocs?fields=tdoc_id&fields=related_wis",
+    ).text
+    assert "<th>TDoc ID</th>" in html
+    assert "<th>Related WIs</th>" in html
+    assert "<th>Status</th>" not in html
+
+
+def test_tdoc_list_unknown_field_returns_400(client: TestClient) -> None:
+    """?fields=bogus is 400 with the invalid_filter envelope."""
+    response = client.get("/tdocs?fields=bogus")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
+def test_tdoc_list_fields_select_renders(client: TestClient) -> None:
+    """The filter form carries the multi-select with all column options."""
+    html = client.get("/tdocs").text
+    assert 'name="fields"' in html
+    assert 'value="related_wis"' in html
+    assert 'value="status"' in html
+
+
+def test_tdoc_list_fields_persist_in_pagination(
+    app_with_fakes: FastAPI,
+) -> None:
+    """The fields selection is preserved in pagination links."""
+    from doc3gpp.web.deps import get_tdoc_service
+
+    class _ManyRowsTDocService(FakeTDocService):
+        def list_recent_with_meeting(
+            self, *, limit: int = 50, offset: int = 0, **_kwargs: Any,
+        ) -> list[TDocWithMeeting]:
+            return [
+                TDocWithMeeting(
+                    tdoc=TDoc(
+                        tdoc_id=f"R5-{260001 + offset + i:06d}",
+                        title=f"row {offset + i}",
+                        meeting_id=1,
+                        ftp_url=f"R5/26.{(offset + i):03d}/R5-{260001 + offset + i:06d}.zip",
+                        spec="38.523-3",
+                        release="Rel-18",
+                        type="CR",
+                        status="Agreed",
+                        uploaded_date=date(2026, 5, 2),
+                    ),
+                    meeting_name="RAN5#99-e",
+                )
+                for i in range(limit)
+            ]
+
+    app_with_fakes.dependency_overrides[get_tdoc_service] = (
+        lambda: _ManyRowsTDocService()
+    )
+    with TestClient(app_with_fakes) as c:
+        response = c.get("/tdocs?limit=50&fields=tdoc_id&fields=status")
+    assert response.status_code == 200
+    assert "fields=tdoc_id" in response.text
+    assert "fields=status" in response.text
+
+
 # ---------------------------------------------------------------------------
-# TSGs
+# status_color_class
 # ---------------------------------------------------------------------------
+
+
+def test_status_color_class_mapping() -> None:
+    """Each status needle maps to its class, case-insensitively."""
+    from doc3gpp.web.templates_setup import status_color_class
+
+    cases = {
+        "Conditionally Approved": "status-lgreen",
+        "Partially Approved": "status-lgreen",
+        "Agreed": "status-green",
+        "approved": "status-green",
+        "Revised": "status-vanilla",
+        "Reissued": "status-vanilla",
+        "Merged": "status-vanilla",
+        "Rejected": "status-red",
+        "Withdrawn": "status-grey",
+        "Postponed": "status-pink",
+        "Noted": "status-lblue",
+        "Treated": "status-lblue",
+        "Endorsed": "status-lblue",
+    }
+    for value, expected in cases.items():
+        assert status_color_class(value) == expected, value
+
+
+def test_status_color_class_no_match_and_empty() -> None:
+    """No matching needle (or None/empty) -> no class."""
+    from doc3gpp.web.templates_setup import status_color_class
+
+    assert status_color_class("Submitted") == ""
+    assert status_color_class("") == ""
+    assert status_color_class(None) == ""
+
+
+
 
 
 def test_tsg_list_renders_html(client: TestClient) -> None:

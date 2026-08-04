@@ -37,6 +37,7 @@ from doc3gpp.web.deps import (
     get_meeting_service,
     get_search_service,
     get_semantic_search_service,
+    get_settings,
     get_tdoc_file_repo,
     get_tdoc_service,
     get_tsg_service,
@@ -72,6 +73,7 @@ class FakeMeetingService(MeetingService):
                 start_doc="R5-260001",
                 end_doc="R5-260500",
                 tsg="R5",
+                ftp_url="TSGR5_99e/",
             ),
             Meeting(
                 meeting_id=2,
@@ -150,7 +152,12 @@ class FakeTDocService(TDocService):
 class FakeTsgService(TsgService):
     def __init__(self) -> None:  # noqa: D401
         self._tsgs = [
-            Tsg(tsg_name="RAN Plenary", short_name="RP", description="RAN Plenary"),
+            Tsg(
+                tsg_name="RAN Plenary",
+                short_name="RP",
+                description="RAN Plenary",
+                url="https://www.3gpp.org/ran",
+            ),
             Tsg(tsg_name="RAN WG5", short_name="R5", description="RAN WG5"),
         ]
 
@@ -245,6 +252,7 @@ def _build_app_with_fakes(
     if cache_dir is not None:
         settings.cache.dir = cache_dir
     app = build_app(settings)
+    app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_meeting_service] = lambda: FakeMeetingService()
     app.dependency_overrides[get_tdoc_service] = lambda: FakeTDocService()
     app.dependency_overrides[get_tsg_service] = lambda: FakeTsgService()
@@ -281,6 +289,36 @@ def test_landing_json_payload(client: TestClient) -> None:
     body = response.json()
     assert "sections" in body
     assert any(s["href"] == "/meetings" for s in body["sections"])
+
+
+def test_nav_order_home_tsgs_meetings_tdocs_wis_search_jobs(
+    client: TestClient,
+) -> None:
+    """The header nav lists Home, TSGs, Meetings, TDocs, WIs, Search, Jobs."""
+    html = client.get("/").text
+    nav = html.split('<nav class="topnav">')[1].split("</nav>")[0]
+    hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
+    assert hrefs == ["/", "/tsgs", "/meetings", "/tdocs", "/wis", "/search", "/jobs"]
+
+
+def test_nav_hides_jobs_badge_when_no_pending_jobs(client: TestClient) -> None:
+    """No queued jobs → the Jobs nav link has no badge."""
+    html = client.get("/").text
+    assert 'href="/jobs"' in html
+    assert 'class="nav-badge"' not in html
+
+
+def test_nav_shows_pending_jobs_badge(client: TestClient) -> None:
+    """Queued jobs → the Jobs nav link shows a count badge."""
+    from doc3gpp.web.deps import get_pending_jobs
+
+    app = client.app
+    app.dependency_overrides[get_pending_jobs] = lambda: 2
+    try:
+        html = client.get("/").text
+    finally:
+        app.dependency_overrides.pop(get_pending_jobs, None)
+    assert 'class="nav-badge">2</span>' in html
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +406,26 @@ def test_meetings_list_sync_button_posts_meeting_id(client: TestClient) -> None:
         assert f'name="meeting_id" value="{meeting_id}"' in html
 
 
+def test_meetings_list_name_links_to_portal(client: TestClient) -> None:
+    """Each meeting Name cell links to the 3GPP portal meeting page."""
+    html = client.get("/meetings").text
+    assert (
+        '<a href="https://portal.3gpp.org/Home.aspx#/meeting?MtgId=1">RAN5#99-e</a>'
+        in html
+    )
+    assert (
+        '<a href="https://portal.3gpp.org/Home.aspx#/meeting?MtgId=2">SA2#150-e</a>'
+        in html
+    )
+
+
+def test_meetings_list_sync_queued_indication(client: TestClient) -> None:
+    """The sync form shows a brief 'queued' indication after the request."""
+    html = client.get("/meetings").text
+    assert 'hx-on::after-request="this.querySelector(\'.sync-queued\').style.display = \'inline\'"' in html
+    assert '<span class="sync-queued" style="display:none">queued</span>' in html
+
+
 def test_meeting_show_404(client: TestClient) -> None:
     """``GET /meetings/{unknown}`` returns 404 with the canonical envelope."""
     response = client.get("/meetings/9999")
@@ -413,6 +471,23 @@ def test_meeting_show_links_to_tdocs(client: TestClient) -> None:
     html = client.get("/meetings/1").text
     assert "View TDocs for this meeting" in html
     assert 'href="/tdocs?meeting_id=1&amp;limit=200"' in html
+
+
+def test_meeting_show_ftp_url_links_to_3gpp_ftp(client: TestClient) -> None:
+    """The FTP URL field links to the 3GPP FTP site."""
+    html = client.get("/meetings/1").text
+    assert (
+        '<a href="https://www.3gpp.org/ftp/TSGR5_99e/"><code>TSGR5_99e/</code></a>'
+        in html
+    )
+
+
+def test_meeting_show_sync_queued_indication(client: TestClient) -> None:
+    """The detail-page sync form shows a 'Sync job queued' indication."""
+    html = client.get("/meetings/1").text
+    assert 'hx-post="/jobs/sync_tdocs"' in html
+    assert 'hx-on::after-request="this.querySelector(\'.sync-queued\').style.display = \'inline\'"' in html
+    assert '<span class="sync-queued" style="display:none">Sync job queued</span>' in html
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +591,167 @@ def test_tdoc_show_404(client: TestClient, sqlite_env: Any) -> None:
     assert response.status_code == 404
     body = response.json()
     assert body["error"] == "tdoc_not_found"
+
+
+def test_tdoc_show_ftp_url_links_to_3gpp_ftp_when_not_cached(
+    client: TestClient, sqlite_env: Any, tmp_path: Any,
+) -> None:
+    """Without a cached zip the FTP URL field links to the 3GPP FTP site."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5-260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url=url),
+    )
+    new_app = _build_app_with_fakes(cache_dir=tmp_path)
+    with TestClient(new_app) as new_client:
+        html = new_client.get("/tdocs/R5-260001").text
+    assert f'<a href="https://www.3gpp.org/ftp/{url}">' in html
+    assert "href=\"/tdocs/R5-260001/download\"" not in html
+
+
+def test_tdoc_show_ftp_url_links_to_cached_zip_download(
+    client: TestClient, sqlite_env: Any, tmp_path: Any,
+) -> None:
+    """With a cached zip the FTP URL field links to the local download route."""
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5-260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url=url),
+    )
+    cache_file = derive_cache_file(url)
+    zip_path = tmp_path / "zips" / cache_file
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    zip_path.write_bytes(b"PK\x03\x04 fake zip bytes")
+
+    new_app = _build_app_with_fakes(cache_dir=tmp_path)
+    with TestClient(new_app) as new_client:
+        html = new_client.get("/tdocs/R5-260001").text
+    assert 'href="/tdocs/R5-260001/download"' in html
+    assert "https://www.3gpp.org/ftp/" not in html
+
+
+def test_tdoc_download_serves_cached_zip(
+    client: TestClient, sqlite_env: Any, tmp_path: Any,
+) -> None:
+    """``GET /tdocs/{id}/download`` serves the cached zip bytes."""
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5-260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url=url),
+    )
+    cache_file = derive_cache_file(url)
+    zip_path = tmp_path / "zips" / cache_file
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    zip_path.write_bytes(b"PK\x03\x04 fake zip bytes")
+
+    new_app = _build_app_with_fakes(cache_dir=tmp_path)
+    with TestClient(new_app) as new_client:
+        response = new_client.get("/tdocs/R5-260001/download")
+    assert response.status_code == 200
+    assert response.content == b"PK\x03\x04 fake zip bytes"
+    assert response.headers["content-type"] == "application/zip"
+
+
+def test_tdoc_download_cache_miss_404(
+    client: TestClient, sqlite_env: Any, tmp_path: Any,
+) -> None:
+    """``GET /tdocs/{id}/download`` returns 404 with a hint on cache miss."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url="R5/missing.zip"),
+    )
+    new_app = _build_app_with_fakes(cache_dir=tmp_path)
+    with TestClient(new_app) as new_client:
+        response = new_client.get("/tdocs/R5-260001/download")
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"] == "cache_miss"
+    assert body["hint"] == "run: doc3gpp tdoc parse --tdoc R5-260001"
+
+
+def test_tdoc_show_ttcn_changed_functions(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The TTCN section lists the changed_functions aggregate."""
+    from doc3gpp.models.tdoc_cr import TDocCRTTCNDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260001",
+            ftp_url=url,
+            testcase="TC_1",
+            changed_functions=["mod_a.fn_one", "mod_b.fn_two"],
+        ),
+    )
+    response = client.get("/tdocs/R5s260001")
+    assert response.status_code == 200
+    assert "<dt>Changed functions</dt>" in response.text
+    assert "<code>mod_a.fn_one</code>" in response.text
+    assert "<code>mod_b.fn_two</code>" in response.text
+
+
+def test_tdoc_show_auxiliary_files_link_to_ftp(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """Auxiliary files link to their 3GPP FTP URLs."""
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.web.deps import get_tdoc_file_repo
+
+    create_schema()
+    url = "R5/26.001/R5-260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url=url),
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5-260001",
+                type="revision",
+                file="R5-260001r1.zip",
+                ftp_url="R5/26.001/R5-260001r1.zip",
+            ),
+        ],
+    )
+    app = client.app
+    app.dependency_overrides[get_tdoc_file_repo] = (
+        lambda: SQLAlchemyTDocFileRepository()
+    )
+    try:
+        response = client.get("/tdocs/R5-260001")
+    finally:
+        app.dependency_overrides.pop(get_tdoc_file_repo, None)
+    assert response.status_code == 200
+    assert (
+        '<a href="https://www.3gpp.org/ftp/R5/26.001/R5-260001r1.zip">'
+        "<code>R5/26.001/R5-260001r1.zip</code></a> (revision)"
+    ) in response.text
 
 
 def test_tdoc_content_markdown_cache_hit(
@@ -921,6 +1157,21 @@ def test_tsg_list_renders_html(client: TestClient) -> None:
     response = client.get("/tsgs")
     assert response.status_code == 200
     assert "RAN Plenary" in response.text
+
+
+def test_tsg_list_name_links_to_tsg_url(client: TestClient) -> None:
+    """A TSG with a URL links its Name cell to the TSG's own URL."""
+    html = client.get("/tsgs").text
+    assert '<a href="https://www.3gpp.org/ran">RAN Plenary</a>' in html
+    # A TSG without a URL renders plain text, not a link.
+    assert "<td>RAN WG5</td>" in html
+
+
+def test_tsg_list_show_links_to_meetings_filtered(client: TestClient) -> None:
+    """The show link jumps to the meetings page pre-filtered by TSG."""
+    html = client.get("/tsgs").text
+    assert 'href="/meetings?tsg=RP"' in html
+    assert 'href="/meetings?tsg=R5"' in html
 
 
 def test_tsg_list_json(client: TestClient) -> None:

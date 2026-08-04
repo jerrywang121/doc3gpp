@@ -28,7 +28,7 @@ from doc3gpp.models.search import SearchFilters, SearchHit
 from doc3gpp.models.semantic_search import SemanticSearchHit
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
-from doc3gpp.web.deps import get_search_service, get_semantic_search_service
+from doc3gpp.web.deps import get_pending_jobs, get_search_service, get_semantic_search_service
 from doc3gpp.web.errors import InvalidFilterError, SettingsDisabledError
 from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
 from doc3gpp.web.templates_setup import templates
@@ -124,6 +124,7 @@ async def search_query(
     limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
     service: SearchService | None = Depends(get_search_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``search_results.html`` or a JSON list of FTS5 hits."""
     if service is None:
@@ -161,6 +162,7 @@ async def search_query(
             "total": len(hits),
             "limit": parsed_limit,
             "error": error,
+            "pending_jobs": pending_jobs,
             "filters": {
                 "tsg": tsg or "",
                 "meeting": meeting or "",
@@ -182,6 +184,7 @@ async def search_semantic(
     limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
     service: SemanticSearchService | None = Depends(get_semantic_search_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``search_results.html`` or a JSON list of semantic hits."""
     if service is None:
@@ -227,6 +230,7 @@ async def search_semantic(
             "limit": parsed_limit,
             "hits": hits,
             "error": error,
+            "pending_jobs": pending_jobs,
         },
     )
 

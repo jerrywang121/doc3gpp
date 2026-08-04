@@ -305,6 +305,7 @@ async def list_jobs(
         if len(jobs) == parsed_limit
         else None
     )
+    pending_jobs = len(job_repo.list(status=JobStatus.QUEUED))
     return templates.TemplateResponse(
         request=request,
         name="job_status.html",
@@ -316,6 +317,7 @@ async def list_jobs(
             "next_offset": next_offset,
             "filter_status": parsed_status.value if parsed_status else "",
             "limit": parsed_limit,
+            "pending_jobs": pending_jobs,
         },
     )
 

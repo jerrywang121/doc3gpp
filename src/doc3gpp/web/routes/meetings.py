@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
-from doc3gpp.web.deps import get_meeting_service
+from doc3gpp.web.deps import get_meeting_service, get_pending_jobs
 from doc3gpp.web.filters import (
     is_htmx_request,
     parse_int_query,
@@ -66,6 +66,7 @@ async def list_meetings(
     offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
     service: MeetingService = Depends(get_meeting_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``meeting_list.html`` or a JSON list of meetings.
 
@@ -114,6 +115,7 @@ async def list_meetings(
             "limit": parsed_limit,
             "offset": parsed_offset,
             "next_offset": next_offset,
+            "pending_jobs": pending_jobs,
             "filters": {
                 "tsg": parsed_tsg or "",
                 "year": year,
@@ -131,6 +133,7 @@ async def show_meeting(
     meeting_id: int = PathParam(...),
     format: str | None = Query(default=None, alias="format"),
     service: MeetingService = Depends(get_meeting_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``meeting_show.html`` (default) or a JSON meeting record."""
     meeting: Meeting | None = service.get_by_id(meeting_id)
@@ -143,7 +146,11 @@ async def show_meeting(
     return templates.TemplateResponse(
         request=request,
         name="meeting_show.html",
-        context={"active_nav": "meetings", "meeting": meeting},
+        context={
+            "active_nav": "meetings",
+            "meeting": meeting,
+            "pending_jobs": pending_jobs,
+        },
     )
 
 

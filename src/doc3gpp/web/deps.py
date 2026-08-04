@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import Request
 from sqlalchemy.engine import Engine
 
+from doc3gpp.models.jobs import JobStatus
 from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
@@ -80,6 +81,20 @@ def get_job_repo(request: Request) -> JobRepository:
     return get_services(request).job_repo
 
 
+def get_pending_jobs(request: Request) -> int:
+    """Return the number of queued background jobs (for the nav badge).
+
+    Counts ``QUEUED`` rows via the :class:`JobRepository` protocol's
+    ``list(status=...)``; a missing ``jobs`` table (fresh database
+    before schema bootstrap) degrades to ``0`` instead of 500-ing the
+    page chrome.
+    """
+    try:
+        return len(get_job_repo(request).list(status=JobStatus.QUEUED))
+    except Exception:
+        return 0
+
+
 def get_job_worker(request: Request) -> JobWorkerHandle:
     """Return the (placeholder) :class:`JobWorkerHandle` for the running app."""
     return get_state(request).jobs
@@ -90,6 +105,7 @@ __all__ = [
     "get_job_repo",
     "get_job_worker",
     "get_meeting_service",
+    "get_pending_jobs",
     "get_search_service",
     "get_semantic_search_service",
     "get_services",

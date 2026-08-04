@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
+from doc3gpp.web.deps import get_pending_jobs
 from doc3gpp.web.render import to_jsonable
 from doc3gpp.web.templates_setup import templates
 
@@ -60,6 +61,7 @@ _SECTIONS: list[dict[str, str]] = [
 async def landing(
     request: Request,
     format: str | None = Query(default=None, alias="format"),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``landing.html`` (default) or a JSON sections list."""
     if format == "json":
@@ -67,7 +69,7 @@ async def landing(
     return templates.TemplateResponse(
         request=request,
         name="landing.html",
-        context={"sections": _SECTIONS, "active_nav": "home"},
+        context={"sections": _SECTIONS, "active_nav": "home", "pending_jobs": pending_jobs},
     )
 
 

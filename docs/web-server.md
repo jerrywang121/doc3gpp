@@ -161,6 +161,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tdocs` | List TDocs (`?format=json`). |
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
 | GET | `/tdocs/{id}/content` | Parsed markdown/HTML content (`?format=markdown\|html`). 404 `cache_miss` with a hint when unparsed. |
+| GET | `/tdocs/{id}/download` | Download the cached source zip (404 `cache_miss` with a hint when unparsed). |
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
@@ -182,9 +183,25 @@ JSON. Append `?format=html` (or omit) for the browsable HTML view.
 The meeting list shows a `↻` sync symbol per meeting coloured by TDoc-list
 sync freshness — green (`≤ 24h` ago), orange (`> 24h` ago), grey (never
 synced). Clicking it enqueues the TDoc-list sync for that meeting (same job
-as the detail page's sync button). The meeting detail page shows
-`start_doc`/`end_doc`, the last-sync timestamp (`YYYY-MM-DD HH:MM UTC`), and
-a link to the meeting's TDocs.
+as the detail page's sync button) and flashes a brief "queued" indication
+next to the symbol. Meeting names link to the 3GPP portal
+(`https://portal.3gpp.org/Home.aspx#/meeting?MtgId={id}`). The meeting
+detail page shows `start_doc`/`end_doc`, the last-sync timestamp
+(`YYYY-MM-DD HH:MM UTC`), a link to the meeting's TDocs, and an FTP URL
+field linking to `https://www.3gpp.org/ftp/{ftp_url}`; its sync button
+flashes a "Sync job queued" indication after enqueueing.
+
+The header nav is ordered Home, TSGs, Meetings, TDocs, WIs, Search, Jobs.
+The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)
+when any are pending. The TSG list links each TSG name to the TSG's own URL
+and its `show` link jumps to the meetings list pre-filtered to that TSG
+(`/meetings?tsg={short_name}`).
+
+The TDoc detail page links the FTP URL field to the cached source zip
+(`/tdocs/{id}/download`) when a cached copy exists, otherwise to
+`https://www.3gpp.org/ftp/{ftp_url}`. The TTCN section lists the
+`changed_functions` aggregate when present, and auxiliary files link to
+their FTP locations.
 
 The filter form (submitted via HTMX to `GET /meetings`, swapping the
 `#results` partial) supports `tsg`, `year`, `location`, `tdoc`, and

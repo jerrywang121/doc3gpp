@@ -13,15 +13,18 @@
     {% if meeting.start_doc %}<dt>Start doc</dt><dd>{{ meeting.start_doc }}</dd>{% endif %}
     {% if meeting.end_doc %}<dt>End doc</dt><dd>{{ meeting.end_doc }}</dd>{% endif %}
     {% if meeting.location %}<dt>Location</dt><dd>{{ meeting.location }}</dd>{% endif %}
-    {% if meeting.ftp_url %}<dt>FTP URL</dt><dd><code>{{ meeting.ftp_url }}</code></dd>{% endif %}
+    {% if meeting.ftp_url %}<dt>FTP URL</dt><dd><a href="https://www.3gpp.org/ftp/{{ meeting.ftp_url }}"><code>{{ meeting.ftp_url }}</code></a></dd>{% endif %}
     <dt>Last sync</dt>
     <dd>{% if meeting.tdoc_list_last_sync %}{{ meeting.tdoc_list_last_sync | dt_short }} <span class="muted">UTC</span>{% else %}Never{% endif %}</dd>
   </dl>
 
   <p><a href="/tdocs?meeting_id={{ meeting.meeting_id }}&amp;limit=200">View TDocs for this meeting</a></p>
 
-  <form method="post" action="/jobs/sync_tdocs" class="sync-form">
+  <form method="post" action="/jobs/sync_tdocs" class="sync-form"
+        hx-post="/jobs/sync_tdocs" hx-swap="none"
+        hx-on::after-request="this.querySelector('.sync-queued').style.display = 'inline'">
     <input type="hidden" name="meeting_id" value="{{ meeting.meeting_id }}">
     <button type="submit" class="btn primary">Sync this meeting's TDocs</button>
+    <span class="sync-queued" style="display:none">Sync job queued</span>
   </form>
 {% endblock %}

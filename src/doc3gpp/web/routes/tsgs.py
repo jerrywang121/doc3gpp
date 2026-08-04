@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tsg_service import TsgService
-from doc3gpp.web.deps import get_meeting_service, get_tsg_service
+from doc3gpp.web.deps import get_meeting_service, get_pending_jobs, get_tsg_service
 from doc3gpp.web.errors import TSGNotFoundError
 from doc3gpp.web.render import to_jsonable, tsg_rows
 from doc3gpp.web.templates_setup import templates
@@ -36,6 +36,7 @@ async def list_tsgs(
     request: Request,
     format: str | None = Query(default=None, alias="format"),
     service: TsgService = Depends(get_tsg_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``tsg_list.html`` or a JSON list of TSGs.
 
@@ -50,7 +51,7 @@ async def list_tsgs(
     return templates.TemplateResponse(
         request=request,
         name="tsg_list.html",
-        context={"active_nav": "tsgs", "tsgs": tsgs},
+        context={"active_nav": "tsgs", "tsgs": tsgs, "pending_jobs": pending_jobs},
     )
 
 
@@ -61,6 +62,7 @@ async def show_tsg(
     format: str | None = Query(default=None, alias="format"),
     tsg_service: TsgService = Depends(get_tsg_service),
     meeting_service: MeetingService = Depends(get_meeting_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``tsg_show.html`` or a JSON payload with TSG + meetings."""
     tsg: Tsg | None = tsg_service.get_by_short_name(short_name)
@@ -80,6 +82,7 @@ async def show_tsg(
             "active_nav": "tsgs",
             "tsg": tsg,
             "meetings": meetings,
+            "pending_jobs": pending_jobs,
         },
     )
 

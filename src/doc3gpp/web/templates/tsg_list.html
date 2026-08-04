@@ -17,10 +17,10 @@
       <tbody>
         {% for tsg in tsgs %}
           <tr>
-            <td>{{ tsg.tsg_name }}</td>
+            <td>{% if tsg.url %}<a href="{{ tsg.url }}">{{ tsg.tsg_name }}</a>{% else %}{{ tsg.tsg_name }}{% endif %}</td>
             <td><code>{{ tsg.short_name }}</code></td>
             <td>{{ tsg.description or '-' }}</td>
-            <td><a href="/tsgs/{{ tsg.short_name }}">show</a></td>
+            <td><a href="/meetings?tsg={{ tsg.short_name }}">show</a></td>
           </tr>
         {% endfor %}
       </tbody>

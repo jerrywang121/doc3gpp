@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi import Path as PathParam
 from fastapi import Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from markdown_it import MarkdownIt
 
 from doc3gpp.models.tdoc import TDoc
@@ -36,7 +36,7 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-from doc3gpp.web.deps import get_settings, get_tdoc_file_repo, get_tdoc_service
+from doc3gpp.web.deps import get_pending_jobs, get_settings, get_tdoc_file_repo, get_tdoc_service
 from doc3gpp.web.errors import CacheMissError, InvalidFilterError
 from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
 from doc3gpp.web.render import to_jsonable, tdoc_rows
@@ -117,6 +117,7 @@ async def list_tdocs(
     offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
     service: TDocService = Depends(get_tdoc_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``tdoc_list.html`` or a JSON list of TDoc rows.
 
@@ -178,6 +179,7 @@ async def list_tdocs(
             "limit": parsed_limit,
             "offset": parsed_offset,
             "next_offset": next_offset,
+            "pending_jobs": pending_jobs,
             "filters": {
                 "tdoc_id": tdoc_id or "",
                 "meeting": meeting or "",
@@ -209,6 +211,7 @@ async def show_tdoc(
     tdoc_id: str = PathParam(...),
     format: str | None = Query(default=None, alias="format"),
     file_repo: Any = Depends(get_tdoc_file_repo),
+    settings: Settings = Depends(get_settings),
 ) -> Any:
     """Render ``tdoc_show.html`` or a :class:`TDocShowRecord` JSON payload."""
     repos = _build_show_repos(request, file_repo)
@@ -219,10 +222,19 @@ async def show_tdoc(
     if format == "json":
         return JSONResponse(content=to_jsonable(record))
 
+    has_cached_zip = False
+    if record.tdoc.ftp_url:
+        cache_file = derive_cache_file(record.tdoc.ftp_url)
+        has_cached_zip = (Path(settings.cache.dir) / "zips" / cache_file).exists()
+
     return templates.TemplateResponse(
         request=request,
         name="tdoc_show.html",
-        context={"active_nav": "tdocs", "record": record},
+        context={
+            "active_nav": "tdocs",
+            "record": record,
+            "has_cached_zip": has_cached_zip,
+        },
     )
 
 
@@ -232,6 +244,7 @@ async def tdoc_content(
     tdoc_id: str = PathParam(...),
     format: str = Query(default="html"),
     settings: Settings = Depends(get_settings),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Response:
     """Return cached markdown bytes or render them as HTML."""
     tdoc_repo = SQLAlchemyTDocRepository()
@@ -278,10 +291,45 @@ async def tdoc_content(
                 "active_nav": "tdocs",
                 "tdoc_id": tdoc_id,
                 "html_content": html_content,
+                "pending_jobs": pending_jobs,
             },
         )
     raise InvalidFilterError(
         f"format must be 'markdown' or 'html', got: {format!r}"
+    )
+
+
+@router.get("/{tdoc_id}/download", include_in_schema=False)
+async def tdoc_download(
+    tdoc_id: str = PathParam(...),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Serve the cached 3GPP zip bytes for ``tdoc_id`` when available.
+
+    The ``zips/`` cache subtree holds the raw bytes 3GPP served for the
+    TDoc's ``ftp_url`` (see ``derive_cache_file``). A cache miss maps to
+    the canonical ``cache_miss`` envelope with a hint pointing at
+    ``doc3gpp tdoc parse --tdoc <id>``.
+    """
+    tdoc_repo = SQLAlchemyTDocRepository()
+    tdoc: TDoc | None = tdoc_repo.get_by_id(tdoc_id)
+    if tdoc is None or not tdoc.ftp_url:
+        raise TDocNotFoundError(
+            f"TDoc '{tdoc_id}' is not stored or has no ftp_url"
+        )
+
+    cache_file = derive_cache_file(tdoc.ftp_url)
+    zip_path = Path(settings.cache.dir) / "zips" / cache_file
+    if not zip_path.exists():
+        raise CacheMissError(
+            f"No cached zip for TDoc {tdoc_id}.",
+            hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id}",
+        )
+
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=cache_file,
     )
 
 

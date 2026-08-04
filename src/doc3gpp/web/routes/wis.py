@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from doc3gpp.services.wi_service import WiService
-from doc3gpp.web.deps import get_wi_service
+from doc3gpp.web.deps import get_pending_jobs, get_wi_service
 from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
 from doc3gpp.web.render import wi_rows
 from doc3gpp.web.templates_setup import templates
@@ -38,6 +38,7 @@ async def list_wis(
     limit: str | None = Query(default="50"),
     format: str | None = Query(default=None, alias="format"),
     service: WiService = Depends(get_wi_service),
+    pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``wi_list.html`` or a JSON list of WIs.
 
@@ -77,6 +78,7 @@ async def list_wis(
             "limit": parsed_limit,
             "offset": 0,
             "next_offset": None,
+            "pending_jobs": pending_jobs,
             "filters": {
                 "tsg": tsg or "",
                 "name": name or "",

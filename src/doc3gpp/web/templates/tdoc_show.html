@@ -17,7 +17,16 @@
       <dt>Release</dt><dd>{{ record.tdoc.release or '-' }}</dd>
       <dt>CR Num</dt><dd>{{ record.tdoc.cr_num or '-' }}</dd>
       <dt>CR Cat</dt><dd>{{ record.tdoc.cr_cat or '-' }}</dd>
-      <dt>FTP URL</dt><dd><code>{{ record.tdoc.ftp_url or '-' }}</code></dd>
+      <dt>FTP URL</dt>
+      <dd>
+        {% if record.tdoc.ftp_url %}
+          {% if has_cached_zip %}
+            <a href="/tdocs/{{ record.tdoc.tdoc_id }}/download"><code>{{ record.tdoc.ftp_url }}</code></a>
+          {% else %}
+            <a href="https://www.3gpp.org/ftp/{{ record.tdoc.ftp_url }}"><code>{{ record.tdoc.ftp_url }}</code></a>
+          {% endif %}
+        {% else %}-{% endif %}
+      </dd>
       <dt>Uploaded</dt><dd>{{ record.tdoc.uploaded_date.isoformat() if record.tdoc.uploaded_date else '-' }}</dd>
     </dl>
     {% if record.tdoc.ftp_url %}
@@ -61,6 +70,16 @@
         <dt>ATS version</dt><dd>{{ record.ttcn.ats_version or '-' }}</dd>
         <dt>TTCN release</dt><dd>{{ record.ttcn.ttcn_release or '-' }}</dd>
         <dt>Test suite</dt><dd>{{ record.ttcn.test_suite or '-' }}</dd>
+        {% if record.ttcn.changed_functions %}
+          <dt>Changed functions</dt>
+          <dd>
+            <ul class="changed-functions">
+              {% for fn in record.ttcn.changed_functions %}
+                <li><code>{{ fn }}</code></li>
+              {% endfor %}
+            </ul>
+          </dd>
+        {% endif %}
       </dl>
     </section>
   {% endif %}
@@ -77,7 +96,7 @@
       <h2>Auxiliary files</h2>
       <ul>
         {% for file in record.files %}
-          <li><code>{{ file.ftp_url }}</code> ({{ file.type }})</li>
+          <li><a href="https://www.3gpp.org/ftp/{{ file.ftp_url }}"><code>{{ file.ftp_url }}</code></a> ({{ file.type }})</li>
         {% endfor %}
       </ul>
     </section>

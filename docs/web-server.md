@@ -165,7 +165,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
-| GET | `/search` | FTS5 search (`?format=json`). |
+| GET | `/search` | FTS5 search (`?format=json`). User queries are normalised into a valid FTS5 `MATCH` expression (jargon like `nb-iot` is quoted, mirroring the CLI); a stopwords-only or empty query returns 400 `invalid_query`. |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. |
@@ -239,7 +239,10 @@ The MCP endpoint is mounted at `/mcp` (Streamable HTTP transport) whenever
 `get_job`, `cancel_job`, `list_jobs`.
 
 Every read tool returns exactly the bytes of the equivalent
-`?format=json` HTTP route. The job tools enqueue the same work as the
+`?format=json` HTTP route. `search_tdocs` normalises the query into a
+valid FTS5 `MATCH` expression exactly like the CLI and the `/search`
+route (a stopwords-only or empty query raises an MCP invalid-params
+error, `-32602`). The job tools enqueue the same work as the
 HTTP `POST /jobs/...` routes, but the enqueue envelope adds a `message`
 key (the only parity exception).
 

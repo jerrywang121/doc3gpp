@@ -251,3 +251,73 @@ def test_read_tools_parity_with_http_json(sqlite_env) -> None:
 
     get_engine.cache_clear()
     del state.engine
+
+
+def _state_and_search_server(search_corpus):
+    """Build state + MCP server with a real passthrough search service.
+
+    The default ``build_state`` composes a semantic-capable search
+    service whose reranker would lazy-load an embedding model; for
+    FTS5-focused tests we swap in a :class:`SearchService` wired to a
+    :class:`PassthroughReranker` so the FTS5 query path is real and no
+    model is touched.
+    """
+    from doc3gpp.services.search_service import PassthroughReranker, SearchService
+    from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
+
+    state, server = _state_and_server()
+    state.services.search = SearchService(
+        repo=SQLAlchemySearchIndexRepository(),
+        reranker=PassthroughReranker(),
+    )
+    return state, server
+
+
+def test_search_tdocs_normalises_jargon_queries(search_corpus) -> None:
+    """``nb-iot`` in an operator query must not crash FTS5.
+
+    Regression for the ``no such column: iot`` error that previously
+    produced a tool failure: the raw query was passed to FTS5 MATCH,
+    which parses ``nb-iot`` as ``nb - iot``.
+    """
+    import asyncio
+    import json
+
+    from doc3gpp.storage.db.session import get_engine
+
+    state, server = _state_and_search_server(search_corpus)
+
+    async def run():
+        return await server.call_tool(
+            "search_tdocs", {"query": "nb-iot AND scheduling", "limit": 20}
+        )
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    hits = json.loads(result.content[0].text)
+    assert hits
+    assert hits[0]["tdoc_id"] == "RP-2200456"
+    get_engine.cache_clear()
+    del state.engine
+
+
+def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> None:
+    """A stopwords-only query is a client error (invalid params), not a 500."""
+    import asyncio
+
+    import pytest
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    state, server = _state_and_search_server(search_corpus)
+
+    async def run():
+        return await server.call_tool("search_tdocs", {"query": "the"})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+    get_engine.cache_clear()
+    del state.engine

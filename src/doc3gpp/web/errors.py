@@ -11,7 +11,7 @@ Mapping table (``map_domain_error``):
 
 * :class:`TDocNotFoundError` / :class:`MeetingNotFoundError` /
   :class:`TSGNotFoundError` / :class:`WINotFoundError` -> 404
-* :class:`InvalidFilterError` -> 400
+* :class:`InvalidFilterError` / :class:`SearchQueryError` -> 400
 * :class:`JobNotFoundError` -> 404
 * :class:`JobAlreadyTerminalError` -> 409
 * :class:`SettingsDisabledError` -> 503
@@ -31,6 +31,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from doc3gpp.models.search import SearchQueryError
 from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 
@@ -95,6 +96,7 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
     CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
     InvalidFilterError: ("filter", MCP_CODE_INVALID_PARAMS),
+    SearchQueryError: ("query", MCP_CODE_INVALID_PARAMS),
 }
 
 
@@ -127,6 +129,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     TSGNotFoundError: "tsg_not_found",
     WINotFoundError: "wi_not_found",
     InvalidFilterError: "invalid_filter",
+    SearchQueryError: "invalid_query",
     JobNotFoundError: "job_not_found",
     JobAlreadyTerminalError: "job_already_terminal",
     SettingsDisabledError: "settings_disabled",
@@ -140,6 +143,7 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     TSGNotFoundError: 404,
     WINotFoundError: 404,
     InvalidFilterError: 400,
+    SearchQueryError: 400,
     JobNotFoundError: 404,
     JobAlreadyTerminalError: 409,
     SettingsDisabledError: 503,
@@ -210,6 +214,7 @@ __all__ = [
     "TSGNotFoundError",
     "WINotFoundError",
     "InvalidFilterError",
+    "SearchQueryError",
     "JobNotFoundError",
     "JobAlreadyTerminalError",
     "SettingsDisabledError",

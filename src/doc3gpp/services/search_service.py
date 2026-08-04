@@ -107,12 +107,23 @@ class SearchService:
     ) -> list[SearchHit]:
         """Run FTS5 ``MATCH`` + rerank + return hits.
 
+        The raw query is normalised into a valid FTS5 ``MATCH``
+        expression via :class:`SearchQueryBuilder` (the same path the
+        CLI uses) so jargon like ``nb-iot`` is quoted rather than
+        parsed as a column-minus-token; a stopwords-only or empty
+        query raises :class:`SearchQueryError`. The *raw* query is
+        forwarded to :meth:`EmbeddingReranker.rerank` because the
+        semantic reranker embeds the user's text verbatim.
+
         Forwards :attr:`_quiet` to :meth:`EmbeddingReranker.rerank` so
         the :class:`SemanticReranker`'s one-shot empty-vector warning
         is suppressed under ``--quiet``. ``PassthroughReranker``
         accepts and ignores the flag.
         """
-        hits = self._repo.search(query, filters)
+        from doc3gpp.cli_filters import SearchQueryBuilder
+
+        match_expr = SearchQueryBuilder(query).build()
+        hits = self._repo.search(match_expr, filters)
         return self._reranker.rerank(query, hits, quiet=self._quiet)
 
     def rebuild(

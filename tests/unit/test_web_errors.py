@@ -10,6 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from doc3gpp.models.search import SearchQueryError
 from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.errors import (
@@ -38,6 +39,7 @@ _MAPPING_CASES = [
     pytest.param(JobAlreadyTerminalError, "succeeded", 409, "job_already_terminal", id="job_already_terminal"),
     pytest.param(SettingsDisabledError, "feature off", 503, "settings_disabled", id="settings_disabled"),
     pytest.param(CacheMissError, "no cached markdown", 404, "cache_miss", id="cache_miss"),
+    pytest.param(SearchQueryError, "query has only stopwords", 400, "invalid_query", id="search_query_error"),
 ]
 
 
@@ -126,6 +128,7 @@ def test_register_error_handlers_attaches_handlers() -> None:
         JobAlreadyTerminalError,
         SettingsDisabledError,
         CacheMissError,
+        SearchQueryError,
         httpx.HTTPError,
         Exception,
     ):
@@ -138,6 +141,10 @@ _MCP_MAPPING_CASES = [
     pytest.param(InvalidFilterError, "bad filter", MCP_CODE_INVALID_PARAMS, "filter", id="invalid_filter"),
     pytest.param(JobNotFoundError, "abc", MCP_CODE_NOT_FOUND, "job", id="job_not_found"),
     pytest.param(MeetingNotFoundError, "bar", MCP_CODE_NOT_FOUND, "meeting", id="meeting_not_found"),
+    pytest.param(
+        SearchQueryError, "query has only stopwords",
+        MCP_CODE_INVALID_PARAMS, "query", id="search_query_error",
+    ),
 ]
 
 

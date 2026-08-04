@@ -105,16 +105,17 @@ The TDoc section of the tdoc detail page shows the `related_wis` field (populate
 
 A Jinja filter `status_color_class(status)` maps a status string to a CSS class. Matching is **case-insensitive substring**, first matching entry in the table wins. No match → no class (no background).
 
-| Match string | CSS class | Color |
-| --- | --- | --- |
-| `agreed`, `approved` | `status-green` | Green |
+| Match string                    | CSS class        | Color           |
+| ---------------------------------| ------------------| -----------------|
+| `conditionally`, `partially`    | `status-lgreen`  | Lightgreen      |
+| `agreed`, `approved`            | `status-green`   | Green           |
 | `revised`, `reissued`, `merged` | `status-vanilla` | Vanilla (cream) |
-| `rejected` | `status-red` | Red |
-| `withdrawn` | `status-grey` | Grey |
-| `postponed` | `status-pink` | Pink |
-| `noted`, `treated`, `endorsed`, `partially` | `status-lblue` | Light blue |
+| `rejected`                      | `status-red`     | Red             |
+| `withdrawn`                     | `status-grey`    | Grey            |
+| `postponed`                     | `status-pink`    | Pink            |
+| `noted`, `treated`, `endorsed`  | `status-lblue`   | Light blue      |
 
-Note: because `approved` matches before `partially`, a status like "Partially Approved" renders **green**. This follows the user-specified list order.
+Note: because `conditionally` / `partially` match first, a status like "Partially Approved" renders **lightgreen**.
 
 ### Changes
 
@@ -127,7 +128,7 @@ Note: because `approved` matches before `partially`, a status like "Partially Ap
 - **`src/doc3gpp/web/templates_setup.py`**: register `status_color_class` Jinja filter (sibling of `dt_short` / `sync_state`).
 - **`src/doc3gpp/web/templates/partials/tdoc_filters.html`**: add `<select name="fields" multiple>` with one `<option>` per available column, `selected` when in the current field list.
 - **`src/doc3gpp/web/templates/partials/tdoc_results.html`**: replace hard-coded 8-column markup with a loop over `fields`; header = label; cell = `row[field]`. The background color applies to the **entire row** — `<tr class="{{ status_color_class(row['status']) }}">` — so the color shows regardless of whether the Status column itself is selected (the user may choose to hide it). No match → no class (no background).
-- **`src/doc3gpp/web/static/style.css`**: pastel background classes `.status-green`, `.status-vanilla`, `.status-red`, `.status-grey`, `.status-pink`, `.status-lblue` (soft pastel shades, dark text stays readable).
+- **`src/doc3gpp/web/static/style.css`**: pastel background classes `.status-lgreen`, `.status-green`, `.status-vanilla`, `.status-red`, `.status-grey`, `.status-pink`, `.status-lblue` (soft pastel shades, dark text stays readable).
 
 ## Data flow
 
@@ -155,7 +156,7 @@ search page:
 - **Unit tests** (`tests/unit/test_web_routes.py` style):
   - `search_query` / `search_semantic` accept `tdoc-id` and forward it into `SearchFilters`.
   - `list_tdocs`: default fields when absent; custom fields honoured; unknown field → 400.
-  - `status_color_class`: each mapping entry + no-match → no class; case-insensitivity; "Partially Approved" → green; row class applied even when Status column is deselected.
+  - `status_color_class`: each mapping entry + no-match → no class; case-insensitivity; "Partially Approved" → lightgreen; row class applied even when Status column is deselected.
 - Run `ruff check .` and `./scripts/test_sqlite.sh`.
 
 ## Docs

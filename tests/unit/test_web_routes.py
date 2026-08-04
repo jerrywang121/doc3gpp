@@ -1214,6 +1214,7 @@ def test_tdoc_list_custom_fields(client: TestClient) -> None:
     assert "<th>TDoc ID</th>" in html
     assert "<th>Related WIs</th>" in html
     assert "<th>Status</th>" not in html
+    assert '<tr class="status-green">' in html
 
 
 def test_tdoc_list_unknown_field_returns_400(client: TestClient) -> None:

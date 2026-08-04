@@ -191,6 +191,7 @@ async def list_tdocs(
     table_rows = tdoc_rows(rows, html_fields)
     for r, item in zip(table_rows, rows):
         r.setdefault("tdoc_id", item.tdoc.tdoc_id)
+        r.setdefault("status", item.tdoc.status or "")
     template_name = (
         "partials/tdoc_results.html" if is_htmx_request(request) else "tdoc_list.html"
     )

@@ -1,0 +1,47 @@
+{% if hits %}
+  <table class="grid" id="search-results-table">
+    <thead>
+      <tr>
+        <th>TDoc</th>
+        <th>Title</th>
+        <th>Meeting</th>
+        <th>TSG</th>
+        {% if mode == 'sem' %}<th>RRF</th><th>FTS5 rank</th><th>vec rank</th>{% else %}<th>Score</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for hit in hits %}
+        <tr>
+          <td><a href="/tdocs/{{ hit.tdoc_id }}"><code>{{ hit.tdoc_id }}</code></a></td>
+          <td>{{ hit.title or '-' }}</td>
+          <td>{{ hit.meeting or '-' }}</td>
+          <td>{{ hit.tsg or '-' }}</td>
+          {% if mode == 'sem' %}
+            <td>{{ '%.4f' | format(hit.rrf_score) }}</td>
+            <td>{{ hit.rank_fts5 if hit.rank_fts5 is not none else '-' }}</td>
+            <td>{{ hit.rank_vec if hit.rank_vec is not none else '-' }}</td>
+          {% else %}
+            <td>{{ '%.4f' | format(hit.score) }}</td>
+          {% endif %}
+        </tr>
+        {% if hit.previews %}
+          <tr class="preview-row">
+            <td colspan="6">
+              <details class="hit-details">
+                <summary>Matching fields</summary>
+                {% for col, snippet in hit.previews.items() %}
+                  <div class="preview-field">
+                    <span class="preview-label">{{ col }}</span>
+                    <pre>{{ snippet }}</pre>
+                  </div>
+                {% endfor %}
+              </details>
+            </td>
+          </tr>
+        {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p class="empty">No matches.</p>
+{% endif %}

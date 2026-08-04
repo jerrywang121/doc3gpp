@@ -314,3 +314,36 @@ dl.kv dd {
 .muted {
   color: var(--muted);
 }
+
+/* Search results: fold toggle + per-hit matching-fields blocks */
+.fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+details.hit-details summary {
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.preview-field {
+  margin: 0.5rem 0 0.5rem 1rem;
+}
+
+.preview-field .preview-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.preview-field pre {
+  margin: 0.25rem 0 0;
+  overflow-x: auto;
+}

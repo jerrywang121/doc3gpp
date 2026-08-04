@@ -1269,6 +1269,35 @@ def test_search_query_renders_html(client: TestClient) -> None:
     assert "R5-260001" in response.text
 
 
+def test_search_results_single_details_per_hit(client: TestClient) -> None:
+    """One details.hit-details block per hit (single folding), not per column."""
+    response = client.get("/search?q=foo")
+    assert response.status_code == 200
+    body = response.text
+    assert body.count('<details class="hit-details">') == 1
+    assert '<span class="preview-label">title</span>' in body
+
+
+def test_search_results_has_master_toggle(client: TestClient) -> None:
+    """The results fragment carries the fold/unfold-all toggle."""
+    response = client.get("/search?q=foo", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    assert 'id="fold-toggle"' in response.text
+
+
+def test_search_results_toggle_absent_without_hits(client: TestClient) -> None:
+    """No hits -> no toggle and no details."""
+    response = client.get("/search")
+    assert response.status_code == 200
+    assert 'id="fold-toggle"' not in response.text
+
+
+def test_search_full_page_loads_search_js(client: TestClient) -> None:
+    """The full search page includes the fold-toggle script."""
+    html = client.get("/search?q=foo").text
+    assert 'src="/static/js/search.js"' in html
+
+
 def test_search_query_htmx_returns_partial(client: TestClient) -> None:
     """``GET /search`` with ``HX-Request: true`` returns the results partial.
 

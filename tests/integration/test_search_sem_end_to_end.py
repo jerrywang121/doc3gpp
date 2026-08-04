@@ -147,6 +147,84 @@ def test_search_sem_filter_by_tsg(semantic_service):
     )
 
 
+def test_search_sem_filter_by_tsg_lowercase(semantic_service):
+    from doc3gpp.models.search import SearchFilters
+
+    # Same narrowing as above, but with a lowercase tsg value: the DB
+    # stores tsg upper-case and the repos must accept any case.
+    out = semantic_service.search(
+        "Rel-17",
+        fts5_query="Rel-17",
+        filters=SearchFilters(tsg="ran5"),
+        limit=10,
+        fts5_weight=0.5,
+    )
+    assert out, "expected at least one hit under lowercase RAN5 filter"
+    tdoc_ids = {h.tdoc_id for h in out}
+    assert "SEM-TTCN-001" in tdoc_ids, (
+        f"lowercase ran5 filter should still surface its only row; got {tdoc_ids}"
+    )
+    leaked = tdoc_ids - {"SEM-TTCN-001"}
+    assert not leaked, (
+        f"TSG filter leaked non-RAN5 rows: {leaked}"
+    )
+
+
+def test_search_sem_filter_by_meeting_like(semantic_service):
+    from doc3gpp.models.search import SearchFilters
+
+    # `%plenary%` matches m.title of meeting SEM#9100 (rows SEM-NB-001,
+    # SEM-LS-001); rows from SEM#9101 / SEM#9102 must not leak in.
+    out = semantic_service.search(
+        "Rel-17",
+        fts5_query="Rel-17",
+        filters=SearchFilters(meeting="%plenary%"),
+        limit=10,
+        fts5_weight=0.5,
+    )
+    ids = {h.tdoc_id for h in out}
+    assert ids, "expected hits under meeting LIKE %plenary%"
+    assert "SEM-NB-002" not in ids and "SEM-TTCN-001" not in ids, (
+        f"meeting LIKE %plenary% must exclude SEM#9101/9102 rows; got {ids}"
+    )
+    assert "SEM-LS-001" in ids, (
+        f"meeting LIKE %plenary% should surface SEM#9100 rows; got {ids}"
+    )
+
+
+def test_search_sem_filter_by_release_like(semantic_service):
+    from doc3gpp.models.search import SearchFilters
+
+    out = semantic_service.search(
+        "Rel-17",
+        fts5_query="Rel-17",
+        filters=SearchFilters(release="Rel-1%"),
+        limit=10,
+        fts5_weight=0.5,
+    )
+    assert out, "expected hits under release LIKE Rel-1%"
+    assert "SEM-LS-001" in {h.tdoc_id for h in out}
+
+
+def test_search_sem_filter_by_spec_like(semantic_service):
+    from doc3gpp.models.search import SearchFilters
+
+    # `38.3%` matches spec 38.300 / 38.321 rows; SEM-TTCN-001 (36.523)
+    # must not leak in.
+    out = semantic_service.search(
+        "Rel-17",
+        fts5_query="Rel-17",
+        filters=SearchFilters(spec="38.3%"),
+        limit=10,
+        fts5_weight=0.5,
+    )
+    ids = {h.tdoc_id for h in out}
+    assert ids, "expected hits under spec LIKE 38.3%"
+    assert "SEM-TTCN-001" not in ids, (
+        f"spec LIKE 38.3% must exclude SEM-TTCN-001; got {ids}"
+    )
+
+
 def test_search_sem_fts5_weight_zero_is_fts5_only(semantic_service):
     from doc3gpp.models.search import SearchFilters
 

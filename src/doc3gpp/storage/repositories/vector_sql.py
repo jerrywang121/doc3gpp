@@ -154,19 +154,25 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 params["tdoc_id"] = filters.tdoc_id
             else:
                 if filters.tsg:
+                    # meetings.tsg is stored upper-case by sync, so callers
+                    # may pass any case (mirrors meeting_sql / wi_sql).
                     sql.append("   AND m.tsg = :tsg")
-                    params["tsg"] = filters.tsg
+                    params["tsg"] = filters.tsg.upper()
                 if filters.meeting:
-                    sql.append("   AND m.name = :meeting")
+                    # LIKE over name OR title: the results page shows
+                    # m.title, but the CLI convention (meeting list
+                    # --name, tdoc list text filters) is LIKE on the
+                    # stored field.
+                    sql.append("   AND (m.name LIKE :meeting OR m.title LIKE :meeting)")
                     params["meeting"] = filters.meeting
                 if filters.meeting_id is not None:
                     sql.append("   AND m.meeting_id = :meeting_id")
                     params["meeting_id"] = filters.meeting_id
                 if filters.release:
-                    sql.append("   AND t.release = :release")
+                    sql.append("   AND t.release LIKE :release")
                     params["release"] = filters.release
                 if filters.spec:
-                    sql.append("   AND t.spec = :spec")
+                    sql.append("   AND t.spec LIKE :spec")
                     params["spec"] = filters.spec
                 if filters.since:
                     sql.append("   AND t.uploaded_date >= :since")

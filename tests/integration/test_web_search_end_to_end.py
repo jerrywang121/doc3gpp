@@ -92,3 +92,76 @@ def test_search_query_stopwords_only_returns_400(search_app) -> None:
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_query"
     get_engine.cache_clear()
+
+
+def test_search_query_with_meeting_like_filter(search_app) -> None:
+    """``meeting`` is a LIKE pattern over name OR title.
+
+    Regression for the user report: ``meeting=%CT6%`` matched the
+    displayed meeting title column but the repo compared ``m.name``
+    exactly, returning zero hits. ``%plenary%`` matches the titles
+    ``RAN#100 plenary`` / ``SA#200 plenary``; the NB-IoT row lives
+    under meeting 100 and must survive the filter.
+    """
+    with TestClient(search_app) as client:
+        response = client.get(
+            "/search",
+            params={"q": "nb-iot AND scheduling", "meeting": "%plenary%"},
+        )
+    assert response.status_code == 200
+    assert "RP-2200456" in response.text
+
+    # A pattern matching nothing yields zero hits, not an error.
+    with TestClient(search_app) as client:
+        response = client.get(
+            "/search",
+            params={"q": "nb-iot AND scheduling", "meeting": "%no-such-meeting%"},
+        )
+    assert response.status_code == 200
+    assert "No matches" in response.text
+    get_engine.cache_clear()
+
+
+def test_search_query_with_release_like_filter(search_app) -> None:
+    """``release`` is a LIKE pattern over tdocs.release.
+
+    Regression: ``t.release = :release`` exact match returned zero hits
+    for any pattern and could not match NULL-release rows.
+    """
+    with TestClient(search_app) as client:
+        response = client.get(
+            "/search",
+            params={"q": "nb-iot AND scheduling", "release": "Rel-1%"},
+        )
+    assert response.status_code == 200
+    assert "RP-2200456" in response.text
+
+    with TestClient(search_app) as client:
+        response = client.get(
+            "/search",
+            params={"q": "nb-iot AND scheduling", "release": "Rel-99"},
+        )
+    assert response.status_code == 200
+    assert "No matches" in response.text
+    get_engine.cache_clear()
+
+
+def test_search_query_with_spec_like_filter(search_app) -> None:
+    """``spec`` is a LIKE pattern over tdocs.spec (versioned specs like
+    ``38.300-1`` can only be partial-matched)."""
+    with TestClient(search_app) as client:
+        response = client.get(
+            "/search",
+            params={"q": "nb-iot AND scheduling", "spec": "38.3%"},
+        )
+    assert response.status_code == 200
+    assert "RP-2200456" in response.text
+
+    with TestClient(search_app) as client:
+        response = client.get(
+            "/search",
+            params={"q": "nb-iot AND scheduling", "spec": "36.5%"},
+        )
+    assert response.status_code == 200
+    assert "No matches" in response.text
+    get_engine.cache_clear()

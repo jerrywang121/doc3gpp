@@ -165,7 +165,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
-| GET | `/search` | FTS5 search (`?format=json`). User queries are normalised into a valid FTS5 `MATCH` expression (jargon like `nb-iot` is quoted, mirroring the CLI); a stopwords-only or empty query returns 400 `invalid_query`. |
+| GET | `/search` | FTS5 search (`?format=json`). User queries are normalised into a valid FTS5 `MATCH` expression (jargon like `nb-iot` is quoted, mirroring the CLI); a stopwords-only or empty query returns 400 `invalid_query`. Filter fields are LIKE patterns matching the CLI's semantics: `meeting` matches `meetings.name` **or** `meetings.title`, `release`/`spec` match `tdocs.release`/`tdocs.spec`, `tsg` is case-insensitive. |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. |

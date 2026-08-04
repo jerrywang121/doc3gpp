@@ -1462,12 +1462,12 @@ Filters (all optional, AND-combined):
 
 | Flag | Effect |
 | --- | --- |
-| `--tsg TEXT` | `meetings.tsg` filter |
-| `--meeting TEXT` | `meetings.name` filter |
+| `--tsg TEXT` | `meetings.tsg` filter (any case; matched against the stored upper-case value) |
+| `--meeting TEXT` | LIKE pattern over `meetings.name` **or** `meetings.title` (the results page shows the title; `%` wildcards work) |
 | `--meeting-id INT` | `meetings.meeting_id` filter |
 | `--tdoc-id TEXT` | exact `tdocs.tdoc_id` filter |
-| `--release TEXT` | `tdocs.release` filter |
-| `--spec TEXT` | spec-number filter (`38.300`, `38.300-1`) |
+| `--release TEXT` | LIKE pattern over `tdocs.release` (e.g. `Rel-1%`) |
+| `--spec TEXT` | LIKE pattern over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`) |
 | `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD) |
 | `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD) |
 | `--limit INT` | max results (default 20) |
@@ -1578,12 +1578,12 @@ omitted, FTS5 + RRF are skipped — only vector KNN results return.
 | --- | --- |
 | `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). Always embedded. |
 | `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
-| `--tsg TEXT` | `meetings.tsg` filter. |
-| `--meeting TEXT` | `meetings.name` filter. |
+| `--tsg TEXT` | `meetings.tsg` filter (any case; matched against the stored upper-case value). |
+| `--meeting TEXT` | LIKE pattern over `meetings.name` **or** `meetings.title` (`%` wildcards work). |
 | `--meeting-id INT` | `meetings.meeting_id` filter. |
 | `--tdoc-id TEXT` | exact `tdocs.tdoc_id` filter. |
-| `--release TEXT` | `tdocs.release` filter. |
-| `--spec TEXT` | spec-number filter (`38.300`, `38.300-1`). |
+| `--release TEXT` | LIKE pattern over `tdocs.release` (e.g. `Rel-1%`). |
+| `--spec TEXT` | LIKE pattern over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`). |
 | `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD). |
 | `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD). |
 | `--limit INT` | max results (default `20`). |

@@ -25,6 +25,11 @@ router = APIRouter(tags=["landing"])
 # new sections appear here first and grow into their own module.
 _SECTIONS: list[dict[str, str]] = [
     {
+        "label": "TSGs",
+        "href": "/tsgs",
+        "description": "Reference list of 3GPP TSGs (Working Groups + Plenaries).",
+    },
+    {
         "label": "Meetings",
         "href": "/meetings",
         "description": "Browse stored meeting records, optionally filtered by TSG / year.",
@@ -33,11 +38,6 @@ _SECTIONS: list[dict[str, str]] = [
         "label": "TDocs",
         "href": "/tdocs",
         "description": "Browse stored TDoc metadata with the same filter grammar as the CLI.",
-    },
-    {
-        "label": "TSGs",
-        "href": "/tsgs",
-        "description": "Reference list of 3GPP TSGs (Working Groups + Plenaries).",
     },
     {
         "label": "WIs",

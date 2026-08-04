@@ -28,6 +28,7 @@
         {% else %}-{% endif %}
       </dd>
       <dt>Uploaded</dt><dd>{{ record.tdoc.uploaded_date.isoformat() if record.tdoc.uploaded_date else '-' }}</dd>
+      <dt>Related WIs</dt><dd>{{ record.tdoc.related_wis or '-' }}</dd>
     </dl>
     {% if record.tdoc.ftp_url %}
       <p>

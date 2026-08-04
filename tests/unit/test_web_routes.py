@@ -718,6 +718,45 @@ def test_tdoc_show_ttcn_changed_functions(
     assert "<code>mod_b.fn_two</code>" in response.text
 
 
+def test_tdoc_show_related_wis_in_tdoc_section(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The TDoc section shows the related_wis field."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(
+            tdoc_id="R5-260001",
+            title="CR on NR measurement",
+            ftp_url="R5/26.001/R5-260001.zip",
+            related_wis="890001, 890002",
+        ),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    assert "<dt>Related WIs</dt>" in response.text
+    assert "<dd>890001, 890002</dd>" in response.text
+
+
+def test_tdoc_show_related_wis_dash_when_absent(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """No related_wis -> the field renders '-'."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    assert "<dt>Related WIs</dt>" in response.text
+    assert "<dd>-</dd>" in response.text
+
+
 def test_tdoc_show_auxiliary_files_link_to_ftp(
     client: TestClient, sqlite_env: Any,
 ) -> None:

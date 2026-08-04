@@ -81,7 +81,7 @@ The TDoc section of the tdoc detail page shows the `related_wis` field (populate
 - Default (no `fields` param): **ID, Title, Meeting, Type, Spec, Release, Status** — the current HTML columns with `Uploaded` replaced by `Status` — plus the always-on "show" action column. This preserves today's look except for the Uploaded→Status swap.
 - Changing the selection re-queries the list (existing form `hx-trigger="change"`).
 - Selection persists in the URL via repeated `fields` params, so it survives pagination (`include_query_params`) and reload.
-- Status cells get a background color from the status value (see below). The Status column is a **new** column in the default set, so color coding shows by default.
+- Status cells get a row background color derived from the status value (see below). The Status column is a **new** column in the default set, so color coding shows by default; the color applies to the whole row, so it still shows even if the user deselects the Status column.
 - `?format=json` and the MCP tool keep `_TDOC_DEFAULT_FIELDS` (10 fields) — unchanged contract.
 
 ### Available columns
@@ -126,7 +126,7 @@ Note: because `approved` matches before `partially`, a status like "Partially Ap
 - **`src/doc3gpp/web/render.py`**: add `TDOC_COLUMN_LABELS` mapping (key → display label) next to `_TDOC_DEFAULT_FIELDS`; reuse `tdoc_rows()` for HTML row building.
 - **`src/doc3gpp/web/templates_setup.py`**: register `status_color_class` Jinja filter (sibling of `dt_short` / `sync_state`).
 - **`src/doc3gpp/web/templates/partials/tdoc_filters.html`**: add `<select name="fields" multiple>` with one `<option>` per available column, `selected` when in the current field list.
-- **`src/doc3gpp/web/templates/partials/tdoc_results.html`**: replace hard-coded 8-column markup with a loop over `fields`; header = label; cell = `row[field]`; Status cell gets `class="{{ status_color_class(row['status']) }}"`.
+- **`src/doc3gpp/web/templates/partials/tdoc_results.html`**: replace hard-coded 8-column markup with a loop over `fields`; header = label; cell = `row[field]`. The background color applies to the **entire row** — `<tr class="{{ status_color_class(row['status']) }}">` — so the color shows regardless of whether the Status column itself is selected (the user may choose to hide it). No match → no class (no background).
 - **`src/doc3gpp/web/static/style.css`**: pastel background classes `.status-green`, `.status-vanilla`, `.status-red`, `.status-grey`, `.status-pink`, `.status-lblue` (soft pastel shades, dark text stays readable).
 
 ## Data flow
@@ -135,7 +135,7 @@ Note: because `approved` matches before `partially`, a status like "Partially Ap
 tdoc list page:
   select[fields] (multi) --hx-get /tdocs?fields=...--> list_tdocs route
     -> validate against allowlist -> tdoc_rows(rows, fields) -> template loop
-  status cell -> status_color_class(row['status']) -> pastel CSS class
+  row class -> status_color_class(row['status']) -> pastel CSS on whole row
 
 search page:
   form[tdoc-id] --hx-get /search|/search/sem--> route
@@ -155,7 +155,7 @@ search page:
 - **Unit tests** (`tests/unit/test_web_routes.py` style):
   - `search_query` / `search_semantic` accept `tdoc-id` and forward it into `SearchFilters`.
   - `list_tdocs`: default fields when absent; custom fields honoured; unknown field → 400.
-  - `status_color_class`: each mapping entry + no-match → no class; case-insensitivity; "Partially Approved" → green.
+  - `status_color_class`: each mapping entry + no-match → no class; case-insensitivity; "Partially Approved" → green; row class applied even when Status column is deselected.
 - Run `ruff check .` and `./scripts/test_sqlite.sh`.
 
 ## Docs

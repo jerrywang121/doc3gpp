@@ -44,6 +44,8 @@
       <form
         id="parse-form"
         class="parse-form"
+        method="post"
+        action="/jobs/parse/tdocs"
         data-tdoc-id="{{ record.tdoc.tdoc_id }}"
       >
         <label class="inline-check">
@@ -128,5 +130,6 @@
       <p>No auxiliary files attached.</p>
     </section>
   {% endif %}
+  <script src="/static/js/job_poller.js" defer></script>
   <script src="/static/js/tdoc_parse.js" defer></script>
 {% endblock %}

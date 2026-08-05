@@ -437,13 +437,24 @@ def test_meetings_list_sync_button_freshness_classes(client: TestClient) -> None
 
 
 def test_meetings_list_sync_button_posts_meeting_id(client: TestClient) -> None:
-    """The sync button is an HTMX form posting the meeting_id to the job route."""
+    """The sync button is a form posting the meeting_id to the job route.
+
+    The form is bound to the shared ``job_poller.js`` lifecycle (POST
+    + capture ``job_id`` + poll + reload). The form-encoded body keeps
+    the ``/jobs/sync_tdocs`` flat alias working without a JSON
+    bridge; the poller reads ``form.elements`` and submits them as
+    ``application/x-www-form-urlencoded``.
+    """
     html = client.get("/meetings").text
-    assert 'hx-post="/jobs/sync_tdocs"' in html
-    assert 'hx-swap="none"' in html
+    assert 'action="/jobs/sync_tdocs"' in html
+    assert 'method="post"' in html
     assert "&#8635;" in html
     for meeting_id in (1, 2, 3):
         assert f'name="meeting_id" value="{meeting_id}"' in html
+    # The form is a plain post — no HTMX swap directive (the poller
+    # owns the lifecycle).
+    assert 'hx-post=' not in html
+    assert 'hx-swap="none"' not in html
 
 
 def test_meetings_list_name_links_to_portal(client: TestClient) -> None:
@@ -460,10 +471,14 @@ def test_meetings_list_name_links_to_portal(client: TestClient) -> None:
 
 
 def test_meetings_list_sync_queued_indication(client: TestClient) -> None:
-    """The sync form shows a brief 'queued' indication after the request."""
+    """The sync form shows a 'queued' hint that the poller toggles."""
     html = client.get("/meetings").text
-    assert 'hx-on::after-request="this.querySelector(\'.sync-queued\').style.display = \'inline\'"' in html
+    # The hint markup is preserved; the poller flips it on submit and
+    # off when the job reaches a terminal state.
     assert '<span class="sync-queued" style="display:none">queued</span>' in html
+    # The legacy ``hx-on::after-request`` show-hint directive is gone —
+    # the poller owns the show/hide transitions.
+    assert 'hx-on::after-request' not in html
 
 
 def test_meeting_show_404(client: TestClient) -> None:
@@ -523,11 +538,22 @@ def test_meeting_show_ftp_url_links_to_3gpp_ftp(client: TestClient) -> None:
 
 
 def test_meeting_show_sync_queued_indication(client: TestClient) -> None:
-    """The detail-page sync form shows a 'Sync job queued' indication."""
+    """The detail-page sync form shows a 'Sync job queued' hint + the poller.
+
+    The hint markup is preserved (the poller toggles it on submit and
+    off on terminal state). The form posts to the same flat
+    ``/jobs/sync_tdocs`` alias the legacy HTMX form used; the
+    lifecycle (enqueue → poll → reload) is now driven by
+    ``job_poller.js`` instead of an ``hx-on::after-request`` hint.
+    """
     html = client.get("/meetings/1").text
-    assert 'hx-post="/jobs/sync_tdocs"' in html
-    assert 'hx-on::after-request="this.querySelector(\'.sync-queued\').style.display = \'inline\'"' in html
+    assert 'action="/jobs/sync_tdocs"' in html
+    assert 'method="post"' in html
     assert '<span class="sync-queued" style="display:none">Sync job queued</span>' in html
+    # The legacy show-hint directive is gone.
+    assert 'hx-on::after-request' not in html
+    # The shared poller is mounted.
+    assert 'src="/static/js/job_poller.js"' in html
 
 
 # ---------------------------------------------------------------------------
@@ -1825,7 +1851,17 @@ def test_healthz_still_ok(client: TestClient) -> None:
 def test_tdoc_show_parse_card_rendered_when_ftp_url(
     client: TestClient, sqlite_env: Any,
 ) -> None:
-    """A TDoc with an ftp_url shows the Parse card with force/full checkboxes."""
+    """A TDoc with an ftp_url shows the Parse card with force/full checkboxes.
+
+    The form must (1) carry the parse route as its ``action`` so the
+    shared ``bindJobPolling`` helper posts to the right URL (the old
+    hand-rolled JS hard-coded ``/jobs/parse/tdocs``; the shared
+    helper resolves the URL from the form's ``action`` attribute and
+    falls back to ``form.action`` which is the page URL when the
+    attribute is absent — a 405 from the page route causes
+    "Failed to enqueue job") and (2) carry ``method="post"`` so
+    non-JS clients can submit the form too.
+    """
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -1838,6 +1874,10 @@ def test_tdoc_show_parse_card_rendered_when_ftp_url(
     assert 'name="force"' in html
     assert 'name="full"' in html
     assert 'src="/static/js/tdoc_parse.js"' in html
+    # The form must declare the parse route so the shared
+    # ``bindJobPolling`` helper resolves the POST URL.
+    assert 'action="/jobs/parse/tdocs"' in html
+    assert 'method="post"' in html
 
 
 def test_tdoc_show_parse_card_hidden_without_ftp_url(
@@ -1862,15 +1902,31 @@ def test_tdoc_parse_js_hides_queued_hint_and_reloads_on_terminal(
     static (no-polling) render. The JS must (1) hide the lingering
     "Parse job queued" hint in the form and (2) reload the page so the
     server-rendered cover page / TTCN / extracted-at sections pick up
-    the freshly-written DB rows. The repo has no jsdom, so this is a
-    content lock-in via the static endpoint.
+    the freshly-written DB rows.
+
+    The lifecycle now lives in the shared ``job_poller.js`` helper;
+    ``tdoc_parse.js`` is a thin wrapper that calls ``bindJobPolling``.
+    The repo has no jsdom, so this is a content lock-in via the
+    static endpoints: the parse form must bind to the shared helper
+    with the parse-specific queued hint class + the JSON body builder,
+    and the helper must own the observer + reload + timeout logic.
     """
-    response = client.get("/static/js/tdoc_parse.js")
-    assert response.status_code == 200
-    body = response.text
-    assert "MutationObserver" in body
-    assert "parse-queued" in body
-    assert "window.location.reload" in body
+    parse_body = client.get("/static/js/tdoc_parse.js").text
+    poller_body = client.get("/static/js/job_poller.js").text
+    # The parse wrapper binds to the shared helper with the right hooks.
+    assert "bindJobPolling" in parse_body
+    assert 'queuedSelector: ".parse-queued"' in parse_body
+    assert 'targetSelector: "#parse-job-target"' in parse_body
+    assert "contentType: \"application/json\"" in parse_body
+    # The lifecycle lives in the shared helper.
+    assert "MutationObserver" in poller_body
+    # The helper is queue-class-agnostic: it accepts the queued class
+    # via options and does not hardcode any specific class. The parse
+    # class is passed by the wrapper above; the helper itself has no
+    # hardcoded reference to it.
+    assert "queuedSelector" in poller_body
+    assert '".parse-queued"' not in poller_body
+    assert "window.location.reload" in poller_body
 
 
 def test_tdoc_parse_js_does_not_reload_before_polling_span_seen(
@@ -1889,12 +1945,13 @@ def test_tdoc_parse_js_does_not_reload_before_polling_span_seen(
     *ever* appeared; reload only fires when the span disappears AFTER
     it has appeared.
 
-    Without jsdom we lock the fix in via two content assertions on the
-    static endpoint: the JS must (a) declare a state variable that flips
-    only when the polling span is observed, and (b) gate the reload on
-    that state being true.
+    The lifecycle now lives in ``job_poller.js``. The fix is locked
+    in via two content assertions on the static endpoint: the helper
+    must (a) declare a state variable that flips only when the
+    polling span is observed, and (b) gate the reload on that state
+    being true.
     """
-    body = client.get("/static/js/tdoc_parse.js").text
+    body = client.get("/static/js/job_poller.js").text
     # The fix variable + the conditional reload gate.
     assert "pollSeen" in body
     assert "if (pollSeen)" in body
@@ -1913,8 +1970,12 @@ def test_tdoc_parse_js_timeout_fallback_for_fast_terminal_jobs(
     the observer alone would never fire. The timeout fallback must hide
     the hint and reload the page, but only when the span was never
     seen (a long-running job must not be reloaded mid-flight).
+
+    The lifecycle now lives in ``job_poller.js``; the parse form
+    delegates to it via ``bindJobPolling``. The fallback is locked
+    in via the helper's static endpoint.
     """
-    body = client.get("/static/js/tdoc_parse.js").text
+    body = client.get("/static/js/job_poller.js").text
     # The fallback timer exists and is gated on the span never having
     # been seen.
     assert "setTimeout" in body
@@ -1922,3 +1983,184 @@ def test_tdoc_parse_js_timeout_fallback_for_fast_terminal_jobs(
     # The reload path is shared (idempotent) so the observer and the
     # timeout cannot double-fire.
     assert "done" in body
+
+
+# ---------------------------------------------------------------------------
+# Meeting sync form (T8 detail-page sync button)
+#
+# Regression for: clicking "Sync this meeting's TDocs" on /meetings/{id}
+# showed "Sync job queued" but the page never updated when the job
+# completed. The original form used ``hx-swap="none"`` which discarded
+# the JSON envelope (and therefore the job_id), so there was no polling
+# span, no terminal-state detection, and no reload. The fix mounts a
+# JS handler that POSTs the form, captures job_id from the response,
+# injects a polling div, and reloads the page when the job reaches a
+# terminal state. The handler is shared with the tdoc parse form via
+# ``static/js/job_poller.js``.
+# ---------------------------------------------------------------------------
+
+
+def test_meeting_show_sync_form_mounts_job_poller(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The detail-page sync form must mount a job-polling JS handler.
+
+    The form must (1) keep the form-encoded POST (the route expects
+    ``meeting_id`` as a form field) and (2) mount a JS file that drives
+    the same enqueue → poll → reload cycle the parse form uses. The
+    page must include the poller script tag, the form must carry the
+    selector hooks the poller binds to, and there must be a target
+    div the poller injects the polling span into.
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.models import TsgORM
+    from doc3gpp.storage.db.session import get_session_factory
+    from doc3gpp.storage.repositories.meeting_sql import (
+        SQLAlchemyMeetingRepository,
+    )
+    from doc3gpp.models.meeting import Meeting
+
+    create_schema()
+    factory = get_session_factory()
+    with factory() as session:
+        session.add(
+            TsgORM(
+                tsg_name="RAN WG5",
+                short_name="RAN5",
+                description="",
+                url=None,
+            )
+        )
+        session.commit()
+    SQLAlchemyMeetingRepository().upsert_many(
+        [
+            Meeting(
+                meeting_id=1,
+                name="RAN5#99-e",
+                title="RAN WG5 Meeting #99-e",
+                location="Athens, Greece",
+                tsg="RAN5",
+            ),
+        ],
+    )
+    html = client.get("/meetings/1").text
+    # The poller script must be mounted.
+    assert 'src="/static/js/job_poller.js"' in html
+    # The sync form must keep carrying the meeting_id selector + a
+    # target div the poller injects into. The route still reads the
+    # form-encoded body, so the hidden input stays put.
+    assert 'name="meeting_id" value="1"' in html
+    assert 'id="sync-form-job-target"' in html
+    # The buggy pure-HTMX pattern (swap=none + show-queued) is gone —
+    # the poller is the single source of truth.
+    assert 'hx-swap="none"' not in html
+    assert 'hx-on::after-request' not in html
+
+
+def test_meeting_show_sync_queued_hint_still_renders(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The 'Sync job queued' hint still ships — the poller hides it on terminal.
+
+    The poller is responsible for the lifecycle: show the hint after
+    enqueue, hide it (and reload) when the job reaches a terminal
+    state. The template keeps the hint markup; the JS owns the
+    show/hide transitions.
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.models import TsgORM
+    from doc3gpp.storage.db.session import get_session_factory
+    from doc3gpp.storage.repositories.meeting_sql import (
+        SQLAlchemyMeetingRepository,
+    )
+    from doc3gpp.models.meeting import Meeting
+
+    create_schema()
+    factory = get_session_factory()
+    with factory() as session:
+        session.add(
+            TsgORM(
+                tsg_name="RAN WG5",
+                short_name="RAN5",
+                description="",
+                url=None,
+            )
+        )
+        session.commit()
+    SQLAlchemyMeetingRepository().upsert_many(
+        [
+            Meeting(
+                meeting_id=1,
+                name="RAN5#99-e",
+                title="RAN WG5 Meeting #99-e",
+                location="Athens, Greece",
+                tsg="RAN5",
+            ),
+        ],
+    )
+    html = client.get("/meetings/1").text
+    assert "Sync job queued" in html
+
+
+def test_meetings_list_sync_form_uses_shared_poller(client: TestClient) -> None:
+    """The meetings list sync form mounts the same poller as the detail page.
+
+    The list view's per-row sync button (``sync-{{ ... }}``) has the
+    same bug as the detail page — the original form used
+    ``hx-swap="none"`` and never picked up the job_id from the
+    response. The fix is shared: every sync form (detail + list) is
+    driven by ``job_poller.js`` so the UX is uniform.
+    """
+    html = client.get("/meetings").text
+    assert 'src="/static/js/job_poller.js"' in html
+    # The list view's per-row form must declare a target div the
+    # poller injects into. The poller derives the target id as
+    # ``<form.id>-job-target`` so ``id="sync-form"`` → ``id="sync-form-job-target"``.
+    assert 'id="sync-form-job-target"' in html
+    # The buggy pure-HTMX pattern is gone.
+    assert 'hx-swap="none"' not in html
+    assert 'hx-on::after-request' not in html
+
+
+def test_job_poller_js_is_served(client: TestClient) -> None:
+    """``/static/js/job_poller.js`` is served as a JS asset."""
+    response = client.get("/static/js/job_poller.js")
+    assert response.status_code == 200
+    assert "javascript" in response.headers.get("content-type", "")
+
+
+def test_job_poller_js_polls_and_reloads_on_terminal(
+    client: TestClient,
+) -> None:
+    """The poller must follow the same enqueue → poll → reload contract.
+
+    The poller binds a click/submit handler that:
+      1. POSTs the form's body and reads ``job_id`` from the JSON.
+      2. Injects a wrapper div with ``hx-get`` against the
+         ``/jobs/{id}?format=html`` partial and ``hx-trigger="load"``.
+      3. Mounts a MutationObserver that reloads the page once the
+         polling span (rendered only when the job is non-terminal)
+         disappears.
+      4. Falls back to a timeout for jobs that are already terminal
+         before the first poll renders.
+    """
+    body = client.get("/static/js/job_poller.js").text
+    # The public binding surface.
+    assert "bindJobPolling" in body
+    # The polling + reload machinery.
+    assert "MutationObserver" in body
+    assert "pollSeen" in body
+    assert "if (pollSeen)" in body
+    assert "window.location.reload" in body
+    # The timeout fallback (job terminal before the first poll).
+    assert "setTimeout" in body
+    assert "if (!pollSeen)" in body
+    # The poller targets the job-status partial URL convention used by
+    # ``/jobs/{id}?format=html`` (the same one ``tdoc_parse.js``
+    # consumed before the refactor).
+    assert "/jobs/" in body
+    assert "hx-get" in body
+    assert "hx-trigger" in body
+    # Sanity: no naive "reload on no-node" bug from the old tdoc
+    # parse JS — the reload is gated on having seen the polling span.
+    assert "if (!node) {" not in body

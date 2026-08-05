@@ -27,13 +27,17 @@
             <td>{{ meeting.start_doc or '-' }}</td>
             <td>{{ meeting.end_doc or '-' }}</td>
             <td>
-              <form hx-post="/jobs/sync_tdocs" hx-swap="none"
-                    hx-on::after-request="this.querySelector('.sync-queued').style.display = 'inline'"
-                    title="Last sync: {{ meeting.tdoc_list_last_sync | dt_short or 'never' }}">
+              <form
+                id="sync-form"
+                method="post"
+                action="/jobs/sync_tdocs"
+                title="Last sync: {{ meeting.tdoc_list_last_sync | dt_short or 'never' }}"
+              >
                 <input type="hidden" name="meeting_id" value="{{ meeting.meeting_id }}">
                 <button type="submit" class="sync-btn sync-{{ meeting.tdoc_list_last_sync | sync_state }}"
                         aria-label="Sync TDocs for meeting {{ meeting.meeting_id }}">&#8635;</button>
                 <span class="sync-queued" style="display:none">queued</span>
+                <div id="sync-form-job-target"></div>
               </form>
             </td>
             <td><a href="/meetings/{{ meeting.meeting_id }}">show</a></td>

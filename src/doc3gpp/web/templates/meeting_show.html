@@ -20,11 +20,17 @@
 
   <p><a href="/tdocs?meeting_id={{ meeting.meeting_id }}&amp;limit=200">View TDocs for this meeting</a></p>
 
-  <form method="post" action="/jobs/sync_tdocs" class="sync-form"
-        hx-post="/jobs/sync_tdocs" hx-swap="none"
-        hx-on::after-request="this.querySelector('.sync-queued').style.display = 'inline'">
+  <form
+    id="sync-form"
+    method="post"
+    action="/jobs/sync_tdocs"
+    class="sync-form"
+  >
     <input type="hidden" name="meeting_id" value="{{ meeting.meeting_id }}">
     <button type="submit" class="btn primary">Sync this meeting's TDocs</button>
     <span class="sync-queued" style="display:none">Sync job queued</span>
+    <div id="sync-form-job-target"></div>
   </form>
+  <script src="/static/js/job_poller.js" defer></script>
+  <script src="/static/js/meeting_sync.js" defer></script>
 {% endblock %}

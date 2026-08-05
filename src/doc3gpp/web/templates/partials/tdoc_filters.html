@@ -59,7 +59,7 @@
   <label>Uploaded date
     <input type="text" name="uploaded-date" placeholder=">= 'YYYY-MM-DD'" value="{{ filters.uploaded_date or '' }}">
   </label>
-  <label class="columns-dropdown">
+  <div class="columns-dropdown">
     <span class="columns-trigger-wrap">
       <button type="button" class="btn columns-trigger" aria-haspopup="true"
               aria-expanded="false">Columns (<span class="columns-count">{{ fields|length }}</span>)</button>
@@ -73,7 +73,7 @@
         </label>
       {% endfor %}
     </span>
-  </label>
+  </div>
   <label>Limit
     <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
   </label>

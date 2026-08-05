@@ -50,16 +50,17 @@ def build_state(settings: Settings) -> WebState:
     engine-level cleanup (``engine.dispose()``) on shutdown.
     """
     engine = get_engine()
+    embedder = factory.build_embedder(settings)
     services = ServiceContainer(
         meeting=factory.build_meeting_service(),
         tdoc=factory.build_tdoc_service(),
-        tdoc_cr=factory.build_tdoc_cr_service(),
+        tdoc_cr=factory.build_tdoc_cr_service(embedder=embedder),
         tdoc_sync=factory.build_tdoc_sync_coordinator(),
         tdoc_repo=factory.build_tdoc_repository(),
         tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
-        search=factory.build_search_service(),
-        semantic_search=factory.build_semantic_search_service(),
+        search=factory.build_search_service(embedder=embedder),
+        semantic_search=factory.build_semantic_search_service(embedder=embedder),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
     )

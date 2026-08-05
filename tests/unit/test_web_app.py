@@ -44,3 +44,25 @@ def test_healthz_returns_ok(sqlite_env) -> None:
         response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_build_state_shares_one_embedder(sqlite_env) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.web.app import build_state
+    from doc3gpp.settings.schema import Settings
+
+    settings = Settings()
+    create_schema()
+    fake_embedder = MagicMock()
+    monkeypatch = __import__("pytest").MonkeyPatch()
+    monkeypatch.setattr(factory, "build_embedder", lambda s: fake_embedder)
+    try:
+        state = build_state(settings)
+    finally:
+        monkeypatch.undo()
+    assert state.services.search._reranker._embedder is fake_embedder
+    assert state.services.semantic_search._embedder is fake_embedder
+    assert state.services.tdoc_cr._semantic_service._embedder is fake_embedder

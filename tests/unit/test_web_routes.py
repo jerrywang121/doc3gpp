@@ -1226,11 +1226,14 @@ def test_tdoc_list_unknown_field_returns_400(client: TestClient) -> None:
 
 
 def test_tdoc_list_fields_select_renders(client: TestClient) -> None:
-    """The filter form carries the multi-select with all column options."""
+    """The filter form carries the dropdown checkboxes with all column options."""
     html = client.get("/tdocs").text
     assert 'name="fields"' in html
+    assert 'type="checkbox"' in html
     assert 'value="related_wis"' in html
     assert 'value="status"' in html
+    assert 'class="columns-count"' in html
+    assert "<select" not in html
 
 
 def test_tdoc_list_fields_persist_in_pagination(

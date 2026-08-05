@@ -59,6 +59,21 @@
   <label>Uploaded date
     <input type="text" name="uploaded-date" placeholder=">= 'YYYY-MM-DD'" value="{{ filters.uploaded_date or '' }}">
   </label>
+  <div class="columns-dropdown">
+    <span class="columns-trigger-wrap">
+      <button type="button" class="btn columns-trigger" aria-haspopup="true"
+              aria-expanded="false">Columns (<span class="columns-count">{{ fields|length }}</span>)</button>
+    </span>
+    <span class="columns-panel" hidden>
+      {% for key, label in column_labels.items() %}
+        <label class="columns-option">
+          <input type="checkbox" name="fields" value="{{ key }}"
+                 {% if key in fields %}checked{% endif %}>
+          {{ label }}
+        </label>
+      {% endfor %}
+    </span>
+  </div>
   <label>Limit
     <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
   </label>

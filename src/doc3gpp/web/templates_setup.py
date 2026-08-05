@@ -55,8 +55,44 @@ def sync_state(value: datetime | None) -> str:
     return "stale"
 
 
+# Status colour rules for the tdoc list page: ordered, case-insensitive
+# substring matches; the first matching entry wins (spec 2026-08-04).
+_STATUS_COLOR_RULES: list[tuple[str, str]] = [
+    ("conditionally", "status-lgreen"),
+    ("partially", "status-lgreen"),
+    ("agreed", "status-green"),
+    ("approved", "status-green"),
+    ("revised", "status-vanilla"),
+    ("reissued", "status-vanilla"),
+    ("merged", "status-vanilla"),
+    ("rejected", "status-red"),
+    ("withdrawn", "status-grey"),
+    ("postponed", "status-pink"),
+    ("noted", "status-lblue"),
+    ("treated", "status-lblue"),
+    ("endorsed", "status-lblue"),
+]
+
+
+def status_color_class(value: str | None) -> str:
+    """Map a tdoc status string to a pastel row-background CSS class.
+
+    Matching is case-insensitive substring; the first rule whose needle
+    appears wins. ``None`` / empty / unmatched values yield ``""`` so
+    the row renders with no background.
+    """
+    if not value:
+        return ""
+    lowered = value.lower()
+    for needle, cls in _STATUS_COLOR_RULES:
+        if needle in lowered:
+            return cls
+    return ""
+
+
 templates.env.filters["dt_short"] = dt_short
 templates.env.filters["sync_state"] = sync_state
+templates.env.globals["status_color_class"] = status_color_class
 
 
 static_files = StaticFiles(directory=str(_STATIC_DIR))

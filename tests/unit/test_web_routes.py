@@ -126,6 +126,7 @@ class FakeTDocService(TDocService):
                     spec="38.523-3",
                     release="Rel-18",
                     type="CR",
+                    status="Approved",
                     uploaded_date=date(2026, 5, 2),
                 ),
                 meeting_name="RAN5#99-e",
@@ -139,6 +140,7 @@ class FakeTDocService(TDocService):
                     spec="38.523-3",
                     release="Rel-18",
                     type="CR",
+                    status="Revised",
                     uploaded_date=date(2026, 5, 3),
                 ),
                 meeting_name="RAN5#99-e",
@@ -189,6 +191,7 @@ class FakeWiService(WiService):
 
 class FakeSearchService(SearchService):
     def __init__(self) -> None:  # noqa: D401
+        self.last_filters = None
         self._hits = [
             SearchHit(
                 tdoc_id="R5-260001",
@@ -204,11 +207,13 @@ class FakeSearchService(SearchService):
         ]
 
     def search(self, _query: str, _filters: Any) -> list[SearchHit]:
+        self.last_filters = _filters
         return list(self._hits)
 
 
 class FakeSemanticSearchService(SemanticSearchService):
     def __init__(self) -> None:  # noqa: D401
+        self.last_kwargs: dict[str, Any] = {}
         from doc3gpp.models.semantic_search import SemanticSearchHit
         self._hits = [
             SemanticSearchHit(
@@ -233,6 +238,7 @@ class FakeSemanticSearchService(SemanticSearchService):
         ]
 
     def search(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+        self.last_kwargs = dict(_kwargs)
         return list(self._hits)
 
 
@@ -714,6 +720,45 @@ def test_tdoc_show_ttcn_changed_functions(
     assert "<code>mod_b.fn_two</code>" in response.text
 
 
+def test_tdoc_show_related_wis_in_tdoc_section(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The TDoc section shows the related_wis field."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(
+            tdoc_id="R5-260001",
+            title="CR on NR measurement",
+            ftp_url="R5/26.001/R5-260001.zip",
+            related_wis="890001, 890002",
+        ),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    assert "<dt>Related WIs</dt>" in response.text
+    assert "<dd>890001, 890002</dd>" in response.text
+
+
+def test_tdoc_show_related_wis_dash_when_absent(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """No related_wis -> the field renders '-'."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    assert "<dt>Related WIs</dt>" in response.text
+    assert "<dd>-</dd>" in response.text
+
+
 def test_tdoc_show_auxiliary_files_link_to_ftp(
     client: TestClient, sqlite_env: Any,
 ) -> None:
@@ -1147,9 +1192,136 @@ def test_tdoc_content_html_zip_wrapped_cache(
     assert "TTCN heading" in response.text
 
 
+def test_tdoc_list_default_columns_use_status(client: TestClient) -> None:
+    """Default HTML columns: Status replaces Uploaded; no fields param needed."""
+    html = client.get("/tdocs").text
+    assert "<th>Status</th>" in html
+    assert "<th>Uploaded</th>" not in html
+    assert '<table class="grid tdoc-grid">' in html
+    assert 'class="col-meeting"' in html
+    assert "content content-wide" in html
+
+
+def test_meetings_page_keeps_default_width(client: TestClient) -> None:
+    """Non-tdoc pages keep the default 1100px content class."""
+    html = client.get("/meetings").text
+    assert 'class="content"' in html
+    assert "content content-wide" not in html
+
+
+def test_tdoc_list_status_row_colors(client: TestClient) -> None:
+    """Rows carry the status-derived class on the <tr>."""
+    html = client.get("/tdocs").text
+    assert '<tr class="status-green">' in html
+    assert '<tr class="status-vanilla">' in html
+
+
+def test_tdoc_list_custom_fields(client: TestClient) -> None:
+    """?fields=tdoc_id&fields=related_wis renders only those columns + action."""
+    html = client.get(
+        "/tdocs?fields=tdoc_id&fields=related_wis",
+    ).text
+    assert "<th>TDoc ID</th>" in html
+    assert "<th>Related WIs</th>" in html
+    assert "<th>Status</th>" not in html
+    assert '<tr class="status-green">' in html
+
+
+def test_tdoc_list_unknown_field_returns_400(client: TestClient) -> None:
+    """?fields=bogus is 400 with the invalid_filter envelope."""
+    response = client.get("/tdocs?fields=bogus")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_filter"
+
+
+def test_tdoc_list_fields_select_renders(client: TestClient) -> None:
+    """The filter form carries the dropdown checkboxes with all column options."""
+    html = client.get("/tdocs").text
+    assert 'name="fields"' in html
+    assert 'type="checkbox"' in html
+    assert 'value="related_wis"' in html
+    assert 'value="status"' in html
+    assert 'class="columns-count"' in html
+    assert "<select" not in html
+
+
+def test_tdoc_list_fields_persist_in_pagination(
+    app_with_fakes: FastAPI,
+) -> None:
+    """The fields selection is preserved in pagination links."""
+    from doc3gpp.web.deps import get_tdoc_service
+
+    class _ManyRowsTDocService(FakeTDocService):
+        def list_recent_with_meeting(
+            self, *, limit: int = 50, offset: int = 0, **_kwargs: Any,
+        ) -> list[TDocWithMeeting]:
+            return [
+                TDocWithMeeting(
+                    tdoc=TDoc(
+                        tdoc_id=f"R5-{260001 + offset + i:06d}",
+                        title=f"row {offset + i}",
+                        meeting_id=1,
+                        ftp_url=f"R5/26.{(offset + i):03d}/R5-{260001 + offset + i:06d}.zip",
+                        spec="38.523-3",
+                        release="Rel-18",
+                        type="CR",
+                        status="Agreed",
+                        uploaded_date=date(2026, 5, 2),
+                    ),
+                    meeting_name="RAN5#99-e",
+                )
+                for i in range(limit)
+            ]
+
+    app_with_fakes.dependency_overrides[get_tdoc_service] = (
+        lambda: _ManyRowsTDocService()
+    )
+    with TestClient(app_with_fakes) as c:
+        response = c.get("/tdocs?limit=50&fields=tdoc_id&fields=status")
+    assert response.status_code == 200
+    assert "fields=tdoc_id" in response.text
+    assert "fields=status" in response.text
+
+
 # ---------------------------------------------------------------------------
-# TSGs
+# status_color_class
 # ---------------------------------------------------------------------------
+
+
+def test_status_color_class_mapping() -> None:
+    """Each status needle maps to its class, case-insensitively."""
+    from doc3gpp.web.templates_setup import status_color_class
+
+    cases = {
+        "Conditionally Approved": "status-lgreen",
+        "Partially Approved": "status-lgreen",
+        "Agreed": "status-green",
+        "approved": "status-green",
+        "Revised": "status-vanilla",
+        "Reissued": "status-vanilla",
+        "Merged": "status-vanilla",
+        "Rejected": "status-red",
+        "Withdrawn": "status-grey",
+        "Postponed": "status-pink",
+        "Noted": "status-lblue",
+        "Treated": "status-lblue",
+        "Endorsed": "status-lblue",
+    }
+    for value, expected in cases.items():
+        assert status_color_class(value) == expected, value
+
+
+def test_status_color_class_no_match_and_empty() -> None:
+    """No matching needle (or None/empty) -> no class."""
+    from doc3gpp.web.templates_setup import status_color_class
+
+    assert status_color_class("Submitted") == ""
+    assert status_color_class("") == ""
+    assert status_color_class(None) == ""
+
+
+
 
 
 def test_tsg_list_renders_html(client: TestClient) -> None:
@@ -1265,6 +1437,35 @@ def test_search_query_renders_html(client: TestClient) -> None:
     assert "R5-260001" in response.text
 
 
+def test_search_results_single_details_per_hit(client: TestClient) -> None:
+    """One details.hit-details block per hit (single folding), not per column."""
+    response = client.get("/search?q=foo")
+    assert response.status_code == 200
+    body = response.text
+    assert body.count('<details class="hit-details">') == 1
+    assert '<span class="preview-label">title</span>' in body
+
+
+def test_search_results_has_master_toggle(client: TestClient) -> None:
+    """The results fragment carries the fold/unfold-all toggle."""
+    response = client.get("/search?q=foo", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    assert 'id="fold-toggle"' in response.text
+
+
+def test_search_results_toggle_absent_without_hits(client: TestClient) -> None:
+    """No hits -> no toggle and no details."""
+    response = client.get("/search")
+    assert response.status_code == 200
+    assert 'id="fold-toggle"' not in response.text
+
+
+def test_search_full_page_loads_search_js(client: TestClient) -> None:
+    """The full search page includes the fold-toggle script."""
+    html = client.get("/search?q=foo").text
+    assert 'src="/static/js/search.js"' in html
+
+
 def test_search_query_htmx_returns_partial(client: TestClient) -> None:
     """``GET /search`` with ``HX-Request: true`` returns the results partial.
 
@@ -1341,6 +1542,66 @@ def test_search_sem_json(client: TestClient) -> None:
         "min_chunk_distance", "best_chunk_id", "hit",
     }
     assert set(body[0]["hit"]) == {"tdoc_id", "title", "ftp_url", "wis"}
+
+
+def test_search_query_tdoc_id_filter_forwarded(client: TestClient) -> None:
+    """``GET /search?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&tdoc-id=R5-260001")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_filters is not None
+    assert service.last_filters.tdoc_id == "R5-260001"
+
+
+def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
+    """``GET /search?q=foo&tdoc-id=`` is 200 and tdoc_id stays None."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&tdoc-id=")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_filters is not None
+    assert service.last_filters.tdoc_id is None
+
+
+def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
+    """``GET /search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get("/search/sem?q=foo&tdoc-id=R5-260001")
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    filters = service.last_kwargs.get("filters")
+    assert filters is not None
+    assert filters.tdoc_id == "R5-260001"
+
+
+def test_search_form_renders_tdoc_input_fts5(client: TestClient) -> None:
+    """The FTS5 search form carries a tdoc-id input with the round-tripped value."""
+    html = client.get("/search?q=foo&tdoc-id=R5-260001").text
+    assert 'name="tdoc-id"' in html
+    assert 'value="R5-260001"' in html
+
+
+def test_search_form_renders_tdoc_input_sem(client: TestClient) -> None:
+    """The semantic search form carries a tdoc-id input with the round-tripped value."""
+    html = client.get("/search/sem?q=foo&tdoc-id=R5-260001").text
+    assert 'name="tdoc-id"' in html
+    assert 'value="R5-260001"' in html
 
 
 # ---------------------------------------------------------------------------

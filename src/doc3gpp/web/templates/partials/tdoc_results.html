@@ -1,29 +1,27 @@
 <div id="results" hx-target="this" hx-swap="outerHTML">
   {% if tdocs %}
-    <table class="grid">
+    <table class="grid tdoc-grid">
       <thead>
         <tr>
-          <th>ID</th>
-          <th>Title</th>
-          <th>Meeting</th>
-          <th>Type</th>
-          <th>Spec</th>
-          <th>Release</th>
-          <th>Uploaded</th>
+          {% for f in fields %}
+            <th{% if f == 'meeting_name' %} class="col-meeting"{% endif %}>{{ column_labels[f] }}</th>
+          {% endfor %}
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for row in tdocs %}
-          <tr>
-            <td><code>{{ row.tdoc.tdoc_id }}</code></td>
-            <td>{{ row.tdoc.title or '-' }}</td>
-            <td>{{ row.meeting_name or '-' }}</td>
-            <td>{{ row.tdoc.type or '-' }}</td>
-            <td>{{ row.tdoc.spec or '-' }}</td>
-            <td>{{ row.tdoc.release or '-' }}</td>
-            <td>{{ row.tdoc.uploaded_date.isoformat() if row.tdoc.uploaded_date else '-' }}</td>
-            <td><a href="/tdocs/{{ row.tdoc.tdoc_id }}">show</a></td>
+          <tr class="{{ status_color_class(row['status']) }}">
+            {% for f in fields %}
+              <td{% if f == 'meeting_name' %} class="col-meeting"{% endif %}>
+                {% if f == 'tdoc_id' %}
+                  <code><a href="/tdocs/{{ row['tdoc_id'] }}">{{ row[f] }}</a></code>
+                {% else %}
+                  {{ row[f] }}
+                {% endif %}
+              </td>
+            {% endfor %}
+            <td><a href="/tdocs/{{ row['tdoc_id'] }}">show</a></td>
           </tr>
         {% endfor %}
       </tbody>

@@ -48,6 +48,7 @@ def _build_filters(
     spec: str | None,
     since: str | None,
     until: str | None,
+    tdoc_id: str | None,
     limit: int,
 ) -> SearchFilters:
     """Compose a :class:`SearchFilters` from raw query params.
@@ -63,6 +64,7 @@ def _build_filters(
         spec=parse_text_query(spec),
         since=parse_date_query(since),
         until=parse_date_query(until),
+        tdoc_id=parse_text_query(tdoc_id),
         limit=limit,
     )
 
@@ -121,6 +123,7 @@ async def search_query(
     spec: str | None = Query(default=None),
     since: str | None = Query(default=None),
     until: str | None = Query(default=None),
+    tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
     limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
     service: SearchService | None = Depends(get_search_service),
@@ -134,7 +137,8 @@ async def search_query(
     parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 20
     filters = _build_filters(
         tsg=tsg, meeting=meeting, release=release,
-        spec=spec, since=since, until=until, limit=parsed_limit,
+        spec=spec, since=since, until=until, tdoc_id=tdoc_id,
+        limit=parsed_limit,
     )
     hits: list[SearchHit] = []
     error: str | None = None
@@ -170,6 +174,7 @@ async def search_query(
                 "spec": spec or "",
                 "since": since or "",
                 "until": until or "",
+                "tdoc_id": tdoc_id or "",
             },
         },
     )
@@ -179,6 +184,7 @@ async def search_query(
 async def search_semantic(
     request: Request,
     q: str | None = Query(default=None),
+    tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
     fts5_query: str | None = Query(default=None),
     fts5_weight: float | None = Query(default=0.5),
     limit: str | None = Query(default="20"),
@@ -205,7 +211,10 @@ async def search_semantic(
         hits = service.search(
             q,
             fts5_query=fts5_query,
-            filters=SearchFilters(limit=parsed_limit),
+            filters=SearchFilters(
+                limit=parsed_limit,
+                tdoc_id=parse_text_query(tdoc_id),
+            ),
             limit=parsed_limit,
             fts5_weight=fts5_weight,
         )
@@ -231,6 +240,9 @@ async def search_semantic(
             "hits": hits,
             "error": error,
             "pending_jobs": pending_jobs,
+            "filters": {
+                "tdoc_id": tdoc_id or "",
+            },
         },
     )
 

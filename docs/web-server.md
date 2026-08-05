@@ -158,14 +158,14 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/` | Landing page. |
 | GET | `/meetings` | List meetings (`?format=json`); shows `start_doc`/`end_doc` and a coloured, clickable sync symbol (`↻`) per meeting. |
 | GET | `/meetings/{id}` | Meeting detail (HTML or JSON). |
-| GET | `/tdocs` | List TDocs (`?format=json`). |
+| GET | `/tdocs` | List TDocs (`?format=json`; repeatable `fields` selects the HTML columns, see below). |
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
 | GET | `/tdocs/{id}/content` | Parsed markdown/HTML content (`?format=markdown\|html`). 404 `cache_miss` with a hint when unparsed. |
 | GET | `/tdocs/{id}/download` | Download the cached source zip (404 `cache_miss` with a hint when unparsed). |
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
-| GET | `/search` | FTS5 search (`?format=json`). User queries are normalised into a valid FTS5 `MATCH` expression (jargon like `nb-iot` is quoted, mirroring the CLI); a stopwords-only or empty query returns 400 `invalid_query`. Filter fields are LIKE patterns matching the CLI's semantics: `meeting` matches `meetings.name` **or** `meetings.title`, `release`/`spec` match `tdocs.release`/`tdocs.spec`, `tsg` is case-insensitive. |
+| GET | `/search` | FTS5 search (`?format=json`). User queries are normalised into a valid FTS5 `MATCH` expression (jargon like `nb-iot` is quoted, mirroring the CLI); a stopwords-only or empty query returns 400 `invalid_query`. Filter fields are LIKE patterns matching the CLI's semantics: `meeting` matches `meetings.name` **or** `meetings.title`, `release`/`spec` match `tdocs.release`/`tdocs.spec`, `tsg` is case-insensitive. Both search modes also accept `tdoc-id` (exact-match tdoc filter, see below). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. |
@@ -209,6 +209,46 @@ The filter form (submitted via HTMX to `GET /meetings`, swapping the
 (e.g. `R5-260013`); the list is narrowed to meetings whose `start_doc` /
 `end_doc` range brackets it. An empty value is ignored; a malformed value
 returns a 400 `invalid_filter` response.
+
+Both search modes (`GET /search` and `GET /search/sem`) accept a
+`tdoc-id` query param — an exact-match tdoc filter identical in
+semantics to the CLI's `search query --tdoc-id`. The search form
+carries a TDoc text input in both the FTS5 and the semantic branch
+(empty input → no filter).
+
+Search results render one collapsible "Matching fields" block per hit
+(a single `<details>` element replacing the previous per-column
+folding), with an "Expand all matching fields" toggle above the table.
+The toggle's state persists in `localStorage` (key `doc3gpp-search-expand`)
+and is re-applied on every HTMX swap (`htmx:afterSwap`), so the
+preference survives re-queries; the script lives at
+`/static/js/search.js`.
+
+The TDoc detail page links the FTP URL field to the cached source zip
+(`/tdocs/{id}/download`) when a cached copy exists, otherwise to
+`https://www.3gpp.org/ftp/{ftp_url}`. The TDoc section now also shows
+`Related WIs` (from the XLSX-derived `tdoc.related_wis`); the Cover
+page section keeps its own separate Related WIs field (parsed from the
+docx). The TTCN section lists the `changed_functions` aggregate when
+present, and auxiliary files link to their FTP locations.
+
+The TDoc list page accepts repeated `fields` query params selecting the
+visible columns; values are validated against the column catalogue and
+an unknown field returns a 400 `invalid_filter` response. Default
+columns are TDoc ID, Title, Meeting, Type, Spec, Release, Status
+(Uploaded was replaced by Status). A dropdown of checkboxes in the
+filter form drives the `fields` param — toggling a checkbox re-queries
+immediately (the form auto-submits on change). The tdoc list page uses
+a wider layout (max-width 1430px) and the Meeting column is fixed at
+180px. Row background colors derive from the status
+value (case-insensitive substring, first match wins): conditionally /
+partially → light green, agreed / approved → green, revised / reissued
+/ merged → vanilla, rejected → red, withdrawn → grey, postponed →
+pink, noted / treated / endorsed → light blue; no match → no
+background. The color class applies to the whole row so it shows even
+when the Status column is hidden. `?format=json` and the MCP
+`list_tdocs` tool keep their fixed 10-field output regardless of the
+HTML column selection.
 
 ## Jobs
 

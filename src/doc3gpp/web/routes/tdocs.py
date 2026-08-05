@@ -39,7 +39,12 @@ from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.web.deps import get_pending_jobs, get_settings, get_tdoc_file_repo, get_tdoc_service
 from doc3gpp.web.errors import CacheMissError, InvalidFilterError
 from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
-from doc3gpp.web.render import to_jsonable, tdoc_rows
+from doc3gpp.web.render import (
+    TDOC_COLUMN_LABELS,
+    TDOC_HTML_DEFAULT_FIELDS,
+    to_jsonable,
+    tdoc_rows,
+)
 from doc3gpp.web.templates_setup import templates
 
 
@@ -65,6 +70,8 @@ _TDOC_DEFAULT_FIELDS = [
     "version",
     "related_wis",
 ]
+
+_TDOC_ALLOWED_FIELDS = frozenset(TDOC_COLUMN_LABELS)
 
 _MD_RENDERER = MarkdownIt("commonmark", {"html": True, "linkify": True}).enable("table")
 
@@ -115,6 +122,7 @@ async def list_tdocs(
     uploaded_date: str | None = Query(default=None, alias="uploaded-date"),
     limit: str | None = Query(default="50"),
     offset: str | None = Query(default="0"),
+    fields: list[str] | None = Query(default=None),
     format: str | None = Query(default=None, alias="format"),
     service: TDocService = Depends(get_tdoc_service),
     pending_jobs: int = Depends(get_pending_jobs),
@@ -136,6 +144,20 @@ async def list_tdocs(
     parsed_offset = parse_int_query(offset, min=0) or 0
     parsed_meeting_id = parse_int_query(meeting_id, min=1)
     parsed_uploaded_date = parse_date_query(uploaded_date)
+
+    if fields:
+        unknown = [f for f in fields if f not in _TDOC_ALLOWED_FIELDS]
+        if unknown:
+            raise InvalidFilterError(
+                "unknown fields: "
+                + ", ".join(sorted(unknown))
+                + f"; valid: {', '.join(sorted(_TDOC_ALLOWED_FIELDS))}"
+            )
+        html_fields = [f for f in fields if f]
+    else:
+        html_fields = list(TDOC_HTML_DEFAULT_FIELDS)
+    if not html_fields:
+        html_fields = list(TDOC_HTML_DEFAULT_FIELDS)
 
     rows = service.list_recent_with_meeting(
         limit=parsed_limit,
@@ -166,6 +188,10 @@ async def list_tdocs(
     next_offset = (
         parsed_offset + len(rows) if len(rows) == parsed_limit else None
     )
+    table_rows = tdoc_rows(rows, html_fields)
+    for r, item in zip(table_rows, rows):
+        r.setdefault("tdoc_id", item.tdoc.tdoc_id)
+        r.setdefault("status", item.tdoc.status or "")
     template_name = (
         "partials/tdoc_results.html" if is_htmx_request(request) else "tdoc_list.html"
     )
@@ -174,12 +200,14 @@ async def list_tdocs(
         name=template_name,
         context={
             "active_nav": "tdocs",
-            "tdocs": rows,
+            "tdocs": table_rows,
             "total": len(rows),
             "limit": parsed_limit,
             "offset": parsed_offset,
             "next_offset": next_offset,
             "pending_jobs": pending_jobs,
+            "fields": html_fields,
+            "column_labels": TDOC_COLUMN_LABELS,
             "filters": {
                 "tdoc_id": tdoc_id or "",
                 "meeting": meeting or "",

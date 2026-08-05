@@ -32,6 +32,36 @@ from doc3gpp.models.tdoc import TDocWithMeeting
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 
 
+# HTML column catalogue for the tdoc list page. The keys mirror the
+# field names used by ``tdoc_rows``; the values are the table headers.
+TDOC_COLUMN_LABELS: dict[str, str] = {
+    "tdoc_id": "TDoc ID",
+    "meeting_name": "Meeting",
+    "title": "Title",
+    "type": "Type",
+    "spec": "Spec",
+    "release": "Release",
+    "status": "Status",
+    "uploaded_date": "Uploaded",
+    "source": "Source",
+    "cr_cat": "CR Category",
+    "version": "Version",
+    "related_wis": "Related WIs",
+}
+
+# Default HTML table columns: the previous hard-coded set with
+# ``uploaded_date`` replaced by ``status`` (spec 2026-08-04).
+TDOC_HTML_DEFAULT_FIELDS: list[str] = [
+    "tdoc_id",
+    "meeting_name",
+    "title",
+    "type",
+    "spec",
+    "release",
+    "status",
+]
+
+
 def to_jsonable(value: Any) -> JSONValue:
     """Recursively coerce ``value`` into a JSON-serialisable shape.
 
@@ -216,6 +246,8 @@ def wi_rows(wis: list[Any], fields: list[str]) -> list[dict[str, str]]:
 
 
 __all__ = [
+    "TDOC_COLUMN_LABELS",
+    "TDOC_HTML_DEFAULT_FIELDS",
     "meeting_rows",
     "tdoc_rows",
     "to_jsonable",

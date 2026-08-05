@@ -63,6 +63,10 @@ body {
   padding: 0 1.5rem;
 }
 
+.content-wide {
+  max-width: 1430px;
+}
+
 .footer {
   text-align: center;
   padding: 1rem;
@@ -314,3 +318,60 @@ dl.kv dd {
 .muted {
   color: var(--muted);
 }
+
+/* Search results: fold toggle + per-hit matching-fields blocks */
+.fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+details.hit-details summary {
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.preview-field {
+  margin: 0.5rem 0 0.5rem 1rem;
+}
+
+.preview-field .preview-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.preview-field pre {
+  margin: 0.25rem 0 0;
+  overflow-x: auto;
+}
+
+/* TDoc list: status-derived row backgrounds (soft pastels, dark text) */
+tr.status-lgreen td { background: #e2f5d8; }
+tr.status-green td { background: #c8e6c9; }
+tr.status-vanilla td { background: #fff3cd; }
+tr.status-red td { background: #f8d7da; }
+tr.status-grey td { background: #e2e3e5; }
+tr.status-pink td { background: #fce4ec; }
+tr.status-lblue td { background: #d1ecf1; }
+
+/* TDoc list: dropdown-checkbox column picker */
+.columns-dropdown { position: relative; display: inline-block; }
+.columns-panel {
+  position: absolute; top: 100%; left: 0; z-index: 10;
+  min-width: 14rem; max-height: 15rem; overflow-y: auto;
+  background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.5rem; display: grid; gap: 0.25rem;
+}
+.columns-panel[hidden] { display: none; }
+.columns-option {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-size: 0.875rem; cursor: pointer; white-space: nowrap;
+}
+table.tdoc-grid .col-meeting { width: 180px; }

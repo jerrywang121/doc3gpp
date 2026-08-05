@@ -12,6 +12,9 @@
     <label>FTS5 query
       <input type="text" name="fts5_query" value="{{ fts5_query or '' }}">
     </label>
+    <label>TDoc
+      <input type="text" name="tdoc-id" value="{{ filters.tdoc_id or '' }}">
+    </label>
     <label>FTS5 weight
       <input type="number" step="0.1" min="0" max="1" name="fts5_weight" value="{{ fts5_weight }}">
     </label>
@@ -24,6 +27,9 @@
     </label>
     <label>Meeting
       <input type="text" name="meeting" value="{{ filters.meeting or '' }}">
+    </label>
+    <label>TDoc
+      <input type="text" name="tdoc-id" value="{{ filters.tdoc_id or '' }}">
     </label>
     <label>Release
       <input type="text" name="release" value="{{ filters.release or '' }}">

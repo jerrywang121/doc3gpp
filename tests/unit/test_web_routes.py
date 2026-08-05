@@ -206,8 +206,11 @@ class FakeSearchService(SearchService):
             ),
         ]
 
-    def search(self, _query: str, _filters: Any) -> list[SearchHit]:
+    def search(
+        self, _query: str, _filters: Any, sem_query: str | None = None,
+    ) -> list[SearchHit]:
         self.last_filters = _filters
+        self.last_sem_query = sem_query
         return list(self._hits)
 
 
@@ -1572,6 +1575,34 @@ def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
     assert response.status_code == 200
     assert service.last_filters is not None
     assert service.last_filters.tdoc_id is None
+
+
+def test_search_query_sem_param_forwarded(client: TestClient) -> None:
+    """``GET /search?sem=<text>`` forwards sem_query into the service."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&sem=hybrid+rerank")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_sem_query == "hybrid rerank"
+
+
+def test_search_query_sem_empty_is_none(client: TestClient) -> None:
+    """``GET /search?sem=`` leaves sem_query None (no rerank)."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&sem=")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_sem_query is None
 
 
 def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:

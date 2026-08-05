@@ -123,6 +123,7 @@ async def search_query(
     spec: str | None = Query(default=None),
     since: str | None = Query(default=None),
     until: str | None = Query(default=None),
+    sem: str | None = Query(default=None),
     tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
     limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
@@ -145,7 +146,7 @@ async def search_query(
     if q:
         # Service exceptions propagate to the generic handler, which
         # emits the 500 envelope with a request_id correlation id.
-        hits = service.search(q, filters)
+        hits = service.search(q, filters, sem_query=sem or None)
 
     if format == "json":
         return JSONResponse(
@@ -174,6 +175,7 @@ async def search_query(
                 "spec": spec or "",
                 "since": since or "",
                 "until": until or "",
+                "sem": sem or "",
                 "tdoc_id": tdoc_id or "",
             },
         },

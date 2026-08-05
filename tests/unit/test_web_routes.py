@@ -1736,3 +1736,34 @@ def test_healthz_still_ok(client: TestClient) -> None:
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_tdoc_show_parse_card_rendered_when_ftp_url(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TDoc with an ftp_url shows the Parse card with force/full checkboxes."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+    )
+    html = client.get("/tdocs/R5-260001").text
+    assert "Parse this TDoc" in html
+    assert 'name="force"' in html
+    assert 'name="full"' in html
+    assert 'src="/static/js/tdoc_parse.js"' in html
+
+
+def test_tdoc_show_parse_card_hidden_without_ftp_url(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TDoc without an ftp_url shows no Parse card."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260001"))
+    html = client.get("/tdocs/R5-260001").text
+    assert "Parse this TDoc" not in html

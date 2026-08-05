@@ -405,3 +405,25 @@ table.tdoc-grid .col-meeting { width: 180px; }
   display: flex;
   gap: .5rem;
 }
+
+/* Parse card on the TDoc detail page. */
+.parse-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  align-items: center;
+}
+
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .875rem;
+  color: var(--muted, #666);
+}
+
+.parse-queued {
+  margin-left: .4rem;
+  color: #1a7f37;
+  font-size: .85rem;
+}

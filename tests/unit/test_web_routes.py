@@ -1558,6 +1558,24 @@ def test_search_sem_renders_html(client: TestClient) -> None:
     assert response.status_code == 200
 
 
+def test_search_sem_table_renders_nested_metadata(client: TestClient) -> None:
+    """The sem results table shows title / meeting / tsg from the nested hit.
+
+    Regression: the shared results table accessed ``hit.title`` directly,
+    but semantic hits carry their metadata in the nested ``hit.hit``
+    bag — Title / Meeting / TSG rendered as ``-`` while RRF and the
+    ranks (top-level fields) worked. The template must unwrap the
+    nested bag in ``sem`` mode.
+    """
+    html = client.get("/search/sem?q=foo").text
+    assert "CR on NR measurement" in html
+    assert "RAN5#99-e" in html
+    assert ">R5<" in html
+    assert "0.5000" in html  # rrf_score
+    assert ">0<" in html  # rank_fts5
+    assert ">1<" in html  # rank_vec
+
+
 def test_search_sem_json(client: TestClient) -> None:
     """``GET /search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
 
@@ -1650,6 +1668,41 @@ def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
     filters = service.last_kwargs.get("filters")
     assert filters is not None
     assert filters.tdoc_id == "R5-260001"
+
+
+def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
+    """``GET /search/sem?q=foo&fts5_query=`` passes fts5_query=None.
+
+    Regression: the sem form always submits an ``fts5_query`` field, so
+    a blank value arrived as ``""``. The service treats any non-``None``
+    value as an opt-in FTS5 path, so an empty string ran FTS5 with an
+    empty query and returned zero hits. The route must normalise blank
+    to ``None`` so the default is pure-vector, matching the CLI.
+    """
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get("/search/sem?q=foo&fts5_query=")
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    assert service.last_kwargs.get("fts5_query") is None
+
+
+def test_search_sem_whitespace_fts5_query_is_none(client: TestClient) -> None:
+    """``GET /search/sem?q=foo&fts5_query=%20%20`` passes fts5_query=None."""
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get("/search/sem?q=foo&fts5_query=%20%20")
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    assert service.last_kwargs.get("fts5_query") is None
 
 
 def test_search_sem_full_filters_forwarded(client: TestClient) -> None:

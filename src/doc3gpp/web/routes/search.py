@@ -210,6 +210,13 @@ async def search_semantic(
         raise InvalidFilterError(
             f"fts5_weight must be between 0.0 and 1.0, got {fts5_weight!r}"
         )
+    # The sem form always submits an ``fts5_query`` field; a blank value
+    # arrives as ``""``. The service treats any non-``None`` value as an
+    # opt-in FTS5 path, so an empty string would run FTS5 with an empty
+    # query and return zero hits. Normalise blank to ``None`` so the
+    # default is pure-vector, matching ``doc3gpp search sem``.
+    if fts5_query is not None and not fts5_query.strip():
+        fts5_query = None
 
     hits: list[SemanticSearchHit] = []
     error: str | None = None

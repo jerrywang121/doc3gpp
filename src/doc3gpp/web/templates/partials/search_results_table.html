@@ -11,11 +11,12 @@
     </thead>
     <tbody>
       {% for hit in hits %}
+        {% set meta = hit.hit if mode == 'sem' else hit %}
         <tr>
           <td><a href="/tdocs/{{ hit.tdoc_id }}"><code>{{ hit.tdoc_id }}</code></a></td>
-          <td>{{ hit.title or '-' }}</td>
-          <td>{{ hit.meeting or '-' }}</td>
-          <td>{{ hit.tsg or '-' }}</td>
+          <td>{{ meta.title or '-' }}</td>
+          <td>{{ meta.meeting or '-' }}</td>
+          <td>{{ meta.tsg or '-' }}</td>
           {% if mode == 'sem' %}
             <td>{{ '%.4f' | format(hit.rrf_score) }}</td>
             <td>{{ hit.rank_fts5 if hit.rank_fts5 is not none else '-' }}</td>
@@ -24,12 +25,12 @@
             <td>{{ '%.4f' | format(hit.score) }}</td>
           {% endif %}
         </tr>
-        {% if hit.previews %}
+        {% if meta.previews %}
           <tr class="preview-row">
             <td colspan="6">
               <details class="hit-details">
                 <summary>Matching fields</summary>
-                {% for col, snippet in hit.previews.items() %}
+                {% for col, snippet in meta.previews.items() %}
                   <div class="preview-field">
                     <span class="preview-label">{{ col }}</span>
                     <pre>{{ snippet }}</pre>

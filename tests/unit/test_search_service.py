@@ -133,6 +133,9 @@ def test_search_with_sem_query_reranks_with_fanout() -> None:
     assert reranker.queries == ["semantic text"]
     assert repo.search_query is not None
     assert repo.search_query[1].limit == 5 * 4  # search_fanout_factor default 4
+
+
+def test_rebuild_yields_progress_per_one_percent() -> None:
     """rebuild must yield at most once per 1% of progress so the
     CLI tqdm bar updates ~100 times for a 13,693-tdoc rebuild
     instead of 27 (per batch) or 13,693 (per tdoc).

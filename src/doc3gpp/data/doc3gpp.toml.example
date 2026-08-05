@@ -237,6 +237,17 @@ search_fanout_factor = 4
 # at 1..16 to keep sqlite writer contention predictable; raise it for
 # high-throughput operators.
 # max_concurrent_jobs = 1
+
+# How often the worker checks the `jobs` table for new QUEUED rows.
+# Lower = faster pickup after a `POST /jobs/...` lands; the default 1s
+# keeps the nav badge in lockstep with the SSE stream. Independent of
+# `cleanup_interval_seconds` so the two cadences can be tuned
+# separately. Range 0.05..60.0 seconds.
+# poll_interval_seconds = 1.0
+
+# How often the worker prunes terminal rows older than `log_retention`.
+# The worker re-checks the cutoff on every pass, so changing this knob
+# does not affect how quickly new jobs are picked up. Minimum 10s.
 # cleanup_interval_seconds = 300
 
 # Retention window for completed-job log files. Parsed by

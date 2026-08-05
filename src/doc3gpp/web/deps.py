@@ -7,7 +7,7 @@ handlers should never reach into ``app.state`` directly.
 """
 from __future__ import annotations
 
-from fastapi import Request
+from fastapi import Depends, Request
 from sqlalchemy.engine import Engine
 
 from doc3gpp.models.jobs import JobStatus
@@ -78,21 +78,45 @@ def get_tdoc_file_repo(request: Request) -> SQLAlchemyTDocFileRepository:
 
 
 def get_job_repo(request: Request) -> JobRepository:
+    """Return the wired :class:`JobRepository` for the request.
+
+    Resolved via :func:`get_services` so it stays consistent with the
+    per-app ``WebState``; routes that need a test double should
+    override :func:`get_pending_jobs` (or wire ``state.services.job_repo``
+    directly) rather than this dependency, since this is the
+    single-source-of-truth for production wiring.
+    """
     return get_services(request).job_repo
 
 
-def get_pending_jobs(request: Request) -> int:
-    """Return the number of queued background jobs (for the nav badge).
+def get_pending_jobs(
+    request: Request,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> int:
+    """Return the number of in-flight background jobs (for the nav badge).
 
-    Counts ``QUEUED`` rows via the :class:`JobRepository` protocol's
-    ``list(status=...)``; a missing ``jobs`` table (fresh database
-    before schema bootstrap) degrades to ``0`` instead of 500-ing the
-    page chrome.
+    Counts ``QUEUED`` + ``RUNNING`` rows via the :class:`JobRepository`
+    protocol's ``list(status=...)`` — from the user's perspective both
+    states are "pending" (the job is either waiting to start or is
+    actively running). Counting only ``QUEUED`` made the badge vanish
+    the moment the worker picked the job up (status → ``RUNNING``),
+    which left the user staring at "Parse job queued" with no header
+    indicator even though the job was clearly still in flight.
+
+    Routed through :class:`fastapi.Depends` on :func:`get_job_repo` so
+    the test suite can swap the repo via ``dependency_overrides``;
+    bypassing that path (by calling ``get_services`` directly) made
+    the function untestable against the production code path.
+
+    A missing ``jobs`` table (fresh database before schema bootstrap)
+    degrades to ``0`` instead of 500-ing the page chrome.
     """
     try:
-        return len(get_job_repo(request).list(status=JobStatus.QUEUED))
+        queued = len(job_repo.list(status=JobStatus.QUEUED, limit=1000))
+        running = len(job_repo.list(status=JobStatus.RUNNING, limit=1000))
     except Exception:
         return 0
+    return queued + running
 
 
 def get_job_worker(request: Request) -> JobWorkerHandle:

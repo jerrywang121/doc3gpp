@@ -61,20 +61,58 @@
   // "Parse job queued" hint so it doesn't linger forever, and reload
   // the page so the server-rendered cover page / TTCN / extracted-at
   // sections pick up the freshly-written DB rows.
+  //
+  // Important: the freshly-appended wrapper div carries
+  // ``hx-trigger="load"`` (NOT ``every 2s``), and a mutation fires the
+  // moment it is attached — before HTMX has had any chance to issue the
+  // initial GET. A naive selector that just checks for the polling
+  // span's presence fires on that first mutation and reloads the page
+  // before the job is even enqueued. The fix is to remember whether we
+  // have ever seen the polling span: only when it disappears AFTER it
+  // has appeared do we conclude the job reached a terminal state.
+  //
+  // Edge case: a job that is already terminal when the first HTMX GET
+  // returns (instant failure, cache purge) never renders the polling
+  // span, so ``pollSeen`` stays false and the observer would never
+  // fire. A timeout fallback hides the hint and reloads the page once
+  // the job has had ample time to reach a terminal state.
   function installTerminalObserver(target, queued) {
     if (!queued || !target || !window.MutationObserver) {
       return;
+    }
+    var pollSeen = false;
+    var done = false;
+    function finish() {
+      if (done) {
+        return;
+      }
+      done = true;
+      queued.style.display = "none";
+      observer.disconnect();
+      window.location.reload();
     }
     var observer = new MutationObserver(function () {
       var node = target.querySelector(
         "[hx-get*='/jobs/'][hx-trigger='every 2s']"
       );
-      if (!node) {
-        queued.style.display = "none";
-        observer.disconnect();
-        window.location.reload();
+      if (node) {
+        pollSeen = true;
+        return;
+      }
+      if (pollSeen) {
+        finish();
       }
     });
     observer.observe(target, { childList: true, subtree: true });
+    // 30s is far beyond the 2s poll cadence. If the polling span never
+    // appeared the job is terminal (or the stream is wedged) — either
+    // way the hint must not linger and the page should refresh. If the
+    // span WAS seen, the observer handles the terminal transition and
+    // this timeout is a no-op.
+    window.setTimeout(function () {
+      if (!pollSeen) {
+        finish();
+      }
+    }, 30000);
   }
 })();

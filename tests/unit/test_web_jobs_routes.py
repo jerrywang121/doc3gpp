@@ -20,7 +20,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from doc3gpp.models.jobs import JobKind
+from doc3gpp.models.jobs import JobKind, JobStatus
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
 from doc3gpp.web.app import build_app
@@ -393,3 +393,88 @@ def test_events_stream_404_for_unknown(client: Any) -> None:
     c, _, _ = client
     r = c.get("/jobs/does-not-exist/events")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Nav badge (``get_pending_jobs``) — QUEUED + RUNNING both count
+# ---------------------------------------------------------------------------
+
+
+def test_nav_badge_counts_queued_jobs(client: Any) -> None:
+    """The nav badge shows the count of QUEUED jobs.
+
+    Regression for the user-visible bug where the badge disappeared the
+    moment the worker picked a job up (status → RUNNING). The badge
+    must keep counting in-flight jobs through the QUEUED → RUNNING
+    transition so users always see whether a parse / sync is in
+    progress. This test pins the QUEUED half of the contract; the
+    RUNNING half is pinned in :func:`test_nav_badge_counts_running_jobs`.
+    """
+    c, repo, _ = client
+    for _ in range(3):
+        repo.create(JobKind.PARSE_TDOCS, {"filter": {"tdoc_id": "R5-260001"}})
+
+    html = c.get("/").text
+    assert 'class="nav-badge">3</span>' in html
+
+
+def test_nav_badge_counts_running_jobs(client: Any) -> None:
+    """The nav badge counts RUNNING jobs (not only QUEUED).
+
+    Locks in the fix for the user-reported bug: clicking "Parse" made
+    the badge vanish as soon as the worker transitioned the job from
+    QUEUED → RUNNING, leaving no header indicator that the parse was
+    still in flight. The badge must keep counting in-flight jobs
+    through that transition.
+    """
+    c, repo, _ = client
+    # Two QUEUED, one RUNNING.
+    queued_1 = repo.create(JobKind.PARSE_TDOCS, {"filter": {"tdoc_id": "R5-1"}})
+    queued_2 = repo.create(JobKind.PARSE_TDOCS, {"filter": {"tdoc_id": "R5-2"}})
+    running = repo.create(JobKind.PARSE_TDOCS, {"filter": {"tdoc_id": "R5-3"}})
+    repo.mark_running(running.id, message="starting")
+    # One SUCCEEDED — must NOT count.
+    done = repo.create(JobKind.PARSE_TDOCS, {"filter": {"tdoc_id": "R5-4"}})
+    repo.mark_running(done.id, message="starting")
+    repo.mark_succeeded(done.id, summary={"requested": 1, "successes": 1})
+
+    html = c.get("/").text
+    assert 'class="nav-badge">3</span>' in html
+    # Sanity: make sure we actually created the jobs we expected.
+    assert len(repo.list(status=JobStatus.QUEUED, limit=100)) == 2
+    assert len(repo.list(status=JobStatus.RUNNING, limit=100)) == 1
+    assert len(repo.list(status=JobStatus.SUCCEEDED, limit=100)) == 1
+    # All four ids must exist.
+    assert all(
+        repo.get(jid) is not None
+        for jid in (queued_1.id, queued_2.id, running.id, done.id)
+    )
+
+
+def test_nav_badge_hidden_when_no_in_flight_jobs(client: Any) -> None:
+    """No QUEUED / RUNNING jobs → the badge is absent (not "0")."""
+    c, repo, _ = client
+    # A terminal job must NOT inflate the badge.
+    done = repo.create(JobKind.PARSE_TDOCS, {})
+    repo.mark_running(done.id, message="starting")
+    repo.mark_succeeded(done.id, summary={})
+
+    html = c.get("/").text
+    assert 'class="nav-badge"' not in html
+
+
+def test_nav_badge_on_jobs_list_page_counts_running(client: Any) -> None:
+    """The badge on /jobs also picks up RUNNING jobs.
+
+    The list route computes ``pending_jobs`` independently of the
+    ``get_pending_jobs`` dependency (because the page renders a table
+    + filter UI that needs the same count). It must apply the same
+    QUEUED + RUNNING semantics.
+    """
+    c, repo, _ = client
+    repo.create(JobKind.PARSE_TDOCS, {})
+    running = repo.create(JobKind.PARSE_TDOCS, {})
+    repo.mark_running(running.id, message="starting")
+
+    html = c.get("/jobs").text
+    assert 'class="nav-badge">2</span>' in html

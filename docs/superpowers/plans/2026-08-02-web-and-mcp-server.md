@@ -65,6 +65,15 @@ new `[web]` pyproject extra so existing CLI users stay unaffected.
   lifespan; `Settings.server.max_concurrent_jobs` defaults to `1`;
   cancellation is cooperative (a `_cancel_event` checked between
   handler iterations).
+- **Two independent cadences for the worker.** `Settings.server.poll_interval_seconds`
+  (default `1.0`s, range `0.05..60.0`) governs how often the loop
+  re-checks the `jobs` table for new `QUEUED` rows. `Settings.server.cleanup_interval_seconds`
+  (default `300`s, min `10`) governs how often terminal rows are
+  pruned. The two are decoupled — flipping the cleanup cadence does
+  not change pickup latency, and vice-versa. (Earlier v1 conflated
+  them and the 5-minute cleanup cadence became a 5-minute pickup
+  delay for parse / sync / cache-purge requests; the fix is the
+  dedicated `poll_interval_seconds` knob.)
 - SSE channel for job progress: bounded `asyncio.Queue[str]`
   (default size 100, drop oldest) per job to avoid unbounded memory.
 - `[server].log_retention` parsed via `humanfriendly.parse_timespan`
@@ -151,7 +160,8 @@ new `[web]` pyproject extra so existing CLI users stay unaffected.
   - `host: str = "127.0.0.1"`
   - `port: int = 8765`
   - `max_concurrent_jobs: int = Field(default=1, ge=1, le=16)`
-  - `cleanup_interval_seconds: int = Field(default=300, ge=10)`
+  - `poll_interval_seconds: float = Field(default=1.0, ge=0.05, le=60.0)` — pickup cadence for new `QUEUED` rows (range and bounds validated by Pydantic)
+  - `cleanup_interval_seconds: int = Field(default=300, ge=10)` — retention-only cadence
   - `log_retention: str = "7d"` (`@field_validator` accepts `humanfriendly.parse_timespan` format)
   - `cache_subdir: str | None = None`
   - `pid_file: str | None = None` (`None` → `{cache.dir}/server.pid`)
@@ -161,7 +171,7 @@ new `[web]` pyproject extra so existing CLI users stay unaffected.
   - `transport: Literal["streamable_http"] = "streamable_http"`
   - `sse_queue_size: int = Field(default=100, ge=10)`
 - Add to `Settings`: `server: ServerSettings = ServerSettings()` + `mcp: MCPSettings = MCPSettings()`.
-- TOML `[server]` and `[mcp]` blocks in `doc3gpp.toml.example` with the same defaults + comment headers.
+- TOML `[server]` and `[mcp]` blocks in `doc3gpp.toml.example` with the same defaults + comment headers; the `[server]` block has explicit commented lines for both `poll_interval_seconds` and `cleanup_interval_seconds` so the independence of the two cadences is documented in the file the user is most likely to read.
 
 **Steps:**
 1. Add `ServerSettings` and `MCPSettings` to `settings/schema.py`. Re-export from the same `__all__`.
@@ -448,12 +458,36 @@ ruff check .
 - `class JobWorkerHandle` (dataclass) with `task: asyncio.Task[None]`, `event_queues: dict[str, asyncio.Queue[dict]]`, `cancel_events: dict[str, asyncio.Event]`, `register_queue(job_id)`, `unregister_queue(job_id)`, `cancel(job_id: str) -> bool`, `shutdown()`.
 - `class JobWorker` with `__init__(self, state: WebState, *, queue_size: int = 100)`.
 - `async def run(self) -> None`:
-  - Loop: `repo.list(status=QUEUED, limit=1)`; if present, claim via `mark_running`; resolve handler from `JobHandlers.KIND_TO_HANDLER`; create `cancel_event` + `event_queue`; run `handler(job, progress_callback=..., cancel_event=...)`.
-  - `progress_callback(message)` formats `[<ISO timestamp>] <message>` then calls `repo.append_log(job_id, line=...)` + `event_queue.put_nowait({"event": "log", "data": {"line": line}})` (drop oldest when full).
+  - Loop: `repo.list(status=QUEUED, limit=max_concurrent)` per tick, gated by
+    `asyncio.Semaphore(max_concurrent)` for concurrency. The cadence
+    is `Settings.server.poll_interval_seconds` (default `1.0`s) so
+    a freshly enqueued `POST /jobs/...` is picked up in roughly one
+    second. `asyncio.wait(..., timeout=poll_interval, FIRST_COMPLETED)`
+    yields the event loop on every tick so a slow handler does not
+    delay pickup of newly enqueued jobs (the previous design used
+    `await asyncio.sleep(cleanup_interval_seconds)` which conflated
+    the pickup cadence with the retention-cleanup cadence and
+    produced 5-minute pickup delays — see the `mark_running`
+    idempotency bullet for the race-safety half of the fix).
+  - Retention cleanup runs on its own `cleanup_interval_seconds`
+    cadence (default `300`s) and is **independent** of the pickup
+    cadence above. The two cadences never share an `asyncio.sleep`.
+  - `mark_running` issues `UPDATE ... WHERE status = 'queued'` and
+    treats `rowcount == 0` as a no-op, returning a `(claimed, job)`
+    pair. The guard makes a duplicate claim safe: two workers ticking
+    the same row cannot both overwrite `started_at` / `log_lines`,
+    and the losing worker skips the handler (no double execution).
+  - On startup the worker sweeps any rows stuck at `RUNNING` (a
+    prior process died mid-flight) and marks them `FAILED` with
+    `error="orphaned_after_restart"` so the badge can never get
+    stuck on a row the new process never claimed.
+  - `progress_callback(message)` formats `[<ISO timestamp>] <message>`
+    then calls `repo.append_log(job_id, line=...)` +
+    `event_queue.put_nowait({"event": "log", "data": {"line": line}})`
+    (drop oldest when full).
   - On `CancelledError` / `cancel_event.is_set()`: emit `event: status` `data: {"status": "cancelled"}`, then `repo.mark_cancelled(job.id)`.
   - On `Exception`: emit `event: status` `data: {"status": "failed", "error": str(exc)}`, then `repo.mark_failed(job.id, error=str(exc))`.
   - On success: emit `event: status` `data: {"status": "succeeded", "summary": ...}`, then `repo.mark_succeeded(job.id, summary=...)`.
-  - Sleep `Settings.server.cleanup_interval_seconds` between ticks; on each tick, run cleanup: `repo.delete_older_than(cutoff)`.
 - `class JobHandlers`:
   - `KIND_TO_HANDLER: dict[JobKind, Callable[..., Awaitable[Mapping[str, JSONValue]]]]`
   - Each handler takes `(job: Job, services: ServiceContainer, settings: Settings, *, progress, cancel_event)` and calls into the existing `services/factory.build_*` methods (no business logic duplication).

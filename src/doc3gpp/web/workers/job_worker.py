@@ -91,35 +91,136 @@ class JobWorker:
     async def run(self) -> None:
         """Run the worker loop until :meth:`shutdown` cancels the task.
 
-        The loop runs cleanup on startup and then once per tick,
-        sleeping ``Settings.server.cleanup_interval_seconds`` between
-        ticks.
+        The loop polls the ``jobs`` table for ``QUEUED`` rows every
+        ``Settings.server.poll_interval_seconds`` (default 1s) and
+        spawns at most ``Settings.server.max_concurrent_jobs`` handler
+        tasks. The ``await`` on each in-flight task is yielded back to
+        the event loop on every poll tick — a slow handler no longer
+        delays pickup of newly enqueued jobs by ``cleanup_interval_seconds``
+        the way it did when the loop's only idle-wait was a single
+        ``asyncio.sleep(cleanup_interval_seconds)``.
+
+        Retention cleanup runs on its own longer cadence (every
+        ``Settings.server.cleanup_interval_seconds``, default 5m)
+        so the DB doesn't grow unbounded. The two cadences are now
+        separate: ``poll_interval_seconds`` for pickup latency,
+        ``cleanup_interval_seconds`` for retention — the previous
+        design conflated them and a 5-minute cleanup interval became
+        a 5-minute pickup delay for every freshly enqueued parse /
+        sync / cache-purge request.
         """
         settings = self._state.settings
         retention_seconds = _parse_retention(settings.server.log_retention)
-        cleanup_interval = settings.server.cleanup_interval_seconds
+        cleanup_interval = float(settings.server.cleanup_interval_seconds)
+        poll_interval = float(settings.server.poll_interval_seconds)
         max_concurrent = settings.server.max_concurrent_jobs
 
         self._cleanup(retention_seconds)
-        logger.info("job worker started (max_concurrent_jobs=%s)", max_concurrent)
+        self._recover_orphans()
+        logger.info(
+            "job worker started (max_concurrent_jobs=%s, poll=%.2fs, cleanup=%.0fs)",
+            max_concurrent, poll_interval, cleanup_interval,
+        )
 
         semaphore = asyncio.Semaphore(max_concurrent)
-        while True:
+        in_flight: set[asyncio.Task] = set()
+        last_cleanup = asyncio.get_running_loop().time()
+        try:
+            while True:
+                # Spawn handlers for every fresh QUEUED row up to the
+                # concurrency cap. ``_claim_and_run`` itself is the
+                # claim guard — see ``mark_running``'s WHERE-status
+                # guard for the idempotency check.
+                try:
+                    queued = self._repo.list(
+                        status=JobStatus.QUEUED, limit=max_concurrent,
+                    )
+                except Exception:
+                    logger.exception("job worker failed to list queued jobs")
+                    queued = []
+
+                for job in queued:
+                    if len(in_flight) >= max_concurrent:
+                        break
+                    task = asyncio.create_task(
+                        self._claim_and_run(job, semaphore),
+                        name=job.id,
+                    )
+                    in_flight.add(task)
+                    task.add_done_callback(in_flight.discard)
+
+                # Sleep until the next tick OR until a handler finishes,
+                # whichever comes first. Yields to the event loop so
+                # uvicorn / MCP requests stay responsive on a slow
+                # parse / sync.
+                if in_flight:
+                    done, _pending = await asyncio.wait(
+                        in_flight,
+                        timeout=poll_interval,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    # Drain exceptions so they don't go silent.
+                    for task in done:
+                        if exc := task.exception():
+                            logger.error(
+                                "job handler raised: %r", exc,
+                                exc_info=exc,
+                            )
+                else:
+                    await asyncio.sleep(poll_interval)
+
+                # Retention cleanup on its own cadence. Runs even when
+                # handlers are active so the table doesn't accumulate
+                # rows indefinitely on a busy install.
+                now = asyncio.get_running_loop().time()
+                if now - last_cleanup >= cleanup_interval:
+                    self._cleanup(retention_seconds)
+                    last_cleanup = now
+        except asyncio.CancelledError:
+            logger.info("job worker loop cancelled; awaiting %d handlers", len(in_flight))
+            if in_flight:
+                # Give in-flight handlers a chance to react to the
+                # cancellation event before tearing down. Each handler
+                # checks ``cancel_event`` between chunks and raises
+                # ``asyncio.CancelledError`` cooperatively; the wait
+                # is bounded so we don't hang on a wedged handler.
+                for task in in_flight:
+                    job_id = task.get_name()
+                    event = self._state.jobs.cancel_events.get(job_id)
+                    if event is not None:
+                        event.set()
+                await asyncio.gather(*in_flight, return_exceptions=True)
+            raise
+
+    def _recover_orphans(self) -> None:
+        """Reset ``RUNNING`` rows left behind by a crashed prior worker.
+
+        Without this pass a process restart while a handler was mid-flight
+        leaves the row pinned at ``RUNNING`` forever — the worker only
+        re-claims ``QUEUED`` rows. Recovery marks each orphan as
+        ``FAILED`` with a synthetic ``orphaned_after_restart`` error so
+        operators can see what happened instead of watching the badge
+        count an unkillable row indefinitely.
+        """
+        try:
+            orphans = self._repo.list(status=JobStatus.RUNNING, limit=1000)
+        except Exception:
+            logger.exception("orphan recovery failed to list RUNNING jobs")
+            return
+        for orphan in orphans:
+            logger.warning(
+                "recovering orphaned RUNNING job %s (started_at=%s)",
+                orphan.id, orphan.started_at,
+            )
             try:
-                queued = self._repo.list(status=JobStatus.QUEUED, limit=max_concurrent)
+                self._repo.mark_failed(
+                    orphan.id,
+                    error="orphaned_after_restart",
+                )
             except Exception:
-                logger.exception("job worker failed to list queued jobs")
-                queued = []
-
-            pending: list[asyncio.Task] = []
-            for job in queued:
-                task = asyncio.create_task(self._claim_and_run(job, semaphore))
-                pending.append(task)
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-            await asyncio.sleep(cleanup_interval)
-            self._cleanup(retention_seconds)
+                logger.exception(
+                    "failed to mark orphaned job %s as failed", orphan.id,
+                )
 
     async def _claim_and_run(
         self,
@@ -159,7 +260,18 @@ class JobWorker:
                 self._enqueue(queue, {"event": "log", "data": {"line": line}})
 
             try:
-                self._repo.mark_running(job.id, message="starting")
+                claimed, _ = self._repo.mark_running(job.id, message="starting")
+                if not claimed:
+                    # The claim lost a race: another worker already
+                    # picked the row up (or it went terminal while we
+                    # were queued). ``mark_running``'s WHERE-status
+                    # guard made the write a no-op; skip the handler so
+                    # the job is not executed twice.
+                    logger.info(
+                        "job %s claim lost; skipping",
+                        job.id,
+                    )
+                    return
                 self._enqueue(
                     queue,
                     {"event": "status", "data": {"status": JobStatus.RUNNING.value}},

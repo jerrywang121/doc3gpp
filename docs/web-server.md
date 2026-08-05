@@ -68,7 +68,8 @@ enabled = false            # master switch; all `server` commands refuse when fa
 host = "127.0.0.1"
 port = 8765
 max_concurrent_jobs = 1    # how many background jobs run at once
-cleanup_interval_seconds = 300
+poll_interval_seconds = 1  # how often the worker checks for new QUEUED jobs
+cleanup_interval_seconds = 300   # how often the worker purges terminal rows
 log_retention = "7d"       # keep this much of the server log
 cache_subdir = "web"       # optional subdir under the tdoc cache for server content (default None)
 
@@ -80,6 +81,12 @@ sse_queue_size = 100
 
 The MCP mount is active only when **both** `server.enabled` and `mcp.enabled`
 are true.
+
+`poll_interval_seconds` (default `1.0`) governs pickup latency for freshly
+enqueued `POST /jobs/...` requests; raise it to reduce DB load on idle
+installs. `cleanup_interval_seconds` (default `300`) is unrelated and
+controls retention cleanup cadence only — flipping it does not change
+pickup speed.
 
 ## CLI reference
 
@@ -334,8 +341,23 @@ print(body["result"]["content"][0]["text"])
 
 - The server appends to the log file (default `{cache.dir}/server.log`);
   `server.log_retention` (default `7d`) bounds how much is kept.
-- `server.cleanup_interval_seconds` (default `300`) controls how often the
-  job worker checks for queued work / prunes finished jobs.
+- `server.poll_interval_seconds` (default `1.0`, range `0.05..60.0`)
+  governs how often the job worker checks the `jobs` table for new
+  `QUEUED` rows. Lower values mean faster pickup after a
+  `POST /jobs/...` lands; the 1-second default keeps the nav badge in
+  lockstep with the SSE stream.
+- `server.cleanup_interval_seconds` (default `300`, minimum `10`)
+  controls how often the worker prunes terminal rows older than
+  `log_retention`. The two cadences are independent — flipping
+  `cleanup_interval_seconds` does not change how quickly new jobs are
+  picked up. (Earlier v1 conflated the two and produced 5-minute
+  pickup delays for parse / sync / cache-purge requests; the bug was
+  split into the dedicated `poll_interval_seconds` knob in
+  [server settings](#config).)
+- On startup the worker sweeps any `RUNNING` rows left behind by a
+  crashed prior process and marks them `FAILED` with
+  `error="orphaned_after_restart"` so the nav badge can't get stuck
+  on a job the new process never claimed.
 - The `/mcp` purge_cache job removes cached content under the cache
   subdirectory; it requires an explicit `yes: true` argument.
 

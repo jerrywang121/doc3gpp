@@ -33,7 +33,9 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.app import build_app
+from doc3gpp.models.jobs import Job, JobStatus
 from doc3gpp.web.deps import (
+    get_job_repo,
     get_meeting_service,
     get_search_service,
     get_semantic_search_service,
@@ -245,6 +247,27 @@ class FakeSemanticSearchService(SemanticSearchService):
         return list(self._hits)
 
 
+class _EmptyJobRepo:
+    """No-op :class:`JobRepository` for the fake-wired app fixture.
+
+    The fake-wired app builds without running the lifespan, so the
+    real ``state.web`` is not wired. This stub provides just enough of
+    the ``JobRepository`` protocol for ``get_pending_jobs`` to render
+    the nav: ``list(...)`` always returns an empty list, so the badge
+    defaults to absent. Individual tests that need to assert the
+    badge counts override ``get_pending_jobs`` or ``get_job_repo``
+    directly (see :func:`test_nav_shows_pending_jobs_badge`).
+    """
+
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        status: JobStatus | None = None,
+    ) -> list[Job]:
+        return []
+
+
 @pytest.fixture()
 def app_with_fakes(sqlite_env: Any) -> FastAPI:
     """Build a FastAPI app with the read routes + fake services wired up."""
@@ -271,6 +294,14 @@ def _build_app_with_fakes(
         lambda: FakeSemanticSearchService()
     )
     app.dependency_overrides[get_tdoc_file_repo] = lambda: MagicMock()
+    # ``get_pending_jobs`` is routed through ``Depends(get_job_repo)`` so the
+    # test suite can swap the repo via dependency_overrides. The fake-wired
+    # app builds without running the lifespan, so the real ``state.web`` is
+    # not wired; inject a no-op ``JobRepository`` here so every nav render
+    # sees zero in-flight jobs by default. Individual tests that need to
+    # assert the badge counts can override ``get_pending_jobs`` or
+    # ``get_job_repo`` directly (see ``test_nav_shows_pending_jobs_badge``).
+    app.dependency_overrides[get_job_repo] = lambda: _EmptyJobRepo()
     return app
 
 
@@ -1787,3 +1818,54 @@ def test_tdoc_parse_js_hides_queued_hint_and_reloads_on_terminal(
     assert "MutationObserver" in body
     assert "parse-queued" in body
     assert "window.location.reload" in body
+
+
+def test_tdoc_parse_js_does_not_reload_before_polling_span_seen(
+    client: TestClient,
+) -> None:
+    """The observer must NOT reload the page until the polling span has been seen.
+
+    Regression for the bug where clicking "Parse" immediately reloaded the
+    tdoc detail page (showing "Parse job queued" but never updating):
+    the freshly-appended wrapper div carries ``hx-trigger="load"`` (not
+    ``every 2s``), and a mutation fires the moment it is attached —
+    before HTMX has issued its initial GET. A naive selector that just
+    checks for the polling span's presence concluded the job was
+    terminal on that first mutation and reloaded the page before the
+    job was even enqueued. The fix tracks whether the polling span has
+    *ever* appeared; reload only fires when the span disappears AFTER
+    it has appeared.
+
+    Without jsdom we lock the fix in via two content assertions on the
+    static endpoint: the JS must (a) declare a state variable that flips
+    only when the polling span is observed, and (b) gate the reload on
+    that state being true.
+    """
+    body = client.get("/static/js/tdoc_parse.js").text
+    # The fix variable + the conditional reload gate.
+    assert "pollSeen" in body
+    assert "if (pollSeen)" in body
+    # Sanity: the buggy pattern is gone — no unconditional reload on
+    # "no node found".
+    assert "if (!node) {" not in body
+
+
+def test_tdoc_parse_js_timeout_fallback_for_fast_terminal_jobs(
+    client: TestClient,
+) -> None:
+    """A job terminal before the first poll never strands the queued hint.
+
+    When the job is already terminal by the time HTMX issues its first
+    GET, the polling span never appears and ``pollSeen`` stays false —
+    the observer alone would never fire. The timeout fallback must hide
+    the hint and reload the page, but only when the span was never
+    seen (a long-running job must not be reloaded mid-flight).
+    """
+    body = client.get("/static/js/tdoc_parse.js").text
+    # The fallback timer exists and is gated on the span never having
+    # been seen.
+    assert "setTimeout" in body
+    assert "if (!pollSeen)" in body
+    # The reload path is shared (idempotent) so the observer and the
+    # timeout cannot double-fire.
+    assert "done" in body

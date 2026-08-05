@@ -400,6 +400,22 @@ by default). It is disabled by default (`[server] enabled = false`); every
   `[{iso}]` log lines, and publishes Server-Sent Events to
   `GET /jobs/{id}/events`. Cancellation is cooperative via an asyncio event.
   The `jobs` table is created by schema bootstrap (no migration step).
+- The worker polls for new `QUEUED` rows every
+  `Settings.server.poll_interval_seconds` (default `1.0`s,
+  range `0.05..60.0`) and runs retention cleanup on the separate
+  `Settings.server.cleanup_interval_seconds` cadence (default `300`s).
+  The two cadences are independent — flipping the cleanup cadence does
+  not change pickup latency, and vice-versa. Earlier v1 conflated them
+  and the 5-minute cleanup cadence became a 5-minute pickup delay for
+  every freshly enqueued parse / sync / cache-purge request; the
+  dedicated `poll_interval_seconds` knob is the fix. `mark_running` is
+  idempotent (issues `UPDATE ... WHERE status = 'queued'` and treats
+  `rowcount == 0` as a no-op) and returns a `(claimed, job)` pair so a
+  worker that loses the claim race skips the handler instead of
+  executing the job twice; the worker also sweeps any rows stuck at
+  `RUNNING` on startup and marks them `FAILED` with
+  `error="orphaned_after_restart"` so the nav badge can't get stuck on
+  a job the new process never claimed.
 
 
 ## Database Schema

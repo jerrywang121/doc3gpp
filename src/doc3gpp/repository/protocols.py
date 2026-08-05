@@ -810,13 +810,17 @@ class JobRepository(Protocol):
         """
         ...
 
-    def mark_running(self, job_id: str, *, message: str = "starting") -> Job:
+    def mark_running(self, job_id: str, *, message: str = "starting") -> tuple[bool, Job]:
         """Transition ``job_id`` from ``QUEUED`` to ``RUNNING``.
 
         Stamps ``started_at`` with the current UTC time and
-        appends ``message`` to ``log_lines``. Returns the refreshed
-        job; callers that need the prior state should have read it
-        via :meth:`get` before calling this method.
+        appends ``message`` to ``log_lines``. Returns a
+        ``(claimed, job)`` pair: ``claimed`` is ``True`` when this
+        call performed the transition (the row was ``QUEUED``), and
+        ``False`` when the row was already ``RUNNING`` / terminal —
+        the claim lost a race against another worker. ``job`` is the
+        refreshed row in either case, so callers that only need the
+        row can ignore the flag.
         """
         ...
 

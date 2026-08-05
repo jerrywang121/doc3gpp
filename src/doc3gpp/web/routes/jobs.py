@@ -305,7 +305,12 @@ async def list_jobs(
         if len(jobs) == parsed_limit
         else None
     )
-    pending_jobs = len(job_repo.list(status=JobStatus.QUEUED))
+    # The nav badge shows the count of in-flight jobs (QUEUED + RUNNING).
+    # See ``get_pending_jobs`` in ``web/deps.py`` for the rationale.
+    pending_jobs = (
+        len(job_repo.list(status=JobStatus.QUEUED, limit=1000))
+        + len(job_repo.list(status=JobStatus.RUNNING, limit=1000))
+    )
     return templates.TemplateResponse(
         request=request,
         name="job_status.html",

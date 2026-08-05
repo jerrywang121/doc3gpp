@@ -1767,3 +1767,23 @@ def test_tdoc_show_parse_card_hidden_without_ftp_url(
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260001"))
     html = client.get("/tdocs/R5-260001").text
     assert "Parse this TDoc" not in html
+
+
+def test_tdoc_parse_js_hides_queued_hint_and_reloads_on_terminal(
+    client: TestClient,
+) -> None:
+    """The parse JS keeps the queued hint in sync with the job-status partial.
+
+    After the parse job reaches a terminal state, the partial swaps to a
+    static (no-polling) render. The JS must (1) hide the lingering
+    "Parse job queued" hint in the form and (2) reload the page so the
+    server-rendered cover page / TTCN / extracted-at sections pick up
+    the freshly-written DB rows. The repo has no jsdom, so this is a
+    content lock-in via the static endpoint.
+    """
+    response = client.get("/static/js/tdoc_parse.js")
+    assert response.status_code == 200
+    body = response.text
+    assert "MutationObserver" in body
+    assert "parse-queued" in body
+    assert "window.location.reload" in body

@@ -1698,6 +1698,20 @@ def test_search_form_sem_keeps_fts5_weight_and_limit(client: TestClient) -> None
     assert 'name="limit"' in html
 
 
+def test_search_page_links_to_hybrid(client: TestClient) -> None:
+    """The FTS5 search page links to /search/sem at top right."""
+    html = client.get("/search?q=foo").text
+    assert 'href="/search/sem"' in html
+    assert "Hybrid search" in html
+
+
+def test_search_sem_page_links_to_fts5(client: TestClient) -> None:
+    """The semantic search page links to /search at top right."""
+    html = client.get("/search/sem?q=foo").text
+    assert 'href="/search"' in html
+    assert "FTS5 search" in html
+
+
 # ---------------------------------------------------------------------------
 # Static + health
 # ---------------------------------------------------------------------------

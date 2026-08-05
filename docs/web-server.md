@@ -206,7 +206,9 @@ their FTP locations.
 The TDoc detail page shows a Parse card (only when the TDoc has an FTP
 URL) with "Force re-parse" and "Full extraction" checkboxes. Submitting
 enqueues a `parse_tdocs` job filtered to that single TDoc id; the job
-status partial polls inline until the job finishes. A successful parse
+status partial polls inline until the job finishes, then the page
+reloads so the server-rendered cover page / TTCN / extracted-at
+sections pick up the freshly-written DB rows. A successful parse
 auto-indexes the FTS5 row and the embedding chunks when
 `[search].auto_index_on_parse` / `[semantic_search].auto_embed_on_parse`
 are enabled — the same hooks the CLI parse path uses.

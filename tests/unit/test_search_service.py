@@ -88,11 +88,11 @@ class StubReranker(EmbeddingReranker):
         self.invocations = 0
 
     def rerank(
-        self, query: str, hits: list[SearchHit],
+        self, semantic_query: str, hits: list[SearchHit],
         final_limit: int | None = None,
         quiet: bool = False,
     ) -> list[SearchHit]:
-        self.queries.append(query)
+        self.queries.append(semantic_query)
         self.invocations += 1
         return list(reversed(hits))
 
@@ -111,17 +111,28 @@ def test_remove_for_tdoc_delegates() -> None:
     assert repo.removes == ["R5-000009"]
 
 
-def test_search_runs_reranker() -> None:
+def test_search_without_sem_query_skips_reranker() -> None:
     repo = MockRepo()
     reranker = StubReranker()
     svc = SearchService(repo=repo, reranker=reranker)
     hits = svc.search("anything", SearchFilters(limit=5))
     assert len(hits) == 1
+    assert reranker.invocations == 0
+    assert reranker.queries == []
+    assert repo.search_query is not None
+    assert repo.search_query[1].limit == 5
+
+
+def test_search_with_sem_query_reranks_with_fanout() -> None:
+    repo = MockRepo()
+    reranker = StubReranker()
+    svc = SearchService(repo=repo, reranker=reranker)
+    hits = svc.search("anything", SearchFilters(limit=5), sem_query="semantic text")
+    assert len(hits) == 1
     assert reranker.invocations == 1
-    assert reranker.queries == ["anything"]
-
-
-def test_rebuild_yields_progress_per_one_percent() -> None:
+    assert reranker.queries == ["semantic text"]
+    assert repo.search_query is not None
+    assert repo.search_query[1].limit == 5 * 4  # search_fanout_factor default 4
     """rebuild must yield at most once per 1% of progress so the
     CLI tqdm bar updates ~100 times for a 13,693-tdoc rebuild
     instead of 27 (per batch) or 13,693 (per tdoc).

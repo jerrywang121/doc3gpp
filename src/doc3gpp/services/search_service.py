@@ -103,28 +103,56 @@ class SearchService:
             )
 
     def search(
-        self, query: str, filters: SearchFilters,
+        self,
+        query: str,
+        filters: SearchFilters,
+        sem_query: str | None = None,
     ) -> list[SearchHit]:
-        """Run FTS5 ``MATCH`` + rerank + return hits.
+        """Run FTS5 ``MATCH`` + optional semantic rerank + return hits.
 
         The raw query is normalised into a valid FTS5 ``MATCH``
         expression via :class:`SearchQueryBuilder` (the same path the
         CLI uses) so jargon like ``nb-iot`` is quoted rather than
         parsed as a column-minus-token; a stopwords-only or empty
-        query raises :class:`SearchQueryError`. The *raw* query is
-        forwarded to :meth:`EmbeddingReranker.rerank` because the
-        semantic reranker embeds the user's text verbatim.
+        query raises :class:`SearchQueryError`.
 
-        Forwards :attr:`_quiet` to :meth:`EmbeddingReranker.rerank` so
-        the :class:`SemanticReranker`'s one-shot empty-vector warning
-        is suppressed under ``--quiet``. ``PassthroughReranker``
-        accepts and ignores the flag.
+        ``sem_query`` mirrors the CLI's ``search query --sem-query``:
+        when ``None`` (default) the hits are returned verbatim and the
+        reranker is NOT invoked — pure FTS5, matching the CLI without
+        ``--sem-query``. When provided, the FTS5 query is re-run with
+        a fanout limit (``filters.limit * search_fanout_factor``) and
+        the raw hits are reordered by cosine similarity to
+        ``sem_query`` via :meth:`EmbeddingReranker.rerank`, truncated
+        back to ``filters.limit``. The *raw* query is forwarded to the
+        reranker only when ``sem_query`` is provided; the reranker
+        embeds that text verbatim.
         """
         from doc3gpp.cli_filters import SearchQueryBuilder
+        from doc3gpp.settings.loader import get_settings
 
         match_expr = SearchQueryBuilder(query).build()
-        hits = self._repo.search(match_expr, filters)
-        return self._reranker.rerank(query, hits, quiet=self._quiet)
+        if sem_query is None:
+            return self._repo.search(match_expr, filters)
+        settings = get_settings()
+        fanout = filters.limit * settings.search.search_fanout_factor
+        fanout_filters = SearchFilters(
+            tsg=filters.tsg,
+            meeting=filters.meeting,
+            meeting_id=filters.meeting_id,
+            tdoc_id=filters.tdoc_id,
+            release=filters.release,
+            spec=filters.spec,
+            since=filters.since,
+            until=filters.until,
+            limit=fanout,
+        )
+        raw_hits = self._repo.search(match_expr, fanout_filters)
+        return self._reranker.rerank(
+            semantic_query=sem_query,
+            hits=raw_hits,
+            final_limit=filters.limit,
+            quiet=self._quiet,
+        )
 
     def rebuild(
         self,

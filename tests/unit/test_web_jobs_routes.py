@@ -151,6 +151,28 @@ def test_post_parse_tdocs(client: Any) -> None:
     }
 
 
+def test_post_parse_tdocs_single_tdoc_payload(client: Any) -> None:
+    """The tdoc detail page's payload enqueues a single-tdoc parse job."""
+    c, repo, _ = client
+    r = c.post(
+        "/jobs/parse/tdocs",
+        json={
+            "filter": {"tdoc_id": "R5-260001"},
+            "force": True,
+            "full": True,
+        },
+    )
+    assert r.status_code == 202
+    job = repo.get(r.json()["job_id"])
+    assert job is not None
+    assert job.kind is JobKind.PARSE_TDOCS
+    assert job.params == {
+        "filter": {"tdoc_id": "R5-260001"},
+        "force": True,
+        "full": True,
+    }
+
+
 def test_post_search_rebuild(client: Any) -> None:
     c, repo, _ = client
     r = c.post("/jobs/search/rebuild", json={"stale_only": True, "resume": False})

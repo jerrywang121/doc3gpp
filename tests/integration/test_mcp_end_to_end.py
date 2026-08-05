@@ -321,3 +321,72 @@ def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> Non
     assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
     get_engine.cache_clear()
     del state.engine
+
+
+def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
+    """search_tdocs forwards sem_query to the search service."""
+    import asyncio
+
+    import numpy as np
+
+    from doc3gpp.services.semantic_reranker import SemanticReranker
+    from doc3gpp.services.search_service import SearchService
+    from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
+    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
+    from doc3gpp.web.mcp_server import build_mcp_server
+    from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
+    from doc3gpp.settings.schema import Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
+    from doc3gpp.services import factory
+
+    recorded: list[str] = []
+
+    class RecordingEmbedder:
+        def encode(self, texts: list[str]) -> np.ndarray:
+            recorded.extend(texts)
+            return np.zeros((len(texts), 384), dtype=np.float32)
+
+    settings = Settings()
+    embedder = factory.build_embedder(settings)
+    services = ServiceContainer(
+        meeting=factory.build_meeting_service(),
+        tdoc=factory.build_tdoc_service(),
+        tdoc_cr=factory.build_tdoc_cr_service(embedder=embedder),
+        tdoc_sync=factory.build_tdoc_sync_coordinator(),
+        tdoc_repo=factory.build_tdoc_repository(),
+        tsg=factory.build_tsg_service(),
+        wi=factory.build_wi_service(),
+        search=SearchService(
+            repo=SQLAlchemySearchIndexRepository(),
+            reranker=SemanticReranker(
+                embedder=RecordingEmbedder(),
+                vector_repo=SQLAlchemyVectorIndexRepository(),
+                settings=settings,
+            ),
+        ),
+        semantic_search=factory.build_semantic_search_service(embedder=embedder),
+        tdoc_file_repo=factory.build_tdoc_file_repository(),
+        job_repo=SQLAlchemyJobRepository(),
+    )
+    state = WebState(
+        settings=settings,
+        engine=get_engine(),
+        services=services,
+        jobs=JobWorkerHandle(),
+    )
+    server = build_mcp_server(state)
+
+    async def run():
+        return await server.call_tool(
+            "search_tdocs",
+            {"query": "scheduling", "limit": 5, "sem_query": "scheduling"},
+        )
+
+    result = asyncio.run(run())
+    assert result is not None
+    text = result.content[0].text
+    assert text.startswith("[")
+    assert recorded == ["scheduling"]
+    get_engine.cache_clear()
+    del state.engine

@@ -1,9 +1,28 @@
 {% extends "base.html" %}
 {% block title %}doc3gpp · search{% endblock %}
 {% block content %}
-  <h1>Search</h1>
+  <div class="page-header">
+    <h1>Search</h1>
+    <div class="page-actions">
+      {% if mode == 'sem' %}
+        <a class="btn" href="/search">FTS5 search</a>
+      {% else %}
+        <a class="btn" href="/search/sem">Hybrid search</a>
+      {% endif %}
+    </div>
+  </div>
 
   {% include "partials/search_form.html" %}
+
+  <p
+    id="search-indicator"
+    class="search-loading htmx-indicator"
+    role="status"
+    aria-live="polite"
+  >
+    <span class="spinner" aria-hidden="true"></span>
+    Searching…
+  </p>
 
   <div id="results" hx-target="this" hx-swap="outerHTML">
     {% if error %}

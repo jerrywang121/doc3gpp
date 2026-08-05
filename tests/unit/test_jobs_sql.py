@@ -54,8 +54,9 @@ def test_mark_running_sets_started_at() -> None:
     repo = _make_repo()
     job = repo.create(JobKind.PARSE_TDOCS, {})
 
-    running = repo.mark_running(job.id, message="worker picked it up")
+    claimed, running = repo.mark_running(job.id, message="worker picked it up")
 
+    assert claimed is True
     assert running.status is JobStatus.RUNNING
     assert running.started_at is not None
     assert running.finished_at is None

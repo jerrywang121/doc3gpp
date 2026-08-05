@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -228,3 +229,262 @@ def test_worker_drops_oldest_events() -> None:
     drained = _drain(queue)
     assert len(drained) == 2
     assert drained[-1]["data"]["line"] == "third"
+
+
+# ---------------------------------------------------------------------------
+# Mark-running idempotency + orphan-recovery + worker poll cadence.
+#
+# These pin the bug fixes for the third worker-stuck regression: the worker
+# was using ``cleanup_interval_seconds`` (default 300s) as its poll cadence,
+# so freshly enqueued parse / sync / cache-purge jobs waited five minutes
+# before pickup. The fix splits the two cadences into
+# ``poll_interval_seconds`` (default 1s) and ``cleanup_interval_seconds``
+# (default 300s), adds a WHERE-status guard to ``mark_running`` so two
+# workers can't both write ``started_at`` for the same job, and adds an
+# orphan-recovery sweep on startup that fails out ``RUNNING`` rows left
+# behind by a crashed prior worker.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_running_is_idempotent() -> None:
+    """A second ``mark_running`` reports the claim lost and does not overwrite state."""
+    repo = _make_repo()
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+
+    claimed, first = repo.mark_running(job.id, message="starting")
+    assert claimed is True
+    assert first.status is JobStatus.RUNNING
+    assert first.started_at is not None
+    first_started_at = first.started_at
+
+    # Second call from another worker should not rewrite started_at and
+    # should report the claim as lost (it was QUEUED -> RUNNING; second
+    # call sees RUNNING and is a no-op).
+    claimed_again, second = repo.mark_running(job.id, message="late")
+    assert claimed_again is False
+    assert second.id == first.id
+    assert second.status is JobStatus.RUNNING
+    # No new "late" log line on the no-op branch — the guard is meant to
+    # make this safe even when two workers tick the same row.
+    assert "late" not in second.log_lines
+    # Round-trip back through the repo: started_at must survive.
+    persisted = repo.get(job.id)
+    assert persisted is not None
+    assert persisted.started_at == first_started_at
+
+
+def test_mark_running_no_op_on_terminal_rows() -> None:
+    """``mark_running`` reports the claim lost on rows in a terminal status."""
+    repo = _make_repo()
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    repo.mark_running(job.id)
+    repo.mark_succeeded(job.id, summary={"ok": True})
+
+    claimed, after_success = repo.mark_running(job.id, message="oops")
+    assert claimed is False
+    assert after_success.status is JobStatus.SUCCEEDED
+    assert after_success.error is None
+    # The "oops" log line is dropped because the claim lost the race;
+    # the row stays SUCCEEDED.
+    assert "oops" not in after_success.log_lines
+
+
+def test_worker_recovers_orphaned_running_jobs() -> None:
+    """RUNNING rows left over from a crashed worker become FAILED on startup."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    repo.mark_running(job.id)
+
+    worker = JobWorker(state, repo=repo)
+    worker._recover_orphans()  # type: ignore[attr-defined]
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert done.error == "orphaned_after_restart"
+
+
+def test_recover_orphans_skips_queued_and_terminal_rows() -> None:
+    """Only RUNNING rows are flipped; QUEUED and terminal rows are untouched."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    queued = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R1"})
+    succeeded = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R2"})
+    repo.mark_running(succeeded.id)
+    repo.mark_succeeded(succeeded.id, summary={"ok": True})
+    running = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R3"})
+    repo.mark_running(running.id)
+
+    worker = JobWorker(state, repo=repo)
+    worker._recover_orphans()  # type: ignore[attr-defined]
+
+    assert repo.get(queued.id).status is JobStatus.QUEUED
+    assert repo.get(succeeded.id).status is JobStatus.SUCCEEDED
+    assert repo.get(running.id).status is JobStatus.FAILED
+    assert repo.get(running.id).error == "orphaned_after_restart"
+
+
+def test_pickup_uses_short_poll_interval() -> None:
+    """Freshly enqueued jobs are picked up within ~2s, not after 5 min.
+
+    Drives the real :meth:`JobWorker.run` loop in a bounded task, then
+    submits a job after the worker is already running and asserts the
+    terminal state lands well before ``cleanup_interval_seconds`` (300s)
+    would have ticked. Without the fix the worker sleeps 300s between
+    pickups and this test would hang for that long.
+    """
+    repo = _make_repo()
+    state = _make_state(repo)
+    # Tight intervals so the test does not actually wait minutes.
+    state.settings.server.poll_interval_seconds = 0.05
+    state.settings.server.cleanup_interval_seconds = 60.0
+    state.settings.server.max_concurrent_jobs = 1
+
+    worker = JobWorker(state, repo=repo)
+
+    async def _drive() -> str:
+        task = asyncio.create_task(worker.run())
+        try:
+            # Let the worker hit its idle-sleep before we enqueue so
+            # we are exercising the post-enqueue pickup path rather
+            # than a coincidental first-tick grab.
+            await asyncio.sleep(0.2)
+            job_id = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"}).id
+            # Poll for terminal state with a generous 2s budget. The
+            # old loop would have needed ~300s, so this failing-fast
+            # timeout is the actual regression assertion.
+            for _ in range(40):
+                row = repo.get(job_id)
+                if row is not None and row.status is JobStatus.SUCCEEDED:
+                    return job_id
+                await asyncio.sleep(0.05)
+            raise AssertionError(
+                f"worker did not pick up job within 2s; row is {repo.get(job_id)}"
+            )
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(_drive())
+
+
+def test_poll_interval_setting_default() -> None:
+    """``poll_interval_seconds`` defaults to 1s and ``cleanup_interval_seconds`` stays 300s.
+
+    Pins the contract that the two knobs are independent; flipping the
+    cleanup interval must not move the pickup cadence, and vice-versa.
+    """
+    s = Settings()
+    assert s.server.poll_interval_seconds == 1.0
+    assert s.server.cleanup_interval_seconds == 300
+
+
+def test_poll_interval_setting_validation() -> None:
+    """Tiny / negative poll intervals are rejected by Pydantic."""
+    from pydantic import ValidationError
+
+    from doc3gpp.settings.schema import ServerSettings
+
+    with pytest.raises(ValidationError):
+        ServerSettings(poll_interval_seconds=0.01)  # below the ge=0.05 floor
+    with pytest.raises(ValidationError):
+        ServerSettings(poll_interval_seconds=-1.0)
+
+
+# ---------------------------------------------------------------------------
+# Claim-race skip + worker-task naming (shutdown cancel-event lookup).
+# ---------------------------------------------------------------------------
+
+
+def test_claim_lost_skips_handler() -> None:
+    """A job already claimed by another worker is not executed twice.
+
+    ``mark_running``'s WHERE-status guard makes the losing claim a
+    no-op; ``_claim_and_run`` must check the returned status and skip
+    the handler instead of running the job a second time.
+    """
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    repo.mark_running(job.id)  # another worker already claimed it
+
+    worker = JobWorker(state, repo=repo)
+
+    async def _claim() -> None:
+        sem = asyncio.Semaphore(1)
+        await worker._claim_and_run(job, sem)  # type: ignore[attr-defined]
+
+    asyncio.run(_claim())
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.RUNNING  # untouched by the losing worker
+    assert done.result_summary is None
+    assert done.error is None
+
+
+def test_worker_shutdown_signals_in_flight_handlers() -> None:
+    """Cancelling the worker task sets the cancel event of in-flight jobs.
+
+    Regression for the bug where the shutdown path looked up the cancel
+    event via ``task.get_name()`` but the handler tasks were created
+    without a ``name=``, so ``get_name()`` returned ``"Task-2"``-style
+    names and the lookup always missed — in-flight handlers never saw
+    the cooperative-cancel signal and the shutdown gather could hang
+    until the handler finished on its own.
+    """
+    repo = _make_repo()
+    state = _make_state(repo)
+    state.settings.server.poll_interval_seconds = 0.05
+    state.settings.server.max_concurrent_jobs = 1
+
+    started = asyncio.Event()
+    saw_cancel = asyncio.Event()
+
+    async def _slow_handler(
+        job, services, settings, *, progress, cancel_event
+    ) -> dict:
+        started.set()
+        # Block until the worker's shutdown path sets the event.
+        while not cancel_event.is_set():
+            await asyncio.sleep(0.01)
+        saw_cancel.set()
+        raise asyncio.CancelledError()
+
+    worker = JobWorker(
+        state,
+        repo=repo,
+        handlers={JobKind.SYNC_MEETINGS: _slow_handler},  # type: ignore[dict-item]
+    )
+
+    async def _drive() -> None:
+        task = asyncio.create_task(worker.run())
+        try:
+            job_id = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"}).id
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+            # Cancel the worker task directly (bypassing
+            # ``handle.shutdown``) so the ``run()`` CancelledError path
+            # — the one that looks up cancel events by task name — is
+            # the code under test.
+            task.cancel()
+            await asyncio.wait_for(saw_cancel.wait(), timeout=2.0)
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.CancelledError:
+                pass  # the worker task re-raises after draining handlers
+            row = repo.get(job_id)
+            assert row is not None
+            assert row.status is JobStatus.CANCELLED
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    asyncio.run(_drive())

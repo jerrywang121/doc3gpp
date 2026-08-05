@@ -33,7 +33,9 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.app import build_app
+from doc3gpp.models.jobs import Job, JobStatus
 from doc3gpp.web.deps import (
+    get_job_repo,
     get_meeting_service,
     get_search_service,
     get_semantic_search_service,
@@ -206,8 +208,11 @@ class FakeSearchService(SearchService):
             ),
         ]
 
-    def search(self, _query: str, _filters: Any) -> list[SearchHit]:
+    def search(
+        self, _query: str, _filters: Any, sem_query: str | None = None,
+    ) -> list[SearchHit]:
         self.last_filters = _filters
+        self.last_sem_query = sem_query
         return list(self._hits)
 
 
@@ -242,6 +247,27 @@ class FakeSemanticSearchService(SemanticSearchService):
         return list(self._hits)
 
 
+class _EmptyJobRepo:
+    """No-op :class:`JobRepository` for the fake-wired app fixture.
+
+    The fake-wired app builds without running the lifespan, so the
+    real ``state.web`` is not wired. This stub provides just enough of
+    the ``JobRepository`` protocol for ``get_pending_jobs`` to render
+    the nav: ``list(...)`` always returns an empty list, so the badge
+    defaults to absent. Individual tests that need to assert the
+    badge counts override ``get_pending_jobs`` or ``get_job_repo``
+    directly (see :func:`test_nav_shows_pending_jobs_badge`).
+    """
+
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        status: JobStatus | None = None,
+    ) -> list[Job]:
+        return []
+
+
 @pytest.fixture()
 def app_with_fakes(sqlite_env: Any) -> FastAPI:
     """Build a FastAPI app with the read routes + fake services wired up."""
@@ -268,6 +294,14 @@ def _build_app_with_fakes(
         lambda: FakeSemanticSearchService()
     )
     app.dependency_overrides[get_tdoc_file_repo] = lambda: MagicMock()
+    # ``get_pending_jobs`` is routed through ``Depends(get_job_repo)`` so the
+    # test suite can swap the repo via dependency_overrides. The fake-wired
+    # app builds without running the lifespan, so the real ``state.web`` is
+    # not wired; inject a no-op ``JobRepository`` here so every nav render
+    # sees zero in-flight jobs by default. Individual tests that need to
+    # assert the badge counts can override ``get_pending_jobs`` or
+    # ``get_job_repo`` directly (see ``test_nav_shows_pending_jobs_badge``).
+    app.dependency_overrides[get_job_repo] = lambda: _EmptyJobRepo()
     return app
 
 
@@ -1524,6 +1558,24 @@ def test_search_sem_renders_html(client: TestClient) -> None:
     assert response.status_code == 200
 
 
+def test_search_sem_table_renders_nested_metadata(client: TestClient) -> None:
+    """The sem results table shows title / meeting / tsg from the nested hit.
+
+    Regression: the shared results table accessed ``hit.title`` directly,
+    but semantic hits carry their metadata in the nested ``hit.hit``
+    bag — Title / Meeting / TSG rendered as ``-`` while RRF and the
+    ranks (top-level fields) worked. The template must unwrap the
+    nested bag in ``sem`` mode.
+    """
+    html = client.get("/search/sem?q=foo").text
+    assert "CR on NR measurement" in html
+    assert "RAN5#99-e" in html
+    assert ">R5<" in html
+    assert "0.5000" in html  # rrf_score
+    assert ">0<" in html  # rank_fts5
+    assert ">1<" in html  # rank_vec
+
+
 def test_search_sem_json(client: TestClient) -> None:
     """``GET /search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
 
@@ -1574,6 +1626,34 @@ def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
     assert service.last_filters.tdoc_id is None
 
 
+def test_search_query_sem_param_forwarded(client: TestClient) -> None:
+    """``GET /search?sem=<text>`` forwards sem_query into the service."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&sem=hybrid+rerank")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_sem_query == "hybrid rerank"
+
+
+def test_search_query_sem_empty_is_none(client: TestClient) -> None:
+    """``GET /search?sem=`` leaves sem_query None (no rerank)."""
+    from doc3gpp.web.deps import get_search_service
+
+    service = FakeSearchService()
+    client.app.dependency_overrides[get_search_service] = lambda: service
+    try:
+        response = client.get("/search?q=foo&sem=")
+    finally:
+        client.app.dependency_overrides.pop(get_search_service, None)
+    assert response.status_code == 200
+    assert service.last_sem_query is None
+
+
 def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
     """``GET /search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
     from doc3gpp.web.deps import get_semantic_search_service
@@ -1590,6 +1670,74 @@ def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
     assert filters.tdoc_id == "R5-260001"
 
 
+def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
+    """``GET /search/sem?q=foo&fts5_query=`` passes fts5_query=None.
+
+    Regression: the sem form always submits an ``fts5_query`` field, so
+    a blank value arrived as ``""``. The service treats any non-``None``
+    value as an opt-in FTS5 path, so an empty string ran FTS5 with an
+    empty query and returned zero hits. The route must normalise blank
+    to ``None`` so the default is pure-vector, matching the CLI.
+    """
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get("/search/sem?q=foo&fts5_query=")
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    assert service.last_kwargs.get("fts5_query") is None
+
+
+def test_search_sem_whitespace_fts5_query_is_none(client: TestClient) -> None:
+    """``GET /search/sem?q=foo&fts5_query=%20%20`` passes fts5_query=None."""
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get("/search/sem?q=foo&fts5_query=%20%20")
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    assert service.last_kwargs.get("fts5_query") is None
+
+
+def test_search_sem_full_filters_forwarded(client: TestClient) -> None:
+    """``GET /search/sem`` forwards tsg/meeting/release/spec/since/until."""
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get(
+            "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e"
+            "&release=18&spec=38.300"
+            "&since=%3E%3D%20%272026-01-01%27"
+            "&until=%3C%3D%20%272026-06-01%27"
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    filters = service.last_kwargs.get("filters")
+    assert filters is not None
+    assert filters.tsg == "R5"
+    assert filters.meeting == "RAN5#99-e"
+    assert filters.release == "18"
+    assert filters.spec == "38.300"
+    assert filters.since == ">= '2026-01-01'"
+    assert filters.until == "<= '2026-06-01'"
+
+
+def test_search_sem_bad_date_filter_400(client: TestClient) -> None:
+    """``GET /search/sem?since=<bad>`` returns 400 invalid_filter."""
+    response = client.get("/search/sem?q=foo&since=not-a-date")
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_filter"
+
+
 def test_search_form_renders_tdoc_input_fts5(client: TestClient) -> None:
     """The FTS5 search form carries a tdoc-id input with the round-tripped value."""
     html = client.get("/search?q=foo&tdoc-id=R5-260001").text
@@ -1602,6 +1750,50 @@ def test_search_form_renders_tdoc_input_sem(client: TestClient) -> None:
     html = client.get("/search/sem?q=foo&tdoc-id=R5-260001").text
     assert 'name="tdoc-id"' in html
     assert 'value="R5-260001"' in html
+
+
+def test_search_form_fts5_has_semantic_input(client: TestClient) -> None:
+    """The FTS5 form carries a Semantic input with the round-tripped value."""
+    html = client.get("/search?q=foo&sem=rerank+me").text
+    assert 'name="sem"' in html
+    assert 'value="rerank me"' in html
+
+
+def test_search_form_sem_has_full_filters(client: TestClient) -> None:
+    """The semantic form carries TSG/Meeting/Release/Spec/Since/Until inputs."""
+    html = client.get(
+        "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e&release=18"
+        "&spec=38.300"
+        "&since=%3E%3D%20%272026-01-01%27"
+        "&until=%3C%3D%20%272026-06-01%27"
+    ).text
+    for name in ("tsg", "meeting", "release", "spec", "since", "until"):
+        assert f'name="{name}"' in html
+    assert 'value="R5"' in html
+    assert 'value="RAN5#99-e"' in html
+    assert "2026-01-01" in html
+    assert "2026-06-01" in html
+
+
+def test_search_form_sem_keeps_fts5_weight_and_limit(client: TestClient) -> None:
+    """The semantic form keeps the FTS5 weight + Limit controls."""
+    html = client.get("/search/sem?q=foo").text
+    assert 'name="fts5_weight"' in html
+    assert 'name="limit"' in html
+
+
+def test_search_page_links_to_hybrid(client: TestClient) -> None:
+    """The FTS5 search page links to /search/sem at top right."""
+    html = client.get("/search?q=foo").text
+    assert 'href="/search/sem"' in html
+    assert "Hybrid search" in html
+
+
+def test_search_sem_page_links_to_fts5(client: TestClient) -> None:
+    """The semantic search page links to /search at top right."""
+    html = client.get("/search/sem?q=foo").text
+    assert 'href="/search"' in html
+    assert "FTS5 search" in html
 
 
 # ---------------------------------------------------------------------------
@@ -1628,3 +1820,105 @@ def test_healthz_still_ok(client: TestClient) -> None:
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_tdoc_show_parse_card_rendered_when_ftp_url(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TDoc with an ftp_url shows the Parse card with force/full checkboxes."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+    )
+    html = client.get("/tdocs/R5-260001").text
+    assert "Parse this TDoc" in html
+    assert 'name="force"' in html
+    assert 'name="full"' in html
+    assert 'src="/static/js/tdoc_parse.js"' in html
+
+
+def test_tdoc_show_parse_card_hidden_without_ftp_url(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TDoc without an ftp_url shows no Parse card."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260001"))
+    html = client.get("/tdocs/R5-260001").text
+    assert "Parse this TDoc" not in html
+
+
+def test_tdoc_parse_js_hides_queued_hint_and_reloads_on_terminal(
+    client: TestClient,
+) -> None:
+    """The parse JS keeps the queued hint in sync with the job-status partial.
+
+    After the parse job reaches a terminal state, the partial swaps to a
+    static (no-polling) render. The JS must (1) hide the lingering
+    "Parse job queued" hint in the form and (2) reload the page so the
+    server-rendered cover page / TTCN / extracted-at sections pick up
+    the freshly-written DB rows. The repo has no jsdom, so this is a
+    content lock-in via the static endpoint.
+    """
+    response = client.get("/static/js/tdoc_parse.js")
+    assert response.status_code == 200
+    body = response.text
+    assert "MutationObserver" in body
+    assert "parse-queued" in body
+    assert "window.location.reload" in body
+
+
+def test_tdoc_parse_js_does_not_reload_before_polling_span_seen(
+    client: TestClient,
+) -> None:
+    """The observer must NOT reload the page until the polling span has been seen.
+
+    Regression for the bug where clicking "Parse" immediately reloaded the
+    tdoc detail page (showing "Parse job queued" but never updating):
+    the freshly-appended wrapper div carries ``hx-trigger="load"`` (not
+    ``every 2s``), and a mutation fires the moment it is attached —
+    before HTMX has issued its initial GET. A naive selector that just
+    checks for the polling span's presence concluded the job was
+    terminal on that first mutation and reloaded the page before the
+    job was even enqueued. The fix tracks whether the polling span has
+    *ever* appeared; reload only fires when the span disappears AFTER
+    it has appeared.
+
+    Without jsdom we lock the fix in via two content assertions on the
+    static endpoint: the JS must (a) declare a state variable that flips
+    only when the polling span is observed, and (b) gate the reload on
+    that state being true.
+    """
+    body = client.get("/static/js/tdoc_parse.js").text
+    # The fix variable + the conditional reload gate.
+    assert "pollSeen" in body
+    assert "if (pollSeen)" in body
+    # Sanity: the buggy pattern is gone — no unconditional reload on
+    # "no node found".
+    assert "if (!node) {" not in body
+
+
+def test_tdoc_parse_js_timeout_fallback_for_fast_terminal_jobs(
+    client: TestClient,
+) -> None:
+    """A job terminal before the first poll never strands the queued hint.
+
+    When the job is already terminal by the time HTMX issues its first
+    GET, the polling span never appears and ``pollSeen`` stays false —
+    the observer alone would never fire. The timeout fallback must hide
+    the hint and reload the page, but only when the span was never
+    seen (a long-running job must not be reloaded mid-flight).
+    """
+    body = client.get("/static/js/tdoc_parse.js").text
+    # The fallback timer exists and is gated on the span never having
+    # been seen.
+    assert "setTimeout" in body
+    assert "if (!pollSeen)" in body
+    # The reload path is shared (idempotent) so the observer and the
+    # timeout cannot double-fire.
+    assert "done" in body

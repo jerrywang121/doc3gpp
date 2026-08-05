@@ -68,7 +68,8 @@ enabled = false            # master switch; all `server` commands refuse when fa
 host = "127.0.0.1"
 port = 8765
 max_concurrent_jobs = 1    # how many background jobs run at once
-cleanup_interval_seconds = 300
+poll_interval_seconds = 1  # how often the worker checks for new QUEUED jobs
+cleanup_interval_seconds = 300   # how often the worker purges terminal rows
 log_retention = "7d"       # keep this much of the server log
 cache_subdir = "web"       # optional subdir under the tdoc cache for server content (default None)
 
@@ -80,6 +81,12 @@ sse_queue_size = 100
 
 The MCP mount is active only when **both** `server.enabled` and `mcp.enabled`
 are true.
+
+`poll_interval_seconds` (default `1.0`) governs pickup latency for freshly
+enqueued `POST /jobs/...` requests; raise it to reduce DB load on idle
+installs. `cleanup_interval_seconds` (default `300`) is unrelated and
+controls retention cleanup cadence only — flipping it does not change
+pickup speed.
 
 ## CLI reference
 
@@ -165,7 +172,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
-| GET | `/search` | FTS5 search (`?format=json`). User queries are normalised into a valid FTS5 `MATCH` expression (jargon like `nb-iot` is quoted, mirroring the CLI); a stopwords-only or empty query returns 400 `invalid_query`. Filter fields are LIKE patterns matching the CLI's semantics: `meeting` matches `meetings.name` **or** `meetings.title`, `release`/`spec` match `tdocs.release`/`tdocs.spec`, `tsg` is case-insensitive. Both search modes also accept `tdoc-id` (exact-match tdoc filter, see below). |
+| GET | `/search` | FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. |
@@ -203,6 +210,16 @@ The TDoc detail page links the FTP URL field to the cached source zip
 `changed_functions` aggregate when present, and auxiliary files link to
 their FTP locations.
 
+The TDoc detail page shows a Parse card (only when the TDoc has an FTP
+URL) with "Force re-parse" and "Full extraction" checkboxes. Submitting
+enqueues a `parse_tdocs` job filtered to that single TDoc id; the job
+status partial polls inline until the job finishes, then the page
+reloads so the server-rendered cover page / TTCN / extracted-at
+sections pick up the freshly-written DB rows. A successful parse
+auto-indexes the FTS5 row and the embedding chunks when
+`[search].auto_index_on_parse` / `[semantic_search].auto_embed_on_parse`
+are enabled — the same hooks the CLI parse path uses.
+
 The filter form (submitted via HTMX to `GET /meetings`, swapping the
 `#results` partial) supports `tsg`, `year`, `location`, `tdoc`, and
 `limit`. The `tdoc` field is a text input accepting a CR-shape TDoc id
@@ -215,6 +232,18 @@ Both search modes (`GET /search` and `GET /search/sem`) accept a
 semantics to the CLI's `search query --tdoc-id`. The search form
 carries a TDoc text input in both the FTS5 and the semantic branch
 (empty input → no filter).
+
+The search form uses a 5-column grid: on `/search` the Query box spans
+2 columns and an optional Semantic box (the `sem` param) spans the
+remaining 3; on `/search/sem` the Query box spans 3 columns and the
+FTS5 query box spans 2. Both forms share the full filter set (TSG,
+Meeting, TDoc, Release, Spec, Since, Until, Limit; `/search/sem` also
+keeps FTS5 weight). Each page links to the other at the top right
+(`/search` → "Hybrid search", `/search/sem` → "FTS5 search").
+The `/search/sem` form always submits an `fts5_query` field; a blank or
+whitespace-only value is normalised to `None` server-side so the default
+is pure-vector (matching `doc3gpp search sem`), rather than running FTS5
+with an empty query and returning zero hits.
 
 Search results render one collapsible "Matching fields" block per hit
 (a single `<details>` element replacing the previous per-column
@@ -282,7 +311,10 @@ Every read tool returns exactly the bytes of the equivalent
 `?format=json` HTTP route. `search_tdocs` normalises the query into a
 valid FTS5 `MATCH` expression exactly like the CLI and the `/search`
 route (a stopwords-only or empty query raises an MCP invalid-params
-error, `-32602`). The job tools enqueue the same work as the
+error, `-32602`). `search_tdocs` also accepts an optional `sem_query` argument — when
+provided, the FTS5 hits are reordered by cosine similarity to that
+text, mirroring the `/search?sem=` route and the CLI's
+`search query --sem-query`. The job tools enqueue the same work as the
 HTTP `POST /jobs/...` routes, but the enqueue envelope adds a `message`
 key (the only parity exception).
 
@@ -313,8 +345,23 @@ print(body["result"]["content"][0]["text"])
 
 - The server appends to the log file (default `{cache.dir}/server.log`);
   `server.log_retention` (default `7d`) bounds how much is kept.
-- `server.cleanup_interval_seconds` (default `300`) controls how often the
-  job worker checks for queued work / prunes finished jobs.
+- `server.poll_interval_seconds` (default `1.0`, range `0.05..60.0`)
+  governs how often the job worker checks the `jobs` table for new
+  `QUEUED` rows. Lower values mean faster pickup after a
+  `POST /jobs/...` lands; the 1-second default keeps the nav badge in
+  lockstep with the SSE stream.
+- `server.cleanup_interval_seconds` (default `300`, minimum `10`)
+  controls how often the worker prunes terminal rows older than
+  `log_retention`. The two cadences are independent — flipping
+  `cleanup_interval_seconds` does not change how quickly new jobs are
+  picked up. (Earlier v1 conflated the two and produced 5-minute
+  pickup delays for parse / sync / cache-purge requests; the bug was
+  split into the dedicated `poll_interval_seconds` knob in
+  [server settings](#config).)
+- On startup the worker sweeps any `RUNNING` rows left behind by a
+  crashed prior process and marks them `FAILED` with
+  `error="orphaned_after_restart"` so the nav badge can't get stuck
+  on a job the new process never claimed.
 - The `/mcp` purge_cache job removes cached content under the cache
   subdirectory; it requires an explicit `yes: true` argument.
 

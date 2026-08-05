@@ -375,3 +375,93 @@ tr.status-lblue td { background: #d1ecf1; }
   font-size: 0.875rem; cursor: pointer; white-space: nowrap;
 }
 table.tdoc-grid .col-meeting { width: 180px; }
+
+/* Search form: 5-column grid for the query row (Query + Semantic/FTS5). */
+.search-grid-5 {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: .75rem;
+  align-items: end;
+  width: 100%;
+}
+
+.search-grid-5 .span-2 { grid-column: span 2; }
+.search-grid-5 .span-3 { grid-column: span 3; }
+
+/* Page header row: title left, action links right. */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.page-actions {
+  display: flex;
+  gap: .5rem;
+}
+
+/* Parse card on the TDoc detail page. */
+.parse-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  align-items: center;
+}
+
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .875rem;
+  color: var(--muted, #666);
+}
+
+.parse-queued {
+  margin-left: .4rem;
+  color: #1a7f37;
+  font-size: .85rem;
+}
+
+/* Search loading indicator — visible only while the HTMX request is
+ * in flight. `.htmx-request` is auto-added/removed by the `htmx.min.js`
+ * bundle to every element listed in any active `hx-indicator`. */
+.search-loading {
+  display: none;
+  align-items: center;
+  gap: .5rem;
+  margin: 0 0 1rem;
+  padding: .5rem .75rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+.search-loading.htmx-request {
+  display: inline-flex;
+}
+
+.spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: search-spin .8s linear infinite;
+}
+
+@keyframes search-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; border-top-color: var(--muted); }
+}

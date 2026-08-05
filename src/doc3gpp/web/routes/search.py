@@ -123,6 +123,7 @@ async def search_query(
     spec: str | None = Query(default=None),
     since: str | None = Query(default=None),
     until: str | None = Query(default=None),
+    sem: str | None = Query(default=None),
     tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
     limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
@@ -145,7 +146,7 @@ async def search_query(
     if q:
         # Service exceptions propagate to the generic handler, which
         # emits the 500 envelope with a request_id correlation id.
-        hits = service.search(q, filters)
+        hits = service.search(q, filters, sem_query=sem or None)
 
     if format == "json":
         return JSONResponse(
@@ -174,6 +175,7 @@ async def search_query(
                 "spec": spec or "",
                 "since": since or "",
                 "until": until or "",
+                "sem": sem or "",
                 "tdoc_id": tdoc_id or "",
             },
         },
@@ -184,6 +186,12 @@ async def search_query(
 async def search_semantic(
     request: Request,
     q: str | None = Query(default=None),
+    tsg: str | None = Query(default=None),
+    meeting: str | None = Query(default=None),
+    release: str | None = Query(default=None),
+    spec: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
     tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
     fts5_query: str | None = Query(default=None),
     fts5_weight: float | None = Query(default=0.5),
@@ -202,6 +210,13 @@ async def search_semantic(
         raise InvalidFilterError(
             f"fts5_weight must be between 0.0 and 1.0, got {fts5_weight!r}"
         )
+    # The sem form always submits an ``fts5_query`` field; a blank value
+    # arrives as ``""``. The service treats any non-``None`` value as an
+    # opt-in FTS5 path, so an empty string would run FTS5 with an empty
+    # query and return zero hits. Normalise blank to ``None`` so the
+    # default is pure-vector, matching ``doc3gpp search sem``.
+    if fts5_query is not None and not fts5_query.strip():
+        fts5_query = None
 
     hits: list[SemanticSearchHit] = []
     error: str | None = None
@@ -211,9 +226,10 @@ async def search_semantic(
         hits = service.search(
             q,
             fts5_query=fts5_query,
-            filters=SearchFilters(
+            filters=_build_filters(
+                tsg=tsg, meeting=meeting, release=release,
+                spec=spec, since=since, until=until, tdoc_id=tdoc_id,
                 limit=parsed_limit,
-                tdoc_id=parse_text_query(tdoc_id),
             ),
             limit=parsed_limit,
             fts5_weight=fts5_weight,
@@ -241,6 +257,12 @@ async def search_semantic(
             "error": error,
             "pending_jobs": pending_jobs,
             "filters": {
+                "tsg": tsg or "",
+                "meeting": meeting or "",
+                "release": release or "",
+                "spec": spec or "",
+                "since": since or "",
+                "until": until or "",
                 "tdoc_id": tdoc_id or "",
             },
         },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ from doc3gpp.models.jobs import (
 from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.storage.db.models import JobORM
 from doc3gpp.storage.db.session import get_session_factory
+
+logger = logging.getLogger(__name__)
 
 
 _LOG_LINES_CAP = 50
@@ -100,8 +103,18 @@ class SQLAlchemyJobRepository(JobRepository):
             rows = session.scalars(stmt).all()
         return [_orm_to_domain(row) for row in rows]
 
-    def mark_running(self, job_id: str, *, message: str = "starting") -> Job:
-        """Transition ``job_id`` from ``QUEUED`` to ``RUNNING``."""
+    def mark_running(self, job_id: str, *, message: str = "starting") -> tuple[bool, Job]:
+        """Transition ``job_id`` from ``QUEUED`` to ``RUNNING``.
+
+        Returns a ``(claimed, job)`` pair. ``claimed`` is ``True``
+        when this call performed the transition; ``False`` when the
+        row was already ``RUNNING`` / terminal — the claim lost a
+        race against another worker (or the job finished while it
+        was queued). The ``WHERE status = 'queued'`` guard makes the
+        losing write a no-op so two workers cannot both overwrite
+        ``started_at`` / ``log_lines``; the caller uses ``claimed``
+        to decide whether to run the handler.
+        """
         now = _utcnow()
         existing_lines = self._read_log_lines(job_id)
         new_lines_json = _encode_json_array(_append_capped(existing_lines, message))
@@ -109,6 +122,7 @@ class SQLAlchemyJobRepository(JobRepository):
             stmt = (
                 update(JobORM)
                 .where(JobORM.job_id == job_id)
+                .where(JobORM.status == JobStatus.QUEUED.value)
                 .values(
                     status=JobStatus.RUNNING.value,
                     started_at=now,
@@ -117,10 +131,18 @@ class SQLAlchemyJobRepository(JobRepository):
             )
             result = session.execute(stmt)
             session.commit()
-            if not result.rowcount:
-                raise KeyError(f"job_id {job_id!r} not found")
             row = session.get(JobORM, job_id)
-        return _orm_to_domain(row)
+            claimed = bool(result.rowcount)
+            if not claimed:
+                # Row exists but is not ``QUEUED`` — the claim lost a
+                # race (another worker already picked it up) or the
+                # job is already terminal. Return the current row so
+                # the caller can decide whether to skip or recover.
+                logger.info(
+                    "mark_running no-op: job %s already in status %s",
+                    job_id, row.status,
+                )
+        return claimed, _orm_to_domain(row)
 
     def append_log(self, job_id: str, *, line: str) -> None:
         """Append ``line`` to ``log_lines``, capping the buffer at 50 entries."""

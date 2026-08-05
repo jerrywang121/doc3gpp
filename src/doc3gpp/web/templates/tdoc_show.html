@@ -38,6 +38,27 @@
     {% endif %}
   </section>
 
+  {% if record.tdoc.ftp_url %}
+    <section class="card">
+      <h2>Parse</h2>
+      <form
+        id="parse-form"
+        class="parse-form"
+        data-tdoc-id="{{ record.tdoc.tdoc_id }}"
+      >
+        <label class="inline-check">
+          <input type="checkbox" name="force"> Force re-parse
+        </label>
+        <label class="inline-check">
+          <input type="checkbox" name="full"> Full extraction
+        </label>
+        <button type="submit" class="btn primary">Parse this TDoc</button>
+        <span class="parse-queued" style="display:none">Parse job queued</span>
+      </form>
+      <div id="parse-job-target"></div>
+    </section>
+  {% endif %}
+
   {% if record.cover %}
     <section class="card">
       <h2>Cover page</h2>
@@ -107,4 +128,5 @@
       <p>No auxiliary files attached.</p>
     </section>
   {% endif %}
+  <script src="/static/js/tdoc_parse.js" defer></script>
 {% endblock %}

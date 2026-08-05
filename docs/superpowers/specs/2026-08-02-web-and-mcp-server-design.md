@@ -302,7 +302,20 @@ story needed):
 
 - One asyncio task, owned by the FastAPI lifespan.
 - Polls `SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1`
-  every 500 ms when idle.
+  every `Settings.server.poll_interval_seconds` (default `1.0s`,
+  range `0.05..60.0`) when idle — short cadence to keep the nav
+  badge in lockstep with the SSE stream. `asyncio.wait(..., timeout=poll_interval, FIRST_COMPLETED)`
+  yields the event loop on every tick so a slow handler does not
+  delay pickup of newly enqueued jobs.
+- `mark_running` issues `UPDATE ... WHERE status = 'queued'` and
+  treats `rowcount == 0` as a no-op, returning a `(claimed, job)`
+  pair. The guard makes a duplicate claim safe: two workers ticking
+  the same row cannot both overwrite `started_at` / `log_lines`,
+  and the losing worker skips the handler (no double execution).
+- On startup the worker sweeps any rows stuck at `RUNNING` (a prior
+  process died mid-flight) and marks them `FAILED` with
+  `error="orphaned_after_restart"` so the badge can never get stuck
+  on a row the new process never claimed.
 - Marks `running`, dispatches via `JOB_HANDLERS[job.kind]`.
 - Handler is an `async def run(params, ctx) -> result_dict` where `ctx`
   exposes `ctx.log(line)`, `ctx.set_summary(dict)`, `ctx.is_cancelled()`.
@@ -328,14 +341,20 @@ and stops on the next checkpoint. Documented in API docs.
 
 ### Cleanup
 
-A small `asyncio` task fires every hour and deletes:
+A small `asyncio` task fires every `Settings.server.cleanup_interval_seconds`
+(default `300`s, minimum `10`s) and deletes:
 
-- `succeeded` jobs older than `Settings.server.job_retention_succeeded`
-  (default `24h`).
-- `failed` jobs older than `Settings.server.job_retention_failed`
-  (default `7d`).
+- terminal jobs (`succeeded` / `failed` / `cancelled`) older than
+  `Settings.server.log_retention` (default `7d`).
 
-Durations parsed with `humanfriendly.parse_timespan`.
+Durations parsed with `humanfriendly.parse_timespan`. The cleanup
+cadence is **independent** of the worker's pickup cadence
+(`poll_interval_seconds`, default `1.0`s) so a fast pickup loop
+does not multiply the SQL load on the cleanup query and vice-versa.
+Earlier v1 conflated the two and the 5-minute cleanup cadence became
+a 5-minute pickup delay for every freshly enqueued parse / sync /
+cache-purge request — the split into the dedicated `poll_interval_seconds`
+knob is what unblocks immediate pickup.
 
 ### Progress streaming
 
@@ -382,7 +401,8 @@ class ServerSettings(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8765
     max_concurrent_jobs: int = 1          # bounded 1..16
-    cleanup_interval_seconds: int = 300   # ge=10; period of the log-cleanup task
+    poll_interval_seconds: float = 1.0     # ge=0.05, le=60.0; pickup cadence
+    cleanup_interval_seconds: int = 300   # ge=10; retention-only cadence
     log_retention: str = "7d"             # humanfriendly duration for completed-job logs
     cache_subdir: str | None = None
     pid_file: str | None = None           # None -> {cache.dir}/server.pid at startup
@@ -425,7 +445,8 @@ enabled = true
 host = "127.0.0.1"
 port = 8765
 max_concurrent_jobs = 1
-cleanup_interval_seconds = 300
+poll_interval_seconds = 1.0      # pickup cadence for new QUEUED rows
+cleanup_interval_seconds = 300   # retention-only cadence
 log_retention = "7d"
 cache_subdir = "web"
 # pid_file = "/var/run/doc3gpp/server.pid"   # defaults to {cache.dir}/server.pid

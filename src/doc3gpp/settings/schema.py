@@ -575,6 +575,20 @@ class ServerSettings(BaseModel):
     host: str = Field(default="127.0.0.1")
     port: int = Field(default=8765, ge=1, le=65535)
     max_concurrent_jobs: int = Field(default=1, ge=1, le=16)
+    poll_interval_seconds: float = Field(
+        default=1.0,
+        ge=0.05,
+        le=60.0,
+        description=(
+            "How often the job worker checks the ``jobs`` table for "
+            "new ``QUEUED`` rows. Lower values mean faster pickup "
+            "after a parse / sync / cache-purge request lands; "
+            "higher values reduce DB load on idle installs. The old "
+            "``cleanup_interval_seconds`` knob was reused as the poll "
+            "cadence and produced 5-minute pickup delays — see the "
+            "job worker module for the regression note."
+        ),
+    )
     cleanup_interval_seconds: int = Field(default=300, ge=10)
     log_retention: str = Field(
         default="7d",

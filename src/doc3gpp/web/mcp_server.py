@@ -326,13 +326,14 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         since: str | None = None,
         until: str | None = None,
         limit: int = 20,
+        sem_query: str | None = None,
     ) -> str:
         if services.search is None:
             raise SettingsDisabledError("search is not available in this build")
         from doc3gpp.services.search_service import SearchFilters
 
         filters = SearchFilters(tsg=tsg, meeting=meeting, release=release, spec=spec, since=since, until=until, limit=limit)
-        hits = services.search.search(query, filters)
+        hits = services.search.search(query, filters, sem_query=sem_query)
         return _to_json([_fts5_hit_to_json(h) for h in hits])
 
     @server.tool(name="semantic_search_tdocs", description="Semantic (embedding) search over tdoc text.")

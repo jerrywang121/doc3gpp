@@ -186,6 +186,12 @@ async def search_query(
 async def search_semantic(
     request: Request,
     q: str | None = Query(default=None),
+    tsg: str | None = Query(default=None),
+    meeting: str | None = Query(default=None),
+    release: str | None = Query(default=None),
+    spec: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
     tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
     fts5_query: str | None = Query(default=None),
     fts5_weight: float | None = Query(default=0.5),
@@ -213,9 +219,10 @@ async def search_semantic(
         hits = service.search(
             q,
             fts5_query=fts5_query,
-            filters=SearchFilters(
+            filters=_build_filters(
+                tsg=tsg, meeting=meeting, release=release,
+                spec=spec, since=since, until=until, tdoc_id=tdoc_id,
                 limit=parsed_limit,
-                tdoc_id=parse_text_query(tdoc_id),
             ),
             limit=parsed_limit,
             fts5_weight=fts5_weight,
@@ -243,6 +250,12 @@ async def search_semantic(
             "error": error,
             "pending_jobs": pending_jobs,
             "filters": {
+                "tsg": tsg or "",
+                "meeting": meeting or "",
+                "release": release or "",
+                "spec": spec or "",
+                "since": since or "",
+                "until": until or "",
                 "tdoc_id": tdoc_id or "",
             },
         },

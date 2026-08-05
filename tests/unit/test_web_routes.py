@@ -1621,6 +1621,39 @@ def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
     assert filters.tdoc_id == "R5-260001"
 
 
+def test_search_sem_full_filters_forwarded(client: TestClient) -> None:
+    """``GET /search/sem`` forwards tsg/meeting/release/spec/since/until."""
+    from doc3gpp.web.deps import get_semantic_search_service
+
+    service = FakeSemanticSearchService()
+    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
+    try:
+        response = client.get(
+            "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e"
+            "&release=18&spec=38.300"
+            "&since=%3E%3D%20%272026-01-01%27"
+            "&until=%3C%3D%20%272026-06-01%27"
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_semantic_search_service, None)
+    assert response.status_code == 200
+    filters = service.last_kwargs.get("filters")
+    assert filters is not None
+    assert filters.tsg == "R5"
+    assert filters.meeting == "RAN5#99-e"
+    assert filters.release == "18"
+    assert filters.spec == "38.300"
+    assert filters.since == ">= '2026-01-01'"
+    assert filters.until == "<= '2026-06-01'"
+
+
+def test_search_sem_bad_date_filter_400(client: TestClient) -> None:
+    """``GET /search/sem?since=<bad>`` returns 400 invalid_filter."""
+    response = client.get("/search/sem?q=foo&since=not-a-date")
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_filter"
+
+
 def test_search_form_renders_tdoc_input_fts5(client: TestClient) -> None:
     """The FTS5 search form carries a tdoc-id input with the round-tripped value."""
     html = client.get("/search?q=foo&tdoc-id=R5-260001").text

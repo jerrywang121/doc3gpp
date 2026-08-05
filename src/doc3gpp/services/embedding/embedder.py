@@ -9,6 +9,7 @@ failure (network, OOM, missing repo id) is wrapped as
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -40,23 +41,30 @@ class SentenceTransformerEmbedder:
     def __init__(self, model_name: str) -> None:
         self._model_name = model_name
         self._model = None
+        self._lock = threading.Lock()
 
     def _load_model(self):
         from sentence_transformers import SentenceTransformer
 
         return SentenceTransformer(self._model_name)
 
+    def _ensure_model(self):
+        if self._model is None:
+            with self._lock:
+                if self._model is None:
+                    try:
+                        self._model = self._load_model()
+                    except (OSError, Exception) as exc:
+                        raise EmbedderUnavailableError(
+                            f"failed to load embedding model {self._model_name!r}: {exc}"
+                        ) from exc
+        return self._model
+
     def encode(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
-        if self._model is None:
-            try:
-                self._model = self._load_model()
-            except (OSError, Exception) as exc:
-                raise EmbedderUnavailableError(
-                    f"failed to load embedding model {self._model_name!r}: {exc}"
-                ) from exc
-        vec = self._model.encode(
+        model = self._ensure_model()
+        vec = model.encode(
             texts,
             convert_to_numpy=True,
             show_progress_bar=False,
@@ -65,11 +73,4 @@ class SentenceTransformerEmbedder:
 
     @property
     def dim(self) -> int:
-        if self._model is None:
-            try:
-                self._model = self._load_model()
-            except (OSError, Exception) as exc:
-                raise EmbedderUnavailableError(
-                    f"failed to load embedding model {self._model_name!r}: {exc}"
-                ) from exc
-        return int(self._model.get_sentence_embedding_dimension())
+        return int(self._ensure_model().get_sentence_embedding_dimension())

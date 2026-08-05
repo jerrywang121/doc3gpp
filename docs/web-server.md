@@ -236,8 +236,11 @@ The TDoc list page accepts repeated `fields` query params selecting the
 visible columns; values are validated against the column catalogue and
 an unknown field returns a 400 `invalid_filter` response. Default
 columns are TDoc ID, Title, Meeting, Type, Spec, Release, Status
-(Uploaded was replaced by Status). A multi-select in the filter form
-drives the `fields` param. Row background colors derive from the status
+(Uploaded was replaced by Status). A dropdown of checkboxes in the
+filter form drives the `fields` param — toggling a checkbox re-queries
+immediately (the form auto-submits on change). The tdoc list page uses
+a wider layout (max-width 1430px) and the Meeting column is fixed at
+180px. Row background colors derive from the status
 value (case-insensitive substring, first match wins): conditionally /
 partially → light green, agreed / approved → green, revised / reissued
 / merged → vanilla, rejected → red, withdrawn → grey, postponed →

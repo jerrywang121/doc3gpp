@@ -140,11 +140,26 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
     )
 
 
+def build_embedder(settings: Settings | None = None) -> SentenceTransformerEmbedder:
+    """Construct the shared :class:`SentenceTransformerEmbedder`.
+
+    Lazy: the model is only loaded on the first ``encode()`` call.
+    The web app builds ONE instance and injects it into every
+    service that embeds (search reranker, semantic search, parse
+    auto-embed) so a single server process loads the model at most
+    once.
+    """
+    if settings is None:
+        settings = get_settings()
+    return SentenceTransformerEmbedder(settings.semantic_search.embedding_model)
+
+
 def build_tdoc_cr_service(
     cr_ttcn_repository: TDocCrTTCNDetailRepository | None = None,
     cr_change_details_repository: TDocCrChangeDetailsRepository | None = None,
     *,
     max_tdoc_size_bytes: int | None = None,
+    embedder: Embedder | None = None,  # noqa: F821
 ) -> TDocCrService:
     """Construct a :class:`TDocCrService` for the ``tdoc parse`` command.
 
@@ -212,8 +227,8 @@ def build_tdoc_cr_service(
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
-        search_service=build_search_service(),
-        semantic_service=build_semantic_search_service(),
+        search_service=build_search_service(embedder=embedder),
+        semantic_service=build_semantic_search_service(embedder=embedder),
     )
 
 
@@ -273,6 +288,7 @@ def build_search_service(
     reranker: EmbeddingReranker | None = None,
     *,
     quiet: bool = False,
+    embedder: Embedder | None = None,  # noqa: F821
 ) -> SearchService | None:
     """Build a :class:`SearchService` or return ``None`` if unavailable.
 
@@ -295,6 +311,11 @@ def build_search_service(
             :class:`SemanticReranker`'s one-shot empty-vector
             ``logger.warning`` is suppressed under ``--quiet``.
             Default ``False`` preserves every existing caller.
+        embedder: Optional shared embedder. When ``None`` (default),
+            the factory constructs a fresh
+            :class:`SentenceTransformerEmbedder`. The web app passes
+            the single shared instance so the model loads once per
+            process.
     """
     if settings is None:
         settings = get_settings()
@@ -316,9 +337,10 @@ def build_search_service(
                 and settings.semantic_search.enabled
             ):
                 try:
-                    embedder = SentenceTransformerEmbedder(
-                        settings.semantic_search.embedding_model,
-                    )
+                    if embedder is None:
+                        embedder = SentenceTransformerEmbedder(
+                            settings.semantic_search.embedding_model,
+                        )
                     vector_repo = SQLAlchemyVectorIndexRepository()
                     reranker = SemanticReranker(
                         embedder=embedder, vector_repo=vector_repo,

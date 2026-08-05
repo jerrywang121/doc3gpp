@@ -384,3 +384,101 @@ def test_factory_falls_back_to_passthrough_when_embedder_unavailable(monkeypatch
     svc = f.build_search_service(FakeSettings())
     assert isinstance(svc, SearchService)
     assert isinstance(svc._reranker, PassthroughReranker)
+
+
+def test_factory_build_embedder_returns_lazy_embedder(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory as f
+
+    class FakeSettings:
+        class semantic_search:
+            embedding_model = "fake-model"
+
+    fake_embedder = MagicMock()
+    monkeypatch.setattr(
+        f, "SentenceTransformerEmbedder", lambda model: fake_embedder,
+    )
+    assert f.build_embedder(FakeSettings()) is fake_embedder
+
+
+def test_factory_search_service_uses_injected_embedder(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import SearchService
+    from doc3gpp.services.semantic_reranker import SemanticReranker
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = True
+            embedding_model = "fake-model"
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_embedder = MagicMock()
+    fake_vector_repo = MagicMock()
+    monkeypatch.setattr(
+        f, "SQLAlchemyVectorIndexRepository", lambda: fake_vector_repo,
+    )
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+
+    svc = f.build_search_service(FakeSettings(), embedder=fake_embedder)
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, SemanticReranker)
+    assert svc._reranker._embedder is fake_embedder
+
+
+def test_factory_tdoc_cr_service_forwards_embedder(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory as f
+
+    class FakeSettings:
+        class tdoc_parse:
+            max_tdoc_size_kb = 1000
+
+        class cache:
+            dir = "/tmp/cache"
+            size_limit_mb = 100
+
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = True
+            embedding_model = "fake-model"
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    fake_embedder = MagicMock()
+    fake_cr_service = MagicMock()
+    monkeypatch.setattr(f, "TDocCrService", lambda **kw: fake_cr_service)
+    monkeypatch.setattr(f, "TDocCache", lambda **kw: MagicMock())
+    monkeypatch.setattr(f, "ScraperClient", lambda: MagicMock())
+    monkeypatch.setattr(f, "SQLAlchemyTDocCrRepository", lambda: MagicMock())
+    monkeypatch.setattr(f, "SQLAlchemyTDocRepository", lambda: MagicMock())
+    monkeypatch.setattr(f, "build_tdoc_cr_ttcn_repository", lambda: MagicMock())
+    monkeypatch.setattr(
+        f, "build_tdoc_cr_change_details_repository", lambda: MagicMock(),
+    )
+
+    captured: dict = {}
+
+    def _fake_search_service(**kw):
+        captured["search"] = kw
+        return MagicMock()
+
+    def _fake_semantic_service(**kw):
+        captured["semantic"] = kw
+        return MagicMock()
+
+    monkeypatch.setattr(f, "build_search_service", _fake_search_service)
+    monkeypatch.setattr(f, "build_semantic_search_service", _fake_semantic_service)
+
+    f.build_tdoc_cr_service(embedder=fake_embedder)
+    assert captured["search"]["embedder"] is fake_embedder
+    assert captured["semantic"]["embedder"] is fake_embedder

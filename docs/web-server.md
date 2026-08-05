@@ -240,6 +240,10 @@ FTS5 query box spans 2. Both forms share the full filter set (TSG,
 Meeting, TDoc, Release, Spec, Since, Until, Limit; `/search/sem` also
 keeps FTS5 weight). Each page links to the other at the top right
 (`/search` → "Hybrid search", `/search/sem` → "FTS5 search").
+The `/search/sem` form always submits an `fts5_query` field; a blank or
+whitespace-only value is normalised to `None` server-side so the default
+is pure-vector (matching `doc3gpp search sem`), rather than running FTS5
+with an empty query and returning zero hits.
 
 Search results render one collapsible "Matching fields" block per hit
 (a single `<details>` element replacing the previous per-column

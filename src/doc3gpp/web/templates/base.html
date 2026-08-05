@@ -19,7 +19,7 @@
     <a href="/jobs" class="{% if active_nav == 'jobs' %}active{% endif %}">Jobs{% if pending_jobs %}<span class="nav-badge">{{ pending_jobs }}</span>{% endif %}</a>
   </nav>
 
-  <main class="content">
+  <main class="content{% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
 

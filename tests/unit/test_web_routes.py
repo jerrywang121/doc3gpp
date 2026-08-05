@@ -1197,6 +1197,16 @@ def test_tdoc_list_default_columns_use_status(client: TestClient) -> None:
     html = client.get("/tdocs").text
     assert "<th>Status</th>" in html
     assert "<th>Uploaded</th>" not in html
+    assert '<table class="grid tdoc-grid">' in html
+    assert 'class="col-meeting"' in html
+    assert "content content-wide" in html
+
+
+def test_meetings_page_keeps_default_width(client: TestClient) -> None:
+    """Non-tdoc pages keep the default 1100px content class."""
+    html = client.get("/meetings").text
+    assert 'class="content"' in html
+    assert "content content-wide" not in html
 
 
 def test_tdoc_list_status_row_colors(client: TestClient) -> None:

@@ -63,6 +63,10 @@ body {
   padding: 0 1.5rem;
 }
 
+.content-wide {
+  max-width: 1430px;
+}
+
 .footer {
   text-align: center;
   padding: 1rem;
@@ -370,3 +374,4 @@ tr.status-lblue td { background: #d1ecf1; }
   display: flex; align-items: center; gap: 0.4rem;
   font-size: 0.875rem; cursor: pointer; white-space: nowrap;
 }
+table.tdoc-grid .col-meeting { width: 180px; }

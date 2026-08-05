@@ -1,10 +1,10 @@
 <div id="results" hx-target="this" hx-swap="outerHTML">
   {% if tdocs %}
-    <table class="grid">
+    <table class="grid tdoc-grid">
       <thead>
         <tr>
           {% for f in fields %}
-            <th>{{ column_labels[f] }}</th>
+            <th{% if f == 'meeting_name' %} class="col-meeting"{% endif %}>{{ column_labels[f] }}</th>
           {% endfor %}
           <th></th>
         </tr>
@@ -13,7 +13,7 @@
         {% for row in tdocs %}
           <tr class="{{ status_color_class(row['status']) }}">
             {% for f in fields %}
-              <td>
+              <td{% if f == 'meeting_name' %} class="col-meeting"{% endif %}>
                 {% if f == 'tdoc_id' %}
                   <code><a href="/tdocs/{{ row['tdoc_id'] }}">{{ row[f] }}</a></code>
                 {% else %}

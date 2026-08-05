@@ -1668,6 +1668,36 @@ def test_search_form_renders_tdoc_input_sem(client: TestClient) -> None:
     assert 'value="R5-260001"' in html
 
 
+def test_search_form_fts5_has_semantic_input(client: TestClient) -> None:
+    """The FTS5 form carries a Semantic input with the round-tripped value."""
+    html = client.get("/search?q=foo&sem=rerank+me").text
+    assert 'name="sem"' in html
+    assert 'value="rerank me"' in html
+
+
+def test_search_form_sem_has_full_filters(client: TestClient) -> None:
+    """The semantic form carries TSG/Meeting/Release/Spec/Since/Until inputs."""
+    html = client.get(
+        "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e&release=18"
+        "&spec=38.300"
+        "&since=%3E%3D%20%272026-01-01%27"
+        "&until=%3C%3D%20%272026-06-01%27"
+    ).text
+    for name in ("tsg", "meeting", "release", "spec", "since", "until"):
+        assert f'name="{name}"' in html
+    assert 'value="R5"' in html
+    assert 'value="RAN5#99-e"' in html
+    assert "2026-01-01" in html
+    assert "2026-06-01" in html
+
+
+def test_search_form_sem_keeps_fts5_weight_and_limit(client: TestClient) -> None:
+    """The semantic form keeps the FTS5 weight + Limit controls."""
+    html = client.get("/search/sem?q=foo").text
+    assert 'name="fts5_weight"' in html
+    assert 'name="limit"' in html
+
+
 # ---------------------------------------------------------------------------
 # Static + health
 # ---------------------------------------------------------------------------

@@ -375,3 +375,15 @@ tr.status-lblue td { background: #d1ecf1; }
   font-size: 0.875rem; cursor: pointer; white-space: nowrap;
 }
 table.tdoc-grid .col-meeting { width: 180px; }
+
+/* Search form: 5-column grid for the query row (Query + Semantic/FTS5). */
+.search-grid-5 {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: .75rem;
+  align-items: end;
+  width: 100%;
+}
+
+.search-grid-5 .span-2 { grid-column: span 2; }
+.search-grid-5 .span-3 { grid-column: span 3; }

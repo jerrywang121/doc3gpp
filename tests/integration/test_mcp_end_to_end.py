@@ -27,6 +27,22 @@ def _state_and_server():
     return state, server
 
 
+def test_mcp_server_info_identity(sqlite_env) -> None:
+    """The MCP ``serverInfo`` block carries the package identity.
+
+    The SDK derives ``serverInfo`` from the ``MCPServer`` constructor's
+    identity fields (name / version / title / description / website_url),
+    which feed the ``initialize`` response on both the streamable_http
+    and sse transports.
+    """
+    from doc3gpp.web.mcp_server import _package_version
+
+    _, server = _state_and_server()
+    assert server.name == "doc3gpp"
+    assert server.version == _package_version()
+    assert server.version  # non-empty (e.g. "0.1.1")
+
+
 def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
     import asyncio
 

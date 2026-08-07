@@ -50,6 +50,25 @@ _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "sp
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
+def _package_version() -> str:
+    """Return the installed ``doc3gpp`` distribution version.
+
+    Prefers ``importlib.metadata`` (authoritative — matches the
+    ``pyproject.toml`` version) and falls back to the package
+    ``__version__`` constant when the distribution metadata is
+    unavailable (e.g. running from a source checkout without an
+    editable install). Feeds the MCP ``serverInfo.version`` block.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("doc3gpp")
+    except Exception:  # noqa: BLE001 - best-effort version probe
+        from doc3gpp import __version__
+
+        return __version__
+
+
 def _mcp_error_guard(fn: _F) -> _F:
     """Translate domain exceptions into MCP JSON-RPC protocol errors.
 
@@ -161,7 +180,16 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     """
     from mcp.server.mcpserver import MCPServer
 
-    server = MCPServer("doc3gpp")
+    server = MCPServer(
+        "doc3gpp",
+        version=_package_version(),
+        title="doc3gpp MCP",
+        description=(
+            "3GPP TDoc, meeting, WI and search tools over the doc3gpp "
+            "database (scraped from 3gpp.org)."
+        ),
+        website_url="https://github.com/jerrywang121/doc3gpp",
+    )
     services = state.services
 
     # ---- Meetings -------------------------------------------------

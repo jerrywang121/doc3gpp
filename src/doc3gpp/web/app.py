@@ -72,31 +72,48 @@ def build_state(settings: Settings) -> WebState:
     )
 
 
-def _mount_mcp_in_lifespan(app: FastAPI) -> None:
+@asynccontextmanager
+async def _mount_mcp_in_lifespan(app: FastAPI):
     """Build the real MCP server from ``app.state.web`` and mount at ``/mcp``.
 
     Only mounts when both ``[server].enabled`` and ``[mcp].enabled`` are
     true and the ``mcp`` package is importable; otherwise silently no-ops.
     Called from the lifespan after ``app.state.web`` is set so the tools
     can reach the wired services.
+
+    The ``streamable_http_app()`` returned by the MCP SDK is a Starlette
+    app whose own lifespan runs the session manager's ``run()`` (which
+    initialises the per-connection task group). When that app is mounted
+    into FastAPI its lifespan is never executed, so we must enter
+    ``server.session_manager.run()`` ourselves here and yield while it is
+    active; otherwise every request fails with "Task group is not
+    initialized".
     """
     settings = app.state.web.settings
     if not (settings.mcp.enabled and settings.server.enabled):
+        yield
         return
     try:
         from doc3gpp.web.mcp_server import build_mcp_server
 
         server = build_mcp_server(app.state.web)
-        app.mount("/mcp", server.streamable_http_app())
+        if settings.mcp.transport == "sse":
+            app.mount("/mcp", server.sse_app(sse_path="/sse", message_path="/messages/"))
+        else:
+            app.mount("/mcp", server.streamable_http_app(streamable_http_path="/"))
+        async with server.session_manager.run():
+            yield
     except ImportError:
         logger.warning(
             "doc3gpp.web.app: mcp package is not installed; skipping /mcp mount",
         )
+        yield
     except Exception:
         logger.warning(
             "doc3gpp.web.app: failed to construct MCP server; skipping /mcp mount",
             exc_info=True,
         )
+        yield
 
 
 def build_app(settings: Settings | None = None) -> FastAPI:
@@ -113,8 +130,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         handle.task = asyncio.create_task(worker.run())
         state.jobs = handle
         try:
-            _mount_mcp_in_lifespan(app)
-            yield
+            async with _mount_mcp_in_lifespan(app):
+                yield
         finally:
             await handle.shutdown()
             state.engine.dispose()

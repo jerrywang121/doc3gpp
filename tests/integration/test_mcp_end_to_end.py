@@ -153,6 +153,38 @@ def test_get_meeting_not_found_raises(sqlite_env) -> None:
     assert exc_info.value.code == MCP_CODE_NOT_FOUND
 
 
+def test_sse_transport_mounts_two_endpoints(sqlite_env) -> None:
+    """transport='sse' mounts GET /mcp/sse and POST /mcp/messages/."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    state, _ = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True, transport="sse"),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        # GET /mcp/sse opens the SSE stream. A bare GET without the SSE
+        # handshake headers fails SDK validation (500), but the route is
+        # mounted — assert it is not a 404.
+        resp = client.get("/mcp/sse")
+        assert resp.status_code != 404, "sse endpoint not mounted"
+        # POST /mcp/messages/ is the message endpoint.
+        resp2 = client.post("/mcp/messages/", json={})
+        assert resp2.status_code != 404, "messages endpoint not mounted"
+
+    get_engine.cache_clear()
+    del state.engine
+
+
 def _seed_corpus() -> None:
     """Seed one meeting + one tdoc + one wi so read tools return rows."""
     from doc3gpp.models.meeting import Meeting

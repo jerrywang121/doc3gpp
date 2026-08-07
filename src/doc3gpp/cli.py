@@ -732,10 +732,10 @@ def meeting_list(
     ),
     tsg: str | None = typer.Option(
         None,
-        help="SQL LIKE pattern to filter meeting TSG short name (supports % and _)",
+        help="Rich filter on meeting TSG short name (LIKE, !NOT LIKE, null/not-null)",
     ),
-    name: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting name (supports % and _)") ,
-    location: str | None = typer.Option(None, help="SQL LIKE pattern to filter meeting location (supports % and _)") ,
+    name: str | None = typer.Option(None, help="Rich filter on meeting name (LIKE, !NOT LIKE, null/not-null)") ,
+    location: str | None = typer.Option(None, help="Rich filter on meeting location (LIKE, !NOT LIKE, null/not-null)") ,
     year: int | None = typer.Option(None, help="Filter meetings by end_date year"),
     tdoc: str | None = typer.Option(
         None,
@@ -3770,15 +3770,15 @@ def wi_list(
     ),
     name: str | None = typer.Option(
         None,
-        help="SQL LIKE pattern to filter WI name (supports % and _).",
+        help="Rich filter on WI name (LIKE, !NOT LIKE, null/not-null).",
     ),
     acronym: str | None = typer.Option(
         None,
-        help="SQL LIKE pattern to filter WI acronym (supports % and _).",
+        help="Rich filter on WI acronym (LIKE, !NOT LIKE, null/not-null).",
     ),
     release: str | None = typer.Option(
         None,
-        help="SQL LIKE pattern to filter WI release marker (supports % and _).",
+        help="Rich filter on WI release marker (LIKE, !NOT LIKE, null/not-null).",
     ),
     fmt: str | None = typer.Option(
         None,
@@ -3804,10 +3804,11 @@ def wi_list(
 ) -> None:
     """List stored WIs matching optional filters.
 
-    Filters ``--name``, ``--acronym``, and ``--release`` accept SQL
-    ``LIKE`` patterns. Output columns default to wi_id, acronym,
-    release, and name; use ``--format`` and ``--output`` to control
-    formatting and destination.
+    Filters ``--name``, ``--acronym``, and ``--release`` accept the rich
+    filter grammar (``null`` / ``not-null`` / ``!pattern`` / plain LIKE
+    with ``%`` and ``_`` wildcards). Output columns default to wi_id,
+    acronym, release, and name; use ``--format`` and ``--output`` to
+    control formatting and destination.
     """
     logger.info(
         "Listing %s recent WIs with filters tsg=%s name=%s acronym=%s release=%s",
@@ -4045,11 +4046,11 @@ def search_command(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),
     tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
-    meeting: str | None = typer.Option(None, help="LIKE pattern over meetings.name or meetings.title."),
+    meeting: str | None = typer.Option(None, help="Rich filter over meetings.name or meetings.title (LIKE, !NOT LIKE, null/not-null)."),
     meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
     tdoc_id: str | None = typer.Option(None, help="Filter by tdocs.tdoc_id."),
-    release: str | None = typer.Option(None, help="LIKE pattern over tdocs.release."),
-    spec: str | None = typer.Option(None, help="LIKE pattern over tdocs.spec."),
+    release: str | None = typer.Option(None, help="Rich filter over tdocs.release (LIKE, !NOT LIKE, null/not-null)."),
+    spec: str | None = typer.Option(None, help="Rich filter over tdocs.spec (LIKE, !NOT LIKE, null/not-null)."),
     since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
     until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
     limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
@@ -4326,11 +4327,11 @@ def sem_command(
         ),
     ),
     tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
-    meeting: str | None = typer.Option(None, help="LIKE pattern over meetings.name or meetings.title."),
+    meeting: str | None = typer.Option(None, help="Rich filter over meetings.name or meetings.title (LIKE, !NOT LIKE, null/not-null)."),
     meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
     tdoc_id: str | None = typer.Option(None, help="Filter by tdocs.tdoc_id."),
-    release: str | None = typer.Option(None, help="LIKE pattern over tdocs.release."),
-    spec: str | None = typer.Option(None, help="LIKE pattern over tdocs.spec."),
+    release: str | None = typer.Option(None, help="Rich filter over tdocs.release (LIKE, !NOT LIKE, null/not-null)."),
+    spec: str | None = typer.Option(None, help="Rich filter over tdocs.spec (LIKE, !NOT LIKE, null/not-null)."),
     since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
     until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
     limit: int = typer.Option(20, "--limit", min=0, help="Max results."),

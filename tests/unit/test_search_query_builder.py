@@ -32,6 +32,14 @@ def test_parse_spec_filter_accepts_dotted() -> None:
     parse_spec_filter("38.300-1")
 
 
+def test_parse_spec_filter_accepts_rich_grammar() -> None:
+    """``--spec`` accepts the rich-filter grammar like the MCP tools."""
+    parse_spec_filter("38.3%")
+    parse_spec_filter("!38.3%")
+    parse_spec_filter("null")
+    parse_spec_filter("not-null")
+
+
 def test_parse_spec_filter_rejects_bare_digits() -> None:
     with pytest.raises(ValueError):
         parse_spec_filter("38300")

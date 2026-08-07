@@ -160,17 +160,19 @@ Options:
   - default: 20
 - --offset: number of rows to skip before applying `--limit` (pagination).
   - default: 0
-- --tsg: SQL LIKE pattern to filter the `meetings.tsg` FK.
-  - default: none
-  - supports `%` and `_` wildcards; input is upper-cased before the
-    lookup so lowercase patterns match the canonical stored values.
-    Rows whose `tsg` is `NULL` (e.g. imported before the column was
-    added) are excluded.
+ - --tsg: rich-filter pattern on the `meetings.tsg` FK.
+   - default: none
+   - accepts the rich grammar: `null` / `not-null` match the column's
+     nullability, a leading `!` flips to `NOT LIKE`, and any other value
+     is a `LIKE` pattern (`%` / `_` wildcards). Plain LIKE patterns are
+     upper-cased before the lookup so lowercase patterns match the
+     canonical stored values. Rows whose `tsg` is `NULL` (e.g. imported
+     before the column was added) are excluded unless `tsg='null'`.
 
 Additional options:
 
-- --name: SQL LIKE pattern to filter meeting `name` (supports `%` and `_`).
-- --location: SQL LIKE pattern to filter meeting `location` (supports `%` and `_`).
+- --name: rich-filter pattern on meeting `name` (LIKE, `!` NOT LIKE, `null`/`not-null`).
+- --location: rich-filter pattern on meeting `location` (LIKE, `!` NOT LIKE, `null`/`not-null`).
 - --year: filter meetings by the year of the `end_date`.
 - --tdoc: find the meeting containing the given TDoc. Accepts a
   9-character CR-shape id (`R5-260013`, `R5s260009`, `R5w260013`,
@@ -217,6 +219,12 @@ doc3gpp meeting list --tsg 'R%'
 
 ```bash
 doc3gpp meeting list --name '%TTCN%'
+```
+
+- Exclude every RAN TSG using the rich `!` NOT LIKE grammar:
+
+```bash
+doc3gpp meeting list --tsg '!R%'
 ```
 
 - List meetings ending in 2026:
@@ -352,7 +360,7 @@ Options:
   `null` / `not-null`, a `!pattern` form, or any other text applied as
   a LIKE pattern with `%` / `_` wildcards. The flag is singular;
   combine with other filters instead of passing it twice.
-- --meeting: SQL LIKE pattern to filter by meeting name (supports % and _).
+- --meeting: rich-filter pattern to filter by meeting name (LIKE, `!` NOT LIKE, `null`/`not-null`).
 - --meeting-id: exact match on the parent meeting's numeric ID (see
   `doc3gpp meeting list`). Combinable with `--meeting`; rows must satisfy
   both predicates.
@@ -838,7 +846,7 @@ Options:
 - `--meeting-id N`: exact integer match against `meetings.meeting_id`.
   Combinable with every other filter; rows must satisfy every
   supplied predicate.
-- `--meeting PATTERN`: SQL `LIKE` pattern on `meetings.name` (joins
+- `--meeting PATTERN`: rich-filter pattern on `meetings.name` (joins
   the `meetings` table to filter the candidate set).
 - `--status PATTERN`: filter on `status`.
 - `--cr-cat PATTERN`: filter on `cr_cat` (CR category — `F`, `B`,
@@ -1463,11 +1471,11 @@ Filters (all optional, AND-combined):
 | Flag | Effect |
 | --- | --- |
 | `--tsg TEXT` | `meetings.tsg` filter (any case; matched against the stored upper-case value) |
-| `--meeting TEXT` | LIKE pattern over `meetings.name` **or** `meetings.title` (the results page shows the title; `%` wildcards work) |
+| `--meeting TEXT` | Rich filter over `meetings.name` **or** `meetings.title` (the results page shows the title). Accepts `%` wildcards, a leading `!` for `NOT LIKE`, and `null`/`not-null` |
 | `--meeting-id INT` | `meetings.meeting_id` filter |
 | `--tdoc-id TEXT` | exact `tdocs.tdoc_id` filter |
-| `--release TEXT` | LIKE pattern over `tdocs.release` (e.g. `Rel-1%`) |
-| `--spec TEXT` | LIKE pattern over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`) |
+| `--release TEXT` | Rich filter over `tdocs.release` (e.g. `Rel-1%`; `!Rel-1%` for NOT LIKE; `null`/`not-null`) |
+| `--spec TEXT` | Rich filter over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`; `!38.3%` for NOT LIKE; `null`/`not-null`) |
 | `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD) |
 | `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD) |
 | `--limit INT` | max results (default 20) |
@@ -1579,11 +1587,11 @@ omitted, FTS5 + RRF are skipped — only vector KNN results return.
 | `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). Always embedded. |
 | `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
 | `--tsg TEXT` | `meetings.tsg` filter (any case; matched against the stored upper-case value). |
-| `--meeting TEXT` | LIKE pattern over `meetings.name` **or** `meetings.title` (`%` wildcards work). |
+| `--meeting TEXT` | Rich filter over `meetings.name` **or** `meetings.title` (`%` wildcards, `!` NOT LIKE, `null`/`not-null`). |
 | `--meeting-id INT` | `meetings.meeting_id` filter. |
 | `--tdoc-id TEXT` | exact `tdocs.tdoc_id` filter. |
-| `--release TEXT` | LIKE pattern over `tdocs.release` (e.g. `Rel-1%`). |
-| `--spec TEXT` | LIKE pattern over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`). |
+| `--release TEXT` | Rich filter over `tdocs.release` (e.g. `Rel-1%`; `!Rel-1%` for NOT LIKE; `null`/`not-null`). |
+| `--spec TEXT` | Rich filter over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`; `!38.3%` for NOT LIKE; `null`/`not-null`). |
 | `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD). |
 | `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD). |
 | `--limit INT` | max results (default `20`). |
@@ -1744,7 +1752,7 @@ doc3gpp wi sync --tsg S2
 
 Purpose:
 
-- List stored WI records with optional SQL `LIKE` filters.
+- List stored WI records with optional rich-filter patterns.
 
 Options:
 
@@ -1754,11 +1762,9 @@ Options:
 - --tsg: only list WIs belonging to the given TSG short name.
   - case-insensitive; normalised to the canonical uppercase form.
   - default: none (results span all TSGs).
-- --name: SQL `LIKE` pattern to filter the WI title (supports `%` and `_`).
-- --acronym: SQL `LIKE` pattern to filter the WI acronym
-  (supports `%` and `_`).
-- --release: SQL `LIKE` pattern to filter the release marker
-  (supports `%` and `_`).
+- --name: rich-filter pattern on the WI title (LIKE, `!` NOT LIKE, `null`/`not-null`).
+- --acronym: rich-filter pattern on the WI acronym (LIKE, `!` NOT LIKE, `null`/`not-null`).
+- --release: rich-filter pattern on the release marker (LIKE, `!` NOT LIKE, `null`/`not-null`).
 - --format: see "Common list output options" below (table | json | markdown).
 - --compact: see "Compact output" in the format-overview section.
 - -o, --output: write the result to a file instead of stdout.

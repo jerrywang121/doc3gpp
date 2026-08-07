@@ -222,13 +222,35 @@ def parse_release_filter(value: str) -> None:
 
 
 def parse_spec_filter(value: str) -> None:
-    """Validate a spec number for ``--spec`` (e.g. ``38.300``)."""
+    """Validate a spec filter for ``--spec``.
+
+    Accepts the rich-filter grammar: ``null`` / ``not-null`` match the
+    column's nullability, a leading ``!`` flips to ``NOT LIKE``, and any
+    other value is a ``LIKE`` pattern (``%`` / ``_`` wildcards; a plain
+    value with no wildcard degenerates to equality). A bare dotted spec
+    (e.g. ``38.300``, ``38.300-1``) is the common case and always valid.
+    """
     v = value.strip()
-    if not re.fullmatch(r"\d+\.\d+(?:-\d+)?", v):
-        raise ValueError(
-            f"Invalid spec filter {value!r}. Expected digits.digits, "
-            f"optionally followed by -digits (e.g. '38.300', '38.300-1')."
-        )
+    if not v:
+        raise ValueError("Spec filter must not be empty.")
+    if v.lower() in (NULL_TOKEN, NOT_NULL_TOKEN):
+        return
+    negated, pattern = split_not_like_prefix(v)
+    if negated:
+        v = pattern
+    if not v:
+        raise ValueError("Spec filter must not be empty after '!'.")
+    if re.fullmatch(r"\d+\.\d+(?:-\d+)?", v):
+        return
+    # A LIKE pattern (contains a wildcard) is allowed; anything else is
+    # rejected so a typo surfaces at the CLI boundary.
+    if "%" in v or "_" in v:
+        return
+    raise ValueError(
+        f"Invalid spec filter {value!r}. Expected a spec like '38.300', "
+        f"'38.300-1', a LIKE pattern (e.g. '38.3%'), or the rich "
+        f"grammar 'null' / 'not-null' / '!pattern'."
+    )
 
 
 class SearchQueryBuilder:

@@ -139,6 +139,13 @@ def test_list_filter_meeting(repo):
     assert res[0].meeting_name == "RAN5#111"
 
 
+def test_list_filter_meeting_negated_grammar(repo):
+    """``meeting_like`` honours the rich ``!pattern`` grammar."""
+    res = repo.list_with_meeting(meeting_like="!%RAN5%")
+    assert len(res) == 1
+    assert res[0].meeting_name == "SA2#150"
+
+
 def test_list_filter_meeting_id(repo):
     res = repo.list(meeting_id=1)
     assert len(res) == 2

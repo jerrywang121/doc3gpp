@@ -159,6 +159,39 @@ def test_search_spec_filter_is_like(semantic_search_corpus) -> None:
     assert {h.tdoc_id for h in hits} == {"SEM-TTCN-001"}
 
 
+def test_search_spec_negated_grammar(semantic_search_corpus) -> None:
+    """--spec honours the rich ``!pattern`` grammar."""
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    repo = SQLAlchemySearchIndexRepository()
+
+    # NOT spec 38.3%: every "NB-IoT" hit whose spec is not 38.300/38.321.
+    hits = repo.search('"NB-IoT"', SearchFilters(spec="!38.3%", limit=10))
+    assert {h.tdoc_id for h in hits} == {
+        "SEM-CHG-002", "SEM-TTCN-001",
+    }
+
+
+def test_search_meeting_negated_grammar(semantic_search_corpus) -> None:
+    """--meeting honours the rich ``!pattern`` grammar over name OR title."""
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    repo = SQLAlchemySearchIndexRepository()
+
+    # NOT "SEM#9100": excludes the SEM-NB-001 plenary row; everything
+    # else in the NB-IoT base set lives in SEM#9101 / SEM#9102.
+    hits = repo.search('"NB-IoT"', SearchFilters(meeting="!SEM#9100", limit=10))
+    assert {h.tdoc_id for h in hits} == {
+        "SEM-CHG-001", "SEM-CHG-002", "SEM-NB-002", "SEM-TTCN-001",
+    }
+
+
 def test_search_with_lowercase_tsg(sqlite_env) -> None:
     """meetings.tsg is stored upper-case; a lowercase --tsg must still hit.
 

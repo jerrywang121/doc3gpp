@@ -17,7 +17,9 @@ CLI most recently wrote.
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Callable, TypeVar
+
+from pydantic import Field
 
 from doc3gpp.models.jobs import JobKind
 from doc3gpp.web import render
@@ -163,15 +165,15 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     services = state.services
 
     # ---- Meetings -------------------------------------------------
-    @server.tool(name="list_meetings", description="List meetings, optionally filtered by TSG, name, location or year.")
+    @server.tool(name="list_meetings", description="List meetings, optionally filtered by TSG, name, location or year. The tsg, name and location filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def list_meetings(
-        tsg: str | None = None,
-        name: str | None = None,
-        location: str | None = None,
-        year: int | None = None,
-        limit: int = 50,
-        offset: int = 0,
+        tsg: Annotated[str | None, Field(description="Rich filter patterns on the TSG short name (e.g. 'R5', '%RAN%').")] = None,
+        name: Annotated[str | None, Field(description="Rich filter patterns on the meeting name (e.g. '%RAN%').")] = None,
+        location: Annotated[str | None, Field(description="Rich filter patterns on the meeting location (e.g. '%Edinburgh%').")] = None,
+        year: Annotated[int | None, Field(description="Match meetings whose end date falls in this year.")] = None,
+        limit: Annotated[int, Field(description="Maximum number of meetings to return.")] = 50,
+        offset: Annotated[int, Field(description="Number of meetings to skip for pagination.")] = 0,
     ) -> str:
         meetings = services.meeting.list_recent(
             limit=limit,
@@ -185,40 +187,40 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="get_meeting", description="Get a single meeting by its numeric meeting id.")
     @_mcp_error_guard
-    def get_meeting(meeting_id: int) -> str:
+    def get_meeting(meeting_id: Annotated[int, Field(description="Numeric 3GPP meeting id (e.g. 260013).")]) -> str:
         meeting = services.meeting.get_by_id(meeting_id)
         if meeting is None:
             raise MeetingNotFoundError(str(meeting_id))
         return _to_json({"meeting": render.to_jsonable(meeting)})
 
     # ---- TDocs ----------------------------------------------------
-    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field.")
+    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def list_tdocs(
-        limit: int = 50,
-        offset: int = 0,
-        tdoc_id: str | None = None,
-        meeting_like: str | None = None,
-        meeting_id: int | None = None,
-        status: str | None = None,
-        cr_cat: str | None = None,
-        spec: str | None = None,
-        wi: str | None = None,
-        revision_of: str | None = None,
-        revised_to: str | None = None,
-        title: str | None = None,
-        source: str | None = None,
-        tdoc_type: str | None = None,
-        release: str | None = None,
-        version: str | None = None,
-        cr_num: str | None = None,
-        cr_pack: str | None = None,
+        limit: Annotated[int, Field(description="Maximum number of tdocs to return.")] = 50,
+        offset: Annotated[int, Field(description="Number of tdocs to skip for pagination.")] = 0,
+        tdoc_id: Annotated[str | None, Field(description="Rich filter on the tdoc id (e.g. 'R5-26%').")] = None,
+        meeting: Annotated[str | None, Field(description="Rich filter on the parent meeting name (e.g. '%RAN%')")] = None,
+        meeting_id: Annotated[int | None, Field(description="Exact numeric meeting id filter.")] = None,
+        status: Annotated[str | None, Field(description="Rich filter on status (e.g. 'Approved').")] = None,
+        cr_cat: Annotated[str | None, Field(description="Rich filter on CR category (e.g. 'A').")] = None,
+        spec: Annotated[str | None, Field(description="Rich filter on the spec (e.g. '38.300').")] = None,
+        wi: Annotated[str | None, Field(description="Rich filter on the work item (e.g. '%MIMO%').")] = None,
+        revision_of: Annotated[str | None, Field(description="Rich filter on the tdoc this revises (e.g. 'R5-260001').")] = None,
+        revised_to: Annotated[str | None, Field(description="Rich filter on the tdoc that revises this one.")] = None,
+        title: Annotated[str | None, Field(description="Rich filter on the title (e.g. '%handover%').")] = None,
+        source: Annotated[str | None, Field(description="Rich filter on the source (e.g. '%Ericsson%').")] = None,
+        tdoc_type: Annotated[str | None, Field(description="Rich filter on the tdoc type (e.g. 'CR').")] = None,
+        release: Annotated[str | None, Field(description="Rich filter on the release (e.g. 'Rel-17').")] = None,
+        version: Annotated[str | None, Field(description="Rich filter on the version (e.g. '17.1.0').")] = None,
+        cr_num: Annotated[str | None, Field(description="Rich filter on the CR number.")] = None,
+        cr_pack: Annotated[str | None, Field(description="Rich filter on the CR pack.")] = None,
     ) -> str:
         rows = services.tdoc.list_recent_with_meeting(
             limit=limit,
             offset=offset,
             tdoc_id=tdoc_id,
-            meeting_like=meeting_like,
+            meeting_like=meeting,
             meeting_id=meeting_id,
             status=status,
             cr_cat=cr_cat,
@@ -238,7 +240,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="get_tdoc", description="Get a single tdoc by id, including its cover-page and extract details.")
     @_mcp_error_guard
-    def get_tdoc(tdoc_id: str) -> str:
+    def get_tdoc(tdoc_id: Annotated[str, Field(description="Canonical tdoc id (e.g. 'R5-260013').")]) -> str:
         from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
         from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import SQLAlchemyTDocCrChangeDetailsRepository
         from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
@@ -257,7 +259,10 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="get_tdoc_content", description="Return the cached markdown body for a tdoc id.")
     @_mcp_error_guard
-    def get_tdoc_content(tdoc_id: str, format: str = "markdown") -> str:
+    def get_tdoc_content(
+        tdoc_id: Annotated[str, Field(description="Canonical tdoc id (e.g. 'R5-260013').")],
+        format: Annotated[str, Field(description="Output format: 'markdown' (default) or 'html'.")] = "markdown",
+    ) -> str:
         if format not in ("markdown", "html"):
             raise InvalidFilterError("format must be one of 'markdown'|'html'")
         from pathlib import Path
@@ -288,7 +293,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="get_tsg", description="Get a single TSG by short name, with its recent meetings.")
     @_mcp_error_guard
-    def get_tsg(short_name: str) -> str:
+    def get_tsg(short_name: Annotated[str, Field(description="TSG short name (e.g. 'R5', 'CT1').")]) -> str:
         tsg = services.tsg.get_by_short_name(short_name)
         if tsg is None:
             raise TSGNotFoundError(short_name)
@@ -296,14 +301,14 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json({"tsg": render.to_jsonable(tsg), "meetings": render.to_jsonable(meetings)})
 
     # ---- WIs ------------------------------------------------------
-    @server.tool(name="list_wis", description="List work items, optionally filtered by TSG, name, acronym or release.")
+    @server.tool(name="list_wis", description="List work items, optionally filtered by TSG, name, acronym or release. The name, acronym and release filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def list_wis(
-        tsg: str | None = None,
-        name: str | None = None,
-        acronym: str | None = None,
-        release: str | None = None,
-        limit: int = 50,
+        tsg: Annotated[str | None, Field(description="TSG short name filter (e.g. 'R5').")] = None,
+        name: Annotated[str | None, Field(description="Rich filter pattern on the WI name (e.g. '%MIMO%').")] = None,
+        acronym: Annotated[str | None, Field(description="Rich filter pattern on the WI acronym (e.g. '%NR%').")] = None,
+        release: Annotated[str | None, Field(description="Rich filter pattern on the release (e.g. 'Rel-17').")] = None,
+        limit: Annotated[int, Field(description="Maximum number of WIs to return.")] = 50,
     ) -> str:
         wis = services.wi.list_recent(
             limit=limit,
@@ -315,18 +320,18 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.wi_rows(wis, _WI_FIELDS))
 
     # ---- Search ---------------------------------------------------
-    @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text.")
+    @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsgm meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def search_tdocs(
-        query: str,
-        tsg: str | None = None,
-        meeting: str | None = None,
-        release: str | None = None,
-        spec: str | None = None,
-        since: str | None = None,
-        until: str | None = None,
-        limit: int = 20,
-        sem_query: str | None = None,
+        query: Annotated[str, Field(description='Full-text query with FTS5 MATCH expression over tdoc text, phrases shall be wrapped with double quotes, support AND, OR and NOT (e.g. \'handover AND beamforming NOT "CSI report"\').')],
+        tsg: Annotated[str | None, Field(description="Exact TSG short name filter (e.g. 'R5').")] = None,
+        meeting: Annotated[str | None, Field(description="Rich filter on the meeting name or title")] = None,
+        release: Annotated[str | None, Field(description="Rich filter pattern on the release (e.g. 'Rel-17').")] = None,
+        spec: Annotated[str | None, Field(description="Rich filter pattern on the spec (e.g. '38.300').")] = None,
+        since: Annotated[str | None, Field(description="Earliest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
+        until: Annotated[str | None, Field(description="Latest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
+        limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
+        sem_query: Annotated[str | None, Field(description="Optional semantic rerank query; when set, results are reranked by embedding similarity to this text.")] = None,
     ) -> str:
         if services.search is None:
             raise SettingsDisabledError("search is not available in this build")
@@ -336,41 +341,56 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         hits = services.search.search(query, filters, sem_query=sem_query)
         return _to_json([_fts5_hit_to_json(h) for h in hits])
 
-    @server.tool(name="semantic_search_tdocs", description="Semantic (embedding) search over tdoc text.")
+    @server.tool(name="semantic_search_tdocs", description="Semantic (embedding) search over tdoc text with natural-language query, optionally blended with an FTS5 query via reciprocal-rank fusion (RRF). Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def semantic_search_tdocs(
-        query: str,
-        limit: int = 20,
-        fts5_weight: float = 0.5,
+        query: Annotated[str, Field(description="Natural-language semantic query over tdoc text (e.g. 'handover signalling procedures').")],
+        fts5_query: Annotated[str | None, Field(description="Optional FTS5 MATCH expression, support AND, OR and NOT (e.g. 'handover AND beamforming NOT \"CSI report\"'). When omitted, only embedding-KNN runs (no RRF). When supplied, results are merged with the vector ranking via RRF.")] = None,
+        tsg: Annotated[str | None, Field(description="Exact TSG short name filter (e.g. 'R5').")] = None,
+        meeting: Annotated[str | None, Field(description="Rich filter on the meeting name or title")] = None,
+        meeting_id: Annotated[int | None, Field(description="Exact numeric meeting id filter.")] = None,
+        tdoc_id: Annotated[str | None, Field(description="Exact tdoc id filter (e.g. 'R5-260013').")] = None,
+        release: Annotated[str | None, Field(description="Rich filter pattern on the release (e.g. 'Rel-17').")] = None,
+        spec: Annotated[str | None, Field(description="Rich filter pattern on the spec (e.g. '38.300').")] = None,
+        since: Annotated[str | None, Field(description="Earliest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
+        until: Annotated[str | None, Field(description="Latest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
+        limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
+        fts5_weight: Annotated[float, Field(description="Blend weight (0.0..1.0) for the FTS5 rank in RRF; the vector weight is 1 - fts5_weight. Ignored when fts5_query is omitted.")] = 0.5,
     ) -> str:
         if services.semantic_search is None:
             raise SettingsDisabledError("semantic search is not available in this build")
         if not 0.0 <= fts5_weight <= 1.0:
             raise InvalidFilterError("fts5_weight must be between 0.0 and 1.0")
-        from doc3gpp.services.search_service import SearchFilters
+        from doc3gpp.models.search import SearchFilters
 
-        filters = SearchFilters(limit=limit)
-        hits = services.semantic_search.search(query, None, filters=filters, limit=limit, fts5_weight=fts5_weight)
+        filters = SearchFilters(
+            tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
+            release=release, spec=spec, since=since, until=until, limit=limit,
+        )
+        hits = services.semantic_search.search(
+            query, fts5_query=fts5_query, filters=filters,
+            limit=limit, fts5_weight=fts5_weight,
+        )
         return _to_json([_semantic_hit_to_json(h) for h in hits])
 
     # ---- Jobs -----------------------------------------------------
     @server.tool(name="sync_meetings", description="Enqueue a meeting-calendar sync for a TSG.")
     @_mcp_error_guard
-    def sync_meetings(tsg: str) -> str:
+    def sync_meetings(tsg: Annotated[str, Field(description="TSG short name to sync the meeting calendar for (e.g. 'R5').")]) -> str:
         if not tsg:
             raise InvalidFilterError("tsg is required")
         return _enqueue(state, JobKind.SYNC_MEETINGS, {"tsg": tsg}, f"queued sync_meetings for TSG {tsg}")
 
     @server.tool(name="sync_tdocs", description="Enqueue a tdoc-list sync for a meeting id.")
     @_mcp_error_guard
-    def sync_tdocs(meeting_id: int | None = None) -> str:
+    def sync_tdocs(meeting_id: Annotated[int | None, Field(description="Numeric meeting id to sync the tdoc list for.")] = None) -> str:
         if meeting_id is None:
             raise InvalidFilterError("meeting_id is required")
         return _enqueue(state, JobKind.SYNC_TDOCS, {"meeting_id": meeting_id}, f"queued sync_tdocs for meeting {meeting_id}")
 
     @server.tool(name="sync_tdocs_by_meeting", description="Enqueue a tdoc-list sync for a meeting by name.")
     @_mcp_error_guard
-    def sync_tdocs_by_meeting(meeting: str | None = None) -> str:
+    def sync_tdocs_by_meeting(meeting: Annotated[str | None, Field(description="Meeting name to sync the tdoc list for (e.g. 'RAN5#106').")] = None) -> str:
         if not meeting:
             raise InvalidFilterError("meeting is required")
         return _enqueue(state, JobKind.SYNC_TDOCS, {"meeting_name": meeting}, f"queued sync_tdocs for meeting {meeting}")
@@ -383,10 +403,10 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages + change details.")
     @_mcp_error_guard
     def parse_tdocs(
-        filter: dict[str, Any] | None = None,
-        force: bool = False,
-        full: bool = False,
-        max_batch: int | None = None,
+        filter: Annotated[dict[str, Any] | None, Field(description="Filter dict selecting which tdocs to parse. Supported keys: tdoc_id, meeting, meeting_id, status, cr_cat, spec, wi, revision_of, revised_to, title, ftp_url, source, tdoc_type, uploaded_date, release, version, cr_num, cr_pack. Text fields (all except meeting_id) are SQL LIKE patterns: use % as a wildcard (e.g. {'tdoc_id': 'R5-26%', 'meeting': '%RAN%', 'title': '%handover%'}); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability; uploaded_date accepts '<op> YYYY-MM-DD'. A plain value with no wildcard still matches exactly.")] = None,
+        force: Annotated[bool, Field(description="Re-parse tdocs already present in the cover-page table.")] = False,
+        full: Annotated[bool, Field(description="Parse full content (not just cover page + change details).")] = False,
+        max_batch: Annotated[int | None, Field(description="Cap on the number of tdocs parsed in this job.")] = None,
     ) -> str:
         if not filter:
             raise InvalidFilterError("filter is required")
@@ -397,12 +417,18 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="rebuild_search_index", description="Enqueue an FTS5 search-index rebuild.")
     @_mcp_error_guard
-    def rebuild_search_index(stale_only: bool = False, resume: bool = False) -> str:
+    def rebuild_search_index(
+        stale_only: Annotated[bool, Field(description="Only re-index tdocs uploaded since the last index.")] = False,
+        resume: Annotated[bool, Field(description="Resume from the last indexed tdoc instead of starting fresh.")] = False,
+    ) -> str:
         return _enqueue(state, JobKind.REBUILD_SEARCH, {"stale_only": stale_only, "resume": resume}, "queued rebuild_search_index")
 
     @server.tool(name="purge_cache", description="Enqueue a cache purge (scope: markdown, zips or all).")
     @_mcp_error_guard
-    def purge_cache(scope: str = "markdown", yes: bool = False) -> str:
+    def purge_cache(
+        scope: Annotated[str, Field(description="Cache scope to purge: 'markdown', 'zips' or 'all'.")] = "markdown",
+        yes: Annotated[bool, Field(description="Must be true to actually purge the cache.")] = False,
+    ) -> str:
         if not yes:
             raise InvalidFilterError("yes must be true to purge the cache")
         if scope not in ("markdown", "zips", "all"):
@@ -411,7 +437,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="get_job", description="Get a job's full detail by id.")
     @_mcp_error_guard
-    def get_job(job_id: str) -> str:
+    def get_job(job_id: Annotated[str, Field(description="Job id (UUID4 hex string).")]) -> str:
         job = state.services.job_repo.get(job_id)
         if job is None:
             raise JobNotFoundError(job_id)
@@ -421,7 +447,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="cancel_job", description="Request cooperative cancellation of a queued or running job.")
     @_mcp_error_guard
-    def cancel_job(job_id: str) -> str:
+    def cancel_job(job_id: Annotated[str, Field(description="Job id (UUID4 hex string) to cancel.")]) -> str:
         from doc3gpp.models.jobs import JobStatus
 
         job = state.services.job_repo.get(job_id)
@@ -436,7 +462,11 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
     @server.tool(name="list_jobs", description="List recent jobs (newest first), optionally filtered by status.")
     @_mcp_error_guard
-    def list_jobs(status: str | None = None, limit: int = 50, offset: int = 0) -> str:
+    def list_jobs(
+        status: Annotated[str | None, Field(description="Filter by job status: 'queued', 'running', 'succeeded', 'failed' or 'cancelled'.")] = None,
+        limit: Annotated[int, Field(description="Maximum number of jobs to return.")] = 50,
+        offset: Annotated[int, Field(description="Number of jobs to skip for pagination.")] = 0,
+    ) -> str:
         from doc3gpp.models.jobs import JobStatus
         from doc3gpp.web.routes.jobs import _envelope
 

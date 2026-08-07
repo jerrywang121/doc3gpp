@@ -33,6 +33,10 @@ from doc3gpp.models.search import (
     SearchIndexStatus,
 )
 from doc3gpp.repository.protocols import SearchIndexRepository
+from doc3gpp.storage.repositories.rich_filters import (
+    build_text_filter_or_params,
+    build_text_filter_sql,
+)
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 from doc3gpp.storage.compression import decompress_json
@@ -221,11 +225,15 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             sql.append("   AND m.tsg = :tsg")
             params["tsg"] = filters.tsg.upper()
         if filters.meeting:
-            # LIKE over name OR title: the results page shows m.title,
-            # but the CLI convention (meeting list --name, tdoc list
-            # text filters) is LIKE on the stored field.
-            sql.append("   AND (m.name LIKE :meeting OR m.title LIKE :meeting)")
-            params["meeting"] = filters.meeting
+            # Rich-filter grammar over name OR title: the results page
+            # shows m.title, but the CLI convention (meeting list --name,
+            # tdoc list text filters) is LIKE on the stored field. Apply
+            # the grammar to each column and OR the resulting clauses.
+            meeting_clauses, meeting_params = build_text_filter_or_params(
+                ("m.name", "m.title"), filters.meeting, param="meeting",
+            )
+            sql.append(f"   AND ({meeting_clauses})")
+            params.update(meeting_params)
         if filters.meeting_id is not None:
             sql.append("   AND m.meeting_id = :meeting_id")
             params["meeting_id"] = filters.meeting_id
@@ -233,11 +241,15 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             sql.append("   AND t.tdoc_id = :tdoc_id")
             params["tdoc_id"] = filters.tdoc_id
         if filters.release:
-            sql.append("   AND t.release LIKE :release")
-            params["release"] = filters.release
+            clause, bound = build_text_filter_sql("t.release", filters.release, param="release")
+            if bound is not None:
+                params["release"] = bound
+            sql.append(f"   AND {clause}")
         if filters.spec:
-            sql.append("   AND t.spec LIKE :spec")
-            params["spec"] = filters.spec
+            clause, bound = build_text_filter_sql("t.spec", filters.spec, param="spec")
+            if bound is not None:
+                params["spec"] = bound
+            sql.append(f"   AND {clause}")
         if filters.since:
             sql.append("   AND t.uploaded_date >= :since")
             params["since"] = filters.since

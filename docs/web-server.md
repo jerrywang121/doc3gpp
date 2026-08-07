@@ -77,6 +77,7 @@ cache_subdir = "web"       # optional subdir under the tdoc cache for server con
 enabled = true             # mount /mcp; no effect unless server.enabled
 transport = "streamable_http"   # streamable_http (default) | sse
 sse_queue_size = 100
+allowed_origins = ["http://127.0.0.1", "http://localhost"]  # browser origins allowed to call /mcp
 ```
 
 The MCP mount is active only when **both** `server.enabled` and `mcp.enabled`
@@ -303,10 +304,15 @@ The MCP endpoint is mounted at `/mcp` whenever `server.enabled` and
 - `sse` — the legacy two-endpoint protocol: `GET /mcp/sse` (event stream)
   and `POST /mcp/messages/` (client→server messages).
 
+Browser-based MCP clients (e.g. a Chrome extension at `http://127.0.0.1`)
+must have their origin listed in `[mcp] allowed_origins`; the MCP SDK's
+transport-security layer otherwise rejects cross-origin requests with a
+403 "Invalid Origin header". The default allows `http://127.0.0.1` and
+`http://localhost`. Set `allowed_origins = []` to disable the origin check.
+
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
 It exposes 20 tools:
-
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `search_tdocs`,
 `semantic_search_tdocs`.

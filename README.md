@@ -344,7 +344,9 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
 - **MCP** — `http://127.0.0.1:8765/mcp` exposes 20 tools covering the
   same reads plus job lifecycle. The transport is set under `[mcp]` in the
   TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
-  (legacy two-endpoint `GET /mcp/sse` + `POST /mcp/messages/`).
+  (legacy two-endpoint `GET /mcp/sse` + `POST /mcp/messages/`). Browser
+  clients must have their origin in `[mcp] allowed_origins` (defaults to
+  `http://127.0.0.1` and `http://localhost`).
 - **Jobs** — sync, parse, search rebuild, and cache purge run on a shared
   asyncio worker; watch live progress over SSE at `/jobs/{id}/events`.
 

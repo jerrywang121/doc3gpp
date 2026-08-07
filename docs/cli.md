@@ -1461,8 +1461,10 @@ doc3gpp cache purge --scope all --yes
 Run a full-text search over the FTS5 index. The QUERY is either
 plain text (which the CLI wraps in FTS5 quotes after escaping
 special characters) or an FTS5 expression with `AND`, `OR`, `NOT`,
-`NEAR`, `*`, or quoted phrases passed through unchanged. Both
-plain and operator queries are normalized via
+`NEAR`, `*`, or quoted phrases passed through unchanged. Single-quoted
+phrases (`'CSI report'`) are rewritten to double-quoted phrases
+(`"CSI report"`) because FTS5 only accepts double quotes as phrase
+delimiters. Both plain and operator queries are normalized via
 `normalize_query` so user input matches indexed text token-for-token
 (TDoc ID base + full; spec ID dot replaced with underscore).
 
@@ -1489,7 +1491,10 @@ Filters (all optional, AND-combined):
 Exit codes: `0` success, `2` bad query, `3` index corrupt. When
 the FTS5 module is unavailable (wrong dialect, missing extra,
 `Settings.search.enabled = false`), the CLI prints
-`search disabled in settings` and exits 0.
+`search disabled in settings` and exits 0. A malformed `MATCH`
+expression (e.g. an unbalanced quote) is classified as a bad query
+and prints a one-line `bad query: ...` message with exit code 2
+rather than a raw traceback.
 
 The `--explain` block is emitted to stderr (so it doesn't pollute
 piped stdout) and looks exactly like this:
@@ -1576,7 +1581,8 @@ Run a hybrid (FTS5 + vector) search that merges lexical and semantic
 matches with Reciprocal Rank Fusion (RRF). The positional `QUERY`
 is always embedded by the vector path (the same model used at index
 time); when `--fts5-query` is supplied, it is preprocessed by
-`SearchQueryBuilder` (same semantics as `search query`) and feeds
+`SearchQueryBuilder` (same semantics as `search query`, including
+single-quote → double-quote phrase rewriting) and feeds
 the FTS5 fan-out. Both paths fan out to `2N` candidates, are merged
 via `rrf_merge`, and truncated to `--limit`. When `--fts5-query` is
 omitted, FTS5 + RRF are skipped — only vector KNN results return.

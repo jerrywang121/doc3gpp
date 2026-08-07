@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import text
 from typer.testing import CliRunner
 
@@ -215,3 +216,35 @@ def test_search_with_lowercase_tsg(sqlite_env) -> None:
     )
     assert result.exit_code == 0
     assert "R5-1000000" in result.output
+
+
+def test_search_malformed_match_raises_query_error(semantic_search_corpus) -> None:
+    """A malformed FTS5 ``MATCH`` expression surfaces as a clean
+    :class:`SearchQueryError` rather than a raw ``OperationalError``
+    traceback.
+
+    Regression: an unbalanced double quote (``"foo``) crashes FTS5 with
+    ``OperationalError: unterminated string``; the repo now classifies
+    query-shaped failures as ``SearchQueryError`` so the CLI prints a
+    one-liner instead of a stack trace.
+    """
+    from doc3gpp.models.search import SearchFilters, SearchQueryError
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    repo = SQLAlchemySearchIndexRepository()
+    with pytest.raises(SearchQueryError):
+        repo.search('"foo', SearchFilters(limit=10))
+
+
+def test_search_malformed_match_cli_exits_cleanly(semantic_search_corpus) -> None:
+    """The CLI turns a malformed MATCH into a friendly stderr message
+    with exit code 2, not a traceback."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["search", "query", '"foo', "--format", "json"],
+    )
+    assert result.exit_code == 2
+    assert "bad query" in result.output

@@ -26,8 +26,10 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import (
+    SearchError,
     SearchFilters,
     SearchHit,
     SearchIndexStatus,
@@ -80,6 +82,39 @@ def _check_fts5(engine: Engine) -> None:
 # module is imported by services/factory.py which itself imports
 # SearchUnavailableError from models.search.
 from doc3gpp.models.search import SearchUnavailableError  # noqa: E402
+
+
+# FTS5 ``MATCH`` parse failures surface as ``OperationalError`` with a
+# message like ``fts5: syntax error near ...``. Distinguish a malformed
+# user query (a :class:`SearchQueryError`, exit code 2) from genuine
+# index corruption (a :class:`SearchIndexCorruptError`, exit code 3) so
+# the CLI / web / MCP surfaces can give the right guidance instead of a
+# raw traceback.
+_QUERY_ERROR_MARKERS = (
+    "syntax error",
+    "unable to parse",
+    "no such column",
+    "unbalanced",
+    "unterminated",
+)
+
+
+def _classify_search_error(exc: OperationalError) -> SearchError:
+    """Translate an FTS5 ``OperationalError`` into a domain error.
+
+    Query-shaped failures (bad ``MATCH`` expression) become
+    :class:`SearchQueryError`; anything else is treated as index
+    corruption (:class:`SearchIndexCorruptError`).
+    """
+    from doc3gpp.models.search import (
+        SearchIndexCorruptError,
+        SearchQueryError,
+    )
+
+    msg = str(exc)
+    if any(marker in msg for marker in _QUERY_ERROR_MARKERS):
+        return SearchQueryError(msg)
+    return SearchIndexCorruptError(msg)
 
 
 class SQLAlchemySearchIndexRepository(SearchIndexRepository):
@@ -261,8 +296,11 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             ":w5, :w6, :w7) LIMIT :limit"
         )
         params["limit"] = max(filters.limit, 0)
-        with self._engine.begin() as conn:
-            rows = conn.execute(text("\n".join(sql)), params).all()
+        try:
+            with self._engine.begin() as conn:
+                rows = conn.execute(text("\n".join(sql)), params).all()
+        except OperationalError as exc:
+            raise _classify_search_error(exc) from exc
         hits: list[SearchHit] = []
         for row in rows:
             previews: dict[str, str] = {}

@@ -4097,7 +4097,11 @@ def search_command(
         parse_release_filter,
         parse_spec_filter,
     )
-    from doc3gpp.models.search import SearchError, SearchFilters
+    from doc3gpp.models.search import (
+        SearchError,
+        SearchFilters,
+        SearchQueryError,
+    )
     from doc3gpp.services.factory import build_search_service
 
     # Reject the removed --rerank flag with a clear migration message.
@@ -4151,6 +4155,9 @@ def search_command(
             )
         else:
             hits = raw_hits
+    except SearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
     except SearchError:
         typer.echo("search index corrupt; run `doc3gpp search index --rebuild`", err=True)
         raise typer.Exit(code=3)

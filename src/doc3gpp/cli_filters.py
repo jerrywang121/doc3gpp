@@ -280,9 +280,27 @@ class SearchQueryBuilder:
             from doc3gpp.models.search import SearchQueryError
             raise SearchQueryError("query has only stopwords")
         if self._is_operator_passthrough():
-            return self._quote_jargon(self._normalize_each_token(self._query))
+            return self._quote_jargon(
+                self._normalize_each_token(self._normalize_phrase_quotes(self._query))
+            )
         escaped = self._escape_specials(self._normalize_each_token(self._query))
         return f'"{escaped}"'
+
+    @staticmethod
+    def _normalize_phrase_quotes(text: str) -> str:
+        """Rewrite single-quoted phrases as double-quoted phrases.
+
+        FTS5 only recognises double quotes (``"…"``) as phrase
+        delimiters; a single-quoted phrase like ``'CSI report'`` is a
+        syntax error (``fts5: syntax error near "'"``). Users coming
+        from SQL or natural-language habits often type single quotes,
+        so on the operator-passthrough branch we rewrite any
+        ``'…'``-delimited span to ``"…"`` before handing the
+        expression to FTS5. Unbalanced or already-double-quoted text
+        is left untouched (FTS5 will reject it, and the repo's
+        defense-in-depth classifies that as a query error).
+        """
+        return re.sub(r"'([^']*)'", r'"\1"', text)
 
     @staticmethod
     def _quote_jargon(text: str) -> str:

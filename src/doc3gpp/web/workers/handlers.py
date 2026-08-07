@@ -143,7 +143,7 @@ async def _parse_tdocs(
 
     _KNOWN_LIST_FILTERS = {
         "tdoc_id",
-        "meeting_like",
+        "meeting",
         "meeting_id",
         "status",
         "cr_cat",
@@ -161,11 +161,16 @@ async def _parse_tdocs(
         "cr_num",
         "cr_pack",
     }
+    list_filters = {
+        k: v for k, v in filters.items() if k in _KNOWN_LIST_FILTERS
+    }
+    if "meeting" in list_filters:
+        list_filters["meeting_like"] = list_filters.pop("meeting")
     tdocs = services.tdoc_repo.list(
         limit=max_batch,
         offset=0,
         exclude_parsed=not force,
-        **{k: v for k, v in filters.items() if k in _KNOWN_LIST_FILTERS},
+        **list_filters,
     )
     tdoc_ids = [t.tdoc_id for t in tdocs]
     if not tdoc_ids:

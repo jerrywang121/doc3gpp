@@ -119,7 +119,8 @@ class SQLAlchemyTDocRepository:
           (rich-filter grammar — ``null`` / ``not-null`` /
           ``!pattern`` / plain LIKE). The same parameter powers the
           ``--tdoc`` flag on both ``tdoc list`` and ``tdoc parse``.
-        - ``meeting_like``: SQL LIKE pattern to apply to the meeting name.
+        - ``meeting_like``: rich-filter grammar against the meeting name
+          (``null`` / ``not-null`` / ``!pattern`` / plain LIKE pattern).
         - ``meeting_id``: exact match on ``tdocs.meeting_id``. Combinable
           with ``meeting_like``; rows must satisfy both predicates.
 
@@ -146,10 +147,9 @@ class SQLAlchemyTDocRepository:
             stmt = select(TDocORM)
 
             if meeting_like:
-                # join meetings to filter by meeting name
-                stmt = stmt.join(MeetingORM, TDocORM.meeting_id == MeetingORM.meeting_id).where(
-                    MeetingORM.name.like(meeting_like)
-                )
+                # join meetings to filter by meeting name (rich LIKE grammar)
+                stmt = stmt.join(MeetingORM, TDocORM.meeting_id == MeetingORM.meeting_id)
+                stmt = _apply_text_filter(stmt, MeetingORM.name, meeting_like)
 
             if meeting_id is not None:
                 stmt = stmt.where(TDocORM.meeting_id == meeting_id)

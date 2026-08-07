@@ -26,13 +26,19 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import (
+    SearchError,
     SearchFilters,
     SearchHit,
     SearchIndexStatus,
 )
 from doc3gpp.repository.protocols import SearchIndexRepository
+from doc3gpp.storage.repositories.rich_filters import (
+    build_text_filter_or_params,
+    build_text_filter_sql,
+)
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 from doc3gpp.storage.compression import decompress_json
@@ -76,6 +82,39 @@ def _check_fts5(engine: Engine) -> None:
 # module is imported by services/factory.py which itself imports
 # SearchUnavailableError from models.search.
 from doc3gpp.models.search import SearchUnavailableError  # noqa: E402
+
+
+# FTS5 ``MATCH`` parse failures surface as ``OperationalError`` with a
+# message like ``fts5: syntax error near ...``. Distinguish a malformed
+# user query (a :class:`SearchQueryError`, exit code 2) from genuine
+# index corruption (a :class:`SearchIndexCorruptError`, exit code 3) so
+# the CLI / web / MCP surfaces can give the right guidance instead of a
+# raw traceback.
+_QUERY_ERROR_MARKERS = (
+    "syntax error",
+    "unable to parse",
+    "no such column",
+    "unbalanced",
+    "unterminated",
+)
+
+
+def _classify_search_error(exc: OperationalError) -> SearchError:
+    """Translate an FTS5 ``OperationalError`` into a domain error.
+
+    Query-shaped failures (bad ``MATCH`` expression) become
+    :class:`SearchQueryError`; anything else is treated as index
+    corruption (:class:`SearchIndexCorruptError`).
+    """
+    from doc3gpp.models.search import (
+        SearchIndexCorruptError,
+        SearchQueryError,
+    )
+
+    msg = str(exc)
+    if any(marker in msg for marker in _QUERY_ERROR_MARKERS):
+        return SearchQueryError(msg)
+    return SearchIndexCorruptError(msg)
 
 
 class SQLAlchemySearchIndexRepository(SearchIndexRepository):
@@ -221,11 +260,15 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             sql.append("   AND m.tsg = :tsg")
             params["tsg"] = filters.tsg.upper()
         if filters.meeting:
-            # LIKE over name OR title: the results page shows m.title,
-            # but the CLI convention (meeting list --name, tdoc list
-            # text filters) is LIKE on the stored field.
-            sql.append("   AND (m.name LIKE :meeting OR m.title LIKE :meeting)")
-            params["meeting"] = filters.meeting
+            # Rich-filter grammar over name OR title: the results page
+            # shows m.title, but the CLI convention (meeting list --name,
+            # tdoc list text filters) is LIKE on the stored field. Apply
+            # the grammar to each column and OR the resulting clauses.
+            meeting_clauses, meeting_params = build_text_filter_or_params(
+                ("m.name", "m.title"), filters.meeting, param="meeting",
+            )
+            sql.append(f"   AND ({meeting_clauses})")
+            params.update(meeting_params)
         if filters.meeting_id is not None:
             sql.append("   AND m.meeting_id = :meeting_id")
             params["meeting_id"] = filters.meeting_id
@@ -233,11 +276,15 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             sql.append("   AND t.tdoc_id = :tdoc_id")
             params["tdoc_id"] = filters.tdoc_id
         if filters.release:
-            sql.append("   AND t.release LIKE :release")
-            params["release"] = filters.release
+            clause, bound = build_text_filter_sql("t.release", filters.release, param="release")
+            if bound is not None:
+                params["release"] = bound
+            sql.append(f"   AND {clause}")
         if filters.spec:
-            sql.append("   AND t.spec LIKE :spec")
-            params["spec"] = filters.spec
+            clause, bound = build_text_filter_sql("t.spec", filters.spec, param="spec")
+            if bound is not None:
+                params["spec"] = bound
+            sql.append(f"   AND {clause}")
         if filters.since:
             sql.append("   AND t.uploaded_date >= :since")
             params["since"] = filters.since
@@ -249,8 +296,11 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             ":w5, :w6, :w7) LIMIT :limit"
         )
         params["limit"] = max(filters.limit, 0)
-        with self._engine.begin() as conn:
-            rows = conn.execute(text("\n".join(sql)), params).all()
+        try:
+            with self._engine.begin() as conn:
+                rows = conn.execute(text("\n".join(sql)), params).all()
+        except OperationalError as exc:
+            raise _classify_search_error(exc) from exc
         hits: list[SearchHit] = []
         for row in rows:
             previews: dict[str, str] = {}

@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.storage.db.models import MeetingORM
 from doc3gpp.storage.db.session import get_session_factory
+from doc3gpp.cli_filters import is_not_null_token, is_null_token, split_not_like_prefix
+from doc3gpp.storage.repositories.rich_filters import apply_text_filter
 
 
 class SQLAlchemyMeetingRepository:
@@ -55,12 +57,12 @@ class SQLAlchemyMeetingRepository:
         """List the most recent meeting records, ordered by start date.
 
         Optional filters:
-        - `tsg`: SQL ``LIKE`` pattern applied to the ``meetings.tsg`` FK
-          (case-insensitive via upper-case canonical form, populated by
-          ``meeting sync --tsg``). Use ``%`` / ``_`` wildcards; a plain
-          value with no wildcards still matches exactly.
-        - `name_like`: SQL LIKE pattern to apply to the `name` column
-        - `location_like`: SQL LIKE pattern to apply to the `location` column
+        - `tsg`: rich-filter grammar applied to the ``meetings.tsg`` FK
+          (``null`` / ``not-null`` / ``!pattern`` / plain LIKE). Stored
+          upper-case by ``meeting sync --tsg``; plain LIKE patterns are
+          upper-cased so callers may pass any case.
+        - `name_like`: rich-filter grammar on the `name` column
+        - `location_like`: rich-filter grammar on the `location` column
         - `year`: integer year to match the `end_date`
         - `tdoc_id`: ``(prefix, number)`` tuple; narrows to meetings whose
           ``start_doc`` / ``end_doc`` range brackets the TDoc. See
@@ -71,14 +73,23 @@ class SQLAlchemyMeetingRepository:
             stmt = select(MeetingORM)
 
             if tsg:
-                # LIKE on meetings.tsg; stored upper-case by sync so callers may pass any case.
-                stmt = stmt.where(MeetingORM.tsg.like(tsg.upper()))
+                # Rich-filter grammar on meetings.tsg. meetings.tsg is
+                # stored upper-case by sync, so for a plain LIKE we
+                # upper-case the pattern to keep it case-insensitive;
+                # the null / not-null / negated tokens pass through
+                # untouched.
+                if is_null_token(tsg) or is_not_null_token(tsg):
+                    stmt = apply_text_filter(stmt, MeetingORM.tsg, tsg)
+                else:
+                    _negated, pattern = split_not_like_prefix(tsg)
+                    canonical = f"!{pattern.upper()}" if _negated else pattern.upper()
+                    stmt = apply_text_filter(stmt, MeetingORM.tsg, canonical)
 
             if name_like:
-                stmt = stmt.where(MeetingORM.name.like(name_like))
+                stmt = apply_text_filter(stmt, MeetingORM.name, name_like)
 
             if location_like:
-                stmt = stmt.where(MeetingORM.location.like(location_like))
+                stmt = apply_text_filter(stmt, MeetingORM.location, location_like)
 
             if year is not None:
                 stmt = stmt.where(extract("year", MeetingORM.end_date) == year)

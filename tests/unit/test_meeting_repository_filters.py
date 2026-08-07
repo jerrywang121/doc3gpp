@@ -160,6 +160,31 @@ def test_list_filters_by_tsg_like_pattern():
     assert {m.meeting_id for m in r_lower} == {1, 2, 3, 4}
 
 
+def test_list_filters_by_tsg_negated_and_null_grammar():
+    """``tsg`` honours the rich ``!pattern`` and ``null`` / ``not-null`` grammar."""
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    with Session() as s:
+        insert_rows(s)
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    # Negated: every row whose tsg is NOT R*.
+    not_r = repo.list(limit=10, tsg="!R%")
+    assert {m.meeting_id for m in not_r} == {5}
+
+    # not-null excludes the NULL-tsg row.
+    nn = repo.list(limit=10, tsg="not-null")
+    assert {m.meeting_id for m in nn} == {1, 2, 3, 4, 5}
+
+    # null matches only the NULL-tsg row.
+    nul = repo.list(limit=10, tsg="null")
+    assert {m.meeting_id for m in nul} == {6}
+
+
 def _insert_doc_range_rows(session):
     """Seed a fixture covering every branch of the ``--tdoc`` range check."""
     session.add_all(

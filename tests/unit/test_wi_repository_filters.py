@@ -110,6 +110,25 @@ def test_list_filter_name_like(repo) -> None:
     assert rows[0].acronym == "NR_LPWUS-UEConTest"
 
 
+def test_list_filter_name_negated_grammar(repo) -> None:
+    """``name_like`` honours the rich ``!pattern`` grammar."""
+    rows = repo.list(name_like="!%Building Block%")
+    assert rows == []
+
+    rows = repo.list(name_like="!%Open Service%")
+    assert {r.acronym for r in rows} == {"LTE_TN_NR_NTN_mob-Core", "NR_LPWUS-UEConTest"}
+
+
+def test_list_filter_release_null_grammar(repo) -> None:
+    """``release_like`` honours the rich ``null`` / ``not-null`` grammar."""
+    # No null releases in the fixture: not-null returns everything.
+    rows = repo.list(release_like="not-null")
+    assert len(rows) == 3
+
+    rows = repo.list(release_like="null")
+    assert rows == []
+
+
 def test_list_combined_filters(repo) -> None:
     """Combined tsg + release filters narrow the result set."""
     rows = repo.list(tsg="R5", release_like="Rel-99")

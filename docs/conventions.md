@@ -189,10 +189,13 @@ The corresponding CLI flag (e.g. `--max-tdoc-size-kb`) is a
 per-invocation override — the value is **not** written back to the
 TOML config.
 
-## Filter grammar (tdoc list / tdoc parse)
+## Filter grammar
 
-Both `tdoc list` and `tdoc parse` share a single grammar defined in
-`src/doc3gpp/cli_filters.py`. For text columns the flag value can be:
+The rich-filter grammar is shared across the CLI, the web routes, and
+the MCP tools, and is defined in `src/doc3gpp/cli_filters.py` (token
+parsing) plus `src/doc3gpp/storage/repositories/rich_filters.py` (the
+SQLAlchemy `Select` and raw-SQL builders). For text columns the flag
+value can be:
 
 | Value | Effect |
 | --- | --- |
@@ -212,11 +215,27 @@ injection-safe.
 before the database is touched. The repository's `_apply_text_filter`
 and `_apply_date_filter` helpers emit the SQLAlchemy bindings.
 
-The text-column flag set is uniform across both commands:
+The text-column flag set is uniform across both `tdoc list` and
+`tdoc parse`:
 `--status`, `--cr-cat`, `--spec`, `--wi`, `--title`, `--source`,
 `--type`, `--revision-of`, `--revised-to`, `--ftp-url`, `--release`,
 `--version`, `--cr-num`, `--cr-pack`, `--uploaded-date`.
 `--meeting` follows the same grammar.
+
+The same grammar also applies to:
+
+- `meeting list` — `--tsg`, `--name`, `--location` (plain LIKE
+  patterns on `--tsg` are upper-cased to match the canonical stored
+  value; `null` / `not-null` / `!pattern` pass through unchanged).
+- `wi list` — `--name`, `--acronym`, `--release`.
+- `search query` / `search sem` — `--meeting` (over `name` **or**
+  `title`), `--release`, `--spec`. For the compound `--meeting`
+  filter, a negated `!pattern` wraps the whole `name OR title` group
+  (`NOT (name LIKE OR title LIKE)`), so a row is kept only when
+  neither column matches.
+- The MCP tools `list_meetings`, `list_tdocs`, `list_wis`,
+  `search_tdocs`, `semantic_search_tdocs`, and the `parse_tdocs`
+  filter dict — the same grammar, documented per-parameter.
 
 ## tdoc parse workflow
 

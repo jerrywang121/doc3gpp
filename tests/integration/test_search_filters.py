@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import text
 from typer.testing import CliRunner
 
@@ -159,6 +160,39 @@ def test_search_spec_filter_is_like(semantic_search_corpus) -> None:
     assert {h.tdoc_id for h in hits} == {"SEM-TTCN-001"}
 
 
+def test_search_spec_negated_grammar(semantic_search_corpus) -> None:
+    """--spec honours the rich ``!pattern`` grammar."""
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    repo = SQLAlchemySearchIndexRepository()
+
+    # NOT spec 38.3%: every "NB-IoT" hit whose spec is not 38.300/38.321.
+    hits = repo.search('"NB-IoT"', SearchFilters(spec="!38.3%", limit=10))
+    assert {h.tdoc_id for h in hits} == {
+        "SEM-CHG-002", "SEM-TTCN-001",
+    }
+
+
+def test_search_meeting_negated_grammar(semantic_search_corpus) -> None:
+    """--meeting honours the rich ``!pattern`` grammar over name OR title."""
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    repo = SQLAlchemySearchIndexRepository()
+
+    # NOT "SEM#9100": excludes the SEM-NB-001 plenary row; everything
+    # else in the NB-IoT base set lives in SEM#9101 / SEM#9102.
+    hits = repo.search('"NB-IoT"', SearchFilters(meeting="!SEM#9100", limit=10))
+    assert {h.tdoc_id for h in hits} == {
+        "SEM-CHG-001", "SEM-CHG-002", "SEM-NB-002", "SEM-TTCN-001",
+    }
+
+
 def test_search_with_lowercase_tsg(sqlite_env) -> None:
     """meetings.tsg is stored upper-case; a lowercase --tsg must still hit.
 
@@ -182,3 +216,35 @@ def test_search_with_lowercase_tsg(sqlite_env) -> None:
     )
     assert result.exit_code == 0
     assert "R5-1000000" in result.output
+
+
+def test_search_malformed_match_raises_query_error(semantic_search_corpus) -> None:
+    """A malformed FTS5 ``MATCH`` expression surfaces as a clean
+    :class:`SearchQueryError` rather than a raw ``OperationalError``
+    traceback.
+
+    Regression: an unbalanced double quote (``"foo``) crashes FTS5 with
+    ``OperationalError: unterminated string``; the repo now classifies
+    query-shaped failures as ``SearchQueryError`` so the CLI prints a
+    one-liner instead of a stack trace.
+    """
+    from doc3gpp.models.search import SearchFilters, SearchQueryError
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    repo = SQLAlchemySearchIndexRepository()
+    with pytest.raises(SearchQueryError):
+        repo.search('"foo', SearchFilters(limit=10))
+
+
+def test_search_malformed_match_cli_exits_cleanly(semantic_search_corpus) -> None:
+    """The CLI turns a malformed MATCH into a friendly stderr message
+    with exit code 2, not a traceback."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["search", "query", '"foo', "--format", "json"],
+    )
+    assert result.exit_code == 2
+    assert "bad query" in result.output

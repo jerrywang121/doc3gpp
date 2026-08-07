@@ -32,6 +32,14 @@ def test_parse_spec_filter_accepts_dotted() -> None:
     parse_spec_filter("38.300-1")
 
 
+def test_parse_spec_filter_accepts_rich_grammar() -> None:
+    """``--spec`` accepts the rich-filter grammar like the MCP tools."""
+    parse_spec_filter("38.3%")
+    parse_spec_filter("!38.3%")
+    parse_spec_filter("null")
+    parse_spec_filter("not-null")
+
+
 def test_parse_spec_filter_rejects_bare_digits() -> None:
     with pytest.raises(ValueError):
         parse_spec_filter("38300")
@@ -138,3 +146,24 @@ def test_query_builder_quotes_hyphenated_jargon_in_operator_query() -> None:
     # Hyphenated jargon without operator still gets the quote-wrap
     # from the existing branch (no regression).
     assert SearchQueryBuilder("nb-iot").build() == '"nb-iot"'
+
+
+def test_query_builder_normalizes_single_quoted_phrases() -> None:
+    """FTS5 only accepts double-quoted phrases; a single-quoted phrase
+    like ``'CSI report'`` is a syntax error. The operator-passthrough
+    branch rewrites ``'…'`` spans to ``"…"`` so the user's query works.
+    """
+    assert (
+        SearchQueryBuilder("handover AND beamforming NOT 'CSI report'").build()
+        == 'handover AND beamforming NOT "CSI report"'
+    )
+    # Multiple single-quoted phrases are all rewritten.
+    assert (
+        SearchQueryBuilder("'beam management' OR 'CSI report'").build()
+        == '"beam management" OR "CSI report"'
+    )
+    # Already-double-quoted phrases are left untouched.
+    assert (
+        SearchQueryBuilder('handover AND NOT "CSI report"').build()
+        == 'handover AND NOT "CSI report"'
+    )

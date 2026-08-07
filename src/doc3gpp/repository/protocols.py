@@ -104,8 +104,11 @@ class TDocRepository(Protocol):
           ``--tdoc`` flag on both ``tdoc parse`` and ``tdoc list`` —
           combined with ``--meeting-id`` or any text filter it narrows
           the candidate set.
-        - ``meeting_like``: SQL ``LIKE`` pattern applied to the parent
-          meeting's name (joins the ``meetings`` table).
+        - ``meeting_like``: rich-filter grammar applied to the parent
+          meeting's name (joins the ``meetings`` table) — ``null`` /
+          ``not-null`` match the column's nullability, a leading ``!``
+          flips the comparison to ``NOT LIKE``, and anything else is
+          treated as a ``LIKE`` pattern.
         - ``meeting_id``: exact match against ``tdocs.meeting_id``. Can
           be combined with ``meeting_like``; rows must satisfy both.
         - The remaining parameters accept the rich filter syntax
@@ -211,12 +214,14 @@ class MeetingRepository(Protocol):
         """Return a list of meeting records, optionally filtered and paginated.
 
         Optional filters:
-            tsg: SQL ``LIKE`` pattern applied to the ``meetings.tsg`` FK
-                (case-insensitive on input, stored canonicalised in upper-case
-                by sync). Rows whose ``tsg`` is ``NULL`` (e.g. imported before
-                the column was added) are excluded.
-            name_like: SQL ``LIKE`` pattern applied to the meeting name column.
-            location_like: SQL ``LIKE`` pattern applied to the meeting
+            tsg: rich-filter grammar applied to the ``meetings.tsg`` FK
+                (``null`` / ``not-null`` / ``!pattern`` / plain LIKE;
+                stored canonicalised in upper-case by sync, so plain
+                LIKE patterns are upper-cased to match any case). Rows
+                whose ``tsg`` is ``NULL`` (e.g. imported before the
+                column was added) are excluded unless ``tsg='null'``.
+            name_like: rich-filter grammar applied to the meeting name column.
+            location_like: rich-filter grammar applied to the meeting
                 location column.
             year: integer year to match against ``end_date``.
             tdoc_id: ``(prefix, number)`` tuple (e.g. ``("R5-", 260013)``)
@@ -318,8 +323,9 @@ class WiRepository(Protocol):
         """Return a list of stored WI records matching the filters.
 
         - ``tsg``: restrict to a single TSG short name (case-insensitive).
-        - ``name_like``, ``acronym_like``, ``release_like``: SQL ``LIKE``
-          patterns applied to the corresponding text columns.
+        - ``name_like``, ``acronym_like``, ``release_like``: rich-filter
+          grammar applied to the corresponding text columns (``null`` /
+          ``not-null`` / ``!pattern`` / plain LIKE).
         """
         ...
 

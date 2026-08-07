@@ -273,8 +273,9 @@ search_fanout_factor = 4
 # the rest of the server (the FastAPI surface stays up).
 # enabled = true
 
-# HTTP transport used by the MCP mount. v1 ships streamable_http only;
-# older transports are intentionally absent.
+# HTTP transport used by the MCP mount. streamable_http (default) is a
+# single POST endpoint; sse uses the legacy two-endpoint protocol
+# (GET /sse + POST /messages/).
 # transport = "streamable_http"
 
 # Per-session event queue length for the SSE pipe. Values below 10

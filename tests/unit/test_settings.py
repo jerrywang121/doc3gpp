@@ -28,7 +28,7 @@ def test_output_compact_toml_override_true(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
     get_settings.cache_clear()
     try:
-        assert get_settings().output.compact is False
+        assert get_settings().output.compact is True
     finally:
         get_settings.cache_clear()
 

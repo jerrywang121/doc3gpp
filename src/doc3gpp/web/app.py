@@ -95,12 +95,30 @@ async def _mount_mcp_in_lifespan(app: FastAPI):
         return
     try:
         from doc3gpp.web.mcp_server import build_mcp_server
+        from mcp.server.transport_security import TransportSecuritySettings
 
         server = build_mcp_server(app.state.web)
+        security = TransportSecuritySettings(
+            allowed_hosts=["127.0.0.1:*", "localhost:*"],
+            allowed_origins=settings.mcp.allowed_origins,
+        )
         if settings.mcp.transport == "sse":
-            app.mount("/mcp", server.sse_app(sse_path="/sse", message_path="/messages/"))
+            app.mount(
+                "/mcp",
+                server.sse_app(
+                    sse_path="/sse",
+                    message_path="/messages/",
+                    transport_security=security,
+                ),
+            )
         else:
-            app.mount("/mcp", server.streamable_http_app(streamable_http_path="/"))
+            app.mount(
+                "/mcp",
+                server.streamable_http_app(
+                    streamable_http_path="/",
+                    transport_security=security,
+                ),
+            )
         async with server.session_manager.run():
             yield
     except ImportError:

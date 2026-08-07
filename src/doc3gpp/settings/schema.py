@@ -689,6 +689,16 @@ class MCPSettings(BaseModel):
             "agents."
         ),
     )
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://127.0.0.1", "http://localhost"],
+        description=(
+            "Browser origins allowed to call the MCP endpoint. The MCP "
+            "SDK's transport-security layer rejects cross-origin requests "
+            "by default; list the origins of browser-based MCP clients "
+            "(e.g. http://127.0.0.1) here. Empty list disables the "
+            "origin check."
+        ),
+    )
 
 
 class Settings(BaseSettings):

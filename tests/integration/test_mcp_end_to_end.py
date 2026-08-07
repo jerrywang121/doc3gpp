@@ -155,8 +155,6 @@ def test_get_meeting_not_found_raises(sqlite_env) -> None:
 
 def test_sse_transport_mounts_two_endpoints(sqlite_env) -> None:
     """transport='sse' mounts GET /mcp/sse and POST /mcp/messages/."""
-    import asyncio
-
     from fastapi.testclient import TestClient
 
     from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings

@@ -75,7 +75,7 @@ cache_subdir = "web"       # optional subdir under the tdoc cache for server con
 
 [mcp]
 enabled = true             # mount /mcp; no effect unless server.enabled
-transport = "streamable_http"
+transport = "streamable_http"   # streamable_http (default) | sse
 sse_queue_size = 100
 ```
 
@@ -296,8 +296,16 @@ migration step.
 
 ## MCP reference
 
-The MCP endpoint is mounted at `/mcp` (Streamable HTTP transport) whenever
-`server.enabled` and `mcp.enabled` are both true. It exposes 20 tools:
+The MCP endpoint is mounted at `/mcp` whenever `server.enabled` and
+`mcp.enabled` are both true. The transport is selected by `[mcp] transport`:
+
+- `streamable_http` (default) — a single POST endpoint at `/mcp`.
+- `sse` — the legacy two-endpoint protocol: `GET /mcp/sse` (event stream)
+  and `POST /mcp/messages/` (client→server messages).
+
+The tool set and the JSON parity guarantees are identical across both
+transports; `sse` exists for clients that only speak the legacy protocol.
+It exposes 20 tools:
 
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `search_tdocs`,

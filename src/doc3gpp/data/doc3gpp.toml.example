@@ -273,10 +273,17 @@ search_fanout_factor = 4
 # the rest of the server (the FastAPI surface stays up).
 # enabled = true
 
-# HTTP transport used by the MCP mount. v1 ships streamable_http only;
-# older transports are intentionally absent.
+# HTTP transport used by the MCP mount. streamable_http (default) is a
+# single POST endpoint; sse uses the legacy two-endpoint protocol
+# (GET /sse + POST /messages/).
 # transport = "streamable_http"
 
 # Per-session event queue length for the SSE pipe. Values below 10
 # cause dropouts under modest load.
 # sse_queue_size = 100
+
+# Browser origins allowed to call the MCP endpoint. The MCP SDK's
+# transport-security layer rejects cross-origin requests by default;
+# list the origins of browser-based MCP clients (e.g. http://127.0.0.1)
+# here. Empty list disables the origin check.
+# allowed_origins = ["http://127.0.0.1", "http://localhost"]

@@ -341,8 +341,12 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
 - **HTML UI** — browse meetings, TDocs, TSGs, WIs, and search results.
 - **JSON API** — every read route accepts `?format=json`, byte-for-byte
   identical to the MCP tools.
-- **MCP** — `http://127.0.0.1:8765/mcp` (Streamable HTTP) exposes 20 tools
-  covering the same reads plus job lifecycle.
+- **MCP** — `http://127.0.0.1:8765/mcp` exposes 20 tools covering the
+  same reads plus job lifecycle. The transport is set under `[mcp]` in the
+  TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
+  (legacy two-endpoint `GET /mcp/sse` + `POST /mcp/messages/`). Browser
+  clients must have their origin in `[mcp] allowed_origins` (defaults to
+  `http://127.0.0.1` and `http://localhost`).
 - **Jobs** — sync, parse, search rebuild, and cache purge run on a shared
   asyncio worker; watch live progress over SSE at `/jobs/{id}/events`.
 
@@ -454,6 +458,19 @@ rrf_k = 60                           # RRF k constant
 fts5_weight = 0.5                    # 0.0 = vector-only, 1.0 = FTS5-only (vector weight = 1 - fts5_weight)
 fanout_multiplier = 4                # hybrid-path fanout: limit * fanout per side
 max_chunks_per_tdoc = 8              # cap on chunks per TDoc
+
+# Web server + MCP — both TOML-only (no env overrides); only loaded
+# with the `doc3gpp[web]` extra installed.
+[server]
+enabled = false                      # master switch; gates every `server` subcommand
+host = "127.0.0.1"
+port = 8765
+
+[mcp]
+enabled = true                       # mount /mcp; no effect unless server.enabled
+transport = "streamable_http"        # streamable_http (default) | sse
+allowed_origins = ["http://127.0.0.1", "http://localhost"]  # browser origins allowed to call /mcp
+sse_queue_size = 100                 # per-session event queue length
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >

@@ -33,6 +33,24 @@ def test_output_compact_toml_override_true(tmp_path: Path, monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_mcp_transport_accepts_sse() -> None:
+    """``mcp.transport`` accepts ``sse`` and defaults to ``streamable_http``."""
+    from doc3gpp.settings.schema import MCPSettings
+
+    assert MCPSettings(transport="sse").transport == "sse"
+    assert MCPSettings().transport == "streamable_http"
+
+
+def test_mcp_allowed_origins_defaults_to_localhost() -> None:
+    """``mcp.allowed_origins`` defaults to localhost origins so browser clients work."""
+    from doc3gpp.settings.schema import MCPSettings
+
+    assert MCPSettings().allowed_origins == ["http://127.0.0.1", "http://localhost"]
+    assert MCPSettings(allowed_origins=["https://example.com"]).allowed_origins == [
+        "https://example.com"
+    ]
+
+
 def test_output_compact_toml_override_false_explicit(
     tmp_path: Path, monkeypatch,
 ) -> None:

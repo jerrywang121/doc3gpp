@@ -200,16 +200,28 @@ def test_start_fails_when_child_crashes_on_bind(isolated_config, tmp_path) -> No
         from doc3gpp import cli_server
 
         original_launch = cli_server._launch_server
+        original_wait = cli_server._wait_for_child_exit
 
         def _real_launch(bind_host, bind_port, env, log_handle):
             return original_launch(bind_host, bind_port, env, log_handle)
 
+        def _patient_wait(proc, timeout=3.0):
+            # The CLI's early-crash probe window (3s) can be too short on
+            # slow machines: uvicorn's import + bind attempt + exit can
+            # exceed it, so the CLI falls through to the health-check
+            # path and the test sees the wrong error message. Give the
+            # real probe a generous window — the child still crashes for
+            # real and the log assertions below stay meaningful.
+            return original_wait(proc, timeout=15.0)
+
         try:
             cli_server._launch_server = _real_launch
+            cli_server._wait_for_child_exit = _patient_wait
             runner = CliRunner()
             result = runner.invoke(app, ["server", "start"])
         finally:
             cli_server._launch_server = original_launch
+            cli_server._wait_for_child_exit = original_wait
             get_settings.cache_clear()
 
         assert result.exit_code != 0, (

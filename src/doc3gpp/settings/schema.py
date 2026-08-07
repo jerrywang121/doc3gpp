@@ -650,11 +650,11 @@ class MCPSettings(BaseModel):
     lets operators stage a config that disables MCP before turning
     the server on.
 
-    :attr:`transport` is locked to ``streamable_http`` for v1 — the
-    older SSE-only transport is deprecated upstream and the legacy
-    stdio transport would conflict with the per-request lifecycle
-    the HTTP surface expects. New transports become literals when
-    they ship.
+    :attr:`transport` selects the HTTP transport: ``streamable_http``
+    (default, a single POST endpoint) or ``sse`` (the legacy two-endpoint
+    GET ``/sse`` + POST ``/messages/`` protocol). The legacy stdio
+    transport is intentionally absent — it would conflict with the
+    per-request lifecycle the HTTP surface expects.
 
     :attr:`sse_queue_size` bounds the in-process queue length that
     fans events out to active MCP sessions; values below 10 cause
@@ -672,9 +672,13 @@ class MCPSettings(BaseModel):
             "mount without touching the rest of the server."
         ),
     )
-    transport: Literal["streamable_http"] = Field(
+    transport: Literal["streamable_http", "sse"] = Field(
         default="streamable_http",
-        description="HTTP transport used by the MCP mount.",
+        description=(
+            "HTTP transport used by the MCP mount. streamable_http is a "
+            "single POST endpoint; sse uses the legacy two-endpoint "
+            "GET /sse + POST /messages/ protocol."
+        ),
     )
     sse_queue_size: int = Field(
         default=100,

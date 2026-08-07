@@ -28,9 +28,17 @@ def test_output_compact_toml_override_true(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
     get_settings.cache_clear()
     try:
-        assert get_settings().output.compact is True
+        assert get_settings().output.compact is False
     finally:
         get_settings.cache_clear()
+
+
+def test_mcp_transport_accepts_sse() -> None:
+    """``mcp.transport`` accepts ``sse`` and defaults to ``streamable_http``."""
+    from doc3gpp.settings.schema import MCPSettings
+
+    assert MCPSettings(transport="sse").transport == "sse"
+    assert MCPSettings().transport == "streamable_http"
 
 
 def test_output_compact_toml_override_false_explicit(

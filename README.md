@@ -458,6 +458,19 @@ rrf_k = 60                           # RRF k constant
 fts5_weight = 0.5                    # 0.0 = vector-only, 1.0 = FTS5-only (vector weight = 1 - fts5_weight)
 fanout_multiplier = 4                # hybrid-path fanout: limit * fanout per side
 max_chunks_per_tdoc = 8              # cap on chunks per TDoc
+
+# Web server + MCP — both TOML-only (no env overrides); only loaded
+# with the `doc3gpp[web]` extra installed.
+[server]
+enabled = false                      # master switch; gates every `server` subcommand
+host = "127.0.0.1"
+port = 8765
+
+[mcp]
+enabled = true                       # mount /mcp; no effect unless server.enabled
+transport = "streamable_http"        # streamable_http (default) | sse
+allowed_origins = ["http://127.0.0.1", "http://localhost"]  # browser origins allowed to call /mcp
+sse_queue_size = 100                 # per-session event queue length
 ```
 
 Precedence (highest wins): **CLI flag > environment variable > config file >

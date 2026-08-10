@@ -234,6 +234,29 @@ The auto-index hook keeps the index fresh after every successful
 `doc3gpp.toml` (`enabled`, `auto_index_on_parse`,
 `rebuild_batch_size`, `snippet_tokens`, `search_fanout_factor`).
 
+#### Search query syntax
+
+`search query` uses the FTS5 rich-text search pattern. Plain text is
+wrapped as a quoted expression (implicit `AND` between terms), so
+`"NB-IoT scheduling"` matches documents containing both terms. Queries
+that contain an FTS5 operator (`AND`, `OR`, `NOT`, `NEAR`, `*`, or a
+`"`) pass through unchanged, letting you write full FTS5 expressions:
+
+```bash
+doc3gpp search query "scheduling AND (NR OR LTE)"
+doc3gpp search query "R5-*"                       # prefix match on TDoc ids
+doc3gpp search query "38.300*"                    # prefix match on spec ids
+doc3gpp search query '"CSI report" NEAR/5 feedback'
+```
+
+Single-quoted phrases are rewritten to FTS5 double-quoted phrases
+(`'CSI report'` → `"CSI report"`). FTS5 special characters (`(`, `)`,
+`:`, `"`, `*`, `\`) are backslash-escaped to prevent injection, and
+stopwords-only queries (e.g. `"the a"`) are rejected with a clear
+error. TDoc ids and spec numbers are normalized on both the index and
+query side so `R5-1234567r2` matches every revision and `38.300`
+stays a single token.
+
 #### `search query --sem-query`
 
 Optional `--sem-query STR` reranks the BM25 hits by cosine similarity
@@ -349,6 +372,39 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
   `http://127.0.0.1` and `http://localhost`).
 - **Jobs** — sync, parse, search rebuild, and cache purge run on a shared
   asyncio worker; watch live progress over SSE at `/jobs/{id}/events`.
+
+Point an MCP client at the endpoint. For example, in Claude Desktop's
+`claude_desktop_config.json` (or any client that supports a
+Streamable-HTTP MCP server):
+
+```json
+{
+  "mcpServers": {
+    "doc3gpp": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+For clients that only speak the legacy SSE protocol, switch the server
+transport and point at the SSE endpoint instead:
+
+```bash
+doc3gpp config set mcp.transport sse
+```
+
+```json
+{
+  "mcpServers": {
+    "doc3gpp": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8765/mcp/sse"
+    }
+  }
+}
+```
 
 Manage the process with `doc3gpp server start|stop|status|logs`,
 `doc3gpp server install|uninstall systemd|launchd`. See

@@ -348,7 +348,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.wi_rows(wis, _WI_FIELDS))
 
     # ---- Search ---------------------------------------------------
-    @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsgm meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def search_tdocs(
         query: Annotated[str, Field(description='Full-text query with FTS5 MATCH expression over tdoc text, phrases shall be wrapped with double quotes, support AND, OR and NOT (e.g. \'handover AND beamforming NOT "CSI report"\').')],

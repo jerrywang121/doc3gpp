@@ -24,6 +24,7 @@ from doc3gpp.models.search import (
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 
@@ -335,6 +336,54 @@ class WiRepository(Protocol):
           grammar applied to the corresponding text columns (``null`` /
           ``not-null`` / ``!pattern`` / plain LIKE).
         """
+        ...
+
+
+class SpecRepository(Protocol):
+    """Storage operations used by the spec service layer."""
+
+    def upsert(self, spec: Spec) -> None:
+        """Insert or update a spec header row keyed by ``spec_id``."""
+        ...
+
+    def upsert_versions(self, versions: list[SpecVersion]) -> int:
+        """Insert or update version rows keyed by ``(spec_id, version)``.
+
+        Returns the number of input rows written.
+        """
+        ...
+
+    def list(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        tsg: str | None = None,
+        type: str | None = None,
+        spec_id: str | None = None,
+        title: str | None = None,
+        status: str | None = None,
+        radio_tech: str | None = None,
+        initial_release: str | None = None,
+        wis: str | None = None,
+    ) -> list[Spec]:
+        """Return stored specs matching the filters.
+
+        Text columns use the rich-filter grammar (``null`` / ``not-null`` /
+        ``!pattern`` / plain LIKE).
+        """
+        ...
+
+    def get(self, spec_id: str) -> Spec | None:
+        """Return a spec header by its dotted id."""
+        ...
+
+    def list_versions(
+        self,
+        spec_id: str,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[SpecVersion]:
+        """Return version rows for a spec, ordered by ``version DESC``."""
         ...
 
 

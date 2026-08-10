@@ -1,0 +1,182 @@
+"""SQLAlchemy-backed implementation of :class:`SpecRepository`."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
+
+from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.storage.db.models import SpecORM, SpecVersionORM
+from doc3gpp.storage.db.session import get_session_factory
+from doc3gpp.storage.repositories.rich_filters import apply_text_filter
+
+
+class SQLAlchemySpecRepository:
+    """SQLAlchemy implementation that stores rows in ``specs`` / ``spec_versions``."""
+
+    def __init__(self, session_factory: sessionmaker | None = None) -> None:
+        self._session_factory = session_factory or get_session_factory()
+
+    def upsert(self, spec: Spec) -> None:
+        with self._session_factory() as session:
+            existing = session.get(SpecORM, spec.spec_id)
+            if existing is not None:
+                existing.type = spec.type
+                existing.title = spec.title
+                existing.status = spec.status
+                existing.radio_tech = spec.radio_tech
+                existing.initial_release = spec.initial_release
+                existing.tsg = spec.tsg
+                existing.wis = spec.wis
+                if spec.last_synced_at is not None:
+                    existing.last_synced_at = spec.last_synced_at
+            else:
+                session.add(
+                    SpecORM(
+                        spec_id=spec.spec_id,
+                        type=spec.type,
+                        title=spec.title,
+                        status=spec.status,
+                        radio_tech=spec.radio_tech,
+                        initial_release=spec.initial_release,
+                        tsg=spec.tsg,
+                        wis=spec.wis,
+                        last_synced_at=spec.last_synced_at,
+                    )
+                )
+            session.commit()
+
+    def upsert_versions(self, versions: list[SpecVersion]) -> int:
+        if not versions:
+            return 0
+        with self._session_factory() as session:
+            for v in versions:
+                existing = session.get(SpecVersionORM, (v.spec_id, v.version))
+                if existing is not None:
+                    existing.ftp_url = v.ftp_url
+                    existing.release = v.release
+                    existing.meeting_id = v.meeting_id
+                    existing.meeting_name = v.meeting_name
+                    existing.upload_date = v.upload_date
+                    existing.version_id = v.version_id
+                    if v.pdf_url is not None:
+                        existing.pdf_url = v.pdf_url
+                    if v.crs is not None:
+                        existing.crs = v.crs
+                    existing.comment = v.comment
+                else:
+                    session.add(
+                        SpecVersionORM(
+                            spec_id=v.spec_id,
+                            version=v.version,
+                            ftp_url=v.ftp_url,
+                            release=v.release,
+                            meeting_id=v.meeting_id,
+                            meeting_name=v.meeting_name,
+                            upload_date=v.upload_date,
+                            version_id=v.version_id,
+                            pdf_url=v.pdf_url,
+                            crs=v.crs,
+                            comment=v.comment,
+                        )
+                    )
+            session.commit()
+        return len(versions)
+
+    def list(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        tsg: str | None = None,
+        type: str | None = None,
+        spec_id: str | None = None,
+        title: str | None = None,
+        status: str | None = None,
+        radio_tech: str | None = None,
+        initial_release: str | None = None,
+        wis: str | None = None,
+    ) -> list[Spec]:
+        with self._session_factory() as session:
+            stmt = select(SpecORM)
+            if tsg:
+                stmt = stmt.where(SpecORM.tsg == tsg.upper())
+            if type:
+                stmt = stmt.where(SpecORM.type == type.upper())
+            if spec_id:
+                stmt = apply_text_filter(stmt, SpecORM.spec_id, spec_id)
+            if title:
+                stmt = apply_text_filter(stmt, SpecORM.title, title)
+            if status:
+                stmt = apply_text_filter(stmt, SpecORM.status, status)
+            if radio_tech:
+                stmt = apply_text_filter(stmt, SpecORM.radio_tech, radio_tech)
+            if initial_release:
+                stmt = apply_text_filter(stmt, SpecORM.initial_release, initial_release)
+            if wis:
+                stmt = apply_text_filter(stmt, SpecORM.wis, wis)
+            stmt = stmt.order_by(SpecORM.spec_id).offset(offset).limit(limit)
+            rows = session.scalars(stmt).all()
+        return [_orm_to_spec(r) for r in rows]
+
+    def get(self, spec_id: str) -> Spec | None:
+        with self._session_factory() as session:
+            row = session.get(SpecORM, spec_id)
+        return _orm_to_spec(row) if row is not None else None
+
+    def list_versions(
+        self,
+        spec_id: str,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[SpecVersion]:
+        with self._session_factory() as session:
+            stmt = (
+                select(SpecVersionORM)
+                .where(SpecVersionORM.spec_id == spec_id)
+                .order_by(SpecVersionORM.version.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            rows = session.scalars(stmt).all()
+        return [_orm_to_version(r) for r in rows]
+
+
+def _orm_to_spec(row: SpecORM) -> Spec:
+    return Spec(
+        spec_id=row.spec_id,
+        type=row.type or "",
+        title=row.title or "",
+        status=row.status,
+        radio_tech=row.radio_tech,
+        initial_release=row.initial_release,
+        tsg=row.tsg,
+        wis=row.wis,
+        last_synced_at=_as_utc(row.last_synced_at),
+    )
+
+
+def _orm_to_version(row: SpecVersionORM) -> SpecVersion:
+    return SpecVersion(
+        spec_id=row.spec_id,
+        version=row.version,
+        ftp_url=row.ftp_url,
+        release=row.release,
+        meeting_id=row.meeting_id,
+        meeting_name=row.meeting_name,
+        upload_date=row.upload_date,
+        version_id=row.version_id,
+        pdf_url=row.pdf_url,
+        crs=row.crs,
+        comment=row.comment,
+    )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Return ``value`` normalized to UTC, handling naive SQLite returns."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

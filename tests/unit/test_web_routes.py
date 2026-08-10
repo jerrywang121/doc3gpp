@@ -2164,3 +2164,17 @@ def test_job_poller_js_polls_and_reloads_on_terminal(
     # Sanity: no naive "reload on no-node" bug from the old tdoc
     # parse JS — the reload is gated on having seen the polling span.
     assert "if (!node) {" not in body
+
+
+def test_spec_rows_coerces_cells() -> None:
+    from doc3gpp.models.spec import Spec
+    from doc3gpp.web.render import spec_rows
+
+    spec = Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5")
+    rows = spec_rows([spec], ["spec_id", "type", "title", "status"])
+    assert rows[0] == {
+        "spec_id": "36.579-5",
+        "type": "TS",
+        "title": "NR conformance",
+        "status": "-",
+    }

@@ -245,10 +245,28 @@ def wi_rows(wis: list[Any], fields: list[str]) -> list[dict[str, str]]:
     ]
 
 
+def spec_rows(specs: list[Any], fields: list[str]) -> list[dict[str, str]]:
+    """Build ``spec list --format json``-shaped rows for ``specs``."""
+    return [
+        {f: _coerce_cell(getattr(spec, f, None)) for f in fields}
+        for spec in specs
+    ]
+
+
+def spec_version_rows(versions: list[Any], fields: list[str]) -> list[dict[str, str]]:
+    """Build version rows for a spec."""
+    return [
+        {f: _coerce_cell(getattr(v, f, None)) for f in fields}
+        for v in versions
+    ]
+
+
 __all__ = [
     "TDOC_COLUMN_LABELS",
     "TDOC_HTML_DEFAULT_FIELDS",
     "meeting_rows",
+    "spec_rows",
+    "spec_version_rows",
     "tdoc_rows",
     "to_jsonable",
     "tsg_rows",

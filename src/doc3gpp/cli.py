@@ -37,7 +37,8 @@ from doc3gpp.cli_url_helpers import (
 )
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.models.sync import BulkSyncOutcome
+from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     TDocCRDetails,
@@ -56,6 +57,7 @@ from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
+    build_spec_service,
     build_tdoc_cr_change_details_repository,
     build_tdoc_cr_repository,
     build_tdoc_cr_service,
@@ -100,6 +102,7 @@ meeting_app = typer.Typer(help="meeting commands")
 tdoc_app = typer.Typer(help="tdoc commands")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
+spec_app = typer.Typer(help="spec commands")
 config_app = typer.Typer(help="inspect the resolved configuration")
 cache_app = typer.Typer(help="TDoc extraction cache commands")
 app.add_typer(db_app, name="db")
@@ -107,6 +110,7 @@ app.add_typer(meeting_app, name="meeting")
 app.add_typer(tdoc_app, name="tdoc")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
+app.add_typer(spec_app, name="spec")
 app.add_typer(config_app, name="config")
 app.add_typer(cache_app, name="cache")
 search_app = typer.Typer(help="full-text search over TDocs, CRs, meetings, and WIs")
@@ -3843,6 +3847,220 @@ def wi_list(
         fmt=fmt,
         output=output,
         no_records_msg="No WIs found",
+        compact=resolved_compact,
+    )
+
+
+@spec_app.command("sync")
+def spec_sync(
+    tsg: str = typer.Option(
+        DEFAULT_TSG,
+        "--tsg",
+        help="TSG short name (e.g. R5) for the spec list page to sync.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Bypass the spec sync interval skip rule.",
+    ),
+) -> None:
+    """Fetch and store specs (and their versions) for a TSG from 3gpp.org.
+
+    Valid ``--tsg`` values are the same as ``meeting sync`` /
+    ``wi sync`` (e.g. ``R5``). When a TSG was synced within
+    ``sync.spec_sync_interval`` the sync is skipped unless ``--force``
+    is passed.
+    """
+    logger.info("Starting spec sync for TSG %s", tsg)
+    create_schema()
+    tsg_service = _ensure_tsg_ready(build_tsg_service())
+    canonical_tsg = _validate_tsg_short_name(tsg, tsg_service)
+    service = build_spec_service()
+    outcome: SyncOutcome = service.sync(canonical_tsg, force=force)
+    typer.echo(outcome.reason)
+
+
+@spec_app.command("list")
+def spec_list(
+    limit: int = typer.Option(50, min=1, max=500),
+    offset: int = typer.Option(
+        0, min=0, help="Number of rows to skip before applying --limit (pagination)."
+    ),
+    tsg: str | None = typer.Option(None, "--tsg", help="Only list specs for the given TSG."),
+    type: str | None = typer.Option(None, "--type", help="Rich filter on spec type (TS|TR)."),
+    spec_id: str | None = typer.Option(
+        None, "--spec-id", help="Rich filter on spec id (e.g. 36.579-5)."
+    ),
+    title: str | None = typer.Option(None, "--title", help="Rich filter on spec title."),
+    status: str | None = typer.Option(None, "--status", help="Rich filter on spec status."),
+    radio_tech: str | None = typer.Option(
+        None, "--radio-tech", help="Rich filter on radio technologies."
+    ),
+    initial_release: str | None = typer.Option(
+        None, "--initial-release", help="Rich filter on initial release."
+    ),
+    wis: str | None = typer.Option(
+        None, "--wis", help="Rich filter on related WIs (comma-joined)."
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
+) -> None:
+    """List stored specs matching optional filters.
+
+    All filter flags accept the rich filter grammar (``null`` /
+    ``not-null`` / ``!pattern`` / plain LIKE with ``%`` and ``_``
+    wildcards) where applicable. Output columns default to ``spec_id``,
+    ``type``, ``title``, ``status``, ``radio_tech``, ``initial_release``,
+    ``tsg``, and ``wis`` from ``settings.output.fields.spec``.
+    """
+    logger.info(
+        "Listing %s specs (offset=%s) tsg=%s type=%s spec_id=%s",
+        limit,
+        offset,
+        tsg,
+        type,
+        spec_id,
+    )
+    service = build_spec_service()
+    records = service.list_recent(
+        limit=limit,
+        offset=offset,
+        tsg=tsg,
+        type=type,
+        spec_id=spec_id,
+        title=title,
+        status=status,
+        radio_tech=radio_tech,
+        initial_release=initial_release,
+        wis=wis,
+    )
+
+    settings = get_settings()
+    default_fields = settings.output.fields.spec
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+
+    rows: list[list[str]] = []
+    for item in records:
+        assert isinstance(item, Spec)
+        rows.append([str(getattr(item, f) or "-") for f in default_fields])
+
+    _emit_records(
+        rows=rows,
+        fields=default_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg="No specs found",
+        compact=resolved_compact,
+    )
+
+
+@spec_app.command("show")
+def spec_show(
+    spec_id: str = typer.Argument(..., help="Dotted spec id (e.g. 36.579-5)."),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
+) -> None:
+    """Render one spec with its versions and per-version metadata.
+
+    Looks up the spec by its dotted id; emits the header row first,
+    a blank separator line, then one row per stored version. The
+    JSON payload nests the header under a ``"spec"`` key and the
+    version rows under ``"versions"`` so downstream consumers can
+    parse the shape without consulting multiple tables.
+    """
+    service = build_spec_service()
+    spec = service.get(spec_id)
+    if spec is None:
+        raise typer.BadParameter(
+            f"Unknown spec id '{spec_id}'. Run 'doc3gpp spec sync --tsg <tsg>' first."
+        )
+    versions = service.list_versions(spec_id)
+
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+
+    header_fields = [
+        "spec_id", "type", "title", "status", "radio_tech",
+        "initial_release", "tsg", "wis",
+    ]
+    version_fields = [
+        "version", "release", "ftp_url", "meeting_id", "meeting_name",
+        "upload_date", "pdf_url", "crs", "comment",
+    ]
+
+    if fmt == "json":
+        payload = {
+            "spec": {f: getattr(spec, f) for f in header_fields},
+            "versions": [
+                {f: getattr(v, f) for f in version_fields}
+                for v in versions
+            ],
+        }
+        _dump_show_json(payload, output, compact=resolved_compact)
+        return
+
+    header_row = [[str(getattr(spec, f) or "-") for f in header_fields]]
+    version_rows: list[list[str]] = []
+    for v in versions:
+        assert isinstance(v, SpecVersion)
+        version_rows.append([str(getattr(v, f) or "-") for f in version_fields])
+
+    _emit_records(
+        rows=header_row,
+        fields=header_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg=f"No spec {spec_id}",
+        compact=resolved_compact,
+    )
+    typer.echo("")
+    _emit_records(
+        rows=version_rows,
+        fields=version_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg=f"No versions stored for {spec_id}",
         compact=resolved_compact,
     )
 

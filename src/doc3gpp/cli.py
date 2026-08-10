@@ -3853,10 +3853,14 @@ def wi_list(
 
 @spec_app.command("sync")
 def spec_sync(
-    tsg: str = typer.Option(
-        DEFAULT_TSG,
+    tsg: str | None = typer.Option(
+        None,
         "--tsg",
-        help="TSG short name (e.g. R5) for the spec list page to sync.",
+        help=(
+            "TSG short name (e.g. R5) for the spec list page to sync. "
+            "When omitted, every distinct TSG found in the local "
+            "meetings table is synced."
+        ),
     ),
     force: bool = typer.Option(
         False,
@@ -3867,18 +3871,41 @@ def spec_sync(
 ) -> None:
     """Fetch and store specs (and their versions) for a TSG from 3gpp.org.
 
-    Valid ``--tsg`` values are the same as ``meeting sync`` /
-    ``wi sync`` (e.g. ``R5``). When a TSG was synced within
-    ``sync.spec_sync_interval`` the sync is skipped unless ``--force``
-    is passed.
+    Valid --tsg values are:
+    `R1`, `R2`, `R3`, `R4`, `R5`, `RT`, `RP`,
+    `C1`, `C3`, `C4`, `C6`, `CP`,
+    `S1`, `S2`, `S3`, `S4`, `S5`, `S6`, `SP`
+
+    When no ``--tsg`` is given, every distinct TSG
+    found in the local meetings table is synced.
+
+    When a TSG was synced within ``sync.spec_sync_interval``
+    the sync is skipped unless ``--force`` is passed.
     """
-    logger.info("Starting spec sync for TSG %s", tsg)
     create_schema()
     tsg_service = _ensure_tsg_ready(build_tsg_service())
-    canonical_tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = build_spec_service()
-    outcome: SyncOutcome = service.sync(canonical_tsg, force=force)
-    typer.echo(outcome.reason)
+
+    if tsg is None:
+        tsgs = build_meeting_service().list_distinct_tsgs()
+        if not tsgs:
+            logger.info("No stored meetings with a TSG found; nothing to sync")
+            typer.echo("No stored meetings with a TSG found; nothing to sync.")
+            return
+        logger.info(
+            "Starting spec sync for %s stored TSG(s): %s", len(tsgs), ", ".join(tsgs)
+        )
+    else:
+        tsgs = [_validate_tsg_short_name(tsg, tsg_service)]
+        logger.info("Starting spec sync for TSG %s", tsgs[0])
+
+    for tsg_short in tsgs:
+        if not tsg_service.is_known_short_name(tsg_short):
+            logger.warning("Skipping unknown TSG '%s' found in meetings table", tsg_short)
+            typer.echo(f"Skipping unknown TSG '{tsg_short}' found in meetings table.")
+            continue
+        outcome: SyncOutcome = service.sync(tsg_short, force=force)
+        typer.echo(outcome.reason)
 
 
 @spec_app.command("list")

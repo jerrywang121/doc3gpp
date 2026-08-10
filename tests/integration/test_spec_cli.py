@@ -23,6 +23,74 @@ def test_spec_sync_help() -> None:
     assert result.exit_code == 0
     assert "--tsg" in result.stdout
     assert "--force" in result.stdout
+    # Every TSG short name is listed explicitly (matches the meeting/wi sync style).
+    for tsg in ("R1", "R2", "R3", "R4", "R5", "RT", "RP", "C1", "C3", "C4", "C6",
+                "CP", "S1", "S2", "S3", "S4", "S5", "S6", "SP"):
+        assert tsg in result.stdout, f"--help missing TSG {tsg}"
+    # Documents the no-tsg fallback behaviour.
+    assert "every distinct TSG" in result.stdout
+
+
+def test_spec_sync_no_tsg_iterates_meetings_distinct_tsgs(sqlite_env, monkeypatch) -> None:
+    """``spec sync`` with no ``--tsg`` loops over the distinct TSGs in the
+    meetings table and calls :meth:`SpecService.sync` once per TSG."""
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.services.tsg_service import TsgService
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+    from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
+
+    create_schema()
+    TsgService(SQLAlchemyTsgRepository()).seed_defaults()
+    SQLAlchemyMeetingRepository().upsert_many(
+        [
+            Meeting(meeting_id=1, name="R5-1", title="R5 mtg 1", location="X", tsg="R5", ftp_url="u1"),
+            Meeting(meeting_id=2, name="R5-2", title="R5 mtg 2", location="X", tsg="R5", ftp_url="u2"),
+            Meeting(meeting_id=3, name="S2-1", title="S2 mtg 1", location="Y", tsg="S2", ftp_url="u3"),
+        ]
+    )
+
+    svc = MagicMock()
+    svc.sync.side_effect = [
+        SyncOutcome(
+            status="synced",
+            reason="Spec sync complete for TSG R5: 1 spec, 1 version stored",
+            synced_count=1,
+            version_count=1,
+        ),
+        SyncOutcome(
+            status="synced",
+            reason="Spec sync complete for TSG S2: 1 spec, 1 version stored",
+            synced_count=1,
+            version_count=1,
+        ),
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+
+    result = runner.invoke(app, ["spec", "sync"])
+    assert result.exit_code == 0, result.stdout
+    # Two distinct TSGs → two sync calls.
+    assert svc.sync.call_count == 2
+    synced_tsgs = {call.args[0] for call in svc.sync.call_args_list}
+    assert synced_tsgs == {"R5", "S2"}
+    assert "Spec sync complete for TSG R5" in result.stdout
+    assert "Spec sync complete for TSG S2" in result.stdout
+
+
+def test_spec_sync_no_tsg_empty_meetings_is_noop(sqlite_env, monkeypatch) -> None:
+    """``spec sync`` with no ``--tsg`` and no stored meetings prints a
+    friendly no-op message and never invokes :meth:`SpecService.sync`."""
+    from doc3gpp.storage.db.migrate import create_schema
+
+    create_schema()
+
+    svc = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+
+    result = runner.invoke(app, ["spec", "sync"])
+    assert result.exit_code == 0, result.stdout
+    assert "No stored meetings" in result.stdout
+    svc.sync.assert_not_called()
 
 
 def test_spec_list(monkeypatch) -> None:

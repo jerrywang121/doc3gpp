@@ -326,6 +326,53 @@ and the TDoc CR extraction is the deepest.
     markdown (DB-cache short-circuit, otherwise download + render +
     persist).
 
+### Spec sync (list + detail)
+
+1. `doc3gpp spec sync --tsg <short>` validates `<short>` against
+   the `tsgs` table (auto-seeded if empty) and resolves the TSG via
+   `TsgService`.
+2. `SpecService.sync` checks `tsgs.spec_last_sync` against
+   `Settings.sync.spec_sync_interval` (default `24h`) and skips the
+   upstream fetch when the cached timestamp is still fresh. `--force`
+   bypasses the check.
+3. On a non-skipped run: `fetch_spec_list(canonical)` produces the
+   DynaReport list HTML, `parse_spec_list(html, canonical)` parses
+   the spec table into `list[Spec]` (one header per `<tr>`).
+4. The service then fans out across the per-spec detail pages in a
+   `ThreadPoolExecutor` capped at `min(32, cpu+4)` workers. Each
+   worker:
+   - Resolves the per-spec URL via `build_spec_detail_url(slug)`
+     (`slug = spec_id.replace(".", "")`) and calls `fetch_spec_detail`.
+   - Parses the detail page into `(header, list[SpecVersion])` via
+     `parse_spec_detail`.
+   - For each version, runs the optional follow-ups gated in
+     `SpecService._maybe_fetch_etsi_pdf` (only when `wki_id` is set
+     and `pdf_url` is empty — fetches the ETSI deliverable HTML and
+     extracts the "download as PDF" URL) and
+     `SpecService._maybe_fetch_crs` (only when the upload date is
+     within the last 90 days **or** the cached `crs` is empty —
+     fetches the per-version CR list HTML and extracts the
+     comma-joined TDoc ids).
+   - Upserts the header row via `SQLAlchemySpecRepository.upsert` and
+     every version row via `SQLAlchemySpecRepository.upsert_versions`.
+   - Per-spec ETSI / CR failures log a warning and the sweep
+     continues — one bad spec must not abort the whole sync.
+5. On success, `TsgRepository.update_spec_last_sync(canonical, now)`
+   stamps `tsgs.spec_last_sync` so the next sync can short-circuit.
+6. `doc3gpp spec list [filters]` reads cached header rows via
+   `SpecRepository.list(...)` (rich filter grammar via the same
+   `_apply_text_filter` / `_apply_date_filter` helpers used by the
+   other list commands). No network traffic.
+7. `doc3gpp spec show <spec-id>` resolves the header via
+   `SpecRepository.get(spec_id)`; a miss raises `SpecNotFoundError`
+   (rendered as `typer.BadParameter` pointing at
+   `doc3gpp spec sync --tsg <tsg>`). On hit, the version rows come
+   from `SpecRepository.list_versions(spec_id)` and the CLI
+   renders header + versions in the requested format (table,
+   JSON, or markdown). The JSON payload splits the data into
+   `{"spec": {...}, "versions": [{...}]}` so downstream consumers
+   don't need to scan a flat list.
+
 ### Cache + CLI
 
 - `doc3gpp cache status` → `TDocCache.status()` (file count, total
@@ -530,13 +577,33 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `end_date`, `ftp_url`, `start_doc`, `end_doc`, `tsg` (nullable
       FK → `tsgs.short_name`, indexed for the `meeting list --tsg` filter).
 - `tsgs`:
-    - `short_name` (PK), `tsg_name` (unique), `description`, `url`.
-      Seeded on `db init`; validates `--tsg` in `meeting sync` and
-      `wi sync`.
+    - `short_name` (PK), `tsg_name` (unique), `description`, `url`,
+      `meeting_last_sync`, `spec_last_sync`. Seeded on `db init`;
+      validates `--tsg` in `meeting sync`, `wi sync`, and `spec sync`.
+      `spec_last_sync` is stamped by `SpecService.sync` so the per-TSG
+      skip rule (controlled by `sync.spec_sync_interval`) can short-circuit
+      a re-sync within the window.
 - `wis`:
     - `(wi_id, tsg_short)` composite PK, `acronym`, `release`, `name`.
       `tsg_short` FK → `tsgs.short_name`; composite PK keeps the natural
       identifier stable across multi-TSG ownership.
+- `specs`:
+    - `spec_id` (PK, dotted form e.g. `36.579-5`), `type` (`TS` / `TR`),
+      `title`, `status`, `radio_tech`, `initial_release`, `tsg`
+      (FK → `tsgs.short_name`, indexed for the `--tsg` filter),
+      `wis` (nullable text — comma-joined related WI ids, extracted
+      from the DynaReport detail page; deliberately **not** a join
+      table so the schema stays flat), `last_synced_at`. One row per
+      dotted spec id.
+- `spec_versions`:
+    - `(spec_id, version)` composite PK, `release`, `ftp_url`, `pdf_url`,
+      `meeting_id` (nullable), `meeting_name`, `upload_date`, `crs`
+      (nullable comma-joined TDoc ids from the per-version CR list
+      page), `comment`, `version_id`, `wki_id`, `last_synced_at`.
+      `spec_id` FK → `specs.spec_id` with `ondelete="CASCADE"` so
+      wiping a header row clears every cached version. No FK to
+      `meetings` — `meeting_id` is a snapshot of the upstream page
+      and the meeting row may not exist in our database yet.
 
 Cascading FK deletes are deliberately inconsistent across the schema:
 `tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` / `tdoc_extracts` cascade

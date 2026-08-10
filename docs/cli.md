@@ -1795,6 +1795,150 @@ doc3gpp wi list --acronym "%UEConTest%" --limit 50
 doc3gpp wi list --tsg R5 --format markdown -o r5_wis.md
 ```
 
+## spec Commands
+
+The `spec` sub-app exposes 3GPP specification records (TS/TR) and their
+versions. Each spec (e.g. `36.579-5`) carries a header row and one
+`spec_versions` row per published version; version rows track the
+3GPP FTP URL, the meeting that approved them, an ETSI PDF link
+(gated on availability), and the comma-joined CR TDoc ids parsed from
+the per-version CR list page.
+
+`spec sync` is the only mutating entry point. After the first sync
+`spec list` and `spec show` read cached rows from the database — no
+network traffic.
+
+### doc3gpp spec sync
+
+Purpose:
+
+- Fetch and store specs (and their versions) for a single TSG from
+  3gpp.org.
+
+Options:
+
+- --tsg: TSG short name (e.g. `R5`). default: `R5`. Validated against
+  the `tsgs` reference table; unknown values raise an error listing the
+  known short names and pointing to `doc3gpp tsg list`. If the `tsgs`
+  table is empty (fresh install), it is auto-seeded before validation.
+- --force, -f: Bypass the spec sync interval skip rule.
+
+Behavior:
+
+- Composes the DynaReport list URL from the uppercased TSG short name
+  (`https://www.3gpp.org/dynareport?code=<Spec-<tsg>.htm>`).
+- Fetches the list page once, parses the spec table into `Spec`
+  headers, then fans out across per-spec detail pages in a thread pool
+  (`min(32, cpu+4)` workers). Each worker parses the detail page into
+  a `Spec` header + `SpecVersion` rows, runs the conditional ETSI PDF
+  and CR-list follow-ups for each version, and upserts the result in
+  one transaction.
+- ETSI PDF follow-ups are gated on `SpecVersion.wki_id` being set and
+  `SpecVersion.pdf_url` being empty. CR-list follow-ups are gated on
+  either the upload date being within the last 90 days **or** the
+  stored `crs` being empty; otherwise the cached comma-joined CR list
+  is left in place.
+- Per-spec ETSI / CR failures log a warning and the sweep continues —
+  one bad spec must not abort the whole sync.
+- On success the `tsgs.spec_last_sync` timestamp is stamped so the
+  next sync can skip when the interval has not yet elapsed.
+- The sync is skipped when the TSG was synced within
+  `sync.spec_sync_interval` (default 24h) unless `--force` is passed.
+
+Examples:
+
+```bash
+# Sync specs for R5 (the default TSG).
+doc3gpp spec sync
+
+# Sync specs for a specific TSG, bypassing the skip rule.
+doc3gpp spec sync --tsg R5 --force
+```
+
+### doc3gpp spec list
+
+Purpose:
+
+- List stored specs (header rows only) with optional filters.
+
+Options:
+
+- --limit: maximum number of rows to return. default: 50, range: 1..500.
+- --offset: number of rows to skip before applying --limit (pagination).
+  default: 0.
+- --tsg: only list specs for the given TSG.
+- --type: rich filter on spec type (`TS` or `TR`).
+- --spec-id: rich filter on spec id (e.g. `36.579-5`).
+- --title: rich filter on spec title.
+- --status: rich filter on spec status.
+- --radio-tech: rich filter on radio technologies.
+- --initial-release: rich filter on initial release.
+- --wis: rich filter on related WIs (comma-joined).
+- --format: see `Common list output options` below (table | json | markdown).
+- --output, -o PATH: write results to PATH instead of stdout.
+- --compact: strip output formatting (see `Compact output` below).
+
+Default output fields (configurable via `[output] fields.spec` in
+`doc3gpp.toml`):
+
+- `spec_id`, `type`, `title`, `status`, `radio_tech`, `initial_release`,
+  `tsg`, `wis`
+
+Filter grammar: every filter flag accepts the rich filter grammar used
+by the other list commands — `null` / `not-null` / `!pattern` / plain
+LIKE with `%` and `_` wildcards.
+
+Examples:
+
+```bash
+# Default compact listing of every cached spec.
+doc3gpp spec list
+
+# Just the RAN WG5 specs.
+doc3gpp spec list --tsg R5
+
+# Dump every R5 spec to JSON for a downstream report.
+doc3gpp spec list --tsg R5 --format json --output r5_specs.json
+
+# Tr specs whose title mentions "Study".
+doc3gpp spec list --type TR --title "%Study%"
+```
+
+### doc3gpp spec show
+
+Purpose:
+
+- Render one spec by its dotted id (`36.579-5`) with its header row
+  plus one row per stored version.
+
+Options:
+
+- SPEC_ID: positional argument — the dotted spec id (e.g. `36.579-5`).
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o PATH: write results to PATH instead of stdout.
+- --compact: strip output formatting (see `Compact output` below).
+
+Behavior:
+
+- Looks up the spec by its dotted id via `SpecRepository.get`.
+- On miss, raises a `BadParameter` pointing at
+  `doc3gpp spec sync --tsg <tsg>` so the user can populate the cache.
+- Pushes the version rows via `SpecRepository.list_versions` and
+  renders header + versions in the requested format.
+- The JSON payload nests the header under a `"spec"` key and the
+  version rows under a `"versions"` key so downstream consumers parse
+  the shape without consulting multiple tables.
+
+Examples:
+
+```bash
+# Quick console view of the NR conformance test spec.
+doc3gpp spec show 36.579-5
+
+# JSON export of every version row for downstream tooling.
+doc3gpp spec show 36.579-5 --format json --output 36_579-5.json
+```
+
 ## Common list output options
 
 The `meeting list`, `tdoc list`, `tsg list`, and `wi list` commands all

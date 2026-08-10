@@ -33,7 +33,7 @@ Typer-based CLI (`doc3gpp`), with SQLite as the sole storage backend.
 
 ## Features
 
-- **Meeting / TDoc / WI sync** — fetch the 3GPP Meetings, TDocs, and Work Items List.
+- **Meeting / TDoc / WI / Spec sync** — fetch the 3GPP Meetings, TDocs, Work Items List, and 3GPP specifications (TS/TR) with versions. Spec sync fans out across per-spec detail pages in a thread pool and caches the result for `spec list` / `spec show`.
 - **TDoc CR extraction** — Download and parse TDoc CR into structured records.
 - **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
 - **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.

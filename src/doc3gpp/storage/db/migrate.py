@@ -5,6 +5,8 @@ from sqlalchemy import text
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
+    SpecORM,  # noqa: F401 - ensures model metadata is loaded
+    SpecVersionORM,  # noqa: F401 - ensures model metadata is loaded
     TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrTtcnDetailOrm,  # noqa: F401 - ensures model metadata is loaded

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -30,6 +31,18 @@ logger = logging.getLogger(__name__)
 # stored crs being empty; the ETSI PDF is fetched once (pdf_url NULL).
 _CR_RECENCY_WINDOW = timedelta(days=90)
 
+SpecProgressFn = Callable[[str, dict], None]
+"""Signature of the optional progress callback for :meth:`SpecService.sync`.
+
+Events:
+    ``"list_parsed"`` — fired after the spec list page is parsed and
+        before the detail-page thread pool is started. ``data`` is
+        ``{"total": <int>}`` with the number of specs to process.
+    ``"spec_done"`` — fired once per spec whose detail page has been
+        fetched and upserted (or whose failure was logged and
+        swallowed). ``data`` is ``{"spec_id": <str>}``.
+"""
+
 
 class SpecService:
     """Sync and query 3GPP specification records."""
@@ -44,7 +57,13 @@ class SpecService:
         self._tsg_repository = tsg_repository
         self._sync_interval = sync_interval
 
-    def sync(self, tsg: str, *, force: bool = False) -> SyncOutcome:
+    def sync(
+        self,
+        tsg: str,
+        *,
+        force: bool = False,
+        on_progress: SpecProgressFn | None = None,
+    ) -> SyncOutcome:
         """Fetch list page -> parallel detail pages -> upsert.
 
         Resolves the TSG, honours ``tsgs.spec_last_sync`` skip rule
@@ -52,6 +71,13 @@ class SpecService:
         detail page in a thread pool, running the conditional ETSI / CR
         follow-ups inside each worker, and upserts per-spec in one
         transaction.
+
+        When ``on_progress`` is supplied it is invoked twice per
+        successful sync sweep: once with ``"list_parsed"`` (carrying
+        ``{"total": N}`` after the list page is parsed) and once per
+        spec with ``"spec_done"`` (carrying ``{"spec_id": ...}``).
+        Skipped syncs (interval not elapsed) do not invoke the
+        callback because there are no specs to process.
         """
         canonical = tsg.upper()
         if not force and self._tsg_repository is not None:
@@ -75,6 +101,9 @@ class SpecService:
         specs = parse_spec_list(list_html, canonical)
         logger.info("Parsed %s specs from list page for TSG %s", len(specs), canonical)
 
+        if on_progress is not None:
+            on_progress("list_parsed", {"total": len(specs)})
+
         synced = 0
         version_total = 0
         workers = min(32, (os.cpu_count() or 4) + 4)
@@ -89,9 +118,13 @@ class SpecService:
                     version_count = future.result()
                 except Exception:  # noqa: BLE001 - one spec failure must not abort the sweep
                     logger.exception("Spec sync failed for %s", spec.spec_id)
+                    if on_progress is not None:
+                        on_progress("spec_done", {"spec_id": spec.spec_id})
                     continue
                 version_total += version_count
                 synced += 1
+                if on_progress is not None:
+                    on_progress("spec_done", {"spec_id": spec.spec_id})
 
         if self._tsg_repository is not None:
             self._tsg_repository.update_spec_last_sync(canonical, datetime.now(timezone.utc))

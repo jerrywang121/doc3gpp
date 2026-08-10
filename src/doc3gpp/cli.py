@@ -3904,7 +3904,28 @@ def spec_sync(
             logger.warning("Skipping unknown TSG '%s' found in meetings table", tsg_short)
             typer.echo(f"Skipping unknown TSG '{tsg_short}' found in meetings table.")
             continue
-        outcome: SyncOutcome = service.sync(tsg_short, force=force)
+
+        from tqdm import tqdm
+
+        bar: tqdm | None = None
+
+        def _on_progress(event: str, data: dict) -> None:
+            nonlocal bar
+            if event == "list_parsed":
+                bar = tqdm(
+                    total=data["total"],
+                    desc=f"spec {tsg_short}",
+                    unit="spec",
+                    dynamic_ncols=True,
+                )
+            elif event == "spec_done" and bar is not None:
+                bar.update(1)
+
+        outcome: SyncOutcome = service.sync(
+            tsg_short, force=force, on_progress=_on_progress
+        )
+        if bar is not None:
+            bar.close()
         typer.echo(outcome.reason)
 
 

@@ -210,9 +210,36 @@ def _spec_id_no_dot(spec_id: str) -> str:
     return spec_id.replace(".", "")
 
 
+def extract_etsi_pdf_url(html: str) -> str | None:
+    """Return the first ``.pdf`` download link in an ETSI work-item page."""
+    soup = BeautifulSoup(html, "lxml")
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if href.lower().endswith(".pdf"):
+            return href
+    return None
+
+
+def extract_cr_tdocs(html: str) -> list[str]:
+    """Return every ``tdoc_id`` in the rendered CR list table.
+
+    Matches anchors with ``id="wgTdocDetailsLink"``. The page is not
+    paginated here (default page size 200).
+    """
+    soup = BeautifulSoup(html, "lxml")
+    ids: list[str] = []
+    for a in soup.find_all("a", id="wgTdocDetailsLink"):
+        text = _normalize(a.get_text())
+        if text:
+            ids.append(text)
+    return ids
+
+
 __all__ = [
     "parse_spec_list",
     "parse_spec_detail",
+    "extract_etsi_pdf_url",
+    "extract_cr_tdocs",
     "normalise_release",
     "release_from_version",
 ]

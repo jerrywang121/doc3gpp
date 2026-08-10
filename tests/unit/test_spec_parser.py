@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from doc3gpp.parsers.spec_parser import parse_spec_detail, parse_spec_list
+from doc3gpp.parsers.spec_parser import (
+    extract_cr_tdocs,
+    extract_etsi_pdf_url,
+    parse_spec_detail,
+    parse_spec_list,
+)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "spec_pages" / "R5_list.html"
 
@@ -53,3 +58,23 @@ def test_parse_spec_detail_versions() -> None:
     assert v1.version_id == 90000
     assert v1.wki_id is None
     assert v1.pdf_url is None
+
+
+ETSI_FIXTURE = Path(__file__).parent.parent / "fixtures" / "spec_pages" / "R5_etsi.html"
+CRS_FIXTURE = Path(__file__).parent.parent / "fixtures" / "spec_pages" / "R5_crs.html"
+
+
+def test_extract_etsi_pdf_url() -> None:
+    html = ETSI_FIXTURE.read_text(encoding="utf-8")
+    url = extract_etsi_pdf_url(html)
+    assert url is not None
+    assert url.endswith(".pdf")
+
+
+def test_extract_etsi_pdf_url_miss() -> None:
+    assert extract_etsi_pdf_url("<html></html>") is None
+
+
+def test_extract_cr_tdocs() -> None:
+    html = CRS_FIXTURE.read_text(encoding="utf-8")
+    assert extract_cr_tdocs(html) == ["R5-253030", "R5-253031"]

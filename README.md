@@ -9,7 +9,8 @@
 
 ## Description
 
-`doc3gpp` scrapes 3GPP meeting calendars, work items (WIs), and TDocs from
+`doc3gpp` scrapes 3GPP meeting calendars, work items (WIs), TDocs,
+and specifications (TS/TR) from
 [3gpp.org](https://www.3gpp.org) and persists them to a relational database
 for programmatic access. It ships as both a Python library (SDK) and a
 Typer-based CLI (`doc3gpp`), with SQLite as the sole storage backend.
@@ -126,15 +127,19 @@ doc3gpp tdoc parse --meeting-id 85434      # extract CR cover pages; prompts bef
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes   # pattern match, skip confirmation
 doc3gpp wi sync --tsg r5                   # scrape WI DynaReport for R5
 doc3gpp wi list --release "Rel-19" --limit 50
+doc3gpp spec sync --tsg r5                 # scrape spec list + parallel detail pages
+doc3gpp spec list --type TS --limit 20
+doc3gpp spec show 36.579-5                 # header + version rows
 ```
 
 ## CLI Usage
 
-The CLI ships eight sub-apps. The most common
+The CLI ships ten sub-apps. The most common
 entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
 (TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR cover
 pages), `tdoc show --format raw` (render the converted `.docx`
-markdown), and `search query` (FTS5 + BM25 full-text search).
+markdown), `spec sync` (3GPP specification records with versions), and
+`search query` (FTS5 + BM25 full-text search).
 
 ### `db` — database lifecycle
 
@@ -203,6 +208,30 @@ doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page f
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
 doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
 ```
+
+### `spec` — 3GPP specifications (TS / TR)
+
+```bash
+# sync — fetch list page + parallel detail pages (TSGs / WI links / ETSI PDF / CR list)
+doc3gpp spec sync --tsg r5                          # 24h skip rule via sync.spec_sync_interval
+doc3gpp spec sync --tsg r5 --force                  # bypass the skip rule
+
+# list — 9 filter flags combine freely (rich-filter grammar: %, !pattern, null, not-null)
+doc3gpp spec list --limit 20
+doc3gpp spec list --tsg R5 --type TS --status "Under change control"
+doc3gpp spec list --spec-id '36.579%' --title '%conformance%'
+doc3gpp spec list --tsg R5 --format json -o r5_specs.json
+
+# show — dotted spec id; renders header + version rows
+doc3gpp spec show 36.579-5
+doc3gpp spec show 36.579-5 --format json -o 36_579-5.json
+```
+
+`spec sync` honours `sync.spec_sync_interval` (default `24h`): a second
+sync within the interval is skipped unless `--force` is passed. The
+follow-up `tsgs.spec_last_sync` timestamp is stamped at the end of a
+successful sweep so a `spec list` / `spec show` always reads from
+cache.
 
 ### `search` — FTS5 + BM25 full-text search
 
@@ -326,7 +355,8 @@ doc3gpp cache purge --scope all --yes  # both subtrees
 Every `* list` command accepts `--format {table,json,markdown}` and
 `-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list`
 additionally accept `--fields` to override the configured column set
-(`wi list` uses the configured `output.fields.wi` list):
+(`wi list` and `spec list` use their configured
+`output.fields.wi` / `output.fields.spec` lists):
 
 ```bash
 doc3gpp tdoc list --format json -o tdocs.json
@@ -364,7 +394,7 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
 - **HTML UI** — browse meetings, TDocs, TSGs, WIs, and search results.
 - **JSON API** — every read route accepts `?format=json`, byte-for-byte
   identical to the MCP tools.
-- **MCP** — `http://127.0.0.1:8765/mcp` exposes 20 tools covering the
+- **MCP** — `http://127.0.0.1:8765/mcp` exposes 22 tools covering the
   same reads plus job lifecycle. The transport is set under `[mcp]` in the
   TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
   (legacy two-endpoint `GET /mcp/sse` + `POST /mcp/messages/`). Browser

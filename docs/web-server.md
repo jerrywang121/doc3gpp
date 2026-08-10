@@ -312,10 +312,10 @@ transport-security layer otherwise rejects cross-origin requests with a
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 20 tools:
+It exposes 22 tools:
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
-`get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `search_tdocs`,
-`semantic_search_tdocs`.
+`get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
+`get_spec`, `search_tdocs`, `semantic_search_tdocs`.
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `parse_tdocs`, `rebuild_search_index`, `purge_cache`,

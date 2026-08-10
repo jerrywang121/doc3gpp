@@ -208,14 +208,14 @@ The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API +
 | `get_state`/`get_settings`/`get_engine`/`get_services` | dependency | `web/deps.py` | FastAPI `Depends` helpers reading `request.app.state.web` |
 | `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_wi_service`/`get_tsg_service`/`get_search_service`/`get_semantic_search_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service `Depends` helpers |
 | `get_job_repo` / `get_job_worker` | dependency | `web/deps.py` | Job repository + worker-handle deps (overridden in tests) |
-| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 20 tools (10 read + 10 job) |
+| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 22 tools (12 read + 10 job) |
 | `_to_json` | function | `web/mcp_server.py` | `json.dumps(value, separators=(",", ":"), ensure_ascii=False)` — byte-matches Starlette `JSONResponse` |
-| `meeting_rows`/`tdoc_rows`/`tsg_rows`/`wi_rows` | function | `web/render.py` | List-of-dict rows matching CLI `--format json` (`_coerce_cell`: `None`→`"-"`, date→isoformat) |
+| `meeting_rows`/`tdoc_rows`/`tsg_rows`/`wi_rows`/`spec_rows`/`spec_version_rows` | function | `web/render.py` | List-of-dict rows matching CLI `--format json` (`_coerce_cell`: `None`→`"-"`, date→isoformat) |
 | `to_jsonable` | function | `web/render.py` | Recursively convert dataclasses/values to JSON-safe structures |
 | `register_error_handlers`/`map_domain_error` | function | `web/errors.py` | Map domain errors→HTTP status (404/400/409/503/502/500) with stable slugs |
 | `render_systemd_unit`/`render_launchd_plist`/`install_systemd`/`install_launchd`/`uninstall_systemd`/`uninstall_launchd` | function | `web/install.py` | OS service-unit install/uninstall helpers with `X-Doc3gpp-Managed` marker guard |
 | `InstallNotManagedError` | exception | `web/install.py` | Raised when uninstalling a missing/non-managed unit |
-| `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, tdocs, tsgs, wis, search, jobs]` |
+| `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, tdocs, tsgs, wis, specs, search, jobs]` |
 | `is_htmx_request` | function | `web/filters.py` | `request.headers["HX-Request"] == "true"` — list routes use this to switch between full page (no header) and `partials/<resource>_results.html` fragment (HTMX-driven swap target). |
 | `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue (sync/meetings, sync/tdocs, sync/tdocs/all, parse/tdocs, search/rebuild, cache/purge, sync_tdocs), list, get, SSE `/events`, cancel |
 | `JobWorker` | class | `web/workers/job_worker.py` | asyncio worker: polls `QUEUED` jobs at `Settings.server.poll_interval_seconds` (default `1.0`s, range `0.05..60.0`), runs handlers (semaphore-bounded by `max_concurrent_jobs`), streams SSE, cooperative cancel, skips handlers when the `mark_running` claim loses the race (`(claimed, job)` return), and sweeps orphaned `RUNNING` rows on startup → `FAILED` with `error="orphaned_after_restart"`. Retention cleanup runs on the independent `cleanup_interval_seconds` cadence. |

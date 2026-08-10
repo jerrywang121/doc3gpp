@@ -492,6 +492,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
         tdoc_repo=factory.build_tdoc_repository(),
         tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
+        spec=factory.build_spec_service(),
         search=SearchService(
             repo=SQLAlchemySearchIndexRepository(),
             reranker=SemanticReranker(

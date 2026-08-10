@@ -1,0 +1,37 @@
+<form
+  hx-get="/specs"
+  hx-target="#results"
+  hx-trigger="change, submit"
+  hx-swap="outerHTML"
+  class="filters"
+>
+  <label>TSG
+    <input type="text" name="tsg" value="{{ filters.tsg or '' }}">
+  </label>
+  <label>Type
+    <input type="text" name="type" value="{{ filters.type or '' }}">
+  </label>
+  <label>Spec ID
+    <input type="text" name="spec_id" value="{{ filters.spec_id or '' }}">
+  </label>
+  <label>Title
+    <input type="text" name="title" value="{{ filters.title or '' }}">
+  </label>
+  <label>Status
+    <input type="text" name="status" value="{{ filters.status or '' }}">
+  </label>
+  <label>Radio tech
+    <input type="text" name="radio_tech" value="{{ filters.radio_tech or '' }}">
+  </label>
+  <label>Initial release
+    <input type="text" name="initial_release" value="{{ filters.initial_release or '' }}">
+  </label>
+  <label>WIs
+    <input type="text" name="wis" value="{{ filters.wis or '' }}">
+  </label>
+  <label>Limit
+    <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
+  </label>
+  <input type="hidden" name="offset" value="0">
+  <button type="submit" class="btn">Apply</button>
+</form>

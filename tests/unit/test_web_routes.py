@@ -331,14 +331,16 @@ def test_landing_json_payload(client: TestClient) -> None:
     assert any(s["href"] == "/meetings" for s in body["sections"])
 
 
-def test_nav_order_home_tsgs_meetings_tdocs_wis_search_jobs(
+def test_nav_order_home_tsgs_meetings_tdocs_wis_specs_search_jobs(
     client: TestClient,
 ) -> None:
-    """The header nav lists Home, TSGs, Meetings, TDocs, WIs, Search, Jobs."""
+    """The header nav lists Home, TSGs, Meetings, TDocs, WIs, Specs, Search, Jobs."""
     html = client.get("/").text
     nav = html.split('<nav class="topnav">')[1].split("</nav>")[0]
     hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
-    assert hrefs == ["/", "/tsgs", "/meetings", "/tdocs", "/wis", "/search", "/jobs"]
+    assert hrefs == [
+        "/", "/tsgs", "/meetings", "/tdocs", "/wis", "/specs", "/search", "/jobs",
+    ]
 
 
 def test_nav_hides_jobs_badge_when_no_pending_jobs(client: TestClient) -> None:
@@ -2178,3 +2180,148 @@ def test_spec_rows_coerces_cells() -> None:
         "title": "NR conformance",
         "status": "-",
     }
+
+
+# ---------------------------------------------------------------------------
+# Specs
+# ---------------------------------------------------------------------------
+
+
+class FakeSpecService:
+    """Stub :class:`SpecService` for the fake-wired app fixture."""
+
+    def __init__(self) -> None:
+        from doc3gpp.models.spec import Spec, SpecVersion
+
+        self._specs = [
+            Spec(
+                spec_id="36.579-5",
+                type="TS",
+                title="NR conformance",
+                status="Approved",
+                radio_tech="5G",
+                initial_release="Rel-15",
+                tsg="R5",
+                wis="NR_5G_Test",
+            ),
+            Spec(
+                spec_id="38.523-3",
+                type="TS",
+                title="NR signalling conformance",
+                status="Approved",
+                tsg="R5",
+            ),
+        ]
+        self._versions = [
+            SpecVersion(
+                spec_id="36.579-5",
+                version="18.0.0",
+                ftp_url="https://www.3gpp.org/ftp/Specs/2026-06/36_series/36.579-5.zip",
+                release="Rel-18",
+                meeting_id=1,
+                meeting_name="RAN5#99-e",
+                upload_date=date(2026, 5, 1),
+                crs="R5-260001,R5-260002",
+                pdf_url="https://www.etsi.org/deliver/etsi_ts/136500_136599/36.579-5/18.00.00_60/ts_136579-05v180000p.pdf",
+            ),
+        ]
+
+    def list_recent(self, **_kwargs: Any) -> list[Any]:
+        return list(self._specs)
+
+    def get(self, spec_id: str) -> Any | None:
+        for spec in self._specs:
+            if spec.spec_id == spec_id:
+                return spec
+        return None
+
+    def list_versions(self, spec_id: str, **_kwargs: Any) -> list[Any]:
+        return [v for v in self._versions if v.spec_id == spec_id]
+
+
+def test_get_specs_renders_list(client: TestClient) -> None:
+    """``GET /specs`` returns 200 with the spec list template."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert "36.579-5" in response.text
+
+
+def test_get_specs_json(client: TestClient) -> None:
+    """``GET /specs?format=json`` returns the CLI-shaped row array."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    body = response.json()
+    assert any(row["spec_id"] == "36.579-5" for row in body)
+
+
+def test_get_specs_htmx_returns_partial(client: TestClient) -> None:
+    """``GET /specs`` with ``HX-Request: true`` returns the results partial."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs", headers={"HX-Request": "true"})
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    body = response.text
+    assert "<!DOCTYPE" not in body
+    assert "<html" not in body
+    assert 'id="results"' in body
+    assert "<table" in body
+
+
+def test_get_spec_show_renders_detail(client: TestClient) -> None:
+    """``GET /specs/{spec_id}`` returns 200 with the spec show template."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert "36.579-5" in response.text
+    assert "18.0.0" in response.text
+
+
+def test_get_spec_show_404(client: TestClient) -> None:
+    """``GET /specs/{unknown}`` returns 404 with the canonical envelope."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/99.999-9")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"] == "spec_not_found"
+
+
+def test_get_spec_show_json(client: TestClient) -> None:
+    """``GET /specs/{spec_id}?format=json`` returns spec + versions."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["spec"]["spec_id"] == "36.579-5"
+    assert len(body["versions"]) == 1
+    assert body["versions"][0]["version"] == "18.0.0"

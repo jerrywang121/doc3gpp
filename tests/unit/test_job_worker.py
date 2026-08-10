@@ -46,6 +46,7 @@ def _make_state(repo: JobRepository, *, fail: bool = False) -> WebState:
         tdoc_repo=None,  # type: ignore[arg-type]
         tsg=None,  # type: ignore[arg-type]
         wi=None,  # type: ignore[arg-type]
+        spec=None,  # type: ignore[arg-type]
         search=None,
         semantic_search=None,
         tdoc_file_repo=None,  # type: ignore[arg-type]

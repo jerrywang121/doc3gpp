@@ -1,0 +1,37 @@
+<div id="results" hx-target="this" hx-swap="outerHTML">
+  {% if specs %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Spec ID</th>
+          <th>Type</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Radio tech</th>
+          <th>Initial release</th>
+          <th>TSG</th>
+          <th>WIs</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for spec in specs %}
+          <tr>
+            <td><code>{{ spec.spec_id }}</code></td>
+            <td>{{ spec.type or '-' }}</td>
+            <td>{{ spec.title or '-' }}</td>
+            <td>{{ spec.status or '-' }}</td>
+            <td>{{ spec.radio_tech or '-' }}</td>
+            <td>{{ spec.initial_release or '-' }}</td>
+            <td><code>{{ spec.tsg or '-' }}</code></td>
+            <td>{{ spec.wis or '-' }}</td>
+            <td><a href="/specs/{{ spec.spec_id }}">show</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% include "partials/pagination.html" %}
+  {% else %}
+    <p class="empty">No specs match these filters.</p>
+  {% endif %}
+</div>

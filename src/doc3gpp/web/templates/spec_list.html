@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · specs{% endblock %}
+{% block content %}
+  <h1>Specifications</h1>
+  <p class="meta">{{ total }} matching spec{{ '' if total == 1 else 's' }}.</p>
+
+  {% include "partials/spec_filters.html" %}
+
+  {% include "partials/spec_results.html" %}
+{% endblock %}

@@ -46,6 +46,10 @@ class WINotFoundError(LookupError):
     """Raised when a WI id cannot be resolved."""
 
 
+class SpecNotFoundError(LookupError):
+    """Raised when a spec id cannot be resolved."""
+
+
 class InvalidFilterError(ValueError):
     """Raised when a filter expression is malformed."""
 
@@ -93,6 +97,7 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     MeetingNotFoundError: ("meeting", MCP_CODE_NOT_FOUND),
     TSGNotFoundError: ("tsg", MCP_CODE_NOT_FOUND),
     WINotFoundError: ("wi", MCP_CODE_NOT_FOUND),
+    SpecNotFoundError: ("spec", MCP_CODE_NOT_FOUND),
     JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
     CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
     InvalidFilterError: ("filter", MCP_CODE_INVALID_PARAMS),
@@ -128,6 +133,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     MeetingNotFoundError: "meeting_not_found",
     TSGNotFoundError: "tsg_not_found",
     WINotFoundError: "wi_not_found",
+    SpecNotFoundError: "spec_not_found",
     InvalidFilterError: "invalid_filter",
     SearchQueryError: "invalid_query",
     JobNotFoundError: "job_not_found",
@@ -142,6 +148,7 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     MeetingNotFoundError: 404,
     TSGNotFoundError: 404,
     WINotFoundError: 404,
+    SpecNotFoundError: 404,
     InvalidFilterError: 400,
     SearchQueryError: 400,
     JobNotFoundError: 404,
@@ -213,6 +220,7 @@ __all__ = [
     "CacheMissError",
     "TSGNotFoundError",
     "WINotFoundError",
+    "SpecNotFoundError",
     "InvalidFilterError",
     "SearchQueryError",
     "JobNotFoundError",

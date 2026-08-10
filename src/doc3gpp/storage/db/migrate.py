@@ -55,6 +55,42 @@ def _migrate_rename_tdoc_cr_details() -> None:
             )
 
 
+def _migrate_tsg_spec_last_sync() -> None:
+    """Add ``tsgs.spec_last_sync`` to databases created before that column
+    existed.
+
+    One-shot, idempotent: ``ALTER TABLE ... ADD COLUMN`` raises if the
+    column is already present, so we probe ``PRAGMA table_info`` first
+    and only issue the ALTER when the column is genuinely missing.
+    ``Base.metadata.create_all`` is a no-op on tables that already
+    exist, so pre-existing ``tsgs`` rows on older databases carry the
+    old schema and explode the moment any ORM read touches the new
+    attribute — see
+    https://doc3gpp project history / Task 6 in
+    ``docs/superpowers/plans/2026-08-10-spec-sync-list-show.md``.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        # sqlite_master entry for the table — guard against a fresh DB
+        # (no ``tsgs`` yet, in which case ``Base.metadata.create_all``
+        # will create it with the column already in place).
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='tsgs' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(tsgs)")).all()
+        column_names = {row[1] for row in rows}
+        if "spec_last_sync" in column_names:
+            return
+        conn.execute(
+            text("ALTER TABLE tsgs ADD COLUMN spec_last_sync DATETIME")
+        )
+
+
 def _create_search_schema() -> None:
     """Create the FTS5 virtual table + meta sidecar.
 
@@ -201,6 +237,7 @@ def create_schema() -> None:
 
     engine = get_engine()
     _migrate_rename_tdoc_cr_details()
+    _migrate_tsg_spec_last_sync()
     Base.metadata.create_all(bind=engine)
     _create_search_schema()
     _create_vector_schema()

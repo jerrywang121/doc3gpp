@@ -114,3 +114,80 @@ def test_sync_force_bypasses_interval(monkeypatch) -> None:
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", lambda s: DETAIL_HTML)
     outcome = svc.sync("R5", force=True)
     assert outcome.status == "synced"
+
+
+def test_sync_followups_are_fanned_out_across_the_thread_pool(monkeypatch) -> None:
+    """``_sync_one_spec`` submits the ETSI + CR follow-ups to the
+    *shared* ``ThreadPoolExecutor`` and waits for every future before
+    upserting — so a single-spec sync doesn't serialise ~2N HTTP
+    requests when the underlying network is the bottleneck.
+
+    The proof uses a slow ``fetch_etsi_pdf_text`` that sleeps; if the
+    follow-ups ran serially the call would take ``~2N * sleep``
+    seconds, but with parallel fan-out it should finish in roughly
+    ``sleep`` seconds (assuming at least one other worker is free).
+    """
+    import time
+
+    from doc3gpp.services.spec_service import SpecService
+
+    n_versions = 20
+    sleep_per_call = 0.2
+
+    versions_html = (
+        "<html><body>"
+        + "".join(
+            f"""
+            <tr>
+              <td><a id="lnkFtpDownload" href="u{i}.zip">{i}.0.0</a></td>
+              <td><a id="lnkMeetings" href="?m_id=108">RAN#108</a></td>
+              <td><a id="imgRelatedCRs" href="?versionId={1000+i}"></a></td>
+              <td><a id="imgRelatedWI" href="?WKI_ID={2000+i}"></a></td>
+              <td>2025-06-01</td><td><span class="lblRemarkText">c</span></td>
+            </tr>
+            """
+            for i in range(n_versions)
+        )
+        + "</body></html>"
+    )
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg: LIST_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug: versions_html,
+    )
+
+    def _slow_etsi(_wki, _client):
+        time.sleep(sleep_per_call)
+        return "<html><a href='x.pdf'>d</a></html>"
+
+    def _slow_cr(_version_id, _client):
+        time.sleep(sleep_per_call)
+        return "<html></html>"
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text", _slow_etsi
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list", _slow_cr
+    )
+
+    svc = SpecService(_StubSpecRepo(), _StubTsgRepo())
+    started = time.perf_counter()
+    outcome = svc.sync("R5", force=True)
+    elapsed = time.perf_counter() - started
+
+    assert outcome.status == "synced"
+    assert outcome.version_count == n_versions
+
+    # Serial baseline: ~2N * sleep = 8s for N=20, sleep=0.2.
+    # Parallel fan-out (workers >= 32) finishes in roughly sleep + jitter.
+    # Generous ceiling: anything under 4s proves parallelism.
+    assert elapsed < 4.0, (
+        f"follow-ups appear to run serially: took {elapsed:.2f}s "
+        f"for {n_versions} versions × 2 follow-ups × {sleep_per_call}s each "
+        f"(serial baseline {n_versions * 2 * sleep_per_call:.1f}s)"
+    )

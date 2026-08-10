@@ -109,7 +109,9 @@ class SpecService:
         workers = min(32, (os.cpu_count() or 4) + 4)
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
-                executor.submit(self._sync_one_spec, spec, canonical): spec
+                executor.submit(
+                    self._sync_one_spec, spec, canonical, executor
+                ): spec
                 for spec in specs
             }
             for future in futures:
@@ -136,7 +138,12 @@ class SpecService:
             version_count=version_total,
         )
 
-    def _sync_one_spec(self, spec: Spec, canonical: str) -> int:
+    def _sync_one_spec(
+        self,
+        spec: Spec,
+        canonical: str,
+        executor: ThreadPoolExecutor,
+    ) -> int:
         slug = spec.spec_id.replace(".", "")
         detail_html = fetch_spec_detail(slug)
         header, versions = parse_spec_detail(detail_html, spec.spec_id, canonical)
@@ -144,14 +151,63 @@ class SpecService:
         header.title = spec.title
         header.last_synced_at = datetime.now(timezone.utc)
 
+        # The ETSI + CR follow-ups are independent HTTP requests —
+        # earlier revisions of this method ran them serially inside a
+        # single ScraperClient, which made a single-spec sync take 30+ s
+        # for a spec with 10-20 versions. Fan them out across the same
+        # shared thread pool so they overlap with the detail-page
+        # fetches of the other spec workers, then wait for them all
+        # before upserting so the in-place mutations on ``versions``
+        # (pdf_url / crs) are captured in the row write.
         with ScraperClient() as client:
-            for v in versions:
-                self._maybe_fetch_etsi_pdf(v, client)
-                self._maybe_fetch_crs(v, client)
+            self._fetch_followups_concurrently(versions, executor, client)
 
         self._repository.upsert(header)
         self._repository.upsert_versions(versions)
         return len(versions)
+
+    def _fetch_followups_concurrently(
+        self,
+        versions: list[SpecVersion],
+        executor: ThreadPoolExecutor,
+        client: ScraperClient,
+    ) -> None:
+        """Submit the ETSI + CR follow-ups for ``versions`` to
+        ``executor`` and wait for every future to complete.
+
+        Each follow-up is wrapped in its own try/except so a single
+        failure does not cancel the others (``FIRST_EXCEPTION`` would
+        otherwise leave later futures pending until the wait times
+        out). The submission cost is bounded by ``len(versions) * 2``,
+        which is in the low tens even for the largest specs.
+        """
+        followup_futures = []
+        for v in versions:
+            followup_futures.append(
+                executor.submit(self._safe_fetch_etsi_pdf, v, client)
+            )
+            followup_futures.append(
+                executor.submit(self._safe_fetch_crs, v, client)
+            )
+        for future in followup_futures:
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "Follow-up task raised unexpectedly", exc_info=True
+                )
+
+    def _safe_fetch_etsi_pdf(self, v: SpecVersion, client: ScraperClient) -> None:
+        try:
+            self._maybe_fetch_etsi_pdf(v, client)
+        except Exception:  # noqa: BLE001
+            logger.debug("ETSI PDF fetch failed for %s", v.version, exc_info=True)
+
+    def _safe_fetch_crs(self, v: SpecVersion, client: ScraperClient) -> None:
+        try:
+            self._maybe_fetch_crs(v, client)
+        except Exception:  # noqa: BLE001
+            logger.debug("CR list fetch failed for %s", v.version, exc_info=True)
 
     def _maybe_fetch_etsi_pdf(self, v: SpecVersion, client: ScraperClient) -> None:
         if v.wki_id is None:

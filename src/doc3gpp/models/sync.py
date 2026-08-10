@@ -26,6 +26,7 @@ class SyncOutcome:
     reason: str
     synced_count: int | None = None
     file_count: int | None = None
+    version_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

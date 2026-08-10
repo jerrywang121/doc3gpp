@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from doc3gpp.parsers.spec_parser import parse_spec_list
+from doc3gpp.parsers.spec_parser import parse_spec_detail, parse_spec_list
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "spec_pages" / "R5_list.html"
 
@@ -19,3 +19,37 @@ def test_parse_spec_list_extracts_specs() -> None:
 
 def test_parse_spec_list_skips_bad_rows() -> None:
     assert parse_spec_list("<html><body></body></html>", "R5") == []
+
+
+DETAIL_FIXTURE = Path(__file__).parent.parent / "fixtures" / "spec_pages" / "R5_detail.html"
+
+
+def test_parse_spec_detail_header_fields() -> None:
+    html = DETAIL_FIXTURE.read_text(encoding="utf-8")
+    header, versions = parse_spec_detail(html, "36.579-5", "R5")
+    assert header.status == "Under change control"
+    assert header.initial_release == "Rel-20"
+    assert header.radio_tech == "2G,3G,LTE,5G"
+    assert header.wis == "NR_CONFORMANCE,RF_TESTING"
+    assert header.tsg == "R5"
+
+
+def test_parse_spec_detail_versions() -> None:
+    html = DETAIL_FIXTURE.read_text(encoding="utf-8")
+    header, versions = parse_spec_detail(html, "36.579-5", "R5")
+    assert len(versions) == 2
+    v0 = versions[0]
+    assert v0.version == "18.3.0"
+    assert v0.release == "Rel-18"
+    assert v0.meeting_id == 108
+    assert v0.meeting_name == "RAN#108"
+    assert v0.version_id == 92276
+    assert v0.wki_id == 12345
+    assert v0.upload_date.isoformat() == "2025-06-01"
+    assert v0.comment == "Some comment here"
+    v1 = versions[1]
+    assert v1.release == "Rel-17"
+    assert v1.meeting_id == 100
+    assert v1.version_id == 90000
+    assert v1.wki_id is None
+    assert v1.pdf_url is None

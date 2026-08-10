@@ -299,6 +299,14 @@ class TsgRepository(Protocol):
         """
         ...
 
+    def update_spec_last_sync(self, short_name: str, synced_at: datetime) -> bool:
+        """Record when the spec list was last synced for a TSG.
+
+        Returns ``True`` when a matching row existed and was updated,
+        ``False`` otherwise.
+        """
+        ...
+
 
 class WiRepository(Protocol):
     """Storage operations used by the WI service layer."""

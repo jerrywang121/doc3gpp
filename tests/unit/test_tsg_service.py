@@ -39,6 +39,13 @@ class _FakeTsgRepository:
     def count(self) -> int:
         return len(self.rows)
 
+    def update_spec_last_sync(self, short_name: str, synced_at) -> bool:
+        row = self.get_by_short_name(short_name)
+        if row is None:
+            return False
+        row.spec_last_sync = synced_at
+        return True
+
 
 def test_seed_defaults_populates_all_nineteen() -> None:
     repo = _FakeTsgRepository()

@@ -30,6 +30,7 @@ from doc3gpp.web.errors import (
     JobNotFoundError,
     MeetingNotFoundError,
     SettingsDisabledError,
+    SpecNotFoundError,
     TDocNotFoundError,
     TSGNotFoundError,
     map_mcp_error,
@@ -44,6 +45,8 @@ _MEETING_FIELDS = ["meeting_id", "name", "location", "start_date", "end_date", "
 _TDOC_FIELDS = ["tdoc_id", "meeting_name", "title", "source", "type", "status", "cr_cat", "spec", "version", "related_wis"]
 _TSG_FIELDS = ["tsg_name", "short_name", "description"]
 _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
+_SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis"]
+_VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs", "comment"]
 
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
 
@@ -346,6 +349,40 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             release_like=release,
         )
         return _to_json(render.wi_rows(wis, _WI_FIELDS))
+
+    # ---- Specs ----------------------------------------------------
+    @server.tool(name="list_specs", description="List 3GPP specifications, optionally filtered by TSG, type, spec id, title, status, radio technology, initial release or related WIs. The spec_id, title, status, radio_tech, initial_release and wis filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec_id='36.579%' matches any spec id starting with '36.579'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @_mcp_error_guard
+    def list_specs(
+        tsg: Annotated[str | None, Field(description="TSG short name filter (e.g. 'R5').")] = None,
+        type: Annotated[str | None, Field(description="Spec type filter: 'TS' or 'TR'.")] = None,
+        spec_id: Annotated[str | None, Field(description="Rich filter pattern on the spec id (e.g. '36.579-5').")] = None,
+        title: Annotated[str | None, Field(description="Rich filter pattern on the title.")] = None,
+        status: Annotated[str | None, Field(description="Rich filter pattern on the status.")] = None,
+        radio_tech: Annotated[str | None, Field(description="Rich filter pattern on radio technologies.")] = None,
+        initial_release: Annotated[str | None, Field(description="Rich filter pattern on the initial release (e.g. 'Rel-20').")] = None,
+        wis: Annotated[str | None, Field(description="Rich filter pattern on related WIs.")] = None,
+        limit: Annotated[int, Field(description="Maximum number of specs to return.")] = 50,
+        offset: Annotated[int, Field(description="Number of specs to skip for pagination.")] = 0,
+    ) -> str:
+        specs = services.spec.list_recent(
+            limit=limit, offset=offset, tsg=tsg, type=type, spec_id=spec_id,
+            title=title, status=status, radio_tech=radio_tech,
+            initial_release=initial_release, wis=wis,
+        )
+        return _to_json(render.spec_rows(specs, _SPEC_FIELDS))
+
+    @server.tool(name="get_spec", description="Get a single spec by its dotted id, including its version rows.")
+    @_mcp_error_guard
+    def get_spec(spec_id: Annotated[str, Field(description="Dotted spec id (e.g. '36.579-5').")]) -> str:
+        spec = services.spec.get(spec_id)
+        if spec is None:
+            raise SpecNotFoundError(spec_id)
+        versions = services.spec.list_versions(spec_id)
+        return _to_json({
+            "spec": {f: getattr(spec, f, None) for f in _SPEC_FIELDS},
+            "versions": render.spec_version_rows(versions, _VERSION_FIELDS),
+        })
 
     # ---- Search ---------------------------------------------------
     @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")

@@ -19,6 +19,7 @@ from doc3gpp.services.embedding.embedder import SentenceTransformerEmbedder
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
+from doc3gpp.services.spec_service import SpecService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_file_service import TDocFileService
 from doc3gpp.services.tdoc_service import TDocService
@@ -29,6 +30,7 @@ from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
+from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
@@ -120,6 +122,16 @@ def build_tsg_service() -> TsgService:
 def build_wi_service() -> WiService:
     """Construct a :class:`WiService` backed by the configured repo."""
     return WiService(SQLAlchemyWiRepository())
+
+
+def build_spec_service() -> SpecService:
+    """Construct a :class:`SpecService` backed by the configured repos."""
+    settings = get_settings()
+    return SpecService(
+        SQLAlchemySpecRepository(),
+        SQLAlchemyTsgRepository(),
+        sync_interval=settings.sync.spec_sync_interval,
+    )
 
 
 def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:

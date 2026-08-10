@@ -98,3 +98,33 @@ def test_factory_zero_override_disables(monkeypatch) -> None:
         assert service._max_tdoc_size_bytes == 0
     finally:
         get_settings.cache_clear()
+
+
+def test_build_spec_service_wires_settings(monkeypatch, tmp_path) -> None:
+    """``build_spec_service`` wires ``settings.sync.spec_sync_interval``
+    into :class:`SpecService` and uses the configured repos.
+
+    Pins ``spec_sync_interval`` via a TOML config file (mirrors the
+    convention used by the other factory tests in this module) and
+    asserts the service picks up the parsed ``timedelta``.
+    """
+    from datetime import timedelta
+
+    from doc3gpp.config import get_settings
+    from doc3gpp.services.factory import build_spec_service
+
+    config_path = tmp_path / "doc3gpp-factory-spec.toml"
+    config_path.write_text(
+        "[sync]\nspec_sync_interval = \"12h\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
+    get_settings.cache_clear()
+    try:
+        svc = build_spec_service()
+        assert svc is not None
+        assert svc._sync_interval == timedelta(hours=12)
+        assert svc._repository is not None
+        assert svc._tsg_repository is not None
+    finally:
+        get_settings.cache_clear()

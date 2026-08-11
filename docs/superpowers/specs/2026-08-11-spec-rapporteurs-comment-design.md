@@ -51,7 +51,7 @@ For 38.508-1 this yields `"Ericsson LM"`.
 
 | Column        | Type          | Notes |
 | ------------- | ------------- | ----- |
-| `rapporteurs` | `String(512)` | Comma-joined company names from the detail page rapporteurs grid. Nullable. |
+| `rapporteurs` | `String(128)` | Comma-joined company names from the detail page rapporteurs grid. Nullable. Normally a single company, so 128 is ample. |
 
 ### 3.2 `spec_versions` — drop `comment`
 
@@ -68,7 +68,7 @@ create it; existing databases get it dropped via migration (see §5).
 
 ### 4.2 `storage/db/models.py`
 
-- `SpecORM`: add `rapporteurs: Mapped[str | None] = mapped_column(String(512), nullable=True)`.
+- `SpecORM`: add `rapporteurs: Mapped[str | None] = mapped_column(String(128), nullable=True)`.
 - `SpecVersionORM`: remove the `comment` column.
 
 ### 4.3 `parsers/spec_parser.py`
@@ -93,7 +93,7 @@ Add `_migrate_spec_rapporteurs()` and `_migrate_spec_versions_drop_comment()`
 following the `_migrate_tsg_spec_last_sync` probe pattern:
 
 - `_migrate_spec_rapporteurs`: if `specs` exists and `PRAGMA table_info(specs)`
-  lacks `rapporteurs`, `ALTER TABLE specs ADD COLUMN rapporteurs VARCHAR(512)`.
+  lacks `rapporteurs`, `ALTER TABLE specs ADD COLUMN rapporteurs VARCHAR(128)`.
 - `_migrate_spec_versions_drop_comment`: if `spec_versions` exists and
   `PRAGMA table_info(spec_versions)` has `comment`,
   `ALTER TABLE spec_versions DROP COLUMN comment`. SQLite 3.35+ supports

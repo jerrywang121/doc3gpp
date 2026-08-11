@@ -593,13 +593,14 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       (FK → `tsgs.short_name`, indexed for the `--tsg` filter),
       `wis` (nullable text — comma-joined related WI ids, extracted
       from the DynaReport detail page; deliberately **not** a join
-      table so the schema stays flat), `last_synced_at`. One row per
-      dotted spec id.
+      table so the schema stays flat), `rapporteurs` (nullable text —
+      comma-joined company names from the detail page rapporteurs
+      grid), `last_synced_at`. One row per dotted spec id.
 - `spec_versions`:
     - `(spec_id, version)` composite PK, `release`, `ftp_url`, `pdf_url`,
       `meeting_id` (nullable), `meeting_name`, `upload_date`, `crs`
       (nullable comma-joined TDoc ids from the per-version CR list
-      page), `comment`, `version_id`, `wki_id`, `last_synced_at`.
+      page), `version_id`, `wki_id`, `last_synced_at`.
       `spec_id` FK → `specs.spec_id` with `ondelete="CASCADE"` so
       wiping a header row clears every cached version. No FK to
       `meetings` — `meeting_id` is a snapshot of the upstream page

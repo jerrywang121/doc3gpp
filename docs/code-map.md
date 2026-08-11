@@ -104,7 +104,7 @@ table below is for navigation only.
 | `SQLAlchemyTDocCrChangeDetailsRepository` | class | `storage/repositories/tdoc_cr_change_details_sql.py` | SQL impl of the body-change sidecar. |
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of `TsgRepository`. |
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of `WiRepository`. |
-| `SQLAlchemySpecRepository` | class | `storage/repositories/spec_sql.py` | SQL impl of `SpecRepository`. Owns `specs` (header) + `spec_versions` (one row per `(spec_id, version)`); `upsert(spec)` writes the header row, `upsert_versions(versions)` writes the per-version rows (PARAMS-bound via SQLAlchemy `insert` with `ON CONFLICT DO UPDATE`), `list(filters)` applies the rich filter grammar, `get(spec_id)` / `list_versions(spec_id)` are the lookups used by `spec show`. |
+| `SQLAlchemySpecRepository` | class | `storage/repositories/spec_sql.py` | SQL impl of `SpecRepository`. Owns `specs` (header, incl. `rapporteurs`) + `spec_versions` (one row per `(spec_id, version)`); `upsert(spec)` writes the header row, `upsert_versions(versions)` writes the per-version rows (PARAMS-bound via SQLAlchemy `insert` with `ON CONFLICT DO UPDATE`), `list(filters)` applies the rich filter grammar, `get(spec_id)` / `list_versions(spec_id)` are the lookups used by `spec show`. |
 | `_apply_text_filter` / `_apply_date_filter` | helpers | `storage/repositories/tdoc_sql.py` | SQLAlchemy helpers that consume `cli_filters.DATE_FILTER_RE` and the rich-filter grammar. |
 | `configure_sqlite_engine` | function | `storage/backends/sqlite.py` | SQLite engine configuration (sole backend). |
 

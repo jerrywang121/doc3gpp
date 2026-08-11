@@ -47,6 +47,7 @@ trigger at the start of `spec sync`.
 | `initial_release` | `String(16)`   | Normalised from `#initialPlannedReleaseVal` (e.g. `Release 20` → `Rel-20`, `Release 9` → `Rel-9`, `R99` → `R99`). |
 | `tsg`             | `String(16) FK → tsgs.short_name` | Owning TSG (e.g. `R5`). Indexed. |
 | `wis`             | `String(512)`  | Comma-joined related-WI acronyms from the detail page's related-WIs grid. Point-in-time snapshot (not a live join against `wis`). |
+| `rapporteurs`     | `String(128)`  | Comma-joined company names from the detail page's rapporteurs grid. Nullable. |
 | `last_synced_at`  | `DateTime(tz)` | UTC of last successful detail fetch (per spec row). |
 
 `spec_id` is a 1:1 PK on the spec identity used in URLs and TDoc
@@ -68,7 +69,6 @@ is never stored.
 | `version_id`   | `Integer`      | From the `?versionId=` parameter in the row's `imgRelatedCRs` link. Used to build the CR list URL. |
 | `pdf_url`      | `String(1024)` | From the ETSI fetch. Nullable. |
 | `crs`          | `Text`         | Comma-joined `tdoc_id`s from the 3GPP CR list page (e.g. `R5-253030,R5-253031`). Nullable. |
-| `comment`      | `String(256)`  | From the row's `Comment` cell. Nullable. |
 
 PK: `(spec_id, version)`. One row per (spec, version) — re-syncing
 the same pair is idempotent.

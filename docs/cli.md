@@ -1882,7 +1882,7 @@ Default output fields (configurable via `[output] fields.spec` in
 `doc3gpp.toml`):
 
 - `spec_id`, `type`, `title`, `status`, `radio_tech`, `initial_release`,
-  `tsg`, `wis`
+  `tsg`, `wis`, `rapporteurs`
 
 Filter grammar: every filter flag accepts the rich filter grammar used
 by the other list commands — `null` / `not-null` / `!pattern` / plain
@@ -1925,6 +1925,9 @@ Behavior:
   `doc3gpp spec sync --tsg <tsg>` so the user can populate the cache.
 - Pushes the version rows via `SpecRepository.list_versions` and
   renders header + versions in the requested format.
+- The header includes `rapporteurs` (comma-joined company names,
+  omitted when absent); the per-version rows no longer carry a
+  `comment` field.
 - The JSON payload nests the header under a `"spec"` key and the
   version rows under a `"versions"` key so downstream consumers parse
   the shape without consulting multiple tables.

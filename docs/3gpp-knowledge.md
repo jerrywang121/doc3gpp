@@ -383,6 +383,8 @@ flow through `SpecService` → `SQLAlchemySpecRepository` →
   on every header row as a FK into `tsgs.short_name`.
 - `wis` (str | None) — comma-joined related WI ids from the
   detail page; stored as a flat text column (no join table).
+- `rapporteurs` (str | None) — comma-joined company names from the
+  detail page rapporteurs grid; `None` when absent.
 - `last_synced_at` (datetime) — UTC timestamp of the last
   successful per-spec upsert.
 
@@ -406,8 +408,6 @@ flow through `SpecService` → `SQLAlchemySpecRepository` →
 - `crs` (str | None) — comma-joined TDoc ids from the per-version
   CR list page (cached; refreshed when the upload date is within
   the last 90 days OR when the cached `crs` is empty).
-- `comment` (str | None) — free-text comment from the version
-  row.
 - `version_id` (int | None) — DynaReport `version_id` parameter
   used to fetch the CR list HTML.
 - `wki_id` (int | None) — DynaReport `wki_id` parameter used to

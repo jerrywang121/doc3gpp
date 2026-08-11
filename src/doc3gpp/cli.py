@@ -4079,9 +4079,13 @@ def spec_show(
 
     if fmt == "json":
         payload = {
-            "spec": {f: getattr(spec, f) for f in header_fields},
+            "spec": {
+                f: _serialise_show_value(getattr(spec, f)) for f in header_fields
+            },
             "versions": [
-                {f: getattr(v, f) for f in version_fields}
+                {
+                    f: _serialise_show_value(getattr(v, f)) for f in version_fields
+                }
                 for v in versions
             ],
         }

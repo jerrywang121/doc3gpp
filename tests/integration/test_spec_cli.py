@@ -8,6 +8,7 @@ exercised without any network or schema bootstrap.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from unittest.mock import MagicMock
 
 import tqdm
@@ -233,6 +234,31 @@ def test_spec_show_json(monkeypatch) -> None:
     assert result.exit_code == 0, result.stdout
     assert "36.579-5" in result.stdout
     assert "18.3.0" in result.stdout
+
+
+def test_spec_show_json_serialises_upload_date(monkeypatch) -> None:
+    """``--format json`` must not crash on a ``date`` upload_date field."""
+    spec = Spec(
+        spec_id="36.579-5",
+        type="TS",
+        title="NR conformance",
+        tsg="R5",
+    )
+    version = SpecVersion(
+        spec_id="36.579-5",
+        version="18.3.0",
+        ftp_url="https://www.3gpp.org/ftp/Specs/archive/36_series/36.579-5.zip",
+        release="Rel-18",
+        upload_date=date(2026, 5, 1),
+    )
+    svc = MagicMock()
+    svc.get.return_value = spec
+    svc.list_versions.return_value = [version]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "json"])
+    assert result.exit_code == 0, result.stdout
+    assert '"upload_date": "2026-05-01"' in result.stdout
 
 
 def test_spec_show_table(monkeypatch) -> None:

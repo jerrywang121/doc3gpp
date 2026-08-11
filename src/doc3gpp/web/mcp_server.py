@@ -351,7 +351,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.wi_rows(wis, _WI_FIELDS))
 
     # ---- Specs ----------------------------------------------------
-    @server.tool(name="list_specs", description="List 3GPP specifications, optionally filtered by TSG, type, spec id, title, status, radio technology, initial release or related WIs. The spec_id, title, status, radio_tech, initial_release and wis filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec_id='36.579%' matches any spec id starting with '36.579'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="list_specs", description="List 3GPP specifications, optionally filtered by TSG, type, spec id, title, status, radio technology, initial release, related WIs or rapporteurs. The spec_id, title, status, radio_tech, initial_release, wis and rapporteurs filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec_id='36.579%' matches any spec id starting with '36.579'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def list_specs(
         tsg: Annotated[str | None, Field(description="TSG short name filter (e.g. 'R5').")] = None,
@@ -362,13 +362,14 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         radio_tech: Annotated[str | None, Field(description="Rich filter pattern on radio technologies.")] = None,
         initial_release: Annotated[str | None, Field(description="Rich filter pattern on the initial release (e.g. 'Rel-20').")] = None,
         wis: Annotated[str | None, Field(description="Rich filter pattern on related WIs.")] = None,
+        rapporteurs: Annotated[str | None, Field(description="Rich filter pattern on rapporteurs.")] = None,
         limit: Annotated[int, Field(description="Maximum number of specs to return.")] = 50,
         offset: Annotated[int, Field(description="Number of specs to skip for pagination.")] = 0,
     ) -> str:
         specs = services.spec.list_recent(
             limit=limit, offset=offset, tsg=tsg, type=type, spec_id=spec_id,
             title=title, status=status, radio_tech=radio_tech,
-            initial_release=initial_release, wis=wis,
+            initial_release=initial_release, wis=wis, rapporteurs=rapporteurs,
         )
         return _to_json(render.spec_rows(specs, _SPEC_FIELDS))
 

@@ -447,6 +447,25 @@ def test_list_specs_tool(sqlite_env) -> None:
     assert payload[0]["spec_id"] == "36.579-5"
 
 
+def test_list_specs_rapporteurs_filter(sqlite_env) -> None:
+    """``list_specs`` accepts and applies the rapporteurs filter."""
+    import asyncio
+
+    _state_and_server()  # runs create_schema()
+    _seed_spec_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_specs", {"rapporteurs": "not-null"})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    import json
+
+    payload = json.loads(result.content[0].text)
+    assert payload == []
+
+
 def test_get_spec_tool(sqlite_env) -> None:
     """``get_spec`` MCP tool returns spec + version rows for a seeded spec."""
     import asyncio

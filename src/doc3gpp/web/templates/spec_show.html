@@ -1,11 +1,9 @@
 {% extends "base.html" %}
 {% block title %}doc3gpp · spec {{ spec.spec_id }}{% endblock %}
 {% block content %}
-  <h1>{{ spec.title or spec.spec_id }}</h1>
+  <h1>{{ spec.type or '' }} {{ spec.spec_id }} : {{ spec.title or '' }}</h1>
   <p class="meta">
-    ID <code>{{ spec.spec_id }}</code>
-    · Type <code>{{ spec.type }}</code>
-    {% if spec.tsg %} · TSG <code>{{ spec.tsg }}</code>{% endif %}
+    {% if spec.tsg %}TSG {{ spec.tsg }}{% endif %}
   </p>
 
   <dl class="kv">

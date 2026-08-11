@@ -131,8 +131,6 @@ list[SpecVersion])`:
       mapping in §3.5 (the `&release=` parameter is the 3GPP-
       internal release id and is not surfaced).
   - `upload_date` ← next-cell `YYYY-MM-DD` text.
-  - `comment` ← next-cell `.lblRemarkText` text (truncated to
-    256 chars).
 
 ### 3.3 Per-version follow-up fetches
 
@@ -329,7 +327,7 @@ under a new `spec_app` typer (three total):
 |---|---|
 | `doc3gpp spec sync --tsg R5 [--force]` | Triggers the full list+detail+follow-up fetch. Honours `settings.sync.spec_sync_interval` (default 24h): a second sync within the interval is skipped with a `SyncOutcome(status="skipped", reason=...)` unless `--force` is passed. |
 | `doc3gpp spec list [--tsg] [--type TS|TR] [--spec-id] [--title] [--status] [--radio-tech] [--initial-release] [--wis] [--limit N] [--offset N] [--format table\|json\|markdown] [--output FILE] [--compact]` | Mirrors `tdoc list` and `wi list`. All text columns use the rich-filter grammar (`null` / `not-null` / `!pattern` / plain `LIKE`). |
-| `doc3gpp spec show --spec-id {spec_id} [--format table\|json\|markdown] [--output FILE] [--compact]` | Renders header + version table (per-version: version, release, ftp_url, meeting_id, meeting_name, upload_date, pdf_url, crs count, comment). |
+| `doc3gpp spec show --spec-id {spec_id} [--format table\|json\|markdown] [--output FILE] [--compact]` | Renders header + version table (per-version: version, release, ftp_url, meeting_id, meeting_name, upload_date, pdf_url, crs count). |
 
 `spec_app` is registered in `cli.py` next to `wi_app`. The default
 TSG constant `DEFAULT_TSG = "r5"` is reused.
@@ -347,9 +345,9 @@ TSG constant `DEFAULT_TSG = "r5"` is reused.
   ftp_url / pdf_url / CR list / tdoc_id anchor pages.
 - `JSONResponse` branch on both routes for `?format=json`. Default
   fields exposed: `spec_id, type, title, status, radio_tech,
-  initial_release, tsg, wis` (header) + `version, release, ftp_url,
-  meeting_id, meeting_name, upload_date, pdf_url, crs, comment`
-  (versions).
+   initial_release, tsg, wis` (header) + `version, release, ftp_url,
+   meeting_id, meeting_name, upload_date, pdf_url, crs`
+   (versions).
 
 ### MCP
 

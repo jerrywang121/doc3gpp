@@ -322,11 +322,12 @@ class SpecService:
         radio_tech: str | None = None,
         initial_release: str | None = None,
         wis: str | None = None,
+        rapporteurs: str | None = None,
     ) -> list[Spec]:
         return self._repository.list(
             limit=limit, offset=offset, tsg=tsg, type=type, spec_id=spec_id,
             title=title, status=status, radio_tech=radio_tech,
-            initial_release=initial_release, wis=wis,
+            initial_release=initial_release, wis=wis, rapporteurs=rapporteurs,
         )
 
     def get(self, spec_id: str) -> Spec | None:

@@ -146,15 +146,14 @@ class SQLAlchemySpecRepository:
         offset: int = 0,
     ) -> list[SpecVersion]:
         with self._session_factory() as session:
-            stmt = (
-                select(SpecVersionORM)
-                .where(SpecVersionORM.spec_id == spec_id)
-                .order_by(SpecVersionORM.version.desc())
-                .offset(offset)
-                .limit(limit)
-            )
+            stmt = select(SpecVersionORM).where(SpecVersionORM.spec_id == spec_id)
             rows = session.scalars(stmt).all()
-        return [_orm_to_version(r) for r in rows]
+        versions = [_orm_to_version(r) for r in rows]
+        # Version strings are ``#.#.#`` (e.g. ``18.10.1``), so a plain
+        # string sort would rank ``18.2.1`` above ``18.10.1``. Sort by
+        # the numeric tuple instead, newest first.
+        versions.sort(key=_version_sort_key, reverse=True)
+        return versions[offset : offset + limit]
 
 
 def _orm_to_spec(row: SpecORM) -> Spec:
@@ -185,6 +184,22 @@ def _orm_to_version(row: SpecVersionORM) -> SpecVersion:
         pdf_url=row.pdf_url,
         crs=row.crs,
     )
+
+
+def _version_sort_key(version: SpecVersion) -> tuple[int, ...]:
+    """Return a numeric sort key for a ``#.#.#`` version string.
+
+    ``18.10.1`` must sort newer than ``18.2.1``, which a lexicographic
+    string sort would get wrong. Non-numeric segments fall back to ``0``
+    so the key is always comparable.
+    """
+    parts: list[int] = []
+    for segment in version.version.split("."):
+        try:
+            parts.append(int(segment))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

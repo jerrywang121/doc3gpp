@@ -12,7 +12,7 @@
     {% if spec.status %}<dt>Status</dt><dd>{{ spec.status }}</dd>{% endif %}
     {% if spec.radio_tech %}<dt>Radio tech</dt><dd>{{ spec.radio_tech }}</dd>{% endif %}
     {% if spec.initial_release %}<dt>Initial release</dt><dd>{{ spec.initial_release }}</dd>{% endif %}
-    {% if spec.wis %}<dt>WIs</dt><dd>{{ spec.wis }}</dd>{% endif %}
+    {% if spec.wis %}<dt>WIs</dt><dd class="wrap-csv">{{ spec.wis | wrap_csv(150) }}</dd>{% endif %}
     {% if spec.rapporteurs %}<dt>Rapporteurs</dt><dd>{{ spec.rapporteurs }}</dd>{% endif %}
     {% if spec.last_synced_at %}<dt>Last synced</dt><dd>{{ spec.last_synced_at | dt_short }} <span class="muted">UTC</span></dd>{% endif %}
   </dl>
@@ -27,7 +27,7 @@
           <th>Upload date</th>
           <th>Meeting</th>
           <th>CRs</th>
-          <th>FTP</th>
+          <th>ZIP</th>
           <th>PDF</th>
         </tr>
       </thead>
@@ -47,7 +47,7 @@
             </td>
             <td>
               {% if v.crs %}
-                <span title="{{ v.crs }}">{{ cr_count }}</span>
+                <span class="copy-cell" title="{{ v.crs }}" data-copy="{{ v.crs }}">{{ cr_count }}</span>
               {% else %}
                 -
               {% endif %}
@@ -65,4 +65,5 @@
   {% else %}
     <p class="empty">No versions stored for this spec.</p>
   {% endif %}
+  <script src="/static/js/spec_clipboard.js" defer></script>
 {% endblock %}

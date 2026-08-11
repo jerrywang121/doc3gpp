@@ -1,10 +1,10 @@
 <div id="results" hx-target="this" hx-swap="outerHTML">
   {% if specs %}
-    <table class="grid">
+    <table class="grid spec-grid">
       <thead>
         <tr>
-          <th>Spec ID</th>
           <th>Type</th>
+          <th>Spec ID</th>
           <th>Title</th>
           <th>Status</th>
           <th>Radio tech</th>
@@ -18,15 +18,27 @@
       <tbody>
         {% for spec in specs %}
           <tr>
-            <td><code>{{ spec.spec_id }}</code></td>
             <td>{{ spec.type or '-' }}</td>
+            <td><code><a href="https://www.3gpp.org/DynaReport/{{ spec.spec_id }}.htm" target="_blank" rel="noopener">{{ spec.spec_id }}</a></code></td>
             <td>{{ spec.title or '-' }}</td>
             <td>{{ spec.status or '-' }}</td>
             <td>{{ spec.radio_tech or '-' }}</td>
             <td>{{ spec.initial_release or '-' }}</td>
             <td><code>{{ spec.tsg or '-' }}</code></td>
-            <td>{{ spec.wis or '-' }}</td>
-            <td>{{ spec.rapporteurs or '-' }}</td>
+            <td>
+              {% if spec.wis and spec.wis | length > 32 %}
+                <span class="copy-cell" title="{{ spec.wis }}" data-copy="{{ spec.wis }}">{{ spec.wis | truncate_csv(32) }}</span>
+              {% else %}
+                {{ spec.wis or '-' }}
+              {% endif %}
+            </td>
+            <td>
+              {% if spec.rapporteurs and spec.rapporteurs | length > 32 %}
+                <span class="copy-cell" title="{{ spec.rapporteurs }}" data-copy="{{ spec.rapporteurs }}">{{ spec.rapporteurs | truncate_csv(32) }}</span>
+              {% else %}
+                {{ spec.rapporteurs or '-' }}
+              {% endif %}
+            </td>
             <td><a href="/specs/{{ spec.spec_id }}">show</a></td>
           </tr>
         {% endfor %}

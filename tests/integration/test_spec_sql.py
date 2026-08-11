@@ -76,6 +76,24 @@ def test_upsert_versions_round_trip(session_factory) -> None:
     assert got[1].version == "17.1.0"
 
 
+def test_list_versions_orders_numerically_desc(session_factory) -> None:
+    """``list_versions`` sorts by numeric version, newest first.
+
+    ``18.10.1`` must rank above ``18.2.1`` even though a lexicographic
+    string sort would place ``18.2.1`` first.
+    """
+    repo = SQLAlchemySpecRepository(session_factory)
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="T"))
+    versions = [
+        SpecVersion(spec_id="36.579-5", version="18.2.1", ftp_url="u1"),
+        SpecVersion(spec_id="36.579-5", version="18.10.1", ftp_url="u2"),
+        SpecVersion(spec_id="36.579-5", version="18.3.0", ftp_url="u3"),
+    ]
+    repo.upsert_versions(versions)
+    got = repo.list_versions("36.579-5")
+    assert [v.version for v in got] == ["18.10.1", "18.3.0", "18.2.1"]
+
+
 def test_list_versions_is_idempotent(session_factory) -> None:
     repo = SQLAlchemySpecRepository(session_factory)
     repo.upsert(Spec(spec_id="s1", type="TS", title="T"))

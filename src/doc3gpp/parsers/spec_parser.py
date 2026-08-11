@@ -104,6 +104,7 @@ def parse_spec_detail(
             radio_tech = ",".join(checked)
 
     wis = _extract_related_wis(soup)
+    rapporteurs = _extract_rapporteurs(soup)
 
     header = Spec(
         spec_id=spec_id,
@@ -114,6 +115,7 @@ def parse_spec_detail(
         initial_release=initial_release,
         tsg=tsg.upper(),
         wis=wis,
+        rapporteurs=rapporteurs,
     )
 
     versions: list[SpecVersion] = []
@@ -176,6 +178,23 @@ def _extract_related_wis(soup: BeautifulSoup) -> str | None:
     return ",".join(acronyms) if acronyms else None
 
 
+def _extract_rapporteurs(soup: BeautifulSoup) -> str | None:
+    grid = soup.find(id="specificationRapporteurs_rdGridRapporteurs_ctl00")
+    if grid is None:
+        return None
+    companies: list[str] = []
+    for row in grid.find_all(
+        "tr", class_=lambda c: c and ("rgRow" in c or "rgAltRow" in c)
+    ):
+        cell = row.find("td", class_="companyStyleColumn")
+        if cell is None:
+            continue
+        text = _normalize(cell.get_text())
+        if text and text not in companies:
+            companies.append(text)
+    return ",".join(companies) if companies else None
+
+
 def _parse_version_row(spec_id: str, version: str, row) -> SpecVersion:
     ftp_anchor = row.find("a", id=lambda v: v and "lnkFtpDownload" in v)
     ftp_url = ftp_anchor.get("href", "") if ftp_anchor else ""
@@ -212,11 +231,6 @@ def _parse_version_row(spec_id: str, version: str, row) -> SpecVersion:
             upload_date = date.fromisoformat(text)
             break
 
-    comment: str | None = None
-    remark = row.find(class_="lblRemarkText")
-    if remark is not None:
-        comment = _normalize(remark.get_text())[:256] or None
-
     release = release_from_version(version) if version else None
 
     return SpecVersion(
@@ -228,7 +242,6 @@ def _parse_version_row(spec_id: str, version: str, row) -> SpecVersion:
         meeting_name=meeting_name,
         upload_date=upload_date,
         version_id=version_id,
-        comment=comment,
         wki_id=wki_id,
     )
 

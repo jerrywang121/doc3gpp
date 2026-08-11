@@ -51,6 +51,7 @@ def test_parse_spec_detail_header_wis_telerik_grid() -> None:
     assert header.status == "Under change control"
     assert header.initial_release == "Rel-15"
     assert header.radio_tech == "LTE,5G"
+    assert header.rapporteurs == "Ericsson LM"
     assert len(versions) == 1
 
 
@@ -66,7 +67,6 @@ def test_parse_spec_detail_versions() -> None:
     assert v0.version_id == 92276
     assert v0.wki_id == 12345
     assert v0.upload_date.isoformat() == "2025-06-01"
-    assert v0.comment == "Some comment here"
     v1 = versions[1]
     assert v1.release == "Rel-17"
     assert v1.meeting_id == 100

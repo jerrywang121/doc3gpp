@@ -19,6 +19,7 @@ class Spec:
         initial_release: Normalised release marker (e.g. ``Rel-20``, ``R99``).
         tsg: Owning TSG short name FK to ``tsgs.short_name``.
         wis: Comma-joined related-WI acronyms (point-in-time snapshot).
+        rapporteurs: Comma-joined company names from the detail page rapporteurs grid (e.g. ``Ericsson LM``).
         last_synced_at: UTC of the last **successful** detail-page sync
             (parsed + wis extracted + ETSI/CR follow-ups fetched + both
             header and ``spec_versions`` rows written). ``None`` when the
@@ -36,6 +37,7 @@ class Spec:
     initial_release: str | None = None
     tsg: str | None = None
     wis: str | None = None
+    rapporteurs: str | None = None
     last_synced_at: datetime | None = None
 
 
@@ -58,7 +60,6 @@ class SpecVersion:
         version_id: ``?versionId=`` param used to build the CR list URL.
         pdf_url: ETSI "download as PDF" link (nullable).
         crs: Comma-joined ``tdoc_id``s from the CR list page (nullable).
-        comment: From the row's ``Comment`` cell (nullable).
         wki_id: Transient ETSI work-item id (not persisted).
     """
 
@@ -72,5 +73,4 @@ class SpecVersion:
     version_id: int | None = None
     pdf_url: str | None = None
     crs: str | None = None
-    comment: str | None = None
     wki_id: int | None = None

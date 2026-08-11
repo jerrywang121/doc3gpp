@@ -1874,6 +1874,7 @@ Options:
 - --radio-tech: rich filter on radio technologies.
 - --initial-release: rich filter on initial release.
 - --wis: rich filter on related WIs (comma-joined).
+- --rapporteurs: rich filter on rapporteurs (comma-joined company names).
 - --format: see `Common list output options` below (table | json | markdown).
 - --output, -o PATH: write results to PATH instead of stdout.
 - --compact: strip output formatting (see `Compact output` below).

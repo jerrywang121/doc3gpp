@@ -5,6 +5,7 @@ def test_normalise_release_forms() -> None:
     assert normalise_release("Release 20") == "Rel-20"
     assert normalise_release("Release 9") == "Rel-9"
     assert normalise_release("R99") == "R99"
+    assert normalise_release("Release 1999") == "R99"
     assert normalise_release("Rel-17") == "Rel-17"
     assert normalise_release("draft") == "draft"
     assert normalise_release("pre-release") == "pre-release"

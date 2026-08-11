@@ -17,6 +17,7 @@ def normalise_release(text: str) -> str:
 
     - ``"Release 20"`` → ``"Rel-20"``
     - ``"Release 9"``  → ``"Rel-9"``
+    - ``"Release 1999"`` → ``"R99"`` (special pre-Rel-4 marker)
     - ``"R99"``        → ``"R99"`` (passed through; pre-Rel-4 marker)
     - ``"draft"`` / ``"pre-release"`` / already-canonical values pass through.
     - Empty / whitespace → empty string.
@@ -28,7 +29,7 @@ def normalise_release(text: str) -> str:
         return stripped
     match = re.fullmatch(r"Release\s+(\d+)", stripped, flags=re.IGNORECASE)
     if match:
-        return f"Rel-{match.group(1)}"
+        return "R99" if match.group(1) == "1999" else f"Rel-{match.group(1)}"
     return stripped
 
 

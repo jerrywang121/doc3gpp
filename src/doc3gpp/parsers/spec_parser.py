@@ -87,10 +87,19 @@ def parse_spec_detail(
     radio_tech_vals = soup.find(id="radioTechnologyVals")
     radio_tech: str | None = None
     if radio_tech_vals is not None:
-        checked = [
-            _normalize(lbl.get_text())
-            for lbl in radio_tech_vals.find_all("label")
-        ]
+        checked = []
+        for span in radio_tech_vals.find_all("span"):
+            checkbox = span.find("input", type="checkbox")
+            label = span.find("label")
+            if checkbox is None or label is None:
+                continue
+            if checkbox.get("checked") is not None:
+                checked.append(_normalize(label.get_text()))
+        if not checked:
+            checked = [
+                _normalize(lbl.get_text())
+                for lbl in radio_tech_vals.find_all("label")
+            ]
         if checked:
             radio_tech = ",".join(checked)
 
@@ -137,10 +146,29 @@ def _spec_type_from_id(spec_id: str) -> str:
 
 
 def _extract_related_wis(soup: BeautifulSoup) -> str | None:
-    grid = soup.find(id="relatedWIs") or soup.find(id="relatedWorkItems")
+    grid = (
+        soup.find(id="SpecificationRelatedWorkItems_relatedWiGrid")
+        or soup.find(id="relatedWIs")
+        or soup.find(id="relatedWorkItems")
+    )
     if grid is None:
         return None
-    acronyms: list[str] = []
+
+    telerik_rows = grid.find_all(
+        "tr", class_=lambda c: c and ("rgRow" in c or "rgAltRow" in c)
+    )
+    if telerik_rows:
+        acronyms: list[str] = []
+        for row in telerik_rows:
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            text = _normalize(cells[1].get_text())
+            if text and text not in acronyms:
+                acronyms.append(text)
+        return ",".join(acronyms) if acronyms else None
+
+    acronyms = []
     for span in grid.find_all("span"):
         text = _normalize(span.get_text())
         if text and text not in acronyms:

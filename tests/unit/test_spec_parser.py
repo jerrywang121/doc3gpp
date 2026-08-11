@@ -39,6 +39,21 @@ def test_parse_spec_detail_header_fields() -> None:
     assert header.tsg == "R5"
 
 
+PORTAL_FIXTURE = (
+    Path(__file__).parent.parent / "fixtures" / "spec_pages" / "R5_detail_portal.html"
+)
+
+
+def test_parse_spec_detail_header_wis_telerik_grid() -> None:
+    html = PORTAL_FIXTURE.read_text(encoding="utf-8")
+    header, versions = parse_spec_detail(html, "38.508-1", "R5")
+    assert header.wis == "5GS_NR_LTE-UEConTest,NR_SA-UEConTest"
+    assert header.status == "Under change control"
+    assert header.initial_release == "Rel-15"
+    assert header.radio_tech == "LTE,5G"
+    assert len(versions) == 1
+
+
 def test_parse_spec_detail_versions() -> None:
     html = DETAIL_FIXTURE.read_text(encoding="utf-8")
     header, versions = parse_spec_detail(html, "36.579-5", "R5")

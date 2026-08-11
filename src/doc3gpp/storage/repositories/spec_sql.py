@@ -108,6 +108,7 @@ class SQLAlchemySpecRepository:
         radio_tech: str | None = None,
         initial_release: str | None = None,
         wis: str | None = None,
+        rapporteurs: str | None = None,
     ) -> list[Spec]:
         with self._session_factory() as session:
             stmt = select(SpecORM)
@@ -127,6 +128,8 @@ class SQLAlchemySpecRepository:
                 stmt = apply_text_filter(stmt, SpecORM.initial_release, initial_release)
             if wis:
                 stmt = apply_text_filter(stmt, SpecORM.wis, wis)
+            if rapporteurs:
+                stmt = apply_text_filter(stmt, SpecORM.rapporteurs, rapporteurs)
             stmt = stmt.order_by(SpecORM.spec_id).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()
         return [_orm_to_spec(r) for r in rows]

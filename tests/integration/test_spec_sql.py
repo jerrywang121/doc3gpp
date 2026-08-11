@@ -168,3 +168,18 @@ def test_list_rich_filters(session_factory) -> None:
     assert [s.spec_id for s in repo.list(spec_id="36.579-5")] == ["36.579-5"]
     assert [s.spec_id for s in repo.list(status="Draft")] == ["38.760-1"]
     assert [s.spec_id for s in repo.list(initial_release="Rel-20")] == []
+
+
+def test_list_rapporteurs_filter(session_factory) -> None:
+    repo = SQLAlchemySpecRepository(session_factory)
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5", rapporteurs="Ericsson LM"))
+    repo.upsert(Spec(spec_id="38.760-1", type="TR", title="Study", tsg="R5", rapporteurs="Nokia"))
+    repo.upsert(Spec(spec_id="38.761-1", type="TR", title="Other", tsg="R5"))
+    # LIKE
+    assert [s.spec_id for s in repo.list(rapporteurs="%Ericsson%")] == ["36.579-5"]
+    # negated (NULL rows are excluded: NULL NOT LIKE ... is NULL in SQL)
+    assert [s.spec_id for s in repo.list(rapporteurs="!%Nokia%")] == ["36.579-5"]
+    # not-null
+    assert [s.spec_id for s in repo.list(rapporteurs="not-null")] == ["36.579-5", "38.760-1"]
+    # null
+    assert [s.spec_id for s in repo.list(rapporteurs="null")] == ["38.761-1"]

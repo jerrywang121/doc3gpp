@@ -365,6 +365,7 @@ class SpecRepository(Protocol):
         radio_tech: str | None = None,
         initial_release: str | None = None,
         wis: str | None = None,
+        rapporteurs: str | None = None,
     ) -> list[Spec]:
         """Return stored specs matching the filters.
 

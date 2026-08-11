@@ -2347,3 +2347,17 @@ def test_get_specs_forwards_rapporteurs_filter(client: TestClient) -> None:
         client.app.dependency_overrides.pop(get_spec_service, None)
     assert response.status_code == 200
     assert captured["rapporteurs"] == "%Ericsson%"
+
+
+def test_get_specs_renders_rapporteurs_column(client: TestClient) -> None:
+    """The spec results table shows a Rapporteurs column with cell values."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs", headers={"HX-Request": "true"})
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert "<th>Rapporteurs</th>" in response.text
+    assert "Ericsson LM" in response.text

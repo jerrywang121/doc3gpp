@@ -11,6 +11,7 @@
           <th>Initial release</th>
           <th>TSG</th>
           <th>WIs</th>
+          <th>Rapporteurs</th>
           <th></th>
         </tr>
       </thead>
@@ -25,6 +26,7 @@
             <td>{{ spec.initial_release or '-' }}</td>
             <td><code>{{ spec.tsg or '-' }}</code></td>
             <td>{{ spec.wis or '-' }}</td>
+            <td>{{ spec.rapporteurs or '-' }}</td>
             <td><a href="/specs/{{ spec.spec_id }}">show</a></td>
           </tr>
         {% endfor %}

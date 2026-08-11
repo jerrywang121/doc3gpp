@@ -102,7 +102,7 @@ class SpecService:
 
         synced = 0
         version_total = 0
-        workers = self._max_workers or min(32, (os.cpu_count() or 4) + 4)
+        workers = self._max_workers or min(8, (os.cpu_count() or 4) + 4)
         # One shared client for the entire sweep: opening a fresh
         # ScraperClient per spec cost ~95 separate httpx clients (one per
         # spec + the list page), each paying a TLS + DNS + connect

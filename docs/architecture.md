@@ -631,6 +631,15 @@ Engine kwargs are applied in `src/doc3gpp/storage/db/session.py` via:
 
 - `src/doc3gpp/storage/backends/sqlite.py`
 
+Every SQLite connection runs in **WAL journal mode** with a 5s
+`busy_timeout` (set in the `Engine "connect"` listener alongside
+`PRAGMA foreign_keys=ON`). WAL lets concurrent readers/writers proceed
+without blocking and a busy writer waits for the lock instead of failing
+immediately — this makes the thread-pool spec sync safe against
+mid-write interruption (a Ctrl-C that previously tore the DB header
+page). A side effect is that a live DB has `-wal` / `-shm` sidecar
+files; `db reset` removes stale sidecars before recreating the schema.
+
 ## CLI Surface
 
 Implemented command groups in `src/doc3gpp/cli.py` (seven groups,

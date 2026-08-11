@@ -182,9 +182,16 @@ def test_db_reset_removes_wal_sidecar_files(sqlite_env) -> None:
     result = runner.invoke(app, ["db", "reset", "--yes"])
     assert result.exit_code == 0, result.output
 
-    assert not db_path.with_name(db_path.name + "-wal").exists()
-    assert not db_path.with_name(db_path.name + "-shm").exists()
+    # The stale sidecars are removed. WAL mode is the default, so a fresh
+    # -wal/-shm pair is legitimately recreated by the post-reset schema
+    # bootstrap — but it must not contain the forged stale bytes, and the
+    # rollback -journal (unused in WAL mode) must be gone entirely.
     assert not db_path.with_name(db_path.name + "-journal").exists()
+    for suffix in ("-wal", "-shm"):
+        sidecar = db_path.with_name(db_path.name + suffix)
+        if sidecar.exists():
+            assert sidecar.read_bytes() != b"fake-wal-bytes"
+            assert sidecar.read_bytes() != b"fake-shm-bytes"
 
 
 def test_db_reset_clears_engine_cache(sqlite_env) -> None:

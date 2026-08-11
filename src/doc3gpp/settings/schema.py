@@ -210,6 +210,7 @@ class OutputFieldsSettings(BaseModel):
             "initial_release",
             "tsg",
             "wis",
+            "rapporteurs",
         ]
     )
 

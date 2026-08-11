@@ -57,6 +57,10 @@
 # ]
 # tsg = ["tsg_name", "short_name", "description"]
 # wi = ["wi_id", "acronym", "release", "name"]
+# spec = [
+#   "spec_id", "type", "title", "status",
+#   "radio_tech", "initial_release", "tsg", "wis", "rapporteurs",
+# ]
 
 # ── TDoc extraction cache ───────────────────────────────────────────────────
 # Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc parse`).

@@ -223,7 +223,6 @@ def test_spec_show_json(monkeypatch) -> None:
         meeting_id=108,
         meeting_name="RAN#108",
         crs="R5-260013,R5-260014",
-        comment="-",
     )
     svc = MagicMock()
     svc.get.return_value = spec

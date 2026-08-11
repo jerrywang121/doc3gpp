@@ -4070,11 +4070,11 @@ def spec_show(
 
     header_fields = [
         "spec_id", "type", "title", "status", "radio_tech",
-        "initial_release", "tsg", "wis",
+        "initial_release", "tsg", "wis", "rapporteurs",
     ]
     version_fields = [
         "version", "release", "ftp_url", "meeting_id", "meeting_name",
-        "upload_date", "pdf_url", "crs", "comment",
+        "upload_date", "pdf_url", "crs",
     ]
 
     if fmt == "json":

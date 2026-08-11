@@ -24,17 +24,41 @@ class _StubTsgRepo:
 
 
 class _StubSpecRepo:
-    def __init__(self):
-        self.specs = {}
-        self.versions = {}
-        self.upserted = []
+    """In-memory stand-in for :class:`SQLAlchemySpecRepository`.
 
-    def upsert(self, spec):
-        self.specs[spec.spec_id] = spec
-        self.upserted.append(spec)
+    Mirrors the real repository's "snapshot at write time" semantics:
+    ``upsert`` and ``upsert_versions`` copy the inbound dataclass
+    into a fresh instance so a later mutation of the caller's
+    reference is not visible to readers. This matches the
+    SQLAlchemy row mapping (which materialises a row into a domain
+    object on read and writes the column values verbatim on upsert).
+    """
 
-    def upsert_versions(self, versions):
-        self.versions.setdefault(versions[0].spec_id if versions else None, []).extend(versions)
+    def __init__(self) -> None:
+        self.specs: dict[str, Spec] = {}
+        self.versions: dict[str, list[SpecVersion]] = {}
+        self.upserted: list[Spec] = []
+
+    def _snapshot_spec(self, spec: Spec) -> Spec:
+        from dataclasses import replace
+
+        return replace(spec)
+
+    def _snapshot_version(self, v: SpecVersion) -> SpecVersion:
+        from dataclasses import replace
+
+        return replace(v)
+
+    def upsert(self, spec: Spec) -> None:
+        snap = self._snapshot_spec(spec)
+        self.specs[spec.spec_id] = snap
+        self.upserted.append(snap)
+
+    def upsert_versions(self, versions: list[SpecVersion]) -> int:
+        snap_list = [self._snapshot_version(v) for v in versions]
+        key = versions[0].spec_id if versions else None
+        if key is not None:
+            self.versions.setdefault(key, []).extend(snap_list)
         return len(versions)
 
     def list(self, **kw):
@@ -114,6 +138,103 @@ def test_sync_force_bypasses_interval(monkeypatch) -> None:
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", lambda s: DETAIL_HTML)
     outcome = svc.sync("R5", force=True)
     assert outcome.status == "synced"
+
+
+def test_sync_stamps_last_synced_at_only_after_full_upsert(monkeypatch) -> None:
+    """``Spec.last_synced_at`` must be set ONLY after the full per-spec
+    sync (detail page + follow-ups + ``upsert`` + ``upsert_versions``)
+    succeeds.
+
+    Rationale: ``last_synced_at`` is the per-spec completion marker
+    the next sync uses to decide whether to re-extract the detail page
+    for this spec. Stamping it before the upserts means a partial
+    sync (e.g. ETSI/CR follow-up crashed, or ``upsert_versions``
+    raised) leaves a ``last_synced_at`` set on a half-written row —
+    so the next sync would skip the detail page and the half-state
+    would persist forever. We want a partial sync to be retryable.
+
+    This test pins the happy-path invariant: after a successful
+    full sync, ``last_synced_at`` is stamped. The companion test
+    ``test_sync_does_not_stamp_last_synced_at_when_upsert_versions_fails``
+    pins the failure-mode invariant.
+    """
+    repo = _StubSpecRepo()
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg: LIST_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug: DETAIL_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: "<html><a href='x.pdf'>d</a></html>",
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>",
+    )
+
+    svc = SpecService(repo, _StubTsgRepo())
+    svc.sync("R5", force=True)
+
+    persisted = repo.specs["36.579-5"]
+    assert persisted.last_synced_at is not None, (
+        "happy-path invariant: last_synced_at must be stamped after a "
+        "successful full sync (detail + follow-ups + upserts)"
+    )
+
+
+def test_sync_does_not_stamp_last_synced_at_when_upsert_versions_fails(
+    monkeypatch,
+) -> None:
+    """If ``upsert_versions`` raises, the header has already been
+    written but ``last_synced_at`` must NOT be set — the next sync
+    should re-extract the detail page so the missing ``spec_versions``
+    rows can be back-filled.
+
+    We simulate the failure by monkeypatching ``upsert_versions`` on
+    the service's repository to raise.
+    """
+    repo = _StubSpecRepo()
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg: LIST_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug: DETAIL_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: "<html><a href='x.pdf'>d</a></html>",
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html></html>",
+    )
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("simulated DB failure on upsert_versions")
+
+    monkeypatch.setattr(repo, "upsert_versions", _raise)
+
+    svc = SpecService(repo, _StubTsgRepo())
+    # The outer loop catches the per-spec exception and continues —
+    # the TSG sync still completes (with synced_count=0).
+    outcome = svc.sync("R5", force=True)
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 0  # the failing spec was counted as failed
+
+    persisted = repo.specs["36.579-5"]
+    assert persisted.last_synced_at is None, (
+        "last_synced_at must NOT be set when upsert_versions fails — "
+        "otherwise the next sync would skip the detail page and the "
+        "missing version rows would never be back-filled"
+    )
 
 
 def test_sync_followups_are_fanned_out_across_the_thread_pool(monkeypatch) -> None:

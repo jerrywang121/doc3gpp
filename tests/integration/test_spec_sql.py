@@ -83,6 +83,30 @@ def test_list_versions_is_idempotent(session_factory) -> None:
     assert len(repo.list_versions("s1")) == 1
 
 
+def test_upsert_then_upsert_stamps_last_synced_at(session_factory) -> None:
+    """``upsert`` preserves ``last_synced_at`` when set, and clears it
+    when omitted — pins the two-step stamp pattern
+    :meth:`SpecService._sync_one_spec` uses (first upsert without the
+    timestamp, second upsert with it after the version rows land).
+    """
+    from datetime import datetime, timezone
+
+    repo = SQLAlchemySpecRepository(session_factory)
+    spec = Spec(spec_id="36.579-5", type="TS", title="NR conformance")
+
+    # First upsert: no timestamp.
+    repo.upsert(spec)
+    assert repo.get("36.579-5").last_synced_at is None
+
+    # Second upsert with a timestamp: lands in the column.
+    stamped = datetime(2026, 8, 11, 12, 0, 0, tzinfo=timezone.utc)
+    spec.last_synced_at = stamped
+    repo.upsert(spec)
+    got = repo.get("36.579-5")
+    assert got.last_synced_at is not None
+    assert got.last_synced_at == stamped
+
+
 def test_upsert_versions_dedupes_within_single_batch(session_factory) -> None:
     """``upsert_versions`` collapses duplicate ``(spec_id, version)`` rows
     inside a single batch.

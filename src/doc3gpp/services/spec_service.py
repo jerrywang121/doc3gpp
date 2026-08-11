@@ -149,7 +149,6 @@ class SpecService:
         header, versions = parse_spec_detail(detail_html, spec.spec_id, canonical)
         header.type = spec.type
         header.title = spec.title
-        header.last_synced_at = datetime.now(timezone.utc)
 
         # The ETSI + CR follow-ups are independent HTTP requests —
         # earlier revisions of this method ran them serially inside a
@@ -162,8 +161,17 @@ class SpecService:
         with ScraperClient() as client:
             self._fetch_followups_concurrently(versions, executor, client)
 
+        # Write the header first WITHOUT ``last_synced_at`` so a failure
+        # in ``upsert_versions`` below leaves the timestamp unset on the
+        # persisted header row. Set it only after both upserts succeed,
+        # then re-upsert to stamp the column. Re-upserting with only
+        # ``last_synced_at`` set is cheap (the repo's update branch
+        # touches that one field) and lets a partial sync retry the
+        # detail page on the next run instead of skipping it.
         self._repository.upsert(header)
         self._repository.upsert_versions(versions)
+        header.last_synced_at = datetime.now(timezone.utc)
+        self._repository.upsert(header)
         return len(versions)
 
     def _fetch_followups_concurrently(

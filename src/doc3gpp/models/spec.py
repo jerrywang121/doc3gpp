@@ -19,7 +19,13 @@ class Spec:
         initial_release: Normalised release marker (e.g. ``Rel-20``, ``R99``).
         tsg: Owning TSG short name FK to ``tsgs.short_name``.
         wis: Comma-joined related-WI acronyms (point-in-time snapshot).
-        last_synced_at: UTC of last successful detail fetch.
+        last_synced_at: UTC of the last **successful** detail-page sync
+            (parsed + wis extracted + ETSI/CR follow-ups fetched + both
+            header and ``spec_versions`` rows written). ``None`` when the
+            row has never been synced, or when the most recent sync
+            attempt for this spec crashed mid-flight — in which case
+            the next sync retries the detail page so the missing data
+            can be back-filled.
     """
 
     spec_id: str

@@ -28,20 +28,36 @@ def build_spec_detail_url(spec_id_no_dot: str) -> str:
     return _SPEC_DETAIL_URL_TEMPLATE.format(spec_id_no_dot=spec_id_no_dot)
 
 
-def fetch_spec_list(tsg_short: str) -> str:
-    """Fetch the raw HTML body of the per-TSG spec list page."""
+def fetch_spec_list(tsg_short: str, client: ScraperClient | None = None) -> str:
+    """Fetch the raw HTML body of the per-TSG spec list page.
+
+    ``client`` may be supplied to reuse a shared ``ScraperClient``
+    (avoiding a fresh TLS/DNS/connect handshake per call); otherwise a
+    short-lived client is opened for the request.
+    """
     url = build_spec_list_url(tsg_short)
     logger.debug("Fetching spec list for TSG %s at %s", tsg_short, url)
-    with ScraperClient() as client:
+    if client is not None:
         return client.get_text(url)
+    with ScraperClient() as new_client:
+        return new_client.get_text(url)
 
 
-def fetch_spec_detail(spec_id_no_dot: str) -> str:
-    """Fetch the raw HTML body of a spec detail page."""
+def fetch_spec_detail(
+    spec_id_no_dot: str, client: ScraperClient | None = None
+) -> str:
+    """Fetch the raw HTML body of a spec detail page.
+
+    ``client`` may be supplied to reuse a shared ``ScraperClient``
+    (avoiding a fresh TLS/DNS/connect handshake per call); otherwise a
+    short-lived client is opened for the request.
+    """
     url = build_spec_detail_url(spec_id_no_dot)
     logger.debug("Fetching spec detail at %s", url)
-    with ScraperClient() as client:
+    if client is not None:
         return client.get_text(url)
+    with ScraperClient() as new_client:
+        return new_client.get_text(url)
 
 
 def fetch_etsi_pdf_text(wki_id: int, client: ScraperClient) -> str:

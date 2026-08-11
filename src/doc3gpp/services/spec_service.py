@@ -52,10 +52,12 @@ class SpecService:
         repository: SpecRepository,
         tsg_repository: TsgRepository | None = None,
         sync_interval: timedelta = timedelta(hours=24),
+        max_workers: int | None = None,
     ) -> None:
         self._repository = repository
         self._tsg_repository = tsg_repository
         self._sync_interval = sync_interval
+        self._max_workers = max_workers
 
     def sync(
         self,
@@ -97,36 +99,60 @@ class SpecService:
                 )
 
         logger.info("Syncing specs for TSG %s", canonical)
-        list_html = fetch_spec_list(canonical)
-        specs = parse_spec_list(list_html, canonical)
-        logger.info("Parsed %s specs from list page for TSG %s", len(specs), canonical)
-
-        if on_progress is not None:
-            on_progress("list_parsed", {"total": len(specs)})
 
         synced = 0
         version_total = 0
-        workers = min(32, (os.cpu_count() or 4) + 4)
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(
-                    self._sync_one_spec, spec, canonical, executor
-                ): spec
-                for spec in specs
-            }
-            for future in futures:
-                spec = futures[future]
-                try:
-                    version_count = future.result()
-                except Exception:  # noqa: BLE001 - one spec failure must not abort the sweep
-                    logger.exception("Spec sync failed for %s", spec.spec_id)
-                    if on_progress is not None:
-                        on_progress("spec_done", {"spec_id": spec.spec_id})
-                    continue
-                version_total += version_count
-                synced += 1
-                if on_progress is not None:
-                    on_progress("spec_done", {"spec_id": spec.spec_id})
+        workers = self._max_workers or min(32, (os.cpu_count() or 4) + 4)
+        # One shared client for the entire sweep: opening a fresh
+        # ScraperClient per spec cost ~95 separate httpx clients (one per
+        # spec + the list page), each paying a TLS + DNS + connect
+        # handshake. A single client is thread-safe for concurrent GETs,
+        # so every worker reuses the same connection pool.
+        with ScraperClient() as client:
+            list_html = fetch_spec_list(canonical, client=client)
+            specs = parse_spec_list(list_html, canonical)
+            logger.info(
+                "Parsed %s specs from list page for TSG %s", len(specs), canonical
+            )
+
+            if on_progress is not None:
+                on_progress("list_parsed", {"total": len(specs)})
+
+            # The ETSI + CR follow-ups must run on a *separate* executor
+            # from the spec workers. Fanning them out onto the same pool
+            # that was already running ``_sync_one_spec`` starved the
+            # pool: a worker blocked on ``future.result()`` held its slot
+            # while the follow-up futures it was waiting on could never
+            # get a free worker, deadlocking the sweep past ~15 specs.
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                with ThreadPoolExecutor(max_workers=workers) as followup_executor:
+                    futures = {
+                        executor.submit(
+                            self._sync_one_spec,
+                            spec,
+                            canonical,
+                            followup_executor,
+                            client,
+                        ): spec
+                        for spec in specs
+                    }
+                    for future in futures:
+                        spec = futures[future]
+                        try:
+                            version_count = future.result()
+                        except Exception:  # noqa: BLE001 - one spec failure must not abort the sweep
+                            logger.exception(
+                                "Spec sync failed for %s", spec.spec_id
+                            )
+                            if on_progress is not None:
+                                on_progress(
+                                    "spec_done", {"spec_id": spec.spec_id}
+                                )
+                            continue
+                        version_total += version_count
+                        synced += 1
+                        if on_progress is not None:
+                            on_progress("spec_done", {"spec_id": spec.spec_id})
 
         if self._tsg_repository is not None:
             self._tsg_repository.update_spec_last_sync(canonical, datetime.now(timezone.utc))
@@ -142,24 +168,29 @@ class SpecService:
         self,
         spec: Spec,
         canonical: str,
-        executor: ThreadPoolExecutor,
+        followup_executor: ThreadPoolExecutor,
+        client: ScraperClient,
     ) -> int:
         slug = spec.spec_id.replace(".", "")
-        detail_html = fetch_spec_detail(slug)
+        detail_html = fetch_spec_detail(slug, client=client)
         header, versions = parse_spec_detail(detail_html, spec.spec_id, canonical)
         header.type = spec.type
         header.title = spec.title
 
-        # The ETSI + CR follow-ups are independent HTTP requests —
-        # earlier revisions of this method ran them serially inside a
-        # single ScraperClient, which made a single-spec sync take 30+ s
-        # for a spec with 10-20 versions. Fan them out across the same
-        # shared thread pool so they overlap with the detail-page
-        # fetches of the other spec workers, then wait for them all
-        # before upserting so the in-place mutations on ``versions``
-        # (pdf_url / crs) are captured in the row write.
-        with ScraperClient() as client:
-            self._fetch_followups_concurrently(versions, executor, client)
+        # The detail page does not carry the ETSI PDF link, so freshly
+        # parsed versions always arrive with ``pdf_url`` unset. Back-fill
+        # the persisted value so ``_maybe_fetch_etsi_pdf`` skips the
+        # upstream fetch for versions we have already resolved — the
+        # link is stable for a version and re-fetching it on every sync
+        # wastes an HTTP request per spec.
+        self._backfill_pdf_urls(versions)
+
+        # The ETSI + CR follow-ups are independent HTTP requests, fanned
+        # out across the dedicated follow-up executor so they overlap
+        # with the detail-page fetches of the other spec workers, then
+        # waited on before upserting so the in-place mutations on
+        # ``versions`` (pdf_url / crs) are captured in the row write.
+        self._fetch_followups_concurrently(versions, followup_executor, client)
 
         # Write the header first WITHOUT ``last_synced_at`` so a failure
         # in ``upsert_versions`` below leaves the timestamp unset on the
@@ -174,14 +205,37 @@ class SpecService:
         self._repository.upsert(header)
         return len(versions)
 
+    def _backfill_pdf_urls(self, versions: list[SpecVersion]) -> None:
+        """Copy the persisted ``pdf_url`` onto freshly parsed versions.
+
+        ``versions`` come from the detail page, which has no ETSI PDF
+        link, so each ``pdf_url`` is ``None``. For any version we have
+        already resolved (``pdf_url`` stored), load the stored value so
+        the ETSI follow-up is skipped instead of re-fetched.
+        """
+        if not versions:
+            return
+        spec_id = versions[0].spec_id
+        persisted = self._repository.list_versions(spec_id)
+        by_version = {v.version: v.pdf_url for v in persisted if v.pdf_url}
+        for v in versions:
+            if v.pdf_url is None:
+                v.pdf_url = by_version.get(v.version)
+
     def _fetch_followups_concurrently(
         self,
         versions: list[SpecVersion],
         executor: ThreadPoolExecutor,
         client: ScraperClient,
     ) -> None:
-        """Submit the ETSI + CR follow-ups for ``versions`` to
-        ``executor`` and wait for every future to complete.
+        """Submit the ETSI + CR follow-ups for ``versions`` to the
+        dedicated ``executor`` (separate from the spec-worker pool) and
+        wait for every future to complete.
+
+        ``executor`` is the *follow-up* executor, not the pool running
+        ``_sync_one_spec``: submitting to the same pool would starve it
+        (a worker blocked on ``result()`` holds a slot the follow-ups it
+        is waiting on can never get), deadlocking the sweep.
 
         Each follow-up is wrapped in its own try/except so a single
         failure does not cancel the others (``FIRST_EXCEPTION`` would
@@ -220,7 +274,13 @@ class SpecService:
     def _maybe_fetch_etsi_pdf(self, v: SpecVersion, client: ScraperClient) -> None:
         if v.wki_id is None:
             return
-        if v.pdf_url is not None:
+        now = datetime.now(timezone.utc)
+        upload_recent = (
+            v.upload_date is not None
+            and (now - datetime.combine(v.upload_date, datetime.min.time(), tzinfo=timezone.utc))
+            < _CR_RECENCY_WINDOW
+        )
+        if not upload_recent or v.pdf_url:
             return
         try:
             html = fetch_etsi_pdf_text(v.wki_id, client)

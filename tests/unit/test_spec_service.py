@@ -94,14 +94,107 @@ DETAIL_HTML = """
 """
 
 
-def test_sync_smoke(monkeypatch) -> None:
+def test_sync_skips_etsi_fetch_when_pdf_url_already_persisted(monkeypatch) -> None:
+    """On a re-sync, a version whose ``pdf_url`` is already stored in the
+    DB must NOT re-fetch the ETSI PDF page.
+
+    ``_sync_one_spec`` parses *fresh* ``SpecVersion`` objects from the
+    detail page whose ``pdf_url`` is always ``None``, so without merging
+    the persisted value in, the ETSI page would be re-fetched on every
+    sync even though the value never changes.
+    """
+    etsi_calls: list[int] = []
+
+    def _etsi(_wki, _client):
+        etsi_calls.append(_wki)
+        return "<html><a href='x.pdf'>d</a></html>"
+
+    recent_upload = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    detail_html = DETAIL_HTML.replace("2025-06-01", recent_upload)
+
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_list",
-        lambda tsg: LIST_HTML,
+        lambda tsg, **k: LIST_HTML,
     )
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_detail",
-        lambda slug: DETAIL_HTML,
+        lambda slug, **k: detail_html,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text", _etsi
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>",
+    )
+
+    repo = _StubSpecRepo()
+    tsg = _StubTsgRepo()
+    svc = SpecService(repo, tsg)
+
+    first = svc.sync("R5")
+    assert first.status == "synced"
+    assert etsi_calls == [12345], "first sync should fetch the ETSI page once"
+
+    persisted = repo.list_versions("36.579-5")
+    assert len(persisted) == 1
+    assert persisted[0].pdf_url == "x.pdf"
+
+    etsi_calls.clear()
+    second = svc.sync("R5")
+    assert second.status == "synced"
+    assert etsi_calls == [], (
+        "second sync must not re-fetch the ETSI page — pdf_url is already persisted"
+    )
+
+
+def test_sync_skips_etsi_fetch_for_stale_versions(monkeypatch) -> None:
+    """The ETSI PDF follow-up is skipped for versions uploaded more than
+    ``_CR_RECENCY_WINDOW`` (90 days) ago, even when no ``pdf_url`` is
+    persisted yet — the link is stable and re-fetching old versions on
+    every sync wastes an HTTP request per spec.
+    """
+    old_upload = (datetime.now(timezone.utc).date() - timedelta(days=400)).isoformat()
+    detail_html = DETAIL_HTML.replace("2025-06-01", old_upload)
+    etsi_calls: list[int] = []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg, **k: LIST_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: detail_html,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: (etsi_calls.append(wki) or "<html><a href='x.pdf'>d</a></html>"),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>",
+    )
+
+    repo = _StubSpecRepo()
+    tsg = _StubTsgRepo()
+    svc = SpecService(repo, tsg)
+    outcome = svc.sync("R5")
+
+    assert outcome.status == "synced"
+    assert etsi_calls == [], (
+        "stale version (>90 days old) must not re-fetch the ETSI page"
+    )
+    assert repo.list_versions("36.579-5")[0].pdf_url is None
+
+
+def test_sync_smoke(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg, **k: LIST_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: DETAIL_HTML,
     )
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
@@ -134,8 +227,8 @@ def test_sync_force_bypasses_interval(monkeypatch) -> None:
     now = datetime.now(timezone.utc)
     tsg = _StubTsgRepo(last_spec_sync=now)
     svc = SpecService(_StubSpecRepo(), tsg, sync_interval=timedelta(hours=24))
-    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_list", lambda t: LIST_HTML)
-    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", lambda s: DETAIL_HTML)
+    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_list", lambda t, **k: LIST_HTML)
+    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", lambda s, **k: DETAIL_HTML)
     outcome = svc.sync("R5", force=True)
     assert outcome.status == "synced"
 
@@ -162,11 +255,11 @@ def test_sync_stamps_last_synced_at_only_after_full_upsert(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_list",
-        lambda tsg: LIST_HTML,
+        lambda tsg, **k: LIST_HTML,
     )
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_detail",
-        lambda slug: DETAIL_HTML,
+        lambda slug, **k: DETAIL_HTML,
     )
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
@@ -202,11 +295,11 @@ def test_sync_does_not_stamp_last_synced_at_when_upsert_versions_fails(
 
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_list",
-        lambda tsg: LIST_HTML,
+        lambda tsg, **k: LIST_HTML,
     )
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_detail",
-        lambda slug: DETAIL_HTML,
+        lambda slug, **k: DETAIL_HTML,
     )
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
@@ -235,6 +328,138 @@ def test_sync_does_not_stamp_last_synced_at_when_upsert_versions_fails(
         "otherwise the next sync would skip the detail page and the "
         "missing version rows would never be back-filled"
     )
+
+
+def _list_html_for(n_specs: int) -> str:
+    return (
+        '<html><body><table class="dsptab adynspec dsp-tsgwg">'
+        + "".join(
+            "<tr>"
+            f"<td><span>TS</span><a href='/DynaReport/{1000 + i}.htm'>{i}.0</a></td>"
+            f"<td>spec {i}</td><td>r</td>"
+            "</tr>"
+            for i in range(n_specs)
+        )
+        + "</table></body></html>"
+    )
+
+
+def _detail_html_with(n_versions: int) -> str:
+    return (
+        "<html><body><table>"
+        + "".join(
+            "<tr>"
+            f'<td><a id="lnkFtpDownload" href="u{j}.zip">{j}.0.0</a></td>'
+            f'<td><a id="lnkMeetings" href="?m_id=108">RAN#108</a></td>'
+            f'<td><a id="imgRelatedCRs" href="?versionId={1000 + j}"></a></td>'
+            f'<td><a id="imgRelatedWI" href="?WKI_ID={2000 + j}"></a></td>'
+            f"<td>2025-06-01</td><td><span class='lblRemarkText'>c</span></td>"
+            "</tr>"
+            for j in range(n_versions)
+        )
+        + "</table></body></html>"
+    )
+
+
+def test_sync_uses_one_shared_client_across_the_whole_sweep(monkeypatch) -> None:
+    """A single ``ScraperClient`` must be opened for the entire sweep.
+
+    Prior to the fix each spec's ``_sync_one_spec`` opened its own
+    ``ScraperClient`` (and ``fetch_spec_list`` another), so a 94-spec
+    sweep created ~95 separate httpx clients and paid a fresh
+    TLS + DNS + connect handshake for every one. This test counts
+    ``ScraperClient`` constructions during a multi-spec ``sync`` and
+    pins it to exactly one shared instance.
+    """
+    import doc3gpp.scraping.client as client_mod
+
+    created: list = []
+
+    def counting_init(self, *args, **kwargs):
+        created.append(self)
+        return original_init(self, *args, **kwargs)
+
+    original_init = client_mod.ScraperClient.__init__
+    monkeypatch.setattr(client_mod.ScraperClient, "__init__", counting_init)
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg, **k: _list_html_for(3),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: DETAIL_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: "<html><a href='x.pdf'>d</a></html>",
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html></html>",
+    )
+
+    svc = SpecService(_StubSpecRepo(), _StubTsgRepo(), max_workers=4)
+    outcome = svc.sync("R5", force=True)
+
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 3
+    assert len(created) == 1, (
+        f"expected exactly one shared ScraperClient for the whole sweep, "
+        f"but {len(created)} were constructed"
+    )
+
+
+def test_sync_followups_do_not_starve_the_spec_pool(monkeypatch) -> None:
+    """Follow-up fetches must not block the worker that owns the spec.
+
+    Before the fix ``_fetch_followups_concurrently`` submitted the ETSI +
+    CR follow-ups to the *same* ``ThreadPoolExecutor`` that was already
+    running ``_sync_one_spec``, then blocked on ``future.result()``. With
+    ``max_workers=1`` a single spec with even one version submits 2
+    follow-ups the sole worker cannot run while it waits -> the sweep
+    deadlocks.
+
+    The fix fans the follow-ups out onto a *separate* executor, so a
+    lone worker can always make progress. We assert the sweep completes
+    under ``max_workers=1`` (the configuration that provably deadlocks
+    the old design).
+    """
+    import concurrent.futures as _cf
+    from concurrent.futures import ThreadPoolExecutor
+
+    list_html = _list_html_for(2)
+    detail_html = _detail_html_with(2)
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list", lambda tsg, **k: list_html
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: detail_html,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: "<html><a href='x.pdf'>d</a></html>",
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html></html>",
+    )
+
+    svc = SpecService(_StubSpecRepo(), _StubTsgRepo(), max_workers=1)
+
+    result: dict = {}
+    def _run():
+        result["outcome"] = svc.sync("R5", force=True)
+
+    with ThreadPoolExecutor(max_workers=1) as t:
+        fut = t.submit(_run)
+        finished = _cf.wait([fut], timeout=20.0)
+
+    assert fut in finished.done, "spec sync deadlocked under max_workers=1"
+    assert result["outcome"].status == "synced"
+    assert result["outcome"].synced_count == 2
 
 
 def test_sync_followups_are_fanned_out_across_the_thread_pool(monkeypatch) -> None:
@@ -274,11 +499,11 @@ def test_sync_followups_are_fanned_out_across_the_thread_pool(monkeypatch) -> No
 
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_list",
-        lambda tsg: LIST_HTML,
+        lambda tsg, **k: LIST_HTML,
     )
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_spec_detail",
-        lambda slug: versions_html,
+        lambda slug, **k: versions_html,
     )
 
     def _slow_etsi(_wki, _client):

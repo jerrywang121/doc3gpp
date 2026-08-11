@@ -21,8 +21,8 @@ _LIMIT_CAP = 200
 
 # Mirrors ``settings.output.fields.spec`` — what
 # ``doc3gpp spec list --format json`` emits by default.
-_SPEC_DEFAULT_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis"]
-_VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs", "comment"]
+_SPEC_DEFAULT_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
+_VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
 
 
 @router.get("", include_in_schema=False)

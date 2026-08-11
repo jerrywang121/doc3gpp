@@ -2203,6 +2203,7 @@ class FakeSpecService:
                 initial_release="Rel-15",
                 tsg="R5",
                 wis="NR_5G_Test",
+                rapporteurs="Ericsson LM",
             ),
             Spec(
                 spec_id="38.523-3",
@@ -2323,5 +2324,6 @@ def test_get_spec_show_json(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["spec"]["spec_id"] == "36.579-5"
+    assert body["spec"]["rapporteurs"] == "Ericsson LM"
     assert len(body["versions"]) == 1
     assert body["versions"][0]["version"] == "18.0.0"

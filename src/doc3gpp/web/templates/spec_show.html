@@ -13,6 +13,7 @@
     {% if spec.radio_tech %}<dt>Radio tech</dt><dd>{{ spec.radio_tech }}</dd>{% endif %}
     {% if spec.initial_release %}<dt>Initial release</dt><dd>{{ spec.initial_release }}</dd>{% endif %}
     {% if spec.wis %}<dt>WIs</dt><dd>{{ spec.wis }}</dd>{% endif %}
+    {% if spec.rapporteurs %}<dt>Rapporteurs</dt><dd>{{ spec.rapporteurs }}</dd>{% endif %}
     {% if spec.last_synced_at %}<dt>Last synced</dt><dd>{{ spec.last_synced_at | dt_short }} <span class="muted">UTC</span></dd>{% endif %}
   </dl>
 
@@ -28,7 +29,6 @@
           <th>CRs</th>
           <th>FTP</th>
           <th>PDF</th>
-          <th>Comment</th>
         </tr>
       </thead>
       <tbody>
@@ -58,7 +58,6 @@
             <td>
               {% if v.pdf_url %}<a href="{{ v.pdf_url }}" target="_blank" rel="noopener">open</a>{% else %}-{% endif %}
             </td>
-            <td>{{ v.comment or '-' }}</td>
           </tr>
         {% endfor %}
       </tbody>

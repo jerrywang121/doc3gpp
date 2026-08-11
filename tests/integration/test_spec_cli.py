@@ -190,6 +190,20 @@ def test_spec_list(monkeypatch) -> None:
     assert "36.579-5" in result.stdout
 
 
+def test_spec_list_rapporteurs_filter(monkeypatch) -> None:
+    svc = MagicMock()
+    svc.list_recent.return_value = [
+        Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5", rapporteurs="Ericsson LM")
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+    result = runner.invoke(app, ["spec", "list", "--rapporteurs", "%Ericsson%", "--format", "json"])
+    assert result.exit_code == 0, result.stdout
+    svc.list_recent.assert_called_once()
+    kwargs = svc.list_recent.call_args.kwargs
+    assert kwargs["rapporteurs"] == "%Ericsson%"
+    assert "36.579-5" in result.stdout
+
+
 def test_spec_sync(sqlite_env, monkeypatch) -> None:
     svc = MagicMock()
     svc.sync.return_value = SyncOutcome(

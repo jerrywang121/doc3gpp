@@ -3951,6 +3951,9 @@ def spec_list(
     wis: str | None = typer.Option(
         None, "--wis", help="Rich filter on related WIs (comma-joined)."
     ),
+    rapporteurs: str | None = typer.Option(
+        None, "--rapporteurs", help="Rich filter on rapporteurs (comma-joined company names)."
+    ),
     fmt: str | None = typer.Option(
         None,
         "--format",
@@ -3979,7 +3982,8 @@ def spec_list(
     ``not-null`` / ``!pattern`` / plain LIKE with ``%`` and ``_``
     wildcards) where applicable. Output columns default to ``spec_id``,
     ``type``, ``title``, ``status``, ``radio_tech``, ``initial_release``,
-    ``tsg``, and ``wis`` from ``settings.output.fields.spec``.
+    ``tsg``, ``wis``, and ``rapporteurs`` from
+    ``settings.output.fields.spec``.
     """
     logger.info(
         "Listing %s specs (offset=%s) tsg=%s type=%s spec_id=%s",
@@ -4001,6 +4005,7 @@ def spec_list(
         radio_tech=radio_tech,
         initial_release=initial_release,
         wis=wis,
+        rapporteurs=rapporteurs,
     )
 
     settings = get_settings()

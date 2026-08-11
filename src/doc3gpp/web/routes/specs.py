@@ -37,6 +37,7 @@ async def list_specs(
     radio_tech: str | None = Query(default=None),
     initial_release: str | None = Query(default=None),
     wis: str | None = Query(default=None),
+    rapporteurs: str | None = Query(default=None),
     limit: str | None = Query(default="50"),
     format: str | None = Query(default=None, alias="format"),
     service: SpecService = Depends(get_spec_service),
@@ -64,6 +65,7 @@ async def list_specs(
         radio_tech=parse_text_query(radio_tech),
         initial_release=parse_text_query(initial_release),
         wis=parse_text_query(wis),
+        rapporteurs=parse_text_query(rapporteurs),
     )
 
     if format == "json":
@@ -92,6 +94,7 @@ async def list_specs(
                 "radio_tech": radio_tech or "",
                 "initial_release": initial_release or "",
                 "wis": wis or "",
+                "rapporteurs": rapporteurs or "",
                 "limit": parsed_limit,
             },
         },

@@ -2327,3 +2327,23 @@ def test_get_spec_show_json(client: TestClient) -> None:
     assert body["spec"]["rapporteurs"] == "Ericsson LM"
     assert len(body["versions"]) == 1
     assert body["versions"][0]["version"] == "18.0.0"
+
+
+def test_get_specs_forwards_rapporteurs_filter(client: TestClient) -> None:
+    """``GET /specs?rapporteurs=...`` forwards the filter to the service."""
+    from doc3gpp.web.deps import get_spec_service
+
+    captured = {}
+
+    class _RecordingSpecService(FakeSpecService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            captured.update(kwargs)
+            return list(self._specs)
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _RecordingSpecService()
+    try:
+        response = client.get("/specs?rapporteurs=%25Ericsson%25")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert captured["rapporteurs"] == "%Ericsson%"

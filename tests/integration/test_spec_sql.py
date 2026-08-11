@@ -41,6 +41,7 @@ def test_upsert_and_get(session_factory) -> None:
         spec_id="36.579-5", type="TS", title="NR conformance",
         status="Under change control", radio_tech="LTE,5G",
         initial_release="Rel-20", tsg="R5", wis="A,B",
+        rapporteurs="Ericsson LM",
     )
     repo.upsert(spec)
     got = repo.get("36.579-5")
@@ -49,6 +50,7 @@ def test_upsert_and_get(session_factory) -> None:
     assert got.type == "TS"
     assert got.tsg == "R5"
     assert got.wis == "A,B"
+    assert got.rapporteurs == "Ericsson LM"
 
 
 def test_upsert_versions_round_trip(session_factory) -> None:
@@ -124,12 +126,11 @@ def test_upsert_versions_dedupes_within_single_batch(session_factory) -> None:
         SpecVersion(
             spec_id="11.10-3", version="5.0.0", ftp_url="u-old",
             release="Rel-5", upload_date=date(1996, 4, 12),
-            version_id=13186, comment="7-99-329,325/96",
+            version_id=13186,
         ),
         SpecVersion(
             spec_id="11.10-3", version="5.0.0", ftp_url="u-new",
             release="Rel-5", upload_date=date(1999, 11, 11),
-            comment="re-upload",
         ),
     ]
     repo.upsert_versions(versions)
@@ -138,7 +139,6 @@ def test_upsert_versions_dedupes_within_single_batch(session_factory) -> None:
     # Newer upload_date wins.
     assert rows[0].upload_date == date(1999, 11, 11)
     assert rows[0].ftp_url == "u-new"
-    assert rows[0].comment == "re-upload"
 
 
 def test_upsert_versions_dedupes_when_upload_date_is_none(session_factory) -> None:
@@ -148,14 +148,13 @@ def test_upsert_versions_dedupes_when_upload_date_is_none(session_factory) -> No
     repo = SQLAlchemySpecRepository(session_factory)
     repo.upsert(Spec(spec_id="s2", type="TS", title="T"))
     versions = [
-        SpecVersion(spec_id="s2", version="1.0.0", ftp_url="u1", comment="first"),
-        SpecVersion(spec_id="s2", version="1.0.0", ftp_url="u2", comment="second"),
+        SpecVersion(spec_id="s2", version="1.0.0", ftp_url="u1"),
+        SpecVersion(spec_id="s2", version="1.0.0", ftp_url="u2"),
     ]
     repo.upsert_versions(versions)
     rows = repo.list_versions("s2")
     assert len(rows) == 1
     # Last write wins when upload_date can't break the tie.
-    assert rows[0].comment == "second"
     assert rows[0].ftp_url == "u2"
 
 

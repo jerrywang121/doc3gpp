@@ -30,6 +30,7 @@ class SQLAlchemySpecRepository:
                 existing.initial_release = spec.initial_release
                 existing.tsg = spec.tsg
                 existing.wis = spec.wis
+                existing.rapporteurs = spec.rapporteurs
                 if spec.last_synced_at is not None:
                     existing.last_synced_at = spec.last_synced_at
             else:
@@ -43,6 +44,7 @@ class SQLAlchemySpecRepository:
                         initial_release=spec.initial_release,
                         tsg=spec.tsg,
                         wis=spec.wis,
+                        rapporteurs=spec.rapporteurs,
                         last_synced_at=spec.last_synced_at,
                     )
                 )
@@ -76,7 +78,6 @@ class SQLAlchemySpecRepository:
                         existing.pdf_url = v.pdf_url
                     if v.crs is not None:
                         existing.crs = v.crs
-                    existing.comment = v.comment
                 else:
                     session.add(
                         SpecVersionORM(
@@ -90,7 +91,6 @@ class SQLAlchemySpecRepository:
                             version_id=v.version_id,
                             pdf_url=v.pdf_url,
                             crs=v.crs,
-                            comment=v.comment,
                         )
                     )
             session.commit()
@@ -164,6 +164,7 @@ def _orm_to_spec(row: SpecORM) -> Spec:
         initial_release=row.initial_release,
         tsg=row.tsg,
         wis=row.wis,
+        rapporteurs=row.rapporteurs,
         last_synced_at=_as_utc(row.last_synced_at),
     )
 
@@ -180,7 +181,6 @@ def _orm_to_version(row: SpecVersionORM) -> SpecVersion:
         version_id=row.version_id,
         pdf_url=row.pdf_url,
         crs=row.crs,
-        comment=row.comment,
     )
 
 

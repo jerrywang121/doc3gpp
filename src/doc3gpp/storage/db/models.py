@@ -414,6 +414,7 @@ class SpecORM(Base):
         index=True,
     )
     wis: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    rapporteurs: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -446,4 +447,3 @@ class SpecVersionORM(Base):
     version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pdf_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     crs: Mapped[str | None] = mapped_column(Text, nullable=True)
-    comment: Mapped[str | None] = mapped_column(String(256), nullable=True)

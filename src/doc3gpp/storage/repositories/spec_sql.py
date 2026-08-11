@@ -55,7 +55,7 @@ class SQLAlchemySpecRepository:
             return 0
         # The 3GPP DynaReport spec detail page lists the same
         # ``(spec_id, version)`` row more than once when a spec has
-        # been re-uploaded (different ``upload_date`` / comment /
+        # been re-uploaded (different ``upload_date`` /
         # ``version_id``). The PK is composite on ``(spec_id, version)``
         # and the semantically-correct row is the most recent
         # re-upload, so collapse duplicates here before any
@@ -198,7 +198,7 @@ def _dedupe_versions(versions: list[SpecVersion]) -> list[SpecVersion]:
 
     The 3GPP DynaReport spec detail page lists the same version more
     than once when it has been re-uploaded (different ``upload_date``
-    / ``comment`` / ``version_id``). The PK is composite on
+    / ``version_id``). The PK is composite on
     ``(spec_id, version)`` and the semantically-correct row is the
     most recent re-upload, so pick the one with the latest
     ``upload_date`` (ties broken by last-write-wins — preserves the

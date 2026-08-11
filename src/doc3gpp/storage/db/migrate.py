@@ -91,6 +91,52 @@ def _migrate_tsg_spec_last_sync() -> None:
         )
 
 
+def _migrate_spec_rapporteurs() -> None:
+    """Add ``specs.rapporteurs`` to databases created before that column
+    existed. Idempotent: probe ``PRAGMA table_info`` first."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='specs' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(specs)")).all()
+        column_names = {row[1] for row in rows}
+        if "rapporteurs" in column_names:
+            return
+        conn.execute(
+            text("ALTER TABLE specs ADD COLUMN rapporteurs VARCHAR(128)")
+        )
+
+
+def _migrate_spec_versions_drop_comment() -> None:
+    """Drop the unused ``spec_versions.comment`` column. Idempotent;
+    degrades to leaving the orphan column on sqlite < 3.35 (no
+    ``DROP COLUMN``)."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='spec_versions' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(spec_versions)")).all()
+        column_names = {row[1] for row in rows}
+        if "comment" not in column_names:
+            return
+        try:
+            conn.execute(text("ALTER TABLE spec_versions DROP COLUMN comment"))
+        except Exception:  # noqa: BLE001 - older sqlite lacks DROP COLUMN
+            return
+
+
 def _create_search_schema() -> None:
     """Create the FTS5 virtual table + meta sidecar.
 
@@ -238,6 +284,8 @@ def create_schema() -> None:
     engine = get_engine()
     _migrate_rename_tdoc_cr_details()
     _migrate_tsg_spec_last_sync()
+    _migrate_spec_rapporteurs()
+    _migrate_spec_versions_drop_comment()
     Base.metadata.create_all(bind=engine)
     _create_search_schema()
     _create_vector_schema()

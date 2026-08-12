@@ -10,7 +10,6 @@
           <th>Radio tech</th>
           <th>Initial release</th>
           <th>TSG</th>
-          <th>WIs</th>
           <th>Rapporteurs</th>
           <th></th>
         </tr>
@@ -25,13 +24,6 @@
             <td>{{ spec.radio_tech or '-' }}</td>
             <td>{{ spec.initial_release or '-' }}</td>
             <td><code>{{ spec.tsg or '-' }}</code></td>
-            <td>
-              {% if spec.wis and spec.wis | length > 32 %}
-                <span class="copy-cell" title="{{ spec.wis }}" data-copy="{{ spec.wis }}">{{ spec.wis | truncate_csv(32) }}</span>
-              {% else %}
-                {{ spec.wis or '-' }}
-              {% endif %}
-            </td>
             <td>
               {% if spec.rapporteurs and spec.rapporteurs | length > 32 %}
                 <span class="copy-cell" title="{{ spec.rapporteurs }}" data-copy="{{ spec.rapporteurs }}">{{ spec.rapporteurs | truncate_csv(32) }}</span>

@@ -82,21 +82,10 @@ class SpecService:
         callback because there are no specs to process.
         """
         canonical = tsg.upper()
-        if not force and self._tsg_repository is not None:
-            tsg_record = self._tsg_repository.get_by_short_name(canonical)
-            last_sync = tsg_record.spec_last_sync if tsg_record is not None else None
-            now = datetime.now(timezone.utc)
-            if last_sync is not None and (now - last_sync) < self._sync_interval:
-                ago = now - last_sync
-                return SyncOutcome(
-                    status="skipped",
-                    reason=(
-                        f"Spec sync skipped for TSG {canonical}: "
-                        f"last sync {_format_duration(ago)} ago "
-                        f"(sync interval {_format_duration(self._sync_interval)}). "
-                        f"Use --force to override."
-                    ),
-                )
+        if not force:
+            skipped = self._is_sync_skipped(canonical, f"TSG {canonical}")
+            if skipped is not None:
+                return skipped
 
         logger.info("Syncing specs for TSG %s", canonical)
 
@@ -186,21 +175,12 @@ class SpecService:
                 f"spec {spec_id!r} is not in the database; run 'doc3gpp spec sync --tsg <tsg>' first"
             )
         canonical = spec.tsg.upper() if spec.tsg else ""
-        if not force and self._tsg_repository is not None:
-            tsg_record = self._tsg_repository.get_by_short_name(canonical)
-            last_sync = tsg_record.spec_last_sync if tsg_record is not None else None
-            now = datetime.now(timezone.utc)
-            if last_sync is not None and (now - last_sync) < self._sync_interval:
-                ago = now - last_sync
-                return SyncOutcome(
-                    status="skipped",
-                    reason=(
-                        f"Spec sync skipped for {spec.spec_id} (TSG {canonical}): "
-                        f"last sync {_format_duration(ago)} ago "
-                        f"(sync interval {_format_duration(self._sync_interval)}). "
-                        f"Use --force to override."
-                    ),
-                )
+        if not force:
+            skipped = self._is_sync_skipped(
+                canonical, f"{spec.spec_id} (TSG {canonical})"
+            )
+            if skipped is not None:
+                return skipped
 
         logger.info("Syncing spec %s", spec.spec_id)
         with ScraperClient() as client:
@@ -226,6 +206,34 @@ class SpecService:
     def list_distinct_tsgs(self) -> list[str]:
         """Return distinct TSG short names currently stored in specs."""
         return self._repository.list_distinct_tsgs()
+
+    def _is_sync_skipped(self, canonical: str, label: str) -> SyncOutcome | None:
+        """Return a ``skipped`` :class:`SyncOutcome` when the per-TSG
+        ``tsgs.spec_last_sync`` interval has not elapsed, else ``None``.
+
+        ``label`` is the human-readable subject embedded in the skip
+        reason (e.g. ``"TSG R5"`` for a whole-TSG sweep or
+        ``"36.579-5 (TSG R5)"`` for a single-spec sync). Shared by
+        :meth:`sync` and :meth:`sync_spec` so the skip rule and its
+        message live in one place.
+        """
+        if self._tsg_repository is None:
+            return None
+        tsg_record = self._tsg_repository.get_by_short_name(canonical)
+        last_sync = tsg_record.spec_last_sync if tsg_record is not None else None
+        now = datetime.now(timezone.utc)
+        if last_sync is not None and (now - last_sync) < self._sync_interval:
+            ago = now - last_sync
+            return SyncOutcome(
+                status="skipped",
+                reason=(
+                    f"Spec sync skipped for {label}: "
+                    f"last sync {_format_duration(ago)} ago "
+                    f"(sync interval {_format_duration(self._sync_interval)}). "
+                    f"Use --force to override."
+                ),
+            )
+        return None
 
     def _sync_one_spec(
         self,

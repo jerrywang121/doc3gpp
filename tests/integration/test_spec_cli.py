@@ -7,6 +7,7 @@ exercised without any network or schema bootstrap.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import date
 from unittest.mock import MagicMock
@@ -368,3 +369,36 @@ def test_spec_sync_no_tsg_loop_shows_progress_bar_per_tsg(monkeypatch) -> None:
     assert sum(s2.updates) == 3
     assert r5.closed is True
     assert s2.closed is True
+
+
+def test_spec_show_forwards_limit_offset_version(monkeypatch) -> None:
+    """``spec show`` passes ``--limit``/``--offset``/``--version`` to the service."""
+    spec = Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5")
+    version = SpecVersion(spec_id="36.579-5", version="18.3.0", ftp_url="u", release="Rel-18")
+    svc = MagicMock()
+    svc.get.return_value = spec
+    svc.list_versions = MagicMock(return_value=[version])
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--limit", "5", "--offset", "2", "--version", "19.%"])
+    assert result.exit_code == 0, result.stdout
+    svc.list_versions.assert_called_once_with("36.579-5", limit=5, offset=2, version="19.%")
+
+
+def test_spec_show_no_wis_crs_drops_fields(monkeypatch) -> None:
+    """``--no-wis-crs`` drops ``wis`` from the header and ``crs`` from versions."""
+    spec = Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5", wis="eNB")
+    version = SpecVersion(
+        spec_id="36.579-5", version="18.3.0", ftp_url="u",
+        release="Rel-18", crs="R5-1,R5-2",
+    )
+    svc = MagicMock()
+    svc.get.return_value = spec
+    svc.list_versions = MagicMock(return_value=[version])
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "json", "--no-wis-crs"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert "wis" not in payload["spec"]
+    assert "crs" not in payload["versions"][0]

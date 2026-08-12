@@ -3558,9 +3558,18 @@ def tdoc_show(
         help=(
             "Strip output formatting: JSON drops indent and operator-space; "
             "Markdown drops GFM tables, bullets, and bold. No-op for "
-            "``table`` and ``raw``. Defaults to ``output.compact`` in "
-            "settings when the flag is not passed."
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
         ),
+    ),
+    limit: int = typer.Option(10, min=1, max=500, help="Max versions to return."),
+    offset: int = typer.Option(0, min=0, help="Number of versions to skip before applying --limit (pagination)."),
+    version: str | None = typer.Option(
+        None, "--version", help="Rich filter pattern on the version (e.g. 19.%)."
+    ),
+    no_wis_crs: bool = typer.Option(
+        False, "--no-wis-crs",
+        help="Drop the 'wis' header field and the per-version 'crs' field from output.",
     ),
 ) -> None:
     """Show a stored TDoc (or URL) and any extracted CR cover-page details.
@@ -4052,6 +4061,15 @@ def spec_show(
             "the flag is not passed."
         ),
     ),
+    limit: int = typer.Option(10, min=1, max=500, help="Max versions to return."),
+    offset: int = typer.Option(0, min=0, help="Number of versions to skip before applying --limit (pagination)."),
+    version: str | None = typer.Option(
+        None, "--version", help="Rich filter pattern on the version (e.g. 19.%)."
+    ),
+    no_wis_crs: bool = typer.Option(
+        False, "--no-wis-crs",
+        help="Drop the 'wis' header field and the per-version 'crs' field from output.",
+    ),
 ) -> None:
     """Render one spec with its versions and per-version metadata.
 
@@ -4067,7 +4085,7 @@ def spec_show(
         raise typer.BadParameter(
             f"Unknown spec id '{spec_id}'. Run 'doc3gpp spec sync --tsg <tsg>' first."
         )
-    versions = service.list_versions(spec_id)
+    versions = service.list_versions(spec_id, limit=limit, offset=offset, version=version)
 
     settings = get_settings()
     fmt = _resolve_format(fmt, default=settings.output.format)
@@ -4081,6 +4099,10 @@ def spec_show(
         "version", "release", "ftp_url", "meeting_id", "meeting_name",
         "upload_date", "pdf_url", "crs",
     ]
+
+    if no_wis_crs:
+        header_fields = [f for f in header_fields if f != "wis"]
+        version_fields = [f for f in version_fields if f != "crs"]
 
     if fmt == "json":
         payload = {

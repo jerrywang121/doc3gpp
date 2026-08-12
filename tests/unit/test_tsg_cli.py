@@ -1,3 +1,5 @@
+from dataclasses import fields
+
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -62,8 +64,14 @@ def test_tsg_list_with_all_fields(monkeypatch) -> None:
     assert result.exit_code == 0
     lines = [line for line in result.output.splitlines() if line and not line.startswith("Listing")]
     assert len(lines) == 3
+    # ``--fields all`` emits one tab-separated column per dataclass
+    # field; ``Tsg`` gained ``meeting_last_sync`` and ``spec_last_sync``
+    # after this test was first written (sync timestamp tracking), so
+    # compute the expected count from the model rather than hardcoding
+    # it.
+    expected_columns = len(fields(Tsg))
     for line in lines:
-        assert len(line.split("\t")) == 5
+        assert len(line.split("\t")) == expected_columns
     assert "ran-ah1" in lines[1]
 
 

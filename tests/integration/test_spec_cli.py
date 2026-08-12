@@ -310,7 +310,10 @@ def test_spec_show_unknown(monkeypatch) -> None:
 
     result = runner.invoke(app, ["spec", "show", "99.999-9"])
     assert result.exit_code != 0
-    assert "Unknown spec id" in (result.output + result.stdout)
+    combined = result.output + result.stdout
+    assert "Unknown spec id" in combined
+    assert "--spec-id" in combined
+    assert "99.999-9" in combined
 
 
 def test_spec_sync_single_tsg_shows_progress_bar(monkeypatch) -> None:

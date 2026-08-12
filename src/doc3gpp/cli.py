@@ -4117,7 +4117,9 @@ def spec_show(
     spec = service.get(spec_id)
     if spec is None:
         raise typer.BadParameter(
-            f"Unknown spec id '{spec_id}'. Run 'doc3gpp spec sync --tsg <tsg>' first."
+            f"Unknown spec id '{spec_id}'. "
+            f"Run 'doc3gpp spec sync --spec-id {spec_id}' to fetch it directly, "
+            f"or '--tsg <tsg>' to sync the whole TSG."
         )
     versions = service.list_versions(spec_id, limit=limit, offset=offset, version=version)
 

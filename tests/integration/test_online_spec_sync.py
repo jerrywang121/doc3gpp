@@ -49,10 +49,12 @@ def test_spec_sync_r5_online(tmp_path, monkeypatch) -> None:
     )
 
     from doc3gpp.settings.loader import get_settings
+    from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
 
     get_settings.cache_clear()
     get_engine.cache_clear()
+    create_schema()
 
     service = build_spec_service()
 

@@ -90,6 +90,7 @@ dev = [
   "doc3gpp[web]",
   "pytest>=8.2.0",
   "pytest-cov>=5.0.0",
+  "pytest-xdist>=3.5.0",
   "ruff>=0.5.0",
 ]
 
@@ -99,6 +100,12 @@ doc3gpp = "doc3gpp.cli:main"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Default to the offline suite so plain `pytest` is fast and never
+# touches live 3gpp.org / FTP endpoints. Online tests are explicitly
+# opted in via `pytest -m online`. Semantic-marked tests already
+# self-deselect via their own marker (they need the heavy `[semantic]`
+# extra) and stay opt-in via `pytest -m semantic`.
+addopts = ["-m", "not online"]
 markers = [
   "online: tests that access live internet endpoints (for example 3gpp.org)",
   "semantic: tests that require the [semantic] extra (sentence-transformers, sqlite-vec)",

@@ -402,3 +402,33 @@ def test_spec_show_no_wis_crs_drops_fields(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert "wis" not in payload["spec"]
     assert "crs" not in payload["versions"][0]
+
+
+def test_spec_show_json_parity_keeps_wis_crs_by_default(monkeypatch) -> None:
+    """``spec show`` default JSON keeps ``wis``/``crs`` — the slim
+    ``--no-wis-crs`` variant drops them. Mirrors the CLI-vs-web/MCP
+    byte-consistency contract (the ``spec show`` header includes ``wis``
+    by default, distinct from ``spec list`` which omits it)."""
+    spec = Spec(
+        spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5", wis="eNB",
+    )
+    version = SpecVersion(
+        spec_id="36.579-5", version="18.3.0", ftp_url="u",
+        release="Rel-18", crs="R5-1,R5-2",
+    )
+    svc = MagicMock()
+    svc.get.return_value = spec
+    svc.list_versions = MagicMock(return_value=[version])
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+
+    full = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "json"])
+    assert full.exit_code == 0, full.stdout
+    full_payload = json.loads(full.stdout)
+    assert "wis" in full_payload["spec"]
+    assert "crs" in full_payload["versions"][0]
+
+    slim = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "json", "--no-wis-crs"])
+    assert slim.exit_code == 0, slim.stdout
+    slim_payload = json.loads(slim.stdout)
+    assert "wis" not in slim_payload["spec"]
+    assert "crs" not in slim_payload["versions"][0]

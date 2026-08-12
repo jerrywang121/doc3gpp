@@ -46,6 +46,7 @@ _TDOC_FIELDS = ["tdoc_id", "meeting_name", "title", "source", "type", "status", 
 _TSG_FIELDS = ["tsg_name", "short_name", "description"]
 _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
 _SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs"]
+_SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
 _VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
 
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
@@ -388,7 +389,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         versions = services.spec.list_versions(
             spec_id, limit=limit, offset=offset, version=version
         )
-        spec_fields = [f for f in _SPEC_FIELDS if not (no_wis_crs and f == "wis")]
+        spec_fields = [f for f in _SPEC_SHOW_FIELDS if not (no_wis_crs and f == "wis")]
         version_fields = [f for f in _VERSION_FIELDS if not (no_wis_crs and f == "crs")]
         return _to_json({
             "spec": {f: getattr(spec, f, None) for f in spec_fields},

@@ -22,6 +22,10 @@ _LIMIT_CAP = 200
 # Mirrors ``settings.output.fields.spec`` — what
 # ``doc3gpp spec list --format json`` emits by default.
 _SPEC_DEFAULT_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs"]
+# Spec-show header fields: keeps ``wis`` by default (dropped only under
+# ``no_wis_crs``), matching ``doc3gpp spec show``. Distinct from the
+# ``spec list`` default fields which omit ``wis``.
+_SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
 _VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
 
 
@@ -125,7 +129,7 @@ async def show_spec(
     )
 
     slim = parse_bool_query(no_wis_crs) is True
-    header_fields = [f for f in _SPEC_DEFAULT_FIELDS if not (slim and f == "wis")]
+    header_fields = [f for f in _SPEC_SHOW_FIELDS if not (slim and f == "wis")]
     version_fields = [f for f in _VERSION_FIELDS if not (slim and f == "crs")]
 
     if format == "json":

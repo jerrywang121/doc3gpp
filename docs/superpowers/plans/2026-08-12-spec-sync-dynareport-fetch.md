@@ -473,15 +473,25 @@ def test_sync_spec_stored_row_unchanged(monkeypatch) -> None:
     assert repo.specs["38.523-1"].title == "Cached"
 ```
 
-The `_StubTsgRepo` referenced in the new tests needs a `short_names` set + a `get_by_short_name` method that returns a `Tsg`-like object for known names and `None` otherwise. Replace the existing `_StubTsgRepo` at `tests/unit/test_spec_service.py:13-25` with:
+Replace the existing `_StubTsgRepo` at `tests/unit/test_spec_service.py:13-25` with a backward-compatible version that:
+
+1. Keeps the existing `last_spec_sync=...` constructor (used by 11 existing call sites that read the skip rule).
+2. Adds a new `short_names: set[str] | None = None` kwarg so the new tests can express "empty reference table" / "known short names".
+3. `get_by_short_name` returns `None` when the name is not in the configured set, so `SpecService.sync_spec`'s new validation step surfaces `UnknownTsgError` exactly as production does.
 
 ```python
 from doc3gpp.models.tsg import Tsg
 
 
 class _StubTsgRepo:
-    def __init__(self, short_names: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        last_spec_sync: datetime | None = None,
+        short_names: set[str] | None = None,
+    ) -> None:
+        self._last = last_spec_sync
         self._known = {n.upper() for n in (short_names or set())}
+        self.spec_sync_calls: list = []
 
     def get_by_short_name(self, short_name: str):
         if short_name.upper() not in self._known:
@@ -492,12 +502,15 @@ class _StubTsgRepo:
             description="stub",
             url=None,
             meeting_last_sync=None,
-            spec_last_sync=None,
+            spec_last_sync=self._last,
         )
 
     def update_spec_last_sync(self, short_name: str, synced_at) -> bool:
+        self.spec_sync_calls.append(synced_at)
         return True
 ```
+
+`test_sync_spec_stored_row_unchanged` (in this task's test list) uses `tsg_repo = _StubTsgRepo(short_names={"R5"})` — the new `short_names` kwarg is additive. All 11 existing call sites that pass `last_spec_sync=...` keep working because the new parameter is keyword-only and defaults to `None`.
 
 - [ ] **Step 2: Run the new tests to verify they fail**
 

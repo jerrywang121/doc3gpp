@@ -134,10 +134,19 @@ async def _sync_specs(
     cancel_event: asyncio.Event,
 ) -> Mapping[str, JSONValue]:
     tsg = job.params.get("tsg")
-    if not tsg or not isinstance(tsg, str):
-        raise ValueError("sync_specs job requires a 'tsg' string parameter")
+    spec_id = job.params.get("spec_id")
     force = bool(job.params.get("force", False))
-    progress(f"syncing specs for TSG {tsg}")
+    if (tsg is None) == (spec_id is None):
+        raise ValueError("sync_specs job requires exactly one of 'tsg' or 'spec_id'")
+
+    if spec_id is not None:
+        if not isinstance(spec_id, str):
+            raise ValueError("sync_specs job requires a 'spec_id' string parameter")
+        progress(f"syncing spec {spec_id}")
+    else:
+        if not tsg or not isinstance(tsg, str):
+            raise ValueError("sync_specs job requires a 'tsg' string parameter")
+        progress(f"syncing specs for TSG {tsg}")
 
     def on_progress(event: str, data: Mapping[str, object]) -> None:
         if event == "list_parsed":
@@ -145,7 +154,10 @@ async def _sync_specs(
         elif event == "spec_done":
             progress(f"spec {data.get('spec_id', '')} done")
 
-    outcome = services.spec.sync(tsg, force=force, on_progress=on_progress)
+    if spec_id is not None:
+        outcome = services.spec.sync_spec(spec_id, force=force, on_progress=on_progress)
+    else:
+        outcome = services.spec.sync(tsg, force=force, on_progress=on_progress)
     progress(outcome.reason)
     return {
         "status": outcome.status,

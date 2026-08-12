@@ -477,20 +477,22 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     def sync_all_tdocs() -> str:
         return _enqueue(state, JobKind.SYNC_TDOCS_ALL, {"force": False}, "queued sync_all_tdocs")
 
-    @server.tool(name="sync_specs", description="Enqueue a spec sync for a TSG.")
+    @server.tool(name="sync_specs", description="Enqueue a spec sync for a TSG or a single stored spec.")
     @_mcp_error_guard
     def sync_specs(
-        tsg: Annotated[str, Field(description="TSG short name to sync specs for (e.g. 'R5').")],
+        tsg: Annotated[str | None, Field(description="TSG short name to sync specs for (e.g. 'R5').")] = None,
+        spec_id: Annotated[str | None, Field(description="Dotted spec id to sync a single stored spec (e.g. '36.579-5').")] = None,
         force: Annotated[bool, Field(description="Bypass the spec sync interval skip rule.")] = False,
     ) -> str:
-        if not tsg:
-            raise InvalidFilterError("tsg is required")
-        return _enqueue(
-            state,
-            JobKind.SYNC_SPECS,
-            {"tsg": tsg, "force": force},
-            f"queued sync_specs for TSG {tsg}",
-        )
+        if (tsg is None) == (spec_id is None):
+            raise InvalidFilterError("exactly one of 'tsg' or 'spec_id' is required")
+        if spec_id is not None:
+            params: dict[str, Any] = {"spec_id": spec_id, "force": force}
+            message = f"queued sync_specs for spec {spec_id}"
+        else:
+            params = {"tsg": tsg, "force": force}
+            message = f"queued sync_specs for TSG {tsg}"
+        return _enqueue(state, JobKind.SYNC_SPECS, params, message)
 
     @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages + change details.")
     @_mcp_error_guard

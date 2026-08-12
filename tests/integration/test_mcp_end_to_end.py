@@ -178,6 +178,28 @@ def test_sync_specs_tool_enqueues(sqlite_env) -> None:
     del state.engine
 
 
+def test_sync_specs_tool_by_spec_id_enqueues(sqlite_env) -> None:
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool("sync_specs", {"spec_id": "36.579-5", "force": False})
+        envelope = json.loads(created.content[0].text)
+        assert envelope["status"] == "queued"
+        job_id = envelope["job_id"]
+        detail = await server.call_tool("get_job", {"job_id": job_id})
+        return detail
+
+    detail = asyncio.run(run())
+    assert detail.is_error is False
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["kind"] == "sync_specs"
+    assert detail_payload["params"] == {"spec_id": "36.579-5", "force": False}
+    del state.engine
+
+
 def test_get_meeting_not_found_raises(sqlite_env) -> None:
     """Unknown meeting id propagates MeetingNotFoundError as an MCP -32004 protocol error."""
     import asyncio

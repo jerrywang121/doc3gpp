@@ -144,9 +144,12 @@ class SQLAlchemySpecRepository:
         spec_id: str,
         limit: int = 200,
         offset: int = 0,
+        version: str | None = None,
     ) -> list[SpecVersion]:
         with self._session_factory() as session:
             stmt = select(SpecVersionORM).where(SpecVersionORM.spec_id == spec_id)
+            if version:
+                stmt = apply_text_filter(stmt, SpecVersionORM.version, version)
             rows = session.scalars(stmt).all()
         versions = [_orm_to_version(r) for r in rows]
         # Version strings are ``#.#.#`` (e.g. ``18.10.1``), so a plain

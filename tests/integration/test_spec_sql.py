@@ -93,6 +93,28 @@ def test_list_versions_orders_numerically_desc(session_factory) -> None:
     got = repo.list_versions("36.579-5")
     assert [v.version for v in got] == ["18.10.1", "18.3.0", "18.2.1"]
 
+def test_list_versions_version_filter_and_paging(session_factory) -> None:
+    """``list_versions`` filters by ``version`` (rich LIKE), orders
+    numeric-DESC, then applies ``limit``/``offset``."""
+    repo = SQLAlchemySpecRepository(session_factory)
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="T"))
+    versions = [
+        SpecVersion(spec_id="36.579-5", version="19.2.0", ftp_url="u1"),
+        SpecVersion(spec_id="36.579-5", version="19.10.0", ftp_url="u2"),
+        SpecVersion(spec_id="36.579-5", version="18.3.0", ftp_url="u3"),
+        SpecVersion(spec_id="36.579-5", version="17.1.0", ftp_url="u4"),
+    ]
+    repo.upsert_versions(versions)
+
+    got = repo.list_versions("36.579-5", version="19.%")
+    assert [v.version for v in got] == ["19.10.0", "19.2.0"]
+
+    got = repo.list_versions("36.579-5", version="19.%", limit=1, offset=1)
+    assert [v.version for v in got] == ["19.2.0"]
+
+    got = repo.list_versions("36.579-5", version="null")
+    assert got == []
+
 
 def test_list_versions_is_idempotent(session_factory) -> None:
     repo = SQLAlchemySpecRepository(session_factory)

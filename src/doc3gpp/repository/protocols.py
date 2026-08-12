@@ -383,6 +383,7 @@ class SpecRepository(Protocol):
         spec_id: str,
         limit: int = 200,
         offset: int = 0,
+        version: str | None = None,
     ) -> list[SpecVersion]:
         """Return version rows for a spec, ordered by ``version DESC``."""
         ...

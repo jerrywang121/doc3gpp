@@ -149,10 +149,22 @@ def test_post_sync_specs_creates_job(client: Any) -> None:
     assert job.params == {"tsg": "R5", "force": True}
 
 
-def test_post_sync_specs_requires_tsg(client: Any) -> None:
+def test_post_sync_specs_by_spec_id(client: Any) -> None:
+    c, repo, _ = client
+    r = c.post("/jobs/sync/specs", json={"spec_id": "36.579-5", "force": False})
+    assert r.status_code == 202
+    job = repo.get(r.json()["job_id"])
+    assert job is not None
+    assert job.kind is JobKind.SYNC_SPECS
+    assert job.params == {"spec_id": "36.579-5", "force": False}
+
+
+def test_post_sync_specs_requires_one_selector(client: Any) -> None:
     c, _, _ = client
-    r = c.post("/jobs/sync/specs", json={})
-    assert r.status_code == 422
+    r = c.post("/jobs/sync/specs", json={"tsg": "R5", "spec_id": "36.579-5"})
+    assert r.status_code == 400
+    r2 = c.post("/jobs/sync/specs", json={})
+    assert r2.status_code == 400
 
 
 def test_post_parse_tdocs(client: Any) -> None:

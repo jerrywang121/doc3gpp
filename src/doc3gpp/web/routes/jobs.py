@@ -114,7 +114,8 @@ class _SyncTDocsBody(BaseModel):
 
 
 class _SyncSpecsBody(BaseModel):
-    tsg: str
+    tsg: str | None = None
+    spec_id: str | None = None
     force: bool = False
 
 
@@ -184,10 +185,16 @@ async def post_sync_specs(
     body: _SyncSpecsBody,
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> JSONResponse:
-    job = job_repo.create(
-        JobKind.SYNC_SPECS,
-        {"tsg": body.tsg, "force": body.force},
-    )
+    if (body.tsg is None) == (body.spec_id is None):
+        raise InvalidFilterError(
+            "sync/specs requires exactly one of 'tsg' or 'spec_id' in the body"
+        )
+    params: dict[str, JSONValue] = {"force": body.force}
+    if body.tsg is not None:
+        params["tsg"] = body.tsg
+    else:
+        params["spec_id"] = body.spec_id
+    job = job_repo.create(JobKind.SYNC_SPECS, params)
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

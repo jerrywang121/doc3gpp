@@ -164,6 +164,69 @@ class SpecService:
             version_count=version_total,
         )
 
+    def sync_spec(
+        self,
+        spec_id: str,
+        *,
+        force: bool = False,
+        on_progress: SpecProgressFn | None = None,
+    ) -> SyncOutcome:
+        """Refresh a single stored spec's detail page + versions.
+
+        Looks up ``spec_id`` in the DB to recover its TSG (required for
+        the FK and for ``parse_spec_detail``). A spec that is not
+        stored cannot be synced on its own and raises ``ValueError``.
+        Honours the per-TSG ``tsgs.spec_last_sync`` skip rule unless
+        ``force``, and stamps it again on success — identical to
+        :meth:`sync`.
+        """
+        spec = self._repository.get(spec_id)
+        if spec is None:
+            raise ValueError(
+                f"spec {spec_id!r} is not in the database; run 'doc3gpp spec sync --tsg <tsg>' first"
+            )
+        canonical = spec.tsg.upper() if spec.tsg else ""
+        if not force and self._tsg_repository is not None:
+            tsg_record = self._tsg_repository.get_by_short_name(canonical)
+            last_sync = tsg_record.spec_last_sync if tsg_record is not None else None
+            now = datetime.now(timezone.utc)
+            if last_sync is not None and (now - last_sync) < self._sync_interval:
+                ago = now - last_sync
+                return SyncOutcome(
+                    status="skipped",
+                    reason=(
+                        f"Spec sync skipped for {spec.spec_id} (TSG {canonical}): "
+                        f"last sync {_format_duration(ago)} ago "
+                        f"(sync interval {_format_duration(self._sync_interval)}). "
+                        f"Use --force to override."
+                    ),
+                )
+
+        logger.info("Syncing spec %s", spec.spec_id)
+        with ScraperClient() as client:
+            with ThreadPoolExecutor(max_workers=1) as followup_executor:
+                version_count = self._sync_one_spec(
+                    spec, canonical, followup_executor, client
+                )
+            if on_progress is not None:
+                on_progress("spec_done", {"spec_id": spec.spec_id})
+
+        if self._tsg_repository is not None:
+            self._tsg_repository.update_spec_last_sync(
+                canonical, datetime.now(timezone.utc)
+            )
+
+        return SyncOutcome(
+            status="synced",
+            reason=f"Spec sync complete for {spec.spec_id}: 1 spec, {version_count} versions stored",
+            synced_count=1,
+            version_count=version_count,
+        )
+
+    def list_distinct_tsgs(self) -> list[str]:
+        """Return distinct TSG short names currently stored in specs."""
+        return self._repository.list_distinct_tsgs()
+
     def _sync_one_spec(
         self,
         spec: Spec,

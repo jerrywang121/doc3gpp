@@ -548,3 +548,64 @@ def test_sync_followups_are_fanned_out_across_the_thread_pool(monkeypatch) -> No
         f"for {n_versions} versions × 2 follow-ups × {sleep_per_call}s each "
         f"(serial baseline {n_versions * 2 * sleep_per_call:.1f}s)"
     )
+
+
+def test_sync_spec_syncs_single_stored_spec(monkeypatch) -> None:
+    """``sync_spec`` fetches only the detail page of one stored spec."""
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: DETAIL_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: "<html><a href='x.pdf'>d</a></html>",
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>",
+    )
+    repo = _StubSpecRepo()
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
+    tsg = _StubTsgRepo()
+    svc = SpecService(repo, tsg)
+
+    outcome = svc.sync_spec("36.579-5")
+
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 1
+    assert repo.versions["36.579-5"]
+    assert tsg.spec_sync_calls, "sync_spec must stamp tsgs.spec_last_sync"
+
+
+def test_sync_spec_unknown_spec_raises() -> None:
+    """``sync_spec`` on a spec not in the DB raises ValueError."""
+    repo = _StubSpecRepo()
+    svc = SpecService(repo, _StubTsgRepo())
+    try:
+        svc.sync_spec("99.999-9")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_sync_spec_honours_skip_rule() -> None:
+    """``sync_spec`` skips when the TSG was synced within the interval."""
+    recent = datetime.now(timezone.utc) - timedelta(minutes=5)
+    repo = _StubSpecRepo()
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
+    tsg = _StubTsgRepo(last_spec_sync=recent)
+    svc = SpecService(repo, tsg, sync_interval=timedelta(hours=24))
+
+    outcome = svc.sync_spec("36.579-5")
+
+    assert outcome.status == "skipped"
+    assert "Use --force to override" in outcome.reason
+
+
+def test_list_distinct_tsgs_delegates_to_repo() -> None:
+    """``SpecService.list_distinct_tsgs`` forwards to the repo."""
+    repo = _StubSpecRepo()
+    repo.list_distinct_tsgs = MagicMock(return_value=["R5", "S2"])
+    svc = SpecService(repo)
+    assert svc.list_distinct_tsgs() == ["R5", "S2"]
+    repo.list_distinct_tsgs.assert_called_once_with()

@@ -1094,10 +1094,10 @@ same bugs.
    expected exit code + message pair.
 
 2. **Each new test re-ran the same `from doc3gpp.services.spec_service
-   import (...)` block.** The implementer collapsed both into the
-   single module-level import already present at the top of
-   `tests/integration/test_spec_cli.py`. No behaviour change;
-   reviewer's diff-only check caught the duplication.
+   import (...)` block.** Reviewer's diff-only check flagged the
+   duplication; the implementer left the in-function imports as-is
+   (each test stays self-contained). No behaviour change; the
+   duplication is harmless.
 
 3. **`test_spec_sync_spec_id_unknown_raises` was a leftover from
    the pre-flight era.** Once the CLI droped the pre-flight block,
@@ -1142,7 +1142,9 @@ same bugs.
   the original design.
 - Reviewers should expect these specific shapes on re-run: in
   Task 3, demand the downstream fetcher mocks; in Task 4, scan
-  for `result.stdout`, double imports, and the obsolete
+  for `result.stdout`, double imports (in-function
+  `from doc3gpp.services.spec_service import ...` per test is
+  acceptable but flag it as a smell), and the obsolete
   `unknown_raises` test name; in Task 6, byte-diff the quoted
   format strings against the actual `__init__` bodies in
   `services/spec_service.py` before approving.

@@ -128,6 +128,7 @@ doc3gpp tdoc parse --tdoc 'R5s26%' --yes   # pattern match, skip confirmation
 doc3gpp wi sync --tsg r5                   # scrape WI DynaReport for R5
 doc3gpp wi list --release "Rel-19" --limit 50
 doc3gpp spec sync --tsg r5                 # scrape spec list + parallel detail pages
+doc3gpp spec sync --spec-id 36.579-5       # sync a single stored spec
 doc3gpp spec list --type TS --limit 20
 doc3gpp spec show 36.579-5                 # header + version rows
 ```
@@ -215,6 +216,8 @@ doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
 # sync — fetch list page + parallel detail pages (TSGs / WI links / ETSI PDF / CR list)
 doc3gpp spec sync --tsg r5                          # 24h skip rule via sync.spec_sync_interval
 doc3gpp spec sync --tsg r5 --force                  # bypass the skip rule
+doc3gpp spec sync --spec-id 36.579-5                # sync a single stored spec (no list page)
+doc3gpp spec sync --spec-id 36.579-5 --force        # bypass the skip rule for one spec
 
 # list — 9 filter flags combine freely (rich-filter grammar: %, !pattern, null, not-null)
 doc3gpp spec list --limit 20

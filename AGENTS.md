@@ -72,7 +72,7 @@ For the full symbol-to-file table, see
 | Add a body-change extraction | `src/doc3gpp/parsers/cr/body_changes.py` + `src/doc3gpp/storage/repositories/tdoc_cr_change_details_sql.py` | Pure function in parsers, sidecar repo in storage. |
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
-| Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and stamps `tsgs.spec_last_sync` at the end. |
+| Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and stamps `tsgs.spec_last_sync` at the end. `SpecService.sync_spec` syncs a single stored spec (no list page); `list_distinct_tsgs` drives the no-selector fallback. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
 | Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
@@ -151,7 +151,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `SQLAlchemySpecRepository.upsert` + `upsert_versions`.
   `tsgs.spec_last_sync` skip rule honoured unless `--force` is
   passed. Per-spec ETSI / CR failures log a warning and the sweep
-  continues.
+  continues. `spec sync --spec-id <id>` instead calls
+  `SpecService.sync_spec` (single detail page, no list fetch); with
+  neither `--tsg` nor `--spec-id`, every distinct TSG in the `specs`
+  table is synced via `SpecService.list_distinct_tsgs`.
 - `doc3gpp spec list [filters]` / `doc3gpp spec show <spec-id>`
   read cached rows via `SpecRepository.list` /
   `SQLAlchemySpecRepository.get` + `list_versions`; the show command

@@ -328,6 +328,13 @@ and the TDoc CR extraction is the deepest.
 
 ### Spec sync (list + detail)
 
+`spec sync --spec-id <id>` and the web spec detail page's Sync button
+use `SpecService.sync_spec` — they recover the spec's TSG from the
+stored row and fetch only that spec's detail page + versions (no list
+page). With no `--tsg` and no `--spec-id`, the fallback iterates the
+distinct TSGs of the `specs` table (via `SpecService.list_distinct_tsgs`)
+and syncs each through the `--tsg` path below.
+
 1. `doc3gpp spec sync --tsg <short>` validates `<short>` against
    the `tsgs` table (auto-seeded if empty) and resolves the TSG via
    `TsgService`.

@@ -1817,22 +1817,23 @@ Purpose:
 
 Options:
 
-- --tsg: TSG short name (e.g. `R5`). default: `R5`. Validated against
+- --tsg: TSG short name (e.g. `R5`). default: none. Validated against
   the `tsgs` reference table; unknown values raise an error listing the
-  known short names and pointing to `doc3gpp tsg list`. If the `tsgs`
-  table is empty (fresh install), it is auto-seeded before validation.
+  known short names. Mutually exclusive with --spec-id.
+- --spec-id: Dotted spec id (e.g. `36.579-5`) to sync a single stored
+  spec. Mutually exclusive with --tsg. The spec must already be stored
+  (run `spec sync --tsg <tsg>` first).
 - --force, -f: Bypass the spec sync interval skip rule.
 
 Behavior:
 
-- Composes the DynaReport list URL from the uppercased TSG short name
-  (`https://www.3gpp.org/dynareport?code=<Spec-<tsg>.htm>`).
-- Fetches the list page once, parses the spec table into `Spec`
-  headers, then fans out across per-spec detail pages in a thread pool
-  (`min(32, cpu+4)` workers). Each worker parses the detail page into
-  a `Spec` header + `SpecVersion` rows, runs the conditional ETSI PDF
-  and CR-list follow-ups for each version, and upserts the result in
-  one transaction.
+- With --tsg: fetches the TSG list page, fans out per-spec detail pages.
+- With --spec-id: looks up the stored spec to recover its TSG, fetches
+  only that spec's detail page + versions (no list page).
+- With neither: every distinct TSG found in the `specs` table is synced
+  (each via the --tsg path). The single-spec and per-TSG paths both
+  honour `tsgs.spec_last_sync` (skip unless --force) and stamp it again
+  on success.
 - ETSI PDF follow-ups are gated on `SpecVersion.wki_id` being set and
   `SpecVersion.pdf_url` being empty. CR-list follow-ups are gated on
   either the upload date being within the last 90 days **or** the
@@ -1848,11 +1849,15 @@ Behavior:
 Examples:
 
 ```bash
-# Sync specs for R5 (the default TSG).
+# Sync every distinct TSG found in the specs table.
 doc3gpp spec sync
 
 # Sync specs for a specific TSG, bypassing the skip rule.
 doc3gpp spec sync --tsg R5 --force
+
+# Sync a single stored spec (no list page fetch).
+doc3gpp spec sync --spec-id 36.579-5
+doc3gpp spec sync --spec-id 36.579-5 --force
 ```
 
 ### doc3gpp spec list

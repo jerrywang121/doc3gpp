@@ -11,11 +11,16 @@ gets updated alongside the fix.
   an **integration test** against sqlite under `tests/integration/`.
 - `pyproject.toml [tool.pytest.ini_options]` sets
   `pythonpath = ["src"]`, so tests resolve `doc3gpp.*` without an
-  editable install.
-- Default `pytest` excludes the `online` marker. New tests stay in
-  the default pool unless they need network.
+  editable install, and `addopts = ["-m", "not online"]` so plain
+  `pytest` is the offline suite. New tests stay in the default
+  pool unless they need network or the `[semantic]` extra.
 - Online tests hit live 3gpp.org + FTP and are flaky — run with
-  `-rs` to surface skip reasons.
+  `pytest -m online -rs` to surface skip reasons.
+- The dev extras pull in `pytest-xdist`; `scripts/test_sqlite.sh`
+  auto-uses `-n auto` when xdist is importable, otherwise it
+  falls back to sequential. Locally you can also pass
+  `pytest -n auto` (or `-n 4`) directly for a ~3× speedup on
+  4+ core machines.
 
 ## Lint / static analysis
 

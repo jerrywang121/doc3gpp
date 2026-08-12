@@ -74,7 +74,7 @@ For the full symbol-to-file table, see
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
 | Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and stamps `tsgs.spec_last_sync` at the end. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
-| Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. |
+| Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. Uses `-n auto` when xdist is installed. |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
 | Add a search command / hook | `src/doc3gpp/cli.py` (`search_app`) + `src/doc3gpp/services/search_service.py` + `src/doc3gpp/storage/repositories/search_sql.py` | FTS5 over sqlite + index-time normalize_query; rebuild resume via `tdoc_search_meta` |
 | Add a search rerank flag / knob | `src/doc3gpp/services/semantic_reranker.py` + `src/doc3gpp/services/search_service.py` (`PassthroughReranker`) + `src/doc3gpp/settings/schema.py` (`SearchSettings.search_fanout_factor`) + `src/doc3gpp/cli.py` (`search_command`) | The `EmbeddingReranker` Protocol lives in `src/doc3gpp/repository/protocols.py`. Vector lookup helper: `VectorIndexRepository.get_min_distance_for_tdocs`. |
@@ -345,16 +345,22 @@ ruff check .
 
 # Full sqlite test suite (unit + integration, excludes online)
 ./scripts/test_sqlite.sh
+# (auto-uses pytest-xdist -n auto when the [dev] extra is installed;
+#  falls back to sequential otherwise. ~3x speedup on 4+ core machines.)
 
 # Online tests (opt-in, hits live 3gpp.org and FTP)
 python -m pytest -m online -rs
+
+# Plain `pytest` is offline by default (addopts in pyproject.toml).
 
 # Bootstrap dev environment
 ./scripts/dev_run.sh
 ```
 
 `pyproject.toml [tool.pytest.ini_options]` sets `pythonpath = ["src"]`,
-so tests resolve `doc3gpp.*` without an editable install.
+so tests resolve `doc3gpp.*` without an editable install, and
+`addopts = ["-m", "not online"]` so plain `pytest` is the offline
+suite.
 
 ## Doc pointers
 

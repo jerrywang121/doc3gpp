@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from typing import NamedTuple
 
 from bs4 import BeautifulSoup
 
@@ -251,6 +252,74 @@ def _spec_id_no_dot(spec_id: str) -> str:
     return spec_id.replace(".", "")
 
 
+class SpecHeaderFields(NamedTuple):
+    """Header fields extracted from the DynaReport detail page.
+
+    Parser-private DTO; does not flow past :class:`doc3gpp.services.spec_service.SpecService`.
+    """
+
+    title: str | None
+    type: str | None
+    tsg_long_name: str | None
+
+
+def parse_dynareport_header(html: str) -> SpecHeaderFields:
+    """Extract the three bootstrap header fields from a DynaReport detail page.
+
+    The DynaReport detail page at
+    ``https://www.3gpp.org/DynaReport/{spec_id_no_dot}.htm`` carries
+    the spec's title (``#titleVal``), its type (``#typeVal``), and
+    the primary responsible group (the cell containing
+    ``#PrimaryResponsibleGroupLbl``). This is a slim parser used by
+    :meth:`doc3gpp.services.spec_service.SpecService.sync_spec` when
+    the spec is not yet in the local DB — the rest of the detail
+    page is parsed by :func:`parse_spec_detail` inside ``_sync_one_spec``.
+
+    Returns a :class:`SpecHeaderFields` NamedTuple with all three
+    fields set to ``None`` when the upstream body does not contain
+    any of the expected spans.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    title = _text_of_id(soup, "titleVal")
+    type_text = _text_of_id(soup, "typeVal")
+    type_token: str | None = None
+    if type_text is not None:
+        m = re.search(r"\b(TS|TR)\b", type_text, flags=re.IGNORECASE)
+        if m is not None:
+            type_token = m.group(1).upper()
+
+    tsg_long_name: str | None = None
+    label = soup.find(id="PrimaryResponsibleGroupLbl")
+    if label is not None:
+        row = label.find_parent("tr")
+        if row is not None:
+            cells = row.find_all("td")
+            if len(cells) >= 2:
+                tsg_long_name = _normalize(cells[1].get_text()) or None
+
+    return SpecHeaderFields(title=title, type=type_token, tsg_long_name=tsg_long_name)
+
+
+def normalise_tsg_long_name(long_name: str) -> str | None:
+    """Collapse a DynaReport responsible-group label to a ``tsgs.short_name`` row.
+
+    Examples: ``RAN 1`` / ``RAN WG1`` → ``R1``, ``CT 3`` → ``C3``,
+    ``SA WG2`` → ``S2``, ``RT`` / ``RP`` / ``CP`` / ``SP`` → as-is.
+    Returns ``None`` for unrecognised labels (e.g. ``RAN AH1``,
+    ``RAN`` with no number, free text, empty input) so the caller
+    can refuse the sync with a clear message.
+    """
+    if not long_name:
+        return None
+    upper = re.sub(r"\s+", " ", long_name).strip().upper()
+    m = re.match(r"^(RAN|CT|SA)\s*(?:WG)?\s*(\d+)$", upper)
+    if m is not None:
+        return f"{m.group(1)[0]}{m.group(2)}"
+    if re.fullmatch(r"(RT|RP|CP|SP)", upper):
+        return upper
+    return None
+
+
 def extract_etsi_pdf_url(html: str) -> str | None:
     """Return the first ``.pdf`` download link in an ETSI work-item page."""
     soup = BeautifulSoup(html, "lxml")
@@ -277,6 +346,9 @@ def extract_cr_tdocs(html: str) -> list[str]:
 
 
 __all__ = [
+    "SpecHeaderFields",
+    "normalise_tsg_long_name",
+    "parse_dynareport_header",
     "parse_spec_list",
     "parse_spec_detail",
     "extract_etsi_pdf_url",

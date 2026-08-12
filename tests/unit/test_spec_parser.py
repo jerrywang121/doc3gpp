@@ -3,6 +3,8 @@ from pathlib import Path
 from doc3gpp.parsers.spec_parser import (
     extract_cr_tdocs,
     extract_etsi_pdf_url,
+    normalise_tsg_long_name,
+    parse_dynareport_header,
     parse_spec_detail,
     parse_spec_list,
 )
@@ -93,3 +95,89 @@ def test_extract_etsi_pdf_url_miss() -> None:
 def test_extract_cr_tdocs() -> None:
     html = CRS_FIXTURE.read_text(encoding="utf-8")
     assert extract_cr_tdocs(html) == ["R5-253030", "R5-253031"]
+
+
+HEADER_HTML = """
+<html><body>
+<table>
+  <tr>
+    <td class="TabLineLeft">
+      <span id="titleLbl">Title:</span>
+    </td>
+    <td class="TabLineRight">
+      <span id="titleVal">Presence service using the IP Multimedia (IM) Core Network (CN) subsystem; Stage 3</span>
+    </td>
+  </tr>
+  <tr>
+    <td class="TabLineLeft">
+      <span id="typeLbl">Type:</span>
+    </td>
+    <td class="TabLineRight">
+      <span id="typeVal">Technical specification (TS)</span>
+    </td>
+  </tr>
+  <tr>
+    <td class="TabLineLeft">
+      <span id="PrimaryResponsibleGroupLbl">Primary responsible group:</span>
+    </td>
+    <td class="TabLineRight">
+      <span>
+        <span>CT 1</span>
+      </span>
+    </td>
+  </tr>
+</table>
+</body></html>
+"""
+
+
+def test_parse_dynareport_header_extracts_all_three_fields() -> None:
+    fields = parse_dynareport_header(HEADER_HTML)
+    assert fields.title == (
+        "Presence service using the IP Multimedia (IM) Core Network "
+        "(CN) subsystem; Stage 3"
+    )
+    assert fields.type == "TS"
+    assert fields.tsg_long_name == "CT 1"
+
+
+def test_parse_dynareport_header_type_tr_token() -> None:
+    html = HEADER_HTML.replace(
+        '<span id="typeVal">Technical specification (TS)</span>',
+        '<span id="typeVal">Technical report (TR)</span>',
+    )
+    assert parse_dynareport_header(html).type == "TR"
+
+
+def test_parse_dynareport_header_missing_fields_are_none() -> None:
+    html = "<html><body><table></table></body></html>"
+    fields = parse_dynareport_header(html)
+    assert fields == (None, None, None)
+
+
+def test_normalise_tsg_long_name_ran_with_number() -> None:
+    assert normalise_tsg_long_name("RAN 1") == "R1"
+    assert normalise_tsg_long_name("RAN WG1") == "R1"
+    assert normalise_tsg_long_name("RAN5") == "R5"
+    assert normalise_tsg_long_name("ran 5") == "R5"
+
+
+def test_normalise_tsg_long_name_ct_and_sa() -> None:
+    assert normalise_tsg_long_name("CT 1") == "C1"
+    assert normalise_tsg_long_name("CT 3") == "C3"
+    assert normalise_tsg_long_name("SA 2") == "S2"
+    assert normalise_tsg_long_name("SA WG6") == "S6"
+
+
+def test_normalise_tsg_long_name_plenary() -> None:
+    assert normalise_tsg_long_name("RT") == "RT"
+    assert normalise_tsg_long_name("RP") == "RP"
+    assert normalise_tsg_long_name("CP") == "CP"
+    assert normalise_tsg_long_name("SP") == "SP"
+
+
+def test_normalise_tsg_long_name_unknown_returns_none() -> None:
+    assert normalise_tsg_long_name("RAN AH1") is None
+    assert normalise_tsg_long_name("RAN") is None
+    assert normalise_tsg_long_name("") is None
+    assert normalise_tsg_long_name("bogus") is None

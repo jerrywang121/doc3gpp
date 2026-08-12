@@ -158,10 +158,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
   the group to a seeded `tsgs.short_name`, build an in-memory
   `Spec`, and hand off to the same `_sync_one_spec` pipeline as the
   stored-row path. A 404 or unrecognised group label surfaces as
-  `typer.BadParameter("spec {id!r} is unknown on the 3GPP DynaReport
-  upstream")`; an unknown seeded-TSG short name surfaces as
-  `typer.BadParameter("spec {id!r} has unknown TSG short name
-  {short!r} (normalised from {long!r})")`. With
+  `typer.BadParameter("spec {spec_id!r} is unknown on the 3GPP DynaReport upstream ({reason}); nothing to sync")`;
+  an unknown seeded-TSG short name surfaces as
+  `typer.BadParameter("spec {spec_id!r} has unknown TSG short name {short_name!r} (normalised from {long_name!r}); run 'doc3gpp tsg seed' or 'doc3gpp tsg list' to inspect the reference table")`. With
   neither `--tsg` nor `--spec-id`, every distinct TSG in the `specs`
   table is synced via `SpecService.list_distinct_tsgs`.
 - `doc3gpp spec list [filters]` / `doc3gpp spec show <spec-id>`

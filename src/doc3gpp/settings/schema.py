@@ -209,7 +209,6 @@ class OutputFieldsSettings(BaseModel):
             "radio_tech",
             "initial_release",
             "tsg",
-            "wis",
             "rapporteurs",
         ]
     )

@@ -81,5 +81,5 @@ def test_output_fields_default_spec() -> None:
     s = Settings()
     assert s.output.fields.spec == [
         "spec_id", "type", "title", "status",
-        "radio_tech", "initial_release", "tsg", "wis", "rapporteurs",
+        "radio_tech", "initial_release", "tsg", "rapporteurs",
     ]

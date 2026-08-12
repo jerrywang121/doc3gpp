@@ -2396,5 +2396,5 @@ def test_get_spec_show_no_wis_crs(client: TestClient) -> None:
         client.app.dependency_overrides.pop(get_spec_service, None)
     assert "wis" not in slim["spec"]
     assert "crs" not in slim["versions"][0]
-    assert "wis" in full["spec"]
+    assert "wis" not in full["spec"]
     assert "crs" in full["versions"][0]

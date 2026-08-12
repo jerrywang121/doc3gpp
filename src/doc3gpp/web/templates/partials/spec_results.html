@@ -18,7 +18,7 @@
         {% for spec in specs %}
           <tr>
             <td>{{ spec.type or '-' }}</td>
-            <td><code><a href="https://www.3gpp.org/DynaReport/{{ spec.spec_id }}.htm" target="_blank" rel="noopener">{{ spec.spec_id }}</a></code></td>
+            <td><code><a href="https://www.3gpp.org/DynaReport/{{ spec.spec_id | replace('.', '') }}.htm" target="_blank" rel="noopener">{{ spec.spec_id }}</a></code></td>
             <td>{{ spec.title or '-' }}</td>
             <td>{{ spec.status or '-' }}</td>
             <td>{{ spec.radio_tech or '-' }}</td>

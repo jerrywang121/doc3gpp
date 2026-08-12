@@ -414,6 +414,14 @@ table.tdoc-grid .col-meeting { width: 180px; }
   align-items: center;
 }
 
+.spec-sync-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem;
+  margin: .5rem 0 1rem;
+}
+
 .inline-check {
   display: flex;
   align-items: center;

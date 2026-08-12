@@ -6,23 +6,20 @@
     {% if spec.tsg %}TSG {{ spec.tsg }}{% endif %}
   </p>
 
-  <section class="card">
-    <h2>Sync</h2>
-    <form
-      id="spec-sync-form"
-      class="spec-sync-form"
-      method="post"
-      action="/jobs/sync/specs"
-      data-spec-id="{{ spec.spec_id }}"
-    >
-      <label class="inline-check">
-        <input type="checkbox" name="force"> Force sync
-      </label>
-      <button type="submit" class="btn primary">Sync this spec</button>
-      <span class="spec-sync-queued" style="display:none">Sync job queued</span>
-    </form>
-    <div id="spec-sync-job-target"></div>
-  </section>
+  <form
+    id="spec-sync-form"
+    class="spec-sync-form"
+    method="post"
+    action="/jobs/sync/specs"
+    data-spec-id="{{ spec.spec_id }}"
+  >
+    <label class="inline-check">
+      <input type="checkbox" name="force"> Force sync
+    </label>
+    <button type="submit" class="btn primary">Sync this spec</button>
+    <span class="spec-sync-queued" style="display:none">Sync job queued</span>
+  </form>
+  <div id="spec-sync-job-target"></div>
 
   <dl class="kv">
     {% if spec.status %}<dt>Status</dt><dd>{{ spec.status }}</dd>{% endif %}

@@ -2236,8 +2236,8 @@ class FakeSpecService:
                 return spec
         return None
 
-    def list_versions(self, spec_id: str, **_kwargs: Any) -> list[Any]:
-        return [v for v in self._versions if v.spec_id == spec_id]
+    def list_versions(self, spec_id: str, limit: int = 200, offset: int = 0, version: str | None = None, **kwargs: Any) -> list[Any]:
+        return [v for v in self._versions if v.spec_id == spec_id][offset : offset + limit]
 
 
 def test_get_specs_renders_list(client: TestClient) -> None:
@@ -2361,3 +2361,40 @@ def test_get_specs_renders_rapporteurs_column(client: TestClient) -> None:
     assert response.status_code == 200
     assert "<th>Rapporteurs</th>" in response.text
     assert "Ericsson LM" in response.text
+
+
+def test_get_spec_show_forwards_limit_offset_version(client: TestClient) -> None:
+    """``GET /specs/{id}`` forwards ``limit``/``offset``/``version`` to the service."""
+    from doc3gpp.web.deps import get_spec_service
+
+    captured = {}
+
+    class _RecordingSpecService(FakeSpecService):
+        def list_versions(self, spec_id: str, limit: int = 200, offset: int = 0, version: str | None = None, **kwargs: Any) -> list[Any]:
+            captured.update({"limit": limit, "offset": offset, "version": version})
+            return list(self._versions) * limit
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _RecordingSpecService()
+    try:
+        response = client.get("/specs/36.579-5?limit=5&offset=2&version=19.%25")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert captured == {"limit": 5, "offset": 2, "version": "19.%"}
+    assert "next ›" in response.text
+
+
+def test_get_spec_show_no_wis_crs(client: TestClient) -> None:
+    """``no_wis_crs=true`` omits the WIs row and CRs column; false keeps them."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        slim = client.get("/specs/36.579-5?no_wis_crs=true&format=json").json()
+        full = client.get("/specs/36.579-5?no_wis_crs=false&format=json").json()
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert "wis" not in slim["spec"]
+    assert "crs" not in slim["versions"][0]
+    assert "wis" in full["spec"]
+    assert "crs" in full["versions"][0]

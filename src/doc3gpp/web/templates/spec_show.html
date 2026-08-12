@@ -10,7 +10,7 @@
     {% if spec.status %}<dt>Status</dt><dd>{{ spec.status }}</dd>{% endif %}
     {% if spec.radio_tech %}<dt>Radio tech</dt><dd>{{ spec.radio_tech }}</dd>{% endif %}
     {% if spec.initial_release %}<dt>Initial release</dt><dd>{{ spec.initial_release }}</dd>{% endif %}
-    {% if spec.wis %}<dt>WIs</dt><dd class="wrap-csv">{{ spec.wis | wrap_csv(150) }}</dd>{% endif %}
+    {% if not no_wis_crs and spec.wis %}<dt>WIs</dt><dd class="wrap-csv">{{ spec.wis | wrap_csv(150) }}</dd>{% endif %}
     {% if spec.rapporteurs %}<dt>Rapporteurs</dt><dd>{{ spec.rapporteurs }}</dd>{% endif %}
     {% if spec.last_synced_at %}<dt>Last synced</dt><dd>{{ spec.last_synced_at | dt_short }} <span class="muted">UTC</span></dd>{% endif %}
   </dl>
@@ -24,7 +24,7 @@
           <th>Release</th>
           <th>Upload date</th>
           <th>Meeting</th>
-          <th>CRs</th>
+          {% if not no_wis_crs %}<th>CRs</th>{% endif %}
           <th>ZIP</th>
           <th>PDF</th>
         </tr>
@@ -43,6 +43,7 @@
                 {{ v.meeting_name or '-' }}
               {% endif %}
             </td>
+            {% if not no_wis_crs %}
             <td>
               {% if v.crs %}
                 <span class="copy-cell" title="{{ v.crs }}" data-copy="{{ v.crs }}">{{ cr_count }}</span>
@@ -50,6 +51,7 @@
                 -
               {% endif %}
             </td>
+            {% endif %}
             <td>
               {% if v.ftp_url %}<a href="{{ v.ftp_url }}" target="_blank" rel="noopener">open</a>{% else %}-{% endif %}
             </td>
@@ -60,6 +62,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% include "partials/pagination.html" %}
   {% else %}
     <p class="empty">No versions stored for this spec.</p>
   {% endif %}

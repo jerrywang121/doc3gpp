@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from doc3gpp.services.spec_service import SpecService
 from doc3gpp.web.deps import get_pending_jobs, get_spec_service
 from doc3gpp.web.errors import SpecNotFoundError
-from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
+from doc3gpp.web.filters import is_htmx_request, parse_bool_query, parse_int_query, parse_text_query
 from doc3gpp.web.render import spec_rows, spec_version_rows
 from doc3gpp.web.templates_setup import templates
 
@@ -106,23 +106,37 @@ async def show_spec(
     request: Request,
     spec_id: str,
     format: str | None = Query(default=None, alias="format"),
+    limit: str | None = Query(default="10"),
+    offset: str | None = Query(default="0"),
+    version: str | None = Query(default=None),
+    no_wis_crs: str | None = Query(default=None),
     service: SpecService = Depends(get_spec_service),
     pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
     """Render ``spec_show.html`` or a JSON payload with the spec + versions."""
+    parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 10
+    parsed_offset = parse_int_query(offset, min=0) or 0
     spec = service.get(spec_id)
     if spec is None:
         raise SpecNotFoundError(f"Spec {spec_id!r} not found")
-    versions = service.list_versions(spec_id)
+    versions = service.list_versions(
+        spec_id, limit=parsed_limit, offset=parsed_offset,
+        version=parse_text_query(version),
+    )
+
+    slim = parse_bool_query(no_wis_crs) is True
+    header_fields = [f for f in _SPEC_DEFAULT_FIELDS if not (slim and f == "wis")]
+    version_fields = [f for f in _VERSION_FIELDS if not (slim and f == "crs")]
 
     if format == "json":
         return JSONResponse(
             content={
-                "spec": {f: getattr(spec, f, None) for f in _SPEC_DEFAULT_FIELDS},
-                "versions": spec_version_rows(versions, _VERSION_FIELDS),
+                "spec": {f: getattr(spec, f, None) for f in header_fields},
+                "versions": spec_version_rows(versions, version_fields),
             },
         )
 
+    next_offset = parsed_offset + len(versions) if len(versions) == parsed_limit else None
     return templates.TemplateResponse(
         request=request,
         name="spec_show.html",
@@ -130,6 +144,12 @@ async def show_spec(
             "active_nav": "specs",
             "spec": spec,
             "versions": versions,
+            "limit": parsed_limit,
+            "offset": parsed_offset,
+            "next_offset": next_offset,
+            "total": len(versions),
+            "version": version or "",
+            "no_wis_crs": slim,
             "pending_jobs": pending_jobs,
         },
     )

@@ -39,6 +39,7 @@ class JobKind(str, Enum):
     SYNC_MEETINGS = "sync_meetings"
     SYNC_TDOCS = "sync_tdocs"
     SYNC_TDOCS_ALL = "sync_tdocs_all"
+    SYNC_SPECS = "sync_specs"
     PARSE_TDOCS = "parse_tdocs"
     REBUILD_SEARCH = "rebuild_search"
     CACHE_PURGE = "cache_purge"

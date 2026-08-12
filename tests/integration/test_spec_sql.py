@@ -31,6 +31,8 @@ def session_factory():
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with Session() as session:
         session.add(m.TsgORM(tsg_name="RAN TSG", short_name="R5", description=""))
+        session.add(m.TsgORM(tsg_name="SA WG2", short_name="SA2", description=""))
+        session.add(m.TsgORM(tsg_name="CT WG1", short_name="CT1", description=""))
         session.commit()
     return Session
 
@@ -223,3 +225,12 @@ def test_list_rapporteurs_filter(session_factory) -> None:
     assert [s.spec_id for s in repo.list(rapporteurs="not-null")] == ["36.579-5", "38.760-1"]
     # null
     assert [s.spec_id for s in repo.list(rapporteurs="null")] == ["38.761-1"]
+
+
+def test_list_distinct_tsgs(session_factory) -> None:
+    repo = SQLAlchemySpecRepository(session_factory)
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="A", tsg="R5"))
+    repo.upsert(Spec(spec_id="38.523-3", type="TS", title="B", tsg="R5"))
+    repo.upsert(Spec(spec_id="23.100", type="TR", title="C", tsg="SA2"))
+    repo.upsert(Spec(spec_id="24.301", type="TS", title="D", tsg="CT1"))
+    assert repo.list_distinct_tsgs() == ["CT1", "R5", "SA2"]

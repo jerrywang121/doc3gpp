@@ -388,6 +388,14 @@ class SpecRepository(Protocol):
         """Return version rows for a spec, ordered by ``version DESC``."""
         ...
 
+    def list_distinct_tsgs(self) -> list[str]:
+        """Return distinct, non-null TSG short names stored in ``specs``.
+
+        Results are ordered alphabetically so iteration is deterministic.
+        Rows with a ``NULL`` ``tsg`` are ignored.
+        """
+        ...
+
 
 class TDocFileRepository(Protocol):
     """Storage operations for auxiliary TDoc files (revisions, reviews, support)."""

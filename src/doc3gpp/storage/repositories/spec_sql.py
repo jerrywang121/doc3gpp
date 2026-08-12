@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import distinct, select
 from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.models.spec import Spec, SpecVersion
@@ -157,6 +157,17 @@ class SQLAlchemySpecRepository:
         # the numeric tuple instead, newest first.
         versions.sort(key=_version_sort_key, reverse=True)
         return versions[offset : offset + limit]
+
+    def list_distinct_tsgs(self) -> list[str]:
+        """Return distinct, non-null TSG short names stored in ``specs.tsg``."""
+        with self._session_factory() as session:
+            stmt = (
+                select(distinct(SpecORM.tsg))
+                .where(SpecORM.tsg.isnot(None))
+                .order_by(SpecORM.tsg)
+            )
+            rows = session.scalars(stmt).all()
+        return [str(row) for row in rows]
 
 
 def _orm_to_spec(row: SpecORM) -> Spec:

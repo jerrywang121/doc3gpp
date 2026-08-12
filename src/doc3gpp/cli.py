@@ -79,6 +79,10 @@ from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingMissingFtpUrlError,
     MeetingNotFoundError,
 )
+from doc3gpp.services.spec_service import (
+    SpecUnknownOnUpstreamError,
+    UnknownTsgError,
+)
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.settings.config_source import find_config_file, load_config_data
 from doc3gpp.settings.config_writer import (
@@ -3903,11 +3907,6 @@ def spec_sync(
         )
 
     if spec_id is not None:
-        spec = service.get(spec_id)
-        if spec is None:
-            raise typer.BadParameter(
-                f"Unknown spec id '{spec_id}'. Run 'doc3gpp spec sync --tsg <tsg>' first."
-            )
         from tqdm import tqdm
 
         bar = tqdm(total=1, desc=f"spec {spec_id}", unit="spec", dynamic_ncols=True)
@@ -3916,7 +3915,16 @@ def spec_sync(
             if event == "spec_done":
                 bar.update(1)
 
-        outcome = service.sync_spec(spec_id, force=force, on_progress=_on_progress)
+        try:
+            outcome = service.sync_spec(
+                spec_id, force=force, on_progress=_on_progress
+            )
+        except SpecUnknownOnUpstreamError as exc:
+            bar.close()
+            raise typer.BadParameter(str(exc)) from exc
+        except UnknownTsgError as exc:
+            bar.close()
+            raise typer.BadParameter(str(exc)) from exc
         bar.close()
         typer.echo(outcome.reason)
         return

@@ -477,6 +477,21 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     def sync_all_tdocs() -> str:
         return _enqueue(state, JobKind.SYNC_TDOCS_ALL, {"force": False}, "queued sync_all_tdocs")
 
+    @server.tool(name="sync_specs", description="Enqueue a spec sync for a TSG.")
+    @_mcp_error_guard
+    def sync_specs(
+        tsg: Annotated[str, Field(description="TSG short name to sync specs for (e.g. 'R5').")],
+        force: Annotated[bool, Field(description="Bypass the spec sync interval skip rule.")] = False,
+    ) -> str:
+        if not tsg:
+            raise InvalidFilterError("tsg is required")
+        return _enqueue(
+            state,
+            JobKind.SYNC_SPECS,
+            {"tsg": tsg, "force": force},
+            f"queued sync_specs for TSG {tsg}",
+        )
+
     @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages + change details.")
     @_mcp_error_guard
     def parse_tdocs(

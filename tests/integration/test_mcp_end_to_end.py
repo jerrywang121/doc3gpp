@@ -70,6 +70,7 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "sync_tdocs",
         "sync_tdocs_by_meeting",
         "sync_all_tdocs",
+        "sync_specs",
         "parse_tdocs",
         "rebuild_search_index",
         "purge_cache",
@@ -149,6 +150,31 @@ def test_job_tools_enqueue_and_poll(sqlite_env) -> None:
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_meetings"
     assert detail_payload["params"] == {"tsg": "SA2"}
+    del state.engine
+
+
+def test_sync_specs_tool_enqueues(sqlite_env) -> None:
+    """``sync_specs`` MCP tool returns the queued envelope."""
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool("sync_specs", {"tsg": "R5", "force": True})
+        envelope = json.loads(created.content[0].text)
+        assert envelope["status"] == "queued"
+        assert "links" in envelope and envelope["links"]["self"].startswith("/jobs/")
+        job_id = envelope["job_id"]
+        detail = await server.call_tool("get_job", {"job_id": job_id})
+        return created, detail
+
+    created, detail = asyncio.run(run())
+    assert created.is_error is False
+    assert detail.is_error is False
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["kind"] == "sync_specs"
+    assert detail_payload["params"] == {"tsg": "R5", "force": True}
     del state.engine
 
 

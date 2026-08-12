@@ -40,6 +40,11 @@ _SECTIONS: list[dict[str, str]] = [
         "description": "Browse stored TDoc metadata with the same filter grammar as the CLI.",
     },
     {
+        "label": "Specs",
+        "href": "/specs",
+        "description": "3GPP specifications (TSs / TRs) with their versions.",
+    },
+    {
         "label": "WIs",
         "href": "/wis",
         "description": "Work Items indexed per TSG.",

@@ -72,6 +72,7 @@ For the full symbol-to-file table, see
 | Add a body-change extraction | `src/doc3gpp/parsers/cr/body_changes.py` + `src/doc3gpp/storage/repositories/tdoc_cr_change_details_sql.py` | Pure function in parsers, sidecar repo in storage. |
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
+| Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and stamps `tsgs.spec_last_sync` at the end. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
 | Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
@@ -85,6 +86,7 @@ For the full symbol-to-file table, see
 | Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. List routes that pair with an HTMX filter form (e.g. meetings / tdocs / wis / search) must render a `partials/<resource>_results.html` fragment when the request sets `HX-Request: true` and the full page otherwise — the `outerHTML` swap target `#results` only fits a fragment, not a full HTML document. The tdoc detail page's Parse card enqueues `POST /jobs/parse/tdocs` (single-tdoc filter) and polls `partials/job_status.html` via `static/js/tdoc_parse.js`; the search pages share a 5-column grid form with a `sem` rerank input on `/search` and full filter parity on `/search/sem`. The web app builds ONE shared `SentenceTransformerEmbedder` in `build_state` and injects it into `build_tdoc_cr_service` / `build_search_service` / `build_semantic_search_service` so the model loads once per process. |
 | Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). The MCP mount supports both `streamable_http` (default) and `sse` transports, selected via `[mcp] transport` in `doc3gpp.toml`; browser origins are allowed via `[mcp] allowed_origins` (defaults to `http://127.0.0.1` and `http://localhost`). |
 | Add a background job kind | `src/doc3gpp/models/jobs.py` (`JobKind`) + `src/doc3gpp/web/workers/handlers.py` (`KIND_TO_HANDLER`) + `src/doc3gpp/web/routes/jobs.py` | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; SSE progress via `append_log`/progress callbacks. |
+| Add a spec sync job / MCP tool | `src/doc3gpp/models/jobs.py` (`JobKind.SYNC_SPECS`) + `src/doc3gpp/web/workers/handlers.py` (`_sync_specs`) + `src/doc3gpp/web/routes/jobs.py` (`POST /jobs/sync/specs`) + `src/doc3gpp/web/mcp_server.py` (`sync_specs`) | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; the handler calls `services.spec.sync(tsg, force=force, on_progress=...)`. |
 | Change job repo / worker | `src/doc3gpp/storage/repositories/jobs_sql.py` + `src/doc3gpp/web/workers/job_worker.py` + `src/doc3gpp/web/state.py` (`JobWorkerHandle`) | `get_job_repo` / `get_job_worker` deps in `web/deps.py`; tests override them. |
 | Add a `server` CLI command | `src/doc3gpp/cli_server.py` | Each subcommand starts with `_require_server_enabled(settings)`; OS install delegates to `web/install.py`. |
 | Change server/OS-settings or install helpers | `src/doc3gpp/web/install.py` + `src/doc3gpp/settings/schema.py` (`ServerSettings`/`MCPSettings`) | `[server]`/`[mcp]` TOML blocks; server settings are TOML-only (not in the env allowlist). |
@@ -141,6 +143,37 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `parse_3gpp_wis` → `SQLAlchemyWiRepository.upsert_many` (composite
   PK `(wi_id, tsg_short)`; `tsgs` table is auto-seeded so the FK
   validates).
+- `doc3gpp spec sync --tsg <s>` → `SpecService.sync` → DynaReport
+  list page + parallel per-spec detail page fans-out
+  (`ThreadPoolExecutor`, capped at `min(32, cpu+4)` workers) →
+  `parse_spec_list` + `parse_spec_detail` (+ optional ETSI PDF
+  text + CR list follow-ups gated on recency / emptiness) →
+  `SQLAlchemySpecRepository.upsert` + `upsert_versions`.
+  `tsgs.spec_last_sync` skip rule honoured unless `--force` is
+  passed. Per-spec ETSI / CR failures log a warning and the sweep
+  continues. `doc3gpp spec sync --spec-id <id>` → `SpecService.sync_spec` →
+  look up in the local `specs` table; if missing, fetch
+  `https://www.3gpp.org/DynaReport/{no_dot}.htm`, parse
+  `#titleVal` / `#typeVal` / `#PrimaryResponsibleGroupLbl`, normalise
+  the group to a seeded `tsgs.short_name`, build an in-memory
+  `Spec`, and hand off to the same `_sync_one_spec` pipeline as the
+  stored-row path. A 404 or unrecognised group label surfaces as
+  `typer.BadParameter("spec {spec_id!r} is unknown on the 3GPP DynaReport upstream ({reason}); nothing to sync")`;
+  an unknown seeded-TSG short name surfaces as
+  `typer.BadParameter("spec {spec_id!r} has unknown TSG short name {short_name!r} (normalised from {long_name!r}); run 'doc3gpp tsg seed' or 'doc3gpp tsg list' to inspect the reference table")`. With
+  neither `--tsg` nor `--spec-id`, every distinct TSG in the `specs`
+  table is synced via `SpecService.list_distinct_tsgs`.
+- `doc3gpp spec list [filters]` / `doc3gpp spec show <spec-id>`
+  read cached rows via `SpecRepository.list` /
+  `SQLAlchemySpecRepository.get` + `list_versions`; the show command
+  raises `SpecNotFoundError` (rendered as `typer.BadParameter`) when
+  no header row exists for the id. `spec show` versions can be
+  paginated/limited via `--limit` (default 10) / `--offset` (default 0),
+  filtered by `--version <pattern>` (rich filter grammar on the version
+  string), and slimmed with `--no-wis-crs` (drops the `wis` header field
+  and per-version `crs` field). `spec list` default output fields are
+  `spec_id, type, title, status, radio_tech, initial_release, tsg,
+  rapporteurs` (no `wis`).
 - `tdoc/meeting/wi * --compact` (any `--format` command) strips
   decorators from JSON / Markdown output. JSON becomes single line
   (`separators=(",", ":")`, no trailing newline); Markdown drops
@@ -336,6 +369,7 @@ so tests resolve `doc3gpp.*` without an editable install.
 | Per-knob TOML schema reference | [`doc3gpp.toml.example`](doc3gpp.toml.example) |
 | Search index design + spec contract | [`docs/superpowers/specs/2026-07-29-fts5-search-design.md`](docs/superpowers/specs/2026-07-29-fts5-search-design.md) |
 | FTS5 implementation plan | [`docs/superpowers/plans/2026-07-29-fts5-search.md`](docs/superpowers/plans/2026-07-29-fts5-search.md) |
+| Spec sync / list / show design + plan | [`docs/superpowers/specs/2026-08-10-spec-sync-list-show-design.md`](docs/superpowers/specs/2026-08-10-spec-sync-list-show-design.md) + [`docs/superpowers/plans/2026-08-10-spec-sync-list-show.md`](docs/superpowers/plans/2026-08-10-spec-sync-list-show.md) |
 | Web server + MCP + jobs end-user guide | [`docs/web-server.md`](docs/web-server.md) |
 
 Update `README.md`, `AGENTS.md`, and the relevant `docs/*.md` in the

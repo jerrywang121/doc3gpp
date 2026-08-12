@@ -100,6 +100,22 @@ class SQLAlchemyTsgRepository:
             session.commit()
         return int(result.rowcount or 0) > 0
 
+    def update_spec_last_sync(self, short_name: str, synced_at: datetime) -> bool:
+        """Record when the spec list was last synced for a TSG.
+
+        Returns ``True`` when a matching row existed and was updated,
+        ``False`` otherwise.
+        """
+        with self._session_factory() as session:
+            stmt = (
+                update(TsgORM)
+                .where(func.lower(TsgORM.short_name) == short_name.lower())
+                .values(spec_last_sync=synced_at)
+            )
+            result = session.execute(stmt)
+            session.commit()
+        return int(result.rowcount or 0) > 0
+
 def _orm_to_domain(row: TsgORM) -> Tsg:
     """Map a TsgORM row into a Tsg dataclass."""
     return Tsg(
@@ -108,6 +124,7 @@ def _orm_to_domain(row: TsgORM) -> Tsg:
         description=row.description,
         url=row.url,
         meeting_last_sync=_as_utc(row.meeting_last_sync),
+        spec_last_sync=_as_utc(row.spec_last_sync),
     )
 
 

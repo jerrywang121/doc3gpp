@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · spec {{ spec.spec_id }}{% endblock %}
+{% block content %}
+  <h1>{{ spec.type or '' }} {{ spec.spec_id }} : {{ spec.title or '' }}</h1>
+  <p class="meta">
+    {% if spec.tsg %}TSG {{ spec.tsg }}{% endif %}
+  </p>
+
+  <form
+    id="spec-sync-form"
+    class="spec-sync-form"
+    method="post"
+    action="/jobs/sync/specs"
+    data-spec-id="{{ spec.spec_id }}"
+  >
+    <label class="inline-check">
+      <input type="checkbox" name="force"> Force sync
+    </label>
+    <button type="submit" class="btn primary">Sync this spec</button>
+    <span class="spec-sync-queued" style="display:none">Sync job queued</span>
+  </form>
+  <div id="spec-sync-job-target"></div>
+
+  <dl class="kv">
+    {% if spec.status %}<dt>Status</dt><dd>{{ spec.status }}</dd>{% endif %}
+    {% if spec.radio_tech %}<dt>Radio tech</dt><dd>{{ spec.radio_tech }}</dd>{% endif %}
+    {% if spec.initial_release %}<dt>Initial release</dt><dd>{{ spec.initial_release }}</dd>{% endif %}
+    {% if not no_wis_crs and spec.wis %}<dt>WIs</dt><dd class="wrap-csv">{{ spec.wis | wrap_csv(150) }}</dd>{% endif %}
+    {% if spec.rapporteurs %}<dt>Rapporteurs</dt><dd>{{ spec.rapporteurs }}</dd>{% endif %}
+    {% if spec.last_synced_at %}<dt>Last synced</dt><dd>{{ spec.last_synced_at | dt_short }} <span class="muted">UTC</span></dd>{% endif %}
+  </dl>
+
+  <h2>Versions</h2>
+  {% if versions %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Release</th>
+          <th>Upload date</th>
+          <th>Meeting</th>
+          {% if not no_wis_crs %}<th>CRs</th>{% endif %}
+          <th>ZIP</th>
+          <th>PDF</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in versions %}
+          {% set cr_count = v.crs.split(',') | length if v.crs else 0 %}
+          <tr>
+            <td><code>{{ v.version }}</code></td>
+            <td>{{ v.release or '-' }}</td>
+            <td>{{ v.upload_date.isoformat() if v.upload_date else '-' }}</td>
+            <td>
+              {% if v.meeting_id %}
+                <a href="/meetings/{{ v.meeting_id }}">{{ v.meeting_name or v.meeting_id }}</a>
+              {% else %}
+                {{ v.meeting_name or '-' }}
+              {% endif %}
+            </td>
+            {% if not no_wis_crs %}
+            <td>
+              {% if v.crs %}
+                <span class="copy-cell" title="{{ v.crs }}" data-copy="{{ v.crs }}">{{ cr_count }}</span>
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            {% endif %}
+            <td>
+              {% if v.ftp_url %}<a href="{{ v.ftp_url }}" target="_blank" rel="noopener">open</a>{% else %}-{% endif %}
+            </td>
+            <td>
+              {% if v.pdf_url %}<a href="{{ v.pdf_url }}" target="_blank" rel="noopener">open</a>{% else %}-{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% include "partials/pagination.html" %}
+  {% else %}
+    <p class="empty">No versions stored for this spec.</p>
+  {% endif %}
+  <script src="/static/js/spec_clipboard.js" defer></script>
+  <script src="/static/js/job_poller.js" defer></script>
+  <script src="/static/js/spec_sync.js" defer></script>
+{% endblock %}

@@ -57,6 +57,11 @@
 # ]
 # tsg = ["tsg_name", "short_name", "description"]
 # wi = ["wi_id", "acronym", "release", "name"]
+# spec = [
+#   "spec_id", "type", "title", "status",
+#   "radio_tech", "initial_release", "tsg", "rapporteurs",
+#   # "wis" — opt back in via config if you want it in spec list output
+# ]
 
 # ── TDoc extraction cache ───────────────────────────────────────────────────
 # Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc parse`).
@@ -109,6 +114,8 @@
 # [sync]
 # auto_sync = true                # automatically sync before list/show/parse read commands
 # meeting_sync_interval = "24h"   # skip meeting calendar sync if last sync is newer than this
+# Minimum time between spec-list syncs for the same TSG.
+# spec_sync_interval = "24h"
 # tdoc_list_sync_interval = "30m" # skip TDoc list sync if last sync is newer than this
 # tdoc_list_closed_window = "90d" # skip TDoc list sync when meeting end_date is older than this
 # tdoc_list_url_template = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}"

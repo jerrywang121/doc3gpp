@@ -15,6 +15,7 @@ from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
+from doc3gpp.services.spec_service import SpecService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.services.tsg_service import TsgService
@@ -58,6 +59,10 @@ def get_tdoc_cr_service(request: Request) -> TDocCrService:
 
 def get_wi_service(request: Request) -> WiService:
     return get_services(request).wi
+
+
+def get_spec_service(request: Request) -> SpecService:
+    return get_services(request).spec
 
 
 def get_tsg_service(request: Request) -> TsgService:
@@ -134,6 +139,7 @@ __all__ = [
     "get_semantic_search_service",
     "get_services",
     "get_settings",
+    "get_spec_service",
     "get_state",
     "get_tdoc_cr_service",
     "get_tdoc_file_repo",

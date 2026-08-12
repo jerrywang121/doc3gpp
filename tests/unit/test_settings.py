@@ -67,3 +67,19 @@ def test_output_compact_toml_override_false_explicit(
         assert get_settings().output.compact is False
     finally:
         get_settings.cache_clear()
+
+
+def test_sync_settings_default_spec_interval() -> None:
+    from datetime import timedelta
+    from doc3gpp.settings.schema import Settings
+    s = Settings()
+    assert s.sync.spec_sync_interval == timedelta(hours=24)
+
+
+def test_output_fields_default_spec() -> None:
+    from doc3gpp.settings.schema import Settings
+    s = Settings()
+    assert s.output.fields.spec == [
+        "spec_id", "type", "title", "status",
+        "radio_tech", "initial_release", "tsg", "rapporteurs",
+    ]

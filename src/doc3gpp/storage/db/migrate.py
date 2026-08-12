@@ -5,6 +5,8 @@ from sqlalchemy import text
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
+    SpecORM,  # noqa: F401 - ensures model metadata is loaded
+    SpecVersionORM,  # noqa: F401 - ensures model metadata is loaded
     TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrTtcnDetailOrm,  # noqa: F401 - ensures model metadata is loaded
@@ -51,6 +53,88 @@ def _migrate_rename_tdoc_cr_details() -> None:
             conn.execute(
                 text("ALTER TABLE tdoc_cr_details RENAME TO tdoc_cr_cover_page")
             )
+
+
+def _migrate_tsg_spec_last_sync() -> None:
+    """Add ``tsgs.spec_last_sync`` to databases created before that column
+    existed.
+
+    One-shot, idempotent: ``ALTER TABLE ... ADD COLUMN`` raises if the
+    column is already present, so we probe ``PRAGMA table_info`` first
+    and only issue the ALTER when the column is genuinely missing.
+    ``Base.metadata.create_all`` is a no-op on tables that already
+    exist, so pre-existing ``tsgs`` rows on older databases carry the
+    old schema and explode the moment any ORM read touches the new
+    attribute — see
+    https://doc3gpp project history / Task 6 in
+    ``docs/superpowers/plans/2026-08-10-spec-sync-list-show.md``.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        # sqlite_master entry for the table — guard against a fresh DB
+        # (no ``tsgs`` yet, in which case ``Base.metadata.create_all``
+        # will create it with the column already in place).
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='tsgs' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(tsgs)")).all()
+        column_names = {row[1] for row in rows}
+        if "spec_last_sync" in column_names:
+            return
+        conn.execute(
+            text("ALTER TABLE tsgs ADD COLUMN spec_last_sync DATETIME")
+        )
+
+
+def _migrate_spec_rapporteurs() -> None:
+    """Add ``specs.rapporteurs`` to databases created before that column
+    existed. Idempotent: probe ``PRAGMA table_info`` first."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='specs' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(specs)")).all()
+        column_names = {row[1] for row in rows}
+        if "rapporteurs" in column_names:
+            return
+        conn.execute(
+            text("ALTER TABLE specs ADD COLUMN rapporteurs VARCHAR(128)")
+        )
+
+
+def _migrate_spec_versions_drop_comment() -> None:
+    """Drop the unused ``spec_versions.comment`` column. Idempotent;
+    degrades to leaving the orphan column on sqlite < 3.35 (no
+    ``DROP COLUMN``)."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='spec_versions' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(spec_versions)")).all()
+        column_names = {row[1] for row in rows}
+        if "comment" not in column_names:
+            return
+        try:
+            conn.execute(text("ALTER TABLE spec_versions DROP COLUMN comment"))
+        except Exception:  # noqa: BLE001 - older sqlite lacks DROP COLUMN
+            return
 
 
 def _create_search_schema() -> None:
@@ -199,6 +283,9 @@ def create_schema() -> None:
 
     engine = get_engine()
     _migrate_rename_tdoc_cr_details()
+    _migrate_tsg_spec_last_sync()
+    _migrate_spec_rapporteurs()
+    _migrate_spec_versions_drop_comment()
     Base.metadata.create_all(bind=engine)
     _create_search_schema()
     _create_vector_schema()

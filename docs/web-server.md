@@ -179,6 +179,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. |
 | POST | `/jobs/sync/tdocs` | Enqueue `sync_tdocs` (by meeting id or name). |
 | POST | `/jobs/sync/tdocs/all` | Enqueue `sync_all_tdocs`. |
+| POST | `/jobs/sync/specs` | Enqueue `sync_specs` (exactly one of `tsg` / `spec_id`). |
 | POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. |
 | POST | `/jobs/search/rebuild` | Enqueue `rebuild_search`. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
@@ -198,6 +199,10 @@ detail page shows `start_doc`/`end_doc`, the last-sync timestamp
 (`YYYY-MM-DD HH:MM UTC`), a link to the meeting's TDocs, and an FTP URL
 field linking to `https://www.3gpp.org/ftp/{ftp_url}`; its sync button
 flashes a "Sync job queued" indication after enqueueing.
+
+The spec detail page shows a Sync card with a Force sync checkbox that
+enqueues a single-spec sync job for that spec; the page auto-refreshes
+when the job completes.
 
 The header nav is ordered Home, TSGs, Meetings, TDocs, WIs, Search, Jobs.
 The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)
@@ -312,14 +317,14 @@ transport-security layer otherwise rejects cross-origin requests with a
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 20 tools:
+It exposes 23 tools:
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
-`get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `search_tdocs`,
-`semantic_search_tdocs`.
+`get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
+`get_spec`, `search_tdocs`, `semantic_search_tdocs`.
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
-`sync_all_tdocs`, `parse_tdocs`, `rebuild_search_index`, `purge_cache`,
-`get_job`, `cancel_job`, `list_jobs`.
+`sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `rebuild_search_index`,
+`purge_cache`, `get_job`, `cancel_job`, `list_jobs`.
 
 Every read tool returns exactly the bytes of the equivalent
 `?format=json` HTTP route. `search_tdocs` normalises the query into a

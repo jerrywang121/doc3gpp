@@ -39,5 +39,12 @@ def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
+            # WAL journal mode lets concurrent readers/writers proceed
+            # without blocking, and a busy_timeout makes a writer wait for
+            # a lock instead of failing immediately. Together these make
+            # the thread-pool spec sync safe against mid-write interruption
+            # (a Ctrl-C that previously tore the header page).
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
         finally:
             cursor.close()

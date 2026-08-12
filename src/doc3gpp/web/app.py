@@ -59,6 +59,7 @@ def build_state(settings: Settings) -> WebState:
         tdoc_repo=factory.build_tdoc_repository(),
         tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
+        spec=factory.build_spec_service(),
         search=factory.build_search_service(embedder=embedder),
         semantic_search=factory.build_semantic_search_service(embedder=embedder),
         tdoc_file_repo=factory.build_tdoc_file_repository(),

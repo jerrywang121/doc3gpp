@@ -113,6 +113,12 @@ class _SyncTDocsBody(BaseModel):
     force: bool = False
 
 
+class _SyncSpecsBody(BaseModel):
+    tsg: str | None = None
+    spec_id: str | None = None
+    force: bool = False
+
+
 class _ParseTDocsBody(BaseModel):
     filter: dict[str, Any] = {}
     force: bool = False
@@ -171,6 +177,24 @@ async def post_sync_tdocs_all(
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> JSONResponse:
     job = job_repo.create(JobKind.SYNC_TDOCS_ALL, {"force": body.force})
+    return JSONResponse(status_code=202, content=_envelope(job, queued=True))
+
+
+@router.post("/sync/specs", status_code=202)
+async def post_sync_specs(
+    body: _SyncSpecsBody,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> JSONResponse:
+    if (body.tsg is None) == (body.spec_id is None):
+        raise InvalidFilterError(
+            "sync/specs requires exactly one of 'tsg' or 'spec_id' in the body"
+        )
+    params: dict[str, JSONValue] = {"force": body.force}
+    if body.tsg is not None:
+        params["tsg"] = body.tsg
+    else:
+        params["spec_id"] = body.spec_id
+    job = job_repo.create(JobKind.SYNC_SPECS, params)
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

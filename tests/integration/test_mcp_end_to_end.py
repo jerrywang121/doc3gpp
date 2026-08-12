@@ -13,7 +13,14 @@ rather than over the wire.
 """
 from __future__ import annotations
 
+import json
+
+from doc3gpp.services.spec_service import (
+    SpecUnknownOnUpstreamError,
+    UnknownTsgError,
+)
 from doc3gpp.web.app import build_state
+from doc3gpp.web.errors import map_domain_error, map_mcp_error
 from doc3gpp.web.mcp_server import build_mcp_server
 
 
@@ -62,12 +69,15 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "list_tsgs",
         "get_tsg",
         "list_wis",
+        "list_specs",
+        "get_spec",
         "search_tdocs",
         "semantic_search_tdocs",
         "sync_meetings",
         "sync_tdocs",
         "sync_tdocs_by_meeting",
         "sync_all_tdocs",
+        "sync_specs",
         "parse_tdocs",
         "rebuild_search_index",
         "purge_cache",
@@ -147,6 +157,53 @@ def test_job_tools_enqueue_and_poll(sqlite_env) -> None:
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_meetings"
     assert detail_payload["params"] == {"tsg": "SA2"}
+    del state.engine
+
+
+def test_sync_specs_tool_enqueues(sqlite_env) -> None:
+    """``sync_specs`` MCP tool returns the queued envelope."""
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool("sync_specs", {"tsg": "R5", "force": True})
+        envelope = json.loads(created.content[0].text)
+        assert envelope["status"] == "queued"
+        assert "links" in envelope and envelope["links"]["self"].startswith("/jobs/")
+        job_id = envelope["job_id"]
+        detail = await server.call_tool("get_job", {"job_id": job_id})
+        return created, detail
+
+    created, detail = asyncio.run(run())
+    assert created.is_error is False
+    assert detail.is_error is False
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["kind"] == "sync_specs"
+    assert detail_payload["params"] == {"tsg": "R5", "force": True}
+    del state.engine
+
+
+def test_sync_specs_tool_by_spec_id_enqueues(sqlite_env) -> None:
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool("sync_specs", {"spec_id": "36.579-5", "force": False})
+        envelope = json.loads(created.content[0].text)
+        assert envelope["status"] == "queued"
+        job_id = envelope["job_id"]
+        detail = await server.call_tool("get_job", {"job_id": job_id})
+        return detail
+
+    detail = asyncio.run(run())
+    assert detail.is_error is False
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["kind"] == "sync_specs"
+    assert detail_payload["params"] == {"spec_id": "36.579-5", "force": False}
     del state.engine
 
 
@@ -288,6 +345,43 @@ def test_mcp_default_allows_localhost_browser_origin(sqlite_env) -> None:
     del state.engine
 
 
+def _seed_spec_corpus() -> None:
+    """Seed one spec + one version so the spec tools return rows."""
+    from doc3gpp.models.spec import Spec, SpecVersion
+    from doc3gpp.models.tsg import Tsg
+    from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
+    from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
+
+    SQLAlchemyTsgRepository().upsert_many(
+        [Tsg(tsg_name="RAN", short_name="R5", description="Radio Access Network")],
+    )
+    repo = SQLAlchemySpecRepository()
+    repo.upsert(
+        Spec(
+            spec_id="36.579-5",
+            type="TS",
+            title="NR conformance",
+            tsg="R5",
+            status="Under change control",
+            radio_tech="LTE,5G",
+            initial_release="Rel-15",
+            wis="FS_NR_TEST",
+        )
+    )
+    repo.upsert_versions(
+        [
+            SpecVersion(
+                spec_id="36.579-5",
+                version="18.3.0",
+                ftp_url="https://www.3gpp.org/ftp/Specs/archive/36_series/36.579-5/36579-5-i30.zip",
+                release="Rel-18",
+                meeting_id=108,
+                meeting_name="RAN#108",
+            )
+        ]
+    )
+
+
 def _seed_corpus() -> None:
     """Seed one meeting + one tdoc + one wi so read tools return rows."""
     from doc3gpp.models.meeting import Meeting
@@ -383,6 +477,175 @@ def test_read_tools_parity_with_http_json(sqlite_env) -> None:
         mcp_meeting = asyncio.run(call("get_meeting", {"meeting_id": 156}))
         http_meeting = client.get("/meetings/156?format=json").content.decode("utf-8")
         assert json.loads(mcp_meeting) == json.loads(http_meeting)
+
+    get_engine.cache_clear()
+    del state.engine
+
+
+def test_list_specs_tool(sqlite_env) -> None:
+    """``list_specs`` MCP tool returns seeded spec rows."""
+    import asyncio
+
+    _state_and_server()  # runs create_schema()
+    _seed_spec_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_specs", {"tsg": "R5"})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    import json
+
+    payload = json.loads(result.content[0].text)
+    assert "spec_id" in payload[0]
+    assert payload[0]["spec_id"] == "36.579-5"
+
+
+def test_list_specs_rapporteurs_filter(sqlite_env) -> None:
+    """``list_specs`` accepts and applies the rapporteurs filter."""
+    import asyncio
+
+    _state_and_server()  # runs create_schema()
+    _seed_spec_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_specs", {"rapporteurs": "not-null"})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    import json
+
+    payload = json.loads(result.content[0].text)
+    assert payload == []
+
+
+def test_get_spec_tool(sqlite_env) -> None:
+    """``get_spec`` MCP tool returns spec + version rows for a seeded spec."""
+    import asyncio
+
+    _state_and_server()  # runs create_schema()
+    _seed_spec_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("get_spec", {"spec_id": "36.579-5"})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    import json
+
+    payload = json.loads(result.content[0].text)
+    assert payload["spec"]["spec_id"] == "36.579-5"
+    assert payload["versions"][0]["version"] == "18.3.0"
+
+
+def test_get_spec_tool_not_found(sqlite_env) -> None:
+    """Unknown spec id surfaces as a JSON-RPC -32004 protocol error."""
+    import asyncio
+
+    import pytest
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_NOT_FOUND
+
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("get_spec", {"spec_id": "99.999"})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_NOT_FOUND
+
+
+def test_get_spec_tool_version_and_no_wis_crs(sqlite_env) -> None:
+    """``get_spec`` accepts ``version`` and ``no_wis_crs``; JSON matches HTTP."""
+    import asyncio
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    _state_and_server()  # runs create_schema()
+    _seed_spec_corpus()
+    state, server = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+
+        async def call(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        mcp_bytes = asyncio.run(call(
+            "get_spec",
+            {"spec_id": "36.579-5", "no_wis_crs": True},
+        ))
+        http_resp = client.get("/specs/36.579-5?format=json&no_wis_crs=true")
+        assert http_resp.status_code == 200, http_resp.text
+        http_bytes = http_resp.content.decode("utf-8")
+        assert json.loads(mcp_bytes) == json.loads(http_bytes)
+        assert "wis" not in json.loads(mcp_bytes)["spec"]
+
+        asyncio.run(call(
+            "get_spec",
+            {"spec_id": "36.579-5", "version": "19.%"},
+        ))
+
+    get_engine.cache_clear()
+    del state.engine
+
+
+def test_spec_tools_parity_with_http_json(sqlite_env) -> None:
+    """Spec MCP tools' JSON bytes match the matching HTTP ``?format=json`` route."""
+    import asyncio
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    _state_and_server()  # runs create_schema()
+    _seed_spec_corpus()
+    state, server = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+
+        async def call(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        mcp_bytes = asyncio.run(call("list_specs", {"tsg": "R5"}))
+        http_resp = client.get("/specs/?tsg=R5&format=json")
+        assert http_resp.status_code == 200, http_resp.text
+        http_bytes = http_resp.content.decode("utf-8")
+        assert mcp_bytes == http_bytes, (
+            f"list_specs parity broke: MCP={mcp_bytes!r} HTTP={http_bytes!r}"
+        )
+
+        mcp_spec = asyncio.run(call("get_spec", {"spec_id": "36.579-5"}))
+        http_spec = client.get("/specs/36.579-5?format=json").content.decode("utf-8")
+        assert json.loads(mcp_spec) == json.loads(http_spec)
 
     get_engine.cache_clear()
     del state.engine
@@ -492,6 +755,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
         tdoc_repo=factory.build_tdoc_repository(),
         tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
+        spec=factory.build_spec_service(),
         search=SearchService(
             repo=SQLAlchemySearchIndexRepository(),
             reranker=SemanticReranker(
@@ -525,3 +789,32 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     assert recorded == ["scheduling"]
     get_engine.cache_clear()
     del state.engine
+
+
+def test_web_errors_maps_new_spec_errors() -> None:
+    """``map_domain_error`` / ``map_mcp_error`` cover the new spec sync errors."""
+    resp_unknown = map_domain_error(
+        SpecUnknownOnUpstreamError("38.523-1", "missing fields: title, type")
+    )
+    assert resp_unknown.status_code == 404
+    body_unknown = json.loads(resp_unknown.body)
+    assert body_unknown["error"] == "spec_unknown_on_upstream"
+    assert "38.523-1" in body_unknown["detail"]
+
+    resp_tsg = map_domain_error(UnknownTsgError("38.523-1", "R5", "RAN 5"))
+    assert resp_tsg.status_code == 400
+    body_tsg = json.loads(resp_tsg.body)
+    assert body_tsg["error"] == "unknown_tsg"
+
+    mcp1 = map_mcp_error(SpecUnknownOnUpstreamError("38.523-1", "missing"))
+    assert mcp1 is not None
+    code, _msg, data = mcp1
+    assert code == -32004
+    assert data["error"] == "spec_unknown_on_upstream"
+    assert data["resource"] == "spec"
+
+    mcp2 = map_mcp_error(UnknownTsgError("38.523-1", "R5", "RAN 5"))
+    assert mcp2 is not None
+    code2, _msg2, data2 = mcp2
+    assert code2 == -32602
+    assert data2["error"] == "unknown_tsg"

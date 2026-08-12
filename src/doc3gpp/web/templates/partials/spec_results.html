@@ -1,0 +1,43 @@
+<div id="results" hx-target="this" hx-swap="outerHTML">
+  {% if specs %}
+    <table class="grid spec-grid">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Spec ID</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Radio tech</th>
+          <th>Initial release</th>
+          <th>TSG</th>
+          <th>Rapporteurs</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for spec in specs %}
+          <tr>
+            <td>{{ spec.type or '-' }}</td>
+            <td><code><a href="https://www.3gpp.org/DynaReport/{{ spec.spec_id | replace('.', '') }}.htm" target="_blank" rel="noopener">{{ spec.spec_id }}</a></code></td>
+            <td>{{ spec.title or '-' }}</td>
+            <td>{{ spec.status or '-' }}</td>
+            <td>{{ spec.radio_tech or '-' }}</td>
+            <td>{{ spec.initial_release or '-' }}</td>
+            <td><code>{{ spec.tsg or '-' }}</code></td>
+            <td>
+              {% if spec.rapporteurs and spec.rapporteurs | length > 32 %}
+                <span class="copy-cell" title="{{ spec.rapporteurs }}" data-copy="{{ spec.rapporteurs }}">{{ spec.rapporteurs | truncate_csv(32) }}</span>
+              {% else %}
+                {{ spec.rapporteurs or '-' }}
+              {% endif %}
+            </td>
+            <td><a href="/specs/{{ spec.spec_id }}">show</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% include "partials/pagination.html" %}
+  {% else %}
+    <p class="empty">No specs match these filters.</p>
+  {% endif %}
+</div>

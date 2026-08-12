@@ -96,6 +96,9 @@ class TsgORM(Base):
     meeting_last_sync: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    spec_last_sync: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class WiORM(Base):
@@ -385,3 +388,62 @@ class JobORM(Base):
         Index("idx_jobs_status_created_at", "status", "created_at"),
         Index("idx_jobs_kind_created_at", "kind", "created_at"),
     )
+
+
+class SpecORM(Base):
+    """Persisted 3GPP specification header row.
+
+    ``spec_id`` is the full dotted identity (e.g. ``36.579-5``) — the
+    same value used in URLs and ``tdocs.spec``. ``wis`` is a
+    point-in-time comma-joined snapshot of related-WI acronyms (no live
+    join table). ``tsg`` is an FK into ``tsgs.short_name``.
+    """
+
+    __tablename__ = "specs"
+
+    spec_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    type: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    radio_tech: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    initial_release: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    tsg: Mapped[str | None] = mapped_column(
+        String(16),
+        ForeignKey("tsgs.short_name"),
+        nullable=True,
+        index=True,
+    )
+    wis: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    rapporteurs: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class SpecVersionORM(Base):
+    """A versioned artefact of a spec.
+
+    One row per ``(spec_id, version)``. ``spec_id`` is an FK into
+    ``specs.spec_id`` with ``ON DELETE CASCADE`` (mirrors the spec-detail
+    sidecar convention). ``ftp_url`` is stored as the absolute 3GPP FTP
+    URL, matching ``tdocs.ftp_url`` / ``tdoc_files.ftp_url``.
+    """
+
+    __tablename__ = "spec_versions"
+
+    spec_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("specs.spec_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+        index=True,
+    )
+    version: Mapped[str] = mapped_column(String(16), primary_key=True, nullable=False)
+    ftp_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    release: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    meeting_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meeting_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    upload_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pdf_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    crs: Mapped[str | None] = mapped_column(Text, nullable=True)

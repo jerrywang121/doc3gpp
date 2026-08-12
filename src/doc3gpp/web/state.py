@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from doc3gpp.services.meetings_service import MeetingService
     from doc3gpp.services.search_service import SearchService
     from doc3gpp.services.semantic_search_service import SemanticSearchService
+    from doc3gpp.services.spec_service import SpecService
     from doc3gpp.services.tdoc_cr_service import TDocCrService
     from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
@@ -148,6 +149,7 @@ class ServiceContainer:
     tdoc_repo: "TDocRepository"
     tsg: "TsgService"
     wi: "WiService"
+    spec: "SpecService"
     search: "SearchService | None"
     semantic_search: "SemanticSearchService | None"
     tdoc_file_repo: SQLAlchemyTDocFileRepository

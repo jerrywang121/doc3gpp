@@ -414,6 +414,14 @@ table.tdoc-grid .col-meeting { width: 180px; }
   align-items: center;
 }
 
+.spec-sync-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem;
+  margin: .5rem 0 1rem;
+}
+
 .inline-check {
   display: flex;
   align-items: center;
@@ -464,4 +472,24 @@ table.tdoc-grid .col-meeting { width: 180px; }
 
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; border-top-color: var(--muted); }
+}
+
+/* Spec list: reduce table font size to 14px. */
+table.spec-grid {
+  font-size: 14px;
+}
+
+/* Spec list / detail: click-to-copy cells (WIs, Rapporteurs, CRs). */
+.copy-cell {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--border);
+}
+
+.copy-cell:hover {
+  background: var(--code-bg);
+}
+
+/* Spec detail: multi-line WIs (wrapped at comma delimiters). */
+.wrap-csv {
+  white-space: pre-line;
 }

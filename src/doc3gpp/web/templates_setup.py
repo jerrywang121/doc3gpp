@@ -90,8 +90,49 @@ def status_color_class(value: str | None) -> str:
     return ""
 
 
+def truncate_csv(value: str | None, max_chars: int = 32) -> str:
+    """Truncate a comma-joined string to ``max_chars``, breaking at the
+    nearest comma delimiter and appending ``...`` when truncated.
+
+    ``None`` / empty values pass through unchanged. The break happens at
+    the last comma whose position is ``<= max_chars`` so a truncated
+    cell never ends mid-token.
+    """
+    if not value:
+        return value or ""
+    if len(value) <= max_chars:
+        return value
+    cut = value.rfind(",", 0, max_chars)
+    if cut == -1:
+        cut = max_chars
+    return value[:cut] + "..."
+
+
+def wrap_csv(value: str | None, max_chars: int = 150) -> str:
+    """Wrap a comma-joined string into newline-separated lines, each at
+    most ``max_chars`` long, breaking at the nearest comma delimiter.
+
+    ``None`` / empty values pass through unchanged. A single token
+    longer than ``max_chars`` is hard-broken at ``max_chars``.
+    """
+    if not value:
+        return value or ""
+    lines: list[str] = []
+    remaining = value
+    while len(remaining) > max_chars:
+        cut = remaining.rfind(",", 0, max_chars)
+        if cut == -1:
+            cut = max_chars
+        lines.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip(",")
+    lines.append(remaining)
+    return "\n".join(lines)
+
+
 templates.env.filters["dt_short"] = dt_short
 templates.env.filters["sync_state"] = sync_state
+templates.env.filters["truncate_csv"] = truncate_csv
+templates.env.filters["wrap_csv"] = wrap_csv
 templates.env.globals["status_color_class"] = status_color_class
 
 

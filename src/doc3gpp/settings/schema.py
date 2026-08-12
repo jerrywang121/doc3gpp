@@ -200,6 +200,18 @@ class OutputFieldsSettings(BaseModel):
     wi: list[str] = Field(
         default_factory=lambda: ["wi_id", "acronym", "release", "name"]
     )
+    spec: list[str] = Field(
+        default_factory=lambda: [
+            "spec_id",
+            "type",
+            "title",
+            "status",
+            "radio_tech",
+            "initial_release",
+            "tsg",
+            "rapporteurs",
+        ]
+    )
 
 
 class OutputSettings(BaseModel):
@@ -316,6 +328,10 @@ class SyncSettings(BaseModel):
         default=timedelta(hours=24),
         description="Minimum time between meeting calendar syncs for the same TSG.",
     )
+    spec_sync_interval: timedelta = Field(
+        default=timedelta(hours=24),
+        description="Minimum time between spec-list syncs for the same TSG.",
+    )
     tdoc_list_sync_interval: timedelta = Field(
         default=timedelta(minutes=30),
         description="Minimum time between TDoc list syncs for the same meeting.",
@@ -332,7 +348,7 @@ class SyncSettings(BaseModel):
         ),
     )
 
-    @field_validator("meeting_sync_interval", "tdoc_list_sync_interval", "tdoc_list_closed_window", mode="before")
+    @field_validator("meeting_sync_interval", "tdoc_list_sync_interval", "tdoc_list_closed_window", "spec_sync_interval", mode="before")
     @classmethod
     def _validate_durations(cls, value: object) -> timedelta:
         return _parse_timedelta(value)

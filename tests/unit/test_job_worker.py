@@ -36,6 +36,30 @@ class _FakeMeetingService:
             )
 
 
+class _FakeSpecService:
+    """Fake ``SpecService`` that records which method was called."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        from doc3gpp.models.sync import SyncOutcome
+
+        self.calls: list[tuple[str, dict]] = []
+        if fail:
+            self.sync = self._raise
+            self.sync_spec = self._raise
+        else:
+            self.sync = lambda *a, **k: self._record("sync", k, SyncOutcome(
+                status="synced", reason="spec sync ok", synced_count=5, version_count=12))
+            self.sync_spec = lambda *a, **k: self._record("sync_spec", k, SyncOutcome(
+                status="synced", reason="spec sync ok", synced_count=1, version_count=2))
+
+    def _raise(self, *a, **k):
+        raise RuntimeError("boom")
+
+    def _record(self, name, kwargs, outcome):
+        self.calls.append((name, kwargs))
+        return outcome
+
+
 def _make_state(repo: JobRepository, *, fail: bool = False) -> WebState:
     """Build a :class:`WebState` with a fake :class:`ServiceContainer`."""
     services = ServiceContainer(
@@ -46,6 +70,7 @@ def _make_state(repo: JobRepository, *, fail: bool = False) -> WebState:
         tdoc_repo=None,  # type: ignore[arg-type]
         tsg=None,  # type: ignore[arg-type]
         wi=None,  # type: ignore[arg-type]
+        spec=_FakeSpecService(fail=fail),  # type: ignore[arg-type]
         search=None,
         semantic_search=None,
         tdoc_file_repo=None,  # type: ignore[arg-type]
@@ -139,6 +164,52 @@ def test_worker_runs_queued_job() -> None:
         "synced_count": 3,
     }
     assert len(done.log_lines) >= 1
+
+
+def test_worker_runs_spec_sync_job() -> None:
+    """A ``SYNC_SPECS`` job is claimed, logs, and succeeds."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(JobKind.SYNC_SPECS, {"tsg": "R5", "force": True})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.result_summary == {
+        "status": "synced",
+        "reason": "spec sync ok",
+        "synced_count": 5,
+        "version_count": 12,
+    }
+    assert len(done.log_lines) >= 1
+
+
+def test_worker_runs_spec_sync_by_spec_id() -> None:
+    """A ``SYNC_SPECS`` job with ``spec_id`` dispatches to ``sync_spec``."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(JobKind.SYNC_SPECS, {"spec_id": "36.579-5", "force": True})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.result_summary == {
+        "status": "synced",
+        "reason": "spec sync ok",
+        "synced_count": 1,
+        "version_count": 2,
+    }
+    fsvc = state.services.spec
+    assert len(fsvc.calls) == 1
+    name, kwargs = fsvc.calls[0]
+    assert name == "sync_spec"
+    assert kwargs.get("force") is True
 
 
 def test_worker_marks_failed_on_exception() -> None:

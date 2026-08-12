@@ -113,6 +113,11 @@ class _SyncTDocsBody(BaseModel):
     force: bool = False
 
 
+class _SyncSpecsBody(BaseModel):
+    tsg: str
+    force: bool = False
+
+
 class _ParseTDocsBody(BaseModel):
     filter: dict[str, Any] = {}
     force: bool = False
@@ -171,6 +176,18 @@ async def post_sync_tdocs_all(
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> JSONResponse:
     job = job_repo.create(JobKind.SYNC_TDOCS_ALL, {"force": body.force})
+    return JSONResponse(status_code=202, content=_envelope(job, queued=True))
+
+
+@router.post("/sync/specs", status_code=202)
+async def post_sync_specs(
+    body: _SyncSpecsBody,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> JSONResponse:
+    job = job_repo.create(
+        JobKind.SYNC_SPECS,
+        {"tsg": body.tsg, "force": body.force},
+    )
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

@@ -2398,3 +2398,19 @@ def test_get_spec_show_no_wis_crs(client: TestClient) -> None:
     assert "crs" not in slim["versions"][0]
     assert "wis" in full["spec"]
     assert "crs" in full["versions"][0]
+
+
+def test_get_spec_show_renders_sync_form(client: TestClient) -> None:
+    """``GET /specs/{id}`` renders the sync form with a force checkbox."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert 'id="spec-sync-form"' in response.text
+    assert 'action="/jobs/sync/specs"' in response.text
+    assert 'name="force"' in response.text
+    assert "spec_sync.js" in response.text

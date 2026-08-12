@@ -1038,3 +1038,111 @@ Expected: no output (the global-constraint rule "no comments unless non-obvious"
 - [ ] **Step 5: Commit if any verification-only cleanups happened**
 
 If `ruff` or the test suite required a final small edit, commit it now with a `chore(spec-sync): final verification cleanup` message. Otherwise, do nothing — the plan is complete.
+
+---
+
+## Brief Defects Caught and Fixed During Execution
+
+The original plan briefs contained **seven** real defects that
+implementers caught in self-test, fixed in place, and validated with
+reviewers during execution of this plan. This section is annotated so
+that a future re-run of this plan from scratch does not trip on the
+same bugs.
+
+### Task 3 brief (commit `c699d25`) — 3 defects
+
+1. **Missing mocks for `fetch_spec_detail` / `fetch_etsi_pdf_text` /
+   `fetch_cr_list` in the bootstrap path tests.** The bootstrap path
+   in `_bootstrap_spec_from_dynareport` flows through
+   `_sync_one_spec`, which calls those three fetchers. The brief
+   only stubbed `fetch_dynareport_detail`, not the downstream ones,
+   so the new tests would have hit live 3gpp.org and returned 53
+   versions in ~21 seconds — failing the `len == 1` assertion. The
+   implementer added `monkeypatch.setattr` calls for the three
+   downstream fetchers and shared a small `_stub_followups` helper
+   across the new tests. Reviewer confirmed the tests now run in
+   milliseconds.
+
+2. **The "_StubTsgRepo replacement is backward-compatible" claim
+   was wrong.** The brief's `_StubTsgRepo` defaulted `_known` to an
+   empty set, so `get_by_short_name` returned `None` for every
+   name. That silently broke `_is_sync_skipped`, which reads
+   `tsg_record.spec_last_sync` (now always `None`, so the skip rule
+   would never trigger). The implementer (a) added a
+   `short_names: set[str] | None = None` kwarg so existing call
+   sites keep working, and (b) seeded `short_names={"R5"}` in three
+   skip-rule tests so the rule still triggers as written.
+   Reviewer confirmed pre-existing skip-rule tests still pass.
+
+3. **`test_sync_spec_unknown_spec_raises` was testing the OLD
+   pre-flight `ValueError` behaviour.** The refactor changes the
+   unknown-spec path to raise `UnknownTsgError`. The implementer
+   rewrote the test to monkeypatch `fetch_dynareport_detail` to
+   raise a valid body and then mock the `_tsg_repository` to return
+   `None` from `get_by_short_name`, so the path
+   `fetch → parse → normalise → validate → raise UnknownTsgError`
+   is exercised end-to-end. Reviewer confirmed the new shape.
+
+### Task 4 brief (commit `33b82fd`) — 3 defects
+
+1. **Both new integration tests used `assert ... in
+   result.stdout`.** `typer.testing.CliRunner.result.output`
+   captures both stdout and stderr; `result.stdout` reads only the
+   `BytesLiteral` half of the buffer and is byte-truncated in
+   practice. The implementer corrected both assertions to
+   `result.output`. Reviewer confirmed the tests now hit the
+   expected exit code + message pair.
+
+2. **Each new test re-ran the same `from doc3gpp.services.spec_service
+   import (...)` block.** The implementer collapsed both into the
+   single module-level import already present at the top of
+   `tests/integration/test_spec_cli.py`. No behaviour change;
+   reviewer's diff-only check caught the duplication.
+
+3. **`test_spec_sync_spec_id_unknown_raises` was a leftover from
+   the pre-flight era.** Once the CLI droped the pre-flight block,
+   the test asserted the WRONG error message (it expected
+   `Unknown spec id '38.523-1'. Run 'doc3gpp spec sync --tsg
+   <tsg>' first.`, the pre-flight message, but the new CLI returns
+   the DynaReport message instead). The implementer deleted the
+   obsolete test — the new
+   `test_spec_sync_spec_id_unknown_tsg_bad_parameter` covers the
+   same behavioural surface from the correct angle. Reviewer
+   confirmed there is no regression in the error mapping.
+
+### Task 6 brief (commit `e2e760b`, fix round 1) — 1 defect
+
+1. **Quoted `typer.BadParameter` format strings were truncated
+   versions of the actual messages.** The brief gave two examples:
+
+   > `typer.BadParameter("spec {id!r} is unknown on the 3GPP
+   > DynaReport upstream")` and
+   > `typer.BadParameter("spec {id!r} has unknown TSG short name
+   > {short!r} (normalised from {long!r})")`
+
+   but the implementation uses different parameter names
+   (`spec_id`, `reason`, `short_name`, `long_name`) and includes
+   the trailing phrases `"; nothing to sync"` and `"run 'doc3gpp
+   tsg seed' or 'doc3gpp tsg list' to inspect the reference
+   table"`. The first reviewer flagged the byte-mismatch; the
+   implementer rewrote both doc snippets (in `AGENTS.md` and
+   `docs/cli.md`) to quote the f-string bodies verbatim, including
+   the parenthetical reason and the trailing hints. Reviewer
+   confirmed byte-equal copy on a `grep -nF` diff.
+
+### Summary
+
+- **Total defects caught across 6 reviews: 7** (Task 3: 3, Task 4: 3,
+  Task 6: 1).
+- All defects were caught by implementers in self-test, fixed in
+  the same commit, and validated by subagent reviewers before
+  progressing.
+- Every defect was the result of a brief-spec drift (or in Task
+  4 case 3, a leftover from the pre-flight era) — not a flaw in
+  the original design.
+- Reviewers should expect these specific shapes on re-run: in
+  Task 3, demand the downstream fetcher mocks; in Task 4, scan
+  for `result.stdout`, double imports, and the obsolete
+  `unknown_raises` test name; in Task 6, byte-diff the quoted
+  format strings against the actual `__init__` bodies in
+  `services/spec_service.py` before approving.

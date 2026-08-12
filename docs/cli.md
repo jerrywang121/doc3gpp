@@ -1820,9 +1820,20 @@ Options:
 - --tsg: TSG short name (e.g. `R5`). default: none. Validated against
   the `tsgs` reference table; unknown values raise an error listing the
   known short names. Mutually exclusive with --spec-id.
-- --spec-id: Dotted spec id (e.g. `36.579-5`) to sync a single stored
-  spec. Mutually exclusive with --tsg. The spec must already be stored
-  (run `spec sync --tsg <tsg>` first).
+- --spec-id: Dotted spec id (e.g. `36.579-5`). Mutually exclusive with
+  --tsg. When the spec is already in the local `specs` table, the
+  existing stored-row path runs. When the spec is missing,
+  `SpecService.sync_spec` fetches
+  the 3GPP DynaReport detail page
+  (`https://www.3gpp.org/DynaReport/{no_dot}.htm`), parses the title,
+  type, and primary responsible group, normalises the group to a
+  seeded `tsgs.short_name` (e.g. `RAN 5` → `R5`, `CT 1` → `C1`,
+  `SA WG2` → `S2`; legacy groups like `RAN AH1` are rejected), and
+  inserts the row. A 404 or unparseable detail page surfaces as
+  `typer.BadParameter` with a `Spec unknown on the 3GPP DynaReport
+  upstream` message; an unknown normalised TSG surfaces as
+  `typer.BadParameter` with an `unknown TSG short name` message.
+  `--force` bypasses the per-TSG skip rule in both paths.
 - --force, -f: Bypass the spec sync interval skip rule.
 
 Behavior:

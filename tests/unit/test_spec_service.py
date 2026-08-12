@@ -94,6 +94,17 @@ DETAIL_HTML = """
 """
 
 
+def test_service_list_versions_forwards_version_filter() -> None:
+    """``SpecService.list_versions`` passes ``version`` through to the repo."""
+    repo = _StubSpecRepo()
+    svc = SpecService(repo)
+    repo.list_versions = MagicMock(return_value=[])
+    svc.list_versions("36.579-5", limit=10, offset=2, version="19.%")
+    repo.list_versions.assert_called_once_with(
+        "36.579-5", limit=10, offset=2, version="19.%"
+    )
+
+
 def test_sync_skips_etsi_fetch_when_pdf_url_already_persisted(monkeypatch) -> None:
     """On a re-sync, a version whose ``pdf_url`` is already stored in the
     DB must NOT re-fetch the ETSI PDF page.

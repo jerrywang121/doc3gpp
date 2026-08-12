@@ -334,9 +334,15 @@ class SpecService:
         return self._repository.get(spec_id)
 
     def list_versions(
-        self, spec_id: str, limit: int = 200, offset: int = 0
+        self,
+        spec_id: str,
+        limit: int = 200,
+        offset: int = 0,
+        version: str | None = None,
     ) -> list[SpecVersion]:
-        return self._repository.list_versions(spec_id, limit=limit, offset=offset)
+        return self._repository.list_versions(
+            spec_id, limit=limit, offset=offset, version=version
+        )
 
 
 def _format_duration(delta: timedelta) -> str:

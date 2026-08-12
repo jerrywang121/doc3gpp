@@ -214,15 +214,15 @@ class SpecService:
         spec = self._repository.get(spec_id)
         if spec is None:
             spec = self._bootstrap_spec_from_dynareport(spec_id)
-
-        canonical = spec.tsg.upper() if spec.tsg else ""
-        if not force:
+        elif not force:
+            canonical = spec.tsg.upper() if spec.tsg else ""
             skipped = self._is_sync_skipped(
                 canonical, f"{spec.spec_id} (TSG {canonical})"
             )
             if skipped is not None:
                 return skipped
 
+        canonical = spec.tsg.upper() if spec.tsg else ""
         logger.info("Syncing spec %s", spec.spec_id)
         with ScraperClient() as client:
             with ThreadPoolExecutor(max_workers=1) as followup_executor:

@@ -749,6 +749,54 @@ def test_sync_spec_raises_when_tsg_unknown(monkeypatch) -> None:
         svc.sync_spec("38.523-1", force=True)
 
 
+def test_sync_spec_bootstrap_unaffected_by_tsg_skip_rule(monkeypatch) -> None:
+    """A bootstrap (cache miss) must run even when the TSG was synced
+    inside the sync interval.
+
+    Regression for the bug surfaced by `doc3gpp spec sync --spec-id
+    38.321` returning a "skipped" outcome for a missing spec: the
+    bootstrap fetches the DynaReport page, parses the header, and
+    builds a fresh ``Spec``, but the per-TSG skip rule then fires and
+    discards the result. The user is left with no cache entry and no
+    error explaining why.
+
+    The skip rule is a re-sync optimisation; it should not block a
+    first-time fetch.
+    """
+    repo = _StubSpecRepo()  # no cached row for 38.523-1
+    recent_sync = datetime.now(timezone.utc) - timedelta(hours=3)
+    tsg_repo = _StubTsgRepo(short_names={"R5"}, last_spec_sync=recent_sync)
+
+    def fake_fetch(spec_id_dotted, client=None):
+        assert spec_id_dotted == "38.523-1"
+        return DYNAREPORT_HEADER_HTML
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_dynareport_detail",
+        fake_fetch,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, client=None: DYNAREPORT_HEADER_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: "<html></html>",
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: "<html></html>",
+    )
+
+    svc = SpecService(repository=repo, tsg_repository=tsg_repo)
+    outcome = svc.sync_spec("38.523-1")  # force=False — skip rule must NOT apply
+
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 1
+    assert "38.523-1" in repo.specs
+    assert repo.specs["38.523-1"].tsg == "R5"
+
+
 def test_sync_spec_stored_row_unchanged(monkeypatch) -> None:
     repo = _StubSpecRepo()
     repo.upsert(Spec(spec_id="38.523-1", type="TS", title="Cached", tsg="R5"))

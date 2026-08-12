@@ -17,11 +17,12 @@ callers can page through and filter the version list, plus an optional
 `--no-wis-crs` flag to slim the output by dropping the `wis` header field
 and the per-version `crs` field. The same controls must be exposed
 consistently across the CLI, web, and MCP surfaces. The web spec detail
-page paginates the version table.
+page paginates the version table. Separately, remove `wis` from the default
+output fields of `spec list`.
 
 ## Non-goals
 
-- No change to `spec list` (already has `limit`/`offset`).
+- No change to `spec list` paging (already has `limit`/`offset`).
 - No change to the sync/backfill path — it must keep seeing all versions.
 - No new DB schema.
 
@@ -113,7 +114,26 @@ Add `limit` (default `10`), `offset` (default `0`), `version`, and
 from the `spec` object and `crs` from each `versions` row. The tool result
 shape is otherwise unchanged.
 
-### 6. Tests
+### 6. `spec list` default output fields
+
+Remove `wis` from the default `spec` output-field list. The single source
+of truth is `settings.output.fields.spec` in
+`src/doc3gpp/settings/schema.py`; the web and MCP list surfaces mirror that
+list in `_SPEC_DEFAULT_FIELDS` (`web/routes/specs.py`) and `_SPEC_FIELDS`
+(`web/mcp_server.py`), and the packaged example documents it in
+`src/doc3gpp/data/doc3gpp.toml.example`. All three mirrors are updated so
+the default columns become:
+
+```
+spec_id, type, title, status, radio_tech, initial_release, tsg, rapporteurs
+```
+
+`wis` remains available as a field users can opt back in via config, and
+`spec list --wis <pattern>` filtering is unchanged. This keeps the JSON
+payload smaller for the AI-agent use case motivating the `--no-wis-crs`
+flag, without changing the underlying data.
+
+### 7. Tests
 
 - `tests/integration/test_spec_sql.py`: `version` filter, and
   `limit`/`offset` applied to the filtered, DESC-ordered set.
@@ -121,14 +141,18 @@ shape is otherwise unchanged.
   are forwarded to the service, and `--no-wis-crs` drops `wis`/`crs` from
   the output.
 - `tests/unit/test_web_routes.py`: web pagination (`next_offset`), `version`
-  filter forwarding, and `no_wis_crs` slimming.
+  filter forwarding, and `no_wis_crs` slimming; spec list default fields
+  no longer include `wis`.
 - `tests/integration/test_mcp_end_to_end.py`: MCP `get_spec` accepts the
   new params including `no_wis_crs`.
+- `tests/unit/test_settings_config_file.py`: `spec list` default fields no
+  longer include `wis`.
 
-### 7. Docs
+### 8. Docs
 
-Update `docs/cli.md` (spec show flags), `AGENTS.md` (spec-show workflow
-line), and `docs/code-map.md` if the symbol table changes.
+Update `docs/cli.md` (spec show flags and spec list default fields),
+`AGENTS.md` (spec-show workflow line), and `docs/code-map.md` if the symbol
+table changes.
 
 ## Open questions
 

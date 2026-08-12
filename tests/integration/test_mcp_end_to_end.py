@@ -505,6 +505,53 @@ def test_get_spec_tool_not_found(sqlite_env) -> None:
     assert exc_info.value.code == MCP_CODE_NOT_FOUND
 
 
+def test_get_spec_tool_version_and_no_wis_crs(sqlite_env) -> None:
+    """``get_spec`` accepts ``version`` and ``no_wis_crs``; JSON matches HTTP."""
+    import asyncio
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    _state_and_server()  # runs create_schema()
+    _seed_spec_corpus()
+    state, server = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+
+        async def call(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        mcp_bytes = asyncio.run(call(
+            "get_spec",
+            {"spec_id": "36.579-5", "no_wis_crs": True},
+        ))
+        http_resp = client.get("/specs/36.579-5?format=json&no_wis_crs=true")
+        assert http_resp.status_code == 200, http_resp.text
+        http_bytes = http_resp.content.decode("utf-8")
+        assert json.loads(mcp_bytes) == json.loads(http_bytes)
+        assert "wis" not in json.loads(mcp_bytes)["spec"]
+
+        asyncio.run(call(
+            "get_spec",
+            {"spec_id": "36.579-5", "version": "19.%"},
+        ))
+
+    get_engine.cache_clear()
+    del state.engine
+
+
 def test_spec_tools_parity_with_http_json(sqlite_env) -> None:
     """Spec MCP tools' JSON bytes match the matching HTTP ``?format=json`` route."""
     import asyncio

@@ -373,16 +373,26 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         )
         return _to_json(render.spec_rows(specs, _SPEC_FIELDS))
 
-    @server.tool(name="get_spec", description="Get a single spec by its dotted id, including its version rows.")
+    @server.tool(name="get_spec", description="Get a single spec by its dotted id, including its version rows. Set no_wis_crs to drop the 'wis' header field and per-version 'crs' field; version is a rich filter pattern (e.g. '19.%').")
     @_mcp_error_guard
-    def get_spec(spec_id: Annotated[str, Field(description="Dotted spec id (e.g. '36.579-5').")]) -> str:
+    def get_spec(
+        spec_id: Annotated[str, Field(description="Dotted spec id (e.g. '36.579-5').")],
+        limit: Annotated[int, Field(description="Maximum number of version rows to return.")] = 10,
+        offset: Annotated[int, Field(description="Number of version rows to skip for pagination.")] = 0,
+        version: Annotated[str | None, Field(description="Rich filter pattern on the version (e.g. '19.%').")] = None,
+        no_wis_crs: Annotated[bool, Field(description="Drop the 'wis' header field and per-version 'crs' field.")] = False,
+    ) -> str:
         spec = services.spec.get(spec_id)
         if spec is None:
             raise SpecNotFoundError(spec_id)
-        versions = services.spec.list_versions(spec_id)
+        versions = services.spec.list_versions(
+            spec_id, limit=limit, offset=offset, version=version
+        )
+        spec_fields = [f for f in _SPEC_FIELDS if not (no_wis_crs and f == "wis")]
+        version_fields = [f for f in _VERSION_FIELDS if not (no_wis_crs and f == "crs")]
         return _to_json({
-            "spec": {f: getattr(spec, f, None) for f in _SPEC_FIELDS},
-            "versions": render.spec_version_rows(versions, _VERSION_FIELDS),
+            "spec": {f: getattr(spec, f, None) for f in spec_fields},
+            "versions": render.spec_version_rows(versions, version_fields),
         })
 
     # ---- Search ---------------------------------------------------

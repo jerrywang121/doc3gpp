@@ -155,7 +155,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   read cached rows via `SpecRepository.list` /
   `SQLAlchemySpecRepository.get` + `list_versions`; the show command
   raises `SpecNotFoundError` (rendered as `typer.BadParameter`) when
-  no header row exists for the id.
+  no header row exists for the id. `spec show` versions can be
+  paginated/limited via `--limit` (default 10) / `--offset` (default 0),
+  filtered by `--version <pattern>` (rich filter grammar on the version
+  string), and slimmed with `--no-wis-crs` (drops the `wis` header field
+  and per-version `crs` field). `spec list` default output fields are
+  `spec_id, type, title, status, radio_tech, initial_release, tsg,
+  rapporteurs` (no `wis`).
 - `tdoc/meeting/wi * --compact` (any `--format` command) strips
   decorators from JSON / Markdown output. JSON becomes single line
   (`separators=(",", ":")`, no trailing newline); Markdown drops

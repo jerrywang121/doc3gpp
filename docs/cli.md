@@ -1883,7 +1883,7 @@ Default output fields (configurable via `[output] fields.spec` in
 `doc3gpp.toml`):
 
 - `spec_id`, `type`, `title`, `status`, `radio_tech`, `initial_release`,
-  `tsg`, `wis`, `rapporteurs`
+  `tsg`, `rapporteurs`
 
 Filter grammar: every filter flag accepts the rich filter grammar used
 by the other list commands — `null` / `not-null` / `!pattern` / plain
@@ -1915,6 +1915,10 @@ Purpose:
 Options:
 
 - SPEC_ID: positional argument — the dotted spec id (e.g. `36.579-5`).
+- --limit N: max versions to return (default 10).
+- --offset N: number of versions to skip before applying --limit (pagination).
+- --version PATTERN: rich filter pattern on the version string (e.g. `19.%`).
+- --no-wis-crs: drop the `wis` header field and the per-version `crs` field.
 - --format: `table` (default, tab-separated), `json`, or `markdown`.
 - --output, -o PATH: write results to PATH instead of stdout.
 - --compact: strip output formatting (see `Compact output` below).

@@ -3558,18 +3558,9 @@ def tdoc_show(
         help=(
             "Strip output formatting: JSON drops indent and operator-space; "
             "Markdown drops GFM tables, bullets, and bold. No-op for "
-            "``table``. Defaults to ``output.compact`` in settings when "
-            "the flag is not passed."
+            "``table`` and ``raw``. Defaults to ``output.compact`` in "
+            "settings when the flag is not passed."
         ),
-    ),
-    limit: int = typer.Option(10, min=1, max=500, help="Max versions to return."),
-    offset: int = typer.Option(0, min=0, help="Number of versions to skip before applying --limit (pagination)."),
-    version: str | None = typer.Option(
-        None, "--version", help="Rich filter pattern on the version (e.g. 19.%)."
-    ),
-    no_wis_crs: bool = typer.Option(
-        False, "--no-wis-crs",
-        help="Drop the 'wis' header field and the per-version 'crs' field from output.",
     ),
 ) -> None:
     """Show a stored TDoc (or URL) and any extracted CR cover-page details.

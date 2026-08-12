@@ -179,6 +179,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. |
 | POST | `/jobs/sync/tdocs` | Enqueue `sync_tdocs` (by meeting id or name). |
 | POST | `/jobs/sync/tdocs/all` | Enqueue `sync_all_tdocs`. |
+| POST | `/jobs/sync/specs` | Enqueue `sync_specs`. |
 | POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. |
 | POST | `/jobs/search/rebuild` | Enqueue `rebuild_search`. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
@@ -312,14 +313,14 @@ transport-security layer otherwise rejects cross-origin requests with a
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 22 tools:
+It exposes 23 tools:
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
 `get_spec`, `search_tdocs`, `semantic_search_tdocs`.
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
-`sync_all_tdocs`, `parse_tdocs`, `rebuild_search_index`, `purge_cache`,
-`get_job`, `cancel_job`, `list_jobs`.
+`sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `rebuild_search_index`,
+`purge_cache`, `get_job`, `cancel_job`, `list_jobs`.
 
 Every read tool returns exactly the bytes of the equivalent
 `?format=json` HTTP route. `search_tdocs` normalises the query into a

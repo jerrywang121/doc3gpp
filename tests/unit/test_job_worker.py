@@ -36,6 +36,23 @@ class _FakeMeetingService:
             )
 
 
+class _FakeSpecService:
+    """Fake ``SpecService`` whose ``sync`` returns a canned outcome."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        from doc3gpp.models.sync import SyncOutcome
+
+        if fail:
+            self.sync = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        else:
+            self.sync = lambda *a, **k: SyncOutcome(
+                status="synced",
+                reason="spec sync ok",
+                synced_count=5,
+                version_count=12,
+            )
+
+
 def _make_state(repo: JobRepository, *, fail: bool = False) -> WebState:
     """Build a :class:`WebState` with a fake :class:`ServiceContainer`."""
     services = ServiceContainer(
@@ -46,7 +63,7 @@ def _make_state(repo: JobRepository, *, fail: bool = False) -> WebState:
         tdoc_repo=None,  # type: ignore[arg-type]
         tsg=None,  # type: ignore[arg-type]
         wi=None,  # type: ignore[arg-type]
-        spec=None,  # type: ignore[arg-type]
+        spec=_FakeSpecService(fail=fail),  # type: ignore[arg-type]
         search=None,
         semantic_search=None,
         tdoc_file_repo=None,  # type: ignore[arg-type]
@@ -138,6 +155,27 @@ def test_worker_runs_queued_job() -> None:
         "status": "synced",
         "reason": "meeting sync ok",
         "synced_count": 3,
+    }
+    assert len(done.log_lines) >= 1
+
+
+def test_worker_runs_spec_sync_job() -> None:
+    """A ``SYNC_SPECS`` job is claimed, logs, and succeeds."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(JobKind.SYNC_SPECS, {"tsg": "R5", "force": True})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.result_summary == {
+        "status": "synced",
+        "reason": "spec sync ok",
+        "synced_count": 5,
+        "version_count": 12,
     }
     assert len(done.log_lines) >= 1
 

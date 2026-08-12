@@ -125,6 +125,36 @@ async def _sync_tdocs_all(
     }
 
 
+async def _sync_specs(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    tsg = job.params.get("tsg")
+    if not tsg or not isinstance(tsg, str):
+        raise ValueError("sync_specs job requires a 'tsg' string parameter")
+    force = bool(job.params.get("force", False))
+    progress(f"syncing specs for TSG {tsg}")
+
+    def on_progress(event: str, data: Mapping[str, object]) -> None:
+        if event == "list_parsed":
+            progress(f"parsed {data.get('total', 0)} specs for TSG {tsg}")
+        elif event == "spec_done":
+            progress(f"spec {data.get('spec_id', '')} done")
+
+    outcome = services.spec.sync(tsg, force=force, on_progress=on_progress)
+    progress(outcome.reason)
+    return {
+        "status": outcome.status,
+        "reason": outcome.reason,
+        "synced_count": outcome.synced_count,
+        "version_count": outcome.version_count,
+    }
+
+
 async def _parse_tdocs(
     job: Job,
     services: ServiceContainer,
@@ -270,6 +300,7 @@ class JobHandlers:
         JobKind.SYNC_MEETINGS: _sync_meetings,
         JobKind.SYNC_TDOCS: _sync_tdocs,
         JobKind.SYNC_TDOCS_ALL: _sync_tdocs_all,
+        JobKind.SYNC_SPECS: _sync_specs,
         JobKind.PARSE_TDOCS: _parse_tdocs,
         JobKind.REBUILD_SEARCH: _rebuild_search,
         JobKind.CACHE_PURGE: _cache_purge,

@@ -14,6 +14,7 @@ from doc3gpp.repository.protocols import SpecRepository, TsgRepository
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.scraping.spec_source import (
     fetch_cr_list,
+    fetch_dynareport_detail,
     fetch_etsi_pdf_text,
     fetch_spec_detail,
     fetch_spec_list,
@@ -21,6 +22,8 @@ from doc3gpp.scraping.spec_source import (
 from doc3gpp.parsers.spec_parser import (
     extract_cr_tdocs,
     extract_etsi_pdf_url,
+    normalise_tsg_long_name,
+    parse_dynareport_header,
     parse_spec_detail,
     parse_spec_list,
 )
@@ -42,6 +45,38 @@ Events:
         fetched and upserted (or whose failure was logged and
         swallowed). ``data`` is ``{"spec_id": <str>}``.
 """
+
+
+class SpecUnknownOnUpstreamError(LookupError):
+    """Raised when the DynaReport detail page does not carry a usable spec.
+
+    Triggered by a 404, an empty / unknown-spec body, an unparseable
+    ``#titleVal`` / ``#typeVal`` / ``#PrimaryResponsibleGroupLbl``, or
+    a responsible-group label that cannot be normalised to a seeded
+    ``tsgs.short_name`` (e.g. ``RAN AH1``).
+    """
+
+    def __init__(self, spec_id: str, reason: str) -> None:
+        super().__init__(
+            f"spec {spec_id!r} is unknown on the 3GPP DynaReport upstream "
+            f"({reason}); nothing to sync"
+        )
+        self.spec_id = spec_id
+        self.reason = reason
+
+
+class UnknownTsgError(ValueError):
+    """Raised when a freshly fetched spec's normalised TSG is not in ``tsgs``."""
+
+    def __init__(self, spec_id: str, short_name: str, long_name: str) -> None:
+        super().__init__(
+            f"spec {spec_id!r} has unknown TSG short name {short_name!r} "
+            f"(normalised from {long_name!r}); run 'doc3gpp tsg seed' or "
+            f"'doc3gpp tsg list' to inspect the reference table"
+        )
+        self.spec_id = spec_id
+        self.short_name = short_name
+        self.long_name = long_name
 
 
 class SpecService:
@@ -160,20 +195,26 @@ class SpecService:
         force: bool = False,
         on_progress: SpecProgressFn | None = None,
     ) -> SyncOutcome:
-        """Refresh a single stored spec's detail page + versions.
+        """Refresh a single spec's detail page + versions.
 
-        Looks up ``spec_id`` in the DB to recover its TSG (required for
-        the FK and for ``parse_spec_detail``). A spec that is not
-        stored cannot be synced on its own and raises ``ValueError``.
+        Looks ``spec_id`` up in the DB to recover its TSG. When the
+        row is missing, fetches the DynaReport detail page directly,
+        parses the bootstrap header (``title`` / ``type`` / primary
+        responsible group), validates the group against ``tsgs``, and
+        funnels the freshly-built :class:`Spec` through the same
+        ``_sync_one_spec`` pipeline as the stored-row path.
+
         Honours the per-TSG ``tsgs.spec_last_sync`` skip rule unless
         ``force``, and stamps it again on success — identical to
-        :meth:`sync`.
+        :meth:`sync`. A spec that is unknown on the upstream raises
+        :class:`SpecUnknownOnUpstreamError`; a normalised TSG that is
+        not in the seeded reference table raises
+        :class:`UnknownTsgError`.
         """
         spec = self._repository.get(spec_id)
         if spec is None:
-            raise ValueError(
-                f"spec {spec_id!r} is not in the database; run 'doc3gpp spec sync --tsg <tsg>' first"
-            )
+            spec = self._bootstrap_spec_from_dynareport(spec_id)
+
         canonical = spec.tsg.upper() if spec.tsg else ""
         if not force:
             skipped = self._is_sync_skipped(
@@ -201,6 +242,55 @@ class SpecService:
             reason=f"Spec sync complete for {spec.spec_id}: 1 spec, {version_count} versions stored",
             synced_count=1,
             version_count=version_count,
+        )
+
+    def _bootstrap_spec_from_dynareport(self, spec_id: str) -> Spec:
+        """Fetch a missing spec's DynaReport detail page and build a ``Spec``.
+
+        Used by :meth:`sync_spec` when the local ``specs`` table has
+        no row for ``spec_id``. Returns a ``Spec`` carrying only the
+        three bootstrap fields (``spec_id`` / ``type`` / ``title`` /
+        ``tsg``) — the other header fields and the version rows are
+        filled by the existing ``_sync_one_spec`` pipeline.
+
+        Raises :class:`SpecUnknownOnUpstreamError` when the upstream
+        body is unusable (404, missing fields, unrecognised group
+        label) and :class:`UnknownTsgError` when the normalised
+        short name is not in the seeded ``tsgs`` table.
+        """
+        html = fetch_dynareport_detail(spec_id)
+        header = parse_dynareport_header(html)
+        if header.title is None or header.type is None or header.tsg_long_name is None:
+            missing = [
+                name
+                for name, value in (
+                    ("title", header.title),
+                    ("type", header.type),
+                    ("tsg_long_name", header.tsg_long_name),
+                )
+                if value is None
+            ]
+            raise SpecUnknownOnUpstreamError(
+                spec_id, f"missing fields: {', '.join(missing)}"
+            )
+
+        short_name = normalise_tsg_long_name(header.tsg_long_name)
+        if short_name is None:
+            raise SpecUnknownOnUpstreamError(
+                spec_id,
+                f"unrecognised primary responsible group {header.tsg_long_name!r}",
+            )
+
+        if self._tsg_repository is not None:
+            tsg_record = self._tsg_repository.get_by_short_name(short_name)
+            if tsg_record is None:
+                raise UnknownTsgError(spec_id, short_name, header.tsg_long_name)
+
+        return Spec(
+            spec_id=spec_id,
+            type=header.type,
+            title=header.title,
+            tsg=short_name,
         )
 
     def list_distinct_tsgs(self) -> list[str]:

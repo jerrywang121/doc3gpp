@@ -60,6 +60,20 @@ def fetch_spec_detail(
         return new_client.get_text(url)
 
 
+def fetch_dynareport_detail(
+    spec_id_dotted: str, client: ScraperClient | None = None
+) -> str:
+    """Fetch the raw HTML body of a spec's DynaReport detail page by dotted id.
+
+    Convenience wrapper around :func:`fetch_spec_detail` that takes
+    the dotted ``spec_id`` (``38.523-1``) and strips the dot before
+    composing the URL. ``client`` is reused when supplied (same
+    pattern as :func:`fetch_spec_list`).
+    """
+    slug = spec_id_dotted.replace(".", "")
+    return fetch_spec_detail(slug, client=client)
+
+
 def fetch_etsi_pdf_text(wki_id: int, client: ScraperClient) -> str:
     """Fetch the ETSI work-item page body for ``wki_id``."""
     url = _ETSI_URL_TEMPLATE.format(wki_id=wki_id)

@@ -208,7 +208,7 @@ The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API +
 | `get_state`/`get_settings`/`get_engine`/`get_services` | dependency | `web/deps.py` | FastAPI `Depends` helpers reading `request.app.state.web` |
 | `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_wi_service`/`get_tsg_service`/`get_search_service`/`get_semantic_search_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service `Depends` helpers |
 | `get_job_repo` / `get_job_worker` | dependency | `web/deps.py` | Job repository + worker-handle deps (overridden in tests) |
-| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 22 tools (12 read + 10 job) |
+| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 23 tools (12 read + 11 job) |
 | `_to_json` | function | `web/mcp_server.py` | `json.dumps(value, separators=(",", ":"), ensure_ascii=False)` — byte-matches Starlette `JSONResponse` |
 | `meeting_rows`/`tdoc_rows`/`tsg_rows`/`wi_rows`/`spec_rows`/`spec_version_rows` | function | `web/render.py` | List-of-dict rows matching CLI `--format json` (`_coerce_cell`: `None`→`"-"`, date→isoformat) |
 | `to_jsonable` | function | `web/render.py` | Recursively convert dataclasses/values to JSON-safe structures |

@@ -90,6 +90,9 @@ class _ProgressFakeSpecService:
         self._specs_per_tsg = specs_per_tsg
         self.sync_calls: list[str] = []
 
+    def list_distinct_tsgs(self) -> list[str]:
+        return list(self._specs_per_tsg)
+
     def sync(self, tsg: str, *, force: bool = False, on_progress=None) -> SyncOutcome:
         self.sync_calls.append(tsg)
         n = self._specs_per_tsg.get(tsg, 0)
@@ -118,26 +121,24 @@ def test_spec_sync_help() -> None:
     assert "every distinct TSG" in result.stdout
 
 
-def test_spec_sync_no_tsg_iterates_meetings_distinct_tsgs(sqlite_env, monkeypatch) -> None:
-    """``spec sync`` with no ``--tsg`` loops over the distinct TSGs in the
-    meetings table and calls :meth:`SpecService.sync` once per TSG."""
-    from doc3gpp.models.meeting import Meeting
+def test_spec_sync_no_tsg_iterates_specs_distinct_tsgs(sqlite_env, monkeypatch) -> None:
+    """``spec sync`` with no selector loops over the distinct TSGs in the
+    specs table and calls :meth:`SpecService.sync` once per TSG."""
+    from doc3gpp.models.spec import Spec
     from doc3gpp.services.tsg_service import TsgService
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+    from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
     from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 
     create_schema()
     TsgService(SQLAlchemyTsgRepository()).seed_defaults()
-    SQLAlchemyMeetingRepository().upsert_many(
-        [
-            Meeting(meeting_id=1, name="R5-1", title="R5 mtg 1", location="X", tsg="R5", ftp_url="u1"),
-            Meeting(meeting_id=2, name="R5-2", title="R5 mtg 2", location="X", tsg="R5", ftp_url="u2"),
-            Meeting(meeting_id=3, name="S2-1", title="S2 mtg 1", location="Y", tsg="S2", ftp_url="u3"),
-        ]
-    )
+    repo = SQLAlchemySpecRepository()
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
+    repo.upsert(Spec(spec_id="38.523-3", type="TS", title="NR signalling", tsg="R5"))
+    repo.upsert(Spec(spec_id="23.100", type="TR", title="Arch", tsg="S2"))
 
     svc = MagicMock()
+    svc.list_distinct_tsgs.return_value = ["R5", "S2"]
     svc.sync.side_effect = [
         SyncOutcome(
             status="synced",
@@ -153,6 +154,7 @@ def test_spec_sync_no_tsg_iterates_meetings_distinct_tsgs(sqlite_env, monkeypatc
         ),
     ]
     monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+    monkeypatch.setattr("doc3gpp.cli.build_meeting_service", lambda: MagicMock())
 
     result = runner.invoke(app, ["spec", "sync"])
     assert result.exit_code == 0, result.stdout
@@ -164,19 +166,20 @@ def test_spec_sync_no_tsg_iterates_meetings_distinct_tsgs(sqlite_env, monkeypatc
     assert "Spec sync complete for TSG S2" in result.stdout
 
 
-def test_spec_sync_no_tsg_empty_meetings_is_noop(sqlite_env, monkeypatch) -> None:
-    """``spec sync`` with no ``--tsg`` and no stored meetings prints a
+def test_spec_sync_no_tsg_empty_specs_is_noop(sqlite_env, monkeypatch) -> None:
+    """``spec sync`` with no selector and no stored specs prints a
     friendly no-op message and never invokes :meth:`SpecService.sync`."""
     from doc3gpp.storage.db.migrate import create_schema
 
     create_schema()
 
     svc = MagicMock()
+    svc.list_distinct_tsgs.return_value = []
     monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
 
     result = runner.invoke(app, ["spec", "sync"])
     assert result.exit_code == 0, result.stdout
-    assert "No stored meetings" in result.stdout
+    assert "No stored specs with a TSG found" in result.stdout
     svc.sync.assert_not_called()
 
 
@@ -331,23 +334,20 @@ def test_spec_sync_single_tsg_shows_progress_bar(monkeypatch) -> None:
     assert sum(call.updates) == 1
 
 
-def test_spec_sync_no_tsg_loop_shows_progress_bar_per_tsg(monkeypatch) -> None:
-    """``spec sync`` (no --tsg) must open a fresh tqdm bar for every TSG
-    in the meetings table, with the per-TSG desc ('spec R5', 'spec S2', ...)."""
-    from doc3gpp.models.meeting import Meeting
+def test_spec_sync_no_tsg_loop_shows_progress_bar_per_tsg(sqlite_env, monkeypatch) -> None:
+    """``spec sync`` (no selector) must open a fresh tqdm bar for every TSG
+    in the specs table, with the per-TSG desc ('spec R5', 'spec S2', ...)."""
+    from doc3gpp.models.spec import Spec
     from doc3gpp.services.tsg_service import TsgService
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+    from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
     from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 
     create_schema()
     TsgService(SQLAlchemyTsgRepository()).seed_defaults()
-    SQLAlchemyMeetingRepository().upsert_many(
-        [
-            Meeting(meeting_id=1, name="R5-1", title="R5 mtg 1", location="X", tsg="R5", ftp_url="u1"),
-            Meeting(meeting_id=2, name="S2-1", title="S2 mtg 1", location="Y", tsg="S2", ftp_url="u2"),
-        ]
-    )
+    repo = SQLAlchemySpecRepository()
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
+    repo.upsert(Spec(spec_id="23.100", type="TR", title="Arch", tsg="S2"))
 
     fake_cls = _install_fake_tqdm(monkeypatch)
     svc = _ProgressFakeSpecService({"R5": 2, "S2": 3})
@@ -432,3 +432,65 @@ def test_spec_show_json_parity_keeps_wis_crs_by_default(monkeypatch) -> None:
     slim_payload = json.loads(slim.stdout)
     assert "wis" not in slim_payload["spec"]
     assert "crs" not in slim_payload["versions"][0]
+
+
+def test_spec_sync_spec_id_syncs_single(monkeypatch) -> None:
+    """``spec sync --spec-id 36.579-5`` calls ``sync_spec`` once."""
+    from doc3gpp.models.spec import Spec
+    from doc3gpp.models.sync import SyncOutcome
+
+    svc = MagicMock()
+    svc.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5")
+    svc.sync_spec.return_value = SyncOutcome(
+        status="synced",
+        reason="Spec sync complete for 36.579-5: 1 spec, 2 versions stored",
+        synced_count=1,
+        version_count=2,
+    )
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+    result = runner.invoke(app, ["spec", "sync", "--spec-id", "36.579-5"])
+    assert result.exit_code == 0, result.stdout
+    args, kwargs = svc.sync_spec.call_args
+    assert args == ("36.579-5",)
+    assert kwargs.get("force") is False
+    assert kwargs.get("on_progress") is not None
+    assert "Spec sync complete for 36.579-5" in result.stdout
+
+
+def test_spec_sync_spec_id_unknown_raises(monkeypatch) -> None:
+    """``spec sync --spec-id <unknown>`` raises a BadParameter."""
+    svc = MagicMock()
+    svc.get.return_value = None
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+    result = runner.invoke(app, ["spec", "sync", "--spec-id", "99.999-9"])
+    assert result.exit_code != 0
+    assert "Unknown spec id" in (result.output + result.stdout)
+
+
+def test_spec_sync_tsg_and_spec_id_conflict(monkeypatch) -> None:
+    """Passing both ``--tsg`` and ``--spec-id`` is rejected."""
+    svc = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+    result = runner.invoke(app, ["spec", "sync", "--tsg", "R5", "--spec-id", "36.579-5"])
+    assert result.exit_code != 0
+    assert "mutually exclusive" in (result.output + result.stdout)
+
+
+def test_spec_sync_no_selector_iterates_specs_tsgs(sqlite_env, monkeypatch) -> None:
+    """``spec sync`` with no selector syncs every TSG in the specs table."""
+    from doc3gpp.models.sync import SyncOutcome
+
+    svc = MagicMock()
+    svc.list_distinct_tsgs.return_value = ["R5", "S2"]
+    svc.sync.side_effect = [
+        SyncOutcome(status="synced", reason="Spec sync complete for TSG R5: 1 spec, 1 version stored", synced_count=1, version_count=1),
+        SyncOutcome(status="synced", reason="Spec sync complete for TSG S2: 1 spec, 1 version stored", synced_count=1, version_count=1),
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+    monkeypatch.setattr("doc3gpp.cli.build_meeting_service", lambda: MagicMock())
+    result = runner.invoke(app, ["spec", "sync"])
+    assert result.exit_code == 0, result.stdout
+    assert svc.sync.call_count == 2
+    synced_tsgs = {call.args[0] for call in svc.sync.call_args_list}
+    assert synced_tsgs == {"R5", "S2"}
+    svc.list_distinct_tsgs.assert_called_once()

@@ -3858,8 +3858,19 @@ def spec_sync(
         "--tsg",
         help=(
             "TSG short name (e.g. R5) for the spec list page to sync. "
-            "When omitted, every distinct TSG found in the local "
-            "meetings table is synced."
+            "Mutually exclusive with --spec-id. When neither --tsg nor "
+            "--spec-id is given, every distinct TSG found in the local "
+            "specs table is synced."
+        ),
+    ),
+    spec_id: str | None = typer.Option(
+        None,
+        "--spec-id",
+        help=(
+            "Dotted spec id (e.g. 36.579-5) to sync a single stored spec. "
+            "Mutually exclusive with --tsg. When neither --tsg nor "
+            "--spec-id is given, every distinct TSG found in the local "
+            "specs table is synced."
         ),
     ),
     force: bool = typer.Option(
@@ -3869,15 +3880,15 @@ def spec_sync(
         help="Bypass the spec sync interval skip rule.",
     ),
 ) -> None:
-    """Fetch and store specs (and their versions) for a TSG from 3gpp.org.
+    """Fetch and store specs (and their versions) from 3gpp.org.
 
     Valid --tsg values are:
     `R1`, `R2`, `R3`, `R4`, `R5`, `RT`, `RP`,
     `C1`, `C3`, `C4`, `C6`, `CP`,
     `S1`, `S2`, `S3`, `S4`, `S5`, `S6`, `SP`
 
-    When no ``--tsg`` is given, every distinct TSG
-    found in the local meetings table is synced.
+    When no ``--tsg`` and no ``--spec-id`` is given, every distinct TSG
+    found in the local specs table is synced.
 
     When a TSG was synced within ``sync.spec_sync_interval``
     the sync is skipped unless ``--force`` is passed.
@@ -3886,11 +3897,35 @@ def spec_sync(
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     service = build_spec_service()
 
+    if tsg is not None and spec_id is not None:
+        raise typer.BadParameter(
+            "--tsg and --spec-id are mutually exclusive; pass exactly one."
+        )
+
+    if spec_id is not None:
+        spec = service.get(spec_id)
+        if spec is None:
+            raise typer.BadParameter(
+                f"Unknown spec id '{spec_id}'. Run 'doc3gpp spec sync --tsg <tsg>' first."
+            )
+        from tqdm import tqdm
+
+        bar = tqdm(total=1, desc=f"spec {spec_id}", unit="spec", dynamic_ncols=True)
+
+        def _on_progress(event: str, data: dict) -> None:
+            if event == "spec_done":
+                bar.update(1)
+
+        outcome = service.sync_spec(spec_id, force=force, on_progress=_on_progress)
+        bar.close()
+        typer.echo(outcome.reason)
+        return
+
     if tsg is None:
-        tsgs = build_meeting_service().list_distinct_tsgs()
+        tsgs = service.list_distinct_tsgs()
         if not tsgs:
-            logger.info("No stored meetings with a TSG found; nothing to sync")
-            typer.echo("No stored meetings with a TSG found; nothing to sync.")
+            logger.info("No stored specs with a TSG found; nothing to sync")
+            typer.echo("No stored specs with a TSG found; nothing to sync.")
             return
         logger.info(
             "Starting spec sync for %s stored TSG(s): %s", len(tsgs), ", ".join(tsgs)
@@ -3901,8 +3936,8 @@ def spec_sync(
 
     for tsg_short in tsgs:
         if not tsg_service.is_known_short_name(tsg_short):
-            logger.warning("Skipping unknown TSG '%s' found in meetings table", tsg_short)
-            typer.echo(f"Skipping unknown TSG '{tsg_short}' found in meetings table.")
+            logger.warning("Skipping unknown TSG '%s' found in specs table", tsg_short)
+            typer.echo(f"Skipping unknown TSG '{tsg_short}' found in specs table.")
             continue
 
         from tqdm import tqdm

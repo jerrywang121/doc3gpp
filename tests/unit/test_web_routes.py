@@ -2479,3 +2479,21 @@ def test_get_spec_show_renders_per_version_details_checkbox(client: TestClient) 
     assert response.status_code == 200
     assert 'name="per_version_details"' in response.text
     assert "Also fetch per-version details" in response.text
+
+
+def test_meeting_list_filters_form_has_name_input(client: TestClient) -> None:
+    """``GET /meetings`` renders the Name filter input."""
+    html = client.get("/meetings").text
+    assert 'name="name"' in html
+
+
+def test_meetings_list_name_filter_returns_200(client: TestClient) -> None:
+    """``GET /meetings?name=SA2%23`` is 200 (pass-through to service)."""
+    response = client.get("/meetings?name=SA2%23")
+    assert response.status_code == 200
+
+
+def test_meetings_list_name_filter_empty_returns_200(client: TestClient) -> None:
+    """``GET /meetings?name=`` is 200, not 422 (empty form field)."""
+    response = client.get("/meetings?name=&tsg=c6")
+    assert response.status_code == 200

@@ -307,7 +307,7 @@ class SpecService:
         # upstream fetch for versions we have already resolved — the
         # link is stable for a version and re-fetching it on every sync
         # wastes an HTTP request per spec.
-        self._backfill_pdf_urls(versions)
+        self._backfill_followup_fields(versions)
 
         # The ETSI + CR follow-ups are independent HTTP requests, fanned
         # out across the dedicated follow-up executor so they overlap
@@ -329,22 +329,34 @@ class SpecService:
         self._repository.upsert(header)
         return len(versions)
 
-    def _backfill_pdf_urls(self, versions: list[SpecVersion]) -> None:
-        """Copy the persisted ``pdf_url`` onto freshly parsed versions.
+    def _backfill_followup_fields(self, versions: list[SpecVersion]) -> None:
+        """Copy the persisted ``pdf_url`` and ``crs`` onto freshly parsed versions.
 
-        ``versions`` come from the detail page, which has no ETSI PDF
-        link, so each ``pdf_url`` is ``None``. For any version we have
-        already resolved (``pdf_url`` stored), load the stored value so
-        the ETSI follow-up is skipped instead of re-fetched.
+        ``versions`` come from the detail page, which carries neither
+        the ETSI PDF link nor the CR list, so each ``pdf_url`` and
+        ``crs`` is ``None``. For every version we have already resolved
+        (either column stored), load the stored value so the upsert
+        below writes the original value back instead of clobbering it
+        with ``None``. Runs on every sync, regardless of whether
+        ``per_version_details`` is on, so a flag-OFF re-sync preserves
+        previously-fetched follow-up data.
         """
         if not versions:
             return
         spec_id = versions[0].spec_id
         persisted = self._repository.list_versions(spec_id)
-        by_version = {v.version: v.pdf_url for v in persisted if v.pdf_url}
+        by_version: dict[str, SpecVersion] = {}
+        for v in persisted:
+            if v.pdf_url or v.crs:
+                by_version[v.version] = v
         for v in versions:
-            if v.pdf_url is None:
-                v.pdf_url = by_version.get(v.version)
+            stored = by_version.get(v.version)
+            if stored is None:
+                continue
+            if v.pdf_url is None and stored.pdf_url:
+                v.pdf_url = stored.pdf_url
+            if v.crs is None and stored.crs:
+                v.crs = stored.crs
 
     def _fetch_followups_concurrently(
         self,

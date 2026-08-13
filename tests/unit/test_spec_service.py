@@ -883,3 +883,38 @@ def test_sync_spec_proceeds_when_no_last_synced_at() -> None:
     svc._sync_one_spec = _fake_sync_one  # type: ignore[assignment]
     out = svc.sync_spec("36.579-5")
     assert out.status == "synced"
+
+
+def test_backfill_followup_fields_copies_stored_pdf_and_crs(monkeypatch) -> None:
+    """``_backfill_followup_fields`` copies both ``pdf_url`` and ``crs``
+    from persisted ``spec_versions`` rows onto freshly-parsed versions
+    that arrived from ``parse_spec_detail`` with ``None`` for both."""
+    from datetime import date
+
+    from doc3gpp.models.spec import Spec, SpecVersion
+
+    repo = _StubSpecRepo()
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="X", tsg="R5"))
+    repo.upsert_versions([
+        SpecVersion(
+            spec_id="36.579-5",
+            version="18.3.0",
+            ftp_url="https://example/x.zip",
+            upload_date=date(2026, 1, 1),
+            pdf_url="https://etsi.example/x.pdf",
+            crs="R5-260001,R5-260002",
+        ),
+    ])
+
+    svc = SpecService(repo)
+    fresh = [
+        SpecVersion(
+            spec_id="36.579-5",
+            version="18.3.0",
+            ftp_url="https://example/x.zip",
+            upload_date=date(2026, 1, 1),
+        ),
+    ]
+    svc._backfill_followup_fields(fresh)
+    assert fresh[0].pdf_url == "https://etsi.example/x.pdf"
+    assert fresh[0].crs == "R5-260001,R5-260002"

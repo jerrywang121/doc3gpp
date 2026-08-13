@@ -129,7 +129,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `Settings.sync.tdoc_list_url_template` (default
   `https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}`);
   the auxiliary TDoc file scan still uses the stored meeting row's
-  FTP URL. **No meeting row → no TDoc sync.** Skips when the meeting
+  FTP URL. **No meeting row → no TDoc sync.** When the meeting has no
+  stored `ftp_url` the TDoc list sync still runs and the auxiliary
+  file scan is skipped (the outcome reason notes the skip); the
+  sync never errors on a missing FTP URL. Skips when the meeting
   has been synced before **and** is outside
   `Settings.sync.tdoc_list_closed_window` or was synced within
   `Settings.sync.tdoc_list_sync_interval`; the closed-window check is

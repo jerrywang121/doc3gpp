@@ -18,7 +18,6 @@ from doc3gpp.models.sync import BulkSyncFailure
 from doc3gpp.models.sync import BulkSyncOutcome
 from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.services.tdoc_sync_coordinator import (
-    MeetingMissingFtpUrlError,
     MeetingNotFoundError,
 )
 
@@ -33,11 +32,15 @@ class _FakeCoordinator:
         self.id_raises: Exception | None = None
         self.name_raises: Exception | None = None
         self.bulk_outcome: BulkSyncOutcome = BulkSyncOutcome()
+        self.id_outcome: SyncOutcome | None = None
+        self.name_outcome: SyncOutcome | None = None
 
     def sync_for_meeting_id(self, meeting_id: int, force: bool = False) -> SyncOutcome:
         self.id_calls.append((meeting_id, force))
         if self.id_raises is not None:
             raise self.id_raises
+        if self.id_outcome is not None:
+            return self.id_outcome
         return SyncOutcome(
             status="synced",
             reason="TDoc sync complete: 7 TDoc row(s) and 0 auxiliary TDoc file(s) stored",
@@ -49,6 +52,8 @@ class _FakeCoordinator:
         self.name_calls.append((meeting_name, force))
         if self.name_raises is not None:
             raise self.name_raises
+        if self.name_outcome is not None:
+            return self.name_outcome
         return SyncOutcome(
             status="synced",
             reason="TDoc sync complete: 3 TDoc row(s) and 0 auxiliary TDoc file(s) stored",
@@ -150,8 +155,8 @@ def test_tdoc_sync_bulk_all_failed_exits_nonzero(monkeypatch) -> None:
         failures=(
             BulkSyncFailure(
                 meeting_id=1,
-                error="MeetingMissingFtpUrlError",
-                reason="no ftp",
+                error="MeetingNotFoundError",
+                reason="no meeting",
             ),
         ),
     )
@@ -219,14 +224,27 @@ def test_tdoc_sync_meeting_not_found_becomes_bad_parameter(monkeypatch) -> None:
     assert "Meeting not found" in result.output
 
 
-def test_tdoc_sync_missing_ftp_url_becomes_bad_parameter(monkeypatch) -> None:
+def test_tdoc_sync_missing_ftp_url_succeeds_and_notes_skip(monkeypatch) -> None:
+    """A meeting without an FTP URL still completes the TDoc list sync.
+
+    The CLI should print the coordinator's outcome reason (which now
+    includes the auxiliary-file-scan skip note) and exit zero.
+    """
     runner = CliRunner()
     fake = _FakeCoordinator()
-    fake.id_raises = MeetingMissingFtpUrlError(
-        "Meeting 10 (R5-100) has no FTP URL stored"
+    fake.id_outcome = SyncOutcome(
+        status="synced",
+        reason=(
+            "TDoc sync complete: 3 TDoc row(s) and 0 auxiliary TDoc "
+            "file(s) stored (no FTP URL on the meeting row — auxiliary "
+            "file scan skipped)"
+        ),
+        synced_count=3,
+        file_count=0,
     )
     _patch_coordinator(monkeypatch, fake)
 
     result = runner.invoke(app, ["tdoc", "sync", "--meeting-id", "10"])
-    assert result.exit_code != 0
-    assert "no FTP URL stored" in result.output
+    assert result.exit_code == 0, result.output
+    assert "no FTP URL" in result.output
+    assert "3 TDoc row(s)" in result.output

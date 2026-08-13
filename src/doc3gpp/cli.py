@@ -76,7 +76,6 @@ from doc3gpp.services.tdoc_cr_service import (
     _read_cached_markdown_path,
 )
 from doc3gpp.services.tdoc_sync_coordinator import (
-    MeetingMissingFtpUrlError,
     MeetingNotFoundError,
 )
 from doc3gpp.services.spec_service import (
@@ -936,9 +935,6 @@ def tdoc_sync(
             outcome = coordinator.sync_for_meeting_name(meeting, force=force)
     except MeetingNotFoundError as exc:
         logger.error("Meeting not found: %s", exc)
-        raise typer.BadParameter(str(exc)) from None
-    except MeetingMissingFtpUrlError as exc:
-        logger.error("Meeting has no FTP URL stored: %s", exc)
         raise typer.BadParameter(str(exc)) from None
 
     typer.echo(outcome.reason)

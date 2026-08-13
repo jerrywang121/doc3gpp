@@ -29,7 +29,6 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_sync_coordinator import (
-    MeetingMissingFtpUrlError,
     MeetingNotFoundError,
     TDocSyncCoordinator,
 )
@@ -145,7 +144,7 @@ def sync_meeting_internal(meeting_id: int, coordinator: TDocSyncCoordinator) -> 
     """
     try:
         outcome = coordinator.sync_for_meeting_id(meeting_id, force=False)
-    except (MeetingNotFoundError, MeetingMissingFtpUrlError) as exc:
+    except MeetingNotFoundError as exc:
         logger.warning("Auto-sync skipped for meeting %s: %s", meeting_id, exc)
         return False
     except Exception as exc:  # noqa: BLE001 - sync failure must not break read commands

@@ -21,7 +21,6 @@ from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.services.tdoc_sync_coordinator import (
-    MeetingMissingFtpUrlError,
     MeetingNotFoundError,
     TDocSyncCoordinator,
 )
@@ -491,22 +490,111 @@ def test_sync_for_meeting_name_raises_when_meeting_missing() -> None:
         coord.sync_for_meeting_name("nope")
 
 
-def test_sync_raises_when_meeting_has_no_ftp_url() -> None:
+def test_sync_runs_tdoc_list_even_when_meeting_has_no_ftp_url(
+    monkeypatch,
+) -> None:
+    """The TDoc list scrape uses the portal URL, not the meeting's FTP URL.
+
+    A missing ``ftp_url`` should not block the TDoc list sync; it only
+    means the auxiliary file scan cannot run. The outcome reports
+    ``status == "synced"`` with ``file_count == 0`` and a reason that
+    explicitly notes the auxiliary file scan was skipped because no
+    FTP URL is stored.
+    """
     meeting = Meeting(
         meeting_id=10,
-        name="R5-100",
-        title="R5 100",
+        name="R2-135",
+        title="R2 135",
         location="Online",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 1, 2),
         ftp_url=None,
     )
-    coord = _make_coordinator(
-        _FakeMeetingRepository({10: meeting}), _FakeTDocRepository(),
-        _FakeTDocFileRepository(),
+    meeting_repo = _FakeMeetingRepository({10: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    captured: dict = {}
+
+    def fake_tdoc_sync(self, meeting_id, url_template):
+        captured["meeting_id"] = meeting_id
+        captured["url_template"] = url_template
+        tdoc_repo.upsert_many(
+            [TDoc(tdoc_id="R2-260001", meeting_id=meeting_id)]
+        )
+        return 1
+
+    def fake_file_sync(self, ftp_url, tdoc_ids):
+        captured["file_sync_called"] = True
+        captured["file_sync_ftp_url"] = ftp_url
+        return 0
+
+    from doc3gpp.services.tdoc_service import TDocService
+    from doc3gpp.services.tdoc_file_service import TDocFileService
+
+    monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_tdoc_sync)
+    monkeypatch.setattr(
+        TDocFileService, "sync_from_meeting_ftp", fake_file_sync
     )
-    with pytest.raises(MeetingMissingFtpUrlError, match="10"):
-        coord.sync_for_meeting_id(10)
+
+    coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
+    outcome = coord.sync_for_meeting_id(10)
+
+    assert captured.get("meeting_id") == 10
+    assert captured.get("url_template") == DEFAULT_TEMPLATE
+    # The auxiliary file scan must NOT be called when no FTP URL is stored.
+    assert captured.get("file_sync_called") is not True
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 1
+    assert outcome.file_count == 0
+    assert "1 TDoc row(s)" in outcome.reason
+    assert "0 auxiliary TDoc file(s)" in outcome.reason
+    assert "no FTP URL" in outcome.reason
+
+
+def test_sync_for_meeting_name_runs_tdoc_list_even_when_no_ftp_url(
+    monkeypatch,
+) -> None:
+    meeting = Meeting(
+        meeting_id=10,
+        name="R2-135",
+        title="R2 135",
+        location="Online",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 2),
+        ftp_url=None,
+    )
+    meeting_repo = _FakeMeetingRepository({10: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    from doc3gpp.services.tdoc_service import TDocService
+    from doc3gpp.services.tdoc_file_service import TDocFileService
+
+    file_sync_called = {"value": False}
+
+    def fake_tdoc_sync(self, meeting_id, url_template):
+        tdoc_repo.upsert_many(
+            [TDoc(tdoc_id="R2-260002", meeting_id=meeting_id)]
+        )
+        return 1
+
+    def fake_file_sync(self, ftp_url, tdoc_ids):
+        file_sync_called["value"] = True
+        return 0
+
+    monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_tdoc_sync)
+    monkeypatch.setattr(
+        TDocFileService, "sync_from_meeting_ftp", fake_file_sync
+    )
+
+    coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
+    outcome = coord.sync_for_meeting_name("R2-135")
+
+    assert file_sync_called["value"] is False
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 1
+    assert outcome.file_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +671,13 @@ def test_sync_all_tracked_meetings_collects_missing_meeting_failure() -> None:
     )
 
 
-def test_sync_all_tracked_meetings_collects_missing_ftp_url_failure() -> None:
+def test_sync_all_tracked_meetings_skips_file_scan_when_no_ftp_url(
+    monkeypatch,
+) -> None:
+    """A missing FTP URL is not a bulk-sync failure; the meeting is synced
+    normally with the auxiliary file scan skipped and the skip recorded
+    in the outcome reason.
+    """
     meeting = Meeting(
         meeting_id=5,
         name="R5#5",
@@ -594,17 +688,41 @@ def test_sync_all_tracked_meetings_collects_missing_ftp_url_failure() -> None:
         ftp_url=None,
     )
     tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[5])
+    tdoc_file_repo = _FakeTDocFileRepository()
+    file_sync_called = {"value": False}
+
+    def fake_tdoc_sync(self, meeting_id, url_template):
+        tdoc_repo.upsert_many(
+            [TDoc(tdoc_id="R5-260005", meeting_id=meeting_id)]
+        )
+        return 1
+
+    def fake_file_sync(self, ftp_url, tdoc_ids):
+        file_sync_called["value"] = True
+        return 0
+
+    from doc3gpp.services.tdoc_service import TDocService
+    from doc3gpp.services.tdoc_file_service import TDocFileService
+
+    monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_tdoc_sync)
+    monkeypatch.setattr(
+        TDocFileService, "sync_from_meeting_ftp", fake_file_sync
+    )
+
     coord = _make_coordinator(
         _FakeMeetingRepository({5: meeting}),
         tdoc_repo,
-        _FakeTDocFileRepository(),
+        tdoc_file_repo,
     )
     outcome = coord.sync_all_tracked_meetings()
 
     assert outcome.total == 1
-    assert outcome.failed_count == 1
-    assert outcome.failures[0].error == "MeetingMissingFtpUrlError"
-    assert "5" in outcome.failures[0].reason
+    # Missing FTP URL is not a failure — the TDoc list sync still runs.
+    assert outcome.failed_count == 0
+    assert outcome.synced_count == 1
+    assert outcome.outcomes[0].file_count == 0
+    assert "no FTP URL" in outcome.outcomes[0].reason
+    assert file_sync_called["value"] is False
 
 
 def test_sync_all_tracked_meetings_force_flag_is_forwarded(monkeypatch) -> None:

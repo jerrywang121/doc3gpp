@@ -308,9 +308,12 @@ Behavior (single-meeting: `--meeting-id` or `--meeting`):
   parses and persists TDoc rows, then updates
   `meetings.tdoc_list_last_sync`.
 - Prints `TDoc sync complete: N TDoc row(s) and M auxiliary TDoc file(s) stored`
-  or a skip reason; exits `0` on skip.
-- `MeetingNotFoundError` and `MeetingMissingFtpUrlError` are converted to
-  `BadParameter` with the original message preserved.
+  or a skip reason; exits `0` on skip. When the meeting has no stored
+  `ftp_url`, the TDoc list sync still runs and the reason notes that the
+  auxiliary file scan was skipped because no FTP URL is on the meeting
+  row.
+- `MeetingNotFoundError` is converted to `BadParameter` with the original
+  message preserved.
 
 Behavior (bulk: no selector):
 

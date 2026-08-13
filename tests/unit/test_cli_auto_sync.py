@@ -24,7 +24,6 @@ from doc3gpp.parsers.direct_extractor import NotAFolderError
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_sync_coordinator import (
-    MeetingMissingFtpUrlError,
     MeetingNotFoundError,
     TDocSyncCoordinator,
 )
@@ -171,16 +170,11 @@ class TestSyncMeetingInternal:
         captured = capsys.readouterr()
         assert "[auto-sync] TDoc sync skipped for meeting 42" in captured.out
 
-    @pytest.mark.parametrize(
-        "error",
-        [
-            MeetingNotFoundError("Meeting not found with id 42"),
-            MeetingMissingFtpUrlError("Meeting 42 has no FTP URL stored"),
-        ],
-    )
-    def test_returns_false_on_known_sync_errors(self, error: Exception) -> None:
+    def test_returns_false_on_known_sync_errors(self) -> None:
         coordinator = MagicMock(spec=TDocSyncCoordinator)
-        coordinator.sync_for_meeting_id.side_effect = error
+        coordinator.sync_for_meeting_id.side_effect = MeetingNotFoundError(
+            "Meeting not found with id 42"
+        )
 
         assert sync_meeting_internal(42, coordinator) is False
 

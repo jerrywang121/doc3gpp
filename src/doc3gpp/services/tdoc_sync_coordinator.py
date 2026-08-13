@@ -35,24 +35,19 @@ class MeetingNotFoundError(LookupError):
     """Raised when the requested meeting record cannot be located."""
 
 
-class MeetingMissingFtpUrlError(ValueError):
-    """Raised when a resolved meeting has no FTP URL stored.
-
-    Without a stored ``ftp_url`` there is no upstream location to scrape
-    TDocs from, so the sync cannot proceed.
-    """
-
-
 class TDocSyncCoordinator:
     """Coordinates the full TDoc sync flow for one or many meetings.
 
     The CLI calls ``sync_for_meeting_id`` or ``sync_for_meeting_name``
     with the user-supplied selector; the coordinator looks up the
-    meeting via :class:`MeetingService`, validates its FTP URL, and
-    dispatches the TDoc and auxiliary-file syncs through
-    :class:`TDocService` and :class:`TDocFileService` respectively.
-    After a successful TDoc list sync, the meeting's
-    ``tdoc_list_last_sync`` timestamp is updated.
+    meeting via :class:`MeetingService` and dispatches the TDoc and
+    auxiliary-file syncs through :class:`TDocService` and
+    :class:`TDocFileService` respectively. The TDoc list scrape uses
+    the configured portal URL template and never needs the meeting's
+    FTP URL, so a missing ``ftp_url`` only skips the auxiliary file
+    scan rather than aborting the whole sync. After a successful TDoc
+    list sync, the meeting's ``tdoc_list_last_sync`` timestamp is
+    updated.
 
     ``sync_all_tracked_meetings`` discovers every distinct meeting ID
     stored in the ``tdocs`` table and runs the same per-meeting sync
@@ -125,7 +120,7 @@ class TDocSyncCoordinator:
                         f"Meeting not found with id {meeting_id}"
                     )
                 result = self._sync_for_meeting(meeting, force=force)
-            except (MeetingNotFoundError, MeetingMissingFtpUrlError) as exc:
+            except MeetingNotFoundError as exc:
                 outcome = outcome.add_failure(
                     BulkSyncFailure(
                         meeting_id=meeting_id,
@@ -139,11 +134,6 @@ class TDocSyncCoordinator:
         return outcome
 
     def _sync_for_meeting(self, meeting: Meeting, force: bool) -> SyncOutcome:
-        if not meeting.ftp_url:
-            raise MeetingMissingFtpUrlError(
-                f"Meeting {meeting.meeting_id} ({meeting.name}) has no FTP URL stored"
-            )
-
         now = datetime.now(timezone.utc)
         if not force and meeting.tdoc_list_last_sync is not None:
             # The closed-window rule only applies to meetings that have already
@@ -185,11 +175,27 @@ class TDocSyncCoordinator:
             meeting_id=meeting.meeting_id,
             url_template=self._tdoc_list_url_template,
         )
-        tdoc_ids = self._repository.list_tdoc_ids_for_meeting(meeting.meeting_id)
-        file_count = self._tdoc_files.sync_from_meeting_ftp(
-            ftp_url=meeting.ftp_url,
-            tdoc_ids=tdoc_ids,
-        )
+        if meeting.ftp_url:
+            tdoc_ids = self._repository.list_tdoc_ids_for_meeting(
+                meeting.meeting_id
+            )
+            file_count = self._tdoc_files.sync_from_meeting_ftp(
+                ftp_url=meeting.ftp_url,
+                tdoc_ids=tdoc_ids,
+            )
+            file_scan_note = f"{file_count} auxiliary TDoc file(s) stored"
+        else:
+            logger.info(
+                "Meeting %s (%s) has no FTP URL stored; "
+                "skipping auxiliary TDoc file scan",
+                meeting.meeting_id,
+                meeting.name,
+            )
+            file_count = 0
+            file_scan_note = (
+                "0 auxiliary TDoc file(s) stored (no FTP URL on the "
+                "meeting row — auxiliary file scan skipped)"
+            )
         self._meeting_repository.update_tdoc_list_last_sync(
             meeting.meeting_id, datetime.now(timezone.utc)
         )
@@ -197,7 +203,7 @@ class TDocSyncCoordinator:
             status="synced",
             reason=(
                 f"TDoc sync complete: {tdoc_count} TDoc row(s) and "
-                f"{file_count} auxiliary TDoc file(s) stored"
+                f"{file_scan_note}"
             ),
             synced_count=tdoc_count,
             file_count=file_count,

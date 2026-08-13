@@ -204,10 +204,9 @@ and the TDoc CR extraction is the deepest.
    the single-meeting flow above (closed window and sync interval checks
    apply individually). `--force` bypasses both checks for every meeting
    in the run.
-4. A single meeting failure (`MeetingNotFoundError` /
-   `MeetingMissingFtpUrlError`) is recorded in `BulkSyncOutcome.failures`
-   and does not abort the sweep; iteration continues so a partial sweep
-   still completes.
+4. A single meeting failure (`MeetingNotFoundError`) is recorded in
+   `BulkSyncOutcome.failures` and does not abort the sweep; iteration
+   continues so a partial sweep still completes.
 5. The CLI prints a single summary block (no per-meeting lines):
    `TDoc bulk sync: N meeting(s) processed / Synced / Skipped / Failed`
    plus the per-failure detail. Exit code is `1` only when every meeting

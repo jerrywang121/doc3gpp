@@ -43,6 +43,7 @@ async def list_specs(
     wis: str | None = Query(default=None),
     rapporteurs: str | None = Query(default=None),
     limit: str | None = Query(default="50"),
+    offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
     service: SpecService = Depends(get_spec_service),
     pending_jobs: int = Depends(get_pending_jobs),
@@ -54,13 +55,17 @@ async def list_specs(
     rows (``settings.output.fields.spec`` by default) with every cell
     string-coerced via :func:`doc3gpp.web.render.spec_rows`.
 
-    ``limit`` is declared as ``str`` so an empty form value
-    (``limit=``) doesn't trigger a 422 — :func:`parse_int_query`
-    treats ``""`` as ``None`` and the route fills in the default.
+    The numeric query params (``limit``, ``offset``) are declared as
+    ``str`` so an empty form value (``limit=``) doesn't trigger a 422 —
+    :func:`parse_int_query` treats ``""`` as ``None`` and the route
+    fills in the default. The CLI's typed path accepts ints only; the
+    HTTP path is a best-effort form-binding layer.
     """
     parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 50
+    parsed_offset = parse_int_query(offset, min=0) or 0
     specs = service.list_recent(
         limit=parsed_limit,
+        offset=parsed_offset,
         tsg=parse_text_query(tsg),
         type=parse_text_query(type),
         spec_id=parse_text_query(spec_id),
@@ -75,6 +80,9 @@ async def list_specs(
     if format == "json":
         return JSONResponse(content=spec_rows(specs, _SPEC_DEFAULT_FIELDS))
 
+    next_offset = (
+        parsed_offset + len(specs) if len(specs) == parsed_limit else None
+    )
     template_name = (
         "partials/spec_results.html" if is_htmx_request(request) else "spec_list.html"
     )
@@ -86,8 +94,8 @@ async def list_specs(
             "specs": specs,
             "total": len(specs),
             "limit": parsed_limit,
-            "offset": 0,
-            "next_offset": None,
+            "offset": parsed_offset,
+            "next_offset": next_offset,
             "pending_jobs": pending_jobs,
             "filters": {
                 "tsg": tsg or "",

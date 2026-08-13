@@ -2363,6 +2363,57 @@ def test_get_specs_renders_rapporteurs_column(client: TestClient) -> None:
     assert "Ericsson LM" in response.text
 
 
+def test_get_specs_forwards_offset_and_paginates(client: TestClient) -> None:
+    """``GET /specs?offset=...`` is forwarded to the service and the
+    next-link appears in the rendered partial when a full page returns.
+    """
+    from doc3gpp.web.deps import get_spec_service
+
+    captured: dict[str, Any] = {}
+
+    class _FullPageService(FakeSpecService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            captured.update(kwargs)
+            return list(self._specs)
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _FullPageService()
+    try:
+        response = client.get(
+            "/specs?offset=10&limit=2",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert captured["offset"] == 10
+    assert captured["limit"] == 2
+    assert "next ›" in response.text
+    assert "offset=12" in response.text
+    assert "Showing 11–12" in response.text
+
+
+def test_get_specs_offset_does_not_render_next_when_partial_page(
+    client: TestClient,
+) -> None:
+    """When fewer rows than ``limit`` come back, the next link stays hidden."""
+    from doc3gpp.web.deps import get_spec_service
+
+    class _ShortPageService(FakeSpecService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            return list(self._specs)[:1]
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _ShortPageService()
+    try:
+        response = client.get(
+            "/specs?offset=20&limit=50",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert "next ›" not in response.text
+
+
 def test_get_spec_show_forwards_limit_offset_version(client: TestClient) -> None:
     """``GET /specs/{id}`` forwards ``limit``/``offset``/``version`` to the service."""
     from doc3gpp.web.deps import get_spec_service

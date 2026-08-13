@@ -153,6 +153,9 @@ Behavior:
 
 ### doc3gpp meeting list
 
+The same filter set is available on the web at `/meetings`
+(form-driven, HTMX-powered, JSON at `?format=json`).
+
 Purpose:
 
 - List recent meeting rows from database.

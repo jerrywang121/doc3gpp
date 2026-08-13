@@ -2479,3 +2479,56 @@ def test_get_spec_show_renders_per_version_details_checkbox(client: TestClient) 
     assert response.status_code == 200
     assert 'name="per_version_details"' in response.text
     assert "Also fetch per-version details" in response.text
+
+
+def test_meeting_list_filters_form_has_name_input(client: TestClient) -> None:
+    """``GET /meetings`` renders the Name filter input."""
+    html = client.get("/meetings").text
+    assert 'name="name"' in html
+
+
+def test_meetings_list_name_filter_returns_200(client: TestClient) -> None:
+    """``GET /meetings?name=SA2%23`` is 200 (pass-through to service)."""
+    response = client.get("/meetings?name=SA2%23")
+    assert response.status_code == 200
+
+
+def test_meetings_list_name_filter_empty_returns_200(client: TestClient) -> None:
+    """``GET /meetings?name=`` is 200, not 422 (empty form field)."""
+    response = client.get("/meetings?name=&tsg=c6")
+    assert response.status_code == 200
+
+
+def test_meetings_list_name_filter_forwards_name_like_kwarg(client: TestClient) -> None:
+    """``GET /meetings?name=SA2%23`` forwards ``name_like='SA2#'`` to the service.
+
+    Regression fence: the route must keep forwarding the parsed
+    ``name`` value as the ``name_like=`` kwarg. If a future refactor of
+    ``src/doc3gpp/web/routes/meetings.py`` accidentally drops the
+    ``name_like=parsed_name`` line, the response is still 200 (the
+    pass-through 200 checks pass for both the happy path and a broken
+    implementation), so this test captures the actual kwargs the
+    service received and asserts on them.
+    """
+    from doc3gpp.web.deps import get_meeting_service
+
+    captured: dict[str, Any] = {}
+
+    class _RecordingMeetingService(FakeMeetingService):
+        def list_recent(self, **_kwargs: Any) -> list[Meeting]:
+            captured.update(_kwargs)
+            return list(self._meetings)
+
+    client.app.dependency_overrides[get_meeting_service] = (
+        lambda: _RecordingMeetingService()
+    )
+    try:
+        response = client.get("/meetings?name=SA2%23")
+        assert response.status_code == 200
+        assert captured.get("name_like") == "SA2#"
+
+        response_empty = client.get("/meetings?name=&tsg=c6")
+        assert response_empty.status_code == 200
+        assert captured.get("name_like") is None
+    finally:
+        client.app.dependency_overrides.pop(get_meeting_service, None)

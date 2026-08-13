@@ -831,3 +831,38 @@ def test_web_errors_maps_spec_unknown_on_upstream() -> None:
     assert code == -32004
     assert data["error"] == "spec_unknown_on_upstream"
     assert data["resource"] == "spec"
+
+
+def test_call_list_meetings_name_filter(sqlite_env) -> None:
+    """``list_meetings`` accepts a ``name`` filter and applies it to the seeded row."""
+    import asyncio
+    import json
+
+    _state_and_server()  # runs create_schema()
+    _seed_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_meetings", {"name": "%SA2%"})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert len(payload) == 1
+    assert payload[0]["name"] == "SA2#156"
+
+
+def test_call_list_meetings_name_no_match(sqlite_env) -> None:
+    """``list_meetings`` with a no-match ``name`` pattern returns ``[]``."""
+    import asyncio
+
+    _state_and_server()  # runs create_schema()
+    _seed_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_meetings", {"name": "no-match-%"})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    assert result.content[0].text == "[]"

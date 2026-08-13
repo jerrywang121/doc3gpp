@@ -202,6 +202,9 @@ detail page shows `start_doc`/`end_doc`, the last-sync timestamp
 field linking to `https://www.3gpp.org/ftp/{ftp_url}`; its sync button
 flashes a "Sync job queued" indication after enqueueing.
 
+The filter form supports TSG, name, year, location, and a TDoc id
+selector, all with the same rich-filter grammar as the CLI.
+
 The spec detail page shows a Sync card with a Force sync checkbox that
 enqueues a single-spec sync job for that spec; the page auto-refreshes
 when the job completes. A "Per-version details" checkbox alongside

@@ -59,6 +59,7 @@ _MEETING_DEFAULT_FIELDS = [
 async def list_meetings(
     request: Request,
     tsg: str | None = Query(default=None),
+    name: str | None = Query(default=None),
     year: str | None = Query(default=None),
     location: str | None = Query(default=None),
     tdoc: str | None = Query(default=None),
@@ -85,6 +86,7 @@ async def list_meetings(
     parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 50
     parsed_offset = parse_int_query(offset, min=0) or 0
     parsed_tsg = parse_text_query(tsg)
+    parsed_name = parse_text_query(name)
     parsed_location = parse_text_query(location)
     parsed_year = parse_int_query(year, min=1970, max=2100)
     parsed_tdoc = parse_tdoc_id_query(tdoc) if tdoc else None
@@ -93,6 +95,7 @@ async def list_meetings(
         limit=parsed_limit,
         offset=parsed_offset,
         tsg=parsed_tsg,
+        name_like=parsed_name,
         location_like=parsed_location,
         year=parsed_year,
         tdoc_id=parsed_tdoc,
@@ -118,6 +121,7 @@ async def list_meetings(
             "pending_jobs": pending_jobs,
             "filters": {
                 "tsg": parsed_tsg or "",
+                "name": parsed_name or "",
                 "year": year,
                 "location": parsed_location or "",
                 "tdoc": tdoc or "",

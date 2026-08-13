@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
 )
@@ -236,7 +238,6 @@ def test_get_meeting_not_found_raises(sqlite_env) -> None:
     """Unknown meeting id propagates MeetingNotFoundError as an MCP -32004 protocol error."""
     import asyncio
 
-    import pytest
     from mcp.shared.exceptions import MCPError
 
     from doc3gpp.web.errors import MCP_CODE_NOT_FOUND
@@ -570,7 +571,6 @@ def test_get_spec_tool_not_found(sqlite_env) -> None:
     """Unknown spec id surfaces as a JSON-RPC -32004 protocol error."""
     import asyncio
 
-    import pytest
     from mcp.shared.exceptions import MCPError
 
     from doc3gpp.web.errors import MCP_CODE_NOT_FOUND
@@ -728,7 +728,6 @@ def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> Non
     """A stopwords-only query is a client error (invalid params), not a 500."""
     import asyncio
 
-    import pytest
     from mcp.shared.exceptions import MCPError
 
     from doc3gpp.storage.db.session import get_engine
@@ -867,3 +866,85 @@ def test_call_list_meetings_name_no_match(sqlite_env) -> None:
     result = asyncio.run(run())
     assert result.is_error is False
     assert result.content[0].text == "[]"
+
+
+def test_cancel_succeeded_job_returns_envelope(sqlite_env) -> None:
+    """cancel_job on a SUCCEEDED job returns the envelope (idempotent)."""
+    import asyncio
+
+    from doc3gpp.models.jobs import JobKind
+
+    state, server = _state_and_server()
+    repo = state.services.job_repo
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_succeeded(job.id, summary={"ok": True})
+
+    async def run():
+        return await server.call_tool("cancel_job", {"job_id": job.id})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert payload["job_id"] == job.id
+    assert payload["status"] == "succeeded"
+    assert payload["summary"] == {"ok": True}
+    del state.engine
+
+
+def test_cancel_failed_job_returns_envelope(sqlite_env) -> None:
+    """cancel_job on a FAILED job returns the envelope + error field."""
+    import asyncio
+
+    from doc3gpp.models.jobs import JobKind
+
+    state, server = _state_and_server()
+    repo = state.services.job_repo
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_failed(job.id, error="boom")
+
+    async def run():
+        return await server.call_tool("cancel_job", {"job_id": job.id})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "failed"
+    assert payload["error"] == "boom"
+    del state.engine
+
+
+def test_cancel_cancelled_job_returns_envelope(sqlite_env) -> None:
+    """cancel_job on an already-CANCELLED job returns the envelope."""
+    import asyncio
+
+    from doc3gpp.models.jobs import JobKind
+
+    state, server = _state_and_server()
+    repo = state.services.job_repo
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_cancelled(job.id)
+
+    async def run():
+        return await server.call_tool("cancel_job", {"job_id": job.id})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "cancelled"
+    del state.engine
+
+
+def test_cancel_unknown_job_raises_job_not_found(sqlite_env) -> None:
+    """cancel_job on an unknown id still raises MCPError(code=-32004)."""
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("cancel_job", {"job_id": "deadbeef"})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert "deadbeef" in str(exc_info.value)

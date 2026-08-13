@@ -16,7 +16,6 @@ from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.errors import (
     CacheMissError,
     InvalidFilterError,
-    JobAlreadyTerminalError,
     JobNotFoundError,
     SettingsDisabledError,
     TSGNotFoundError,
@@ -36,7 +35,6 @@ _MAPPING_CASES = [
     pytest.param(WINotFoundError, "wi-7", 404, "wi_not_found", id="wi_not_found"),
     pytest.param(InvalidFilterError, "bad filter", 400, "invalid_filter", id="invalid_filter"),
     pytest.param(JobNotFoundError, "abc", 404, "job_not_found", id="job_not_found"),
-    pytest.param(JobAlreadyTerminalError, "succeeded", 409, "job_already_terminal", id="job_already_terminal"),
     pytest.param(SettingsDisabledError, "feature off", 503, "settings_disabled", id="settings_disabled"),
     pytest.param(CacheMissError, "no cached markdown", 404, "cache_miss", id="cache_miss"),
     pytest.param(SearchQueryError, "query has only stopwords", 400, "invalid_query", id="search_query_error"),
@@ -125,7 +123,6 @@ def test_register_error_handlers_attaches_handlers() -> None:
         WINotFoundError,
         InvalidFilterError,
         JobNotFoundError,
-        JobAlreadyTerminalError,
         SettingsDisabledError,
         CacheMissError,
         SearchQueryError,
@@ -175,9 +172,8 @@ def test_map_mcp_error_cache_miss_carries_hint() -> None:
     assert data["hint"] == "run: doc3gpp tdoc parse --tdoc R5-260001"
 
 
-def test_map_mcp_error_terminal_and_disabled_map_to_internal() -> None:
-    """Terminal-cancel and disabled-feature map to the generic -32603 internal code."""
-    assert map_mcp_error(JobAlreadyTerminalError("done"))[0] == MCP_CODE_INTERNAL_ERROR
+def test_map_mcp_error_disabled_maps_to_internal() -> None:
+    """``SettingsDisabledError`` maps to the generic -32603 internal code."""
     assert map_mcp_error(SettingsDisabledError("off"))[0] == MCP_CODE_INTERNAL_ERROR
 
 

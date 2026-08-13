@@ -1,23 +1,11 @@
-"""Job HTTP routes (T8): POST / poll / SSE / cancel.
+"""Job lifecycle endpoints: enqueue, status, cancel.
 
-Background job queue surface:
-
-* ``POST /jobs/sync/meetings``, ``POST /jobs/sync/tdocs``,
-  ``POST /jobs/sync/tdocs/all``, ``POST /jobs/parse/tdocs``,
-  ``POST /jobs/search/rebuild``, ``POST /jobs/cache/purge`` — enqueue a
-  job and return ``202`` with the spec's job envelope.
-* ``POST /jobs/sync_tdocs`` — flat alias required by the
-  ``meeting_show.html`` form, which POSTs ``meeting_id`` as
-  ``application/x-www-form-urlencoded``.
-* ``GET /jobs`` — list recent jobs (JSON + HTML).
-* ``GET /jobs/{job_id}`` — job detail JSON envelope.
-* ``GET /jobs/{job_id}/events`` — ``text/event-stream`` of named
-  ``status`` / ``log`` events.
-* ``POST /jobs/{job_id}/cancel`` — cooperative cancellation (``200``
-  or ``409`` when the job is already terminal).
-
-Errors map through :func:`doc3gpp.web.errors.map_domain_error`:
-``JobNotFoundError`` -> 404, ``JobAlreadyTerminalError`` -> 409.
+The cancel endpoint is **idempotent** — cancelling a job that has already
+reached a terminal state (``JobStatus.SUCCEEDED``, ``FAILED`` or
+``CANCELLED``) returns the current envelope with ``200`` instead of an
+error so the caller can inspect the result without a separate
+``GET /jobs/{job_id}`` round-trip. ``JobNotFoundError`` still surfaces
+as a 404 when the ``job_id`` is unknown.
 """
 from __future__ import annotations
 
@@ -34,7 +22,6 @@ from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.web.deps import get_job_repo, get_job_worker
 from doc3gpp.web.errors import (
     InvalidFilterError,
-    JobAlreadyTerminalError,
     JobNotFoundError,
 )
 from doc3gpp.web.render import to_jsonable
@@ -465,13 +452,10 @@ async def cancel_job(
     job_repo: JobRepository = Depends(get_job_repo),
     handle: JobWorkerHandle = Depends(get_job_worker),
 ) -> JSONResponse:
-    """Request cooperative cancellation; ``200`` or ``409`` when terminal."""
+    """Request cooperative cancellation; idempotent on terminal jobs (returns 200 + envelope)."""
     job = _load_job(job_repo, job_id)
-    if job.status in _TERMINAL_STATUSES:
-        raise JobAlreadyTerminalError(
-            f"Job {job_id} is already {job.status.value}"
-        )
-    handle.cancel(job_id)
+    if job.status not in _TERMINAL_STATUSES:
+        handle.cancel(job_id)
     return JSONResponse(content=_envelope(job))
 
 

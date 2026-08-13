@@ -114,7 +114,7 @@ runtime data flow, and ORM schema.
 | `storage/repositories/` | SQL impls of the `repository/` Protocols |
 | `settings/` | env + TOML config (pydantic-settings; precedence: CLI > env > file > defaults) |
 | `cli.py` | thin Typer commands; never instantiate SQL repos directly |
-| `web/` | thin FastAPI adapters over services via `web/deps.py`; HTML/JSON/MCP output byte-consistent; MCP via `web/mcp_server.py`; background jobs via `web/workers/`. The MCP `parse_tdoc_url` tool enqueues a `PARSE_TDOC_URL` job; see `src/doc3gpp/web/workers/handlers.py::_parse_tdoc_url` and `src/doc3gpp/web/mcp_server.py:parse_tdoc_url`. |
+| `web/` | thin FastAPI adapters over services via `web/deps.py`; HTML/JSON/MCP output byte-consistent; MCP via `web/mcp_server.py`; background jobs via `web/workers/`. `cancel_job` is idempotent on terminal jobs (returns the envelope instead of erroring). The MCP `parse_tdoc_url` tool enqueues a `PARSE_TDOC_URL` job; see `src/doc3gpp/web/workers/handlers.py::_parse_tdoc_url` and `src/doc3gpp/web/mcp_server.py:parse_tdoc_url`. |
 
 Workflows in one line (full prose in `docs/architecture.md`):
 

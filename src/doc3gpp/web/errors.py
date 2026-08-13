@@ -13,7 +13,6 @@ Mapping table (``map_domain_error``):
   :class:`TSGNotFoundError` / :class:`WINotFoundError` -> 404
 * :class:`InvalidFilterError` / :class:`SearchQueryError` -> 400
 * :class:`JobNotFoundError` -> 404
-* :class:`JobAlreadyTerminalError` -> 409
 * :class:`SettingsDisabledError` -> 503
 * :class:`httpx.HTTPError` (and subclasses) -> 502
 * generic :class:`Exception` -> 500 (with ``request_id`` correlation id)
@@ -59,10 +58,6 @@ class InvalidFilterError(ValueError):
 
 class JobNotFoundError(LookupError):
     """Raised when a Job id cannot be resolved."""
-
-
-class JobAlreadyTerminalError(RuntimeError):
-    """Raised when an action is attempted on a job that has already reached a terminal state."""
 
 
 class SettingsDisabledError(RuntimeError):
@@ -127,7 +122,7 @@ def map_mcp_error(exc: Exception) -> tuple[int, str, dict[str, Any]] | None:
             elif exc.args:
                 data["id"] = exc.args[0]
             return (code, str(exc), data)
-    if isinstance(exc, (JobAlreadyTerminalError, SettingsDisabledError, httpx.HTTPError)):
+    if isinstance(exc, (SettingsDisabledError, httpx.HTTPError)):
         return (MCP_CODE_INTERNAL_ERROR, str(exc), {"error": _ERROR_SLUGS.get(type(exc), "internal_error"), "detail": str(exc)})
     return None
 
@@ -142,7 +137,6 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     InvalidFilterError: "invalid_filter",
     SearchQueryError: "invalid_query",
     JobNotFoundError: "job_not_found",
-    JobAlreadyTerminalError: "job_already_terminal",
     SettingsDisabledError: "settings_disabled",
     CacheMissError: "cache_miss",
 }
@@ -158,7 +152,6 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     InvalidFilterError: 400,
     SearchQueryError: 400,
     JobNotFoundError: 404,
-    JobAlreadyTerminalError: 409,
     SettingsDisabledError: 503,
     CacheMissError: 404,
     httpx.HTTPError: 502,
@@ -230,7 +223,6 @@ __all__ = [
     "InvalidFilterError",
     "SearchQueryError",
     "JobNotFoundError",
-    "JobAlreadyTerminalError",
     "SettingsDisabledError",
     "MCP_CODE_NOT_FOUND",
     "MCP_CODE_CACHE_MISS",

@@ -210,6 +210,27 @@ def test_worker_runs_spec_sync_by_spec_id() -> None:
     name, kwargs = fsvc.calls[0]
     assert name == "sync_spec"
     assert kwargs.get("force") is True
+    assert kwargs.get("per_version_details") is False
+
+
+def test_worker_runs_spec_sync_with_per_version_details() -> None:
+    """The handler forwards ``per_version_details=True`` to the service."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(
+        JobKind.SYNC_SPECS,
+        {"tsg": "R5", "force": True, "per_version_details": True},
+    )
+    assert job.id
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    fsvc = state.services.spec
+    assert len(fsvc.calls) == 1
+    name, kwargs = fsvc.calls[0]
+    assert name == "sync"
+    assert kwargs.get("per_version_details") is True
 
 
 def test_worker_marks_failed_on_exception() -> None:

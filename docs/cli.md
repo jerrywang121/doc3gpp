@@ -1836,7 +1836,7 @@ Options:
   `typer.BadParameter` with a `Spec unknown on the 3GPP DynaReport
   upstream` message; an unknown normalised TSG surfaces as
   `typer.BadParameter` with an `unknown TSG short name` message.
-  `--force` bypasses the per-TSG skip rule in both paths.
+  `--force` bypasses the per-spec skip rule in both paths.
 - --force, -f: Bypass the spec sync interval skip rule.
 
 Behavior:

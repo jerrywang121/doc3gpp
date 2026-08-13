@@ -7,7 +7,7 @@ allow-direct-references = true
 
 [project]
 name = "doc3gpp"
-version = "0.1.2"
+version = "0.1.3"
 description = "Extract 3GPP TDoc information by scraping 3gpp.org"
 readme = "README.md"
 requires-python = ">=3.10"

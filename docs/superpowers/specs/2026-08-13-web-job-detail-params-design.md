@@ -195,10 +195,10 @@ to the existing `test_get_job_returns_detail` (line 331) and
    nested-Mapping case the simple `sync_meetings` test can't reach.
 
 3. **`test_get_job_html_empty_params_renders_brace_pair`** — enqueue
-   a `sync_tdocs_all` job with `{"force": False}` (the smallest legal
-   params for an existing kind; covers the `{}` edge case). Assert
-   the response contains `{}` inside the `<pre>`. Belt-and-suspenders
-   for the "no params" branch.
+   a `sync_tdocs_all` job with `{}` (the smallest legal params for an
+   existing kind; covers the empty-params branch). Assert the response
+   contains `{}` inside the `<pre>`. Belt-and-suspenders for the "no
+   params" branch.
 
 4. **`test_get_job_html_escape_unsafe_value`** — enqueue a job with
    `{"tsg": "<script>alert(1)</script>"}` (synthetic, constructed via

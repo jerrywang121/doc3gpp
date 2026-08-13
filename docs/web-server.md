@@ -304,9 +304,11 @@ Each enqueue returns a slim envelope with a `job_id` and self/events links;
 poll `GET /jobs/{id}` or stream `GET /jobs/{id}/events` (Server-Sent
 Events) for progress. Log lines carry a `[{iso}]` timestamp prefix.
 
-Terminal jobs cannot be cancelled (`409 job_already_terminal`). The
-`jobs` table is created automatically via schema bootstrap — there is no
-migration step.
+Cancelling a terminal job is idempotent — the response returns the job's
+final envelope with `200` so callers can inspect the result without a
+separate `GET /jobs/{id}` round-trip. See `cancel_job` in the MCP/Job
+tools section below. The `jobs` table is created automatically via schema
+bootstrap — there is no migration step.
 
 ## MCP reference
 

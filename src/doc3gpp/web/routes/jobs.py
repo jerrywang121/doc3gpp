@@ -454,8 +454,7 @@ async def cancel_job(
 ) -> JSONResponse:
     """Request cooperative cancellation; idempotent on terminal jobs (returns 200 + envelope)."""
     job = _load_job(job_repo, job_id)
-    from doc3gpp.models.jobs import JobStatus
-    if job.status not in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED):
+    if job.status not in _TERMINAL_STATUSES:
         handle.cancel(job_id)
     return JSONResponse(content=_envelope(job))
 

@@ -179,7 +179,7 @@ def test_sync_skips_etsi_fetch_for_stale_versions(monkeypatch) -> None:
 
     repo = _StubSpecRepo()
     svc = SpecService(repo)
-    outcome = svc.sync("R5")
+    outcome = svc.sync("R5", per_version_details=True)
 
     assert outcome.status == "synced"
     assert etsi_calls == [], (
@@ -547,7 +547,7 @@ def test_sync_followups_are_fanned_out_across_the_thread_pool(monkeypatch) -> No
 
     svc = SpecService(_StubSpecRepo())
     started = time.perf_counter()
-    outcome = svc.sync("R5", force=True)
+    outcome = svc.sync("R5", force=True, per_version_details=True)
     elapsed = time.perf_counter() - started
 
     assert outcome.status == "synced"

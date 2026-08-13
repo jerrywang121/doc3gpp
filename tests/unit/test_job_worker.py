@@ -720,3 +720,258 @@ def test_parse_tdoc_url_handler_happy_path() -> None:
             },
         ],
     }
+
+
+class _FakeTDocSyncCoordinator:
+    """Fake coordinator that records ``sync_for_meeting_id`` calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def sync_for_meeting_id(self, meeting_id: int, *, force: bool = False) -> object:
+        from doc3gpp.models.sync import SyncOutcome
+        self.calls.append(meeting_id)
+        return SyncOutcome(
+            status="synced", reason="ok", synced_count=0, file_count=0
+        )
+
+    def sync_for_meeting_name(self, *a, **k):  # pragma: no cover - not exercised here
+        raise NotImplementedError
+
+    def sync_all_tracked_meetings(self, *, force: bool = False):  # pragma: no cover
+        raise NotImplementedError
+
+
+def _make_url_state(
+    repo: JobRepository,
+    *,
+    url_service: object,
+    auto_sync: bool = False,
+) -> WebState:
+    settings = Settings()
+    settings.sync.auto_sync = auto_sync
+    services = ServiceContainer(
+        meeting=_FakeMeetingService(),  # type: ignore[arg-type]
+        tdoc=None,  # type: ignore[arg-type]
+        tdoc_cr=url_service,  # type: ignore[arg-type]
+        tdoc_sync=_FakeTDocSyncCoordinator(),  # type: ignore[arg-type]
+        tdoc_repo=None,  # type: ignore[arg-type]
+        tsg=None,  # type: ignore[arg-type]
+        wi=None,  # type: ignore[arg-type]
+        spec=_FakeSpecService(),  # type: ignore[arg-type]
+        search=None,
+        semantic_search=None,
+        tdoc_file_repo=None,  # type: ignore[arg-type]
+        job_repo=repo,
+    )
+    return WebState(settings=settings, engine=None, services=services, jobs=_JobWorkerHandleFake())  # type: ignore[arg-type]
+
+
+def test_parse_tdoc_url_handler_recursive_means_bfs_exhausted() -> None:
+    """``recursive=True`` is forwarded as ``max_depth=-1`` (BFS-until-exhausted)."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()
+    state = _make_url_state(repo, url_service=fake)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/", "recursive": True},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert fake.extract_calls[0]["max_depth"] == -1
+
+
+def test_parse_tdoc_url_handler_explicit_max_depth_forwarded() -> None:
+    """``max_depth=5`` is forwarded verbatim; default is 2 when omitted."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()
+    state = _make_url_state(repo, url_service=fake)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/", "max_depth": 5},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert fake.extract_calls[0]["max_depth"] == 5
+
+
+def test_parse_tdoc_url_handler_default_max_depth_is_two() -> None:
+    """No ``max_depth`` in params → ``max_depth=2`` forwarded to service."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()
+    state = _make_url_state(repo, url_service=fake)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert fake.extract_calls[0]["max_depth"] == 2
+
+
+def test_parse_tdoc_url_handler_auto_sync_runs_when_enabled() -> None:
+    """``settings.sync.auto_sync=True`` triggers ``trigger_auto_sync``."""
+    from doc3gpp.models.jobs import JobKind
+
+    class _CandidateTDocCrService(_FakeTDocCrServiceForUrl):
+        def __init__(self) -> None:
+            super().__init__(
+                file_urls=["https://www.3gpp.org/ftp/R5s260001.zip"],
+            )
+
+        def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> list[str]:
+            return ["https://www.3gpp.org/ftp/R5s260001.zip"]
+
+    repo = _make_repo()
+    fake = _CandidateTDocCrService()
+    state = _make_url_state(repo, url_service=fake, auto_sync=True)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    # The "auto-sync" progress line is appended; the parse still ran.
+    assert any("auto-sync" in line for line in done.log_lines)
+    assert any("done:" in line for line in done.log_lines)
+
+
+def test_parse_tdoc_url_handler_auto_sync_disabled_skips_step() -> None:
+    """``settings.sync.auto_sync=False`` → no ``collect_3gpp_file_urls`` call."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()
+    state = _make_url_state(repo, url_service=fake, auto_sync=False)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert fake.collect_calls == []
+    assert not any("auto-sync" in line for line in done.log_lines)
+
+
+def test_parse_tdoc_url_handler_auto_sync_failure_does_not_abort() -> None:
+    """An exception in ``trigger_auto_sync`` is logged; the parse still runs."""
+    from doc3gpp.models.jobs import JobKind
+
+    class _RaisingTDocCrService(_FakeTDocCrServiceForUrl):
+        def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> tuple[str, ...]:
+            raise RuntimeError("network down")
+
+    repo = _make_repo()
+    fake = _RaisingTDocCrService()
+    state = _make_url_state(repo, url_service=fake, auto_sync=True)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert any("done:" in line for line in done.log_lines)
+
+
+def test_parse_tdoc_url_handler_cancellation_raises_cancelled() -> None:
+    """``cancel_event`` set before the service call → ``CANCELLED`` job state."""
+    import asyncio as _asyncio
+    from doc3gpp.models.jobs import JobKind
+    from doc3gpp.web.workers.job_worker import JobWorker as _JW
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()
+    state = _make_url_state(repo, url_service=fake)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+
+    cancel_event = _asyncio.Event()
+    cancel_event.set()
+    # Wire the pre-set event into worker state so ``_claim_and_run`` picks it
+    # up instead of creating a fresh unset one.
+    state.jobs.cancel_events[job.id] = cancel_event
+    worker = _JW(state, repo=repo)
+
+    async def _claim() -> None:
+        sem = _asyncio.Semaphore(1)
+        await worker._claim_and_run(repo.get(job.id), sem)  # type: ignore[attr-defined]
+
+    _asyncio.run(_claim())
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.CANCELLED
+    assert fake.extract_calls == []  # never reached the service
+
+
+def test_parse_tdoc_url_handler_size_cap_forwarded() -> None:
+    """``settings.tdoc_parse.max_tdoc_size_kb`` is forwarded as ``kb * 1024``."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()
+    state = _make_url_state(repo, url_service=fake)
+    state.settings.tdoc_parse.max_tdoc_size_kb = 1000
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert fake.extract_calls[0]["max_tdoc_size_bytes"] == 1000 * 1024
+
+
+def test_parse_tdoc_url_handler_size_cap_zero_means_unlimited() -> None:
+    """``max_tdoc_size_kb=0`` → ``max_tdoc_size_bytes=None`` forwarded."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()
+    state = _make_url_state(repo, url_service=fake)
+    state.settings.tdoc_parse.max_tdoc_size_kb = 0
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert fake.extract_calls[0]["max_tdoc_size_bytes"] is None

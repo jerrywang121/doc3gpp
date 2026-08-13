@@ -32,7 +32,7 @@ _SECTIONS: list[dict[str, str]] = [
     {
         "label": "Meetings",
         "href": "/meetings",
-        "description": "Browse stored meeting records, optionally filtered by TSG / year.",
+        "description": "Browse stored meeting records, optionally filtered by TSG / name / year / location.",
     },
     {
         "label": "TDocs",

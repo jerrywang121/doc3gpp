@@ -96,9 +96,6 @@ class TsgORM(Base):
     meeting_last_sync: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    spec_last_sync: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
 class WiORM(Base):

@@ -11,6 +11,7 @@ from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.repository.protocols import MeetingRepository
 from doc3gpp.repository.protocols import TsgRepository
 from doc3gpp.scraping.calendar_source import fetch_calendar
+from doc3gpp.services._duration import format_duration as _format_duration
 
 logger = logging.getLogger(__name__)
 
@@ -141,25 +142,5 @@ class MeetingService:
     def list_distinct_tsgs(self) -> list[str]:
         """Return the distinct TSG short names currently stored in meetings."""
         return self._repository.list_distinct_tsgs()
-
-
-def _format_duration(delta: timedelta) -> str:
-    """Return a concise human-readable representation of a timedelta."""
-    total_seconds = int(delta.total_seconds())
-    if total_seconds < 60:
-        return f"{total_seconds}s"
-    if total_seconds < 3600:
-        return f"{total_seconds // 60}m"
-    if total_seconds < 86400:
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        if minutes:
-            return f"{hours}h {minutes}m"
-        return f"{hours}h"
-    days = total_seconds // 86400
-    hours = (total_seconds % 86400) // 3600
-    if hours:
-        return f"{days}d {hours}h"
-    return f"{days}d"
 
 

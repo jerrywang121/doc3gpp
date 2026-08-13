@@ -12,6 +12,7 @@ from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.repository.protocols import SpecRepository
 from doc3gpp.scraping.client import ScraperClient
+from doc3gpp.services._duration import format_duration as _format_duration
 from doc3gpp.scraping.spec_source import (
     fetch_cr_list,
     fetch_dynareport_detail,
@@ -466,14 +467,3 @@ class SpecService:
         return self._repository.list_versions(
             spec_id, limit=limit, offset=offset, version=version
         )
-
-
-def _format_duration(delta: timedelta) -> str:
-    total = int(delta.total_seconds())
-    if total < 60:
-        return f"{total}s"
-    if total < 3600:
-        return f"{total // 60}m"
-    if total < 86400:
-        return f"{total // 3600}h"
-    return f"{total // 86400}d"

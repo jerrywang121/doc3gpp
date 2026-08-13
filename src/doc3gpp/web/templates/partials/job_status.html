@@ -5,6 +5,10 @@
       <strong>{{ job.status.value }}</strong> ·
       kind <code>{{ job.kind.value }}</code>
     </p>
+    <section class="card">
+      <h2>Params</h2>
+      <pre><code>{{ job.params | tojson(indent=2) }}</code></pre>
+    </section>
     {% if job.error %}
       <p class="error">{{ job.error }}</p>
     {% endif %}

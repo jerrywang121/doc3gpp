@@ -915,6 +915,66 @@ def test_sync_skips_followups_when_per_version_details_false(monkeypatch) -> Non
     assert cr_calls == [], "CR list fetch must be skipped when per_version_details=False"
 
 
+def test_sync_preserves_stored_crs_when_per_version_details_false(monkeypatch) -> None:
+    """A flag-OFF re-sync preserves the stored ``crs`` and ``pdf_url``
+    even though ``parse_spec_detail`` returns ``None`` for both.
+
+    Regression guard: the ``per_version_details=False`` default must
+    short-circuit the ETSI / CR follow-up HTTP fetches (which would
+    otherwise overwrite the freshly-parsed versions' ``None``
+    ``pdf_url`` / ``crs`` with whatever the live upstream returns,
+    *and* would themselves be skipped by the recency window for
+    stale uploads). The combination of ``_backfill_followup_fields``
+    + the new gate keeps the previously-resolved values intact.
+    """
+    from datetime import date
+
+    from doc3gpp.models.spec import Spec, SpecVersion
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg, **k: LIST_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: DETAIL_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: pytest.fail("ETSI must not be called"),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: pytest.fail("CR list must not be called"),
+    )
+
+    repo = _StubSpecRepo()
+    recent_upload = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    detail_html_recent = DETAIL_HTML.replace("2025-06-01", recent_upload)
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: detail_html_recent,
+    )
+
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
+    repo.upsert_versions([
+        SpecVersion(
+            spec_id="36.579-5",
+            version="18.3.0",
+            ftp_url="https://www.3gpp.org/ftp/Specs/archive/36_series/36.579-5/36579-5-i30.zip",
+            upload_date=date.today(),
+            pdf_url="https://etsi.example/x.pdf",
+            crs="R5-260001,R5-260002",
+        ),
+    ])
+
+    svc = SpecService(repo)
+    svc.sync("R5")  # no per_version_details → default False
+    persisted = repo.list_versions("36.579-5")
+    assert persisted[0].pdf_url == "https://etsi.example/x.pdf"
+    assert persisted[0].crs == "R5-260001,R5-260002"
+
+
 def test_backfill_followup_fields_copies_stored_pdf_and_crs(monkeypatch) -> None:
     """``_backfill_followup_fields`` copies both ``pdf_url`` and ``crs``
     from persisted ``spec_versions`` rows onto freshly-parsed versions

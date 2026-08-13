@@ -178,6 +178,7 @@ class SpecService:
         spec_id: str,
         *,
         force: bool = False,
+        per_version_details: bool = False,
         on_progress: SpecProgressFn | None = None,
     ) -> SyncOutcome:
         """Refresh a single spec's detail page + versions.
@@ -216,7 +217,11 @@ class SpecService:
         with ScraperClient() as client:
             with ThreadPoolExecutor(max_workers=1) as followup_executor:
                 version_count = self._sync_one_spec(
-                    spec, canonical, followup_executor, client
+                    spec,
+                    canonical,
+                    followup_executor,
+                    client,
+                    per_version_details=per_version_details,
                 )
             if on_progress is not None:
                 on_progress("spec_done", {"spec_id": spec.spec_id})

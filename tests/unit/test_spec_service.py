@@ -833,7 +833,7 @@ def test_sync_spec_force_overrides_recent_sync() -> None:
         sync_interval=timedelta(hours=24),
     )
 
-    def _fake_sync_one(spec, canonical, executor, client):
+    def _fake_sync_one(spec, canonical, executor, client, per_version_details=False):
         repo.upsert(
             Spec(
                 spec_id=spec.spec_id,
@@ -868,7 +868,7 @@ def test_sync_spec_proceeds_when_no_last_synced_at() -> None:
         sync_interval=timedelta(hours=24),
     )
 
-    def _fake_sync_one(spec, canonical, executor, client):
+    def _fake_sync_one(spec, canonical, executor, client, per_version_details=False):
         repo.upsert(
             Spec(
                 spec_id=spec.spec_id,
@@ -973,6 +973,33 @@ def test_sync_preserves_stored_crs_when_per_version_details_false(monkeypatch) -
     persisted = repo.list_versions("36.579-5")
     assert persisted[0].pdf_url == "https://etsi.example/x.pdf"
     assert persisted[0].crs == "R5-260001,R5-260002"
+
+
+def test_sync_spec_skips_followups_when_per_version_details_false(monkeypatch) -> None:
+    """The single-spec path honours ``per_version_details=False``."""
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg, **k: pytest.fail("list must not be called"),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: DETAIL_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: pytest.fail("ETSI must not be called"),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: pytest.fail("CR list must not be called"),
+    )
+
+    repo = _StubSpecRepo()
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
+    svc = SpecService(repo)
+    outcome = svc.sync_spec("36.579-5")
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 1
 
 
 def test_backfill_followup_fields_copies_stored_pdf_and_crs(monkeypatch) -> None:

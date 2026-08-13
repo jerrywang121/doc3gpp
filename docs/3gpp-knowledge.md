@@ -1,5 +1,7 @@
 # 3GPP Knowledge Reference
 
+> Last reviewed: 2026-08-13
+
 This document summarizes the 3GPP source URLs, naming conventions, and extraction fields used by this project.
 
 ## Meeting Source URLs

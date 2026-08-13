@@ -1,5 +1,7 @@
 # Architecture
 
+> Last reviewed: 2026-08-13
+
 The project is implemented as a layered Python package under `src/doc3gpp/`,
 shipped both as a library (SDK) and a CLI. Each layer depends only on the
 layer below it; cross-layer imports flow strictly downward.

@@ -1,5 +1,7 @@
 # Conventions
 
+> Last reviewed: 2026-08-13
+
 Implementation-specific rules that are too detailed for `AGENTS.md`
 but matter when changing the codebase. If something here disagrees with
 the implementation, the implementation wins — and this file is what
@@ -358,9 +360,11 @@ without a dialect-specific `ILIKE`.
 - **Cross-service orchestration in the CLI.** Mostly addressed:
   `tdoc sync` delegates to `TDocSyncCoordinator`. Other commands still
   construct their own services via `services.factory.build_*` helpers.
-- **Acknowledged `# noqa: F401`.** Four in `storage/db/migrate.py` —
-  side-effect imports required for SQLAlchemy `Base.metadata`
-  registration. Do not remove without restructuring the registration.
+- **Acknowledged `# noqa: F401`.** Eleven in `storage/db/migrate.py`
+  (one per ORM import in the `models.py` registration block at
+  migrate.py:7-17) — side-effect imports required for SQLAlchemy
+  `Base.metadata` registration. Do not remove without restructuring
+  the registration.
 - **`ScraperClient._is_retryable_exception`** deliberately treats only
   transient `httpx` subclasses as retryable. Programming errors
   (e.g. `httpx.InvalidURL`) raise immediately — do not broaden the

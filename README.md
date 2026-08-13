@@ -1,5 +1,7 @@
 # doc3gpp
 
+> Last reviewed: 2026-08-13
+
 > Extract 3GPP TDoc information by scraping 3gpp.org — a Python CLI and library with pluggable SQL backends.
 
 [![License: MIT](https://img.shields.io/github/license/jerrywang121/doc3gpp)](LICENSE)

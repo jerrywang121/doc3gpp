@@ -410,6 +410,32 @@ def test_get_job_html_params_for_nested_filter(client: Any) -> None:
     assert "false" in pre_block
 
 
+def test_get_job_html_empty_params_renders_brace_pair(client: Any) -> None:
+    """The smallest legal params renders as '{}' (no special-case branching)."""
+    c, repo, _ = client
+    job = repo.create(JobKind.SYNC_TDOCS_ALL, {})
+    r = c.get(f"/jobs/{job.id}?format=html")
+    assert r.status_code == 200
+    body = r.text
+    pre_start = body.index("<pre><code>")
+    pre_end = body.index("</code></pre>")
+    pre_block = body[pre_start:pre_end]
+    assert "{}" in pre_block
+
+
+def test_get_job_html_escape_unsafe_value(client: Any) -> None:
+    """HTML in a param value is escaped by tojson (no literal <script> in the body)."""
+    c, repo, _ = client
+    job = repo.create(
+        JobKind.SYNC_MEETINGS,
+        {"tsg": "<script>alert(1)</script>"},
+    )
+    r = c.get(f"/jobs/{job.id}?format=html")
+    assert r.status_code == 200
+    body = r.text
+    assert "<script>alert(1)</script>" not in body
+
+
 # ---------------------------------------------------------------------------
 # Cancel
 # ---------------------------------------------------------------------------

@@ -84,13 +84,15 @@ class SpecService:
         tsg: str,
         *,
         force: bool = False,
+        per_version_details: bool = False,
         on_progress: SpecProgressFn | None = None,
     ) -> SyncOutcome:
         """Fetch list page -> parallel detail pages -> upsert.
 
         Resolves the TSG, fetches the list once, then fetches each
         detail page in a thread pool, running the per-spec skip
-        check, the conditional ETSI / CR follow-ups, and the upsert
+        check, and the conditional ETSI / CR follow-ups (skipped when
+        ``per_version_details`` is ``False``), and the upsert
         inside each worker. The per-spec skip rule
         (``spec.last_synced_at``) is enforced at the worker, so
         ``force`` is only consulted by ``sync_spec`` (single-spec
@@ -141,6 +143,7 @@ class SpecService:
                             canonical,
                             followup_executor,
                             client,
+                            per_version_details=per_version_details,
                         ): spec
                         for spec in specs
                     }
@@ -278,6 +281,7 @@ class SpecService:
         canonical: str,
         followup_executor: ThreadPoolExecutor,
         client: ScraperClient,
+        per_version_details: bool = False,
     ) -> int:
         # Per-spec skip rule: a sync interval throttles each spec
         # independently. Read from the *incoming* spec (which already
@@ -314,7 +318,9 @@ class SpecService:
         # with the detail-page fetches of the other spec workers, then
         # waited on before upserting so the in-place mutations on
         # ``versions`` (pdf_url / crs) are captured in the row write.
-        self._fetch_followups_concurrently(versions, followup_executor, client)
+        self._fetch_followups_concurrently(
+            versions, followup_executor, client, per_version_details=per_version_details
+        )
 
         # Write the header first WITHOUT ``last_synced_at`` so a failure
         # in ``upsert_versions`` below leaves the timestamp unset on the
@@ -363,6 +369,7 @@ class SpecService:
         versions: list[SpecVersion],
         executor: ThreadPoolExecutor,
         client: ScraperClient,
+        per_version_details: bool = False,
     ) -> None:
         """Submit the ETSI + CR follow-ups for ``versions`` to the
         dedicated ``executor`` (separate from the spec-worker pool) and
@@ -373,12 +380,20 @@ class SpecService:
         (a worker blocked on ``result()`` holds a slot the follow-ups it
         is waiting on can never get), deadlocking the sweep.
 
+        When ``per_version_details`` is ``False`` the follow-up HTTP
+        fetches are skipped entirely — the caller only wants the
+        detail-page data. ``_backfill_followup_fields`` still runs in
+        ``_sync_one_spec`` so previously-persisted ``pdf_url`` /
+        ``crs`` are not clobbered on a flag-OFF re-sync.
+
         Each follow-up is wrapped in its own try/except so a single
         failure does not cancel the others (``FIRST_EXCEPTION`` would
         otherwise leave later futures pending until the wait times
         out). The submission cost is bounded by ``len(versions) * 2``,
         which is in the low tens even for the largest specs.
         """
+        if not per_version_details:
+            return
         followup_futures = []
         for v in versions:
             followup_futures.append(

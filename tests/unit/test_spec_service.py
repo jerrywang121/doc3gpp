@@ -134,7 +134,7 @@ def test_sync_skips_etsi_fetch_when_pdf_url_already_persisted(monkeypatch) -> No
     repo = _StubSpecRepo()
     svc = SpecService(repo)
 
-    first = svc.sync("R5")
+    first = svc.sync("R5", per_version_details=True)
     assert first.status == "synced"
     assert etsi_calls == [12345], "first sync should fetch the ETSI page once"
 
@@ -143,7 +143,7 @@ def test_sync_skips_etsi_fetch_when_pdf_url_already_persisted(monkeypatch) -> No
     assert persisted[0].pdf_url == "x.pdf"
 
     etsi_calls.clear()
-    second = svc.sync("R5")
+    second = svc.sync("R5", per_version_details=True)
     assert second.status == "synced"
     assert etsi_calls == [], (
         "second sync must not re-fetch the ETSI page — pdf_url is already persisted"
@@ -883,6 +883,36 @@ def test_sync_spec_proceeds_when_no_last_synced_at() -> None:
     svc._sync_one_spec = _fake_sync_one  # type: ignore[assignment]
     out = svc.sync_spec("36.579-5")
     assert out.status == "synced"
+
+
+def test_sync_skips_followups_when_per_version_details_false(monkeypatch) -> None:
+    """A sync with the default ``per_version_details=False`` must NOT
+    invoke the ETSI PDF or CR list fetchers."""
+    etsi_calls: list[int] = []
+    cr_calls: list[int] = []
+
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_list",
+        lambda tsg, **k: LIST_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_spec_detail",
+        lambda slug, **k: DETAIL_HTML,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_etsi_pdf_text",
+        lambda wki, client: (etsi_calls.append(wki) or "<html><a href='x.pdf'>d</a></html>"),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.spec_service.fetch_cr_list",
+        lambda version_id, client: (cr_calls.append(version_id) or "<html><a id='wgTdocDetailsLink'>R5-1</a></html>"),
+    )
+
+    svc = SpecService(_StubSpecRepo())
+    outcome = svc.sync("R5")
+    assert outcome.status == "synced"
+    assert etsi_calls == [], "ETSI fetch must be skipped when per_version_details=False"
+    assert cr_calls == [], "CR list fetch must be skipped when per_version_details=False"
 
 
 def test_backfill_followup_fields_copies_stored_pdf_and_crs(monkeypatch) -> None:

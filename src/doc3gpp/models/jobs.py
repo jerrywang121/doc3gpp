@@ -41,6 +41,7 @@ class JobKind(str, Enum):
     SYNC_TDOCS_ALL = "sync_tdocs_all"
     SYNC_SPECS = "sync_specs"
     PARSE_TDOCS = "parse_tdocs"
+    PARSE_TDOC_URL = "parse_tdoc_url"
     REBUILD_SEARCH = "rebuild_search"
     CACHE_PURGE = "cache_purge"
 

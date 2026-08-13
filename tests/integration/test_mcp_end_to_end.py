@@ -78,6 +78,7 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "sync_all_tdocs",
         "sync_specs",
         "parse_tdocs",
+        "parse_tdoc_url",
         "rebuild_search_index",
         "purge_cache",
         "get_job",

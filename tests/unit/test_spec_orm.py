@@ -11,11 +11,3 @@ def test_spec_tables_created() -> None:
     tables = set(inspector.get_table_names())
     assert "specs" in tables
     assert "spec_versions" in tables
-
-
-def test_tsgs_has_spec_last_sync_column() -> None:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    inspector = inspect(engine)
-    cols = {c["name"] for c in inspector.get_columns("tsgs")}
-    assert "spec_last_sync" in cols

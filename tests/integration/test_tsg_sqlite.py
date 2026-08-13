@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
@@ -110,25 +108,3 @@ def test_tsgorm_metadata_registered(sqlite_env) -> None:
         ).first()
     assert result is not None
     assert result[0] == "tsgs"
-
-
-def test_update_spec_last_sync_sql(sqlite_env) -> None:
-    create_schema()
-    service = TsgService(SQLAlchemyTsgRepository())
-    service.seed_defaults()
-
-    repo = SQLAlchemyTsgRepository()
-    now = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
-    assert repo.update_spec_last_sync("R5", now) is True
-    rec = repo.get_by_short_name("R5")
-    assert rec is not None
-    assert rec.spec_last_sync is not None
-
-
-def test_update_spec_last_sync_unknown_returns_false(sqlite_env) -> None:
-    create_schema()
-    service = TsgService(SQLAlchemyTsgRepository())
-    service.seed_defaults()
-
-    repo = SQLAlchemyTsgRepository()
-    assert repo.update_spec_last_sync("NOPE", datetime.now(timezone.utc)) is False

@@ -117,6 +117,7 @@ class _SyncSpecsBody(BaseModel):
     tsg: str | None = None
     spec_id: str | None = None
     force: bool = False
+    per_version_details: bool = False
 
 
 class _ParseTDocsBody(BaseModel):
@@ -189,7 +190,10 @@ async def post_sync_specs(
         raise InvalidFilterError(
             "sync/specs requires exactly one of 'tsg' or 'spec_id' in the body"
         )
-    params: dict[str, JSONValue] = {"force": body.force}
+    params: dict[str, JSONValue] = {
+        "force": body.force,
+        "per_version_details": body.per_version_details,
+    }
     if body.tsg is not None:
         params["tsg"] = body.tsg
     else:

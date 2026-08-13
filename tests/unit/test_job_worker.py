@@ -879,6 +879,27 @@ def test_parse_tdoc_url_handler_auto_sync_disabled_skips_step() -> None:
     assert not any("auto-sync" in line for line in done.log_lines)
 
 
+def test_parse_tdoc_url_handler_auto_sync_empty_candidates_skips() -> None:
+    """``auto_sync=True`` with an empty candidate set does NOT trigger auto-sync."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl()  # empty file_urls -> no candidates
+    state = _make_url_state(repo, url_service=fake, auto_sync=True)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.SUCCEEDED
+    assert len(fake.collect_calls) == 1          # collection ran
+    assert not any("auto-sync" in line for line in done.log_lines)  # no trigger
+
+
 def test_parse_tdoc_url_handler_auto_sync_failure_does_not_abort() -> None:
     """An exception in ``trigger_auto_sync`` is logged; the parse still runs."""
     from doc3gpp.models.jobs import JobKind

@@ -1,5 +1,7 @@
 # Known Constraints
 
+> Last reviewed: 2026-08-13
+
 Open / known limitations that future work should respect. This file is
 the single source of truth — `docs/architecture.md` §Out of scope (today)
 and the per-feature notes below should stay in lock-step with this list.

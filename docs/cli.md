@@ -2,6 +2,8 @@
 
 This document describes the currently implemented command surface in src/doc3gpp/cli.py.
 
+> Last reviewed: 2026-08-13
+
 ## Installation
 
 The CLI requires the `[cli]` extra on top of the core SDK:
@@ -125,7 +127,8 @@ Purpose:
 Options:
 
 - --tsg: TSG short name.
-  - default: r5
+  - default: none — when omitted, every distinct TSG currently stored in
+    the local `meetings` table is synced (via `MeetingService.list_distinct_tsgs`).
   - validated against the `tsgs` reference table; unknown values raise an
     error listing the known short names and pointing to `doc3gpp tsg list`.
   - if the `tsgs` table is empty (fresh install), it is auto-seeded before

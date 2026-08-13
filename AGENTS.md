@@ -37,7 +37,7 @@ or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (7 groups, 20 commands)
+│   ├── cli.py            # Typer commands (9 sub-apps, 26 commands) + cli_server.py (server sub-app, 6 commands)
 │   ├── models/           # domain dataclasses — never leak ORM attrs out
 │   ├── repository/       # abstract repo contracts (Protocols)
 │   ├── services/         # orchestration; CLI-injected via factory
@@ -180,8 +180,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
   bold, italic, headings, bullets, GFM tables, code fences, and
   emits `key: value` lines with blank-line section separators. No-op
   for `table` and `raw`. CLI flag wins over `[output] compact` in
-  `doc3gpp.toml`. See `_resolve_compact` (`src/doc3gpp/cli.py:247`)
-  and `Settings.output.compact` (`src/doc3gpp/settings/schema.py:209`).
+  `doc3gpp.toml`. See `_resolve_compact` (`src/doc3gpp/cli.py:269`)
+  and `Settings.output.compact` (`src/doc3gpp/settings/schema.py:221`).
 - `doc3gpp tdoc parse <filters>` is end-to-end filter-driven — every
   flag is a filter, capped by `Settings.tdoc_parse.max_batch`. The
   per-file byte cap is `Settings.tdoc_parse.max_tdoc_size_kb` (default
@@ -223,7 +223,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   (basename for file URLs; BFS up to `--max-depth` / `--recursive`
   for folder URLs) and runs `trigger_auto_sync(...)` **before**
   dispatching to the per-file parse helpers — see
-  [`src/doc3gpp/cli.py:1353-1366`](src/doc3gpp/cli.py) and the
+  [`src/doc3gpp/cli.py:1527-1539`](src/doc3gpp/cli.py) and the
   "Auto-sync from URL candidates" section in `docs/cli.md`. The
   ordering is TSG sync → meeting sync → parse, so the meeting_id
   resolution can usually find the parent row by the time the parse

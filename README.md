@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-08-13
 
-> Extract 3GPP TDoc information by scraping 3gpp.org — a Python CLI/library, a local web UI, and an MCP server for AI clients.
+> Provide 3GPP TDoc information with full text search capability — a Python CLI/library, a local web UI, and an MCP server for AI clients.
 
 [![License: MIT](https://img.shields.io/github/license/jerrywang121/doc3gpp)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)

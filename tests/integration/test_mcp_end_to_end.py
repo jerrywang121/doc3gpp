@@ -855,7 +855,6 @@ def test_call_list_meetings_name_filter(sqlite_env) -> None:
 def test_call_list_meetings_name_no_match(sqlite_env) -> None:
     """``list_meetings`` with a no-match ``name`` pattern returns ``[]``."""
     import asyncio
-    import json
 
     _state_and_server()  # runs create_schema()
     _seed_corpus()

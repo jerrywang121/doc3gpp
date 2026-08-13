@@ -147,13 +147,15 @@ Workflows in one line (full prose in `docs/architecture.md`):
   list page + parallel per-spec detail page fans-out
   (`ThreadPoolExecutor`, capped at `min(32, cpu+4)` workers) →
   `parse_spec_list` + `parse_spec_detail` (+ optional ETSI PDF
-  text + CR list follow-ups gated on recency / emptiness) →
-  `SQLAlchemySpecRepository.upsert` + `upsert_versions`.
-  The per-spec `specs.last_synced_at` skip rule is honoured
-  (each per-worker `_sync_one_spec` short-circuits specs whose
-  `last_synced_at` is within `Settings.sync.spec_sync_interval`)
-  unless `--force` is passed. Per-spec ETSI / CR failures log a
-  warning and the sweep continues. `doc3gpp spec sync --spec-id <id>` → `SpecService.sync_spec` →
+  text + CR list follow-ups gated on recency / emptiness; pass
+  `--per-version-details` to always re-fetch both for every version
+  on every run) → `SQLAlchemySpecRepository.upsert` +
+  `upsert_versions`. The per-spec `specs.last_synced_at` skip rule is
+  honoured (each per-worker `_sync_one_spec` short-circuits specs
+  whose `last_synced_at` is within
+  `Settings.sync.spec_sync_interval`) unless `--force` is passed.
+  Per-spec ETSI / CR failures log a warning and the sweep continues.
+  `doc3gpp spec sync --spec-id <id>` → `SpecService.sync_spec` →
   look up in the local `specs` table; if missing, fetch
   `https://www.3gpp.org/DynaReport/{no_dot}.htm`, parse
   `#titleVal` / `#typeVal` / `#PrimaryResponsibleGroupLbl`, normalise

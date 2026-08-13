@@ -1838,6 +1838,13 @@ Options:
   `typer.BadParameter` with an `unknown TSG short name` message.
   `--force` bypasses the per-spec skip rule in both paths.
 - --force, -f: Bypass the spec sync interval skip rule.
+- --per-version-details: Fetch per-version follow-ups (ETSI PDF + CR list)
+  on every sync. **Default OFF** — `spec sync` only fetches the per-version
+  follow-ups when their cached values are missing (ETSI PDF when `pdf_url`
+  is empty; CR list when the version was updated within 90 days or `crs`
+  is empty). Pass this flag to refresh those fields for every version on
+  every run, and to backfill any previously-unset `pdf_url` / `crs`
+  values without changing the cached content of populated rows.
 
 Behavior:
 
@@ -1853,7 +1860,10 @@ Behavior:
   `SpecVersion.pdf_url` being empty. CR-list follow-ups are gated on
   either the upload date being within the last 90 days **or** the
   stored `crs` being empty; otherwise the cached comma-joined CR list
-  is left in place.
+  is left in place. Both gates are bypassed by `--per-version-details`,
+  which always re-fetches the per-version follow-ups and preserves any
+  previously-cached `pdf_url` / `crs` values that the upstream page no
+  longer exposes.
 - Per-spec ETSI / CR failures log a warning and the sweep continues —
   one bad spec must not abort the whole sync.
 - On success each spec's `last_synced_at` is stamped so the next
@@ -1874,6 +1884,9 @@ doc3gpp spec sync --tsg R5 --force
 # Sync a single stored spec (no list page fetch).
 doc3gpp spec sync --spec-id 36.579-5
 doc3gpp spec sync --spec-id 36.579-5 --force
+
+# Always re-fetch per-version ETSI PDF + CR list (default skips cached rows).
+doc3gpp spec sync --tsg R5 --per-version-details
 ```
 
 ### doc3gpp spec list

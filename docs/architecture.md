@@ -363,7 +363,10 @@ and syncs each through the `--tsg` path below.
      `SpecService._maybe_fetch_crs` (only when the upload date is
      within the last 90 days **or** the cached `crs` is empty —
      fetches the per-version CR list HTML and extracts the
-     comma-joined TDoc ids).
+     comma-joined TDoc ids). Both gates are bypassed by the
+     `--per-version-details` flag (default `False`); when set, every
+     version is re-fetched on every run while existing cached
+     `pdf_url` / `crs` values on populated rows are preserved.
    - Upserts the header row via `SQLAlchemySpecRepository.upsert` and
      every version row via `SQLAlchemySpecRepository.upsert_versions`.
    - Per-spec ETSI / CR failures log a warning and the sweep

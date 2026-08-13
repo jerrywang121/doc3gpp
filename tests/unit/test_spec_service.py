@@ -36,12 +36,7 @@ class _StubTsgRepo:
             description="stub",
             url=None,
             meeting_last_sync=None,
-            spec_last_sync=self._last,
         )
-
-    def update_spec_last_sync(self, short_name: str, synced_at) -> bool:
-        self.spec_sync_calls.append(synced_at)
-        return True
 
 
 class _StubSpecRepo:

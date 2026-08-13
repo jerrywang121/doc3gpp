@@ -333,6 +333,10 @@ It exposes 24 tools:
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,
 `rebuild_search_index`, `purge_cache`, `get_job`, `cancel_job`, `list_jobs`.
+`cancel_job` is idempotent on terminal jobs: cancelling a job that has
+already reached SUCCEEDED / FAILED / CANCELLED returns the envelope
+instead of erroring, so callers can inspect the result without a
+separate `get_job` call.
 
 Every read tool returns exactly the bytes of the equivalent
 `?format=json` HTTP route. `search_tdocs` normalises the query into a

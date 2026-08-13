@@ -357,6 +357,28 @@ def test_get_job_returns_404_for_unknown(client: Any) -> None:
     assert r.json()["error"] == "job_not_found"
 
 
+def test_get_job_html_includes_params_section(client: Any) -> None:
+    """The ?format=html detail page renders a 'Params' section with the params dict.
+
+    Locks the happy path: the new <section class="card">Params</section> is present,
+    wraps the params inside a <pre><code> block, and includes the supplied keys
+    and values verbatim.
+    """
+    c, repo, _ = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    r = c.get(f"/jobs/{job.id}?format=html")
+    assert r.status_code == 200
+    body = r.text
+    assert "<h2>Params</h2>" in body
+    assert "<pre><code>" in body
+    assert "</code></pre>" in body
+    pre_start = body.index("<pre><code>")
+    pre_end = body.index("</code></pre>")
+    pre_block = body[pre_start:pre_end]
+    assert '"tsg"' in pre_block
+    assert '"SA2"' in pre_block
+
+
 # ---------------------------------------------------------------------------
 # Cancel
 # ---------------------------------------------------------------------------

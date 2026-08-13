@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Callable, TypeVar
 from pydantic import Field
 
 from doc3gpp.models.jobs import JobKind
+from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
 from doc3gpp.web import render
 from doc3gpp.web.errors import (
     CacheMissError,
@@ -526,6 +527,51 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         if max_batch is not None:
             params["max_batch"] = max_batch
         return _enqueue(state, JobKind.PARSE_TDOCS, params, "queued parse_tdocs")
+
+    @server.tool(
+        name="parse_tdoc_url",
+        description=(
+            "Enqueue a parse of a single TDoc file or a folder of TDoc files "
+            "from a 3GPP FTP URL (https://www.3gpp.org/ftp/...). Mirrors "
+            "`doc3gpp tdoc parse --from-url`. Use `recursive`/`max_depth` to "
+            "scan subfolders; `force` re-parses already-cached files; `full` "
+            "parses the TTCN corrections sub-parser. When "
+            "Settings.sync.auto_sync is on, the worker runs the same "
+            "TSG→meeting→tdoc-list auto-sync the CLI runs before parsing, so "
+            "the cover-page FK on tdocs is satisfied. Returns a job_id; poll "
+            "`get_job` for progress and `cancel_job` to abort."
+        ),
+    )
+    @_mcp_error_guard
+    def parse_tdoc_url(
+        url: Annotated[str, Field(description="Absolute 3GPP FTP URL (https://www.3gpp.org/ftp/...). Single .docx/.zip file or a folder URL.")],
+        recursive: Annotated[bool, Field(description="Scan subfolders (BFS); equivalent to CLI's --recursive. Mutually exclusive with max_depth.")] = False,
+        max_depth: Annotated[int, Field(description="Maximum BFS depth (0 = root folder only). Ignored when recursive=True.")] = 2,
+        force: Annotated[bool, Field(description="Re-parse even when a cover-page row already exists (forwarded to the service).")] = False,
+        full: Annotated[bool, Field(description="Parse full content for TTCN corrections (forwarded to the service).")] = False,
+    ) -> str:
+        if not is_3gpp_ftp_url(url):
+            raise InvalidFilterError(
+                f"url must be a 3GPP FTP URL (https://www.3gpp.org/ftp/...); got {url!r}"
+            )
+        if recursive and max_depth != 2:
+            raise InvalidFilterError(
+                "recursive and max_depth are mutually exclusive; set one or the other"
+            )
+        params: dict[str, Any] = {
+            "url": url,
+            "force": force,
+            "full": full,
+            "recursive": recursive,
+        }
+        if not recursive:
+            params["max_depth"] = max_depth
+        return _enqueue(
+            state,
+            JobKind.PARSE_TDOC_URL,
+            params,
+            f"queued parse_tdoc_url for {url}",
+        )
 
     @server.tool(name="rebuild_search_index", description="Enqueue an FTS5 search-index rebuild.")
     @_mcp_error_guard

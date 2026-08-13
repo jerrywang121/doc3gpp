@@ -1,5 +1,7 @@
 # Web server + MCP
 
+> Last reviewed: 2026-08-13
+
 The `doc3gpp` web server serves a browsable HTML interface over the same
 services the CLI uses, plus an MCP (Model Context Protocol) endpoint for
 AI tooling. It runs as a single process on one HTTP port

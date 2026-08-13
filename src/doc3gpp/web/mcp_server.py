@@ -27,7 +27,6 @@ from doc3gpp.web import render
 from doc3gpp.web.errors import (
     CacheMissError,
     InvalidFilterError,
-    JobAlreadyTerminalError,
     JobNotFoundError,
     MeetingNotFoundError,
     SettingsDisabledError,
@@ -603,19 +602,27 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
         return _to_json(_envelope(job))
 
-    @server.tool(name="cancel_job", description="Request cooperative cancellation of a queued or running job.")
+    @server.tool(
+        name="cancel_job",
+        description=(
+            "Request cooperative cancellation of a queued or running job. "
+            "Idempotent on terminal jobs: when the job has already reached "
+            "SUCCEEDED / FAILED / CANCELLED, returns the current envelope "
+            "so the caller can inspect the result without a separate "
+            "get_job call."
+        ),
+    )
     @_mcp_error_guard
-    def cancel_job(job_id: Annotated[str, Field(description="Job id (UUID4 hex string) to cancel.")]) -> str:
-        from doc3gpp.models.jobs import JobStatus
-
+    def cancel_job(
+        job_id: Annotated[str, Field(description="Job id (UUID4 hex string) to cancel.")],
+    ) -> str:
         job = state.services.job_repo.get(job_id)
         if job is None:
             raise JobNotFoundError(job_id)
-        if job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED):
-            raise JobAlreadyTerminalError(job_id)
-        state.jobs.cancel(job_id)
+        from doc3gpp.models.jobs import JobStatus
+        if job.status not in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED):
+            state.jobs.cancel(job_id)
         from doc3gpp.web.routes.jobs import _envelope
-
         return _to_json(_envelope(job))
 
     @server.tool(name="list_jobs", description="List recent jobs (newest first), optionally filtered by status.")

@@ -372,13 +372,43 @@ def test_cancel_returns_200_for_running(client: Any) -> None:
     assert r.json()["job_id"] == job.id
 
 
-def test_cancel_returns_409_when_terminal(client: Any) -> None:
-    c, repo, _ = client
+def test_cancel_returns_200_when_terminal_idempotent_succeeded(client: Any) -> None:
+    """Cancel on a SUCCEEDED job returns 200 + envelope (idempotent)."""
+    c, repo, handle = client
     job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
     repo.mark_succeeded(job.id, summary={"ok": True})
     r = c.post(f"/jobs/{job.id}/cancel")
-    assert r.status_code == 409
-    assert r.json()["error"] == "job_already_terminal"
+    assert r.status_code == 200
+    assert handle.cancelled == []  # no cancel event on a terminal job
+    body = r.json()
+    assert body["job_id"] == job.id
+    assert body["status"] == "succeeded"
+    assert body["summary"] == {"ok": True}
+
+
+def test_cancel_returns_200_when_terminal_idempotent_failed(client: Any) -> None:
+    """Cancel on a FAILED job returns 200 + envelope + error field."""
+    c, repo, _ = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_failed(job.id, error="boom")
+    r = c.post(f"/jobs/{job.id}/cancel")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["job_id"] == job.id
+    assert body["status"] == "failed"
+    assert body["error"] == "boom"
+
+
+def test_cancel_returns_200_when_terminal_idempotent_cancelled(client: Any) -> None:
+    """Cancel on an already-CANCELLED job returns 200 + envelope."""
+    c, repo, _ = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_cancelled(job.id)
+    r = c.post(f"/jobs/{job.id}/cancel")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["job_id"] == job.id
+    assert body["status"] == "cancelled"
 
 
 def test_cancel_returns_404_for_unknown(client: Any) -> None:

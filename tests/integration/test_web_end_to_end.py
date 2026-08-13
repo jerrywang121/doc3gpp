@@ -167,9 +167,10 @@ def test_full_lifecycle(sqlite_env, app_with_deps) -> None:
         assert "succeeded" in text
         assert "fetched meeting SA2#156" in text
 
-        # cancel on a terminal job is a 409
-        conflict = client.post(f"/jobs/{job_id}/cancel")
-        assert conflict.status_code == 409
+        # cancel on a terminal job is a 200 (idempotent) returning the envelope
+        envelope = client.post(f"/jobs/{job_id}/cancel")
+        assert envelope.status_code == 200
+        assert envelope.json()["status"] == "succeeded"
 
     get_engine.cache_clear()
 

@@ -89,12 +89,24 @@ class _ProgressFakeSpecService:
     def __init__(self, specs_per_tsg: dict[str, int]) -> None:
         self._specs_per_tsg = specs_per_tsg
         self.sync_calls: list[str] = []
+        self.sync_kwargs: list[dict] = []
 
     def list_distinct_tsgs(self) -> list[str]:
         return list(self._specs_per_tsg)
 
-    def sync(self, tsg: str, *, force: bool = False, on_progress=None) -> SyncOutcome:
+    def sync(
+        self,
+        tsg: str,
+        *,
+        force: bool = False,
+        per_version_details: bool = False,
+        on_progress=None,
+    ) -> SyncOutcome:
+        _ProgressFakeSpecService._last_instance = self
         self.sync_calls.append(tsg)
+        self.sync_kwargs.append(
+            {"force": force, "per_version_details": per_version_details}
+        )
         n = self._specs_per_tsg.get(tsg, 0)
         if on_progress is not None:
             on_progress("list_parsed", {"total": n})
@@ -515,3 +527,31 @@ def test_spec_sync_spec_id_dynareport_404_bad_parameter(sqlite_env, monkeypatch)
     assert result.exit_code != 0
     assert "38.523-1" in result.output
     assert "unknown on the 3GPP DynaReport upstream" in result.output
+
+
+def test_spec_sync_per_version_details_flag(monkeypatch) -> None:
+    """``--per-version-details`` is forwarded to the service as
+    ``per_version_details=True``; the default is ``False``."""
+    from doc3gpp.cli import app
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli._ensure_tsg_ready",
+        lambda svc: type("_T", (), {"is_known_short_name": staticmethod(lambda s: True)})(),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tsg_service",
+        lambda: type("_T", (), {"is_known_short_name": staticmethod(lambda s: True)})(),
+    )
+
+    svc = _ProgressFakeSpecService({"R5": 1})
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
+    _install_fake_tqdm(monkeypatch)
+
+    r = runner.invoke(app, ["spec", "sync", "--tsg", "R5"])
+    assert r.exit_code == 0
+    assert svc.sync_kwargs[0]["per_version_details"] is False
+
+    r = runner.invoke(app, ["spec", "sync", "--tsg", "R5", "--per-version-details"])
+    assert r.exit_code == 0
+    assert svc.sync_kwargs[-1]["per_version_details"] is True

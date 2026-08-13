@@ -65,20 +65,6 @@ class SpecUnknownOnUpstreamError(LookupError):
         self.reason = reason
 
 
-class UnknownTsgError(ValueError):
-    """Raised when a freshly fetched spec's normalised TSG is not in ``tsgs``."""
-
-    def __init__(self, spec_id: str, short_name: str, long_name: str) -> None:
-        super().__init__(
-            f"spec {spec_id!r} has unknown TSG short name {short_name!r} "
-            f"(normalised from {long_name!r}); run 'doc3gpp tsg seed' or "
-            f"'doc3gpp tsg list' to inspect the reference table"
-        )
-        self.spec_id = spec_id
-        self.short_name = short_name
-        self.long_name = long_name
-
-
 class SpecService:
     """Sync and query 3GPP specification records."""
 

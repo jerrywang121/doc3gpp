@@ -81,7 +81,6 @@ from doc3gpp.services.tdoc_sync_coordinator import (
 )
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
-    UnknownTsgError,
 )
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.settings.config_source import find_config_file, load_config_data
@@ -3920,9 +3919,6 @@ def spec_sync(
                 spec_id, force=force, on_progress=_on_progress
             )
         except SpecUnknownOnUpstreamError as exc:
-            bar.close()
-            raise typer.BadParameter(str(exc)) from exc
-        except UnknownTsgError as exc:
             bar.close()
             raise typer.BadParameter(str(exc)) from exc
         bar.close()

@@ -515,24 +515,3 @@ def test_spec_sync_spec_id_dynareport_404_bad_parameter(sqlite_env, monkeypatch)
     assert result.exit_code != 0
     assert "38.523-1" in result.output
     assert "unknown on the 3GPP DynaReport upstream" in result.output
-
-
-def test_spec_sync_spec_id_unknown_tsg_bad_parameter(sqlite_env, monkeypatch) -> None:
-    """``spec sync --spec-id`` of a spec whose TSG is not in tsgs surfaces BadParameter."""
-    from doc3gpp.services.spec_service import UnknownTsgError
-    from doc3gpp.services.tsg_service import TsgService
-    from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
-
-    create_schema()
-    TsgService(SQLAlchemyTsgRepository()).seed_defaults()
-
-    svc = MagicMock()
-    svc.sync_spec.side_effect = UnknownTsgError("38.523-1", "R5", "RAN 5")
-    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: svc)
-    monkeypatch.setattr("doc3gpp.cli.build_meeting_service", lambda: MagicMock())
-
-    result = runner.invoke(app, ["spec", "sync", "--spec-id", "38.523-1"])
-    assert result.exit_code != 0
-    assert "unknown TSG short name" in result.output
-    assert "R5" in result.output

@@ -17,7 +17,6 @@ import json
 
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
-    UnknownTsgError,
 )
 from doc3gpp.web.app import build_state
 from doc3gpp.web.errors import map_domain_error, map_mcp_error
@@ -791,8 +790,8 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     del state.engine
 
 
-def test_web_errors_maps_new_spec_errors() -> None:
-    """``map_domain_error`` / ``map_mcp_error`` cover the new spec sync errors."""
+def test_web_errors_maps_spec_unknown_on_upstream() -> None:
+    """``map_domain_error`` / ``map_mcp_error`` cover ``SpecUnknownOnUpstreamError``."""
     resp_unknown = map_domain_error(
         SpecUnknownOnUpstreamError("38.523-1", "missing fields: title, type")
     )
@@ -801,20 +800,9 @@ def test_web_errors_maps_new_spec_errors() -> None:
     assert body_unknown["error"] == "spec_unknown_on_upstream"
     assert "38.523-1" in body_unknown["detail"]
 
-    resp_tsg = map_domain_error(UnknownTsgError("38.523-1", "R5", "RAN 5"))
-    assert resp_tsg.status_code == 400
-    body_tsg = json.loads(resp_tsg.body)
-    assert body_tsg["error"] == "unknown_tsg"
-
     mcp1 = map_mcp_error(SpecUnknownOnUpstreamError("38.523-1", "missing"))
     assert mcp1 is not None
     code, _msg, data = mcp1
     assert code == -32004
     assert data["error"] == "spec_unknown_on_upstream"
     assert data["resource"] == "spec"
-
-    mcp2 = map_mcp_error(UnknownTsgError("38.523-1", "R5", "RAN 5"))
-    assert mcp2 is not None
-    code2, _msg2, data2 = mcp2
-    assert code2 == -32602
-    assert data2["error"] == "unknown_tsg"

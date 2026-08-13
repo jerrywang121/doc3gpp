@@ -180,7 +180,7 @@ def test_sync_specs_tool_enqueues(sqlite_env) -> None:
     assert detail.is_error is False
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_specs"
-    assert detail_payload["params"] == {"tsg": "R5", "force": True}
+    assert detail_payload["params"] == {"tsg": "R5", "force": True, "per_version_details": False}
     del state.engine
 
 
@@ -202,7 +202,32 @@ def test_sync_specs_tool_by_spec_id_enqueues(sqlite_env) -> None:
     assert detail.is_error is False
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_specs"
-    assert detail_payload["params"] == {"spec_id": "36.579-5", "force": False}
+    assert detail_payload["params"] == {"spec_id": "36.579-5", "force": False, "per_version_details": False}
+    del state.engine
+
+
+def test_sync_specs_tool_per_version_details_enqueues(sqlite_env) -> None:
+    """The MCP tool's ``per_version_details=True`` reaches ``job.params``."""
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool(
+            "sync_specs", {"tsg": "R5", "force": False, "per_version_details": True}
+        )
+        envelope = json.loads(created.content[0].text)
+        return envelope["job_id"]
+
+    job_id = asyncio.run(run())
+    detail = asyncio.run(server.call_tool("get_job", {"job_id": job_id}))
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["params"] == {
+        "tsg": "R5",
+        "force": False,
+        "per_version_details": True,
+    }
     del state.engine
 
 

@@ -483,14 +483,32 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         tsg: Annotated[str | None, Field(description="TSG short name to sync specs for (e.g. 'R5').")] = None,
         spec_id: Annotated[str | None, Field(description="Dotted spec id to sync a single stored spec (e.g. '36.579-5').")] = None,
         force: Annotated[bool, Field(description="Bypass the spec sync interval skip rule.")] = False,
+        per_version_details: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Also fetch per-version follow-ups (ETSI PDF link + CR list). "
+                    "Defaults to false to keep the sync cheap; existing stored "
+                    "pdf_url and crs values are preserved either way."
+                )
+            ),
+        ] = False,
     ) -> str:
         if (tsg is None) == (spec_id is None):
             raise InvalidFilterError("exactly one of 'tsg' or 'spec_id' is required")
         if spec_id is not None:
-            params: dict[str, Any] = {"spec_id": spec_id, "force": force}
+            params: dict[str, Any] = {
+                "spec_id": spec_id,
+                "force": force,
+                "per_version_details": per_version_details,
+            }
             message = f"queued sync_specs for spec {spec_id}"
         else:
-            params = {"tsg": tsg, "force": force}
+            params = {
+                "tsg": tsg,
+                "force": force,
+                "per_version_details": per_version_details,
+            }
             message = f"queued sync_specs for TSG {tsg}"
         return _enqueue(state, JobKind.SYNC_SPECS, params, message)
 

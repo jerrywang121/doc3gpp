@@ -1,7 +1,19 @@
 # Single-spec sync + sync-all-in-DB — design
 
 **Date:** 2026-08-12
-**Status:** Approved
+**Status:** Approved (subsequently amended — see note below)
+
+> **Superseded** — the per-TSG `tsgs.spec_last_sync` skip rule
+> described in this design was replaced by a per-spec
+> `specs.last_synced_at` skip rule in
+> [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md).
+> The `--spec-id` selector, `SpecService.sync_spec`, the
+> `SpecRepository.list_distinct_tsgs` repo method, the no-selector
+> fallback, the HTTP / MCP / job / web hookups, and the test
+> coverage all stand as written; only the skip-rule source
+> (`tsgs.spec_last_sync` → `specs.last_synced_at`) and the TSG
+> stamp moved. The original design text is preserved below for
+> historical reference.
 
 ## Problem
 
@@ -39,10 +51,15 @@ Syncs one spec without fetching the list page:
 - Honour the per-TSG `tsgs.spec_last_sync` skip rule (unless `force`),
   identical to `sync()` — a single spec whose TSG was synced within
   `sync.spec_sync_interval` is skipped with a `skipped` `SyncOutcome`.
+  **Superseded** — the skip rule is now per-spec and keyed on
+  `specs.last_synced_at`; see
+  [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md).
 - Open one `ScraperClient`, call `self._sync_one_spec(spec, canonical,
   followup_executor, client)` with a single-worker `ThreadPoolExecutor`
   for the ETSI/CR follow-ups, fire `"spec_done"` on progress.
 - Stamp `tsgs.spec_last_sync` at the end (same as `sync()`).
+  **Superseded** — the per-TSG stamp is gone; the per-worker
+  pipeline now stamps the spec's own `specs.last_synced_at`.
 - Return `SyncOutcome` with `status`, `reason`, `synced_count` (0 or 1)
   and `version_count`.
 
@@ -149,4 +166,7 @@ Add a "Sync" card mirroring the TDoc Parse card:
 - No `sync_spec` MCP tool name change — the existing `sync_specs` tool
   gains a `spec_id` param instead.
 - No change to the `tsgs.spec_last_sync` semantics (single-spec sync
-  still stamps the owning TSG).
+  still stamps the owning TSG). **Superseded** — `tsgs.spec_last_sync`
+  was removed entirely; the skip rule is per-spec and the only stamp
+  is on the spec's own `specs.last_synced_at` (see
+  [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md)).

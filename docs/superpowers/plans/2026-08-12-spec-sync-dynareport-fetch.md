@@ -508,6 +508,12 @@ class _StubTsgRepo:
     def update_spec_last_sync(self, short_name: str, synced_at) -> bool:
         self.spec_sync_calls.append(synced_at)
         return True
+    # Superseded — the `_StubTsgRepo.spec_last_sync` /
+    # `update_spec_last_sync` plumbing was removed in the per-spec
+    # skip rule plan
+    # ([docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md](2026-08-13-per-spec-skip-rule.md));
+    # the new per-spec skip uses `Spec.last_synced_at` and the TSG
+    # stub no longer carries a spec stamp.
 ```
 
 `test_sync_spec_stored_row_unchanged` (in this task's test list) uses `tsg_repo = _StubTsgRepo(short_names={"R5"})` — the new `short_names` kwarg is additive. All 11 existing call sites that pass `last_spec_sync=...` keep working because the new parameter is keyword-only and defaults to `None`.
@@ -581,6 +587,10 @@ In `src/doc3gpp/services/spec_service.py`, replace the existing `sync_spec` meth
         :class:`SpecUnknownOnUpstreamError`; a normalised TSG that is
         not in the seeded reference table raises
         :class:`UnknownTsgError`.
+        # Superseded — the per-TSG skip was replaced by a per-spec
+        # `specs.last_synced_at` skip in the per-spec skip rule plan
+        # ([docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md](2026-08-13-per-spec-skip-rule.md));
+        # the `tsgs.spec_last_sync` and the TSG-repo stamp are gone.
         """
         spec = self._repository.get(spec_id)
         if spec is None:
@@ -607,6 +617,9 @@ In `src/doc3gpp/services/spec_service.py`, replace the existing `sync_spec` meth
             self._tsg_repository.update_spec_last_sync(
                 canonical, datetime.now(timezone.utc)
             )
+        # Superseded — the per-TSG stamp is gone; the per-spec
+        # `specs.last_synced_at` is stamped by the per-worker
+        # pipeline.
 
         return SyncOutcome(
             status="synced",
@@ -1073,6 +1086,12 @@ same bugs.
    sites keep working, and (b) seeded `short_names={"R5"}` in three
    skip-rule tests so the rule still triggers as written.
    Reviewer confirmed pre-existing skip-rule tests still pass.
+   **Superseded** — the entire `_is_sync_skipped` skip-rule machinery
+   and the `_StubTsgRepo.spec_last_sync` plumbing were removed in
+   the per-spec skip rule plan
+   ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md));
+   the per-spec skip is now enforced against
+   `Spec.last_synced_at`.
 
 3. **`test_sync_spec_unknown_spec_raises` was testing the OLD
    pre-flight `ValueError` behaviour.** The refactor changes the

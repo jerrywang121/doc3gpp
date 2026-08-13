@@ -15,7 +15,7 @@
 - **`specs.wis` is a point-in-time comma-joined string.** No `spec_wis` join table. `SpecService` does **NOT** auto-run `wi sync --tsg {tsg}`.
 - **`spec_versions.release`** is derived from the `version` leading digit via `normalise_release` (NOT from the upstream `&release=` param, which is the 3GPP-internal release id and is ignored).
 - **`spec_id` is the full dotted PK** (e.g. `36.579-5`); the dotless form (`36579-5`) is a pure function (URL slug), never stored.
-- **`tsgs.spec_last_sync`** column is nullable and additive; `create_schema`'s `Base.metadata.create_all` picks it up in-place. No alembic migration.
+- **`tsgs.spec_last_sync`** column is nullable and additive; `create_schema`'s `Base.metadata.create_all` picks it up in-place. No alembic migration. **Superseded** — the column was removed in the per-spec skip rule plan ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md)); the skip rule is now per-spec and keyed on `specs.last_synced_at`.
 - **Rich-filter grammar** for all text list filters: `null` / `not-null` / `!pattern` / plain `LIKE`.
 - **Doc sync:** update `AGENTS.md`, `docs/cli.md`, `docs/code-map.md`, `docs/architecture.md`, `docs/3gpp-knowledge.md`, `README.md`, and `doc3gpp.toml.example` in the same change set (see final task).
 - Follow-up fetch knobs (3-month CR recency gate, `min(32, cpu+4)` workers) stay constants on `SpecService`.
@@ -802,7 +802,14 @@ git commit -m "feat(parsers): add spec detail page parser tests"
 - Test: `tests/unit/test_spec_orm.py`
 
 **Interfaces:**
-- Produces: `SpecORM`, `SpecVersionORM`, `TsgORM.spec_last_sync`. Consumed by `SQLAlchemySpecRepository` and `SQLAlchemyTsgRepository`.
+- Produces: `SpecORM`, `SpecVersionORM`, ~~`TsgORM.spec_last_sync`~~. Consumed by `SQLAlchemySpecRepository` ~~and `SQLAlchemyTsgRepository`~~.
+
+> **Superseded** — `TsgORM.spec_last_sync` was removed in the per-spec
+> skip rule plan
+> ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md));
+> the spec sync skip rule is now per-spec and lives on
+> `SpecORM.last_synced_at`. `SpecORM` and `SpecVersionORM` stand as
+> written.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -833,10 +840,15 @@ def test_tsgs_has_spec_last_sync_column() -> None:
     assert "spec_last_sync" in cols
 ```
 
+> **Superseded** — `test_tsgs_has_spec_last_sync_column` was dropped
+> in the per-spec skip rule plan
+> ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md));
+> the `tsgs.spec_last_sync` column no longer exists.
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/test_spec_orm.py -v`
-Expected: FAIL (`specs` table absent; `spec_last_sync` absent).
+Expected: FAIL (`specs` table absent; ~~`spec_last_sync` absent~~). **Superseded** — the second leg of the expected failure is gone; only the `specs` table absence is still expected.
 
 - [ ] **Step 3: Implement**
 
@@ -847,6 +859,11 @@ In `src/doc3gpp/storage/db/models.py`, add `spec_last_sync` to `TsgORM` (after `
         DateTime(timezone=True), nullable=True
     )
 ```
+
+> **Superseded** — the `TsgORM.spec_last_sync` column addition was
+> undone in the per-spec skip rule plan
+> ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md)).
+> `SpecORM` and `SpecVersionORM` still stand as written below.
 
 Add two new ORM classes at the end of `models.py`:
 
@@ -926,12 +943,23 @@ Expected: PASS.
 
 ```bash
 git add src/doc3gpp/storage/db/models.py src/doc3gpp/storage/db/migrate.py tests/unit/test_spec_orm.py
-git commit -m "feat(db): add specs, spec_versions and tsgs.spec_last_sync columns"
+git commit -m "feat(db): add specs, spec_versions ~~and tsgs.spec_last_sync~~ columns"
 ```
 
 ---
 
 ### Task 7: `TsgRepository` — add `update_spec_last_sync`
+
+> **Superseded** — the entire task is obsolete. The
+> `Tsg.spec_last_sync` field, the
+> `TsgRepository.update_spec_last_sync` Protocol method, the SQL
+> impl, the test, the `_FakeTsgRepository` method, and the
+> `_orm_to_domain` mapping were all removed in the per-spec skip
+> rule plan
+> ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md)).
+> The skip rule is per-spec and lives on `specs.last_synced_at` —
+> the TSG repo no longer participates. The task text below is
+> preserved for historical reference.
 
 **Files:**
 - Modify: `src/doc3gpp/models/tsg.py` (add `spec_last_sync` field)
@@ -1037,7 +1065,7 @@ Expected: PASS.
 
 ```bash
 git add src/doc3gpp/models/tsg.py src/doc3gpp/repository/protocols.py src/doc3gpp/storage/repositories/tsg_sql.py tests/unit/test_tsg_service.py tests/integration/test_tsg_sqlite.py
-git commit -m "feat(tsg): add spec_last_sync tracking to TsgRepository"
+git commit -m "feat(tsg): add ~~spec_last_sync tracking to~~ TsgRepository"
 ```
 
 ---
@@ -1641,12 +1669,22 @@ git commit -m "feat(parsers): extract ETSI PDF link and CR tdoc list"
 
 ### Task 11: `SpecService`
 
+> **Superseded** (skip-rule sub-aspects only) — the per-TSG
+> `tsgs.spec_last_sync` skip rule and the per-TSG stamp described
+> inside this task were replaced by a per-spec
+> `specs.last_synced_at` skip rule in
+> [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md).
+> `SpecService` no longer takes a `TsgRepository`; the per-spec
+> skip is enforced per worker inside `sync()` and per call inside
+> `sync_spec()`. The other interfaces (list / detail / parallel
+> fetch / follow-ups) all stand as written.
+
 **Files:**
 - Create: `src/doc3gpp/services/spec_service.py`
 - Test: `tests/unit/test_spec_service.py`
 
 **Interfaces:**
-- Consumes: `SpecRepository`, `TsgRepository`, `fetch_spec_list`, `fetch_spec_detail`, `fetch_etsi_pdf_text`, `fetch_cr_list`, `parse_spec_list`, `parse_spec_detail`, `extract_etsi_pdf_url`, `extract_cr_tdocs`, `SyncOutcome`.
+- Consumes: `SpecRepository`, ~~`TsgRepository`~~, `fetch_spec_list`, `fetch_spec_detail`, `fetch_etsi_pdf_text`, `fetch_cr_list`, `parse_spec_list`, `parse_spec_detail`, `extract_etsi_pdf_url`, `extract_cr_tdocs`, `SyncOutcome`.
 - Produces: `SpecService` with `sync(tsg, *, force=False) -> SyncOutcome`, `list_recent(...)`, `get(spec_id)`, `list_versions(...)`. Consumed by `factory.build_spec_service`, CLI, web, MCP.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1675,6 +1713,12 @@ class _StubTsgRepo:
     def update_spec_last_sync(self, short_name, synced_at):
         self.spec_sync_calls.append(synced_at)
         return True
+
+    # Superseded — the entire `_StubTsgRepo` helper was removed in the
+    # per-spec skip rule plan
+    # ([docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md](2026-08-13-per-spec-skip-rule.md));
+    # the new per-spec skip is enforced by `SpecService` against
+    # `specs.last_synced_at` and does not need a TSG stub.
 
 
 class _StubSpecRepo:
@@ -1749,6 +1793,10 @@ def test_sync_smoke(monkeypatch) -> None:
     assert outcome.synced_count == 1
     assert outcome.version_count == 1
     assert tsg.spec_sync_calls, "spec_last_sync not stamped"
+    # Superseded — the TSG-stamp assertion was replaced by a per-spec
+    # `specs.last_synced_at` stamp assertion in the per-spec skip rule
+    # plan
+    # ([docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md](2026-08-13-per-spec-skip-rule.md)).
 
 
 def test_sync_skips_within_interval(monkeypatch) -> None:
@@ -1758,6 +1806,11 @@ def test_sync_skips_within_interval(monkeypatch) -> None:
     outcome = svc.sync("R5")
     assert outcome.status == "skipped"
     assert not tsg.spec_sync_calls
+    # Superseded — the per-TSG skip was replaced by a per-spec
+    # `last_synced_at` skip; this test was rewritten in the per-spec
+    # skip rule plan
+    # ([docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md](2026-08-13-per-spec-skip-rule.md))
+    # to seed the stub spec's `last_synced_at` instead.
 
 
 def test_sync_force_bypasses_interval(monkeypatch) -> None:
@@ -1768,6 +1821,10 @@ def test_sync_force_bypasses_interval(monkeypatch) -> None:
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", lambda s: DETAIL_HTML)
     outcome = svc.sync("R5", force=True)
     assert outcome.status == "synced"
+    # Superseded — the TSG-repo plumbing is gone; the rewritten test
+    # in the per-spec skip rule plan uses a stub spec with
+    # `last_synced_at` inside the interval and asserts `force=True`
+    # bypasses the per-spec check.
 ```
 
 (Add `from datetime import timedelta` import to the test.)
@@ -1832,11 +1889,16 @@ class SpecService:
     def sync(self, tsg: str, *, force: bool = False) -> SyncOutcome:
         """Fetch list page → parallel detail pages → upsert.
 
-        Resolves the TSG, honours ``tsgs.spec_last_sync`` skip rule
-        (unless ``force``), fetches the list once, then fetches each
+        Resolves the TSG, ~~honours ``tsgs.spec_last_sync`` skip rule
+        (unless ``force``)~~, fetches the list once, then fetches each
         detail page in a thread pool, running the conditional ETSI / CR
         follow-ups inside each worker, and upserts per-spec in one
-        transaction.
+        transaction. **Superseded** — the per-TSG skip was replaced by
+        a per-spec `specs.last_synced_at` skip inside
+        `_sync_one_spec`; the TSG-level `if not force and
+        self._tsg_repository is not None:` block below was removed in
+        the per-spec skip rule plan
+        ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md)).
         """
         canonical = tsg.upper()
         if (
@@ -1857,6 +1919,11 @@ class SpecService:
                         f"Use --force to override."
                     ),
                 )
+        # Superseded — the entire TSG-level skip block above was removed
+        # in the per-spec skip rule plan
+        # ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md));
+        # the per-spec skip is enforced inside `_sync_one_spec` against
+        # `header.last_synced_at`.
 
         logger.info("Syncing specs for TSG %s", canonical)
         list_html = fetch_spec_list(canonical)
@@ -1883,6 +1950,11 @@ class SpecService:
 
         if self._tsg_repository is not None:
             self._tsg_repository.update_spec_last_sync(canonical, datetime.now(timezone.utc))
+        # Superseded — the TSG-level stamp above was removed in the
+        # per-spec skip rule plan
+        # ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md));
+        # the per-worker `_sync_one_spec` already stamps
+        # `header.last_synced_at` on success.
 
         return SyncOutcome(
             status="synced",
@@ -2709,7 +2781,7 @@ git commit -m "docs: document spec sync/list/show and add online test"
 ## Self-Review
 
 **Spec coverage:**
-- §2 Data model (`specs`, `spec_versions`, `tsgs.spec_last_sync`) → Tasks 2, 6, 7.
+- §2 Data model (`specs`, `spec_versions`, ~~`tsgs.spec_last_sync`~~) → Tasks 2, 6, ~~7~~. **Superseded** — `tsgs.spec_last_sync` and the `TsgRepository.update_spec_last_sync` helper were removed in the per-spec skip rule plan ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md)).
 - §3.1 list page parser → Task 4; §3.2 detail parser → Task 5; §3.3 follow-ups (ETSI PDF, CR list) → Task 10; §3.4 concurrency → Task 11 (`ThreadPoolExecutor`); §3.5 release normalisation → Task 3.
 - §4 Service layer → Task 11; §5 Repository layer → Task 8; §5 Tsg repo method → Task 7.
 - §6 CLI (`spec sync/list/show`) → Task 13; §7 Web → Tasks 14–15; §7 MCP → Task 16.
@@ -2720,7 +2792,7 @@ git commit -m "docs: document spec sync/list/show and add online test"
 
 **Placeholder scan:** No TBD/TODO. Each task includes concrete test + implementation code. The `spec show` table rendering in Task 13 is flagged as approximate and directs the implementer to refine if a test asserts specific cells; the JSON branch is concrete.
 
-**Type consistency:** `Spec.spec_id` / `SpecVersion.spec_id` consistent across models, ORM (`SpecORM.spec_id`), repo (`SpecRepository.upsert/get`), service, CLI, web, MCP. `release_from_version` and `normalise_release` names consistent (Task 3) and used by parser (Task 4). `update_spec_last_sync` consistent across Protocol (Task 7), SQL impl (Task 7), fake (Task 7), service (Task 11). `SpecNotFoundError` referenced in Tasks 15 and 16 — created in Task 15 and reused in Task 16. `build_spec_service` defined in Task 12 and consumed in Tasks 13, 15, 17.
+**Type consistency:** `Spec.spec_id` / `SpecVersion.spec_id` consistent across models, ORM (`SpecORM.spec_id`), repo (`SpecRepository.upsert/get`), service, CLI, web, MCP. `release_from_version` and `normalise_release` names consistent (Task 3) and used by parser (Task 4). ~~`update_spec_last_sync` consistent across Protocol (Task 7), SQL impl (Task 7), fake (Task 7), service (Task 11).~~ **Superseded** — `update_spec_last_sync` was removed in the per-spec skip rule plan ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md)); the per-spec skip is now enforced against `specs.last_synced_at`. `SpecNotFoundError` referenced in Tasks 15 and 16 — created in Task 15 and reused in Task 16. `build_spec_service` defined in Task 12 and consumed in Tasks 13, 15, 17.
 
 ## Execution Handoff
 

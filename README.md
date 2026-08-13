@@ -232,11 +232,12 @@ doc3gpp spec show 36.579-5
 doc3gpp spec show 36.579-5 --format json -o 36_579-5.json
 ```
 
-`spec sync` honours `sync.spec_sync_interval` (default `24h`): a second
-sync within the interval is skipped unless `--force` is passed. The
-follow-up `tsgs.spec_last_sync` timestamp is stamped at the end of a
-successful sweep so a `spec list` / `spec show` always reads from
-cache.
+`spec sync` honours `sync.spec_sync_interval` (default `24h`) on a
+**per-spec** basis: each per-worker `_sync_one_spec` short-circuits
+specs whose own `specs.last_synced_at` is within the interval, and
+re-syncs the rest; `--force` bypasses the check. Each spec's
+`last_synced_at` is stamped on a successful re-sync so a `spec list`
+/ `spec show` always reads from cache.
 
 ### `search` — FTS5 + BM25 full-text search
 

@@ -79,6 +79,18 @@ spec-detail sidecars (`tdoc_cr_cover_page`, `tdoc_cr_ttcn_details`,
 
 ### 2.3 `tsgs.spec_last_sync` (additive)
 
+> **Superseded** — the per-TSG `tsgs.spec_last_sync` column and the
+> `TsgRepository.update_spec_last_sync` method described in this
+> sub-section were removed in the per-spec skip rule plan
+> ([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md)).
+> The spec sync skip rule is now keyed on `specs.last_synced_at`
+> and enforced per worker inside `SpecService.sync` (and per call
+> inside `SpecService.sync_spec`); `tsgs` no longer carries a
+> `spec_last_sync` column and `TsgRepository` no longer exposes
+> `update_spec_last_sync`. The text below is preserved as the
+> original design record — the column and method it describes no
+> longer exist in the schema or the Protocol.
+
 `tsgs` gains one new column:
 
 | Column           | Type           | Notes |
@@ -233,18 +245,23 @@ class SpecService:
 
         - Resolves the TSG via the existing `TsgRepository` (raises
           if unknown).
-        - Reads ``tsgs.spec_last_sync`` for the TSG; if it is
+        - ~~Reads ``tsgs.spec_last_sync`` for the TSG; if it is
           non-null and within ``sync_interval`` of ``now``, returns
           a ``SyncOutcome(status="skipped", ...)`` (mirrors
           ``MeetingService.sync``). ``force=True`` bypasses the
-          check.
+          check.~~ **Superseded** — the per-TSG skip was replaced by
+          a per-spec `last_synced_at` check; see
+          [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md).
         - Fetches the per-TSG list once.
         - For each spec_id, fetches the detail page in a thread
           pool, parses header + versions, then runs the
           conditional ETSI / CR follow-up fetches.
         - Upserts the header row + version rows in a single
           transaction per spec.
-        - On success, stamps ``tsgs.spec_last_sync = now()``.
+        - On success, ~~stamps ``tsgs.spec_last_sync = now()``.~~
+          **Superseded** — each per-worker `_sync_one_spec` now
+          stamps the spec's own `specs.last_synced_at` instead; see
+          the link above.
         - Returns a ``SyncOutcome(status, reason, synced_count,
           version_count)``.
         """
@@ -313,10 +330,15 @@ orders by `version DESC` (newest first) and supports `offset` for
 pagination. `list` uses the existing `apply_text_filter` for the
 rich-filter text columns (matches the `WiRepository` pattern).
 
-`SQLAlchemyTsgRepository` gains
+`SQLAlchemyTsgRepository` ~~gains
 `update_spec_last_sync(short_name: str, synced_at: datetime) -> bool`
 (mirroring `update_meeting_last_sync`). The `TsgRepository`
-Protocol and the in-memory test double both pick it up.
+Protocol and the in-memory test double both pick it up.~~
+**Superseded** — `update_spec_last_sync` was removed in the
+per-spec skip rule plan
+([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md));
+the per-spec skip is enforced by `SpecService` against
+`specs.last_synced_at`.
 
 ## 6. CLI surface
 
@@ -325,7 +347,7 @@ under a new `spec_app` typer (three total):
 
 | Command | Notes |
 |---|---|
-| `doc3gpp spec sync --tsg R5 [--force]` | Triggers the full list+detail+follow-up fetch. Honours `settings.sync.spec_sync_interval` (default 24h): a second sync within the interval is skipped with a `SyncOutcome(status="skipped", reason=...)` unless `--force` is passed. |
+| `doc3gpp spec sync --tsg R5 [--force]` | Triggers the full list+detail+follow-up fetch. ~~Honours `settings.sync.spec_sync_interval` (default 24h): a second sync within the interval is skipped with a `SyncOutcome(status="skipped", reason=...)` unless `--force` is passed.~~ **Superseded** — the skip rule is now **per-spec** and keyed on `specs.last_synced_at`; each per-worker `_sync_one_spec` short-circuits specs whose own `last_synced_at` is within the interval and stamps the spec's own `last_synced_at` on a successful re-sync. See [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md). |
 | `doc3gpp spec list [--tsg] [--type TS|TR] [--spec-id] [--title] [--status] [--radio-tech] [--initial-release] [--wis] [--limit N] [--offset N] [--format table\|json\|markdown] [--output FILE] [--compact]` | Mirrors `tdoc list` and `wi list`. All text columns use the rich-filter grammar (`null` / `not-null` / `!pattern` / plain `LIKE`). |
 | `doc3gpp spec show --spec-id {spec_id} [--format table\|json\|markdown] [--output FILE] [--compact]` | Renders header + version table (per-version: version, release, ftp_url, meeting_id, meeting_name, upload_date, pdf_url, crs count). |
 
@@ -366,7 +388,7 @@ field:
 
 | Field | Default | Description |
 |---|---|---|
-| `spec_sync_interval` | `timedelta(hours=24)` | Minimum time between spec-list syncs for the same TSG. Mirrors `meeting_sync_interval`. |
+| `spec_sync_interval` | `timedelta(hours=24)` | Minimum time between re-syncs of the **same spec** (per-spec throttle). Mirrors `meeting_sync_interval` in shape but is now enforced per spec via `specs.last_synced_at` rather than per TSG. |
 
 The human-string parser (`24h`, `30m`, `90d`, `PT1H`, …) is already
 wired through `_validate_durations`, so the new field is
@@ -382,11 +404,16 @@ exposes them, the conventional `[spec_sync]` block follows the
 existing `tdoc_parse.max_tdoc_size_kb` pattern.
 
 `create_schema` already calls `Base.metadata.create_all(bind=engine)`,
-so the new `specs` / `spec_versions` tables and the new
-`tsgs.spec_last_sync` column are created on the next
+so the new `specs` / `spec_versions` tables ~~and the new
+`tsgs.spec_last_sync` column~~ are created on the next
 `doc3gpp db init` / first command run. No alembic migration is
 needed (the project is on the in-place `create_schema` bootstrap,
-and the new column is nullable).
+~~and the new column is nullable~~). **Superseded** — the
+`tsgs.spec_last_sync` column was removed in the per-spec skip
+rule plan
+([`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md));
+the per-spec skip rule is enforced at the service layer against
+`specs.last_synced_at`.
 
 ## 9. Testing
 

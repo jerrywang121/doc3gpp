@@ -72,7 +72,7 @@ For the full symbol-to-file table, see
 | Add a body-change extraction | `src/doc3gpp/parsers/cr/body_changes.py` + `src/doc3gpp/storage/repositories/tdoc_cr_change_details_sql.py` | Pure function in parsers, sidecar repo in storage. |
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
-| Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and stamps `tsgs.spec_last_sync` at the end. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. |
+| Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and honours the per-spec `specs.last_synced_at` skip rule (one row per spec, no TSG-level gate) — each per-worker `_sync_one_spec` short-circuits specs whose `last_synced_at` is within `Settings.sync.spec_sync_interval` and stamps the spec's own `last_synced_at` on a successful re-sync. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
 | Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. Uses `-n auto` when xdist is installed. |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
@@ -149,9 +149,11 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `parse_spec_list` + `parse_spec_detail` (+ optional ETSI PDF
   text + CR list follow-ups gated on recency / emptiness) →
   `SQLAlchemySpecRepository.upsert` + `upsert_versions`.
-  `tsgs.spec_last_sync` skip rule honoured unless `--force` is
-  passed. Per-spec ETSI / CR failures log a warning and the sweep
-  continues. `doc3gpp spec sync --spec-id <id>` → `SpecService.sync_spec` →
+  The per-spec `specs.last_synced_at` skip rule is honoured
+  (each per-worker `_sync_one_spec` short-circuits specs whose
+  `last_synced_at` is within `Settings.sync.spec_sync_interval`)
+  unless `--force` is passed. Per-spec ETSI / CR failures log a
+  warning and the sweep continues. `doc3gpp spec sync --spec-id <id>` → `SpecService.sync_spec` →
   look up in the local `specs` table; if missing, fetch
   `https://www.3gpp.org/DynaReport/{no_dot}.htm`, parse
   `#titleVal` / `#typeVal` / `#PrimaryResponsibleGroupLbl`, normalise

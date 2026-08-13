@@ -1846,8 +1846,9 @@ Behavior:
   only that spec's detail page + versions (no list page).
 - With neither: every distinct TSG found in the `specs` table is synced
   (each via the --tsg path). The single-spec and per-TSG paths both
-  honour `tsgs.spec_last_sync` (skip unless --force) and stamp it again
-  on success.
+  honour the **per-spec** `specs.last_synced_at` skip rule (one row
+  per spec, no TSG-level gate) and stamp the spec's own
+  `last_synced_at` on success.
 - ETSI PDF follow-ups are gated on `SpecVersion.wki_id` being set and
   `SpecVersion.pdf_url` being empty. CR-list follow-ups are gated on
   either the upload date being within the last 90 days **or** the
@@ -1855,10 +1856,11 @@ Behavior:
   is left in place.
 - Per-spec ETSI / CR failures log a warning and the sweep continues —
   one bad spec must not abort the whole sync.
-- On success the `tsgs.spec_last_sync` timestamp is stamped so the
-  next sync can skip when the interval has not yet elapsed.
-- The sync is skipped when the TSG was synced within
-  `sync.spec_sync_interval` (default 24h) unless `--force` is passed.
+- On success each spec's `last_synced_at` is stamped so the next
+  sync can skip that spec when the interval has not yet elapsed.
+- The per-spec sync is skipped when the spec's own `last_synced_at`
+  is within `sync.spec_sync_interval` (default 24h) unless `--force`
+  is passed (no TSG-level gate).
 
 Examples:
 

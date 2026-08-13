@@ -213,3 +213,64 @@ def test_job_cancel(sqlite_env, app_with_deps) -> None:
     assert response.status_code == 200
     assert job.id in handle.cancelled
     get_engine.cache_clear()
+
+
+def test_meetings_list_name_filter_rich_grammar(sqlite_env, app_with_deps) -> None:
+    """``GET /meetings?name=!%25SA2%25`` is 200 and excludes ``SA2#156``.
+
+    The ``!`` prefix is a ``NOT LIKE`` in the rich filter grammar; the
+    route's ``parse_text_query`` is a pass-through, so the prefix must
+    reach the SQL layer intact. A regression that stripped the
+    ``!`` (e.g. a premature ``lstrip("!")``) would turn this into a
+    plain ``LIKE '%SA2%'`` and silently include the SA2 row. The
+    pass-through 200 status checks in the unit suite can't catch that;
+    only an end-to-end exercise over real sqlite can. Seed a second
+    meeting so a wrong "all rows returned" implementation still fails
+    the negative assertion.
+    """
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+
+    app, _ = app_with_deps
+    create_schema()
+    SQLAlchemyMeetingRepository().upsert_many(
+        [
+            Meeting(
+                meeting_id=156,
+                name="SA2#156",
+                title="SA2 meeting 156",
+                location="online",
+                start_date=None,
+                end_date=None,
+                ftp_url="TSG_SA/WG2_Arch/",
+            ),
+            Meeting(
+                meeting_id=99,
+                name="RAN5#99",
+                title="RAN5 meeting 99",
+                location="athens",
+                start_date=None,
+                end_date=None,
+                ftp_url="TSGR5_99/",
+            ),
+        ]
+    )
+
+    with TestClient(app) as client:
+        neg = client.get("/meetings?name=!%25SA2%25&format=json")
+        assert neg.status_code == 200
+        neg_rows = json.loads(neg.content)
+        neg_names = [row["name"] for row in neg_rows]
+        assert "SA2#156" not in neg_names
+        assert "RAN5#99" in neg_names
+
+        pos = client.get("/meetings?name=%25SA2%25&format=json")
+        assert pos.status_code == 200
+        pos_rows = json.loads(pos.content)
+        pos_names = [row["name"] for row in pos_rows]
+        assert "SA2#156" in pos_names
+        assert "RAN5#99" not in pos_names
+
+    get_engine.cache_clear()

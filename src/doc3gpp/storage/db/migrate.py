@@ -55,25 +55,22 @@ def _migrate_rename_tdoc_cr_details() -> None:
             )
 
 
-def _migrate_tsg_spec_last_sync() -> None:
-    """Add ``tsgs.spec_last_sync`` to databases created before that column
-    existed.
+def _migrate_drop_tsg_spec_last_sync() -> None:
+    """Drop the obsolete ``tsgs.spec_last_sync`` column from databases
+    that carried it before the per-spec skip rule landed.
 
-    One-shot, idempotent: ``ALTER TABLE ... ADD COLUMN`` raises if the
-    column is already present, so we probe ``PRAGMA table_info`` first
-    and only issue the ALTER when the column is genuinely missing.
+    One-shot, idempotent: ``ALTER TABLE ... DROP COLUMN`` raises if the
+    column is already absent, so we probe ``PRAGMA table_info`` first
+    and only issue the ALTER when the column is genuinely present.
     ``Base.metadata.create_all`` is a no-op on tables that already
     exist, so pre-existing ``tsgs`` rows on older databases carry the
-    old schema and explode the moment any ORM read touches the new
-    attribute — see
-    https://doc3gpp project history / Task 6 in
-    ``docs/superpowers/plans/2026-08-10-spec-sync-list-show.md``.
+    legacy column forever.
     """
     engine = get_engine()
     with engine.begin() as conn:
         # sqlite_master entry for the table — guard against a fresh DB
         # (no ``tsgs`` yet, in which case ``Base.metadata.create_all``
-        # will create it with the column already in place).
+        # will create it without the column).
         table_exists = conn.execute(
             text(
                 "SELECT 1 FROM sqlite_master "
@@ -84,11 +81,9 @@ def _migrate_tsg_spec_last_sync() -> None:
             return
         rows = conn.execute(text("PRAGMA table_info(tsgs)")).all()
         column_names = {row[1] for row in rows}
-        if "spec_last_sync" in column_names:
+        if "spec_last_sync" not in column_names:
             return
-        conn.execute(
-            text("ALTER TABLE tsgs ADD COLUMN spec_last_sync DATETIME")
-        )
+        conn.execute(text("ALTER TABLE tsgs DROP COLUMN spec_last_sync"))
 
 
 def _migrate_spec_rapporteurs() -> None:
@@ -283,7 +278,7 @@ def create_schema() -> None:
 
     engine = get_engine()
     _migrate_rename_tdoc_cr_details()
-    _migrate_tsg_spec_last_sync()
+    _migrate_drop_tsg_spec_last_sync()
     _migrate_spec_rapporteurs()
     _migrate_spec_versions_drop_comment()
     Base.metadata.create_all(bind=engine)

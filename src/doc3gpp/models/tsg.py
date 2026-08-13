@@ -18,9 +18,6 @@ class Tsg:
         meeting_last_sync: UTC timestamp of the last successful
             ``doc3gpp meeting sync`` for this TSG, or ``None`` if the
             calendar has never been synced.
-        spec_last_sync: UTC timestamp of the last successful spec-list
-            sync for this TSG, or ``None`` if the spec list has never
-            been synced.
     """
 
     tsg_name: str
@@ -28,4 +25,3 @@ class Tsg:
     description: str
     url: str | None = None
     meeting_last_sync: datetime | None = None
-    spec_last_sync: datetime | None = None

@@ -1856,14 +1856,9 @@ Behavior:
   honour the **per-spec** `specs.last_synced_at` skip rule (one row
   per spec, no TSG-level gate) and stamp the spec's own
   `last_synced_at` on success.
-- ETSI PDF follow-ups are gated on `SpecVersion.wki_id` being set and
-  `SpecVersion.pdf_url` being empty. CR-list follow-ups are gated on
-  either the upload date being within the last 90 days **or** the
-  stored `crs` being empty; otherwise the cached comma-joined CR list
-  is left in place. Both gates are bypassed by `--per-version-details`,
-  which always re-fetches the per-version follow-ups and preserves any
-  previously-cached `pdf_url` / `crs` values that the upstream page no
-  longer exposes.
+- ETSI PDF and CR-list follow-ups are skipped by default; pass
+  `--per-version-details` to fetch them. The default preserves any
+  previously-cached `pdf_url` / `crs` values on existing rows.
 - Per-spec ETSI / CR failures log a warning and the sweep continues —
   one bad spec must not abort the whole sync.
 - On success each spec's `last_synced_at` is stamped so the next

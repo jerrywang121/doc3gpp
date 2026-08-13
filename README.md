@@ -239,12 +239,9 @@ specs whose own `specs.last_synced_at` is within the interval, and
 re-syncs the rest; `--force` bypasses the check. Each spec's
 `last_synced_at` is stamped on a successful re-sync so a `spec list`
 / `spec show` always reads from cache. Per-version follow-ups
-(ETSI PDF + CR list) are also gated by default: the ETSI PDF is only
-fetched when `pdf_url` is empty, and the CR list only when the version
-was updated within 90 days or `crs` is empty. Pass
-`--per-version-details` to always re-fetch both for every version on
-every run (and to backfill previously-unset rows) — without the flag
-the cached `pdf_url` / `crs` values on existing rows are preserved.
+(ETSI PDF + CR list) are skipped by default; pass `--per-version-details`
+to fetch them. The default preserves any previously-cached `pdf_url` /
+`crs` values on existing rows.
 
 ### `search` — FTS5 + BM25 full-text search
 

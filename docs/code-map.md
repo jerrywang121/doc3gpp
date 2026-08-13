@@ -57,7 +57,7 @@ table below is for navigation only.
 | `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; exposes `build_tsg_url`. |
 | `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters. |
 | `SpecService` | class | `services/spec_service.py` | Spec sync + list orchestration. `sync(tsg, force=False)` fetches the DynaReport list page once, then fans out across per-spec detail pages in a thread pool (capped at `min(32, cpu+4)` workers), runs ETSI PDF + CR-list follow-ups inside each worker, and honours the **per-spec** `specs.last_synced_at` skip rule — each per-worker `_sync_one_spec` short-circuits specs whose own `last_synced_at` is within `Settings.sync.spec_sync_interval` (no TSG-level gate) and stamps the spec's own `last_synced_at` on a successful re-sync. `sync_spec(spec_id, force=False)` syncs a single stored spec (recovers its TSG, fetches only that spec's detail page + versions — no list page; honours the same per-spec `last_synced_at` skip rule). `list_distinct_tsgs()` returns the distinct TSGs in the `specs` table for the no-selector fallback. `list_recent` returns the cached header rows; `get` / `list_versions` are the lookups used by `spec show`. |
-| `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. `build_spec_service` injects `SQLAlchemySpecRepository` + `SQLAlchemyTsgRepository` + the `sync.spec_sync_interval` setting. |
+| `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. `build_spec_service` injects `SQLAlchemySpecRepository` + the `sync.spec_sync_interval` setting. |
 
 ## Scraping, caching, parsers (`src/doc3gpp/scraping/`, `src/doc3gpp/parsers/`)
 

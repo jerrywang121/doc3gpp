@@ -790,14 +790,6 @@ def test_sync_spec_stored_row_unchanged(monkeypatch) -> None:
     assert repo.specs["38.523-1"].title == "Cached"
 
 
-class _StubTsgRepo:
-    """Minimal stub for the spec service — the per-spec skip rule no
-    longer reads from the TSG repo, so this stub is empty."""
-
-    def get_by_short_name(self, short_name: str):
-        return None
-
-
 def test_sync_spec_skips_when_last_synced_recently() -> None:
     repo = _StubSpecRepo()
     now = datetime(2026, 8, 13, tzinfo=timezone.utc)

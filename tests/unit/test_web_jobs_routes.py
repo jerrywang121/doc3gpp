@@ -379,6 +379,37 @@ def test_get_job_html_includes_params_section(client: Any) -> None:
     assert '"SA2"' in pre_block
 
 
+def test_get_job_html_params_for_nested_filter(client: Any) -> None:
+    """A nested params dict (PARSE_TDOCS' filter) renders as nested JSON.
+
+    Locks the case the happy-path test cannot reach: a Mapping whose value is
+    itself a Mapping. The outer 'filter' key and its inner 'tdoc_id' key +
+    value both surface inside the <pre> block.
+    """
+    c, repo, _ = client
+    job = repo.create(
+        JobKind.PARSE_TDOCS,
+        {
+            "filter": {"tdoc_id": "R5-123456"},
+            "force": True,
+            "full": False,
+        },
+    )
+    r = c.get(f"/jobs/{job.id}?format=html")
+    assert r.status_code == 200
+    body = r.text
+    pre_start = body.index("<pre><code>")
+    pre_end = body.index("</code></pre>")
+    pre_block = body[pre_start:pre_end]
+    assert '"filter"' in pre_block
+    assert '"tdoc_id"' in pre_block
+    assert "R5-123456" in pre_block
+    assert '"force"' in pre_block
+    assert "true" in pre_block  # JSON boolean
+    assert '"full"' in pre_block
+    assert "false" in pre_block
+
+
 # ---------------------------------------------------------------------------
 # Cancel
 # ---------------------------------------------------------------------------

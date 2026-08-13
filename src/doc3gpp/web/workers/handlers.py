@@ -17,7 +17,12 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 
+from doc3gpp.cli_auto_sync import (
+    collect_tdoc_candidates_for_url,
+    trigger_auto_sync,
+)
 from doc3gpp.models.jobs import Job, JobKind, JSONValue
+from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
 
@@ -254,6 +259,92 @@ async def _parse_tdocs(
     }
 
 
+async def _parse_tdoc_url(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    url = job.params.get("url")
+    if not isinstance(url, str) or not is_3gpp_ftp_url(url):
+        raise ValueError(
+            f"parse_tdoc_url job requires a 3GPP FTP 'url' parameter; got {url!r}"
+        )
+    force = bool(job.params.get("force", False))
+    full = bool(job.params.get("full", False))
+    recursive = bool(job.params.get("recursive", False))
+    max_depth_param = job.params.get("max_depth")
+    if recursive:
+        max_depth = -1
+    elif max_depth_param is not None:
+        max_depth = max(int(max_depth_param), 0)
+    else:
+        max_depth = 2
+
+    if settings.sync.auto_sync:
+        candidates = collect_tdoc_candidates_for_url(
+            url,
+            tdoc_service=services.tdoc_cr,
+            max_depth=max_depth,
+        )
+        if candidates:
+            progress(
+                f"auto-sync: {len(candidates)} candidate tdoc_id(s) from URL — "
+                f"running trigger_auto_sync"
+            )
+            try:
+                trigger_auto_sync(
+                    auto_sync_enabled=True,
+                    meeting_service=services.meeting,
+                    tdoc_sync_coordinator=services.tdoc_sync,
+                    tdoc_ids=candidates,
+                )
+            except Exception as exc:  # noqa: BLE001 - CLI parity: warn, do not abort
+                logger.warning("auto_sync from URL %s failed: %s", url, exc)
+
+    max_tdoc_size_bytes = (
+        settings.tdoc_parse.max_tdoc_size_kb * 1024
+        if settings.tdoc_parse.max_tdoc_size_kb > 0
+        else 0
+    )
+
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    batch = await asyncio.to_thread(
+        services.tdoc_cr.extract_from_url_batch,
+        url,
+        max_depth=max_depth,
+        force=force,
+        full=full,
+        max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+    )
+
+    files: list[dict[str, str]] = []
+    for r in batch.results:
+        if r.tdoc_id is None:
+            continue
+        files.append({
+            "tdoc_id": r.tdoc_id,
+            "ftp_url": r.source_url or "",
+            "status": "ok" if r.persisted else "parsed-no-fk",
+        })
+
+    progress(
+        f"done: {len(batch.results)} parsed, {len(batch.failures)} failed, "
+        f"{len(batch.skipped)} skipped"
+    )
+
+    return {
+        "requested": len(batch.results) + len(batch.failures) + len(batch.skipped),
+        "successes": len(batch.results),
+        "failures": len(batch.failures),
+        "skipped": len(batch.skipped),
+        "files": files,
+    }
+
+
 async def _rebuild_search(
     job: Job,
     services: ServiceContainer,
@@ -325,6 +416,7 @@ class JobHandlers:
         JobKind.SYNC_TDOCS_ALL: _sync_tdocs_all,
         JobKind.SYNC_SPECS: _sync_specs,
         JobKind.PARSE_TDOCS: _parse_tdocs,
+        JobKind.PARSE_TDOC_URL: _parse_tdoc_url,
         JobKind.REBUILD_SEARCH: _rebuild_search,
         JobKind.CACHE_PURGE: _cache_purge,
     }

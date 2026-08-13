@@ -14,6 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.models.jobs import JobKind, JobStatus
+from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult
 from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.base import Base
@@ -60,12 +61,17 @@ class _FakeSpecService:
         return outcome
 
 
-def _make_state(repo: JobRepository, *, fail: bool = False) -> WebState:
+def _make_state(
+    repo: JobRepository,
+    *,
+    fail: bool = False,
+    url_service: object | None = None,
+) -> WebState:
     """Build a :class:`WebState` with a fake :class:`ServiceContainer`."""
     services = ServiceContainer(
         meeting=_FakeMeetingService(fail=fail),  # type: ignore[arg-type]
         tdoc=None,  # type: ignore[arg-type]
-        tdoc_cr=None,  # type: ignore[arg-type]
+        tdoc_cr=url_service,  # type: ignore[arg-type]
         tdoc_sync=None,  # type: ignore[arg-type]
         tdoc_repo=None,  # type: ignore[arg-type]
         tsg=None,  # type: ignore[arg-type]
@@ -580,3 +586,137 @@ def test_worker_shutdown_signals_in_flight_handlers() -> None:
                     pass
 
     asyncio.run(_drive())
+
+
+class _FakeTDocCrServiceForUrl:
+    """Fake ``TDocCrService`` whose ``extract_from_url_batch`` is stubbed."""
+
+    def __init__(
+        self,
+        *,
+        results: list[DirectParseResult] | None = None,
+        failures: dict[str, str] | None = None,
+        skipped: dict[str, str] | None = None,
+        file_urls: list[str] | None = None,
+        raise_extract: Exception | None = None,
+    ) -> None:
+        self.results = results or []
+        self.failures = failures or {}
+        self.skipped = skipped or {}
+        self.file_urls: list[str] = file_urls or []
+        self.raise_extract = raise_extract
+        self.extract_calls: list[dict] = []
+        self.collect_calls: list[dict] = []
+
+    def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> list[str]:
+        self.collect_calls.append({"url": url, "max_depth": max_depth})
+        return list(self.file_urls)
+
+    def extract_from_url_batch(
+        self,
+        url: str,
+        *,
+        max_depth: int,
+        force: bool,
+        full: bool,
+        max_tdoc_size_bytes: int | None,
+    ) -> DirectParseBatchResult:
+        self.extract_calls.append({
+            "url": url,
+            "max_depth": max_depth,
+            "force": force,
+            "full": full,
+            "max_tdoc_size_bytes": max_tdoc_size_bytes,
+        })
+        if self.raise_extract is not None:
+            raise self.raise_extract
+        return DirectParseBatchResult(
+            results=self.results,
+            failures=self.failures,
+            skipped=self.skipped,
+        )
+
+
+def test_parse_tdoc_url_handler_rejects_non_3gpp_url() -> None:
+    """Defence-in-depth: a tampered Job with a non-3GPP url raises ValueError."""
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    job = repo.create(JobKind.PARSE_TDOC_URL, {"url": "https://example.com/bad.zip"})
+    state = _make_state(repo)
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert "3GPP FTP" in (done.error or "")
+
+
+def test_parse_tdoc_url_handler_happy_path() -> None:
+    """Happy path: results map to ``files[]`` with the right status labels."""
+    from doc3gpp.models.tdoc_cr import DirectParseResult
+    from doc3gpp.models.jobs import JobKind
+
+    repo = _make_repo()
+    state = _make_state(
+        repo,
+        url_service=_FakeTDocCrServiceForUrl(
+            results=[
+                DirectParseResult(
+                    source_kind="url-3gpp",
+                    markdown="",
+                    details=None,
+                    extract_meta=None,
+                    from_cache=False,
+                    persisted=True,
+                    tdoc_id="R5-260001",
+                    tdoc_id_in_tdocs=True,
+                    source_url="https://www.3gpp.org/ftp/R5s260001.zip",
+                ),
+                DirectParseResult(
+                    source_kind="url-3gpp",
+                    markdown="",
+                    details=None,
+                    extract_meta=None,
+                    from_cache=False,
+                    persisted=False,
+                    tdoc_id="R5-260002",
+                    tdoc_id_in_tdocs=False,
+                    source_url="https://www.3gpp.org/ftp/R5s260002.zip",
+                ),
+            ],
+            failures={"https://www.3gpp.org/ftp/R5s260003.zip": "ZipError: corrupt"},
+            skipped={"https://www.3gpp.org/ftp/R5s260004.zip": "TDocTooLargeError: ..."},
+        ),
+    )
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/", "force": True, "max_depth": 2},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.result_summary == {
+        "requested": 4,
+        "successes": 2,
+        "failures": 1,
+        "skipped": 1,
+        "files": [
+            {
+                "tdoc_id": "R5-260001",
+                "ftp_url": "https://www.3gpp.org/ftp/R5s260001.zip",
+                "status": "ok",
+            },
+            {
+                "tdoc_id": "R5-260002",
+                "ftp_url": "https://www.3gpp.org/ftp/R5s260002.zip",
+                "status": "parsed-no-fk",
+            },
+        ],
+    }

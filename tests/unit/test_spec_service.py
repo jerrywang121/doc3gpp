@@ -246,7 +246,8 @@ def test_sync_skips_within_interval(monkeypatch) -> None:
     assert outcome.version_count == 0
 
 
-def test_sync_force_bypasses_interval(monkeypatch) -> None:
+def test_sync_force_runs_list_sweep_regardless_of_per_spec_skip(monkeypatch) -> None:
+    """With per-spec skip rule, ``sync()`` always walks the list page; ``force=True`` does not change the per-spec behaviour inside ``_sync_one_spec`` (the spec coming from ``parse_spec_list`` has no ``last_synced_at``, so the per-spec skip never fires for a list-page-driven sweep)."""
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_list", lambda t, **k: LIST_HTML)
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", lambda s, **k: DETAIL_HTML)
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_etsi_pdf_text", lambda w, c: "<html><a href='x.pdf'>d</a></html>")

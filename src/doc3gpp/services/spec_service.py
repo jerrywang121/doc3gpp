@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import SyncOutcome
-from doc3gpp.repository.protocols import SpecRepository, TsgRepository
+from doc3gpp.repository.protocols import SpecRepository
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.scraping.spec_source import (
     fetch_cr_list,
@@ -85,12 +85,10 @@ class SpecService:
     def __init__(
         self,
         repository: SpecRepository,
-        tsg_repository: TsgRepository | None = None,
         sync_interval: timedelta = timedelta(hours=24),
         max_workers: int | None = None,
     ) -> None:
         self._repository = repository
-        self._tsg_repository = tsg_repository
         self._sync_interval = sync_interval
         self._max_workers = max_workers
 
@@ -103,25 +101,24 @@ class SpecService:
     ) -> SyncOutcome:
         """Fetch list page -> parallel detail pages -> upsert.
 
-        Resolves the TSG, honours ``tsgs.spec_last_sync`` skip rule
-        (unless ``force``), fetches the list once, then fetches each
-        detail page in a thread pool, running the conditional ETSI / CR
-        follow-ups inside each worker, and upserts per-spec in one
-        transaction.
+        Resolves the TSG, fetches the list once, then fetches each
+        detail page in a thread pool, running the per-spec skip
+        check, the conditional ETSI / CR follow-ups, and the upsert
+        inside each worker. The per-spec skip rule
+        (``spec.last_synced_at``) is enforced at the worker, so
+        ``force`` is only consulted by ``sync_spec`` (single-spec
+        path); this method always walks the list, but specs that are
+        within their interval are short-circuited before any HTTP
+        request is made.
 
-        When ``on_progress`` is supplied it is invoked twice per
-        successful sync sweep: once with ``"list_parsed"`` (carrying
+        When ``on_progress`` is supplied it is invoked once per
+        successful sync sweep with ``"list_parsed"`` (carrying
         ``{"total": N}`` after the list page is parsed) and once per
-        spec with ``"spec_done"`` (carrying ``{"spec_id": ...}``).
-        Skipped syncs (interval not elapsed) do not invoke the
-        callback because there are no specs to process.
+        spec with ``"spec_done"`` (carrying ``{"spec_id": ...}``),
+        including specs that were skipped at the worker — the progress
+        bar advances in lockstep with the worker fan-out.
         """
         canonical = tsg.upper()
-        if not force:
-            skipped = self._is_sync_skipped(canonical, f"TSG {canonical}")
-            if skipped is not None:
-                return skipped
-
         logger.info("Syncing specs for TSG %s", canonical)
 
         synced = 0
@@ -174,12 +171,10 @@ class SpecService:
                                 )
                             continue
                         version_total += version_count
-                        synced += 1
+                        if version_count > 0:
+                            synced += 1
                         if on_progress is not None:
                             on_progress("spec_done", {"spec_id": spec.spec_id})
-
-        if self._tsg_repository is not None:
-            self._tsg_repository.update_spec_last_sync(canonical, datetime.now(timezone.utc))
 
         return SyncOutcome(
             status="synced",
@@ -197,30 +192,34 @@ class SpecService:
     ) -> SyncOutcome:
         """Refresh a single spec's detail page + versions.
 
-        Looks ``spec_id`` up in the DB to recover its TSG. When the
-        row is missing, fetches the DynaReport detail page directly,
-        parses the bootstrap header (``title`` / ``type`` / primary
-        responsible group), validates the group against ``tsgs``, and
-        funnels the freshly-built :class:`Spec` through the same
+        Looks ``spec_id`` up in the DB. When the row is missing,
+        fetches the DynaReport detail page directly, parses the
+        bootstrap header (``title`` / ``type`` / primary responsible
+        group), normalises the group label, and funnels the
+        freshly-built :class:`Spec` through the same
         ``_sync_one_spec`` pipeline as the stored-row path.
 
-        Honours the per-TSG ``tsgs.spec_last_sync`` skip rule unless
-        ``force``, and stamps it again on success — identical to
-        :meth:`sync`. A spec that is unknown on the upstream raises
-        :class:`SpecUnknownOnUpstreamError`; a normalised TSG that is
-        not in the seeded reference table raises
-        :class:`UnknownTsgError`.
+        Honours the per-spec ``spec.last_synced_at`` skip rule
+        unless ``force`` — a freshly-bootstrapped spec with no
+        ``last_synced_at`` is never skipped. A spec that is unknown
+        on the upstream raises :class:`SpecUnknownOnUpstreamError`.
         """
         spec = self._repository.get(spec_id)
         if spec is None:
             spec = self._bootstrap_spec_from_dynareport(spec_id)
-        elif not force:
-            canonical = spec.tsg.upper() if spec.tsg else ""
-            skipped = self._is_sync_skipped(
-                canonical, f"{spec.spec_id} (TSG {canonical})"
-            )
-            if skipped is not None:
-                return skipped
+        elif not force and spec.last_synced_at is not None:
+            now = datetime.now(timezone.utc)
+            if (now - spec.last_synced_at) < self._sync_interval:
+                ago = now - spec.last_synced_at
+                return SyncOutcome(
+                    status="skipped",
+                    reason=(
+                        f"Spec sync skipped for {spec.spec_id}: "
+                        f"last sync {_format_duration(ago)} ago "
+                        f"(sync interval {_format_duration(self._sync_interval)}). "
+                        f"Use --force to override."
+                    ),
+                )
 
         canonical = spec.tsg.upper() if spec.tsg else ""
         logger.info("Syncing spec %s", spec.spec_id)
@@ -231,11 +230,6 @@ class SpecService:
                 )
             if on_progress is not None:
                 on_progress("spec_done", {"spec_id": spec.spec_id})
-
-        if self._tsg_repository is not None:
-            self._tsg_repository.update_spec_last_sync(
-                canonical, datetime.now(timezone.utc)
-            )
 
         return SyncOutcome(
             status="synced",
@@ -255,8 +249,7 @@ class SpecService:
 
         Raises :class:`SpecUnknownOnUpstreamError` when the upstream
         body is unusable (404, missing fields, unrecognised group
-        label) and :class:`UnknownTsgError` when the normalised
-        short name is not in the seeded ``tsgs`` table.
+        label).
         """
         html = fetch_dynareport_detail(spec_id)
         header = parse_dynareport_header(html)
@@ -281,11 +274,6 @@ class SpecService:
                 f"unrecognised primary responsible group {header.tsg_long_name!r}",
             )
 
-        if self._tsg_repository is not None:
-            tsg_record = self._tsg_repository.get_by_short_name(short_name)
-            if tsg_record is None:
-                raise UnknownTsgError(spec_id, short_name, header.tsg_long_name)
-
         return Spec(
             spec_id=spec_id,
             type=header.type,
@@ -297,34 +285,6 @@ class SpecService:
         """Return distinct TSG short names currently stored in specs."""
         return self._repository.list_distinct_tsgs()
 
-    def _is_sync_skipped(self, canonical: str, label: str) -> SyncOutcome | None:
-        """Return a ``skipped`` :class:`SyncOutcome` when the per-TSG
-        ``tsgs.spec_last_sync`` interval has not elapsed, else ``None``.
-
-        ``label`` is the human-readable subject embedded in the skip
-        reason (e.g. ``"TSG R5"`` for a whole-TSG sweep or
-        ``"36.579-5 (TSG R5)"`` for a single-spec sync). Shared by
-        :meth:`sync` and :meth:`sync_spec` so the skip rule and its
-        message live in one place.
-        """
-        if self._tsg_repository is None:
-            return None
-        tsg_record = self._tsg_repository.get_by_short_name(canonical)
-        last_sync = tsg_record.spec_last_sync if tsg_record is not None else None
-        now = datetime.now(timezone.utc)
-        if last_sync is not None and (now - last_sync) < self._sync_interval:
-            ago = now - last_sync
-            return SyncOutcome(
-                status="skipped",
-                reason=(
-                    f"Spec sync skipped for {label}: "
-                    f"last sync {_format_duration(ago)} ago "
-                    f"(sync interval {_format_duration(self._sync_interval)}). "
-                    f"Use --force to override."
-                ),
-            )
-        return None
-
     def _sync_one_spec(
         self,
         spec: Spec,
@@ -332,6 +292,22 @@ class SpecService:
         followup_executor: ThreadPoolExecutor,
         client: ScraperClient,
     ) -> int:
+        # Per-spec skip rule: a sync interval throttles each spec
+        # independently. Read from the *incoming* spec (which already
+        # carries the persisted ``last_synced_at`` thanks to
+        # ``SpecRepository.upsert`` round-tripping the column) so the
+        # list sweep stays at one HTTP fetch per fresh spec and walks
+        # the per-spec skip at the worker.
+        now = datetime.now(timezone.utc)
+        if spec.last_synced_at is not None and (now - spec.last_synced_at) < self._sync_interval:
+            logger.debug(
+                "Skipping spec %s: last_synced_at=%s within interval %s",
+                spec.spec_id,
+                spec.last_synced_at.isoformat(),
+                self._sync_interval,
+            )
+            return 0
+
         slug = spec.spec_id.replace(".", "")
         detail_html = fetch_spec_detail(slug, client=client)
         header, versions = parse_spec_detail(detail_html, spec.spec_id, canonical)

@@ -102,7 +102,7 @@ def test_factory_zero_override_disables(monkeypatch) -> None:
 
 def test_build_spec_service_wires_settings(monkeypatch, tmp_path) -> None:
     """``build_spec_service`` wires ``settings.sync.spec_sync_interval``
-    into :class:`SpecService` and uses the configured repos.
+    into :class:`SpecService` and uses the configured repo.
 
     Pins ``spec_sync_interval`` via a TOML config file (mirrors the
     convention used by the other factory tests in this module) and
@@ -125,6 +125,5 @@ def test_build_spec_service_wires_settings(monkeypatch, tmp_path) -> None:
         assert svc is not None
         assert svc._sync_interval == timedelta(hours=12)
         assert svc._repository is not None
-        assert svc._tsg_repository is not None
     finally:
         get_settings.cache_clear()

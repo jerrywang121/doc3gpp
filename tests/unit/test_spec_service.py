@@ -9,34 +9,10 @@ import pytest
 
 from doc3gpp.models.spec import Spec, SpecVersion  # noqa: F401  (spec contract)
 from doc3gpp.models.sync import SyncOutcome  # noqa: F401  (spec contract)
-from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.spec_service import (
     SpecService,
     SpecUnknownOnUpstreamError,
-    UnknownTsgError,
 )
-
-
-class _StubTsgRepo:
-    def __init__(
-        self,
-        last_spec_sync: datetime | None = None,
-        short_names: set[str] | None = None,
-    ) -> None:
-        self._last = last_spec_sync
-        self._known = {n.upper() for n in (short_names or set())}
-        self.spec_sync_calls: list = []
-
-    def get_by_short_name(self, short_name: str):
-        if short_name.upper() not in self._known:
-            return None
-        return Tsg(
-            tsg_name=short_name.upper(),
-            short_name=short_name.upper(),
-            description="stub",
-            url=None,
-            meeting_last_sync=None,
-        )
 
 
 class _StubSpecRepo:
@@ -156,8 +132,7 @@ def test_sync_skips_etsi_fetch_when_pdf_url_already_persisted(monkeypatch) -> No
     )
 
     repo = _StubSpecRepo()
-    tsg = _StubTsgRepo()
-    svc = SpecService(repo, tsg)
+    svc = SpecService(repo)
 
     first = svc.sync("R5")
     assert first.status == "synced"
@@ -203,8 +178,7 @@ def test_sync_skips_etsi_fetch_for_stale_versions(monkeypatch) -> None:
     )
 
     repo = _StubSpecRepo()
-    tsg = _StubTsgRepo()
-    svc = SpecService(repo, tsg)
+    svc = SpecService(repo)
     outcome = svc.sync("R5")
 
     assert outcome.status == "synced"
@@ -232,30 +206,52 @@ def test_sync_smoke(monkeypatch) -> None:
         lambda version_id, client: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>",
     )
     repo = _StubSpecRepo()
-    tsg = _StubTsgRepo()
-    svc = SpecService(repo, tsg)
+    svc = SpecService(repo)
     outcome = svc.sync("R5")
     assert outcome.status == "synced"
     assert outcome.synced_count == 1
     assert outcome.version_count == 1
-    assert tsg.spec_sync_calls, "spec_last_sync not stamped"
 
 
 def test_sync_skips_within_interval(monkeypatch) -> None:
+    """``sync`` honours the per-spec ``last_synced_at`` skip rule.
+
+    A spec that was synced within the interval must be short-circuited
+    by the worker — no detail-page fetch, no upsert. The
+    ``synced_count`` must not count the skipped spec.
+    """
     now = datetime.now(timezone.utc)
-    tsg = _StubTsgRepo(last_spec_sync=now, short_names={"R5"})
-    svc = SpecService(_StubSpecRepo(), tsg, sync_interval=timedelta(hours=24))
+    repo = _StubSpecRepo()
+    repo.upsert(
+        Spec(
+            spec_id="36.579-5",
+            type="TS",
+            title="NR conformance",
+            tsg="R5",
+            last_synced_at=now - timedelta(hours=1),
+        )
+    )
+    svc = SpecService(repo, sync_interval=timedelta(hours=24))
+
+    def _fail_detail(*args, **kwargs):
+        raise AssertionError("detail page must not be fetched when skipped")
+
+    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_list", lambda t, **k: LIST_HTML)
+    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", _fail_detail)
+
     outcome = svc.sync("R5")
-    assert outcome.status == "skipped"
-    assert not tsg.spec_sync_calls
+
+    assert outcome.status == "synced"
+    assert outcome.synced_count == 0
+    assert outcome.version_count == 0
 
 
 def test_sync_force_bypasses_interval(monkeypatch) -> None:
-    now = datetime.now(timezone.utc)
-    tsg = _StubTsgRepo(last_spec_sync=now, short_names={"R5"})
-    svc = SpecService(_StubSpecRepo(), tsg, sync_interval=timedelta(hours=24))
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_list", lambda t, **k: LIST_HTML)
     monkeypatch.setattr("doc3gpp.services.spec_service.fetch_spec_detail", lambda s, **k: DETAIL_HTML)
+    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_etsi_pdf_text", lambda w, c: "<html><a href='x.pdf'>d</a></html>")
+    monkeypatch.setattr("doc3gpp.services.spec_service.fetch_cr_list", lambda v, c: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>")
+    svc = SpecService(_StubSpecRepo())
     outcome = svc.sync("R5", force=True)
     assert outcome.status == "synced"
 
@@ -297,7 +293,7 @@ def test_sync_stamps_last_synced_at_only_after_full_upsert(monkeypatch) -> None:
         lambda version_id, client: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>",
     )
 
-    svc = SpecService(repo, _StubTsgRepo())
+    svc = SpecService(repo)
     svc.sync("R5", force=True)
 
     persisted = repo.specs["36.579-5"]
@@ -342,9 +338,9 @@ def test_sync_does_not_stamp_last_synced_at_when_upsert_versions_fails(
 
     monkeypatch.setattr(repo, "upsert_versions", _raise)
 
-    svc = SpecService(repo, _StubTsgRepo())
+    svc = SpecService(repo)
     # The outer loop catches the per-spec exception and continues —
-    # the TSG sync still completes (with synced_count=0).
+    # the sync still completes (with synced_count=0).
     outcome = svc.sync("R5", force=True)
     assert outcome.status == "synced"
     assert outcome.synced_count == 0  # the failing spec was counted as failed
@@ -426,7 +422,7 @@ def test_sync_uses_one_shared_client_across_the_whole_sweep(monkeypatch) -> None
         lambda version_id, client: "<html></html>",
     )
 
-    svc = SpecService(_StubSpecRepo(), _StubTsgRepo(), max_workers=4)
+    svc = SpecService(_StubSpecRepo(), max_workers=4)
     outcome = svc.sync("R5", force=True)
 
     assert outcome.status == "synced"
@@ -474,7 +470,7 @@ def test_sync_followups_do_not_starve_the_spec_pool(monkeypatch) -> None:
         lambda version_id, client: "<html></html>",
     )
 
-    svc = SpecService(_StubSpecRepo(), _StubTsgRepo(), max_workers=1)
+    svc = SpecService(_StubSpecRepo(), max_workers=1)
 
     result: dict = {}
     def _run():
@@ -548,7 +544,7 @@ def test_sync_followups_are_fanned_out_across_the_thread_pool(monkeypatch) -> No
         "doc3gpp.services.spec_service.fetch_cr_list", _slow_cr
     )
 
-    svc = SpecService(_StubSpecRepo(), _StubTsgRepo())
+    svc = SpecService(_StubSpecRepo())
     started = time.perf_counter()
     outcome = svc.sync("R5", force=True)
     elapsed = time.perf_counter() - started
@@ -582,45 +578,32 @@ def test_sync_spec_syncs_single_stored_spec(monkeypatch) -> None:
     )
     repo = _StubSpecRepo()
     repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
-    tsg = _StubTsgRepo()
-    svc = SpecService(repo, tsg)
+    svc = SpecService(repo)
 
     outcome = svc.sync_spec("36.579-5")
 
     assert outcome.status == "synced"
     assert outcome.synced_count == 1
     assert repo.versions["36.579-5"]
-    assert tsg.spec_sync_calls, "sync_spec must stamp tsgs.spec_last_sync"
-
-
-def test_sync_spec_unknown_spec_raises(monkeypatch) -> None:
-    """``sync_spec`` on a spec not in the DB with TSG not in seeded table raises UnknownTsgError.
-
-    The new bootstrap path (when the DB lookup misses) fetches the
-    DynaReport detail page, parses the header, and validates the
-    normalised TSG against the seeded ``tsgs`` table. An empty
-    reference table (``_StubTsgRepo()`` with no ``short_names``) makes
-    the validation step raise :class:`UnknownTsgError` (a
-    ``ValueError`` subclass) — the test asserts the
-    bootstrap-validation failure propagates through ``sync_spec``.
-    """
-    monkeypatch.setattr(
-        "doc3gpp.services.spec_service.fetch_dynareport_detail",
-        lambda spec_id_dotted, client=None: DYNAREPORT_HEADER_HTML,
-    )
-    repo = _StubSpecRepo()
-    svc = SpecService(repo, _StubTsgRepo())
-    with pytest.raises(UnknownTsgError):
-        svc.sync_spec("99.999-9")
+    # Per-spec stamp: last_synced_at was advanced on the row the
+    # worker upserted.
+    assert repo.specs["36.579-5"].last_synced_at is not None
 
 
 def test_sync_spec_honours_skip_rule() -> None:
-    """``sync_spec`` skips when the TSG was synced within the interval."""
+    """``sync_spec`` skips when the spec's ``last_synced_at`` is within the interval."""
     recent = datetime.now(timezone.utc) - timedelta(minutes=5)
     repo = _StubSpecRepo()
-    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5"))
-    tsg = _StubTsgRepo(last_spec_sync=recent, short_names={"R5"})
-    svc = SpecService(repo, tsg, sync_interval=timedelta(hours=24))
+    repo.upsert(
+        Spec(
+            spec_id="36.579-5",
+            type="TS",
+            title="NR conformance",
+            tsg="R5",
+            last_synced_at=recent,
+        )
+    )
+    svc = SpecService(repo, sync_interval=timedelta(hours=24))
 
     outcome = svc.sync_spec("36.579-5")
 
@@ -682,7 +665,6 @@ DYNAREPORT_HEADER_HTML = """
 
 def test_sync_spec_falls_back_to_dynareport_when_missing(monkeypatch) -> None:
     repo = _StubSpecRepo()
-    tsg_repo = _StubTsgRepo(short_names={"R5"})
 
     def fake_fetch(spec_id_dotted, client=None):
         assert spec_id_dotted == "38.523-1"
@@ -705,7 +687,7 @@ def test_sync_spec_falls_back_to_dynareport_when_missing(monkeypatch) -> None:
         lambda version_id, client: "<html></html>",
     )
 
-    svc = SpecService(repository=repo, tsg_repository=tsg_repo)
+    svc = SpecService(repository=repo)
     outcome = svc.sync_spec("38.523-1", force=True)
 
     assert outcome.status == "synced"
@@ -720,47 +702,33 @@ def test_sync_spec_falls_back_to_dynareport_when_missing(monkeypatch) -> None:
 
 def test_sync_spec_raises_when_dynareport_body_empty(monkeypatch) -> None:
     repo = _StubSpecRepo()
-    tsg_repo = _StubTsgRepo(short_names={"R5"})
     monkeypatch.setattr(
         "doc3gpp.services.spec_service.fetch_dynareport_detail",
         lambda spec_id_dotted, client=None: "<html><body></body></html>",
     )
 
-    svc = SpecService(repository=repo, tsg_repository=tsg_repo)
+    svc = SpecService(repository=repo)
     with pytest.raises(SpecUnknownOnUpstreamError):
         svc.sync_spec("38.523-1", force=True)
 
 
-def test_sync_spec_raises_when_tsg_unknown(monkeypatch) -> None:
-    repo = _StubSpecRepo()
-    tsg_repo = _StubTsgRepo(short_names=set())  # empty reference table
-    monkeypatch.setattr(
-        "doc3gpp.services.spec_service.fetch_dynareport_detail",
-        lambda spec_id_dotted, client=None: DYNAREPORT_HEADER_HTML,
-    )
-
-    svc = SpecService(repository=repo, tsg_repository=tsg_repo)
-    with pytest.raises(UnknownTsgError):
-        svc.sync_spec("38.523-1", force=True)
-
-
 def test_sync_spec_bootstrap_unaffected_by_tsg_skip_rule(monkeypatch) -> None:
-    """A bootstrap (cache miss) must run even when the TSG was synced
+    """A bootstrap (cache miss) must run even when the spec was synced
     inside the sync interval.
 
     Regression for the bug surfaced by `doc3gpp spec sync --spec-id
     38.321` returning a "skipped" outcome for a missing spec: the
     bootstrap fetches the DynaReport page, parses the header, and
-    builds a fresh ``Spec``, but the per-TSG skip rule then fires and
-    discards the result. The user is left with no cache entry and no
+    builds a fresh ``Spec``, but a per-TSG skip rule could fire and
+    discard the result. The user is left with no cache entry and no
     error explaining why.
 
     The skip rule is a re-sync optimisation; it should not block a
-    first-time fetch.
+    first-time fetch. With the per-spec skip rule, a bootstrapped
+    spec has no ``last_synced_at`` to consult, so the rule is a
+    no-op on the bootstrap path.
     """
     repo = _StubSpecRepo()  # no cached row for 38.523-1
-    recent_sync = datetime.now(timezone.utc) - timedelta(hours=3)
-    tsg_repo = _StubTsgRepo(short_names={"R5"}, last_spec_sync=recent_sync)
 
     def fake_fetch(spec_id_dotted, client=None):
         assert spec_id_dotted == "38.523-1"
@@ -783,7 +751,7 @@ def test_sync_spec_bootstrap_unaffected_by_tsg_skip_rule(monkeypatch) -> None:
         lambda version_id, client: "<html></html>",
     )
 
-    svc = SpecService(repository=repo, tsg_repository=tsg_repo)
+    svc = SpecService(repository=repo)
     outcome = svc.sync_spec("38.523-1")  # force=False — skip rule must NOT apply
 
     assert outcome.status == "synced"
@@ -816,8 +784,109 @@ def test_sync_spec_stored_row_unchanged(monkeypatch) -> None:
         lambda version_id, client: "<html></html>",
     )
 
-    tsg_repo = _StubTsgRepo(short_names={"R5"})
-    svc = SpecService(repository=repo, tsg_repository=tsg_repo)
+    svc = SpecService(repository=repo)
     outcome = svc.sync_spec("38.523-1", force=True)
     assert outcome.status == "synced"
     assert repo.specs["38.523-1"].title == "Cached"
+
+
+class _StubTsgRepo:
+    """Minimal stub for the spec service — the per-spec skip rule no
+    longer reads from the TSG repo, so this stub is empty."""
+
+    def get_by_short_name(self, short_name: str):
+        return None
+
+
+def test_sync_spec_skips_when_last_synced_recently() -> None:
+    repo = _StubSpecRepo()
+    now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+    existing = Spec(
+        spec_id="36.579-5",
+        type="TS",
+        title="NR conformance",
+        tsg="R5",
+        last_synced_at=now - timedelta(hours=1),
+    )
+    repo.upsert(existing)
+
+    svc = SpecService(
+        repository=repo,
+        sync_interval=timedelta(hours=24),
+    )
+    out = svc.sync_spec("36.579-5")
+    assert out.status == "skipped"
+    assert "36.579-5" in out.reason
+    # detail-page fetch must not have run; versions remain empty.
+    assert repo.versions.get("36.579-5", []) == []
+
+
+def test_sync_spec_force_overrides_recent_sync() -> None:
+    repo = _StubSpecRepo()
+    now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+    existing = Spec(
+        spec_id="36.579-5",
+        type="TS",
+        title="NR conformance",
+        tsg="R5",
+        last_synced_at=now - timedelta(hours=1),
+    )
+    repo.upsert(existing)
+    # Bootstrap returns a Spec that will be parsed via _sync_one_spec.
+    # To keep this test simple, we monkey-patch _sync_one_spec to a no-op
+    # that upserts a fresh Spec.
+    svc = SpecService(
+        repository=repo,
+        sync_interval=timedelta(hours=24),
+    )
+
+    def _fake_sync_one(spec, canonical, executor, client):
+        repo.upsert(
+            Spec(
+                spec_id=spec.spec_id,
+                type=spec.type,
+                title=spec.title,
+                tsg=spec.tsg,
+                last_synced_at=now,
+            )
+        )
+        return 1
+
+    svc._sync_one_spec = _fake_sync_one  # type: ignore[assignment]
+    out = svc.sync_spec("36.579-5", force=True)
+    assert out.status == "synced"
+    # last_synced_at was advanced.
+    assert repo.specs["36.579-5"].last_synced_at == now
+
+
+def test_sync_spec_proceeds_when_no_last_synced_at() -> None:
+    repo = _StubSpecRepo()
+    now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+    existing = Spec(
+        spec_id="36.579-5",
+        type="TS",
+        title="NR conformance",
+        tsg="R5",
+        last_synced_at=None,
+    )
+    repo.upsert(existing)
+    svc = SpecService(
+        repository=repo,
+        sync_interval=timedelta(hours=24),
+    )
+
+    def _fake_sync_one(spec, canonical, executor, client):
+        repo.upsert(
+            Spec(
+                spec_id=spec.spec_id,
+                type=spec.type,
+                title=spec.title,
+                tsg=spec.tsg,
+                last_synced_at=now,
+            )
+        )
+        return 1
+
+    svc._sync_one_spec = _fake_sync_one  # type: ignore[assignment]
+    out = svc.sync_spec("36.579-5")
+    assert out.status == "synced"

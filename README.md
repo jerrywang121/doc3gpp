@@ -2,7 +2,7 @@
 
 > Last reviewed: 2026-08-13
 
-> Extract 3GPP TDoc information by scraping 3gpp.org — a Python CLI and library with pluggable SQL backends.
+> Extract 3GPP TDoc information by scraping 3gpp.org — a Python CLI/library, a local web UI, and an MCP server for AI clients.
 
 [![License: MIT](https://img.shields.io/github/license/jerrywang121/doc3gpp)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
@@ -14,8 +14,16 @@
 `doc3gpp` scrapes 3GPP meeting calendars, work items (WIs), TDocs,
 and specifications (TS/TR) from
 [3gpp.org](https://www.3gpp.org) and persists them to a relational database
-for programmatic access. It ships as both a Python library (SDK) and a
-Typer-based CLI (`doc3gpp`), with SQLite as the sole storage backend.
+for programmatic access. It ships in three forms:
+
+- a **Python library (SDK)** for embedding the data in your own code,
+- a **Typer-based CLI** (`doc3gpp`) for scripting and ad-hoc queries, and
+- a **local web server** with a built-in browser UI (FastAPI + HTMX + Jinja2)
+  plus a **Model Context Protocol** endpoint (`/mcp`) that exposes the same
+  data to AI clients with byte-for-byte JSON parity against the HTTP
+  `?format=json` routes.
+
+SQLite is the sole storage backend.
 
 ## Table of Contents
 

@@ -1,5 +1,7 @@
 # Code Map
 
+> Last reviewed: 2026-08-13
+
 Where each public symbol lives. Use this when you want to jump from a
 class / function name straight to the source file. Long inline descriptions
 that risk going stale live in the docstring of the symbol itself; the
@@ -26,6 +28,9 @@ table below is for navigation only.
 | `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to `tsg_short`). |
 | `Spec` | dataclass | `models/spec.py` | Domain model for 3GPP specifications (TS/TR). One row per dotted spec id (e.g. `36.579-5`) keyed by `spec_id`. |
 | `SpecVersion` | dataclass | `models/spec.py` | Domain model for one published version of a spec; `spec_id` FK plus `version`, `ftp_url`, `pdf_url`, `crs`, etc. |
+| `TDocShowRecord` | dataclass | `models/tdoc_show.py` | Composite render record for `tdoc show --tdoc`: `TDoc` + slim cover + optional TTCN + `extracted_at` + `TDocFile` list. |
+| `TDocShowRecordByUrl` | dataclass | `models/tdoc_show.py` | URL-anchored variant of `TDocShowRecord` for `tdoc show --ftp-url`. |
+| `TDocShowRepos` | dataclass | `models/tdoc_show.py` | Bundle of repos (`tdoc`, `cr`, `cr_ttcn`, `cr_change_details`, `file`) consumed by `TDocShowRecord.from_tdoc_id`. |
 
 ## Repository contracts (`src/doc3gpp/repository/`)
 
@@ -70,6 +75,10 @@ table below is for navigation only.
 | `derive_cache_file` | function | `scraping/cache_keys.py` | Derive unified cache filename `<stem>-<md5(ftp_url)>.zip` from a 3GPP relative FTP URL. Used for both zip and markdown cache keys. |
 | `TDocCache` / `CacheStatus` | class | `scraping/cache.py` | On-disk `zips/` + `markdown/` cache with FIFO eviction. |
 | `parse_3gpp_calendar` | function | `parsers/calendar_parser.py` | DynaReport HTML → `Meeting` list. |
+| `parse_title` | function | `parsers/html_parsers.py` | Pull the `<title>` out of a DynaReport HTML page. |
+| `clean_whitespace` / `normalize_ftp_path` / `build_ftp_url` | functions | `parsers/normalizers.py` | Shared text / URL normalisers used by the spec + tdoc parsers. |
+| `normalise_release` / `release_from_version` | functions | `parsers/spec_release.py` | Spec release-string normalisation (e.g. `Rel-18` ↔ `18.x.y`). |
+| `classify_tdoc_filename` / `parse_tdoc_files_from_listing` | functions | `parsers/tdoc_file_parser.py` | Classify FTP-listing filenames into `revision` / `review` / `support` and parse the per-file metadata. |
 | `read_tdoc_sheet` | function | `parsers/tdoc_parser.py` | TDoc-list XLSX → `TDoc` list. |
 | `parse_3gpp_wis` | function | `parsers/wi_parser.py` | WI DynaReport HTML → `Wi` list (extracts `wi_id`, `acronym`, `release`, `name`). |
 | `parse_spec_list` | function | `parsers/spec_parser.py` | DynaReport list HTML → `Spec` header rows (one per `<tr>` in the spec table). |
@@ -86,6 +95,9 @@ table below is for navigation only.
 | `extract_function_name` | function | `parsers/cr/ttcn_functions.py` | Regex match against the TTCN function-name prefix set (with a `*_type` fallback); strips a trailing non-alphanumeric boundary (e.g. ` (NR)`); returns `None` when neither group matches. |
 | `extract_changed_functions` | function | `parsers/cr/ttcn_functions.py` | Aggregator: walks `required_changes`, applies the 4-form contract — both extract → `"<module>.<function>"`, only module → `"<module>."` (trailing-dot sentinel), only function → `".<function>"` (leading-dot sentinel), neither → drop — deduplicates, and returns `sorted(set(...))`. |
 | `extract_body_changes` | function | `parsers/cr/body_changes.py` | Pure function: line-by-line scan of the converted markdown body to capture change blocks and clause numbers. |
+| `CRCoverPageParser` | class | `parsers/cr/cover_page.py` | Cover-page markdown → `TDocCRDetails` (spec, cr_num, release, source, title, …). |
+| `is_cr_header_present` / `is_ttcn_tdoc` | functions | `parsers/cr/header.py` | `is_cr_header_present` probes the markdown body for the CR header marker; `is_ttcn_tdoc` decides whether a TDoc id is a TTCN CR (drives the `tdoc_cr_ttcn_details` sidecar writes). |
+| `TTCNOverviewParser` / `TTCNCorrectionsParser` | classes | `parsers/cr/ttcn_sections.py` | TTCN-specific parsers for the overview block and the per-correction table. |
 
 ## Storage (`src/doc3gpp/storage/`)
 
@@ -168,6 +180,7 @@ table below is for navigation only.
 | `doc3gpp.models.search.SearchError` (+ 3 subclasses) | exception hierarchy | `models/search.py` | `SearchUnavailableError`, `SearchQueryError`, `SearchIndexCorruptError` for the search subsystem |
 | `doc3gpp.services.search_service.SearchService` | service | `services/search_service.py` | Orchestration: `upsert_for_tdoc`, `remove_for_tdoc`, `search`, `rebuild`, `status` |
 | `doc3gpp.services.search_service.PassthroughReranker` | service | `services/search_service.py` | Default `EmbeddingReranker` impl |
+| `doc3gpp.services.semantic_reranker.SemanticReranker` | service | `services/semantic_reranker.py` | Embedding-based reranker used by `search query --sem-query`; consults `VectorIndexRepository` and applies `MISSING_FLOOR` for unindexed rows |
 | `doc3gpp.storage.db.fts5_query.normalize_query` | function | `storage/db/fts5_query.py` | Index-time pre-processor for TDoc ID + spec ID recognition |
 | `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | repository | `storage/repositories/search_sql.py` | Concrete FTS5-backed `SearchIndexRepository` impl |
 

@@ -204,7 +204,10 @@ flashes a "Sync job queued" indication after enqueueing.
 
 The spec detail page shows a Sync card with a Force sync checkbox that
 enqueues a single-spec sync job for that spec; the page auto-refreshes
-when the job completes.
+when the job completes. A "Per-version details" checkbox alongside
+"Force sync" forwards `per_version_details=true` to the job so the
+worker always re-fetches the ETSI PDF + CR-list follow-ups for every
+version (default OFF — without it, cached rows are preserved).
 
 The header nav is ordered Home, TSGs, Meetings, TDocs, WIs, Search, Jobs.
 The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)

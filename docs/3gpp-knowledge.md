@@ -357,7 +357,10 @@ and `SpecService._maybe_fetch_crs` are satisfied.
   detail URL); the per-version follow-ups are best-effort and
   gated on presence (`wki_id` / `version_id`) and recency
   (`upload_date` within the last 90 days, OR the cached `crs`
-  field is empty).
+  field is empty). The gates are bypassed by the
+  `--per-version-details` flag (CLI default `False`), which always
+  re-fetches every version's follow-ups and preserves the cached
+  `pdf_url` / `crs` values on populated rows.
 - All spec URLs are rooted at `https://www.3gpp.org/dynareport`
   (no separate FTP subtree); the absolute `SpecVersion.ftp_url`
   is read from the detail page itself and stored verbatim.

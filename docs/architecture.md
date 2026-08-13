@@ -340,10 +340,12 @@ and syncs each through the `--tsg` path below.
 1. `doc3gpp spec sync --tsg <short>` validates `<short>` against
    the `tsgs` table (auto-seeded if empty) and resolves the TSG via
    `TsgService`.
-2. `SpecService.sync` checks `tsgs.spec_last_sync` against
-   `Settings.sync.spec_sync_interval` (default `24h`) and skips the
-   upstream fetch when the cached timestamp is still fresh. `--force`
-   bypasses the check.
+2. The list page is fetched unconditionally on a `--tsg` sweep (no
+   TSG-level skip rule). The **per-spec** skip is enforced per
+   worker: each `_sync_one_spec` short-circuits the upstream
+   fetch for any spec whose own `specs.last_synced_at` is within
+   `Settings.sync.spec_sync_interval` (default `24h`). `--force`
+   bypasses the per-spec check.
 3. On a non-skipped run: `fetch_spec_list(canonical)` produces the
    DynaReport list HTML, `parse_spec_list(html, canonical)` parses
    the spec table into `list[Spec]` (one header per `<tr>`).
@@ -361,13 +363,18 @@ and syncs each through the `--tsg` path below.
      `SpecService._maybe_fetch_crs` (only when the upload date is
      within the last 90 days **or** the cached `crs` is empty —
      fetches the per-version CR list HTML and extracts the
-     comma-joined TDoc ids).
+     comma-joined TDoc ids). Both gates are bypassed by the
+     `--per-version-details` flag (default `False`); when set, every
+     version is re-fetched on every run while existing cached
+     `pdf_url` / `crs` values on populated rows are preserved.
    - Upserts the header row via `SQLAlchemySpecRepository.upsert` and
      every version row via `SQLAlchemySpecRepository.upsert_versions`.
    - Per-spec ETSI / CR failures log a warning and the sweep
      continues — one bad spec must not abort the whole sync.
-5. On success, `TsgRepository.update_spec_last_sync(canonical, now)`
-   stamps `tsgs.spec_last_sync` so the next sync can short-circuit.
+5. On success, each worker's `_sync_one_spec` stamps the spec's
+   own `specs.last_synced_at` so the next sweep can short-circuit
+   that spec's re-fetch within the interval (per-spec throttle;
+   no TSG-level gate).
 6. `doc3gpp spec list [filters]` reads cached header rows via
    `SpecRepository.list(...)` (rich filter grammar via the same
    `_apply_text_filter` / `_apply_date_filter` helpers used by the
@@ -587,11 +594,10 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       FK → `tsgs.short_name`, indexed for the `meeting list --tsg` filter).
 - `tsgs`:
     - `short_name` (PK), `tsg_name` (unique), `description`, `url`,
-      `meeting_last_sync`, `spec_last_sync`. Seeded on `db init`;
-      validates `--tsg` in `meeting sync`, `wi sync`, and `spec sync`.
-      `spec_last_sync` is stamped by `SpecService.sync` so the per-TSG
-      skip rule (controlled by `sync.spec_sync_interval`) can short-circuit
-      a re-sync within the window.
+      `meeting_last_sync`. Seeded on `db init`; validates `--tsg`
+      in `meeting sync`, `wi sync`, and `spec sync`. The spec sync
+      skip rule is **per-spec** and lives on `specs.last_synced_at`
+      (no TSG-level gate).
 - `wis`:
     - `(wi_id, tsg_short)` composite PK, `acronym`, `release`, `name`.
       `tsg_short` FK → `tsgs.short_name`; composite PK keeps the natural

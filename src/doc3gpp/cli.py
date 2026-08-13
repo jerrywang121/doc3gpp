@@ -81,7 +81,6 @@ from doc3gpp.services.tdoc_sync_coordinator import (
 )
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
-    UnknownTsgError,
 )
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.settings.config_source import find_config_file, load_config_data
@@ -3883,6 +3882,16 @@ def spec_sync(
         "-f",
         help="Bypass the spec sync interval skip rule.",
     ),
+    per_version_details: bool = typer.Option(
+        False,
+        "--per-version-details",
+        "-d",
+        help=(
+            "Also fetch per-version follow-ups (ETSI PDF link + CR list). "
+            "Default off so the sync stays cheap; existing stored "
+            "pdf_url and crs values are preserved either way."
+        ),
+    ),
 ) -> None:
     """Fetch and store specs (and their versions) from 3gpp.org.
 
@@ -3896,6 +3905,11 @@ def spec_sync(
 
     When a TSG was synced within ``sync.spec_sync_interval``
     the sync is skipped unless ``--force`` is passed.
+
+    By default, the per-version follow-ups (ETSI PDF link and CR list)
+    are not re-fetched; pass ``--per-version-details`` to also pull
+    them. Existing stored ``pdf_url`` and ``crs`` values are preserved
+    either way.
     """
     create_schema()
     tsg_service = _ensure_tsg_ready(build_tsg_service())
@@ -3917,12 +3931,12 @@ def spec_sync(
 
         try:
             outcome = service.sync_spec(
-                spec_id, force=force, on_progress=_on_progress
+                spec_id,
+                force=force,
+                per_version_details=per_version_details,
+                on_progress=_on_progress,
             )
         except SpecUnknownOnUpstreamError as exc:
-            bar.close()
-            raise typer.BadParameter(str(exc)) from exc
-        except UnknownTsgError as exc:
             bar.close()
             raise typer.BadParameter(str(exc)) from exc
         bar.close()
@@ -3965,7 +3979,10 @@ def spec_sync(
                 bar.update(1)
 
         outcome: SyncOutcome = service.sync(
-            tsg_short, force=force, on_progress=_on_progress
+            tsg_short,
+            force=force,
+            per_version_details=per_version_details,
+            on_progress=_on_progress,
         )
         if bar is not None:
             bar.close()

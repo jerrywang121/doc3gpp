@@ -92,6 +92,13 @@ Rules are evaluated in the order listed. `--force` / `-f` bypasses all
 skip checks for a single invocation. Skip outcomes are normal no-ops:
 the CLI exits `0` and prints a human-readable reason.
 
+## Spec sync per-version follow-ups
+
+`doc3gpp spec sync` defaults to skipping per-version follow-ups (ETSI
+PDF + CR list). Pass `--per-version-details` to opt back in. The
+default preserves any previously-fetched `pdf_url` / `crs` values on
+existing `spec_versions` rows.
+
 ## Internal auto-sync helpers
 
 The read commands (`meeting list`, `tdoc list`, `tdoc show`, database-mode

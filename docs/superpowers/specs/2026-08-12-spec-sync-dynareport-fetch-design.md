@@ -4,6 +4,16 @@
 **Date:** 2026-08-12
 **Author:** brainstorming session
 
+> **Superseded** — the per-TSG `tsgs.spec_last_sync` skip rule
+> described in §2 and §4 of this design was replaced by a
+> per-spec `specs.last_synced_at` skip rule in
+> [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md).
+> The DynaReport direct fetch on `--spec-id` miss, the
+> `SpecUnknownOnUpstreamError` / `UnknownTsgError` exception types,
+> the error mapping in `web/errors.py`, and the test coverage all
+> stand as written; only the skip-rule source moved. The original
+> design text is preserved below for historical reference.
+
 ## 1. Problem
 
 `doc3gpp spec sync --spec-id <id>` currently refuses to run when the
@@ -122,8 +132,11 @@ Add one helper:
    known). `--force` bypasses as before.
 6. Hand off to `_sync_one_spec(header, ...)` — the rest of the
    pipeline (detail-page parse, ETSI / CR follow-ups, two-phase
-   `last_synced_at` write, `tsgs.spec_last_sync` stamp) is
-   unchanged.
+   `last_synced_at` write, ~~`tsgs.spec_last_sync` stamp~~) is
+   unchanged. **Superseded** — the `tsgs.spec_last_sync` stamp is
+   gone; the per-worker pipeline now stamps the spec's own
+   `specs.last_synced_at` only. See
+   [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md).
 
 `_sync_one_spec` does **not** need to know the row came from the
 fallback path. It receives a `Spec` with `tsg` set and behaves
@@ -186,6 +199,11 @@ extended `map_mcp_error` table.
 * The `specs` and `spec_versions` schema — unchanged. No migration.
 * `SQLAlchemySpecRepository.upsert` / `upsert_versions` — unchanged.
 * `tsgs.spec_last_sync` skip rule semantics — unchanged.
+  **Superseded** — the per-TSG skip was replaced by a per-spec
+  `specs.last_synced_at` skip in
+  [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md);
+  the column itself was dropped and the TSG repo no longer
+  carries the helper.
 * The `--force` flag, the `--tsg` / `--spec-id` mutual-exclusion
   check, the no-selector fallback that iterates
   `list_distinct_tsgs` — unchanged.

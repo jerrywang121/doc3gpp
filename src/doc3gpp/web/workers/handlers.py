@@ -136,6 +136,7 @@ async def _sync_specs(
     tsg = job.params.get("tsg")
     spec_id = job.params.get("spec_id")
     force = bool(job.params.get("force", False))
+    per_version_details = bool(job.params.get("per_version_details", False))
     if (tsg is None) == (spec_id is None):
         raise ValueError("sync_specs job requires exactly one of 'tsg' or 'spec_id'")
 
@@ -155,9 +156,19 @@ async def _sync_specs(
             progress(f"spec {data.get('spec_id', '')} done")
 
     if spec_id is not None:
-        outcome = services.spec.sync_spec(spec_id, force=force, on_progress=on_progress)
+        outcome = services.spec.sync_spec(
+            spec_id,
+            force=force,
+            per_version_details=per_version_details,
+            on_progress=on_progress,
+        )
     else:
-        outcome = services.spec.sync(tsg, force=force, on_progress=on_progress)
+        outcome = services.spec.sync(
+            tsg,
+            force=force,
+            per_version_details=per_version_details,
+            on_progress=on_progress,
+        )
     progress(outcome.reason)
     return {
         "status": outcome.status,

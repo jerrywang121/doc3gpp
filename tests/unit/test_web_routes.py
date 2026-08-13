@@ -2414,3 +2414,17 @@ def test_get_spec_show_renders_sync_form(client: TestClient) -> None:
     assert 'action="/jobs/sync/specs"' in response.text
     assert 'name="force"' in response.text
     assert "spec_sync.js" in response.text
+
+
+def test_get_spec_show_renders_per_version_details_checkbox(client: TestClient) -> None:
+    """The spec detail page sync form has a ``per_version_details`` checkbox."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+    assert response.status_code == 200
+    assert 'name="per_version_details"' in response.text
+    assert "Also fetch per-version details" in response.text

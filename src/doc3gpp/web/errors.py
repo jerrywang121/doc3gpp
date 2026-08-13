@@ -34,7 +34,6 @@ from fastapi.responses import JSONResponse
 from doc3gpp.models.search import SearchQueryError
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
-    UnknownTsgError,
 )
 from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
@@ -103,7 +102,6 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     WINotFoundError: ("wi", MCP_CODE_NOT_FOUND),
     SpecNotFoundError: ("spec", MCP_CODE_NOT_FOUND),
     SpecUnknownOnUpstreamError: ("spec", MCP_CODE_NOT_FOUND),
-    UnknownTsgError: ("spec", MCP_CODE_INVALID_PARAMS),
     JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
     CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
     InvalidFilterError: ("filter", MCP_CODE_INVALID_PARAMS),
@@ -141,7 +139,6 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     WINotFoundError: "wi_not_found",
     SpecNotFoundError: "spec_not_found",
     SpecUnknownOnUpstreamError: "spec_unknown_on_upstream",
-    UnknownTsgError: "unknown_tsg",
     InvalidFilterError: "invalid_filter",
     SearchQueryError: "invalid_query",
     JobNotFoundError: "job_not_found",
@@ -158,7 +155,6 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     WINotFoundError: 404,
     SpecNotFoundError: 404,
     SpecUnknownOnUpstreamError: 404,
-    UnknownTsgError: 400,
     InvalidFilterError: 400,
     SearchQueryError: 400,
     JobNotFoundError: 404,

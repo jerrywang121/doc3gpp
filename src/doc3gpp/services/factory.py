@@ -125,11 +125,10 @@ def build_wi_service() -> WiService:
 
 
 def build_spec_service() -> SpecService:
-    """Construct a :class:`SpecService` backed by the configured repos."""
+    """Construct a :class:`SpecService` backed by the configured repo."""
     settings = get_settings()
     return SpecService(
         SQLAlchemySpecRepository(),
-        SQLAlchemyTsgRepository(),
         sync_interval=settings.sync.spec_sync_interval,
     )
 

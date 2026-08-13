@@ -10,8 +10,9 @@ from datetime import datetime, timedelta, timezone
 
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import SyncOutcome
-from doc3gpp.repository.protocols import SpecRepository, TsgRepository
+from doc3gpp.repository.protocols import SpecRepository
 from doc3gpp.scraping.client import ScraperClient
+from doc3gpp.services._duration import format_duration as _format_duration
 from doc3gpp.scraping.spec_source import (
     fetch_cr_list,
     fetch_dynareport_detail,
@@ -65,32 +66,16 @@ class SpecUnknownOnUpstreamError(LookupError):
         self.reason = reason
 
 
-class UnknownTsgError(ValueError):
-    """Raised when a freshly fetched spec's normalised TSG is not in ``tsgs``."""
-
-    def __init__(self, spec_id: str, short_name: str, long_name: str) -> None:
-        super().__init__(
-            f"spec {spec_id!r} has unknown TSG short name {short_name!r} "
-            f"(normalised from {long_name!r}); run 'doc3gpp tsg seed' or "
-            f"'doc3gpp tsg list' to inspect the reference table"
-        )
-        self.spec_id = spec_id
-        self.short_name = short_name
-        self.long_name = long_name
-
-
 class SpecService:
     """Sync and query 3GPP specification records."""
 
     def __init__(
         self,
         repository: SpecRepository,
-        tsg_repository: TsgRepository | None = None,
         sync_interval: timedelta = timedelta(hours=24),
         max_workers: int | None = None,
     ) -> None:
         self._repository = repository
-        self._tsg_repository = tsg_repository
         self._sync_interval = sync_interval
         self._max_workers = max_workers
 
@@ -99,29 +84,30 @@ class SpecService:
         tsg: str,
         *,
         force: bool = False,
+        per_version_details: bool = False,
         on_progress: SpecProgressFn | None = None,
     ) -> SyncOutcome:
         """Fetch list page -> parallel detail pages -> upsert.
 
-        Resolves the TSG, honours ``tsgs.spec_last_sync`` skip rule
-        (unless ``force``), fetches the list once, then fetches each
-        detail page in a thread pool, running the conditional ETSI / CR
-        follow-ups inside each worker, and upserts per-spec in one
-        transaction.
+        Resolves the TSG, fetches the list once, then fetches each
+        detail page in a thread pool, running the per-spec skip
+        check, and the conditional ETSI / CR follow-ups (skipped when
+        ``per_version_details`` is ``False``), and the upsert
+        inside each worker. The per-spec skip rule
+        (``spec.last_synced_at``) is enforced at the worker, so
+        ``force`` is only consulted by ``sync_spec`` (single-spec
+        path); this method always walks the list, but specs that are
+        within their interval are short-circuited before any HTTP
+        request is made.
 
-        When ``on_progress`` is supplied it is invoked twice per
-        successful sync sweep: once with ``"list_parsed"`` (carrying
+        When ``on_progress`` is supplied it is invoked once per
+        successful sync sweep with ``"list_parsed"`` (carrying
         ``{"total": N}`` after the list page is parsed) and once per
-        spec with ``"spec_done"`` (carrying ``{"spec_id": ...}``).
-        Skipped syncs (interval not elapsed) do not invoke the
-        callback because there are no specs to process.
+        spec with ``"spec_done"`` (carrying ``{"spec_id": ...}``),
+        including specs that were skipped at the worker — the progress
+        bar advances in lockstep with the worker fan-out.
         """
         canonical = tsg.upper()
-        if not force:
-            skipped = self._is_sync_skipped(canonical, f"TSG {canonical}")
-            if skipped is not None:
-                return skipped
-
         logger.info("Syncing specs for TSG %s", canonical)
 
         synced = 0
@@ -157,6 +143,7 @@ class SpecService:
                             canonical,
                             followup_executor,
                             client,
+                            per_version_details=per_version_details,
                         ): spec
                         for spec in specs
                     }
@@ -174,12 +161,10 @@ class SpecService:
                                 )
                             continue
                         version_total += version_count
-                        synced += 1
+                        if version_count > 0:
+                            synced += 1
                         if on_progress is not None:
                             on_progress("spec_done", {"spec_id": spec.spec_id})
-
-        if self._tsg_repository is not None:
-            self._tsg_repository.update_spec_last_sync(canonical, datetime.now(timezone.utc))
 
         return SyncOutcome(
             status="synced",
@@ -193,49 +178,53 @@ class SpecService:
         spec_id: str,
         *,
         force: bool = False,
+        per_version_details: bool = False,
         on_progress: SpecProgressFn | None = None,
     ) -> SyncOutcome:
         """Refresh a single spec's detail page + versions.
 
-        Looks ``spec_id`` up in the DB to recover its TSG. When the
-        row is missing, fetches the DynaReport detail page directly,
-        parses the bootstrap header (``title`` / ``type`` / primary
-        responsible group), validates the group against ``tsgs``, and
-        funnels the freshly-built :class:`Spec` through the same
+        Looks ``spec_id`` up in the DB. When the row is missing,
+        fetches the DynaReport detail page directly, parses the
+        bootstrap header (``title`` / ``type`` / primary responsible
+        group), normalises the group label, and funnels the
+        freshly-built :class:`Spec` through the same
         ``_sync_one_spec`` pipeline as the stored-row path.
 
-        Honours the per-TSG ``tsgs.spec_last_sync`` skip rule unless
-        ``force``, and stamps it again on success — identical to
-        :meth:`sync`. A spec that is unknown on the upstream raises
-        :class:`SpecUnknownOnUpstreamError`; a normalised TSG that is
-        not in the seeded reference table raises
-        :class:`UnknownTsgError`.
+        Honours the per-spec ``spec.last_synced_at`` skip rule
+        unless ``force`` — a freshly-bootstrapped spec with no
+        ``last_synced_at`` is never skipped. A spec that is unknown
+        on the upstream raises :class:`SpecUnknownOnUpstreamError`.
         """
         spec = self._repository.get(spec_id)
         if spec is None:
             spec = self._bootstrap_spec_from_dynareport(spec_id)
-        elif not force:
-            canonical = spec.tsg.upper() if spec.tsg else ""
-            skipped = self._is_sync_skipped(
-                canonical, f"{spec.spec_id} (TSG {canonical})"
-            )
-            if skipped is not None:
-                return skipped
+        elif not force and spec.last_synced_at is not None:
+            now = datetime.now(timezone.utc)
+            if (now - spec.last_synced_at) < self._sync_interval:
+                ago = now - spec.last_synced_at
+                return SyncOutcome(
+                    status="skipped",
+                    reason=(
+                        f"Spec sync skipped for {spec.spec_id}: "
+                        f"last sync {_format_duration(ago)} ago "
+                        f"(sync interval {_format_duration(self._sync_interval)}). "
+                        f"Use --force to override."
+                    ),
+                )
 
         canonical = spec.tsg.upper() if spec.tsg else ""
         logger.info("Syncing spec %s", spec.spec_id)
         with ScraperClient() as client:
             with ThreadPoolExecutor(max_workers=1) as followup_executor:
                 version_count = self._sync_one_spec(
-                    spec, canonical, followup_executor, client
+                    spec,
+                    canonical,
+                    followup_executor,
+                    client,
+                    per_version_details=per_version_details,
                 )
             if on_progress is not None:
                 on_progress("spec_done", {"spec_id": spec.spec_id})
-
-        if self._tsg_repository is not None:
-            self._tsg_repository.update_spec_last_sync(
-                canonical, datetime.now(timezone.utc)
-            )
 
         return SyncOutcome(
             status="synced",
@@ -255,8 +244,7 @@ class SpecService:
 
         Raises :class:`SpecUnknownOnUpstreamError` when the upstream
         body is unusable (404, missing fields, unrecognised group
-        label) and :class:`UnknownTsgError` when the normalised
-        short name is not in the seeded ``tsgs`` table.
+        label).
         """
         html = fetch_dynareport_detail(spec_id)
         header = parse_dynareport_header(html)
@@ -281,11 +269,6 @@ class SpecService:
                 f"unrecognised primary responsible group {header.tsg_long_name!r}",
             )
 
-        if self._tsg_repository is not None:
-            tsg_record = self._tsg_repository.get_by_short_name(short_name)
-            if tsg_record is None:
-                raise UnknownTsgError(spec_id, short_name, header.tsg_long_name)
-
         return Spec(
             spec_id=spec_id,
             type=header.type,
@@ -297,41 +280,30 @@ class SpecService:
         """Return distinct TSG short names currently stored in specs."""
         return self._repository.list_distinct_tsgs()
 
-    def _is_sync_skipped(self, canonical: str, label: str) -> SyncOutcome | None:
-        """Return a ``skipped`` :class:`SyncOutcome` when the per-TSG
-        ``tsgs.spec_last_sync`` interval has not elapsed, else ``None``.
-
-        ``label`` is the human-readable subject embedded in the skip
-        reason (e.g. ``"TSG R5"`` for a whole-TSG sweep or
-        ``"36.579-5 (TSG R5)"`` for a single-spec sync). Shared by
-        :meth:`sync` and :meth:`sync_spec` so the skip rule and its
-        message live in one place.
-        """
-        if self._tsg_repository is None:
-            return None
-        tsg_record = self._tsg_repository.get_by_short_name(canonical)
-        last_sync = tsg_record.spec_last_sync if tsg_record is not None else None
-        now = datetime.now(timezone.utc)
-        if last_sync is not None and (now - last_sync) < self._sync_interval:
-            ago = now - last_sync
-            return SyncOutcome(
-                status="skipped",
-                reason=(
-                    f"Spec sync skipped for {label}: "
-                    f"last sync {_format_duration(ago)} ago "
-                    f"(sync interval {_format_duration(self._sync_interval)}). "
-                    f"Use --force to override."
-                ),
-            )
-        return None
-
     def _sync_one_spec(
         self,
         spec: Spec,
         canonical: str,
         followup_executor: ThreadPoolExecutor,
         client: ScraperClient,
+        per_version_details: bool = False,
     ) -> int:
+        # Per-spec skip rule: a sync interval throttles each spec
+        # independently. Read from the *incoming* spec (which already
+        # carries the persisted ``last_synced_at`` thanks to
+        # ``SpecRepository.upsert`` round-tripping the column) so the
+        # list sweep stays at one HTTP fetch per fresh spec and walks
+        # the per-spec skip at the worker.
+        now = datetime.now(timezone.utc)
+        if spec.last_synced_at is not None and (now - spec.last_synced_at) < self._sync_interval:
+            logger.debug(
+                "Skipping spec %s: last_synced_at=%s within interval %s",
+                spec.spec_id,
+                spec.last_synced_at.isoformat(),
+                self._sync_interval,
+            )
+            return 0
+
         slug = spec.spec_id.replace(".", "")
         detail_html = fetch_spec_detail(slug, client=client)
         header, versions = parse_spec_detail(detail_html, spec.spec_id, canonical)
@@ -344,14 +316,16 @@ class SpecService:
         # upstream fetch for versions we have already resolved — the
         # link is stable for a version and re-fetching it on every sync
         # wastes an HTTP request per spec.
-        self._backfill_pdf_urls(versions)
+        self._backfill_followup_fields(versions)
 
         # The ETSI + CR follow-ups are independent HTTP requests, fanned
         # out across the dedicated follow-up executor so they overlap
         # with the detail-page fetches of the other spec workers, then
         # waited on before upserting so the in-place mutations on
         # ``versions`` (pdf_url / crs) are captured in the row write.
-        self._fetch_followups_concurrently(versions, followup_executor, client)
+        self._fetch_followups_concurrently(
+            versions, followup_executor, client, per_version_details=per_version_details
+        )
 
         # Write the header first WITHOUT ``last_synced_at`` so a failure
         # in ``upsert_versions`` below leaves the timestamp unset on the
@@ -366,28 +340,41 @@ class SpecService:
         self._repository.upsert(header)
         return len(versions)
 
-    def _backfill_pdf_urls(self, versions: list[SpecVersion]) -> None:
-        """Copy the persisted ``pdf_url`` onto freshly parsed versions.
+    def _backfill_followup_fields(self, versions: list[SpecVersion]) -> None:
+        """Copy the persisted ``pdf_url`` and ``crs`` onto freshly parsed versions.
 
-        ``versions`` come from the detail page, which has no ETSI PDF
-        link, so each ``pdf_url`` is ``None``. For any version we have
-        already resolved (``pdf_url`` stored), load the stored value so
-        the ETSI follow-up is skipped instead of re-fetched.
+        ``versions`` come from the detail page, which carries neither
+        the ETSI PDF link nor the CR list, so each ``pdf_url`` and
+        ``crs`` is ``None``. For every version we have already resolved
+        (either column stored), load the stored value so the upsert
+        below writes the original value back instead of clobbering it
+        with ``None``. Runs on every sync, regardless of whether
+        ``per_version_details`` is on, so a flag-OFF re-sync preserves
+        previously-fetched follow-up data.
         """
         if not versions:
             return
         spec_id = versions[0].spec_id
         persisted = self._repository.list_versions(spec_id)
-        by_version = {v.version: v.pdf_url for v in persisted if v.pdf_url}
+        by_version: dict[str, SpecVersion] = {}
+        for v in persisted:
+            if v.pdf_url or v.crs:
+                by_version[v.version] = v
         for v in versions:
-            if v.pdf_url is None:
-                v.pdf_url = by_version.get(v.version)
+            stored = by_version.get(v.version)
+            if stored is None:
+                continue
+            if v.pdf_url is None and stored.pdf_url:
+                v.pdf_url = stored.pdf_url
+            if v.crs is None and stored.crs:
+                v.crs = stored.crs
 
     def _fetch_followups_concurrently(
         self,
         versions: list[SpecVersion],
         executor: ThreadPoolExecutor,
         client: ScraperClient,
+        per_version_details: bool = False,
     ) -> None:
         """Submit the ETSI + CR follow-ups for ``versions`` to the
         dedicated ``executor`` (separate from the spec-worker pool) and
@@ -398,12 +385,20 @@ class SpecService:
         (a worker blocked on ``result()`` holds a slot the follow-ups it
         is waiting on can never get), deadlocking the sweep.
 
+        When ``per_version_details`` is ``False`` the follow-up HTTP
+        fetches are skipped entirely — the caller only wants the
+        detail-page data. ``_backfill_followup_fields`` still runs in
+        ``_sync_one_spec`` so previously-persisted ``pdf_url`` /
+        ``crs`` are not clobbered on a flag-OFF re-sync.
+
         Each follow-up is wrapped in its own try/except so a single
         failure does not cancel the others (``FIRST_EXCEPTION`` would
         otherwise leave later futures pending until the wait times
         out). The submission cost is bounded by ``len(versions) * 2``,
         which is in the low tens even for the largest specs.
         """
+        if not per_version_details:
+            return
         followup_futures = []
         for v in versions:
             followup_futures.append(
@@ -504,14 +499,3 @@ class SpecService:
         return self._repository.list_versions(
             spec_id, limit=limit, offset=offset, version=version
         )
-
-
-def _format_duration(delta: timedelta) -> str:
-    total = int(delta.total_seconds())
-    if total < 60:
-        return f"{total}s"
-    if total < 3600:
-        return f"{total // 60}m"
-    if total < 86400:
-        return f"{total // 3600}h"
-    return f"{total // 86400}d"

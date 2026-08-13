@@ -15,7 +15,12 @@ self-contained.
 The database is pinned under a temporary path so the live test never
 writes into a user's real ``~/.local/share/...`` SQLite file, and the
 ``tsgs`` table is auto-seeded via ``create_schema`` so the
-``tsgs.spec_last_sync`` FK on ``specs.tsg`` validates.
+``specs.tsg`` FK (→ ``tsgs.short_name``) validates. The test
+exercises the live R5 spec list + per-spec detail pages and
+round-trips the resulting rows through ``SpecRepository`` (header
++ version reads); it does not assert anything about a per-TSG
+``tsgs`` skip timestamp (the per-spec skip rule lives on
+``specs.last_synced_at`` and is throttled per worker).
 """
 
 from __future__ import annotations

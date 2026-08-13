@@ -90,7 +90,7 @@ create it; existing databases get it dropped via migration (see §5).
 ### 4.5 `storage/db/migrate.py`
 
 Add `_migrate_spec_rapporteurs()` and `_migrate_spec_versions_drop_comment()`
-following the `_migrate_tsg_spec_last_sync` probe pattern:
+following the ~~`_migrate_tsg_spec_last_sync`~~ probe pattern (note: the referenced function was replaced by a drop-column version in the per-spec skip rule plan [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../../plans/2026-08-13-per-spec-skip-rule.md); the underlying `PRAGMA table_info` probe approach is the same):
 
 - `_migrate_spec_rapporteurs`: if `specs` exists and `PRAGMA table_info(specs)`
   lacks `rapporteurs`, `ALTER TABLE specs ADD COLUMN rapporteurs VARCHAR(128)`.

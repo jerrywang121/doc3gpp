@@ -13,7 +13,7 @@
 - Layered architecture is strict in `src/doc3gpp/`: `models/` never leaks ORM attrs; `services/` reaches storage only through `repository/` Protocols; `scraping/` is network-only; `parsers/` is parse-only.
 - `SpecRepository` Protocol and its `SQLAlchemySpecRepository` impl must stay in sync (update **both**).
 - XOR rule: `--spec-id` and `--tsg` are mutually exclusive on every surface; exactly one must be provided for the single-selector paths, neither selects "all in DB".
-- `tsgs.spec_last_sync` skip rule is honoured for both `sync()` and `sync_spec()` unless `force`; single-spec sync stamps the owning TSG.
+- `tsgs.spec_last_sync` skip rule is honoured for both `sync()` and `sync_spec()` unless `force`; single-spec sync stamps the owning TSG. **Superseded** — the per-TSG skip was replaced by a per-spec `specs.last_synced_at` skip in [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](2026-08-13-per-spec-skip-rule.md); the column and the per-TSG stamp are gone.
 - No comments in code unless the surrounding block documents non-obvious behavior (match existing style).
 - Run `ruff check .` and the full sqlite suite (`./scripts/test_sqlite.sh`) before completion.
 
@@ -127,6 +127,9 @@ def test_sync_spec_syncs_single_stored_spec(monkeypatch) -> None:
     assert outcome.synced_count == 1
     assert repo.versions["36.579-5"]
     assert tsg.spec_sync_calls, "sync_spec must stamp tsgs.spec_last_sync"
+    # Superseded — the TSG stamp assertion was replaced by a per-spec
+    # `specs.last_synced_at` stamp assertion in the per-spec skip rule
+    # plan ([docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md](2026-08-13-per-spec-skip-rule.md)).
 
 
 def test_sync_spec_unknown_spec_raises() -> None:
@@ -186,6 +189,8 @@ Expected: FAIL with `AttributeError` (no `sync_spec` / `list_distinct_tsgs` on `
         Honours the per-TSG ``tsgs.spec_last_sync`` skip rule unless
         ``force``, and stamps it again on success — identical to
         :meth:`sync`.
+        # Superseded — the per-TSG skip was replaced by a per-spec
+        # `specs.last_synced_at` skip; the TSG-repo plumbing is gone.
         """
         spec = self._repository.get(spec_id)
         if spec is None:
@@ -196,6 +201,8 @@ Expected: FAIL with `AttributeError` (no `sync_spec` / `list_distinct_tsgs` on `
         if not force and self._tsg_repository is not None:
             tsg_record = self._tsg_repository.get_by_short_name(canonical)
             last_sync = tsg_record.spec_last_sync if tsg_record is not None else None
+            # Superseded — the per-TSG skip is gone; the per-spec skip
+            # uses `spec.last_synced_at` instead.
             now = datetime.now(timezone.utc)
             if last_sync is not None and (now - last_sync) < self._sync_interval:
                 ago = now - last_sync
@@ -222,6 +229,9 @@ Expected: FAIL with `AttributeError` (no `sync_spec` / `list_distinct_tsgs` on `
             self._tsg_repository.update_spec_last_sync(
                 canonical, datetime.now(timezone.utc)
             )
+        # Superseded — the per-TSG stamp is gone; the per-spec
+        # `specs.last_synced_at` is stamped by the per-worker
+        # pipeline.
 
         return SyncOutcome(
             status="synced",
@@ -962,6 +972,9 @@ Behavior:
   (each via the --tsg path). The single-spec and per-TSG paths both
   honour `tsgs.spec_last_sync` (skip unless --force) and stamp it again
   on success.
+  # Superseded — the per-TSG skip is gone; the per-spec skip rule
+  # is enforced per worker inside `sync()` and per call inside
+  # `sync_spec()` against `specs.last_synced_at`.
 
 Examples:
 

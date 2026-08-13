@@ -146,7 +146,7 @@ def test_post_sync_specs_creates_job(client: Any) -> None:
     job = repo.get(body["job_id"])
     assert job is not None
     assert job.kind is JobKind.SYNC_SPECS
-    assert job.params == {"tsg": "R5", "force": True}
+    assert job.params == {"tsg": "R5", "force": True, "per_version_details": False}
 
 
 def test_post_sync_specs_by_spec_id(client: Any) -> None:
@@ -156,7 +156,20 @@ def test_post_sync_specs_by_spec_id(client: Any) -> None:
     job = repo.get(r.json()["job_id"])
     assert job is not None
     assert job.kind is JobKind.SYNC_SPECS
-    assert job.params == {"spec_id": "36.579-5", "force": False}
+    assert job.params == {"spec_id": "36.579-5", "force": False, "per_version_details": False}
+
+
+def test_post_sync_specs_forwards_per_version_details(client: Any) -> None:
+    """``per_version_details`` in the JSON body is written into ``job.params``."""
+    c, repo, _ = client
+    r = c.post(
+        "/jobs/sync/specs",
+        json={"tsg": "R5", "force": False, "per_version_details": True},
+    )
+    assert r.status_code == 202
+    job = repo.get(r.json()["job_id"])
+    assert job is not None
+    assert job.params == {"tsg": "R5", "force": False, "per_version_details": True}
 
 
 def test_post_sync_specs_requires_one_selector(client: Any) -> None:

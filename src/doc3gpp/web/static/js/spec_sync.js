@@ -23,8 +23,15 @@
       targetSelector: "#spec-sync-job-target",
       contentType: "application/json",
       buildBody: function (form) {
-        var force = form.querySelector('input[name="force"]').checked;
-        return JSON.stringify({ spec_id: specId, force: force });
+        var forceEl = form.querySelector('input[name="force"]');
+        var perVersionEl = form.querySelector('input[name="per_version_details"]');
+        var force = !!forceEl && forceEl.checked;
+        var perVersion = !!perVersionEl && perVersionEl.checked;
+        return JSON.stringify({
+          spec_id: specId,
+          force: force,
+          per_version_details: perVersion,
+        });
       },
     });
   }

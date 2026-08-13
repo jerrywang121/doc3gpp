@@ -1836,8 +1836,15 @@ Options:
   `typer.BadParameter` with a `Spec unknown on the 3GPP DynaReport
   upstream` message; an unknown normalised TSG surfaces as
   `typer.BadParameter` with an `unknown TSG short name` message.
-  `--force` bypasses the per-TSG skip rule in both paths.
+  `--force` bypasses the per-spec skip rule in both paths.
 - --force, -f: Bypass the spec sync interval skip rule.
+- --per-version-details: Fetch per-version follow-ups (ETSI PDF + CR list)
+  on every sync. **Default OFF** — `spec sync` only fetches the per-version
+  follow-ups when their cached values are missing (ETSI PDF when `pdf_url`
+  is empty; CR list when the version was updated within 90 days or `crs`
+  is empty). Pass this flag to refresh those fields for every version on
+  every run, and to backfill any previously-unset `pdf_url` / `crs`
+  values without changing the cached content of populated rows.
 
 Behavior:
 
@@ -1846,19 +1853,19 @@ Behavior:
   only that spec's detail page + versions (no list page).
 - With neither: every distinct TSG found in the `specs` table is synced
   (each via the --tsg path). The single-spec and per-TSG paths both
-  honour `tsgs.spec_last_sync` (skip unless --force) and stamp it again
-  on success.
-- ETSI PDF follow-ups are gated on `SpecVersion.wki_id` being set and
-  `SpecVersion.pdf_url` being empty. CR-list follow-ups are gated on
-  either the upload date being within the last 90 days **or** the
-  stored `crs` being empty; otherwise the cached comma-joined CR list
-  is left in place.
+  honour the **per-spec** `specs.last_synced_at` skip rule (one row
+  per spec, no TSG-level gate) and stamp the spec's own
+  `last_synced_at` on success.
+- ETSI PDF and CR-list follow-ups are skipped by default; pass
+  `--per-version-details` to fetch them. The default preserves any
+  previously-cached `pdf_url` / `crs` values on existing rows.
 - Per-spec ETSI / CR failures log a warning and the sweep continues —
   one bad spec must not abort the whole sync.
-- On success the `tsgs.spec_last_sync` timestamp is stamped so the
-  next sync can skip when the interval has not yet elapsed.
-- The sync is skipped when the TSG was synced within
-  `sync.spec_sync_interval` (default 24h) unless `--force` is passed.
+- On success each spec's `last_synced_at` is stamped so the next
+  sync can skip that spec when the interval has not yet elapsed.
+- The per-spec sync is skipped when the spec's own `last_synced_at`
+  is within `sync.spec_sync_interval` (default 24h) unless `--force`
+  is passed (no TSG-level gate).
 
 Examples:
 
@@ -1872,6 +1879,9 @@ doc3gpp spec sync --tsg R5 --force
 # Sync a single stored spec (no list page fetch).
 doc3gpp spec sync --spec-id 36.579-5
 doc3gpp spec sync --spec-id 36.579-5 --force
+
+# Always re-fetch per-version ETSI PDF + CR list (default skips cached rows).
+doc3gpp spec sync --tsg R5 --per-version-details
 ```
 
 ### doc3gpp spec list

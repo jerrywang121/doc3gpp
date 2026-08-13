@@ -17,7 +17,6 @@ import json
 
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
-    UnknownTsgError,
 )
 from doc3gpp.web.app import build_state
 from doc3gpp.web.errors import map_domain_error, map_mcp_error
@@ -181,7 +180,7 @@ def test_sync_specs_tool_enqueues(sqlite_env) -> None:
     assert detail.is_error is False
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_specs"
-    assert detail_payload["params"] == {"tsg": "R5", "force": True}
+    assert detail_payload["params"] == {"tsg": "R5", "force": True, "per_version_details": False}
     del state.engine
 
 
@@ -203,7 +202,32 @@ def test_sync_specs_tool_by_spec_id_enqueues(sqlite_env) -> None:
     assert detail.is_error is False
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_specs"
-    assert detail_payload["params"] == {"spec_id": "36.579-5", "force": False}
+    assert detail_payload["params"] == {"spec_id": "36.579-5", "force": False, "per_version_details": False}
+    del state.engine
+
+
+def test_sync_specs_tool_per_version_details_enqueues(sqlite_env) -> None:
+    """The MCP tool's ``per_version_details=True`` reaches ``job.params``."""
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool(
+            "sync_specs", {"tsg": "R5", "force": False, "per_version_details": True}
+        )
+        envelope = json.loads(created.content[0].text)
+        return envelope["job_id"]
+
+    job_id = asyncio.run(run())
+    detail = asyncio.run(server.call_tool("get_job", {"job_id": job_id}))
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["params"] == {
+        "tsg": "R5",
+        "force": False,
+        "per_version_details": True,
+    }
     del state.engine
 
 
@@ -791,8 +815,8 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     del state.engine
 
 
-def test_web_errors_maps_new_spec_errors() -> None:
-    """``map_domain_error`` / ``map_mcp_error`` cover the new spec sync errors."""
+def test_web_errors_maps_spec_unknown_on_upstream() -> None:
+    """``map_domain_error`` / ``map_mcp_error`` cover ``SpecUnknownOnUpstreamError``."""
     resp_unknown = map_domain_error(
         SpecUnknownOnUpstreamError("38.523-1", "missing fields: title, type")
     )
@@ -801,20 +825,9 @@ def test_web_errors_maps_new_spec_errors() -> None:
     assert body_unknown["error"] == "spec_unknown_on_upstream"
     assert "38.523-1" in body_unknown["detail"]
 
-    resp_tsg = map_domain_error(UnknownTsgError("38.523-1", "R5", "RAN 5"))
-    assert resp_tsg.status_code == 400
-    body_tsg = json.loads(resp_tsg.body)
-    assert body_tsg["error"] == "unknown_tsg"
-
     mcp1 = map_mcp_error(SpecUnknownOnUpstreamError("38.523-1", "missing"))
     assert mcp1 is not None
     code, _msg, data = mcp1
     assert code == -32004
     assert data["error"] == "spec_unknown_on_upstream"
     assert data["resource"] == "spec"
-
-    mcp2 = map_mcp_error(UnknownTsgError("38.523-1", "R5", "RAN 5"))
-    assert mcp2 is not None
-    code2, _msg2, data2 = mcp2
-    assert code2 == -32602
-    assert data2["error"] == "unknown_tsg"

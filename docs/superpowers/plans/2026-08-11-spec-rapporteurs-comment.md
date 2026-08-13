@@ -351,7 +351,7 @@ Expected: FAIL — `create_schema()` does not add `rapporteurs` / drop `comment`
 
 - [ ] **Step 3: Implement the migrations**
 
-In `src/doc3gpp/storage/db/migrate.py`, add two functions following the `_migrate_tsg_spec_last_sync` probe pattern:
+In `src/doc3gpp/storage/db/migrate.py`, add two functions following the ~~`_migrate_tsg_spec_last_sync`~~ probe pattern (note: the referenced function was renamed / replaced by the per-spec skip rule plan in [`docs/superpowers/plans/2026-08-13-per-spec-skip-rule.md`](../2026-08-13-per-spec-skip-rule.md); the drop-column migration follows the same `PRAGMA table_info` probe approach):
 
 ```python
 def _migrate_spec_rapporteurs() -> None:

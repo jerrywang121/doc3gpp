@@ -287,11 +287,11 @@ async def _parse_tdoc_url(
     recursive = bool(job.params.get("recursive", False))
     max_depth_param = job.params.get("max_depth")
     if recursive:
-        max_depth = -1
+        max_depth = settings.tdoc_parse.max_ftp_depth
     elif max_depth_param is not None:
         max_depth = max(int(max_depth_param), 0)
     else:
-        max_depth = 2
+        max_depth = settings.tdoc_parse.max_ftp_depth
 
     if settings.sync.auto_sync:
         candidates = collect_tdoc_candidates_for_url(

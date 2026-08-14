@@ -820,8 +820,8 @@ def _make_url_state(
     return WebState(settings=settings, engine=None, services=services, jobs=_JobWorkerHandleFake())  # type: ignore[arg-type]
 
 
-def test_parse_tdoc_url_handler_recursive_means_bfs_exhausted() -> None:
-    """``recursive=True`` is forwarded as ``max_depth=-1`` (BFS-until-exhausted)."""
+def test_parse_tdoc_url_handler_recursive_uses_settings_depth() -> None:
+    """``recursive=True`` is forwarded as ``settings.tdoc_parse.max_ftp_depth``."""
     from doc3gpp.models.jobs import JobKind
 
     repo = _make_repo()
@@ -837,7 +837,7 @@ def test_parse_tdoc_url_handler_recursive_means_bfs_exhausted() -> None:
 
     done = repo.get(job.id)
     assert done.status is JobStatus.SUCCEEDED
-    assert fake.extract_calls[0]["max_depth"] == -1
+    assert fake.extract_calls[0]["max_depth"] == state.settings.tdoc_parse.max_ftp_depth
 
 
 def test_parse_tdoc_url_handler_explicit_max_depth_forwarded() -> None:

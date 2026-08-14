@@ -2724,6 +2724,49 @@ def test_tdoc_show_ttcn_without_required_changes_omits_card(
     assert "<dt>Testcase</dt>" in body
 
 
+def test_show_tdoc_cover_card_includes_summary_of_change(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The Cover card on ``tdoc_show.html`` renders
+    ``Summary of change`` between Reason for change and Consequences
+    if not approved (matches the source CR row order)."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_sql import (
+        SQLAlchemyTDocCrRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import (
+        SQLAlchemyTDocRepository,
+    )
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+
+    create_schema()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrRepository().upsert(
+        TDocCRDetails(
+            tdoc_id="R5s260001",
+            ftp_url=url,
+            reason_for_change="Existing flow does not cover USIM refresh.",
+            summary_of_change="Add USIM config setter.",
+            consequences_if_not_approved="Test will fail unfairly.",
+        ),
+    )
+
+    response = client.get("/tdocs/R5s260001")
+    assert response.status_code == 200
+    body = response.text
+    assert "<dt>Summary of change</dt>" in body
+    assert "<dd>Add USIM config setter.</dd>" in body
+    # Position: between Reason for change and Consequences if not approved.
+    rfc_pos = body.index("<dt>Reason for change</dt>")
+    soc_pos = body.index("<dt>Summary of change</dt>")
+    cna_pos = body.index("<dt>Consequences if not approved</dt>")
+    assert rfc_pos < soc_pos < cna_pos
+
+
 _JS_DIR = Path(__file__).resolve().parents[2] / "src" / "doc3gpp" / "web" / "static" / "js"
 
 

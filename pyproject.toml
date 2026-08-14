@@ -7,7 +7,7 @@ allow-direct-references = true
 
 [project]
 name = "doc3gpp"
-version = "0.1.4"
+version = "0.1.5"
 description = "Provide 3GPP TDoc information with full text search capability — a Python CLI/library, a local web UI, and an MCP server for AI clients."
 readme = "README.md"
 requires-python = ">=3.10"

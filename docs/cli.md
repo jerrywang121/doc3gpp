@@ -30,6 +30,10 @@ pip install -e ".[dev]"
 - Command: doc3gpp
 - Python entrypoint: doc3gpp.cli:main
 
+## Global flags
+
+- `--version` — print `doc3gpp <version>` and exit. Top-level only; takes precedence over sub-command arguments when supplied.
+
 ## Auto-sync behavior
 
 The read commands `meeting list`, `tdoc list`, `tdoc show`, and database-mode

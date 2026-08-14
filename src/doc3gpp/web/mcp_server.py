@@ -187,10 +187,9 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
     server = MCPServer(
         "doc3gpp",
         version=_package_version(),
-        title="doc3gpp MCP",
+        title="Doc3gpp",
         description=(
-            "3GPP TDoc, meeting, WI and search tools over the doc3gpp "
-            "database (scraped from 3gpp.org)."
+            "3GPP TDoc, Meeting, WI and Spec search tools."
         ),
         website_url="https://github.com/jerrywang121/doc3gpp",
     )

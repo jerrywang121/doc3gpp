@@ -156,11 +156,33 @@ def _configure_logging() -> None:
     logger.debug("Logging configured at %s", logging.getLevelName(level))
 
 
+def _version_callback(value: bool) -> None:
+    """Print the doc3gpp version and exit.
+
+    Local-imports ``__version__`` so a future refactor that moves the
+    constant cannot take the whole CLI down at import time.
+    """
+    if value:
+        from doc3gpp import __version__
+
+        typer.echo(f"doc3gpp {__version__}")
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def main_callback(ctx: typer.Context) -> None:
+def main_callback(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the doc3gpp version and exit.",
+    ),
+) -> None:
     _configure_logging()
     if ctx.invoked_subcommand is None:
-        typer.echo(app.get_help(ctx))
+        typer.echo(ctx.get_help())
 
 
 def _ensure_tsg_ready(tsg_service: TsgService) -> TsgService:

@@ -15,6 +15,8 @@ from fastapi import Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from doc3gpp import __version__ as _APP_VERSION
+
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -37,6 +39,7 @@ def _url_for(request: Request, name: str) -> str:
 
 
 templates.env.globals["url_for"] = _url_for
+templates.env.globals["app_version"] = _APP_VERSION
 
 
 def dt_short(value: datetime | None) -> str | None:

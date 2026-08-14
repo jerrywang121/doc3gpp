@@ -735,6 +735,7 @@ class _FakeTDocCrServiceForUrl:
         force: bool,
         full: bool,
         max_tdoc_size_bytes: int | None,
+        on_progress: object | None = None,
     ) -> DirectParseBatchResult:
         self.extract_calls.append({
             "url": url,
@@ -750,6 +751,26 @@ class _FakeTDocCrServiceForUrl:
             failures=self.failures,
             skipped=self.skipped,
         )
+
+
+def test_parse_tdoc_url_passes_on_progress() -> None:
+    """The PARSE_TDOC_URL handler passes a callable on_progress to the service."""
+    repo = _make_repo()
+    captured: dict = {}
+
+    class _FakeUrlService:
+        def extract_from_url_batch(self, url, **kwargs):
+            captured["on_progress"] = kwargs.get("on_progress")
+            return DirectParseBatchResult(results=[], failures={}, skipped={})
+
+    state = _make_state(repo, url_service=_FakeUrlService())
+    repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/tsg_ran/WG2_RL2/TSGR2_135/"},
+    )
+    worker = JobWorker(state, repo=repo)
+    _run_worker_once(worker, repo)
+    assert callable(captured.get("on_progress"))
 
 
 def test_parse_tdoc_url_handler_rejects_non_3gpp_url() -> None:
@@ -843,7 +864,9 @@ class _FakeTDocSyncCoordinator:
     def __init__(self) -> None:
         self.calls: list[int] = []
 
-    def sync_for_meeting_id(self, meeting_id: int, *, force: bool = False) -> object:
+    def sync_for_meeting_id(
+        self, meeting_id: int, *, force: bool = False, on_progress: object | None = None
+    ) -> object:
         from doc3gpp.models.sync import SyncOutcome
         self.calls.append(meeting_id)
         return SyncOutcome(

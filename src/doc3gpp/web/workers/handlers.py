@@ -72,7 +72,7 @@ async def _sync_meetings(
     progress(f"syncing meetings for TSG {tsg}")
     url = _build_meeting_url(tsg)
     force = bool(job.params.get("force", False))
-    outcome = services.meeting.sync(url, tsg=tsg, force=force)
+    outcome = services.meeting.sync(url, tsg=tsg, force=force, on_progress=progress)
     progress(outcome.reason)
     return {
         "status": outcome.status,
@@ -95,10 +95,10 @@ async def _sync_tdocs(
     coordinator = services.tdoc_sync
     if meeting_id is not None:
         progress(f"syncing TDocs for meeting id {meeting_id}")
-        outcome = coordinator.sync_for_meeting_id(int(meeting_id), force=force)
+        outcome = coordinator.sync_for_meeting_id(int(meeting_id), force=force, on_progress=progress)
     elif meeting_name is not None:
         progress(f"syncing TDocs for meeting {meeting_name}")
-        outcome = coordinator.sync_for_meeting_name(str(meeting_name), force=force)
+        outcome = coordinator.sync_for_meeting_name(str(meeting_name), force=force, on_progress=progress)
     else:
         raise ValueError(
             "sync_tdocs job requires a 'meeting_id' or 'meeting_name' parameter"
@@ -122,7 +122,7 @@ async def _sync_tdocs_all(
 ) -> Mapping[str, JSONValue]:
     force = bool(job.params.get("force", False))
     progress("syncing TDocs for all tracked meetings")
-    outcome = services.tdoc_sync.sync_all_tracked_meetings(force=force)
+    outcome = services.tdoc_sync.sync_all_tracked_meetings(force=force, on_progress=progress)
     progress(
         f"bulk sync complete: {outcome.synced_count} synced, "
         f"{outcome.skipped_count} skipped, {outcome.failed_count} failed"
@@ -310,6 +310,7 @@ async def _parse_tdoc_url(
                     meeting_service=services.meeting,
                     tdoc_sync_coordinator=services.tdoc_sync,
                     tdoc_ids=candidates,
+                    on_progress=progress,
                 )
             except Exception as exc:  # noqa: BLE001 - CLI parity: warn, do not abort
                 logger.warning("auto_sync from URL %s failed: %s", url, exc)
@@ -329,6 +330,7 @@ async def _parse_tdoc_url(
         force=force,
         full=full,
         max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+        on_progress=progress,
     )
 
     files: list[dict[str, str]] = []

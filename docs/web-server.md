@@ -367,6 +367,8 @@ text, mirroring the `/search?sem=` route and the CLI's
 HTTP `POST /jobs/...` routes, but the enqueue envelope adds a `message`
 key (the only parity exception).
 
+The MCP `serverInfo` block returned on every `initialize` handshake carries `name` ("doc3gpp"), `version` (from `importlib.metadata.version("doc3gpp")`, falling back to `doc3gpp.__version__`), `title`, `description`, and `website_url`. Clients do not need a tool call to read the version.
+
 ### Example MCP client (Python)
 
 ```python

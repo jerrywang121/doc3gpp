@@ -4,84 +4,189 @@
   <h1>Sync hub</h1>
   <p class="lead">One place to enqueue every sync-shaped job.</p>
 
+  {# --- Panel 1 — Meeting sync --- #}
   <section class="card">
     <h2>Meeting sync</h2>
-    <form id="sync-meetings-form" action="/jobs/sync/meetings" method="post">
-      <input type="hidden" name="tsg" value="SA2">
-      <button type="submit">Sync meetings</button>
-      <span class="sync-queued" style="display:none">queued</span>
+    <form id="sync-meetings-form" class="sync-form"
+          method="post" action="/jobs/sync/meetings">
+      <label>TSG <input type="text" id="sync-meetings-tsg" name="tsg"
+                         placeholder="e.g. R5" required></label>
+      <label class="inline-check">
+        <input type="checkbox" id="sync-meetings-force" name="force"> Force sync (bypass 24h interval)
+      </label>
+      <button type="submit" class="btn primary">Sync meetings</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="sync-meetings-form-job-target"></div>
     </form>
   </section>
 
+  {# --- Panel 2 — TDoc sync (single meeting) --- #}
   <section class="card">
     <h2>TDoc sync</h2>
-    <form id="sync-tdocs-form" action="/jobs/sync/tdocs" method="post">
-      <button type="submit">Sync TDocs</button>
-      <span class="sync-queued" style="display:none">queued</span>
+    <form id="sync-tdocs-form" class="sync-form"
+          method="post" action="/jobs/sync/tdocs">
+      <label class="inline-check">
+        <input type="radio" name="selector" value="meeting_id" checked> Meeting id
+      </label>
+      <label class="inline-check">
+        <input type="radio" name="selector" value="meeting_name"> Meeting name
+      </label>
+      <label>Value <input type="text" id="sync-tdocs-value" name="value"
+                          placeholder="156 or RAN5#106" required></label>
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force sync
+      </label>
+      <button type="submit" class="btn primary">Sync TDocs for this meeting</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="sync-tdocs-form-job-target"></div>
     </form>
-    <form id="sync-tdocs-all-form" action="/jobs/sync/tdocs/all" method="post">
-      <button type="submit">Sync TDocs for all tracked meetings</button>
-      <span class="sync-queued" style="display:none">queued</span>
+
+    {# --- Panel 2b — TDoc sync (all tracked meetings) --- #}
+    <hr>
+    <form id="sync-tdocs-all-form" class="sync-form"
+          method="post" action="/jobs/sync/tdocs/all">
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force sync
+      </label>
+      <button type="submit" class="btn primary">Sync TDocs for ALL tracked meetings</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="sync-tdocs-all-form-job-target"></div>
     </form>
   </section>
 
+  {# --- Panel 3 — Spec sync (by TSG) --- #}
   <section class="card">
     <h2>Spec sync</h2>
-    <form id="sync-specs-tsg-form" action="/jobs/sync/specs" method="post">
-      <input type="hidden" name="tsg" value="R5">
-      <button type="submit">Sync specs for TSG</button>
-      <span class="sync-queued" style="display:none">queued</span>
+    <form id="sync-specs-tsg-form" class="sync-form"
+          method="post" action="/jobs/sync/specs">
+      <label>TSG <input type="text" id="sync-specs-tsg-tsg" name="tsg"
+                        placeholder="e.g. R5" required></label>
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force sync
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" name="per_version_details">
+        Also fetch per-version details (ETSI PDF + CR list)
+      </label>
+      <button type="submit" class="btn primary">Sync specs for this TSG</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="sync-specs-tsg-form-job-target"></div>
     </form>
-    <form id="sync-specs-id-form" action="/jobs/sync/specs" method="post">
-      <input type="hidden" name="spec_id" value="36.579-5">
-      <button type="submit">Sync this spec</button>
-      <span class="sync-queued" style="display:none">queued</span>
+
+    {# --- Panel 3b — Spec sync (by id) --- #}
+    <hr>
+    <form id="sync-specs-id-form" class="sync-form"
+          method="post" action="/jobs/sync/specs">
+      <label>Spec id <input type="text" id="sync-specs-id-spec" name="spec_id"
+                            placeholder="e.g. 36.579-5" required></label>
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force sync
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" name="per_version_details">
+        Also fetch per-version details (ETSI PDF + CR list)
+      </label>
+      <button type="submit" class="btn primary">Sync this spec</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="sync-specs-id-form-job-target"></div>
     </form>
   </section>
 
+  {# --- Panel 4 — Parse TDocs (filter-driven) --- #}
   <section class="card">
     <h2>Parse TDocs (filter-driven)</h2>
-    <form id="parse-tdocs-form" action="/jobs/parse/tdocs" method="post">
-      <button type="submit">Queue parse</button>
-      <span class="sync-queued" style="display:none">queued</span>
+    <form id="parse-tdocs-form" class="sync-form"
+          method="post" action="/jobs/parse/tdocs">
+      <div class="filters">
+        <label>TDoc id <input type="text" name="filter_tdoc_id" placeholder="R5-26%"></label>
+        <label>Meeting <input type="text" name="filter_meeting" placeholder="%RAN%"></label>
+        <label>Status <input type="text" name="filter_status" placeholder="Approved"></label>
+        <label>Spec <input type="text" name="filter_spec" placeholder="38.300"></label>
+        <label>WI <input type="text" name="filter_wi" placeholder="%MIMO%"></label>
+        <label>Release <input type="text" name="filter_release" placeholder="Rel-17"></label>
+        <label>Version <input type="text" name="filter_version" placeholder="17.1.0"></label>
+        <label>Source <input type="text" name="filter_source" placeholder="%Ericsson%"></label>
+      </div>
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force re-parse
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" name="full"> Parse full content (TTCN corrections)
+      </label>
+      <label>Max batch <input type="number" name="max_batch" min="1" placeholder="(server default)"></label>
+      <button type="submit" class="btn primary">Queue parse</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="parse-tdocs-form-job-target"></div>
     </form>
   </section>
 
+  {# --- Panel 5 — Parse from URL --- #}
   <section class="card">
     <h2>Parse from URL</h2>
-    <form id="parse-tdoc-url-form" action="/jobs/parse/tdoc-url" method="post">
-      <input type="hidden" name="url" value="https://www.3gpp.org/ftp/">
-      <button type="submit">Queue parse</button>
-      <span class="sync-queued" style="display:none">queued</span>
+    <form id="parse-tdoc-url-form" class="sync-form"
+          method="post" action="/jobs/parse/tdoc-url">
+      <label>URL <input type="text" id="parse-tdoc-url-url" name="url"
+                        placeholder="https://www.3gpp.org/ftp/..." required></label>
+      <label class="inline-check">
+        <input type="radio" name="selector" value="recursive" checked>
+        Recursive (BFS into subfolders)
+      </label>
+      <label class="inline-check">
+        <input type="radio" name="selector" value="max_depth">
+        Max depth (root only)
+      </label>
+      <label>Depth <input type="number" name="max_depth" value="2" min="0"></label>
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force re-parse
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" name="full"> Parse full content
+      </label>
+      <button type="submit" class="btn primary">Queue parse</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="parse-tdoc-url-form-job-target"></div>
     </form>
   </section>
 
+  {# --- Panel 6 — Rebuild search index --- #}
   <section class="card">
     <h2>Rebuild search index</h2>
-    <form id="rebuild-search-form" action="/jobs/search/rebuild" method="post">
-      <button type="submit">Rebuild FTS5 index</button>
-      <span class="sync-queued" style="display:none">queued</span>
+    <form id="rebuild-search-form" class="sync-form"
+          method="post" action="/jobs/search/rebuild">
+      <label class="inline-check">
+        <input type="checkbox" name="stale_only"> Stale only (re-index tdocs uploaded since last build)
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" name="resume"> Resume from last indexed tdoc
+      </label>
+      <button type="submit" class="btn primary">Rebuild FTS5 index</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="rebuild-search-form-job-target"></div>
     </form>
   </section>
 
+  {# --- Panel 7 — Purge cache --- #}
   <section class="card">
     <h2>Purge cache</h2>
-    <form id="purge-cache-form" action="/jobs/cache/purge" method="post">
-      <input type="hidden" name="yes" value="true">
-      <button type="submit">Purge cache</button>
-      <span class="sync-queued" style="display:none">queued</span>
+    <form id="purge-cache-form" class="sync-form"
+          method="post" action="/jobs/cache/purge">
+      <label>Scope
+        <select name="scope">
+          <option value="markdown">markdown</option>
+          <option value="zips">zips</option>
+          <option value="all">all</option>
+        </select>
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" name="yes"> Confirm purge (yes)
+      </label>
+      <button type="submit" class="btn primary">Purge cache</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
       <div id="purge-cache-form-job-target"></div>
     </form>
   </section>
 
+  {# --- Panel 8 — Recent sync jobs --- #}
   <section class="card">
     <h2>Recent sync jobs</h2>
     <div
@@ -93,4 +198,6 @@
       {% include "partials/sync_recent_jobs.html" %}
     </div>
   </section>
+  <script src="/static/js/job_poller.js" defer></script>
+  <script src="/static/js/sync_hub.js" defer></script>
 {% endblock %}

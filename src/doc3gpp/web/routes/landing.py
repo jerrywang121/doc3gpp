@@ -59,6 +59,11 @@ _SECTIONS: list[dict[str, str]] = [
         "href": "/jobs",
         "description": "Background job queue status (read-only view).",
     },
+    {
+        "label": "Sync",
+        "href": "/sync",
+        "description": "Enqueue every sync-shaped job (meetings, tdocs, specs, parse, search, cache).",
+    },
 ]
 
 

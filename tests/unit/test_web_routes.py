@@ -13,6 +13,7 @@ the CLI's ``--format json`` envelope is a spec violation.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -334,12 +335,12 @@ def test_landing_json_payload(client: TestClient) -> None:
 def test_nav_order_home_tsgs_meetings_tdocs_specs_wis_search_jobs(
     client: TestClient,
 ) -> None:
-    """The header nav lists Home, TSGs, Meetings, TDocs, Specs, WIs, Search, Jobs."""
+    """The header nav lists Home, TSGs, Meetings, TDocs, Specs, WIs, Search, Jobs, Sync."""
     html = client.get("/").text
     nav = html.split('<nav class="topnav">')[1].split("</nav>")[0]
     hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
     assert hrefs == [
-        "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/wis", "/search", "/jobs",
+        "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/wis", "/search", "/jobs", "/sync",
     ]
 
 
@@ -2721,3 +2722,20 @@ def test_tdoc_show_ttcn_without_required_changes_omits_card(
     # Regression guard: existing TTCN card still renders
     assert "<h2>TTCN</h2>" in body
     assert "<dt>Testcase</dt>" in body
+
+
+_JS_DIR = Path(__file__).resolve().parents[2] / "src" / "doc3gpp" / "web" / "static" / "js"
+
+
+def test_meeting_sync_js_wires_on_terminal_reload() -> None:
+    """``meeting_sync.js`` still passes an explicit ``onTerminal`` reload callback."""
+    text = (_JS_DIR / "meeting_sync.js").read_text(encoding="utf-8")
+    assert "onTerminal" in text
+    assert "window.location.reload" in text
+
+
+def test_spec_sync_js_wires_on_terminal_reload() -> None:
+    """``spec_sync.js`` still passes an explicit ``onTerminal`` reload callback."""
+    text = (_JS_DIR / "spec_sync.js").read_text(encoding="utf-8")
+    assert "onTerminal" in text
+    assert "window.location.reload" in text

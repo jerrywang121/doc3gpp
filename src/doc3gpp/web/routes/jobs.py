@@ -124,6 +124,14 @@ class _CachePurgeBody(BaseModel):
     yes: bool = False
 
 
+class _ParseTDocURLBody(BaseModel):
+    url: str
+    recursive: bool = False
+    max_depth: int = 2
+    force: bool = False
+    full: bool = False
+
+
 # ---------------------------------------------------------------------------
 # POST enqueue endpoints
 # ---------------------------------------------------------------------------
@@ -229,6 +237,34 @@ async def post_cache_purge(
             "cache/purge scope must be one of 'markdown'|'zips'|'all'"
         )
     job = job_repo.create(JobKind.CACHE_PURGE, {"scope": body.scope})
+    return JSONResponse(status_code=202, content=_envelope(job, queued=True))
+
+
+@router.post("/parse/tdoc-url", status_code=202)
+async def post_parse_tdoc_url(
+    body: _ParseTDocURLBody,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> JSONResponse:
+    """Enqueue a parse of a single 3GPP FTP URL or folder (closes the MCP-vs-HTTP gap)."""
+    from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
+
+    if not is_3gpp_ftp_url(body.url):
+        raise InvalidFilterError(
+            f"url must be a 3GPP FTP URL (https://www.3gpp.org/ftp/...); got {body.url!r}"
+        )
+    if body.recursive and body.max_depth != 2:
+        raise InvalidFilterError(
+            "recursive and max_depth are mutually exclusive; set one or the other"
+        )
+    params: dict[str, JSONValue] = {
+        "url": body.url,
+        "force": body.force,
+        "full": body.full,
+        "recursive": body.recursive,
+    }
+    if not body.recursive:
+        params["max_depth"] = body.max_depth
+    job = job_repo.create(JobKind.PARSE_TDOC_URL, params)
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

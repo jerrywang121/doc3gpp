@@ -64,6 +64,11 @@ async def _sync_meetings(
     tsg = job.params.get("tsg")
     if not tsg or not isinstance(tsg, str):
         raise ValueError("sync_meetings job requires a 'tsg' string parameter")
+    if not services.tsg.is_known_short_name(tsg):
+        raise ValueError(
+            f"Unknown TSG short name '{tsg}'. "
+            f"Run 'doc3gpp tsg list' for the full reference."
+        )
     progress(f"syncing meetings for TSG {tsg}")
     url = _build_meeting_url(tsg)
     force = bool(job.params.get("force", False))
@@ -152,6 +157,11 @@ async def _sync_specs(
     else:
         if not tsg or not isinstance(tsg, str):
             raise ValueError("sync_specs job requires a 'tsg' string parameter")
+        if not services.tsg.is_known_short_name(tsg):
+            raise ValueError(
+                f"Unknown TSG short name '{tsg}'. "
+                f"Run 'doc3gpp tsg list' for the full reference."
+            )
         progress(f"syncing specs for TSG {tsg}")
 
     def on_progress(event: str, data: Mapping[str, object]) -> None:

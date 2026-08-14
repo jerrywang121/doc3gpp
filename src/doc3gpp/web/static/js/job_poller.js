@@ -62,10 +62,15 @@
    *   ``/jobs/sync_tdocs`` flat alias accepts. The tdoc parse form
    *   passes a JSON body instead because
    *   ``/jobs/parse/tdocs`` expects a JSON envelope.
-   * @param {string} [options.contentType] Content-Type for the POST.
-   *   Defaults to ``application/x-www-form-urlencoded``; the tdoc
-   *   parse form passes ``application/json``.
-   */
+    * @param {string} [options.contentType] Content-Type for the POST.
+    *   Defaults to ``application/x-www-form-urlencoded``; the tdoc
+    *   parse form passes ``application/json``.
+    * @param {function} [options.onTerminal] Called once when the job
+    *   reaches a terminal state (or the fallback window elapses).
+    *   Defaults to ``function () { window.location.reload(); }``; pass
+    *   a custom callback when the page needs a different refresh
+    *   behaviour (e.g. an HTMX partial swap on the hub page).
+    */
   function bindJobPolling(form, options) {
     if (!form || !form.tagName || form.tagName !== "FORM") {
       return;
@@ -76,6 +81,12 @@
       opts.targetSelector ||
       (form.id ? "#" + form.id + "-job-target" : null);
     var target = targetSelector ? document.querySelector(targetSelector) : null;
+    var onTerminal =
+      typeof opts.onTerminal === "function"
+        ? opts.onTerminal
+        : function () {
+            window.location.reload();
+          };
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -138,7 +149,7 @@
           if (!body || !body.job_id) {
             throw new Error("enqueue response missing job_id");
           }
-          attachPolling(form, target, body.job_id, queued);
+          attachPolling(form, target, body.job_id, queued, onTerminal);
         })
         .catch(function (err) {
           if (queued) {
@@ -150,16 +161,18 @@
     });
   }
 
-  function attachPolling(form, target, jobId, queued) {
+  function attachPolling(form, target, jobId, queued, onTerminal) {
     if (!target) {
       // Without a target we can't observe the polling span. Fall back
-      // to a blind reload after the fallback window so the page
-      // eventually reflects whatever the worker wrote.
+      // to a blind refresh after the fallback window so the page
+      // eventually reflects whatever the worker wrote. This honours
+      // ``onTerminal`` too so a hub panel without a job target never
+      // does an uncoordinated hard reload.
       if (queued) {
         queued.style.display = "inline";
       }
       window.setTimeout(function () {
-        window.location.reload();
+        onTerminal();
       }, TERMINAL_FALLBACK_MS);
       return;
     }
@@ -168,7 +181,7 @@
     div.setAttribute("hx-trigger", "load");
     div.setAttribute("hx-swap", "outerHTML");
     target.appendChild(div);
-    installTerminalObserver(target, queued);
+    installTerminalObserver(target, queued, onTerminal);
     if (global.htmx) {
       global.htmx.process(div);
     }
@@ -196,7 +209,7 @@
   // span, so ``pollSeen`` stays false and the observer would never
   // fire. A timeout fallback hides the hint and reloads the page once
   // the job has had ample time to reach a terminal state.
-  function installTerminalObserver(target, queued) {
+  function installTerminalObserver(target, queued, onTerminal) {
     if (!target || !global.MutationObserver) {
       return;
     }
@@ -211,7 +224,7 @@
         queued.style.display = "none";
       }
       observer.disconnect();
-      global.location.reload();
+      onTerminal();
     }
     var observer = new MutationObserver(function () {
       var node = target.querySelector(

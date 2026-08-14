@@ -63,6 +63,7 @@ class TDocCRDetails:
         release: Release label (e.g. ``"Rel-18"``).
         reason_for_change: Reason-for-change cell text.
         consequences_if_not_approved: Consequences cell text.
+        summary_of_change: Cover-page ``Summary of change:`` cell text.
         clauses_affected: Clauses-affected cell text.
         other_comments: Other-comments cell text.
         revision_history: Revision-history cell text.
@@ -90,6 +91,7 @@ class TDocCRDetails:
     release: str | None = None
     reason_for_change: str | None = None
     consequences_if_not_approved: str | None = None
+    summary_of_change: str | None = None
     clauses_affected: str | None = None
     other_comments: str | None = None
     revision_history: str | None = None
@@ -134,6 +136,7 @@ class TDocCRDetails:
             "release": self.release,
             "reason_for_change": self.reason_for_change,
             "consequences_if_not_approved": self.consequences_if_not_approved,
+            "summary_of_change": self.summary_of_change,
             "clauses_affected": self.clauses_affected,
             "other_comments": self.other_comments,
             "revision_history": self.revision_history,

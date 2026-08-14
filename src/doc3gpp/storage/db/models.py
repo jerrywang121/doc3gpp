@@ -206,6 +206,7 @@ class TDocCrDetailOrm(Base):
     release: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason_for_change: Mapped[str | None] = mapped_column(Text, nullable=True)
     consequences_if_not_approved: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_of_change: Mapped[str | None] = mapped_column(Text, nullable=True)
     clauses_affected: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
     revision_history: Mapped[str | None] = mapped_column(Text, nullable=True)

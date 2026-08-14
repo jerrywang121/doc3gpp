@@ -183,6 +183,21 @@ def test_emit_record_markdown_compact_strips_decorators(tmp_path) -> None:
         assert f"{label}:" in text
 
 
+def test_direct_parse_fields_includes_summary_of_change() -> None:
+    from doc3gpp.cli import _DIRECT_PARSE_FIELDS
+
+    assert "summary_of_change" in _DIRECT_PARSE_FIELDS
+    # Position: between consequences_if_not_approved and clauses_affected.
+    assert (
+        _DIRECT_PARSE_FIELDS.index("summary_of_change")
+        > _DIRECT_PARSE_FIELDS.index("consequences_if_not_approved")
+    )
+    assert (
+        _DIRECT_PARSE_FIELDS.index("summary_of_change")
+        < _DIRECT_PARSE_FIELDS.index("clauses_affected")
+    )
+
+
 def test_emit_record_table_compact_is_noop(tmp_path) -> None:
     """``_emit_record_table`` ignores ``compact`` (table is already
     line-oriented and maximally compact by construction)."""
@@ -863,3 +878,152 @@ def test_tdoc_show_json_default_still_pretty_prints(monkeypatch) -> None:
     assert ": " in output
     payload = json.loads(output)
     assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+
+
+def test_show_table_body_renders_summary_of_change() -> None:
+    """``_render_tdoc_show_table_body`` emits ``summary_of_change:``
+    between ``reason_for_change:`` and ``consequences_if_not_approved:``."""
+    from io import StringIO
+
+    from doc3gpp.cli import _render_tdoc_show_table_body
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_show import TDocShowRecord
+
+    record = TDocShowRecord(
+        tdoc=TDoc(tdoc_id="R5-227476", ftp_url="x.zip"),
+        cover=TDocCRDetails(
+            tdoc_id="R5-227476",
+            ftp_url="x.zip",
+            reason_for_change="Existing flow does not cover USIM refresh.",
+            summary_of_change="Add USIM config setter.",
+            consequences_if_not_approved="Test will fail unfairly.",
+        ),
+    )
+    stream = StringIO()
+    _render_tdoc_show_table_body(stream, record, parse_hint="--tdoc <id>")
+    out = stream.getvalue()
+    # Position: summary_of_change appears between reason_for_change and consequences.
+    assert "reason_for_change: Existing flow does not cover USIM refresh." in out
+    assert "summary_of_change: Add USIM config setter." in out
+    assert "consequences_if_not_approved: Test will fail unfairly." in out
+    rfc_pos = out.index("reason_for_change:")
+    soc_pos = out.index("summary_of_change:")
+    cna_pos = out.index("consequences_if_not_approved:")
+    assert rfc_pos < soc_pos < cna_pos
+
+
+def test_show_table_body_renders_summary_of_change_absent() -> None:
+    """When ``summary_of_change`` is ``None``, the table renderer omits
+    the line entirely (matches the existing ``clauses_affected`` /
+    ``other_comments`` / ``revision_history`` omission convention)."""
+    from io import StringIO
+
+    from doc3gpp.cli import _render_tdoc_show_table_body
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_show import TDocShowRecord
+
+    record = TDocShowRecord(
+        tdoc=TDoc(tdoc_id="R5-227476", ftp_url="x.zip"),
+        cover=TDocCRDetails(tdoc_id="R5-227476", ftp_url="x.zip"),
+    )
+    stream = StringIO()
+    _render_tdoc_show_table_body(stream, record, parse_hint="--tdoc <id>")
+    assert "summary_of_change:" not in stream.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — cover summary_of_change auto-propagation in JSON / markdown / by-url
+# ---------------------------------------------------------------------------
+
+
+def test_show_json_includes_summary_of_change() -> None:
+    """``_render_tdoc_show_json`` includes ``summary_of_change`` in
+    the ``cover`` block (null when absent, matching the existing
+    reason_for_change / clauses_affected contract)."""
+    from io import StringIO
+    import json
+
+    from doc3gpp.cli import _render_tdoc_show_json
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_show import TDocShowRecord
+
+    record = TDocShowRecord(
+        tdoc=TDoc(tdoc_id="R5-227476", ftp_url="x.zip"),
+        cover=TDocCRDetails(
+            tdoc_id="R5-227476",
+            ftp_url="x.zip",
+            summary_of_change="Add USIM config setter.",
+        ),
+    )
+    stream = StringIO()
+    _render_tdoc_show_json(record, stream)
+    payload = json.loads(stream.getvalue())
+    assert payload["cover"]["summary_of_change"] == "Add USIM config setter."
+
+    # Absent case: null (not omitted).
+    record_blank = TDocShowRecord(
+        tdoc=TDoc(tdoc_id="R5-227476", ftp_url="x.zip"),
+        cover=TDocCRDetails(tdoc_id="R5-227476", ftp_url="x.zip"),
+    )
+    stream2 = StringIO()
+    _render_tdoc_show_json(record_blank, stream2)
+    payload2 = json.loads(stream2.getvalue())
+    assert payload2["cover"]["summary_of_change"] is None
+
+
+def test_show_markdown_full_includes_summary_of_change() -> None:
+    """``_render_tdoc_show_markdown_full`` emits the
+    ``- **summary_of_change**: …`` line under ``## Extracted Cover Details``."""
+    from io import StringIO
+
+    from doc3gpp.cli import _render_tdoc_show_markdown_full
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_show import TDocShowRecord
+
+    record = TDocShowRecord(
+        tdoc=TDoc(tdoc_id="R5-227476", ftp_url="x.zip"),
+        cover=TDocCRDetails(
+            tdoc_id="R5-227476",
+            ftp_url="x.zip",
+            summary_of_change="Add USIM config setter.",
+        ),
+    )
+    stream = StringIO()
+    _render_tdoc_show_markdown_full(
+        stream,
+        record,
+        header_line="# R5-227476",
+        tdoc_heading="## TDoc",
+        tdoc_missing_note=None,
+        parse_hint="--tdoc <id>",
+        show_extracted_details_fallback=False,
+        files_missing_hint="—",
+    )
+    assert "**summary_of_change**: Add USIM config setter." in stream.getvalue()
+
+
+def test_show_by_ftp_url_table_includes_summary_of_change() -> None:
+    """``_render_tdoc_show_by_url_table`` surfaces
+    ``summary_of_change`` in the same way as the by-id renderer."""
+    from io import StringIO
+
+    from doc3gpp.cli import _render_tdoc_show_by_url_table
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_show import TDocShowRecordByUrl
+
+    record = TDocShowRecordByUrl(
+        ftp_url="x.zip",
+        cover=TDocCRDetails(
+            tdoc_id="R5-227476",
+            ftp_url="x.zip",
+            summary_of_change="Add USIM config setter.",
+        ),
+    )
+    stream = StringIO()
+    _render_tdoc_show_by_url_table(record, stream)
+    out = stream.getvalue()
+    assert "summary_of_change: Add USIM config setter." in out

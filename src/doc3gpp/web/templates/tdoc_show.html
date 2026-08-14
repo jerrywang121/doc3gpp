@@ -75,6 +75,9 @@
         <dt>Release</dt><dd>{{ record.cover.release or '-' }}</dd>
         <dt>CR Cat</dt><dd>{{ record.cover.cr_cat or '-' }}</dd>
         <dt>Date</dt><dd>{{ record.cover.date.isoformat() if record.cover.date else '-' }}</dd>
+        <dt>Reason for change</dt><dd>{{ record.cover.reason_for_change or '-' }}</dd>
+        <dt>Summary of change</dt><dd>{{ record.cover.summary_of_change or '-' }}</dd>
+        <dt>Consequences if not approved</dt><dd>{{ record.cover.consequences_if_not_approved or '-' }}</dd>
       </dl>
     </section>
   {% else %}

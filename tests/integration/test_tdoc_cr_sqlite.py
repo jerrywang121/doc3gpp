@@ -1037,6 +1037,37 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
     assert {row.ftp_url for row in meta_rows} == {url, url_b}
 
 
+def test_cr_cover_page_round_trip_summary_of_change(sqlite_env) -> None:
+    """A ``TDocCRDetails`` with ``summary_of_change`` set round-trips
+    through the SQL repo; ``None`` round-trips as ``NULL``."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id="R5-227476", ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip")]
+    )
+    repo = SQLAlchemyTDocCrRepository()
+
+    populated = TDocCRDetails(
+        tdoc_id="R5-227476",
+        ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip",
+        summary_of_change="Add USIM config setter.",
+    )
+    repo.upsert(populated)
+    fetched = repo.get_by_url("TSG_RAN/TSG_RAN_2/R5-227476.zip")
+    assert fetched is not None
+    assert fetched.summary_of_change == "Add USIM config setter."
+
+    # ``None`` round-trips as NULL.
+    blank = TDocCRDetails(
+        tdoc_id="R5-227476",
+        ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip",
+        summary_of_change=None,
+    )
+    repo.upsert(blank)
+    fetched_blank = repo.get_by_url("TSG_RAN/TSG_RAN_2/R5-227476.zip")
+    assert fetched_blank is not None
+    assert fetched_blank.summary_of_change is None
+
+
 def test_extract_repository_rejects_blank_url(sqlite_env) -> None:
     """``upsert`` rejects an empty ``ftp_url`` on the cover page row."""
     create_schema()
@@ -1440,3 +1471,55 @@ def test_extract_meta_orm_round_trips_cache_file(sqlite_env) -> None:
     column_names = {col.name for col in TDocExtractOrm.__table__.columns}
     assert "cache_file" in column_names
     assert sum(name.endswith("_file") for name in column_names) == 1
+
+
+def test_tdoc_cr_detail_orm_has_summary_of_change_column(sqlite_env) -> None:
+    """A fresh ``tdoc_cr_cover_page`` schema carries
+    ``summary_of_change TEXT`` after ``create_schema``."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from sqlalchemy import text
+
+    create_schema()
+    with get_engine().begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(tdoc_cr_cover_page)")).all()
+    cols = {row[1]: row[2] for row in rows}
+    assert cols.get("summary_of_change") == "TEXT"
+
+
+def test_migrate_adds_summary_of_change_to_existing_db(sqlite_env) -> None:
+    """Migration adds ``summary_of_change`` to a database whose
+    ``tdoc_cr_cover_page`` predates the column. Idempotent on a second
+    call."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from sqlalchemy import text
+
+    engine = get_engine()
+    # Simulate a legacy DB: the ``tdoc_cr_cover_page`` table exists but
+    # was created before ``summary_of_change`` was added, so
+    # ``Base.metadata.create_all`` (a no-op on existing tables) would
+    # never add it — only the migration's ``ALTER TABLE`` can.
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS tdoc_cr_cover_page"))
+        conn.execute(
+            text(
+                "CREATE TABLE tdoc_cr_cover_page ("
+                "url TEXT PRIMARY KEY, tdoc_id TEXT)"
+            )
+        )
+
+    create_schema()
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(
+            text("PRAGMA table_info(tdoc_cr_cover_page)")
+        ).all()}
+    assert "summary_of_change" in cols
+
+    # Second call is a no-op (no exception, column still present).
+    create_schema()
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(
+            text("PRAGMA table_info(tdoc_cr_cover_page)")
+        ).all()}
+    assert "summary_of_change" in cols

@@ -204,6 +204,7 @@ class SQLAlchemyTDocCrRepository:
         target.release = details.release
         target.reason_for_change = details.reason_for_change
         target.consequences_if_not_approved = details.consequences_if_not_approved
+        target.summary_of_change = details.summary_of_change
         target.clauses_affected = details.clauses_affected
         target.other_comments = details.other_comments
         target.revision_history = details.revision_history
@@ -243,6 +244,7 @@ def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
         release=row.release,
         reason_for_change=row.reason_for_change,
         consequences_if_not_approved=row.consequences_if_not_approved,
+        summary_of_change=row.summary_of_change,
         clauses_affected=row.clauses_affected,
         other_comments=row.other_comments,
         revision_history=row.revision_history,

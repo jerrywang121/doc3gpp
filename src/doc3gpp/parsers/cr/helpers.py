@@ -196,6 +196,7 @@ _COVER_FIELDS = (
     "release",
     "reason_for_change",
     "consequences_if_not_approved",
+    "summary_of_change",
     "clauses_affected",
     "other_comments",
     "revision_history",

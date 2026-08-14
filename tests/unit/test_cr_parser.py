@@ -151,6 +151,60 @@ _TTCN_CORRECTION_LINES = (
     "### 3. Method of test",
 )
 
+_HEADER_WITH_SUMMARY_LINES = (
+    "**3GPP TSG-RAN5 Meeting #97 *R5-227476***",
+    "",
+    "**Toulouse, France, 14th Nov 2022 - 18th Nov 2022**",
+    "",
+    "| CR-Form-v12.4 |",
+    "| --- |",
+    "| CHANGE REQUEST |",
+    "|  | 38.508-1 | CR | 2678 | rev | 1 | Current version: | 17.6.0 |  |",
+    "| Title: | Addition of USIM configuration for MUSIM test cases | | | | | | | | |",
+    "| Source to WG: | Qualcomm Incorporated | | | | | | | | |",
+    "| Source to TSG: | R5 | | | | | | | | |",
+    "| Category: | F | | | | | | Release: | | | Rel-17 |",
+    "| Reason for change: | | Existing flow does not cover USIM refresh. | | | | | | | |",
+    "| Summary of change: | | Add USIM config setter. | | | | | | | |",
+    "| Consequences if not approved: | | Test will fail unfairly. | | | | | | | |",
+    "| Clauses affected: | | 5.2.3 | | | | | | | | |",
+)
+
+
+def test_cover_page_extracts_summary_of_change() -> None:
+    """The ``| Summary of change: |`` cover-page row populates the
+    ``summary_of_change`` field on :class:`TDocCRDetails`."""
+    parsed = parse_cr_details(
+        "\n".join(_HEADER_WITH_SUMMARY_LINES), tdoc_id="R5-227476"
+    )
+    assert isinstance(parsed, TDocCRParseResult)
+    assert parsed.cover.summary_of_change == "Add USIM config setter."
+    # Neighbouring fields must still be parsed correctly.
+    assert parsed.cover.reason_for_change == "Existing flow does not cover USIM refresh."
+    assert parsed.cover.consequences_if_not_approved == "Test will fail unfairly."
+    assert parsed.cover.clauses_affected == "5.2.3"
+
+
+def test_cover_page_summary_of_change_absent_is_none() -> None:
+    """When the source markdown has no ``| Summary of change: |`` row,
+    the field is ``None`` (no warning, matches every other optional
+    narrative cell)."""
+    parsed = parse_cr_details(
+        "\n".join(_NON_TTCN_HEADER_LINES), tdoc_id="R5-227476"
+    )
+    assert parsed.cover.summary_of_change is None
+
+
+def test_cover_page_summary_of_change_blank_is_none() -> None:
+    """A blank ``| Summary of change: | |`` cell becomes ``None`` after
+    the existing ``_blank_cells_to_none`` pass."""
+    md = "\n".join(
+        list(_NON_TTCN_HEADER_LINES)
+        + ["| Summary of change: | | | | | | | | |"]
+    )
+    parsed = parse_cr_details(md, tdoc_id="R5-227476")
+    assert parsed.cover.summary_of_change is None
+
 
 # ---------------------------------------------------------------------------
 # Header / fail-loud behaviour

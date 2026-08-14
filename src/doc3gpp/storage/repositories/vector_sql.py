@@ -440,11 +440,17 @@ def _build_embed_text(tdoc_id: str) -> str | None:
         if wis_names:
             parts.append("; ".join(row[0] for row in wis_names if row[0]))
         cover = conn.execute(
-            text("SELECT title FROM tdoc_cr_cover_page WHERE tdoc_id = :id"),
+            text(
+                "SELECT title, summary_of_change "
+                "FROM tdoc_cr_cover_page WHERE tdoc_id = :id"
+            ),
             {"id": tdoc_id},
         ).first()
-        if cover is not None and cover[0]:
-            parts.append(cover[0])
+        if cover is not None:
+            if cover[0]:
+                parts.append(cover[0])
+            if cover[1]:
+                parts.append(cover[1])
         ttcn = conn.execute(
             text(
                 """

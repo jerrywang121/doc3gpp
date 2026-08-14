@@ -115,6 +115,28 @@ def test_to_persisted_omits_details_and_parser_version() -> None:
     assert "parser_version" not in payload
 
 
+def test_tdoc_cr_details_summary_of_change_default_is_none() -> None:
+    details = TDocCRDetails(tdoc_id="R5-227476")
+    assert details.summary_of_change is None
+
+
+def test_tdoc_cr_details_summary_of_change_round_trip() -> None:
+    details = TDocCRDetails(
+        tdoc_id="R5-227476",
+        summary_of_change="Add USIM config setter.",
+    )
+    assert details.summary_of_change == "Add USIM config setter."
+    persisted = details.to_persisted()
+    assert persisted["summary_of_change"] == "Add USIM config setter."
+    assert persisted["tdoc_id"] == "R5-227476"
+
+
+def test_tdoc_cr_details_summary_of_change_none_in_persisted() -> None:
+    details = TDocCRDetails(tdoc_id="R5-227476")
+    persisted = details.to_persisted()
+    assert persisted["summary_of_change"] is None
+
+
 def test_dataclass_is_frozen() -> None:
     """Mutation of any field raises ``FrozenInstanceError``."""
     details = TDocCRDetails(tdoc_id="R5s260009")

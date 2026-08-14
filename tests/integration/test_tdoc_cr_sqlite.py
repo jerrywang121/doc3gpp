@@ -1440,3 +1440,17 @@ def test_extract_meta_orm_round_trips_cache_file(sqlite_env) -> None:
     column_names = {col.name for col in TDocExtractOrm.__table__.columns}
     assert "cache_file" in column_names
     assert sum(name.endswith("_file") for name in column_names) == 1
+
+
+def test_tdoc_cr_detail_orm_has_summary_of_change_column(sqlite_env) -> None:
+    """A fresh ``tdoc_cr_cover_page`` schema carries
+    ``summary_of_change TEXT`` after ``create_schema``."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from sqlalchemy import text
+
+    create_schema()
+    with get_engine().begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(tdoc_cr_cover_page)")).all()
+    cols = {row[1]: row[2] for row in rows}
+    assert cols.get("summary_of_change") == "TEXT"

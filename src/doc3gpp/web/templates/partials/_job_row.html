@@ -1,0 +1,27 @@
+{# One row of the /jobs list table.
+
+   Renders the action cell with a Cancel button when the job is QUEUED or
+   RUNNING (cooperative cancellation via ``POST /jobs/{id}/cancel``); for
+   terminal jobs only the ``show`` link is rendered.
+
+   The row's ``id`` attribute is the HTMX swap target for the cancel
+   POST — the route returns this same partial after setting the cancel
+   event so the button disappears in place. #}
+<tr id="job-row-{{ job.id }}">
+  <td><code>{{ job.id[:8] }}</code></td>
+  <td>{{ job.kind.value }}</td>
+  <td>{{ job.status.value }}</td>
+  <td>{{ job.created_at.isoformat() }}</td>
+  <td>
+    <a href="/jobs/{{ job.id }}?format=html">show</a>
+    {% if job.status.value in ('queued', 'running') %}
+      <button class="btn danger"
+              hx-post="/jobs/{{ job.id }}/cancel?format=html"
+              hx-swap="outerHTML"
+              hx-target="#job-row-{{ job.id }}"
+              hx-confirm="Cancel this job?">
+        Cancel
+      </button>
+    {% endif %}
+  </td>
+</tr>

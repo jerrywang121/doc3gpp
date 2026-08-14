@@ -217,11 +217,21 @@ dl.kv dd {
   border-color: var(--accent);
 }
 
+.btn.danger {
+  background: #b00020;
+  color: white;
+  border-color: #b00020;
+}
+
 .btn:hover {
   background: var(--code-bg);
 }
 
 .btn.primary:hover {
+  filter: brightness(0.9);
+}
+
+.btn.danger:hover {
   filter: brightness(0.9);
 }
 

@@ -185,8 +185,11 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. |
 | POST | `/jobs/search/rebuild` | Enqueue `rebuild_search`. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
+| POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single 3GPP FTP URL or folder; `url` must be `https://www.3gpp.org/ftp/...`, `recursive` XOR `max_depth`). |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
+| GET | `/sync` | Sync hub page: nine enqueue panels (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, search-rebuild, cache-purge) + a "Recent sync jobs" table. |
+| GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.
@@ -211,6 +214,8 @@ when the job completes. A "Per-version details" checkbox alongside
 "Force sync" forwards `per_version_details=true` to the job so the
 worker always re-fetches the ETSI PDF + CR-list follow-ups for every
 version (default OFF — without it, cached rows are preserved).
+
+The sync hub (`/sync`) is a single page for enqueueing every sync-shaped job. Each panel submits a JSON body to the matching `/jobs/...` route via the shared `bindJobPolling` helper; when the job reaches a terminal state the bottom "Recent sync jobs" table is refreshed in place via HTMX (`GET /sync?format=fragment`) rather than a full page reload, so the user keeps their scroll position.
 
 The header nav is ordered Home, TSGs, Meetings, TDocs, WIs, Search, Jobs.
 The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)

@@ -98,6 +98,23 @@ def _build_show_repos(
     )
 
 
+def _resolve_cache_file(tdoc: TDoc) -> str:
+    """Return the cache key for a TDoc's artefacts.
+
+    Prefers the authoritative ``cache_file`` persisted on
+    ``tdoc_extracts`` (keyed by ``tdoc.ftp_url``) — that is the name
+    the parse actually wrote to the ``zips/`` / ``markdown/`` subtrees,
+    and it can differ from :func:`derive_cache_file` depending on which
+    parse path populated it (DB-mode keys on the relative ``ftp_url``,
+    while the direct-URL path keys on the absolute ``https://...`` URL).
+    Falls back to re-deriving when no extract row exists yet.
+    """
+    meta = SQLAlchemyTDocCrRepository().get_extract_meta_by_url(tdoc.ftp_url)
+    if meta is not None and meta.cache_file:
+        return meta.cache_file
+    return derive_cache_file(tdoc.ftp_url)
+
+
 @router.get("", include_in_schema=False)
 @router.get("/", include_in_schema=False)
 async def list_tdocs(
@@ -282,7 +299,7 @@ async def tdoc_content(
             f"TDoc '{tdoc_id}' is not stored or has no ftp_url"
         )
 
-    cache_file = derive_cache_file(tdoc.ftp_url)
+    cache_file = _resolve_cache_file(tdoc)
     markdown_path = Path(settings.cache.dir) / "markdown" / cache_file
     if not markdown_path.exists():
         raise CacheMissError(
@@ -346,7 +363,7 @@ async def tdoc_download(
             f"TDoc '{tdoc_id}' is not stored or has no ftp_url"
         )
 
-    cache_file = derive_cache_file(tdoc.ftp_url)
+    cache_file = _resolve_cache_file(tdoc)
     zip_path = Path(settings.cache.dir) / "zips" / cache_file
     if not zip_path.exists():
         raise CacheMissError(

@@ -887,6 +887,49 @@ def test_tdoc_content_markdown_cache_hit(
     assert "# Title" in response.text
 
 
+def test_tdoc_content_uses_stored_cache_file_when_divergent(
+    client: TestClient, sqlite_env: Any, tmp_path: Any,
+) -> None:
+    """``GET /tdocs/{id}/content`` prefers the persisted ``cache_file``.
+
+    Regression: the direct-URL parse path keys the cache on the
+    absolute ``https://www.3gpp.org/ftp/...`` URL, which produces a
+    different md5 than re-deriving from the relative ``tdocs.ftp_url``.
+    The route must serve the file named in ``tdoc_extracts.cache_file``,
+    not the one derived from ``ftp_url``.
+    """
+    from doc3gpp.models.tdoc_cr import TDocExtractMeta
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5-260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url=url),
+    )
+    # A cache_file whose hash does NOT match derive_cache_file(relative url) —
+    # e.g. one written by the direct-URL path keyed on the absolute URL.
+    stored_cache_file = "R5-260001-deadbeefdeadbeefdeadbeefdeadbeef.zip"
+    SQLAlchemyTDocCrRepository().upsert_extract_meta(
+        TDocExtractMeta(
+            ftp_url=url,
+            tdoc_id="R5-260001",
+            cache_file=stored_cache_file,
+            doc_filename="R5-260001.docx",
+        ),
+    )
+    markdown_path = tmp_path / "markdown" / stored_cache_file
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text("# Title\n\nFrom stored cache file.", encoding="utf-8")
+
+    new_app = _build_app_with_fakes(cache_dir=tmp_path)
+    with TestClient(new_app) as new_client:
+        response = new_client.get("/tdocs/R5-260001/content?format=markdown")
+    assert response.status_code == 200
+    assert "From stored cache file." in response.text
+
+
 def test_tdoc_content_markdown_cache_miss_404(
     client: TestClient, sqlite_env: Any, tmp_path: Any,
 ) -> None:

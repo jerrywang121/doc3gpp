@@ -252,6 +252,12 @@ search_fanout_factor = 4
 # separately. Range 0.05..60.0 seconds.
 # poll_interval_seconds = 1.0
 
+# Minimum interval between periodic progress log lines emitted by the
+# job worker for long-running jobs. At most one line per interval is
+# written to the job log / SSE stream; the final pending line is always
+# flushed on completion. Range 0.1..60.0 seconds.
+# progress_interval_seconds = 5.0
+
 # How often the worker prunes terminal rows older than `log_retention`.
 # The worker re-checks the cutoff on every pass, so changing this knob
 # does not affect how quickly new jobs are picked up. Minimum 10s.

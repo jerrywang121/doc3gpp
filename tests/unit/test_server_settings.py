@@ -63,6 +63,39 @@ def test_max_concurrent_jobs_bounds() -> None:
         ServerSettings(max_concurrent_jobs=17)
 
 
+def test_progress_interval_seconds_default() -> None:
+    """``progress_interval_seconds`` ships with the 5.0s default."""
+    settings = Settings()
+    assert settings.server.progress_interval_seconds == 5.0
+
+
+def test_progress_interval_seconds_toml_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TOML ``progress_interval_seconds`` flows through ``get_settings()``."""
+    config_path = tmp_path / "doc3gpp.toml"
+    config_path.write_text(
+        "[server]\nprogress_interval_seconds = 2.5\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
+    get_settings.cache_clear()
+    try:
+        assert get_settings().server.progress_interval_seconds == 2.5
+    finally:
+        get_settings.cache_clear()
+
+
+def test_progress_interval_seconds_bounds() -> None:
+    """``progress_interval_seconds`` accepts the closed range 0.1..60.0."""
+    with pytest.raises(ValidationError):
+        ServerSettings(progress_interval_seconds=0.05)
+    with pytest.raises(ValidationError):
+        ServerSettings(progress_interval_seconds=61.0)
+    assert ServerSettings(progress_interval_seconds=0.1).progress_interval_seconds == 0.1
+    assert ServerSettings(progress_interval_seconds=60.0).progress_interval_seconds == 60.0
+
+
 def test_mcp_sse_queue_size_bounds() -> None:
     """``sse_queue_size`` rejects values below 10."""
     with pytest.raises(ValidationError):

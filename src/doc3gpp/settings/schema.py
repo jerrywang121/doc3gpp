@@ -605,6 +605,17 @@ class ServerSettings(BaseModel):
             "job worker module for the regression note."
         ),
     )
+    progress_interval_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=60.0,
+        description=(
+            "Minimum interval between periodic progress log lines emitted "
+            "by the job worker for long-running jobs. At most one line per "
+            "interval is written to the job log / SSE stream; the final "
+            "pending line is always flushed on completion."
+        ),
+    )
     cleanup_interval_seconds: int = Field(default=300, ge=10)
     log_retention: str = Field(
         default="7d",

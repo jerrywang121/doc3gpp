@@ -56,7 +56,7 @@ def test_parse_tdoc_url_job_end_to_end(sqlite_env, monkeypatch) -> None:
     )
 
     def fake_extract_from_url_batch(
-        url, *, max_depth, force, full, max_tdoc_size_bytes
+        url, *, max_depth, force, full, max_tdoc_size_bytes, on_progress=None
     ):
         assert url.startswith("https://www.3gpp.org/ftp/")
         assert max_depth == 2  # default

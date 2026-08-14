@@ -100,6 +100,10 @@ _COVER_CONSEQUENCES_RE = re.compile(
 )
 _COVER_CLAUSES_RE = re.compile(r"\|\s*Clauses affected:(?:\s*\|)+\s*(.*?)\s*\|", re.IGNORECASE)
 _COVER_OTHER_RE = re.compile(r"\|\s*Other comments:(?:\s*\|)+\s*(.*?)\s*\|", re.IGNORECASE)
+_COVER_SUMMARY_RE = re.compile(
+    r"\|\s*Summary of change:(?:\s*\|)+\s*(.*?)\s*\|",
+    re.IGNORECASE,
+)
 _COVER_REVHIST_RE = re.compile(
     r"\|\s*This CR's revision history:(?:\s*\|)+\s*(.*?)\s*\|",
     re.IGNORECASE,
@@ -156,6 +160,7 @@ class CRCoverPageParser:
             ),
             (True, ["clauses_affected"], [1], _COVER_CLAUSES_RE),
             (True, ["other_comments"], [1], _COVER_OTHER_RE),
+            (True, ["summary_of_change"], [1], _COVER_SUMMARY_RE),
             (True, ["revision_history"], [1], _COVER_REVHIST_RE),
         ]
 
@@ -205,6 +210,7 @@ class CRCoverPageParser:
             for field_name in (
                 "reason_for_change",
                 "consequences_if_not_approved",
+                "summary_of_change",
                 "other_comments",
                 "revision_history",
             ):

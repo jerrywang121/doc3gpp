@@ -2532,3 +2532,71 @@ def test_meetings_list_name_filter_forwards_name_like_kwarg(client: TestClient) 
         assert captured.get("name_like") is None
     finally:
         client.app.dependency_overrides.pop(get_meeting_service, None)
+
+
+def test_tdoc_show_required_changes_card_for_ttcn(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The TTCN section is followed by a 'Required changes' card listing each entry.
+
+    Mirrors the existing ``test_tdoc_show_ttcn_changed_functions`` pattern:
+    seed a tdoc row + a TTCN sidecar with two required_changes entries,
+    GET the page, and assert the new card surfaces both entries with
+    their structured fields.
+    """
+    from doc3gpp.models.tdoc_cr import TDocCRTTCNDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260001",
+            ftp_url=url,
+            testcase="TC_1",
+            changed_functions=["mod_a.fn_one"],
+            required_changes=[
+                {
+                    "function_name": "fl_TC_7_1_3_5_3_Body",
+                    "ttcn_module": "NR_DC_Testcases.ttcn",
+                    "reason_for_change": "Change due to MCX feature addition.",
+                    "summary_of_change": "Use new PDCP function.",
+                    "mcc160_comment": "OK",
+                },
+                {
+                    "function_name": "fl_TC_7_1_3_5_4_Body",
+                },
+            ],
+        ),
+    )
+    response = client.get("/tdocs/R5s260001")
+    assert response.status_code == 200
+    body = response.text
+    # Card heading present
+    assert "<h2>Required changes</h2>" in body
+    # Two <article class="change-entry"> elements
+    assert body.count('class="change-entry"') == 2
+    # First entry renders all five fields
+    assert "<dt>Function name</dt>" in body
+    assert "<code>fl_TC_7_1_3_5_3_Body</code>" in body
+    assert "<dt>TTCN module</dt>" in body
+    assert "<code>NR_DC_Testcases.ttcn</code>" in body
+    assert "<dt>Reason for change</dt>" in body
+    assert "Change due to MCX feature addition." in body
+    assert "<dt>Summary of change</dt>" in body
+    assert "Use new PDCP function." in body
+    assert "<dt>MCC160 comment</dt>" in body
+    # Second entry only renders function_name
+    assert body.count("<dt>Function name</dt>") == 2
+    assert body.count("<dt>TTCN module</dt>") == 1
+    assert body.count("<dt>Reason for change</dt>") == 1
+    # Existing TTCN card regression guard — changed_functions still present
+    assert "<dt>Changed functions</dt>" in body
+    assert "<code>mod_a.fn_one</code>" in body

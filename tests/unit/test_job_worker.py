@@ -392,7 +392,7 @@ def test_progress_throttle_flushes_pending_on_completion() -> None:
     """
     repo = _make_repo()
     state = _make_state(repo)
-    state.settings.server.progress_interval_seconds = 60.0
+    state.settings.server.progress_interval_seconds = 1000.0
 
     async def handler(job, services, settings, *, progress, cancel_event):
         progress("first")

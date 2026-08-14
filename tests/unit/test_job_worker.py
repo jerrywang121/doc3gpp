@@ -61,11 +61,22 @@ class _FakeSpecService:
         return outcome
 
 
+class _FakeTsgService:
+    """Fake ``TsgService`` that knows a fixed set of short names."""
+
+    def __init__(self, known: set[str] | None = None) -> None:
+        self._known = known or {"R5", "SA2"}
+
+    def is_known_short_name(self, short_name: str) -> bool:
+        return short_name.upper() in self._known
+
+
 def _make_state(
     repo: JobRepository,
     *,
     fail: bool = False,
     url_service: object | None = None,
+    known_tsgs: set[str] | None = None,
 ) -> WebState:
     """Build a :class:`WebState` with a fake :class:`ServiceContainer`."""
     services = ServiceContainer(
@@ -74,7 +85,7 @@ def _make_state(
         tdoc_cr=url_service,  # type: ignore[arg-type]
         tdoc_sync=None,  # type: ignore[arg-type]
         tdoc_repo=None,  # type: ignore[arg-type]
-        tsg=None,  # type: ignore[arg-type]
+        tsg=_FakeTsgService(known_tsgs),  # type: ignore[arg-type]
         wi=None,  # type: ignore[arg-type]
         spec=_FakeSpecService(fail=fail),  # type: ignore[arg-type]
         search=None,
@@ -172,6 +183,26 @@ def test_worker_runs_queued_job() -> None:
     assert len(done.log_lines) >= 1
 
 
+def test_worker_rejects_unknown_tsg_for_meeting_sync() -> None:
+    """A ``SYNC_MEETINGS`` job for a TSG not in the ``tsgs`` table fails fast.
+
+    A legacy / unknown TSG (e.g. ``R6``) must be rejected before any
+    network work or DB writes, instead of running a sweep that fails
+    every meeting insert with an FK constraint error.
+    """
+    repo = _make_repo()
+    state = _make_state(repo, known_tsgs={"R5", "SA2"})
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R6"})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert "R6" in (done.error or "")
+
+
 def test_worker_runs_spec_sync_job() -> None:
     """A ``SYNC_SPECS`` job is claimed, logs, and succeeds."""
     repo = _make_repo()
@@ -237,6 +268,28 @@ def test_worker_runs_spec_sync_with_per_version_details() -> None:
     name, kwargs = fsvc.calls[0]
     assert name == "sync"
     assert kwargs.get("per_version_details") is True
+
+
+def test_worker_rejects_unknown_tsg_for_spec_sync() -> None:
+    """A ``SYNC_SPECS`` job for a TSG not in the ``tsgs`` table fails fast.
+
+    A legacy / unknown TSG (e.g. ``R6``) must be rejected before any
+    network work or DB writes, instead of running a full sweep that
+    fails every spec with an FK constraint error.
+    """
+    repo = _make_repo()
+    state = _make_state(repo, known_tsgs={"R5", "SA2"})
+    job = repo.create(JobKind.SYNC_SPECS, {"tsg": "R6", "force": True})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert "R6" in (done.error or "")
+    fsvc = state.services.spec
+    assert len(fsvc.calls) == 0
 
 
 def test_worker_marks_failed_on_exception() -> None:

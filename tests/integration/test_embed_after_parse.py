@@ -60,6 +60,31 @@ def _docx_available() -> bool:
     return True
 
 
+def test_build_embed_text_includes_summary_of_change(sqlite_env) -> None:
+    """``_build_embed_text`` appends ``tdoc_cr_cover_page.summary_of_change``
+    to the parts list so a fresh embedding reflects the field."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.vector_sql import _build_embed_text
+
+    create_schema()
+
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id="R5-227476", ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip")]
+    )
+    SQLAlchemyTDocCrRepository().upsert(
+        TDocCRDetails(
+            tdoc_id="R5-227476",
+            ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip",
+            title="USIM configuration",
+            summary_of_change="AddUSIMConfigSetter",
+        )
+    )
+
+    out = _build_embed_text("R5-227476")
+    assert out is not None
+    assert "AddUSIMConfigSetter" in out
+
+
 def test_embed_hook_fires_after_parse(sqlite_env) -> None:
     mock = MagicMock()
     service = build_tdoc_cr_service()

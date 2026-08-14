@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from collections.abc import Iterable
 
 from doc3gpp.models.tdoc_file import TDocFile
@@ -29,6 +30,7 @@ class TDocFileService:
         self,
         ftp_url: str,
         tdoc_ids: Iterable[str] | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> int:
         """Fetch auxiliary TDoc files from the meeting FTP and persist them.
 
@@ -60,6 +62,8 @@ class TDocFileService:
             logger.info("No auxiliary TDoc files found under %s", ftp_url)
             return 0
         written = self._repository.upsert_many(files)
+        if on_progress is not None:
+            on_progress(f"aux files for meeting: {written} stored")
         logger.info("Stored %s TDocFile records", written)
         return written
 

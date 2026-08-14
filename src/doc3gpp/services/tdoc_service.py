@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from doc3gpp.models.tdoc import TDocWithMeeting
 from doc3gpp.repository.protocols import TDocRepository
@@ -82,7 +83,12 @@ class TDocService:
             cr_pack=cr_pack,
         )
 
-    def sync_tdoc_list(self, meeting_id: int, url_template: str) -> int:
+    def sync_tdoc_list(
+        self,
+        meeting_id: int,
+        url_template: str,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> int:
         logger.info(
             "Syncing TDoc list for meeting_id %s from portal template %s",
             meeting_id,
@@ -92,5 +98,7 @@ class TDocService:
             meeting_id=meeting_id, url_template=url_template
         )
         stored = self._repository.upsert_many(tdocs)
+        if on_progress is not None:
+            on_progress(f"tdoc list for meeting {meeting_id}: {stored} rows stored")
         logger.info("Stored %s TDoc records", stored)
         return stored

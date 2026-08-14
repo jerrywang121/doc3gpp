@@ -10,6 +10,7 @@ callers.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -73,7 +74,12 @@ class TDocSyncCoordinator:
         self._tdoc_list_closed_window = tdoc_list_closed_window
         self._tdoc_list_url_template = tdoc_list_url_template
 
-    def sync_for_meeting_id(self, meeting_id: int, force: bool = False) -> SyncOutcome:
+    def sync_for_meeting_id(
+        self,
+        meeting_id: int,
+        force: bool = False,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> SyncOutcome:
         """Sync TDocs and auxiliary TDoc files for the meeting with the given numeric ID.
 
         Returns a :class:`SyncOutcome` because the coordinator may skip the
@@ -83,9 +89,14 @@ class TDocSyncCoordinator:
         meeting = self._meetings.get_by_id(meeting_id)
         if meeting is None:
             raise MeetingNotFoundError(f"Meeting not found with id {meeting_id}")
-        return self._sync_for_meeting(meeting, force=force)
+        return self._sync_for_meeting(meeting, force=force, on_progress=on_progress)
 
-    def sync_for_meeting_name(self, meeting_name: str, force: bool = False) -> SyncOutcome:
+    def sync_for_meeting_name(
+        self,
+        meeting_name: str,
+        force: bool = False,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> SyncOutcome:
         """Sync TDocs and auxiliary TDoc files for the meeting with the given canonical name.
 
         Returns a :class:`SyncOutcome` (see :meth:`sync_for_meeting_id`).
@@ -94,9 +105,13 @@ class TDocSyncCoordinator:
         meeting = self._meetings.get_by_name(meeting_name)
         if meeting is None:
             raise MeetingNotFoundError(f"Meeting not found with name {meeting_name}")
-        return self._sync_for_meeting(meeting, force=force)
+        return self._sync_for_meeting(meeting, force=force, on_progress=on_progress)
 
-    def sync_all_tracked_meetings(self, force: bool = False) -> BulkSyncOutcome:
+    def sync_all_tracked_meetings(
+        self,
+        force: bool = False,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> BulkSyncOutcome:
         """Sync TDocs and auxiliary TDoc files for every tracked meeting.
 
         Discovers all distinct ``meeting_id`` values currently stored in
@@ -119,7 +134,9 @@ class TDocSyncCoordinator:
                     raise MeetingNotFoundError(
                         f"Meeting not found with id {meeting_id}"
                     )
-                result = self._sync_for_meeting(meeting, force=force)
+                result = self._sync_for_meeting(
+                    meeting, force=force, on_progress=on_progress
+                )
             except MeetingNotFoundError as exc:
                 outcome = outcome.add_failure(
                     BulkSyncFailure(
@@ -133,7 +150,14 @@ class TDocSyncCoordinator:
 
         return outcome
 
-    def _sync_for_meeting(self, meeting: Meeting, force: bool) -> SyncOutcome:
+    def _sync_for_meeting(
+        self,
+        meeting: Meeting,
+        force: bool,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> SyncOutcome:
+        if on_progress is not None:
+            on_progress(f"syncing meeting {meeting.meeting_id} ({meeting.name})")
         now = datetime.now(timezone.utc)
         if not force and meeting.tdoc_list_last_sync is not None:
             # The closed-window rule only applies to meetings that have already
@@ -174,6 +198,7 @@ class TDocSyncCoordinator:
         tdoc_count = self._tdocs.sync_tdoc_list(
             meeting_id=meeting.meeting_id,
             url_template=self._tdoc_list_url_template,
+            on_progress=on_progress,
         )
         if meeting.ftp_url:
             tdoc_ids = self._repository.list_tdoc_ids_for_meeting(
@@ -182,6 +207,7 @@ class TDocSyncCoordinator:
             file_count = self._tdoc_files.sync_from_meeting_ftp(
                 ftp_url=meeting.ftp_url,
                 tdoc_ids=tdoc_ids,
+                on_progress=on_progress,
             )
             file_scan_note = f"{file_count} auxiliary TDoc file(s) stored"
         else:

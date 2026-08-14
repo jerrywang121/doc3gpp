@@ -791,15 +791,31 @@ def test_sync_spec_stored_row_unchanged(monkeypatch) -> None:
     assert repo.specs["38.523-1"].title == "Cached"
 
 
-def test_sync_spec_skips_when_last_synced_recently() -> None:
+def test_sync_spec_skips_when_last_synced_recently(monkeypatch) -> None:
+    """A spec synced within the sync interval is skipped (per-spec skip rule).
+
+    Freezes ``datetime.now`` inside ``spec_service`` so the skip-window
+    check is deterministic regardless of wall-clock drift.
+    """
+    from doc3gpp.services import spec_service as _svc_mod
+
+    last_synced_at = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    fake_now = last_synced_at + timedelta(hours=1)
+
+    class _FrozenDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            return fake_now if tz is None else fake_now.astimezone(tz)
+
+    monkeypatch.setattr(_svc_mod, "datetime", _FrozenDateTime)
+
     repo = _StubSpecRepo()
-    now = datetime(2026, 8, 13, tzinfo=timezone.utc)
     existing = Spec(
         spec_id="36.579-5",
         type="TS",
         title="NR conformance",
         tsg="R5",
-        last_synced_at=now - timedelta(hours=1),
+        last_synced_at=last_synced_at,
     )
     repo.upsert(existing)
 
@@ -814,15 +830,31 @@ def test_sync_spec_skips_when_last_synced_recently() -> None:
     assert repo.versions.get("36.579-5", []) == []
 
 
-def test_sync_spec_force_overrides_recent_sync() -> None:
+def test_sync_spec_force_overrides_recent_sync(monkeypatch) -> None:
+    """``--force`` bypasses the per-spec skip rule even when within the interval.
+
+    Freezes ``datetime.now`` inside ``spec_service`` so the skip-window
+    check is deterministic regardless of wall-clock drift.
+    """
+    from doc3gpp.services import spec_service as _svc_mod
+
+    last_synced_at = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    fake_now = last_synced_at + timedelta(hours=1)
+
+    class _FrozenDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            return fake_now if tz is None else fake_now.astimezone(tz)
+
+    monkeypatch.setattr(_svc_mod, "datetime", _FrozenDateTime)
+
     repo = _StubSpecRepo()
-    now = datetime(2026, 8, 13, tzinfo=timezone.utc)
     existing = Spec(
         spec_id="36.579-5",
         type="TS",
         title="NR conformance",
         tsg="R5",
-        last_synced_at=now - timedelta(hours=1),
+        last_synced_at=last_synced_at,
     )
     repo.upsert(existing)
     # Bootstrap returns a Spec that will be parsed via _sync_one_spec.
@@ -840,7 +872,7 @@ def test_sync_spec_force_overrides_recent_sync() -> None:
                 type=spec.type,
                 title=spec.title,
                 tsg=spec.tsg,
-                last_synced_at=now,
+                last_synced_at=fake_now,
             )
         )
         return 1
@@ -849,12 +881,29 @@ def test_sync_spec_force_overrides_recent_sync() -> None:
     out = svc.sync_spec("36.579-5", force=True)
     assert out.status == "synced"
     # last_synced_at was advanced.
-    assert repo.specs["36.579-5"].last_synced_at == now
+    assert repo.specs["36.579-5"].last_synced_at == fake_now
 
 
-def test_sync_spec_proceeds_when_no_last_synced_at() -> None:
+def test_sync_spec_proceeds_when_no_last_synced_at(monkeypatch) -> None:
+    """A spec with ``last_synced_at=None`` proceeds even within the interval.
+
+    The skip check only applies when ``last_synced_at is not None``, so
+    this test is not wall-clock-dependent for its assertion, but we still
+    freeze ``datetime.now`` for consistency with the other skip-rule tests.
+    """
+    from doc3gpp.services import spec_service as _svc_mod
+
+    last_synced_at = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    fake_now = last_synced_at + timedelta(hours=1)
+
+    class _FrozenDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            return fake_now if tz is None else fake_now.astimezone(tz)
+
+    monkeypatch.setattr(_svc_mod, "datetime", _FrozenDateTime)
+
     repo = _StubSpecRepo()
-    now = datetime(2026, 8, 13, tzinfo=timezone.utc)
     existing = Spec(
         spec_id="36.579-5",
         type="TS",
@@ -875,7 +924,7 @@ def test_sync_spec_proceeds_when_no_last_synced_at() -> None:
                 type=spec.type,
                 title=spec.title,
                 tsg=spec.tsg,
-                last_synced_at=now,
+                last_synced_at=fake_now,
             )
         )
         return 1

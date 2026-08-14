@@ -2661,3 +2661,63 @@ def test_tdoc_show_extracted_changes_card_for_non_ttcn(
     assert "<ins>added line</ins>" in body
     # TTCN card is not present (non-TTCN CRs never have record.ttcn)
     assert "<h2>Required changes</h2>" not in body
+
+
+def test_tdoc_show_no_extracted_changes_cards_when_no_sidecars(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TDoc with no cover/ttcn/changes sidecars shows neither new card.
+
+    The 'Cover page' placeholder is still rendered (regression guard).
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    body = response.text
+    assert "<h2>Required changes</h2>" not in body
+    assert "<h2>Extracted changes</h2>" not in body
+    # Regression guard: existing placeholder still renders
+    assert "<h2>Cover page</h2>" in body
+    assert "Not yet extracted" in body
+
+
+def test_tdoc_show_ttcn_without_required_changes_omits_card(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TTCN CR with no corrections (empty required_changes) hides the new card.
+
+    The existing TTCN card still renders (regression guard).
+    """
+    from doc3gpp.models.tdoc_cr import TDocCRTTCNDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260001",
+            ftp_url=url,
+            testcase="TC_1",
+            required_changes=[],
+        ),
+    )
+    response = client.get("/tdocs/R5s260001")
+    assert response.status_code == 200
+    body = response.text
+    assert "<h2>Required changes</h2>" not in body
+    # Regression guard: existing TTCN card still renders
+    assert "<h2>TTCN</h2>" in body
+    assert "<dt>Testcase</dt>" in body

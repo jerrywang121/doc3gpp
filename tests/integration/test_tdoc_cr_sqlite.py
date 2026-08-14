@@ -1286,7 +1286,15 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
             def __init__(self) -> None:
                 self.many_calls: list[list[str]] = []
 
-            def extract_many(self, tdoc_ids, *, force=False, full=False):
+            def extract_many(
+                self,
+                tdoc_ids,
+                *,
+                force=False,
+                full=False,
+                on_progress=None,
+                is_cancelled=None,
+            ):
                 from doc3gpp.services.tdoc_cr_service import BatchExtractResult
                 from doc3gpp.models.tdoc_cr import TDocCRDetails
                 ids = list(tdoc_ids)

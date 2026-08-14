@@ -38,6 +38,8 @@ class _FakeBatchService:
         force: bool = False,
         full: bool = False,
         max_tdoc_size_bytes: int = 0,
+        on_progress=None,
+        is_cancelled=None,
     ) -> DirectParseBatchResult:
         self.batch_calls.append((url, {"max_depth": max_depth, "force": force, "full": full}))
         if self.batch_result is None:

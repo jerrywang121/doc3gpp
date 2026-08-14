@@ -101,7 +101,13 @@ class _FakeCrService:
         self.extract_calls: list[str] = []
 
     def extract_many(
-        self, tdoc_ids, *, force: bool = False, full: bool = False,
+        self,
+        tdoc_ids,
+        *,
+        force: bool = False,
+        full: bool = False,
+        on_progress=None,
+        is_cancelled=None,
     ) -> BatchExtractResult:
         self.many_calls.append((list(tdoc_ids), force, full))
         if self._raise_from_many is not None:

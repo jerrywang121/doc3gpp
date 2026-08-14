@@ -8,8 +8,10 @@ backend. The repository and scraper boundaries are stubbed with
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import io
+import sys
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -890,3 +892,74 @@ def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
     assert set(batch.skipped.keys()) == set(urls)
     for url, reason in batch.skipped.items():
         assert reason.startswith("TDocTooLargeError:"), url
+
+
+def test_extract_many_is_cancelled_aborts_batch(tmp_path) -> None:
+    """``extract_many`` honours ``is_cancelled``: when the callback
+    returns True, the loop raises :class:`asyncio.CancelledError` and
+    the in-flight batch aborts (so the worker can land the job in
+    CANCELLED instead of running the whole list to completion).
+    """
+    service, _, _, _, _, _ = _build_service(tmp_path)
+
+    cancel_calls = {"n": 0}
+
+    def _is_cancelled() -> bool:
+        cancel_calls["n"] += 1
+        # Fire after the second poll: the first iteration runs to
+        # completion (one extract), the second aborts.
+        return cancel_calls["n"] >= 2
+
+    with pytest.raises(asyncio.CancelledError):
+        service.extract_many(
+            ["TDoc-1", "TDoc-2", "TDoc-3", "TDoc-4"],
+            is_cancelled=_is_cancelled,
+        )
+    assert cancel_calls["n"] >= 2
+
+
+def test_extract_from_url_batch_is_cancelled_aborts_batch(tmp_path) -> None:
+    """``extract_from_url_batch`` honours ``is_cancelled`` between files.
+
+    Fires the cancel before the second iteration so the first file
+    still completes (allowing its on_progress to land) but the rest
+    never start.
+    """
+    service, _, _, _, _, _ = _build_service(tmp_path)
+
+    progress_lines: list[str] = []
+    seen: list[str] = []
+
+    def _extract(url: str, **kwargs):
+        seen.append(url)
+        from doc3gpp.models.tdoc_cr import DirectParseResult
+
+        return DirectParseResult(tdoc_id=None, source_url=url)
+
+    service.extract_from_url = _extract  # type: ignore[assignment]
+
+    file_urls = [f"https://www.3gpp.org/ftp/f{i}.docx" for i in range(5)]
+    service.collect_3gpp_file_urls = lambda url, *, max_depth: list(file_urls)  # type: ignore[assignment]
+
+    cancel_calls = {"n": 0}
+
+    def _is_cancelled() -> bool:
+        cancel_calls["n"] += 1
+        return cancel_calls["n"] >= 2
+
+    svc_mod = sys.modules[service.__class__.__module__]
+    original_is_3gpp = svc_mod.is_3gpp_ftp_url
+    svc_mod.is_3gpp_ftp_url = lambda u: True  # type: ignore[assignment]
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            service.extract_from_url_batch(
+                "https://www.3gpp.org/ftp/folder/",
+                max_depth=0,
+                on_progress=progress_lines.append,
+                is_cancelled=_is_cancelled,
+            )
+    finally:
+        svc_mod.is_3gpp_ftp_url = original_is_3gpp  # type: ignore[assignment]
+
+    # First file runs, second observes the cancel and aborts.
+    assert len(seen) < 5, f"expected cancel to short-circuit; saw {seen}"

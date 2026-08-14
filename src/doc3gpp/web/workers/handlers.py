@@ -297,7 +297,12 @@ async def _parse_tdocs(
         if cancel_event.is_set():
             raise asyncio.CancelledError()
         batch = tdoc_ids[start : start + max_batch]
-        result = services.tdoc_cr.extract_many(batch, force=force, full=full)
+        result = services.tdoc_cr.extract_many(
+            batch,
+            force=force,
+            full=full,
+            is_cancelled=cancel_event.is_set,
+        )
         total_successes.update(result.successes)
         total_failures.update(result.failures)
         total_skipped.update(result.skipped)
@@ -375,7 +380,10 @@ async def _parse_tdoc_url(
         full=full,
         max_tdoc_size_bytes=max_tdoc_size_bytes or None,
         on_progress=progress,
+        is_cancelled=cancel_event.is_set,
     )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
 
     files: list[dict[str, str]] = []
     for r in batch.results:

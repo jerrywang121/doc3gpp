@@ -62,6 +62,7 @@ import io
 import logging
 import re
 import zipfile
+import asyncio
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -702,6 +703,7 @@ class TDocCrService:
         force: bool = False,
         full: bool = False,
         on_progress: Callable[[str], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> BatchExtractResult:
         """Extract a batch of TDocs and bundle successes with per-id failure reasons.
 
@@ -748,6 +750,8 @@ class TDocCrService:
         tdoc_ids = list(tdoc_ids)
         total = len(tdoc_ids)
         for i, raw_id in enumerate(tdoc_ids, start=1):
+            if is_cancelled is not None and is_cancelled():
+                raise asyncio.CancelledError()
             if on_progress is not None:
                 on_progress(f"parsed {i}/{total} TDocs")
             try:
@@ -920,6 +924,7 @@ class TDocCrService:
         full: bool = False,
         max_tdoc_size_bytes: int | None = None,
         on_progress: Callable[[str], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> DirectParseBatchResult:
         """Batch-parse every matching ``.docx``/``.zip`` under a 3GPP FTP folder.
 
@@ -956,6 +961,8 @@ class TDocCrService:
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
         for i, file_url in enumerate(file_urls, start=1):
+            if is_cancelled is not None and is_cancelled():
+                raise asyncio.CancelledError()
             if on_progress is not None:
                 on_progress(f"parsed {i}/{len(file_urls)} files")
             try:

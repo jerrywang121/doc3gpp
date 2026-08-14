@@ -809,6 +809,7 @@ class _FakeTDocCrServiceForUrl:
         full: bool,
         max_tdoc_size_bytes: int | None,
         on_progress: object | None = None,
+        is_cancelled: object | None = None,
     ) -> DirectParseBatchResult:
         self.extract_calls.append({
             "url": url,
@@ -1574,3 +1575,107 @@ def test_cache_purge_mid_flight_cancel_lands_cancelled() -> None:
             assert done.status is JobStatus.CANCELLED
         finally:
             monkey.undo()
+
+
+def test_parse_tdoc_url_mid_flight_cancel_lands_cancelled() -> None:
+    """Mid-flight cancel on a multi-file ``parse_tdoc_url`` job → CANCELLED.
+
+    The batch URL path (``extract_from_url_batch``) iterates over many
+    files in a tight loop. With the fix, ``extract_from_url_batch``
+    accepts an ``is_cancelled`` callback that the loop checks between
+    files — the moment cancel_event is set, the batch raises
+    ``asyncio.CancelledError`` and the worker marks the job CANCELLED.
+    Without the fix, the batch runs all 5 files to completion, the
+    post-call cancel check fires, but the user-visible behaviour is
+    still "ran for the whole batch" — so the test fails.
+    """
+    repo = _make_repo()
+
+    progress_calls = []
+
+    class _BlockOnReleaseBatch:
+        """``extract_from_url_batch`` that invokes on_progress per file,
+        blocking each invocation on a threading.Event.
+
+        The test sets the release after the cancel has fired, so the
+        ``is_cancelled`` callback (which the handler passes to the
+        service) is what lands the cancel — the to_thread alone would
+        otherwise wait for the whole batch to complete.
+        """
+
+        def __init__(self) -> None:
+            self.release = threading.Event()
+            self.processed: list[str] = []
+
+        def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> list[str]:
+            return [f"file://{i}" for i in range(5)]
+
+        def extract_from_url_batch(
+            self,
+            url: str,
+            *,
+            max_depth: int,
+            force: bool,
+            full: bool,
+            max_tdoc_size_bytes: int | None,
+            on_progress=None,
+            is_cancelled=None,
+        ):
+            for i in range(5):
+                if on_progress is not None:
+                    on_progress(f"parsed {i + 1}/5 files")
+                progress_calls.append(f"file {i}")
+                if is_cancelled is not None and is_cancelled():
+                    raise asyncio.CancelledError()
+                self.release.wait()
+            return DirectParseBatchResult(results=[], failures={}, skipped={})
+
+    svc = _BlockOnReleaseBatch()
+    state = _make_state_with_services(repo, tdoc_cr=svc)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/tsg_ran/WG2_RL2/TSGR2_135/Docs"},
+    )
+
+    cancel_event = asyncio.Event()
+    state.jobs.cancel_events[job.id] = cancel_event
+
+    worker = JobWorker(state, repo=repo)
+
+    async def _claim_and_trigger() -> None:
+        queued = repo.list(status=JobStatus.QUEUED, limit=1)
+        sem = asyncio.Semaphore(1)
+
+        async def _trigger() -> None:
+            await asyncio.sleep(0.05)
+            cancel_event.set()
+            # Unblock any thread that's currently waiting on
+            # release so the to_thread can unwind. The handler's
+            # is_cancelled check inside extract_from_url_batch
+            # should fire BEFORE this release, but the release
+            # is a safety net.
+            await asyncio.sleep(0.02)
+            svc.release.set()
+
+        trigger_task = asyncio.create_task(_trigger())
+        try:
+            await worker._claim_and_run(queued[0], sem)  # type: ignore[attr-defined]
+        finally:
+            trigger_task.cancel()
+            try:
+                await trigger_task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(_claim_and_trigger())
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.CANCELLED, (
+        f"expected CANCELLED after mid-flight cancel; got {done.status.value}"
+    )
+    # The cancel must have landed BEFORE all 5 files were processed —
+    # otherwise the user-visible behaviour is the same as "no cancel".
+    assert len(progress_calls) < 5, (
+        f"expected cancel to land before batch completion; "
+        f"processed {len(progress_calls)}/5 files: {progress_calls}"
+    )

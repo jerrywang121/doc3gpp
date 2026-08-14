@@ -108,6 +108,39 @@
     </section>
   {% endif %}
 
+  {% if record.ttcn and record.ttcn.required_changes %}
+    <section class="card">
+      <h2>Required changes</h2>
+      {% for change in record.ttcn.required_changes %}
+        <article class="change-entry">
+          <dl class="kv">
+            {% if change.function_name %}<dt>Function name</dt><dd><code>{{ change.function_name }}</code></dd>{% endif %}
+            {% if change.ttcn_module %}<dt>TTCN module</dt><dd><code>{{ change.ttcn_module }}</code></dd>{% endif %}
+            {% if change.reason_for_change %}<dt>Reason for change</dt><dd>{{ change.reason_for_change }}</dd>{% endif %}
+            {% if change.summary_of_change %}<dt>Summary of change</dt><dd>{{ change.summary_of_change }}</dd>{% endif %}
+            {% if change.mcc160_comment %}<dt>MCC160 comment</dt><dd>{{ change.mcc160_comment }}</dd>{% endif %}
+          </dl>
+        </article>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {% if record.changes %}
+    <section class="card">
+      <h2>Extracted changes</h2>
+      <p class="meta">
+        <span>Clauses: <code>{{ record.changes.clauses | join(', ') or '—' }}</code></span>
+        <span>{{ record.changes.changes | length }} block(s)</span>
+      </p>
+      {% for block in record.changes.changes %}
+        <article class="change-block-entry">
+          <h3>Block {{ loop.index }}{% if block.clauses %} · clauses: {{ block.clauses | join(', ') }}{% endif %}</h3>
+          <pre><code class="change-block">{{ block.text | safe }}</code></pre>
+        </article>
+      {% endfor %}
+    </section>
+  {% endif %}
+
   {% if record.extracted_at %}
     <section class="card">
       <h2>Extracted at</h2>

@@ -2532,3 +2532,192 @@ def test_meetings_list_name_filter_forwards_name_like_kwarg(client: TestClient) 
         assert captured.get("name_like") is None
     finally:
         client.app.dependency_overrides.pop(get_meeting_service, None)
+
+
+def test_tdoc_show_required_changes_card_for_ttcn(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """The TTCN section is followed by a 'Required changes' card listing each entry.
+
+    Mirrors the existing ``test_tdoc_show_ttcn_changed_functions`` pattern:
+    seed a tdoc row + a TTCN sidecar with two required_changes entries,
+    GET the page, and assert the new card surfaces both entries with
+    their structured fields.
+    """
+    from doc3gpp.models.tdoc_cr import TDocCRTTCNDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260001",
+            ftp_url=url,
+            testcase="TC_1",
+            changed_functions=["mod_a.fn_one"],
+            required_changes=[
+                {
+                    "function_name": "fl_TC_7_1_3_5_3_Body",
+                    "ttcn_module": "NR_DC_Testcases.ttcn",
+                    "reason_for_change": "Change due to MCX feature addition.",
+                    "summary_of_change": "Use new PDCP function.",
+                    "mcc160_comment": "OK",
+                },
+                {
+                    "function_name": "fl_TC_7_1_3_5_4_Body",
+                },
+            ],
+        ),
+    )
+    response = client.get("/tdocs/R5s260001")
+    assert response.status_code == 200
+    body = response.text
+    # Card heading present
+    assert "<h2>Required changes</h2>" in body
+    # Two <article class="change-entry"> elements
+    assert body.count('class="change-entry"') == 2
+    # First entry renders all five fields
+    assert "<dt>Function name</dt>" in body
+    assert "<code>fl_TC_7_1_3_5_3_Body</code>" in body
+    assert "<dt>TTCN module</dt>" in body
+    assert "<code>NR_DC_Testcases.ttcn</code>" in body
+    assert "<dt>Reason for change</dt>" in body
+    assert "Change due to MCX feature addition." in body
+    assert "<dt>Summary of change</dt>" in body
+    assert "Use new PDCP function." in body
+    assert "<dt>MCC160 comment</dt>" in body
+    # Second entry only renders function_name
+    assert body.count("<dt>Function name</dt>") == 2
+    assert body.count("<dt>TTCN module</dt>") == 1
+    assert body.count("<dt>Reason for change</dt>") == 1
+    # Existing TTCN card regression guard — changed_functions still present
+    assert "<dt>Changed functions</dt>" in body
+    assert "<code>mod_a.fn_one</code>" in body
+
+
+def test_tdoc_show_extracted_changes_card_for_non_ttcn(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A non-TTCN CR with body-derived change blocks renders the 'Extracted changes' card.
+
+    Seeds a non-TTCN tdoc + a tdoc_cr_change_details row with 2 clauses
+    and 2 change blocks (block 1 has clauses + text; block 2 has clauses
+    only, empty text), GETs the page, and asserts the new card surfaces
+    the header line, block headings, and <pre> block text.
+    """
+    from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+        SQLAlchemyTDocCrChangeDetailsRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5-260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrChangeDetailsRepository().upsert(
+        TDocCRChangeDetails(
+            tdoc_id="R5-260001",
+            ftp_url=url,
+            clauses=("5.2.3", "Table 5.2.3-1"),
+            changes=(
+                {
+                    "clauses": ["5.2.3"],
+                    "text": "first block\n<ins>added line</ins>\nmore text",
+                },
+                {
+                    "clauses": ["Table 5.2.3-1"],
+                    "text": "",
+                },
+            ),
+        ),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    body = response.text
+    # Card heading present
+    assert "<h2>Extracted changes</h2>" in body
+    # Header line: clauses string + block count
+    assert "5.2.3, Table 5.2.3-1" in body
+    assert "2 block(s)" in body
+    # Two <article class="change-block-entry"> elements
+    assert body.count('class="change-block-entry"') == 2
+    # Two <pre><code class="change-block"> elements
+    assert body.count('class="change-block"') == 2
+    # Block headings render block number + per-block clauses
+    assert "<h3>Block 1 · clauses: 5.2.3</h3>" in body
+    assert "<h3>Block 2 · clauses: Table 5.2.3-1</h3>" in body
+    # Captured text byte-faithful
+    assert "first block" in body
+    assert "<ins>added line</ins>" in body
+    # TTCN card is not present (non-TTCN CRs never have record.ttcn)
+    assert "<h2>Required changes</h2>" not in body
+
+
+def test_tdoc_show_no_extracted_changes_cards_when_no_sidecars(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TDoc with no cover/ttcn/changes sidecars shows neither new card.
+
+    The 'Cover page' placeholder is still rendered (regression guard).
+    """
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    body = response.text
+    assert "<h2>Required changes</h2>" not in body
+    assert "<h2>Extracted changes</h2>" not in body
+    # Regression guard: existing placeholder still renders
+    assert "<h2>Cover page</h2>" in body
+    assert "Not yet extracted" in body
+
+
+def test_tdoc_show_ttcn_without_required_changes_omits_card(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A TTCN CR with no corrections (empty required_changes) hides the new card.
+
+    The existing TTCN card still renders (regression guard).
+    """
+    from doc3gpp.models.tdoc_cr import TDocCRTTCNDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrTtcnRepository().upsert(
+        TDocCRTTCNDetails(
+            tdoc_id="R5s260001",
+            ftp_url=url,
+            testcase="TC_1",
+            required_changes=[],
+        ),
+    )
+    response = client.get("/tdocs/R5s260001")
+    assert response.status_code == 200
+    body = response.text
+    assert "<h2>Required changes</h2>" not in body
+    # Regression guard: existing TTCN card still renders
+    assert "<h2>TTCN</h2>" in body
+    assert "<dt>Testcase</dt>" in body

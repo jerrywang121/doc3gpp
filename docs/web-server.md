@@ -278,6 +278,8 @@ page section keeps its own separate Related WIs field (parsed from the
 docx). The TTCN section lists the `changed_functions` aggregate when
 present, and auxiliary files link to their FTP locations.
 
+When a parsed TDoc has structured sidecar data, the page also surfaces a 'Required changes' card (TTCN CRs) and an 'Extracted changes' card (non-TTCN CRs); both are mutually exclusive and omitted when their respective sidecar is absent.
+
 The TDoc list page accepts repeated `fields` query params selecting the
 visible columns; values are validated against the column catalogue and
 an unknown field returns a 400 `invalid_filter` response. Default

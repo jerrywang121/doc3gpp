@@ -1454,3 +1454,41 @@ def test_tdoc_cr_detail_orm_has_summary_of_change_column(sqlite_env) -> None:
         rows = conn.execute(text("PRAGMA table_info(tdoc_cr_cover_page)")).all()
     cols = {row[1]: row[2] for row in rows}
     assert cols.get("summary_of_change") == "TEXT"
+
+
+def test_migrate_adds_summary_of_change_to_existing_db(sqlite_env) -> None:
+    """Migration adds ``summary_of_change`` to a database whose
+    ``tdoc_cr_cover_page`` predates the column. Idempotent on a second
+    call."""
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from sqlalchemy import text
+
+    engine = get_engine()
+    # Simulate a legacy DB: the ``tdoc_cr_cover_page`` table exists but
+    # was created before ``summary_of_change`` was added, so
+    # ``Base.metadata.create_all`` (a no-op on existing tables) would
+    # never add it — only the migration's ``ALTER TABLE`` can.
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS tdoc_cr_cover_page"))
+        conn.execute(
+            text(
+                "CREATE TABLE tdoc_cr_cover_page ("
+                "url TEXT PRIMARY KEY, tdoc_id TEXT)"
+            )
+        )
+
+    create_schema()
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(
+            text("PRAGMA table_info(tdoc_cr_cover_page)")
+        ).all()}
+    assert "summary_of_change" in cols
+
+    # Second call is a no-op (no exception, column still present).
+    create_schema()
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(
+            text("PRAGMA table_info(tdoc_cr_cover_page)")
+        ).all()}
+    assert "summary_of_change" in cols

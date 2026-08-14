@@ -108,6 +108,32 @@ def _migrate_spec_rapporteurs() -> None:
         )
 
 
+def _migrate_tdoc_cr_cover_page_summary_of_change() -> None:
+    """Add ``tdoc_cr_cover_page.summary_of_change`` to databases created
+    before that column existed. Idempotent: probe
+    ``PRAGMA table_info`` first (same shape as
+    :func:`_migrate_spec_rapporteurs`)."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='tdoc_cr_cover_page' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(
+            text("PRAGMA table_info(tdoc_cr_cover_page)")
+        ).all()
+        column_names = {row[1] for row in rows}
+        if "summary_of_change" in column_names:
+            return
+        conn.execute(
+            text("ALTER TABLE tdoc_cr_cover_page ADD COLUMN summary_of_change TEXT")
+        )
+
+
 def _migrate_spec_versions_drop_comment() -> None:
     """Drop the unused ``spec_versions.comment`` column. Idempotent;
     degrades to leaving the orphan column on sqlite < 3.35 (no
@@ -280,6 +306,7 @@ def create_schema() -> None:
     _migrate_rename_tdoc_cr_details()
     _migrate_drop_tsg_spec_last_sync()
     _migrate_spec_rapporteurs()
+    _migrate_tdoc_cr_cover_page_summary_of_change()
     _migrate_spec_versions_drop_comment()
     Base.metadata.create_all(bind=engine)
     _create_search_schema()

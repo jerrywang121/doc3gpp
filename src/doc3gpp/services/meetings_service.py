@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
@@ -49,6 +50,7 @@ class MeetingService:
         meetings_url: str,
         tsg: str | None = None,
         force: bool = False,
+        on_progress: Callable[[str], None] | None = None,
     ) -> SyncOutcome:
         """Fetch meetings from the 3GPP calendar URL and persist all results.
 
@@ -89,6 +91,11 @@ class MeetingService:
         if canonical_tsg is not None:
             meetings = [replace(m, tsg=canonical_tsg) for m in meetings]
         written = self._repository.upsert_many(meetings)
+
+        if on_progress is not None:
+            on_progress(
+                f"meeting sync for TSG {canonical_tsg}: {written} rows stored"
+            )
 
         if canonical_tsg is not None and self._tsg_repository is not None:
             self._tsg_repository.update_meeting_last_sync(

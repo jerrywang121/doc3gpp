@@ -16,13 +16,7 @@
     </thead>
     <tbody>
       {% for job in jobs %}
-        <tr>
-          <td><code>{{ job.id[:8] }}</code></td>
-          <td>{{ job.kind.value }}</td>
-          <td>{{ job.status.value }}</td>
-          <td>{{ job.created_at.isoformat() }}</td>
-          <td><a href="/jobs/{{ job.id }}?format=html">show</a></td>
-        </tr>
+        {% include "partials/_job_row.html" %}
       {% endfor %}
     </tbody>
   </table>

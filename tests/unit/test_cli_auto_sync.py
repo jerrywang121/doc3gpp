@@ -439,6 +439,46 @@ class TestTriggerAutoSync:
         ) == (1, 1)
         assert meeting_service.sync.call_count == 2
 
+    def test_reports_progress_lines(self) -> None:
+        meeting_service = MagicMock(spec=MeetingService)
+        meeting_service.sync.return_value = SyncOutcome(
+            status="synced",
+            reason="Meeting sync complete",
+            synced_count=1,
+        )
+        meeting_service.get_by_id.return_value = Meeting(
+            meeting_id=42,
+            name="R5-200",
+            title="Title",
+            location="City",
+            start_date=None,
+            end_date=None,
+            ftp_url=None,
+            start_doc=None,
+            end_doc=None,
+            tsg="R5",
+        )
+        coordinator = MagicMock(spec=TDocSyncCoordinator)
+        coordinator.sync_for_meeting_id.return_value = SyncOutcome(
+            status="synced",
+            reason="TDoc sync complete",
+            synced_count=3,
+        )
+
+        lines: list[str] = []
+        trigger_auto_sync(
+            auto_sync_enabled=True,
+            meeting_service=meeting_service,
+            tdoc_sync_coordinator=coordinator,
+            tsg="R5",
+            meeting_id=42,
+            on_progress=lines.append,
+        )
+
+        assert any("TSG R5 sync: Meeting sync complete" in line for line in lines)
+        assert any("meeting 42 sync: TDoc sync complete" in line for line in lines)
+        assert any("auto-sync: 1 TSG sync(s), 1 tdoc sync(s) done" in line for line in lines)
+
 
 class TestCollectTdocCandidatesForUrl:
     def _service(self, **kwargs) -> MagicMock:

@@ -28,8 +28,13 @@ from doc3gpp.web.state import ServiceContainer
 
 logger = logging.getLogger(__name__)
 
-ProgressFn = Callable[[str], None]
+ProgressFn = Callable[[str, bool], None]
 """Signature of the ``progress`` callback passed to every handler.
+
+The second ``force`` argument bypasses the worker's throttling interval so
+the caller can guarantee a terminal-summary emission lands regardless of
+when the previous live line was written. All intermediate per-item
+progress calls use the default ``force=False`` and are throttled.
 
 Formats and persists one log line (``[<ISO timestamp>] <message>``)
 and fans it out to the job's SSE queue.
@@ -72,8 +77,18 @@ async def _sync_meetings(
     progress(f"syncing meetings for TSG {tsg}")
     url = _build_meeting_url(tsg)
     force = bool(job.params.get("force", False))
-    outcome = services.meeting.sync(url, tsg=tsg, force=force)
-    progress(outcome.reason)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    outcome = await asyncio.to_thread(
+        services.meeting.sync,
+        url,
+        tsg=tsg,
+        force=force,
+        on_progress=progress,
+    )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
         "reason": outcome.reason,
@@ -93,17 +108,31 @@ async def _sync_tdocs(
     meeting_id = job.params.get("meeting_id")
     meeting_name = job.params.get("meeting_name")
     coordinator = services.tdoc_sync
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     if meeting_id is not None:
         progress(f"syncing TDocs for meeting id {meeting_id}")
-        outcome = coordinator.sync_for_meeting_id(int(meeting_id), force=force)
+        outcome = await asyncio.to_thread(
+            coordinator.sync_for_meeting_id,
+            int(meeting_id),
+            force=force,
+            on_progress=progress,
+        )
     elif meeting_name is not None:
         progress(f"syncing TDocs for meeting {meeting_name}")
-        outcome = coordinator.sync_for_meeting_name(str(meeting_name), force=force)
+        outcome = await asyncio.to_thread(
+            coordinator.sync_for_meeting_name,
+            str(meeting_name),
+            force=force,
+            on_progress=progress,
+        )
     else:
         raise ValueError(
             "sync_tdocs job requires a 'meeting_id' or 'meeting_name' parameter"
         )
-    progress(outcome.reason)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
         "reason": outcome.reason,
@@ -122,10 +151,19 @@ async def _sync_tdocs_all(
 ) -> Mapping[str, JSONValue]:
     force = bool(job.params.get("force", False))
     progress("syncing TDocs for all tracked meetings")
-    outcome = services.tdoc_sync.sync_all_tracked_meetings(force=force)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    outcome = await asyncio.to_thread(
+        services.tdoc_sync.sync_all_tracked_meetings,
+        force=force,
+        on_progress=progress,
+    )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     progress(
         f"bulk sync complete: {outcome.synced_count} synced, "
-        f"{outcome.skipped_count} skipped, {outcome.failed_count} failed"
+        f"{outcome.skipped_count} skipped, {outcome.failed_count} failed",
+        force=True,
     )
     return {
         "synced": outcome.synced_count,
@@ -170,21 +208,27 @@ async def _sync_specs(
         elif event == "spec_done":
             progress(f"spec {data.get('spec_id', '')} done")
 
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     if spec_id is not None:
-        outcome = services.spec.sync_spec(
+        outcome = await asyncio.to_thread(
+            services.spec.sync_spec,
             spec_id,
             force=force,
             per_version_details=per_version_details,
             on_progress=on_progress,
         )
     else:
-        outcome = services.spec.sync(
+        outcome = await asyncio.to_thread(
+            services.spec.sync,
             tsg,
             force=force,
             per_version_details=per_version_details,
             on_progress=on_progress,
         )
-    progress(outcome.reason)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
         "reason": outcome.reason,
@@ -253,7 +297,12 @@ async def _parse_tdocs(
         if cancel_event.is_set():
             raise asyncio.CancelledError()
         batch = tdoc_ids[start : start + max_batch]
-        result = services.tdoc_cr.extract_many(batch, force=force, full=full)
+        result = services.tdoc_cr.extract_many(
+            batch,
+            force=force,
+            full=full,
+            is_cancelled=cancel_event.is_set,
+        )
         total_successes.update(result.successes)
         total_failures.update(result.failures)
         total_skipped.update(result.skipped)
@@ -310,6 +359,7 @@ async def _parse_tdoc_url(
                     meeting_service=services.meeting,
                     tdoc_sync_coordinator=services.tdoc_sync,
                     tdoc_ids=candidates,
+                    on_progress=progress,
                 )
             except Exception as exc:  # noqa: BLE001 - CLI parity: warn, do not abort
                 logger.warning("auto_sync from URL %s failed: %s", url, exc)
@@ -329,7 +379,11 @@ async def _parse_tdoc_url(
         force=force,
         full=full,
         max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+        on_progress=progress,
+        is_cancelled=cancel_event.is_set,
     )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
 
     files: list[dict[str, str]] = []
     for r in batch.results:
@@ -343,7 +397,8 @@ async def _parse_tdoc_url(
 
     progress(
         f"done: {len(batch.results)} parsed, {len(batch.failures)} failed, "
-        f"{len(batch.skipped)} skipped"
+        f"{len(batch.skipped)} skipped",
+        force=True,
     )
 
     return {
@@ -382,7 +437,7 @@ async def _rebuild_search(
             f"rebuild {update.processed}/{update.total} "
             f"({update.current_tdoc_id})"
         )
-    progress("search index rebuild complete")
+    progress("search index rebuild complete", force=True)
     return {"processed": True}
 
 
@@ -406,10 +461,15 @@ async def _cache_purge(
         size_limit_bytes=settings.cache.size_limit_mb * 1024 * 1024,
     )
     if scope == "all":
-        deleted = cache.purge()
+        deleted = await asyncio.to_thread(cache.purge)
     else:
-        deleted = cache.purge_subdir(scope)  # type: ignore[arg-type]
-    progress(f"purged {deleted} file(s) from cache '{scope}'")
+        deleted = await asyncio.to_thread(
+            cache.purge_subdir,
+            scope,  # type: ignore[arg-type]
+        )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    progress(f"purged {deleted} file(s) from cache '{scope}'", force=True)
     return {"deleted": deleted}
 
 

@@ -496,6 +496,53 @@ def test_cancel_returns_404_for_unknown(client: Any) -> None:
     assert r.status_code == 404
 
 
+def test_cancel_format_html_renders_row_for_running(client: Any) -> None:
+    """``?format=html`` returns the row partial as text/html for HTMX swap."""
+    c, repo, handle = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_running(job.id, message="starting")
+    r = c.post(f"/jobs/{job.id}/cancel?format=html")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    body = r.text
+    assert f'<tr id="job-row-{job.id}">' in body
+    assert ">running</td>" in body
+    # HTMX wire shape is preserved so the row continues to be self-cancellable
+    # if the worker hasn't transitioned yet.
+    assert f'hx-post="/jobs/{job.id}/cancel?format=html"' in body
+    assert f'hx-target="#job-row-{job.id}"' in body
+    assert handle.cancelled == [job.id]
+
+
+def test_cancel_format_html_renders_row_for_terminal_job(client: Any) -> None:
+    """Cancel on a CANCELLED job returns the row WITHOUT a Cancel button.
+
+    Pins the idempotent contract: a terminal job sees no ``handle.cancel``
+    call and the rendered row omits the Cancel button so the user can't
+    double-click their way into a stale state.
+    """
+    c, repo, handle = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_cancelled(job.id)
+    r = c.post(f"/jobs/{job.id}/cancel?format=html")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    body = r.text
+    assert f'<tr id="job-row-{job.id}">' in body
+    assert ">cancelled</td>" in body
+    # No Cancel button — the job is already terminal.
+    assert "Cancel</button>" not in body
+    assert f"/jobs/{job.id}/cancel?format=html" not in body
+    assert handle.cancelled == []
+
+
+def test_cancel_format_html_returns_404_for_unknown(client: Any) -> None:
+    """``?format=html`` still surfaces ``JobNotFoundError`` as a 404."""
+    c, _, _ = client
+    r = c.post("/jobs/does-not-exist/cancel?format=html")
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # SSE events stream
 # ---------------------------------------------------------------------------

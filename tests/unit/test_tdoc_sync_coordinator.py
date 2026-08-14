@@ -159,7 +159,7 @@ def test_sync_for_meeting_id_dispatches_tdoc_list_sync(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def fake_sync(self, meeting_id, url_template):
+    def fake_sync(self, meeting_id, url_template, on_progress=None):
         captured["meeting_id"] = meeting_id
         captured["url_template"] = url_template
         # Simulate that the TDoc sync wrote two rows.
@@ -201,7 +201,7 @@ def test_sync_for_meeting_name_dispatches_tdoc_list_sync(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def fake_sync(self, meeting_id, url_template):
+    def fake_sync(self, meeting_id, url_template, on_progress=None):
         captured["meeting_id"] = meeting_id
         captured["url_template"] = url_template
         return 3
@@ -217,6 +217,36 @@ def test_sync_for_meeting_name_dispatches_tdoc_list_sync(monkeypatch) -> None:
     assert outcome.status == "synced"
     assert outcome.reason.startswith("TDoc sync complete:")
     assert "3 TDoc row(s)" in outcome.reason
+
+
+def test_sync_for_meeting_id_reports_progress(monkeypatch) -> None:
+    """sync_for_meeting_id invokes on_progress with a meeting line."""
+    meeting = Meeting(
+        meeting_id=135,
+        name="R5#135",
+        title="R5 135",
+        location="Online",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 5),
+        ftp_url="tsg_ran/WG5_135/",
+    )
+    meeting_repo = _FakeMeetingRepository({135: meeting})
+    tdoc_repo = _FakeTDocRepository()
+    tdoc_file_repo = _FakeTDocFileRepository()
+
+    from doc3gpp.services.tdoc_service import TDocService
+
+    monkeypatch.setattr(
+        TDocService,
+        "sync_tdoc_list",
+        lambda self, meeting_id, url_template, on_progress=None: 0,
+    )
+
+    coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
+    lines: list[str] = []
+    coord.sync_for_meeting_id(135, on_progress=lines.append)
+
+    assert any("syncing meeting 135" in line for line in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +268,7 @@ def test_sync_chains_into_tdoc_file_service(monkeypatch) -> None:
     tdoc_repo = _FakeTDocRepository()
     tdoc_file_repo = _FakeTDocFileRepository()
 
-    def fake_tdoc_sync(self, meeting_id, url_template):
+    def fake_tdoc_sync(self, meeting_id, url_template, on_progress=None):
         tdoc_repo.upsert_many(
             [
                 TDoc(tdoc_id="R5w260200", meeting_id=meeting_id),
@@ -249,7 +279,7 @@ def test_sync_chains_into_tdoc_file_service(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def fake_file_sync(self, ftp_url, tdoc_ids):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
         captured["ftp_url"] = ftp_url
         captured["tdoc_ids"] = list(tdoc_ids)
         return 4
@@ -289,12 +319,12 @@ def test_file_sync_receives_no_tdoc_ids_when_tdoc_sync_writes_none(
 
     monkeypatch.setattr(
         "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
-        lambda self, meeting_id, url_template: 0,
+        lambda self, meeting_id, url_template, on_progress=None: 0,
     )
 
     captured: dict = {}
 
-    def fake_file_sync(self, ftp_url, tdoc_ids):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
         captured["tdoc_ids"] = list(tdoc_ids)
         return 0
 
@@ -335,7 +365,7 @@ def test_skip_when_never_synced_runs(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
-        lambda self, meeting_id, url_template: 0,
+        lambda self, meeting_id, url_template, on_progress=None: 0,
     )
 
     coord = _make_coordinator(meeting_repo, tdoc_repo, tdoc_file_repo)
@@ -394,7 +424,7 @@ def test_runs_when_closed_window_but_never_synced(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
-        lambda self, meeting_id, url_template: 0,
+        lambda self, meeting_id, url_template, on_progress=None: 0,
     )
 
     coord = _make_coordinator(
@@ -455,7 +485,7 @@ def test_force_bypasses_all_skip_rules(monkeypatch) -> None:
     from doc3gpp.services.tdoc_service import TDocService
 
     monkeypatch.setattr(
-        TDocService, "sync_tdoc_list", lambda self, meeting_id, url_template: 1
+        TDocService, "sync_tdoc_list", lambda self, meeting_id, url_template, on_progress=None: 1
     )
 
     coord = _make_coordinator(
@@ -516,7 +546,7 @@ def test_sync_runs_tdoc_list_even_when_meeting_has_no_ftp_url(
 
     captured: dict = {}
 
-    def fake_tdoc_sync(self, meeting_id, url_template):
+    def fake_tdoc_sync(self, meeting_id, url_template, on_progress=None):
         captured["meeting_id"] = meeting_id
         captured["url_template"] = url_template
         tdoc_repo.upsert_many(
@@ -524,7 +554,7 @@ def test_sync_runs_tdoc_list_even_when_meeting_has_no_ftp_url(
         )
         return 1
 
-    def fake_file_sync(self, ftp_url, tdoc_ids):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
         captured["file_sync_called"] = True
         captured["file_sync_ftp_url"] = ftp_url
         return 0
@@ -573,13 +603,13 @@ def test_sync_for_meeting_name_runs_tdoc_list_even_when_no_ftp_url(
 
     file_sync_called = {"value": False}
 
-    def fake_tdoc_sync(self, meeting_id, url_template):
+    def fake_tdoc_sync(self, meeting_id, url_template, on_progress=None):
         tdoc_repo.upsert_many(
             [TDoc(tdoc_id="R2-260002", meeting_id=meeting_id)]
         )
         return 1
 
-    def fake_file_sync(self, ftp_url, tdoc_ids):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
         file_sync_called["value"] = True
         return 0
 
@@ -639,7 +669,7 @@ def test_sync_all_tracked_meetings_iterates_each_id(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "doc3gpp.services.tdoc_service.TDocService.sync_tdoc_list",
-        lambda self, meeting_id, url_template: 1,
+        lambda self, meeting_id, url_template, on_progress=None: 1,
     )
 
     coord = _make_coordinator(
@@ -691,13 +721,13 @@ def test_sync_all_tracked_meetings_skips_file_scan_when_no_ftp_url(
     tdoc_file_repo = _FakeTDocFileRepository()
     file_sync_called = {"value": False}
 
-    def fake_tdoc_sync(self, meeting_id, url_template):
+    def fake_tdoc_sync(self, meeting_id, url_template, on_progress=None):
         tdoc_repo.upsert_many(
             [TDoc(tdoc_id="R5-260005", meeting_id=meeting_id)]
         )
         return 1
 
-    def fake_file_sync(self, ftp_url, tdoc_ids):
+    def fake_file_sync(self, ftp_url, tdoc_ids, on_progress=None):
         file_sync_called["value"] = True
         return 0
 
@@ -738,7 +768,7 @@ def test_sync_all_tracked_meetings_force_flag_is_forwarded(monkeypatch) -> None:
     tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[1])
     captured: list[bool] = []
 
-    def fake_sync_for_meeting(self, meeting, force):
+    def fake_sync_for_meeting(self, meeting, force, on_progress=None):
         captured.append(force)
         return SyncOutcome(status="synced", reason="ok")
 
@@ -777,7 +807,7 @@ def test_sync_all_tracked_meetings_counts_synced_and_skipped(monkeypatch) -> Non
     }
     tdoc_repo = _FakeTDocRepository(distinct_meeting_ids=[1, 2])
 
-    def fake_sync_for_meeting(self, meeting, force):
+    def fake_sync_for_meeting(self, meeting, force, on_progress=None):
         if meeting.meeting_id == 1:
             return SyncOutcome(status="synced", reason="synced 1")
         return SyncOutcome(status="skipped", reason="skipped 2")

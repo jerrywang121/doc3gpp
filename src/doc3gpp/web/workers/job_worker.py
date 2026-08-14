@@ -251,13 +251,34 @@ class JobWorker:
             self._state.jobs.register_queue(job.id, queue)
             cancel_event = cancel_events[job.id]
 
-            def progress(message: str) -> None:
-                line = f"[{_iso_now()}] {message}"
+            loop = asyncio.get_running_loop()
+            interval = float(self._state.settings.server.progress_interval_seconds)
+            state = {"last_emit": -interval}
+
+            def _emit(message: str, ts: str) -> None:
+                state["last_emit"] = loop.time()
+                line = f"[{ts}] {message}"
                 try:
                     self._repo.append_log(job.id, line=line)
                 except Exception:
                     logger.exception("failed to append log for job %s", job.id)
                 self._enqueue(queue, {"event": "log", "data": {"line": line}})
+
+            def _do_progress(message: str, ts: str, force: bool) -> None:
+                now = loop.time()
+                if force or now - state["last_emit"] >= interval:
+                    _emit(message, ts)
+
+            def progress(message: str, force: bool = False) -> None:
+                ts = _iso_now()
+                try:
+                    current = asyncio.get_running_loop()
+                except RuntimeError:
+                    current = None
+                if current is loop:
+                    _do_progress(message, ts, force)
+                else:
+                    loop.call_soon_threadsafe(_do_progress, message, ts, force)
 
             try:
                 claimed, _ = self._repo.mark_running(job.id, message="starting")

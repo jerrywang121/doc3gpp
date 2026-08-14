@@ -321,6 +321,62 @@ def test_extract_from_url_batch_records_per_file_failures(service: TDocCrService
     assert batch.failures == {file2: "ValueError: bad file"}
 
 
+def test_extract_from_url_batch_reports_progress(service: TDocCrService) -> None:
+    """extract_from_url_batch invokes on_progress with parsed counts."""
+    root = "https://www.3gpp.org/ftp/Docs/"
+    file1 = f"{root}R5s260001.zip"
+    file2 = f"{root}R5s260002.zip"
+    service._scraper = _FakeScraper(
+        {
+            root: _folder_html(
+                f'<a class="file" href="{file1}">R5s260001.zip</a>',
+                f'<a class="file" href="{file2}">R5s260002.zip</a>',
+            ),
+        }
+    )
+    service.extract_from_url = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda url, **_: _make_result(
+            "R5s260001" if "R5s260001" in url else "R5s260002", url
+        )
+    )
+
+    lines: list[str] = []
+    service.extract_from_url_batch(root, max_depth=0, on_progress=lines.append)
+
+    assert lines == ["parsed 1/2 files", "parsed 2/2 files"]
+
+
+def test_extract_from_url_batch_reports_progress_on_failure(
+    service: TDocCrService,
+) -> None:
+    """Progress is emitted for every file, including ones that fail."""
+    root = "https://www.3gpp.org/ftp/Docs/"
+    file1 = f"{root}R5s260001.zip"
+    file2 = f"{root}R5s260002.zip"
+    service._scraper = _FakeScraper(
+        {
+            root: _folder_html(
+                f'<a class="file" href="{file1}">R5s260001.zip</a>',
+                f'<a class="file" href="{file2}">R5s260002.zip</a>',
+            ),
+        }
+    )
+
+    def side_effect(url: str, **_: Any) -> DirectParseResult:
+        if "R5s260002" in url:
+            raise ValueError("bad file")
+        return _make_result("R5s260001", url)
+
+    service.extract_from_url = MagicMock(side_effect=side_effect)  # type: ignore[method-assign]
+
+    lines: list[str] = []
+    batch = service.extract_from_url_batch(root, max_depth=0, on_progress=lines.append)
+
+    assert len(batch.results) == 1
+    assert batch.failures == {file2: "ValueError: bad file"}
+    assert lines == ["parsed 1/2 files", "parsed 2/2 files"]
+
+
 def test_extract_from_url_batch_rejects_non_3gpp_url(service: TDocCrService) -> None:
     with pytest.raises(ValueError, match="not a 3GPP FTP URL"):
         service.extract_from_url_batch("https://example.com/", max_depth=0)

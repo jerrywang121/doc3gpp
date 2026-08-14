@@ -484,14 +484,28 @@ async def job_events(
 
 @router.post("/{job_id}/cancel")
 async def cancel_job(
+    request: Request,
     job_id: str,
+    format: str | None = Query(default=None),
     job_repo: JobRepository = Depends(get_job_repo),
     handle: JobWorkerHandle = Depends(get_job_worker),
-) -> JSONResponse:
-    """Request cooperative cancellation; idempotent on terminal jobs (returns 200 + envelope)."""
+):
+    """Request cooperative cancellation; idempotent on terminal jobs.
+
+    ``format=html`` returns the refreshed job row as an ``outerHTML`` swap
+    target for the list page's Cancel button (HTMX ``hx-swap="outerHTML"``).
+    ``format=json`` (or omitted) returns the JSON envelope as today.
+    """
     job = _load_job(job_repo, job_id)
     if job.status not in _TERMINAL_STATUSES:
         handle.cancel(job_id)
+        job = job_repo.get(job_id) or job  # refreshed envelope
+    if format == "html":
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/_job_row.html",
+            context={"job": job},
+        )
     return JSONResponse(content=_envelope(job))
 
 

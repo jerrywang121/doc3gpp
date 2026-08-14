@@ -62,7 +62,7 @@ import io
 import logging
 import re
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -701,6 +701,7 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = False,
+        on_progress: Callable[[str], None] | None = None,
     ) -> BatchExtractResult:
         """Extract a batch of TDocs and bundle successes with per-id failure reasons.
 
@@ -744,7 +745,9 @@ class TDocCrService:
         successes: dict[str, ExtractResult] = {}
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
-        for raw_id in tdoc_ids:
+        tdoc_ids = list(tdoc_ids)
+        total = len(tdoc_ids)
+        for i, raw_id in enumerate(tdoc_ids, start=1):
             try:
                 result = self.extract(raw_id, force=force, full=full)
             except TDocNotYetOnFTPError as exc:
@@ -768,6 +771,8 @@ class TDocCrService:
                 failures[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
                 continue
             successes[result.details.tdoc_id] = result
+            if on_progress is not None:
+                on_progress(f"parsed {i}/{total} TDocs")
         return BatchExtractResult(successes=successes, failures=failures, skipped=skipped)
 
     # ------------------------------------------------------------------
@@ -914,6 +919,7 @@ class TDocCrService:
         force: bool = False,
         full: bool = False,
         max_tdoc_size_bytes: int | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> DirectParseBatchResult:
         """Batch-parse every matching ``.docx``/``.zip`` under a 3GPP FTP folder.
 
@@ -949,7 +955,7 @@ class TDocCrService:
         results: list[DirectParseResult] = []
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
-        for file_url in file_urls:
+        for i, file_url in enumerate(file_urls, start=1):
             try:
                 result = self.extract_from_url(
                     file_url, force=force, full=full,
@@ -969,6 +975,8 @@ class TDocCrService:
                 failures[file_url] = f"{type(exc).__name__}: {exc}"
                 continue
             results.append(result)
+            if on_progress is not None:
+                on_progress(f"parsed {i}/{len(file_urls)} files")
 
         return DirectParseBatchResult(
             results=results, failures=failures, skipped=skipped,

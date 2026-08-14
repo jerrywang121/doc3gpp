@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
 from doc3gpp.cli_filters import parse_tdoc_id
@@ -112,7 +112,11 @@ def resolve_meetings_for_name_pattern(
     return meeting_service.list_recent(name_like=name_pattern)
 
 
-def sync_tsg_internal(tsg: str, meeting_service: MeetingService) -> bool:
+def sync_tsg_internal(
+    tsg: str,
+    meeting_service: MeetingService,
+    on_progress: Callable[[str], None] | None = None,
+) -> bool:
     """Trigger an internal meeting-calendar sync for ``tsg``.
 
     Returns ``True`` only when the sync actually ran (``status == "synced"``).
@@ -127,6 +131,9 @@ def sync_tsg_internal(tsg: str, meeting_service: MeetingService) -> bool:
         logger.warning("Auto-sync failed for TSG %s: %s", canonical_tsg, exc)
         return False
 
+    if on_progress is not None:
+        on_progress(f"TSG {canonical_tsg} sync: {outcome.reason}")
+
     prefix = "[auto-sync]"
     if outcome.status == "synced":
         print(f"{prefix} {outcome.reason}")
@@ -135,7 +142,11 @@ def sync_tsg_internal(tsg: str, meeting_service: MeetingService) -> bool:
     return False
 
 
-def sync_meeting_internal(meeting_id: int, coordinator: TDocSyncCoordinator) -> bool:
+def sync_meeting_internal(
+    meeting_id: int,
+    coordinator: TDocSyncCoordinator,
+    on_progress: Callable[[str], None] | None = None,
+) -> bool:
     """Trigger an internal TDoc-list sync for ``meeting_id``.
 
     Returns ``True`` only when the sync actually ran (``status == "synced"``).
@@ -150,6 +161,9 @@ def sync_meeting_internal(meeting_id: int, coordinator: TDocSyncCoordinator) -> 
     except Exception as exc:  # noqa: BLE001 - sync failure must not break read commands
         logger.warning("Auto-sync failed for meeting %s: %s", meeting_id, exc)
         return False
+
+    if on_progress is not None:
+        on_progress(f"meeting {meeting_id} sync: {outcome.reason}")
 
     prefix = "[auto-sync]"
     if outcome.status == "synced":
@@ -258,6 +272,7 @@ def trigger_auto_sync(
     meeting_name: str | None = None,
     tdoc: str | None = None,
     tdoc_ids: Iterable[str] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> tuple[int, int]:
     """Fire internal syncs based on the CLI filters supplied.
 
@@ -321,12 +336,19 @@ def trigger_auto_sync(
 
     meeting_syncs_done = 0
     for candidate_tsg in sorted(tsg_candidates):
-        if sync_tsg_internal(candidate_tsg, meeting_service):
+        if sync_tsg_internal(candidate_tsg, meeting_service, on_progress=on_progress):
             meeting_syncs_done += 1
 
     tdoc_syncs_done = 0
     for candidate_meeting_id in sorted(meeting_candidates):
-        if sync_meeting_internal(candidate_meeting_id, tdoc_sync_coordinator):
+        if sync_meeting_internal(
+            candidate_meeting_id, tdoc_sync_coordinator, on_progress=on_progress
+        ):
             tdoc_syncs_done += 1
+
+    if on_progress is not None:
+        on_progress(
+            f"auto-sync: {meeting_syncs_done} TSG sync(s), {tdoc_syncs_done} tdoc sync(s) done"
+        )
 
     return meeting_syncs_done, tdoc_syncs_done

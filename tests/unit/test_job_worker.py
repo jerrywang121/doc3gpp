@@ -382,13 +382,12 @@ def test_worker_drops_oldest_events() -> None:
     assert drained[-1]["data"]["line"] == "third"
 
 
-def test_progress_throttle_flushes_pending_on_completion() -> None:
-    """Rapid progress calls coalesce during a run but flush at completion.
+def test_progress_throttle_drops_suppressed_messages() -> None:
+    """Rapid progress calls under the throttle are dropped, not buffered.
 
-    With a large ``progress_interval_seconds`` both calls land under the
-    throttle during the run; the ``finally`` flush must push the pending
-    line out so every ``progress()`` call is represented in ``log_lines``
-    once the job finishes.
+    With a large ``progress_interval_seconds`` only the first call emits;
+    subsequent throttled calls within the interval are dropped so the log
+    does not fill up with per-item lines on a fast run.
     """
     repo = _make_repo()
     state = _make_state(repo)
@@ -397,6 +396,7 @@ def test_progress_throttle_flushes_pending_on_completion() -> None:
     async def handler(job, services, settings, *, progress, cancel_event):
         progress("first")
         progress("second")
+        progress("third")
         return {"ok": True}
 
     worker = JobWorker(
@@ -411,22 +411,54 @@ def test_progress_throttle_flushes_pending_on_completion() -> None:
     assert done is not None
     assert done.status is JobStatus.SUCCEEDED
     assert any("first" in line for line in done.log_lines)
-    assert any("second" in line for line in done.log_lines)
+    assert not any("second" in line for line in done.log_lines)
+    assert not any("third" in line for line in done.log_lines)
 
 
-def test_progress_flushed_lines_keep_original_timestamp(
+def test_progress_force_bypasses_throttle() -> None:
+    """``progress(message, force=True)`` emits even within the throttle window.
+
+    Terminal-summary calls use ``force=True`` so the "done: …" line always
+    lands in ``log_lines`` regardless of how recently the previous line
+    was written. The interval check is bypassed; ``last_emit`` is still
+    updated so the next non-forced call still sees a fresh window.
+    """
+    repo = _make_repo()
+    state = _make_state(repo)
+    state.settings.server.progress_interval_seconds = 1000.0
+
+    async def handler(job, services, settings, *, progress, cancel_event):
+        progress("first")
+        progress("done: 5 parsed, 0 failed", force=True)
+        return {"ok": True}
+
+    worker = JobWorker(
+        state,
+        repo=repo,
+        handlers={JobKind.SYNC_MEETINGS: handler},  # type: ignore[dict-item]
+    )
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert any("first" in line for line in done.log_lines)
+    assert any("done: 5 parsed" in line for line in done.log_lines)
+
+
+def test_progress_emitted_line_keeps_receive_timestamp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Lines coalesced by the throttle keep the timestamp they were received at.
+    """The emitted line carries the timestamp captured when ``progress()`` ran.
 
-    The ``finally`` flush emits all pending lines in one pass; each line must
-    carry the timestamp captured when ``progress()`` was called, not the
-    (identical) flush time — otherwise every buffered line shares one bogus
-    timestamp.
+    Before the receive-time fix, every buffered line shared the (later)
+    flush timestamp. Now the timestamp is captured at ``progress()`` call
+    time, so a single emitted line shows when the work actually happened
+    instead of when the buffer happened to flush.
     """
     import doc3gpp.web.workers.job_worker as jw
 
-    stamps = iter(["01:02:03", "04:05:06"])
+    stamps = iter(["01:02:03", "04:05:06", "07:08:09"])
     monkeypatch.setattr(jw, "_iso_now", lambda: next(stamps))
 
     repo = _make_repo()
@@ -434,8 +466,9 @@ def test_progress_flushed_lines_keep_original_timestamp(
     state.settings.server.progress_interval_seconds = 1000.0
 
     async def handler(job, services, settings, *, progress, cancel_event):
-        progress("first")
-        progress("second")
+        progress("first")           # emits — ts "01:02:03"
+        progress("second")          # throttled — dropped
+        progress("done", force=True)  # bypasses — ts "07:08:09"
         return {"ok": True}
 
     worker = JobWorker(
@@ -449,7 +482,8 @@ def test_progress_flushed_lines_keep_original_timestamp(
     done = repo.get(job.id)
     assert done is not None
     assert "[01:02:03] first" in done.log_lines
-    assert "[04:05:06] second" in done.log_lines
+    assert "[07:08:09] done" in done.log_lines
+    assert not any("second" in line for line in done.log_lines)
 
 
 def test_progress_from_thread_is_safe() -> None:

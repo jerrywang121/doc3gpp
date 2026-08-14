@@ -91,10 +91,11 @@ enqueued `POST /jobs/...` requests; raise it to reduce DB load on idle
 installs. `progress_interval_seconds` (default `10.0`) throttles the
 worker's periodic progress lines (at most one per interval) so
 long-running sync/parse jobs show live status without flooding the job
-log / SSE stream; the final pending line is always flushed on completion.
-`cleanup_interval_seconds` (default `300`) is unrelated and
-controls retention cleanup cadence only — flipping it does not change
-pickup speed.
+log / SSE stream; intermediate lines under the throttle are dropped, not
+buffered, and terminal-summary emissions bypass the throttle via
+`progress(message, force=True)`. `cleanup_interval_seconds` (default `300`)
+is unrelated and controls retention cleanup cadence only — flipping it
+does not change pickup speed.
 
 ## CLI reference
 

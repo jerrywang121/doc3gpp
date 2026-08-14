@@ -28,8 +28,13 @@ from doc3gpp.web.state import ServiceContainer
 
 logger = logging.getLogger(__name__)
 
-ProgressFn = Callable[[str], None]
+ProgressFn = Callable[[str, bool], None]
 """Signature of the ``progress`` callback passed to every handler.
+
+The second ``force`` argument bypasses the worker's throttling interval so
+the caller can guarantee a terminal-summary emission lands regardless of
+when the previous live line was written. All intermediate per-item
+progress calls use the default ``force=False`` and are throttled.
 
 Formats and persists one log line (``[<ISO timestamp>] <message>``)
 and fans it out to the job's SSE queue.
@@ -73,7 +78,7 @@ async def _sync_meetings(
     url = _build_meeting_url(tsg)
     force = bool(job.params.get("force", False))
     outcome = services.meeting.sync(url, tsg=tsg, force=force, on_progress=progress)
-    progress(outcome.reason)
+    progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
         "reason": outcome.reason,
@@ -103,7 +108,7 @@ async def _sync_tdocs(
         raise ValueError(
             "sync_tdocs job requires a 'meeting_id' or 'meeting_name' parameter"
         )
-    progress(outcome.reason)
+    progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
         "reason": outcome.reason,
@@ -125,7 +130,8 @@ async def _sync_tdocs_all(
     outcome = services.tdoc_sync.sync_all_tracked_meetings(force=force, on_progress=progress)
     progress(
         f"bulk sync complete: {outcome.synced_count} synced, "
-        f"{outcome.skipped_count} skipped, {outcome.failed_count} failed"
+        f"{outcome.skipped_count} skipped, {outcome.failed_count} failed",
+        force=True,
     )
     return {
         "synced": outcome.synced_count,
@@ -184,7 +190,7 @@ async def _sync_specs(
             per_version_details=per_version_details,
             on_progress=on_progress,
         )
-    progress(outcome.reason)
+    progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
         "reason": outcome.reason,
@@ -345,7 +351,8 @@ async def _parse_tdoc_url(
 
     progress(
         f"done: {len(batch.results)} parsed, {len(batch.failures)} failed, "
-        f"{len(batch.skipped)} skipped"
+        f"{len(batch.skipped)} skipped",
+        force=True,
     )
 
     return {
@@ -384,7 +391,7 @@ async def _rebuild_search(
             f"rebuild {update.processed}/{update.total} "
             f"({update.current_tdoc_id})"
         )
-    progress("search index rebuild complete")
+    progress("search index rebuild complete", force=True)
     return {"processed": True}
 
 
@@ -411,7 +418,7 @@ async def _cache_purge(
         deleted = cache.purge()
     else:
         deleted = cache.purge_subdir(scope)  # type: ignore[arg-type]
-    progress(f"purged {deleted} file(s) from cache '{scope}'")
+    progress(f"purged {deleted} file(s) from cache '{scope}'", force=True)
     return {"deleted": deleted}
 
 

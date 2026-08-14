@@ -537,6 +537,7 @@ def _cover_text(*, conn: Engine, tdoc_id: str) -> str:
                 SELECT spec, cr_num, rev, version, title, source, tsg,
                        related_wis, date, cr_cat, release,
                        reason_for_change, consequences_if_not_approved,
+                       summary_of_change,
                        clauses_affected, other_comments, revision_history,
                        extracted_tdoc_id
                   FROM tdoc_cr_cover_page

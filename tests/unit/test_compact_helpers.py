@@ -183,6 +183,21 @@ def test_emit_record_markdown_compact_strips_decorators(tmp_path) -> None:
         assert f"{label}:" in text
 
 
+def test_direct_parse_fields_includes_summary_of_change() -> None:
+    from doc3gpp.cli import _DIRECT_PARSE_FIELDS
+
+    assert "summary_of_change" in _DIRECT_PARSE_FIELDS
+    # Position: between consequences_if_not_approved and clauses_affected.
+    assert (
+        _DIRECT_PARSE_FIELDS.index("summary_of_change")
+        > _DIRECT_PARSE_FIELDS.index("consequences_if_not_approved")
+    )
+    assert (
+        _DIRECT_PARSE_FIELDS.index("summary_of_change")
+        < _DIRECT_PARSE_FIELDS.index("clauses_affected")
+    )
+
+
 def test_emit_record_table_compact_is_noop(tmp_path) -> None:
     """``_emit_record_table`` ignores ``compact`` (table is already
     line-oriented and maximally compact by construction)."""

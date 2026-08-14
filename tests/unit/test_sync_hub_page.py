@@ -93,3 +93,16 @@ def test_sync_fragment_includes_recent_jobs_table(client: Any) -> None:
     text = client.get("/sync?format=fragment").text
     assert 'id="recent-jobs"' in text
     assert "<table" in text
+
+
+def test_landing_lists_sync_link(client: Any) -> None:
+    """The landing page nav links to /sync."""
+    html = client.get("/").text
+    assert "/sync" in html
+
+
+def test_nav_includes_sync_link(client: Any) -> None:
+    """The top nav contains a ``/sync`` link next to Jobs."""
+    html = client.get("/").text
+    nav = html.split('<nav class="topnav">')[1].split("</nav>")[0]
+    assert 'href="/sync"' in nav

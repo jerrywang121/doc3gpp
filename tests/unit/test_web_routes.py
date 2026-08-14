@@ -334,12 +334,12 @@ def test_landing_json_payload(client: TestClient) -> None:
 def test_nav_order_home_tsgs_meetings_tdocs_specs_wis_search_jobs(
     client: TestClient,
 ) -> None:
-    """The header nav lists Home, TSGs, Meetings, TDocs, Specs, WIs, Search, Jobs."""
+    """The header nav lists Home, TSGs, Meetings, TDocs, Specs, WIs, Search, Jobs, Sync."""
     html = client.get("/").text
     nav = html.split('<nav class="topnav">')[1].split("</nav>")[0]
     hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
     assert hrefs == [
-        "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/wis", "/search", "/jobs",
+        "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/wis", "/search", "/jobs", "/sync",
     ]
 
 

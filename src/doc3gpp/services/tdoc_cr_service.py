@@ -748,6 +748,8 @@ class TDocCrService:
         tdoc_ids = list(tdoc_ids)
         total = len(tdoc_ids)
         for i, raw_id in enumerate(tdoc_ids, start=1):
+            if on_progress is not None:
+                on_progress(f"parsed {i}/{total} TDocs")
             try:
                 result = self.extract(raw_id, force=force, full=full)
             except TDocNotYetOnFTPError as exc:
@@ -771,8 +773,6 @@ class TDocCrService:
                 failures[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
                 continue
             successes[result.details.tdoc_id] = result
-            if on_progress is not None:
-                on_progress(f"parsed {i}/{total} TDocs")
         return BatchExtractResult(successes=successes, failures=failures, skipped=skipped)
 
     # ------------------------------------------------------------------
@@ -956,6 +956,8 @@ class TDocCrService:
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
         for i, file_url in enumerate(file_urls, start=1):
+            if on_progress is not None:
+                on_progress(f"parsed {i}/{len(file_urls)} files")
             try:
                 result = self.extract_from_url(
                     file_url, force=force, full=full,
@@ -975,8 +977,6 @@ class TDocCrService:
                 failures[file_url] = f"{type(exc).__name__}: {exc}"
                 continue
             results.append(result)
-            if on_progress is not None:
-                on_progress(f"parsed {i}/{len(file_urls)} files")
 
         return DirectParseBatchResult(
             results=results, failures=failures, skipped=skipped,

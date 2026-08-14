@@ -40,9 +40,10 @@ The hub gives the user one URL where every one of these is a stacked panel.
 
 ## Approach
 
-A single `GET /sync` page with eight stacked `<section class="card">` panels
-(one per enqueue route, plus a ninth section for the recent-jobs table at the
-bottom). All panels use the existing `bindJobPolling` helper from
+A single `GET /sync` page with nine enqueue panels inside
+`<section class="card">` blocks (one per form) plus a tenth section at
+the bottom holding the recent-jobs table. All nine enqueue forms use the
+existing `bindJobPolling` helper from
 `job_poller.js` so the submit + poll + terminal UX matches every other sync
 form on the site. The hub's only behavioural twist is the terminal action:
 when a panel's job terminates, the bottom recent-jobs table is refreshed via
@@ -140,7 +141,7 @@ GET /sync (templates/sync.html)
     </div>
 ```
 
-All eight forms submit JSON bodies via `bindJobPolling`'s `buildBody`
+All nine forms submit JSON bodies via `bindJobPolling`'s `buildBody`
 override. The TDoc sync panel uses a radio switch: when "Meeting id" is
 selected, `buildBody` emits `{meeting_id: int(text)}`; when "Meeting name" is
 selected, `{meeting_name: text}`. The Spec panels are distinct forms (one
@@ -342,7 +343,7 @@ function refreshRecentJobs() {
 
 ### Unit (`tests/unit/test_web_routes.py`)
 
-- `test_sync_page_renders_eight_panels`: `GET /sync` returns 200, body
+- `test_sync_page_renders_all_panels`: `GET /sync` returns 200, body
   contains every panel's `<h2>` (Meeting sync, TDoc sync, Spec sync, Parse
   TDocs (filter-driven), Parse from URL, Rebuild search index, Purge
   cache, Recent sync jobs).
@@ -363,7 +364,7 @@ function refreshRecentJobs() {
 ### Integration (`tests/integration/test_web_end_to_end.py` + new
 `tests/integration/test_sync_hub_end_to_end.py`)
 
-- `GET /sync` end-to-end renders 200 with all eight panels + the
+- `GET /sync` end-to-end renders 200 with all panels + the
   recent-jobs table seeded with a fake `Job`.
 - `GET /sync?format=fragment` returns only the recent-jobs table fragment.
 - Enqueueing from each form produces a `JobRepository` row with the
@@ -415,7 +416,7 @@ ruff check .
 
 ## TL;DR
 
-One new top-level page (`GET /sync`) with eight stacked panels mirroring
+One new top-level page (`GET /sync`) with nine enqueue panels mirroring
 every sync-shaped MCP tool; one new enqueue route (`POST /jobs/parse/tdoc-url`)
 to close the MCP-vs-HTTP gap; one shared `onTerminal` callback added to the
 job-poller helper; page-local JS that swaps the bottom recent-jobs table via

@@ -31,6 +31,9 @@
     window.bindJobPolling(form, {
       queuedSelector: ".sync-queued",
       targetSelector: "#" + FORM_ID + "-job-target",
+      onTerminal: function () {
+        window.location.reload();
+      },
     });
   }
 

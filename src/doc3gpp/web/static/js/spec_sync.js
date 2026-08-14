@@ -22,6 +22,9 @@
       queuedSelector: ".spec-sync-queued",
       targetSelector: "#spec-sync-job-target",
       contentType: "application/json",
+      onTerminal: function () {
+        window.location.reload();
+      },
       buildBody: function (form) {
         var forceEl = form.querySelector('input[name="force"]');
         var perVersionEl = form.querySelector('input[name="per_version_details"]');

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · sync{% endblock %}
+{% block content %}
+  <h1>Sync hub</h1>
+  <p class="lead">One place to enqueue every sync-shaped job.</p>
+
+  <section class="card">
+    <h2>Meeting sync</h2>
+    <form id="sync-meetings-form" action="/jobs/sync/meetings" method="post">
+      <input type="hidden" name="tsg" value="SA2">
+      <button type="submit">Sync meetings</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="sync-meetings-form-job-target"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>TDoc sync</h2>
+    <form id="sync-tdocs-form" action="/jobs/sync/tdocs" method="post">
+      <button type="submit">Sync TDocs</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="sync-tdocs-form-job-target"></div>
+    </form>
+    <form id="sync-tdocs-all-form" action="/jobs/sync/tdocs/all" method="post">
+      <button type="submit">Sync TDocs for all tracked meetings</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="sync-tdocs-all-form-job-target"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Spec sync</h2>
+    <form id="sync-specs-tsg-form" action="/jobs/sync/specs" method="post">
+      <input type="hidden" name="tsg" value="R5">
+      <button type="submit">Sync specs for TSG</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="sync-specs-tsg-form-job-target"></div>
+    </form>
+    <form id="sync-specs-id-form" action="/jobs/sync/specs" method="post">
+      <input type="hidden" name="spec_id" value="36.579-5">
+      <button type="submit">Sync this spec</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="sync-specs-id-form-job-target"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Parse TDocs (filter-driven)</h2>
+    <form id="parse-tdocs-form" action="/jobs/parse/tdocs" method="post">
+      <button type="submit">Queue parse</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="parse-tdocs-form-job-target"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Parse from URL</h2>
+    <form id="parse-tdoc-url-form" action="/jobs/parse/tdoc-url" method="post">
+      <input type="hidden" name="url" value="https://www.3gpp.org/ftp/">
+      <button type="submit">Queue parse</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="parse-tdoc-url-form-job-target"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Rebuild search index</h2>
+    <form id="rebuild-search-form" action="/jobs/search/rebuild" method="post">
+      <button type="submit">Rebuild FTS5 index</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="rebuild-search-form-job-target"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Purge cache</h2>
+    <form id="purge-cache-form" action="/jobs/cache/purge" method="post">
+      <input type="hidden" name="yes" value="true">
+      <button type="submit">Purge cache</button>
+      <span class="sync-queued" style="display:none">queued</span>
+      <div id="purge-cache-form-job-target"></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Recent sync jobs</h2>
+    <div
+      id="recent-jobs"
+      hx-get="/sync?format=fragment"
+      hx-trigger="load"
+      hx-swap="outerHTML"
+    >
+      {% include "partials/sync_recent_jobs.html" %}
+    </div>
+  </section>
+{% endblock %}

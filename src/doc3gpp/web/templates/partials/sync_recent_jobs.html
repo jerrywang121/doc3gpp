@@ -1,0 +1,28 @@
+<div id="recent-jobs">
+  {% if jobs %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Kind</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+          <tr>
+            <td><code>{{ job.id[:8] }}</code></td>
+            <td>{{ job.kind.value }}</td>
+            <td>{{ job.status.value }}</td>
+            <td>{{ job.created_at.isoformat() }}</td>
+            <td><a href="/jobs/{{ job.id }}?format=html">show</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="empty">No sync jobs yet.</p>
+  {% endif %}
+</div>

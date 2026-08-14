@@ -382,6 +382,68 @@ def test_worker_drops_oldest_events() -> None:
     assert drained[-1]["data"]["line"] == "third"
 
 
+def test_progress_throttle_flushes_pending_on_completion() -> None:
+    """Rapid progress calls coalesce during a run but flush at completion.
+
+    With a large ``progress_interval_seconds`` both calls land under the
+    throttle during the run; the ``finally`` flush must push the pending
+    line out so every ``progress()`` call is represented in ``log_lines``
+    once the job finishes.
+    """
+    repo = _make_repo()
+    state = _make_state(repo)
+    state.settings.server.progress_interval_seconds = 60.0
+
+    async def handler(job, services, settings, *, progress, cancel_event):
+        progress("first")
+        progress("second")
+        return {"ok": True}
+
+    worker = JobWorker(
+        state,
+        repo=repo,
+        handlers={JobKind.SYNC_MEETINGS: handler},  # type: ignore[dict-item]
+    )
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert any("first" in line for line in done.log_lines)
+    assert any("second" in line for line in done.log_lines)
+
+
+def test_progress_from_thread_is_safe() -> None:
+    """``progress()`` called from an ``asyncio.to_thread`` executor lands in ``log_lines``.
+
+    ``asyncio.Queue`` is not thread-safe and the handler may emit from a
+    worker thread (``_parse_tdoc_url`` runs ``extract_from_url_batch`` via
+    ``asyncio.to_thread``). The ``progress`` closure must schedule onto the
+    owning loop with ``call_soon_threadsafe`` instead of touching the queue
+    directly, otherwise the line is lost (or the job errors).
+    """
+    repo = _make_repo()
+    state = _make_state(repo)
+
+    async def handler(job, services, settings, *, progress, cancel_event):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: progress("from-thread"))
+        return {"ok": True}
+
+    worker = JobWorker(
+        state,
+        repo=repo,
+        handlers={JobKind.SYNC_MEETINGS: handler},  # type: ignore[dict-item]
+    )
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert any("from-thread" in line for line in done.log_lines)
+
+
 # ---------------------------------------------------------------------------
 # Mark-running idempotency + orphan-recovery + worker poll cadence.
 #

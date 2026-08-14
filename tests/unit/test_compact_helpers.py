@@ -863,3 +863,56 @@ def test_tdoc_show_json_default_still_pretty_prints(monkeypatch) -> None:
     assert ": " in output
     payload = json.loads(output)
     assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+
+
+def test_show_table_body_renders_summary_of_change() -> None:
+    """``_render_tdoc_show_table_body`` emits ``summary_of_change:``
+    between ``reason_for_change:`` and ``consequences_if_not_approved:``."""
+    from io import StringIO
+
+    from doc3gpp.cli import _render_tdoc_show_table_body
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_show import TDocShowRecord
+
+    record = TDocShowRecord(
+        tdoc=TDoc(tdoc_id="R5-227476", ftp_url="x.zip"),
+        cover=TDocCRDetails(
+            tdoc_id="R5-227476",
+            ftp_url="x.zip",
+            reason_for_change="Existing flow does not cover USIM refresh.",
+            summary_of_change="Add USIM config setter.",
+            consequences_if_not_approved="Test will fail unfairly.",
+        ),
+    )
+    stream = StringIO()
+    _render_tdoc_show_table_body(stream, record, parse_hint="--tdoc <id>")
+    out = stream.getvalue()
+    # Position: summary_of_change appears between reason_for_change and consequences.
+    assert "reason_for_change: Existing flow does not cover USIM refresh." in out
+    assert "summary_of_change: Add USIM config setter." in out
+    assert "consequences_if_not_approved: Test will fail unfairly." in out
+    rfc_pos = out.index("reason_for_change:")
+    soc_pos = out.index("summary_of_change:")
+    cna_pos = out.index("consequences_if_not_approved:")
+    assert rfc_pos < soc_pos < cna_pos
+
+
+def test_show_table_body_renders_summary_of_change_absent() -> None:
+    """When ``summary_of_change`` is ``None``, the table renderer omits
+    the line entirely (matches the existing ``clauses_affected`` /
+    ``other_comments`` / ``revision_history`` omission convention)."""
+    from io import StringIO
+
+    from doc3gpp.cli import _render_tdoc_show_table_body
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_show import TDocShowRecord
+
+    record = TDocShowRecord(
+        tdoc=TDoc(tdoc_id="R5-227476", ftp_url="x.zip"),
+        cover=TDocCRDetails(tdoc_id="R5-227476", ftp_url="x.zip"),
+    )
+    stream = StringIO()
+    _render_tdoc_show_table_body(stream, record, parse_hint="--tdoc <id>")
+    assert "summary_of_change:" not in stream.getvalue()

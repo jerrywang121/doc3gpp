@@ -2706,6 +2706,11 @@ def _render_tdoc_show_table_body(
             "reason_for_change: "
             f"{_truncate_for_display(details.reason_for_change)}\n"
         )
+        if details.summary_of_change is not None:
+            stream.write(
+                "summary_of_change: "
+                f"{_truncate_for_display(details.summary_of_change)}\n"
+            )
         stream.write(
             "consequences_if_not_approved: "
             f"{_truncate_for_display(details.consequences_if_not_approved)}\n"

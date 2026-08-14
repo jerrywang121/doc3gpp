@@ -2600,3 +2600,64 @@ def test_tdoc_show_required_changes_card_for_ttcn(
     # Existing TTCN card regression guard — changed_functions still present
     assert "<dt>Changed functions</dt>" in body
     assert "<code>mod_a.fn_one</code>" in body
+
+
+def test_tdoc_show_extracted_changes_card_for_non_ttcn(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A non-TTCN CR with body-derived change blocks renders the 'Extracted changes' card.
+
+    Seeds a non-TTCN tdoc + a tdoc_cr_change_details row with 2 clauses
+    and 2 change blocks (block 1 has clauses + text; block 2 has clauses
+    only, empty text), GETs the page, and asserts the new card surfaces
+    the header line, block headings, and <pre> block text.
+    """
+    from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+        SQLAlchemyTDocCrChangeDetailsRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "R5/26.001/R5-260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", ftp_url=url),
+    )
+    SQLAlchemyTDocCrChangeDetailsRepository().upsert(
+        TDocCRChangeDetails(
+            tdoc_id="R5-260001",
+            ftp_url=url,
+            clauses=("5.2.3", "Table 5.2.3-1"),
+            changes=(
+                {
+                    "clauses": ["5.2.3"],
+                    "text": "first block\n<ins>added line</ins>\nmore text",
+                },
+                {
+                    "clauses": ["Table 5.2.3-1"],
+                    "text": "",
+                },
+            ),
+        ),
+    )
+    response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    body = response.text
+    # Card heading present
+    assert "<h2>Extracted changes</h2>" in body
+    # Header line: clauses string + block count
+    assert "5.2.3, Table 5.2.3-1" in body
+    assert "2 block(s)" in body
+    # Two <article class="change-block-entry"> elements
+    assert body.count('class="change-block-entry"') == 2
+    # Two <pre><code class="change-block"> elements
+    assert body.count('class="change-block"') == 2
+    # Block headings render block number + per-block clauses
+    assert "<h3>Block 1 · clauses: 5.2.3</h3>" in body
+    assert "<h3>Block 2 · clauses: Table 5.2.3-1</h3>" in body
+    # Captured text byte-faithful
+    assert "first block" in body
+    assert "<ins>added line</ins>" in body
+    # TTCN card is not present (non-TTCN CRs never have record.ttcn)
+    assert "<h2>Required changes</h2>" not in body

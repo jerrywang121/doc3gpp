@@ -125,6 +125,22 @@
     </section>
   {% endif %}
 
+  {% if record.changes %}
+    <section class="card">
+      <h2>Extracted changes</h2>
+      <p class="meta">
+        <span>Clauses: <code>{{ record.changes.clauses | join(', ') or '—' }}</code></span>
+        <span>{{ record.changes.changes | length }} block(s)</span>
+      </p>
+      {% for block in record.changes.changes %}
+        <article class="change-block-entry">
+          <h3>Block {{ loop.index }}{% if block.clauses %} · clauses: {{ block.clauses | join(', ') }}{% endif %}</h3>
+          <pre><code class="change-block">{{ block.text | safe }}</code></pre>
+        </article>
+      {% endfor %}
+    </section>
+  {% endif %}
+
   {% if record.extracted_at %}
     <section class="card">
       <h2>Extracted at</h2>

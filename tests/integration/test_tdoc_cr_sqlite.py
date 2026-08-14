@@ -1037,6 +1037,37 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
     assert {row.ftp_url for row in meta_rows} == {url, url_b}
 
 
+def test_cr_cover_page_round_trip_summary_of_change(sqlite_env) -> None:
+    """A ``TDocCRDetails`` with ``summary_of_change`` set round-trips
+    through the SQL repo; ``None`` round-trips as ``NULL``."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id="R5-227476", ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip")]
+    )
+    repo = SQLAlchemyTDocCrRepository()
+
+    populated = TDocCRDetails(
+        tdoc_id="R5-227476",
+        ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip",
+        summary_of_change="Add USIM config setter.",
+    )
+    repo.upsert(populated)
+    fetched = repo.get_by_url("TSG_RAN/TSG_RAN_2/R5-227476.zip")
+    assert fetched is not None
+    assert fetched.summary_of_change == "Add USIM config setter."
+
+    # ``None`` round-trips as NULL.
+    blank = TDocCRDetails(
+        tdoc_id="R5-227476",
+        ftp_url="TSG_RAN/TSG_RAN_2/R5-227476.zip",
+        summary_of_change=None,
+    )
+    repo.upsert(blank)
+    fetched_blank = repo.get_by_url("TSG_RAN/TSG_RAN_2/R5-227476.zip")
+    assert fetched_blank is not None
+    assert fetched_blank.summary_of_change is None
+
+
 def test_extract_repository_rejects_blank_url(sqlite_env) -> None:
     """``upsert`` rejects an empty ``ftp_url`` on the cover page row."""
     create_schema()

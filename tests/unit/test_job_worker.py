@@ -414,6 +414,44 @@ def test_progress_throttle_flushes_pending_on_completion() -> None:
     assert any("second" in line for line in done.log_lines)
 
 
+def test_progress_flushed_lines_keep_original_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lines coalesced by the throttle keep the timestamp they were received at.
+
+    The ``finally`` flush emits all pending lines in one pass; each line must
+    carry the timestamp captured when ``progress()`` was called, not the
+    (identical) flush time — otherwise every buffered line shares one bogus
+    timestamp.
+    """
+    import doc3gpp.web.workers.job_worker as jw
+
+    stamps = iter(["01:02:03", "04:05:06"])
+    monkeypatch.setattr(jw, "_iso_now", lambda: next(stamps))
+
+    repo = _make_repo()
+    state = _make_state(repo)
+    state.settings.server.progress_interval_seconds = 1000.0
+
+    async def handler(job, services, settings, *, progress, cancel_event):
+        progress("first")
+        progress("second")
+        return {"ok": True}
+
+    worker = JobWorker(
+        state,
+        repo=repo,
+        handlers={JobKind.SYNC_MEETINGS: handler},  # type: ignore[dict-item]
+    )
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert "[01:02:03] first" in done.log_lines
+    assert "[04:05:06] second" in done.log_lines
+
+
 def test_progress_from_thread_is_safe() -> None:
     """``progress()`` called from an ``asyncio.to_thread`` executor lands in ``log_lines``.
 

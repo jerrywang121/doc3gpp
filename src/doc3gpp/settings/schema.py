@@ -606,7 +606,7 @@ class ServerSettings(BaseModel):
         ),
     )
     progress_interval_seconds: float = Field(
-        default=5.0,
+        default=10.0,
         ge=0.1,
         le=60.0,
         description=(

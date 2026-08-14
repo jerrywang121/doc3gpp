@@ -255,31 +255,32 @@ class JobWorker:
             interval = float(self._state.settings.server.progress_interval_seconds)
             state = {"last_emit": -interval, "pending": []}
 
-            def _emit(message: str) -> None:
+            def _emit(message: str, ts: str) -> None:
                 state["last_emit"] = loop.time()
-                line = f"[{_iso_now()}] {message}"
+                line = f"[{ts}] {message}"
                 try:
                     self._repo.append_log(job.id, line=line)
                 except Exception:
                     logger.exception("failed to append log for job %s", job.id)
                 self._enqueue(queue, {"event": "log", "data": {"line": line}})
 
-            def _do_progress(message: str) -> None:
+            def _do_progress(message: str, ts: str) -> None:
                 now = loop.time()
                 if now - state["last_emit"] >= interval:
-                    _emit(message)
+                    _emit(message, ts)
                 else:
-                    state["pending"].append(message)
+                    state["pending"].append((ts, message))
 
             def progress(message: str) -> None:
+                ts = _iso_now()
                 try:
                     current = asyncio.get_running_loop()
                 except RuntimeError:
                     current = None
                 if current is loop:
-                    _do_progress(message)
+                    _do_progress(message, ts)
                 else:
-                    loop.call_soon_threadsafe(_do_progress, message)
+                    loop.call_soon_threadsafe(_do_progress, message, ts)
 
             try:
                 claimed, _ = self._repo.mark_running(job.id, message="starting")
@@ -330,8 +331,8 @@ class JobWorker:
                 self._repo.mark_succeeded(job.id, summary=dict(summary))
                 logger.info("job %s succeeded", job.id)
             finally:
-                for msg in state["pending"]:
-                    _emit(msg)
+                for ts, msg in state["pending"]:
+                    _emit(msg, ts)
                 state["pending"].clear()
                 self._state.jobs.unregister_queue(job.id)
                 self._state.jobs.cancel_events.pop(job.id, None)

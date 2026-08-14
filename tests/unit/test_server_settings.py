@@ -64,9 +64,9 @@ def test_max_concurrent_jobs_bounds() -> None:
 
 
 def test_progress_interval_seconds_default() -> None:
-    """``progress_interval_seconds`` ships with the 5.0s default."""
+    """``progress_interval_seconds`` ships with the 10.0s default."""
     settings = Settings()
-    assert settings.server.progress_interval_seconds == 5.0
+    assert settings.server.progress_interval_seconds == 10.0
 
 
 def test_progress_interval_seconds_toml_override(

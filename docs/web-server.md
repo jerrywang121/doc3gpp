@@ -71,6 +71,7 @@ host = "127.0.0.1"
 port = 8765
 max_concurrent_jobs = 1    # how many background jobs run at once
 poll_interval_seconds = 1  # how often the worker checks for new QUEUED jobs
+progress_interval_seconds = 5  # min gap between periodic progress log lines for long-running jobs
 cleanup_interval_seconds = 300   # how often the worker purges terminal rows
 log_retention = "7d"       # keep this much of the server log
 cache_subdir = "web"       # optional subdir under the tdoc cache for server content (default None)
@@ -87,7 +88,11 @@ are true.
 
 `poll_interval_seconds` (default `1.0`) governs pickup latency for freshly
 enqueued `POST /jobs/...` requests; raise it to reduce DB load on idle
-installs. `cleanup_interval_seconds` (default `300`) is unrelated and
+installs. `progress_interval_seconds` (default `5.0`) throttles the
+worker's periodic progress lines (at most one per interval) so
+long-running sync/parse jobs show live status without flooding the job
+log / SSE stream; the final pending line is always flushed on completion.
+`cleanup_interval_seconds` (default `300`) is unrelated and
 controls retention cleanup cadence only — flipping it does not change
 pickup speed.
 
@@ -393,6 +398,10 @@ print(body["result"]["content"][0]["text"])
   `QUEUED` rows. Lower values mean faster pickup after a
   `POST /jobs/...` lands; the 1-second default keeps the nav badge in
   lockstep with the SSE stream.
+- `server.progress_interval_seconds` (default `5.0`, range `0.1..60.0`)
+  is the minimum gap between the worker's periodic progress log lines
+  for long-running jobs. It is independent of `poll_interval_seconds` —
+  it only throttles progress emission, not job pickup.
 - `server.cleanup_interval_seconds` (default `300`, minimum `10`)
   controls how often the worker prunes terminal rows older than
   `log_retention`. The two cadences are independent — flipping

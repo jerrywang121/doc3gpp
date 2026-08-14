@@ -77,7 +77,17 @@ async def _sync_meetings(
     progress(f"syncing meetings for TSG {tsg}")
     url = _build_meeting_url(tsg)
     force = bool(job.params.get("force", False))
-    outcome = services.meeting.sync(url, tsg=tsg, force=force, on_progress=progress)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    outcome = await asyncio.to_thread(
+        services.meeting.sync,
+        url,
+        tsg=tsg,
+        force=force,
+        on_progress=progress,
+    )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
@@ -98,16 +108,30 @@ async def _sync_tdocs(
     meeting_id = job.params.get("meeting_id")
     meeting_name = job.params.get("meeting_name")
     coordinator = services.tdoc_sync
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     if meeting_id is not None:
         progress(f"syncing TDocs for meeting id {meeting_id}")
-        outcome = coordinator.sync_for_meeting_id(int(meeting_id), force=force, on_progress=progress)
+        outcome = await asyncio.to_thread(
+            coordinator.sync_for_meeting_id,
+            int(meeting_id),
+            force=force,
+            on_progress=progress,
+        )
     elif meeting_name is not None:
         progress(f"syncing TDocs for meeting {meeting_name}")
-        outcome = coordinator.sync_for_meeting_name(str(meeting_name), force=force, on_progress=progress)
+        outcome = await asyncio.to_thread(
+            coordinator.sync_for_meeting_name,
+            str(meeting_name),
+            force=force,
+            on_progress=progress,
+        )
     else:
         raise ValueError(
             "sync_tdocs job requires a 'meeting_id' or 'meeting_name' parameter"
         )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
@@ -127,7 +151,15 @@ async def _sync_tdocs_all(
 ) -> Mapping[str, JSONValue]:
     force = bool(job.params.get("force", False))
     progress("syncing TDocs for all tracked meetings")
-    outcome = services.tdoc_sync.sync_all_tracked_meetings(force=force, on_progress=progress)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    outcome = await asyncio.to_thread(
+        services.tdoc_sync.sync_all_tracked_meetings,
+        force=force,
+        on_progress=progress,
+    )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     progress(
         f"bulk sync complete: {outcome.synced_count} synced, "
         f"{outcome.skipped_count} skipped, {outcome.failed_count} failed",
@@ -176,20 +208,26 @@ async def _sync_specs(
         elif event == "spec_done":
             progress(f"spec {data.get('spec_id', '')} done")
 
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     if spec_id is not None:
-        outcome = services.spec.sync_spec(
+        outcome = await asyncio.to_thread(
+            services.spec.sync_spec,
             spec_id,
             force=force,
             per_version_details=per_version_details,
             on_progress=on_progress,
         )
     else:
-        outcome = services.spec.sync(
+        outcome = await asyncio.to_thread(
+            services.spec.sync,
             tsg,
             force=force,
             per_version_details=per_version_details,
             on_progress=on_progress,
         )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     progress(outcome.reason, force=True)
     return {
         "status": outcome.status,
@@ -415,9 +453,14 @@ async def _cache_purge(
         size_limit_bytes=settings.cache.size_limit_mb * 1024 * 1024,
     )
     if scope == "all":
-        deleted = cache.purge()
+        deleted = await asyncio.to_thread(cache.purge)
     else:
-        deleted = cache.purge_subdir(scope)  # type: ignore[arg-type]
+        deleted = await asyncio.to_thread(
+            cache.purge_subdir,
+            scope,  # type: ignore[arg-type]
+        )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
     progress(f"purged {deleted} file(s) from cache '{scope}'", force=True)
     return {"deleted": deleted}
 

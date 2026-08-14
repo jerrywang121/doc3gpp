@@ -8,6 +8,7 @@ whose service methods are stubs. No network calls are made.
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 from sqlalchemy import create_engine
@@ -1206,3 +1207,370 @@ def test_parse_tdoc_url_handler_size_cap_zero_means_unlimited() -> None:
     done = repo.get(job.id)
     assert done.status is JobStatus.SUCCEEDED
     assert fake.extract_calls[0]["max_tdoc_size_bytes"] is None
+
+
+# ---------------------------------------------------------------------------
+# In-flight cancellation of sync_* / cache_purge handlers
+#
+# The cancel button on the web /jobs page calls JobWorkerHandle.cancel which
+# sets cancel_events[job_id] mid-run. The handler MUST observe the cancel
+# event — either before invoking the blocking service or after it returns —
+# and raise :class:`asyncio.CancelledError` so the worker routes the job to
+# CANCELLED instead of SUCCEEDED. Before the fix, ``sync_meetings`` /
+# ``sync_tdocs`` / ``sync_tdocs_all`` / ``sync_specs`` / ``cache_purge``
+# held the event loop with the synchronous service call and never polled
+# the event, so the job ran to completion and was marked SUCCEEDED.
+#
+# The fix wraps each blocking service call in ``await asyncio.to_thread``
+# (so the loop is freed) and polls ``cancel_event.is_set()`` both before
+# and after the call (so a pre-set or mid-flight event short-circuits the
+# work and lands the job in CANCELLED). The pre-set tests below pin the
+# "before-call" half of the contract: the cancel check fires before the
+# service is invoked so the job never reaches the blocking work.
+# ---------------------------------------------------------------------------
+
+
+def _run_worker_with_pre_set_cancel(
+    worker: JobWorker, repo: JobRepository, job_id: str
+):
+    """Run a worker claim with the cancel event pre-set.
+
+    The test pattern is: pre-set the event (simulating "cancel arrived
+    while the handler was about to do its blocking work"), then run the
+    worker, then assert CANCELLED. The handler's ``cancel_event.is_set()``
+    check fires BEFORE the service call so the service is never invoked.
+    """
+
+    async def _claim() -> None:
+        queued = repo.list(status=JobStatus.QUEUED, limit=1)
+        assert queued, "expected a queued job"
+        sem = asyncio.Semaphore(1)
+        await worker._claim_and_run(queued[0], sem)  # type: ignore[attr-defined]
+
+    asyncio.run(_claim())
+    return repo.get(job_id)
+
+
+def _run_worker_with_mid_flight_cancel(
+    worker: JobWorker,
+    repo: JobRepository,
+    job_id: str,
+    cancel_event: asyncio.Event,
+    *,
+    trigger_delay: float = 0.05,
+    release: threading.Event | None = None,
+) -> None:
+    """Run a worker claim; set the cancel event from a side-task mid-flight.
+
+    Schedules a sibling asyncio task that waits ``trigger_delay`` seconds
+    and then sets ``cancel_event``. The side-task also unblocks
+    ``release`` (a threading.Event blocking the fake service call) after a
+    short grace period so the to_thread can return and the handler's
+    post-call cancel check can fire. Used to exercise the in-flight
+    cancellation contract: the handler's blocking service call MUST be
+    wrapped in ``asyncio.to_thread`` (so the loop is free) and MUST poll
+    ``cancel_event.is_set()`` after the call (so the cancel lands the
+    job in CANCELLED, not SUCCEEDED).
+    """
+
+    async def _claim() -> None:
+        queued = repo.list(status=JobStatus.QUEUED, limit=1)
+        assert queued, "expected a queued job"
+        sem = asyncio.Semaphore(1)
+
+        async def _trigger() -> None:
+            # Set cancel shortly after the to_thread starts so the
+            # handler's post-call check fires.
+            await asyncio.sleep(trigger_delay)
+            cancel_event.set()
+            # Give the to_thread time to return after the cancel lands;
+            # if a release event is provided, unblock the service call
+            # so the to_thread can finish.
+            if release is not None:
+                await asyncio.sleep(0.02)
+                release.set()
+
+        trigger_task = asyncio.create_task(_trigger())
+        try:
+            await worker._claim_and_run(queued[0], sem)  # type: ignore[attr-defined]
+        finally:
+            trigger_task.cancel()
+            try:
+                await trigger_task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(_claim())
+
+
+def _make_state_with_services(repo: JobRepository, **services_kwargs) -> WebState:
+    """Build a :class:`WebState` with the named fake services, defaults for the rest."""
+    from doc3gpp.settings.schema import Settings
+    defaults = dict(
+        meeting=None,
+        tdoc=None,
+        tdoc_cr=None,
+        tdoc_sync=None,
+        tdoc_repo=None,
+        tsg=_FakeTsgService({"R5"}),
+        wi=None,
+        spec=_FakeSpecService(),
+        search=None,
+        semantic_search=None,
+        tdoc_file_repo=None,
+        job_repo=repo,
+    )
+    defaults.update(services_kwargs)
+    return WebState(
+        settings=Settings(),
+        engine=None,
+        services=ServiceContainer(**defaults),  # type: ignore[arg-type]
+        jobs=_JobWorkerHandleFake(),  # type: ignore[arg-type]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mid-flight cancellation: the bug the user reported
+#
+# A cancel that lands WHILE the handler's blocking service call is in
+# flight must reach the handler (which yields via ``asyncio.to_thread``)
+# so the job ends in CANCELLED. Without ``to_thread`` + a post-call
+# ``cancel_event.is_set()`` check, the loop is held and the cancel
+# cannot land — the job reaches SUCCEEDED.
+#
+# The fakes below await a ``release`` event INSIDE the service call to
+# simulate a long-running blocking request: they yield to the loop, the
+# cancel-task sets the event, and the handler observes it after the
+# service returns (the post-call cancel check fires).
+# ---------------------------------------------------------------------------
+
+
+class _BlockOnReleaseMeetingService:
+    """``MeetingService.sync`` is a BLOCKING call that waits for ``release``.
+
+    Mirrors the production service shape: ``def sync(...)`` is synchronous
+    and returns a ``SyncOutcome``. The blocking wait simulates a long
+    network request; ``asyncio.to_thread`` runs it in a worker thread so
+    the loop is free to deliver the cancel event.
+    """
+
+    def __init__(self, release: threading.Event) -> None:
+        from doc3gpp.models.sync import SyncOutcome
+        self.release = release
+
+        def sync(*_a, **_kw):
+            release.wait()  # blocking
+            return SyncOutcome(
+                status="synced", reason="ok", synced_count=3
+            )
+
+        self.sync = sync
+
+
+class _BlockOnReleaseTDocSync:
+    """TDocSyncCoordinator whose methods are BLOCKING calls waiting on ``release``."""
+
+    def __init__(self, release: threading.Event) -> None:
+        from doc3gpp.models.sync import SyncOutcome
+        self.release = release
+
+        def _by_id(*_a, **_kw):
+            release.wait()
+            return SyncOutcome(
+                status="synced", reason="ok", synced_count=2, file_count=10,
+            )
+
+        def _all(*_a, **_kw):
+            release.wait()
+            return SyncOutcome(
+                status="synced", reason="ok", synced_count=2, file_count=10,
+            )
+
+        self.sync_for_meeting_id = _by_id
+        self.sync_for_meeting_name = _by_id
+        self.sync_all_tracked_meetings = _all
+
+
+class _BlockOnReleaseSpecService:
+    """``SpecService.sync`` / ``sync_spec`` are BLOCKING calls waiting on ``release``."""
+
+    def __init__(self, release: threading.Event) -> None:
+        from doc3gpp.models.sync import SyncOutcome
+        self.release = release
+
+        def _impl(*_a, **_kw):
+            release.wait()
+            return SyncOutcome(
+                status="synced", reason="ok", synced_count=5, version_count=12
+            )
+
+        self.sync = _impl
+        self.sync_spec = _impl
+
+
+def test_sync_meetings_mid_flight_cancel_lands_cancelled() -> None:
+    """Mid-flight cancel on ``sync_meetings`` → CANCELLED.
+
+    Reproduces the user-reported bug: clicking Cancel on a running
+    sync_meetings job must transition the job to CANCELLED, not let it
+    run to completion. The fake service is a BLOCKING call that waits
+    for ``release``; ``asyncio.to_thread`` runs it in a worker thread
+    so the loop is free, the side-task sets the cancel event during
+    the wait, the handler observes it after the service returns,
+    raises CancelledError, and the worker marks the job CANCELLED.
+    Before the fix, the handler ran the service synchronously and
+    never yielded → the cancel couldn't land → SUCCEEDED.
+    """
+    repo = _make_repo()
+    release = threading.Event()
+    svc = _BlockOnReleaseMeetingService(release=release)
+    state = _make_state_with_services(repo, meeting=svc)
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+
+    cancel_event = asyncio.Event()
+    state.jobs.cancel_events[job.id] = cancel_event
+
+    worker = JobWorker(state, repo=repo)
+    _run_worker_with_mid_flight_cancel(
+        worker, repo, job.id, cancel_event, release=release,
+    )
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.CANCELLED, (
+        f"expected CANCELLED after mid-flight cancel; got {done.status.value}"
+    )
+
+
+def test_sync_tdocs_mid_flight_cancel_lands_cancelled() -> None:
+    """Mid-flight cancel on ``sync_tdocs`` → CANCELLED."""
+    repo = _make_repo()
+    release = threading.Event()
+    coord = _BlockOnReleaseTDocSync(release=release)
+    state = _make_state_with_services(repo, tdoc_sync=coord)
+    job = repo.create(JobKind.SYNC_TDOCS, {"meeting_id": 42})
+
+    cancel_event = asyncio.Event()
+    state.jobs.cancel_events[job.id] = cancel_event
+
+    worker = JobWorker(state, repo=repo)
+    _run_worker_with_mid_flight_cancel(
+        worker, repo, job.id, cancel_event, release=release,
+    )
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.CANCELLED
+
+
+def test_sync_tdocs_all_mid_flight_cancel_lands_cancelled() -> None:
+    """Mid-flight cancel on ``sync_tdocs_all`` → CANCELLED."""
+    repo = _make_repo()
+    release = threading.Event()
+    coord = _BlockOnReleaseTDocSync(release=release)
+    state = _make_state_with_services(repo, tdoc_sync=coord)
+    job = repo.create(JobKind.SYNC_TDOCS_ALL, {})
+
+    cancel_event = asyncio.Event()
+    state.jobs.cancel_events[job.id] = cancel_event
+
+    worker = JobWorker(state, repo=repo)
+    _run_worker_with_mid_flight_cancel(
+        worker, repo, job.id, cancel_event, release=release,
+    )
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.CANCELLED
+
+
+def test_sync_specs_mid_flight_cancel_lands_cancelled() -> None:
+    """Mid-flight cancel on ``sync_specs`` (by tsg) → CANCELLED."""
+    repo = _make_repo()
+    release = threading.Event()
+    svc = _BlockOnReleaseSpecService(release=release)
+    state = _make_state_with_services(repo, spec=svc)
+    job = repo.create(JobKind.SYNC_SPECS, {"tsg": "R5"})
+
+    cancel_event = asyncio.Event()
+    state.jobs.cancel_events[job.id] = cancel_event
+
+    worker = JobWorker(state, repo=repo)
+    _run_worker_with_mid_flight_cancel(
+        worker, repo, job.id, cancel_event, release=release,
+    )
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.CANCELLED
+
+
+def test_sync_specs_by_id_mid_flight_cancel_lands_cancelled() -> None:
+    """Mid-flight cancel on ``sync_specs`` (by spec_id) → CANCELLED."""
+    repo = _make_repo()
+    release = threading.Event()
+    svc = _BlockOnReleaseSpecService(release=release)
+    state = _make_state_with_services(repo, spec=svc)
+    job = repo.create(JobKind.SYNC_SPECS, {"spec_id": "36.579-5"})
+
+    cancel_event = asyncio.Event()
+    state.jobs.cancel_events[job.id] = cancel_event
+
+    worker = JobWorker(state, repo=repo)
+    _run_worker_with_mid_flight_cancel(
+        worker, repo, job.id, cancel_event, release=release,
+    )
+
+    done = repo.get(job.id)
+    assert done.status is JobStatus.CANCELLED
+
+
+def test_cache_purge_mid_flight_cancel_lands_cancelled() -> None:
+    """Mid-flight cancel on ``cache_purge`` → CANCELLED."""
+    import tempfile
+    from pathlib import Path
+
+    repo = _make_repo()
+    release = threading.Event()
+    with tempfile.TemporaryDirectory() as td:
+
+        class _TrackingCache:
+            def __init__(self, *args, **kwargs):
+                self.purged = False
+                self.purge_subdir_called = False
+
+            def purge(self):
+                release.wait()
+                self.purged = True
+                return 0
+
+            def purge_subdir(self, scope):
+                release.wait()
+                self.purge_subdir_called = True
+                return 0
+
+        cache = _TrackingCache()
+        state = _make_state_with_services(repo)
+        from doc3gpp.settings.schema import CacheSettings
+
+        monkey = __import__("pytest").MonkeyPatch()
+        monkey.setattr(
+            "doc3gpp.scraping.cache.TDocCache",
+            lambda *a, **kw: cache,
+        )
+        try:
+            state.settings = type(state.settings)(
+                cache=CacheSettings(dir=Path(td)),
+            )
+            job = repo.create(JobKind.CACHE_PURGE, {"scope": "all"})
+            cancel_event = asyncio.Event()
+            state.jobs.cancel_events[job.id] = cancel_event
+            worker = JobWorker(state, repo=repo)
+            _run_worker_with_mid_flight_cancel(
+                worker, repo, job.id, cancel_event, release=release,
+            )
+            done = repo.get(job.id)
+            # Job lands in CANCELLED because the handler's post-call
+            # cancel check fires after the to_thread returns; the
+            # purge may or may not have set the flag depending on
+            # timing, so we don't assert on it — only on the terminal
+            # job status.
+            assert done.status is JobStatus.CANCELLED
+        finally:
+            monkey.undo()

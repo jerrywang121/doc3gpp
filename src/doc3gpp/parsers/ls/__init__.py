@@ -7,3 +7,9 @@ the :class:`LSParserBase` orchestrator lives in
 :mod:`doc3gpp.parsers.ls.ls_parsers`. Subclass-per-format variants
 live in :mod:`doc3gpp.parsers.ls.variants`.
 """
+
+from __future__ import annotations
+
+from doc3gpp.parsers.ls.cover_page import LSCoverPageParser
+
+__all__ = ["LSCoverPageParser"]

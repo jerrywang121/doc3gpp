@@ -84,7 +84,12 @@ class CRParserBase(TDocParser):
         self._details = list(details)
 
     def supports(
-        self, tdoc_id: str, *, tdoc_type: str | None = None, spec: str | None = None
+        self,
+        tdoc_id: str,
+        *,
+        tdoc_type: str | None = None,
+        spec: str | None = None,
+        source: str | None = None,
     ) -> bool:
         return tdoc_type in (None, "CR")
 
@@ -209,10 +214,15 @@ class CRParser(CRParserBase):
         super().__init__(cover=CRCoverPageParser(), details=())
 
     def supports(
-        self, tdoc_id: str, *, tdoc_type: str | None = None, spec: str | None = None
+        self,
+        tdoc_id: str,
+        *,
+        tdoc_type: str | None = None,
+        spec: str | None = None,
+        source: str | None = None,
     ) -> bool:
         return super().supports(
-            tdoc_id, tdoc_type=tdoc_type, spec=spec
+            tdoc_id, tdoc_type=tdoc_type, spec=spec, source=source
         ) and not is_ttcn_tdoc(tdoc_id)
 
 
@@ -229,10 +239,15 @@ class TTCNCRParser(CRParserBase):
         )
 
     def supports(
-        self, tdoc_id: str, *, tdoc_type: str | None = None, spec: str | None = None
+        self,
+        tdoc_id: str,
+        *,
+        tdoc_type: str | None = None,
+        spec: str | None = None,
+        source: str | None = None,
     ) -> bool:
         return super().supports(
-            tdoc_id, tdoc_type=tdoc_type, spec=spec
+            tdoc_id, tdoc_type=tdoc_type, spec=spec, source=source
         ) and is_ttcn_tdoc(tdoc_id)
 
     def parse(

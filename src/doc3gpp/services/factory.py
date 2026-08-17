@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from doc3gpp.repository.protocols import (
     EmbeddingReranker,
+    LSParserRepository,
     SearchIndexRepository,
     TDocCrChangeDetailsRepository,
     TDocCrTTCNDetailRepository,
@@ -34,6 +35,7 @@ from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
+from doc3gpp.storage.repositories.tdoc_cr_ls_sql import SQLAlchemyLSParserRepository
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
@@ -95,6 +97,13 @@ def build_tdoc_cr_change_details_repository() -> SQLAlchemyTDocCrChangeDetailsRe
     change details next to the cover page and the TTCN sidecar.
     """
     return SQLAlchemyTDocCrChangeDetailsRepository()
+
+
+def build_ls_repository(
+    session_factory=None,
+) -> LSParserRepository:
+    """Construct an :class:`LSParserRepository` for the LS sidecar table."""
+    return SQLAlchemyLSParserRepository(session_factory=session_factory)
 
 
 def build_tdoc_file_repository() -> SQLAlchemyTDocFileRepository:

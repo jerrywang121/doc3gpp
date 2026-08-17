@@ -100,6 +100,39 @@ def test_factory_zero_override_disables(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_build_ls_repository_returns_repo_instance() -> None:
+    """``build_ls_repository`` returns a concrete LS parser repository."""
+    from doc3gpp.services.factory import build_ls_repository
+    from doc3gpp.storage.repositories.tdoc_cr_ls_sql import (
+        SQLAlchemyLSParserRepository,
+    )
+
+    repo = build_ls_repository()
+    assert isinstance(repo, SQLAlchemyLSParserRepository)
+
+
+def test_build_ls_repository_forwards_session_factory() -> None:
+    """``build_ls_repository`` forwards an optional session factory."""
+    from doc3gpp.services.factory import build_ls_repository
+
+    def fake_factory():
+        raise AssertionError("should not be called")
+
+    repo = build_ls_repository(session_factory=fake_factory)
+    assert repo._session_factory is fake_factory
+
+
+def test_build_ls_repository_return_type_is_protocol() -> None:
+    """The factory is annotated with the ``LSParserRepository`` Protocol."""
+    import typing
+
+    from doc3gpp.repository.protocols import LSParserRepository
+    from doc3gpp.services.factory import build_ls_repository
+
+    hints = typing.get_type_hints(build_ls_repository)
+    assert hints["return"] is LSParserRepository
+
+
 def test_build_spec_service_wires_settings(monkeypatch, tmp_path) -> None:
     """``build_spec_service`` wires ``settings.sync.spec_sync_interval``
     into :class:`SpecService` and uses the configured repo.

@@ -293,6 +293,41 @@ class TDocCrChangeDetailOrm(Base):
     )
 
 
+class TDocCrLSDetailOrm(Base):
+    """Sidecar row for LS header extraction.
+
+    One row per immutable ``ftp_url``; FK ``tdoc_id`` cascades from
+    ``tdocs.tdoc_id``. The ``attachments_json`` column stores the
+    parsed attachments as gzip-compressed UTF-8 JSON via
+    :func:`doc3gpp.storage.compression.compress_json`. ``variant``
+    tags the format family so the show record and search index can
+    branch on it without re-running the parser.
+    """
+
+    __tablename__ = "tdoc_cr_ls_details"
+
+    ftp_url: Mapped[str] = mapped_column(Text, primary_key=True)
+    tdoc_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"), nullable=False
+    )
+    variant: Mapped[str] = mapped_column(Text, nullable=False, default="3gpp", server_default="3gpp")
+    title: Mapped[str | None] = mapped_column(Text)
+    response_to_doc: Mapped[str | None] = mapped_column(Text)
+    response_to_title: Mapped[str | None] = mapped_column(Text)
+    response_to_group: Mapped[str | None] = mapped_column(Text)
+    release: Mapped[str | None] = mapped_column(Text)
+    work_item_name: Mapped[str | None] = mapped_column(Text)
+    work_item_code: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(Text)
+    to_groups: Mapped[str | None] = mapped_column(Text)
+    cc_groups: Mapped[str | None] = mapped_column(Text)
+    attachments_json: Mapped[bytes | None] = mapped_column(LargeBinary)
+    parser_version: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class TDocExtractOrm(Base):
     """Metadata-only sidecar recording that a TDoc has been extracted.
 

@@ -9,6 +9,7 @@ from doc3gpp.storage.db.models import (
     SpecVersionORM,  # noqa: F401 - ensures model metadata is loaded
     TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrDetailOrm,  # noqa: F401 - ensures model metadata is loaded
+    TDocCrLSDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrTtcnDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocExtractOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocFileORM,  # noqa: F401 - ensures model metadata is loaded

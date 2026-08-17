@@ -24,6 +24,7 @@ from doc3gpp.models.search import (
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.tdoc_ls import TDocLSDetails
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -547,6 +548,33 @@ class TDocCrChangeDetailsRepository(Protocol):
 
     def get_for_tdoc_id(self, tdoc_id: str) -> list[TDocCRChangeDetails]:
         """Return every body-change row for ``tdoc_id``."""
+        ...
+
+
+class LSParserRepository(Protocol):
+    """Storage operations used by the LS service layer."""
+
+    def upsert(self, details: TDocLSDetails) -> None:
+        """Insert or update the LS sidecar row keyed by ``details.ftp_url``."""
+        ...
+
+    def get_by_url(self, ftp_url: str) -> TDocLSDetails | None:
+        """Return the LS row whose URL matches, or ``None``.
+
+        ``ftp_url`` is the relative path (PK); callers that hold a
+        full upstream URL must normalise via
+        :func:`doc3gpp.scraping.ftp_source.normalize_ftp_path` first.
+        """
+        ...
+
+    def get_by_tdoc_id(self, tdoc_id: str) -> list[TDocLSDetails]:
+        """Return every LS row for ``tdoc_id``, ordered by ``ftp_url`` ASC."""
+        ...
+
+    def get_by_variant(
+        self, ftp_url: str, variant: str
+    ) -> TDocLSDetails | None:
+        """Return the LS row matching both URL and variant tag."""
         ...
 
 

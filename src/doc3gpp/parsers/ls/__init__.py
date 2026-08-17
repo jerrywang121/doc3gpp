@@ -11,5 +11,7 @@ live in :mod:`doc3gpp.parsers.ls.variants`.
 from __future__ import annotations
 
 from doc3gpp.parsers.ls.cover_page import LSCoverPageParser
+from doc3gpp.parsers.ls.ls_parsers import LSParserBase
+from doc3gpp.parsers.ls.variants.three_gpp import ThreeGPPLSParser
 
-__all__ = ["LSCoverPageParser"]
+__all__ = ["LSCoverPageParser", "LSParserBase", "ThreeGPPLSParser"]

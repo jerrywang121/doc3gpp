@@ -297,7 +297,8 @@ class TDocCrLSDetailOrm(Base):
     """Sidecar row for LS header extraction.
 
     One row per immutable ``ftp_url``; FK ``tdoc_id`` cascades from
-    ``tdocs.tdoc_id``. The ``attachments_json`` column stores the
+    ``tdocs.tdoc_id`` (indexed for the ``get_by_tdoc_id`` lookup). The
+    ``attachments_json`` column stores the
     parsed attachments as gzip-compressed UTF-8 JSON via
     :func:`doc3gpp.storage.compression.compress_json`. ``variant``
     tags the format family so the show record and search index can
@@ -308,7 +309,10 @@ class TDocCrLSDetailOrm(Base):
 
     ftp_url: Mapped[str] = mapped_column(Text, primary_key=True)
     tdoc_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"), nullable=False
+        Text,
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     variant: Mapped[str] = mapped_column(Text, nullable=False, default="3gpp", server_default="3gpp")
     title: Mapped[str | None] = mapped_column(Text)

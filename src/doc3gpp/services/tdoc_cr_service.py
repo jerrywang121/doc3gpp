@@ -123,6 +123,7 @@ __all__ = [
     "BatchExtractResult",
     "CRHeaderMissingError",
     "ExtractResult",
+    "LSResult",
     "TDocCrService",
     "TDocNotFoundError",
     "TDocNotYetOnFTPError",

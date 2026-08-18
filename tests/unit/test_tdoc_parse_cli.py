@@ -122,7 +122,7 @@ class _FakeCrService:
             skipped=dict(self._skipped),
         )
 
-    def extract(self, tdoc_id, *, force: bool = False) -> ExtractResult:
+    def extract(self, tdoc_id, *, force: bool = False) -> ExtractResult | LSResult:
         self.extract_calls.append(tdoc_id)
         if self._raise_from_extract is not None:
             raise self._raise_from_extract
@@ -137,8 +137,9 @@ class _FakeTDocRepoList:
     The ``--meeting-id`` / filter branch calls ``list_with_meeting``;
     older tests stubbed ``list`` directly, so we mirror both APIs on
     the same fixture. Records every call's kwargs so the test can
-    assert the CLI asked for ``tdoc_type="CR"`` with the right
-    ``meeting_id`` and the configured ``max_batch``.
+    assert the CLI asked for ``tdoc_type=None`` (no implicit ``--type``
+    default) with the right ``meeting_id`` and the configured
+    ``max_batch``.
 
     When ``parsed_ids`` is supplied, the fake models the contract the
     production SQL repo must satisfy once pending selection is pushed
@@ -297,8 +298,9 @@ def _patch_tdoc_repo_for_listing(
     """Stub ``build_tdoc_repository`` so ``tdoc parse`` can call ``list_with_meeting``.
 
     Records every ``list_with_meeting`` call so the test can assert
-    the filter branch queried for ``tdoc_type="CR"`` with the expected
-    ``meeting_id`` and ``limit=max_batch``. Only ``list_with_meeting``
+    the filter branch queried with ``tdoc_type=None`` (the ``--type``
+    filter default) and the expected ``meeting_id`` and
+    ``limit=max_batch``. Only ``list_with_meeting``
     and ``list`` are exercised; ``get_by_id`` returns ``None`` so a
     stray lookup surfaces as a miss.
 
@@ -347,7 +349,7 @@ def _patch_cr_repo(
     ``parsed_ids`` is the set of TDoc ids considered already parsed
     (``get(tdoc_id)`` returns a non-empty list for these). Records
     every ``get`` call so the test can verify the CLI checked parsed
-    status per row when ``force=False``.
+    status per row when ``force=True``.
 
     Pass ``by_url`` / ``extract_meta_by_url`` to seed the URL-keyed
     lookups used by ``tdoc show``.
@@ -377,6 +379,48 @@ def _patch_cr_ttcn_repo(
     fake = _FakeCrTtcnRepo(by_url=by_url)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_cr_ttcn_repository",
+        lambda: fake,
+    )
+    return fake
+
+
+class _FakeLsRepo:
+    """In-memory :class:`LSParserRepository` double that answers ``get_by_tdoc_id``.
+
+    Mirrors the LS sidecar repo surface exercised by the ``tdoc parse``
+    force-mode probe: ``get_by_tdoc_id`` returns a non-empty list for
+    ids that have a persisted ``tdoc_cr_ls_details`` row.
+    """
+
+    def __init__(self, parsed_ids: set[str] | None = None) -> None:
+        self._parsed = parsed_ids or set()
+        self.get_by_tdoc_id_calls: list[str] = []
+
+    def get_by_tdoc_id(self, tdoc_id: str) -> list[object]:
+        self.get_by_tdoc_id_calls.append(tdoc_id)
+        return [object()] if tdoc_id in self._parsed else []
+
+    def get_by_url(self, url: str) -> None:
+        return None
+
+    def get_by_variant(self, url: str, variant: str) -> None:
+        return None
+
+    def upsert(self, details) -> None:
+        pass
+
+
+def _patch_ls_repo(monkeypatch, parsed_ids: set[str] | None = None) -> "_FakeLsRepo":
+    """Stub ``build_ls_repository`` so ``tdoc parse`` can probe the LS sidecar.
+
+    ``parsed_ids`` is the set of TDoc ids that already have an LS
+    sidecar row (``get_by_tdoc_id(tdoc_id)`` returns non-empty for
+    these).
+    """
+    fake = _FakeLsRepo(parsed_ids=parsed_ids or set())
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_ls_repository",
         lambda: fake,
     )
     return fake
@@ -957,7 +1001,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
     assert "R5s260009" in result.output
     assert "R5s260011" in result.output
     # Normal mode never renders the already-parsed table.
-    assert "Already parsed in tdoc_cr_cover_page" not in result.output
+    assert "Already parsed (cover page / LS sidecar)" not in result.output
     assert "R5s260010" not in result.output
     assert "Newly parsed:                              2" in result.output
 
@@ -1620,7 +1664,7 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
     assert result.exit_code == 0, result.output
     assert "To parse [count=2]:" in result.output
     assert (
-        "Already parsed in tdoc_cr_cover_page "
+        "Already parsed (cover page / LS sidecar) "
         "(with --force, these will be re-extracted) [count=1]:"
     ) in result.output
     assert "spec" in result.output
@@ -1732,6 +1776,63 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
     assert "Newly parsed:                              2" in result.output
     assert "Skipped (already parsed before this run): 0" in result.output
     assert "Failures:                                  0" in result.output
+
+
+def test_tdoc_parse_summary_counts_ls_sidecar_as_reparsed_in_force_mode(
+    sqlite_env, monkeypatch
+) -> None:
+    """``--force`` on an LS row that already has a ``tdoc_cr_ls_details``
+    sidecar must count it as Re-parsed (not Newly parsed) and render it
+    in the "Already parsed" preview group — the probe covers the LS
+    sidecar, not just the CR cover-page table."""
+    runner = CliRunner()
+    meeting_id = 80
+    tdocs = [
+        TDoc(tdoc_id="R5s260001", type="LS", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260002", type="LS", meeting_id=meeting_id),
+    ]
+    _patch_meeting_service(
+        monkeypatch,
+        {meeting_id: Meeting(
+            meeting_id=meeting_id,
+            name="RAN5#111",
+            title="RAN WG5 #111",
+            location="Online",
+        )},
+    )
+    _patch_tdoc_repo_for_listing(monkeypatch, tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    _patch_ls_repo(monkeypatch, {"R5s260001"})
+    fake = _FakeCrService(
+        ls_results={
+            "R5s260001": _make_ls_result("R5s260001"),
+            "R5s260002": _make_ls_result("R5s260002"),
+        },
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--meeting-id", str(meeting_id),
+            "--force",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # With --force both LS rows are dispatched; R5s260001 already had
+    # an LS sidecar (counted as Re-parsed), the other is Newly parsed.
+    assert fake.many_calls == [(["R5s260001", "R5s260002"], True, False)]
+    assert "Re-parsed (with --force):                  1" in result.output
+    assert "Newly parsed:                              1" in result.output
+    assert "Skipped (already parsed before this run): 0" in result.output
+    assert "Failures:                                  0" in result.output
+    # The force-mode preview group names both sidecars.
+    assert (
+        "Already parsed (cover page / LS sidecar) "
+        "(with --force, these will be re-extracted) [count=1]:"
+    ) in result.output
 
 
 def test_tdoc_parse_summary_without_force_dispatches_only_new(

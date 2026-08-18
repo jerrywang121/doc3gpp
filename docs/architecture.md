@@ -383,8 +383,9 @@ source)` (see `services/tdoc_cr_service.py::extract`) and branches on
    rows are written; the DB-cache short-circuit probes
    `tdoc_cr_ls_details` instead of the cover-page table. The result
    is an `LSResult` (returned alongside `ExtractResult` from
-   `extract_many`, which aggregates the two into a flat
-   successes/failures/skipped total for the CLI summary).
+   `extract_many`, which bundles both families into one
+   `BatchExtractResult`; the CLI merges them into the flat
+   successes/failures/skipped summary).
 2. `doc3gpp tdoc parse --from-url <3gpp-url>` on a row present in
    `tdocs` with `type = LS`:
    `extract_from_url` → `_extract_from_3gpp_url` resolves the parser
@@ -635,7 +636,8 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
 - `tdoc_cr_ls_details`:
     - `ftp_url` (PK, immutable download URL — same identity
       convention as the other sidecars) + `tdoc_id` (non-PK FK →
-      `tdocs.tdoc_id` with `ondelete="CASCADE"`), `variant` (default
+      `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed for the
+      `get_by_tdoc_id` lookup), `variant` (default
       `"3gpp"` — tags the format family so the show record and the
       search index can branch without re-running the parser),
       eleven header fields (`title`, `response_to_doc`,

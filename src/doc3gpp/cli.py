@@ -1709,12 +1709,18 @@ def tdoc_parse(
 
     columns = _BASE_PARSE_COLUMNS + _active_extra_columns(filter_args)
     cr_repo = build_tdoc_cr_repository()
+    ls_repo = build_ls_repository()
     if force:
         # Force mode: SQL returns every match, so we probe parsed status
         # per id to feed the reparse / newly-parsed summary math and to
-        # render the "Already parsed" preview group.
+        # render the "Already parsed" preview group. A row counts as
+        # parsed when EITHER the CR cover-page row or the LS sidecar
+        # row exists — both families share the same reparse semantics.
         parsed_ids = {
-            m.tdoc.tdoc_id for m in matches if cr_repo.get(m.tdoc.tdoc_id)
+            m.tdoc.tdoc_id
+            for m in matches
+            if cr_repo.get(m.tdoc.tdoc_id)
+            or ls_repo.get_by_tdoc_id(m.tdoc.tdoc_id)
         }
         already_parsed = [m for m in matches if m.tdoc.tdoc_id in parsed_ids]
         to_parse = list(matches)
@@ -1741,7 +1747,7 @@ def tdoc_parse(
     if already_parsed:
         suffix = " (with --force, these will be re-extracted)" if force else ""
         _print_parse_group(
-            f"Already parsed in tdoc_cr_cover_page{suffix}",
+            f"Already parsed (cover page / LS sidecar){suffix}",
             already_parsed,
             columns,
         )

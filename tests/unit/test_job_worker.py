@@ -1766,4 +1766,4 @@ def test_parse_tdocs_merges_ls_successes_into_count() -> None:
     assert result["requested"] == 2
     assert result["successes"] == 2  # 1 CR + 1 LS
     assert result["failures"] == 0
-    assert any("2 ok" in line for line in progress_calls)
+    assert "batch 1: 2 requested, 2 ok, 0 failed" in progress_calls

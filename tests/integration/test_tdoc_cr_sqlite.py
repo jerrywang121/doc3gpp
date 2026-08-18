@@ -512,8 +512,7 @@ def test_db_mode_ls_row_writes_sidecar(sqlite_env, monkeypatch) -> None:
     # The auto-embed hook is out of scope here — dropping it keeps the
     # test from lazily loading the sentence-transformer model (mirrors
     # ``test_embed_hook_skipped_when_service_none``).
-    service._semantic_service = None  # type: ignore[attr-defined]
-    service._scraper.get_bytes = MagicMock()
+    service._semantic_service = None
     service._cache.put_bytes = MagicMock()
     service._cache.get_bytes = MagicMock(return_value=None)
     monkeypatch.setattr(
@@ -1366,7 +1365,7 @@ def test_parse_with_combined_filters_against_sqlite(
     # "To parse" group is rendered — the "Already parsed" preview is
     # force-mode-only.
     assert "To parse [count=4]:" in result.output
-    assert "Already parsed in tdoc_cr_cover_page" not in result.output
+    assert "Already parsed (cover page / LS sidecar)" not in result.output
     # The completion summary reports zero Skipped (the parsed id never
     # reached dispatch), zero Re-parsed (no --force), four Newly
     # parsed, zero Failures.

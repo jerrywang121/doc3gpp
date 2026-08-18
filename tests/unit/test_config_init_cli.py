@@ -25,6 +25,7 @@ from doc3gpp.settings.config_writer import (
     resolve_init_target,
 )
 from doc3gpp.settings.loader import get_settings
+from doc3gpp.storage.db.session import get_engine
 
 
 # ---------------------------------------------------------------------------
@@ -43,8 +44,10 @@ def clean_settings(monkeypatch: pytest.MonkeyPatch):
         if key.startswith("DOC3GPP_"):
             monkeypatch.delenv(key, raising=False)
     get_settings.cache_clear()
+    get_engine.cache_clear()
     yield
     get_settings.cache_clear()
+    get_engine.cache_clear()
 
 
 @pytest.fixture()

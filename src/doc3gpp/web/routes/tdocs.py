@@ -86,7 +86,7 @@ def _build_show_repos(
     The repository Protocol-typed collaborators live on the per-app
     state container; we re-build concrete instances because the
     show-composition is an inner-layer read, not a service-layer
-    operation. The same five repos the CLI's ``tdoc show`` uses.
+    operation. The same six repos the CLI's ``tdoc show`` uses.
     The file repo is injected via :func:`get_tdoc_file_repo` so tests
     can override it without poking at ``app.state``.
     """

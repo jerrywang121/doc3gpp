@@ -2766,7 +2766,7 @@ def _render_tdoc_show_table_body(
     elif tdoc_missing_msg is not None:
         stream.write(f"{tdoc_missing_msg}\n")
 
-    if record.cover is None:
+    if record.cover is None and record.ls is None:
         # No cover row exists for the URL — skip the
         # ``[Extracted Details]`` section header so the placeholder
         # message is the only thing rendered under the ``[TDoc]``
@@ -2776,6 +2776,17 @@ def _render_tdoc_show_table_body(
         stream.write(
             f"No extracted details; run `doc3gpp tdoc parse {parse_hint}` first.\n"
         )
+        if record.extracted_at is not None:
+            stream.write(
+                f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
+            )
+        else:
+            stream.write("extracted_at: -\n")
+    elif record.cover is None:
+        # LS sidecar is the only detail row — the placeholder would
+        # be factually wrong (details DO exist), so drop it but keep
+        # the ``extracted_at`` line (mirroring the markdown full-mode
+        # extracted-details fallback).
         if record.extracted_at is not None:
             stream.write(
                 f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
@@ -3157,9 +3168,9 @@ def _render_tdoc_show_by_url_markdown(
                 tdoc_missing_note=(
                     "note: No tdocs row matches this URL; the URL "
                     "still surfaces in tdoc_cr_cover_page / "
-                    "tdoc_cr_ttcn_details / tdoc_files because the "
-                    "upstream document appeared in a sync but no "
-                    "parent TDoc row was stored."
+                    "tdoc_cr_ttcn_details / tdoc_cr_ls_details / "
+                    "tdoc_files because the upstream document appeared "
+                    "in a sync but no parent TDoc row was stored."
                 ),
                 parse_hint="--from-url <url>",
                 files_missing_hint="No auxiliary files match this URL.",
@@ -3172,8 +3183,9 @@ def _render_tdoc_show_by_url_markdown(
             tdoc_missing_note=(
                 "_No `tdocs` row matches this URL. The URL still "
                 "surfaces in `tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` "
-                "/ `tdoc_files` because the upstream document appeared "
-                "in a sync but no parent TDoc row was stored._"
+                "/ `tdoc_cr_ls_details` / `tdoc_files` because the "
+                "upstream document appeared in a sync but no parent "
+                "TDoc row was stored._"
             ),
             parse_hint="--from-url <url>",
             show_extracted_details_fallback=True,

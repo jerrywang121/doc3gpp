@@ -3214,7 +3214,12 @@ def _seed_ls_sidecar(tdoc_id: str, url: str) -> None:
 
 def test_tdoc_show_ls_sidecar_table_block(sqlite_env) -> None:
     """``tdoc show --tdoc`` on an LS TDoc with a sidecar emits the
-    ``[LS Cover]`` block with the header fields."""
+    ``[LS Cover]`` block with the header fields.
+
+    The "no extracted details" placeholder must NOT appear — the LS
+    sidecar IS the extracted detail, so the placeholder would be
+    factually wrong (regression guard for the table gate).
+    """
     create_schema()
     _seed_ls_sidecar("R5-240001", "tsg/ls/R5-240001.doc")
 
@@ -3225,6 +3230,8 @@ def test_tdoc_show_ls_sidecar_table_block(sqlite_env) -> None:
     assert "title: LS on 5G_eHealth WI status update" in result.output
     assert "to_groups: RAN WG3, RAN WG4" in result.output
     assert "attachments: 2 item(s)" in result.output
+    assert "No extracted details" not in result.output
+    assert "extracted_at: -" in result.output
 
 
 def test_tdoc_show_ls_sidecar_json_block(sqlite_env) -> None:

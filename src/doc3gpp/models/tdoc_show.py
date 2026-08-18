@@ -1,13 +1,15 @@
 """Bundled TDoc-show DTOs shared by the CLI and the HTTP web surface.
 
 The CLI's ``tdoc show`` and the web ``GET /tdocs/{id}`` route compose
-the same record from the same five repository reads:
+the same record from the same six repository reads:
 
 * ``tdocs`` — the parent TDoc row (by ``tdoc_id``).
 * ``tdoc_cr_cover_page`` — the slim cover-page sidecar, keyed by the
   parent TDoc's ``ftp_url``.
 * ``tdoc_cr_ttcn_details`` — the optional TTCN sidecar, keyed by the
   parent TDoc's ``ftp_url`` (only populated for TTCN-shape ids).
+* ``tdoc_cr_ls_details`` — the optional LS header sidecar, keyed by
+  the parent TDoc's ``ftp_url``.
 * ``tdoc_extracts`` — the cache-extract metadata sidecar, keyed by the
   parent TDoc's ``ftp_url``. The web / CLI renderers lift the
   ``extracted_at`` timestamp out of this row.
@@ -15,7 +17,7 @@ the same record from the same five repository reads:
   keyed by ``tdoc_id``.
 
 :class:`TDocShowRecord` mirrors that composition by ``tdoc_id``;
-:class:`TDocShowRecordByUrl` mirrors the same five reads but anchors
+:class:`TDocShowRecordByUrl` mirrors the same six reads but anchors
 on ``ftp_url`` instead (used by ``tdoc show --ftp-url``). Both move
 out of :mod:`doc3gpp.cli` into the models layer so the web route can
 share the composition and the JSON envelope stays byte-identical
@@ -34,6 +36,7 @@ from doc3gpp.models.tdoc_cr import (
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.tdoc_ls import TDocLSDetails
 from doc3gpp.parsers.cr.header import is_ttcn_tdoc
 
 
@@ -59,6 +62,8 @@ class TDocShowRecord:
             a TTCN CR.
         changes: Body-derived change-details sidecar for non-TTCN CRs;
             ``None`` for TTCN CRs or when no row exists for the parent.
+        ls: LS header sidecar keyed by ``tdoc.ftp_url``; ``None`` when
+            no LS row exists for that URL.
         extracted_at: Cache-extract timestamp for ``tdoc.ftp_url``;
             ``None`` when no ``tdoc_extracts`` row exists for that URL.
         files: Auxiliary ``tdoc_files`` rows matching ``tdoc_id``;
@@ -69,6 +74,7 @@ class TDocShowRecord:
     cover: TDocCRDetails | None = None
     ttcn: TDocCRTTCNDetails | None = None
     changes: TDocCRChangeDetails | None = None
+    ls: TDocLSDetails | None = None
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
 
@@ -78,16 +84,17 @@ class TDocShowRecord:
         tdoc_id: str,
         repos: "TDocShowRepos",
     ) -> "TDocShowRecord":
-        """Compose a :class:`TDocShowRecord` by resolving ``tdoc_id`` across all 5 repos.
+        """Compose a :class:`TDocShowRecord` by resolving ``tdoc_id`` across all 6 repos.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_command`
         composition: ``tdocs`` PK lookup → cover sidecar by ``ftp_url``
         → extract-metadata ``extracted_at`` by ``ftp_url`` → optional
         TTCN sidecar by ``ftp_url`` (structural gate via
         :func:`is_ttcn_tdoc`) → optional body-change sidecar by
-        ``tdoc_id`` (first row only) → auxiliary ``tdoc_files`` rows
-        by ``tdoc_id``. Raises :class:`TDocNotFoundError` when no
-        matching ``tdocs`` row exists.
+        ``tdoc_id`` (first row only) → optional LS sidecar by
+        ``ftp_url`` → auxiliary ``tdoc_files`` rows by ``tdoc_id``.
+        Raises :class:`TDocNotFoundError` when no matching ``tdocs``
+        row exists.
         """
         from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
 
@@ -103,6 +110,7 @@ class TDocShowRecord:
         extracted_at: datetime | None = None
         ttcn: TDocCRTTCNDetails | None = None
         changes: TDocCRChangeDetails | None = None
+        ls: TDocLSDetails | None = None
         if record.ftp_url:
             cover = repos.cr.get_by_url(record.ftp_url)
             meta = repos.cr.get_extract_meta_by_url(record.ftp_url)
@@ -112,6 +120,7 @@ class TDocShowRecord:
                 ttcn = repos.cr_ttcn.get_by_url(record.ftp_url)
             change_details = repos.cr_change_details.get_for_tdoc_id(record.tdoc_id)
             changes = change_details[0] if change_details else None
+            ls = repos.ls.get_by_url(record.ftp_url)
 
         files = tuple(repos.file.get_for_tdoc_id(record.tdoc_id))
         return cls(
@@ -119,6 +128,7 @@ class TDocShowRecord:
             cover=cover,
             ttcn=ttcn,
             changes=changes,
+            ls=ls,
             extracted_at=extracted_at,
             files=files,
         )
@@ -145,6 +155,8 @@ class TDocShowRecordByUrl:
             sidecar row exists.
         changes: Body-change sidecar keyed by ``ftp_url``;
             ``None`` when no row exists.
+        ls: LS header sidecar keyed by ``ftp_url``; ``None`` when no
+            LS row exists for that URL.
         extracted_at: Cache-extract timestamp for ``ftp_url``;
             ``None`` when no ``tdoc_extracts`` row exists.
         files: Auxiliary ``tdoc_files`` rows matching ``ftp_url``;
@@ -156,6 +168,7 @@ class TDocShowRecordByUrl:
     cover: TDocCRDetails | None = None
     ttcn: TDocCRTTCNDetails | None = None
     changes: TDocCRChangeDetails | None = None
+    ls: TDocLSDetails | None = None
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
 
@@ -165,15 +178,15 @@ class TDocShowRecordByUrl:
         ftp_url: str,
         repos: "TDocShowRepos",
     ) -> "TDocShowRecordByUrl":
-        """Compose a :class:`TDocShowRecordByUrl` by URL across all 5 repos.
+        """Compose a :class:`TDocShowRecordByUrl` by URL across all 6 repos.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_by_ftp_url`
         composition: ``tdocs`` URL lookup → cover sidecar by URL →
         extract-metadata ``extracted_at`` by URL → TTCN sidecar by URL
         (only when a cover row exists, since the cover parser is what
-        produces it) → body-change sidecar by URL → auxiliary
-        ``tdoc_files`` rows by URL. Returns ``None``-free fields when
-        no rows match anywhere.
+        produces it) → body-change sidecar by URL → LS sidecar by URL
+        → auxiliary ``tdoc_files`` rows by URL. Returns ``None``-free
+        fields when no rows match anywhere.
         """
         tdoc = repos.tdoc.get_by_ftp_url(ftp_url)
         cover = repos.cr.get_by_url(ftp_url)
@@ -183,6 +196,7 @@ class TDocShowRecordByUrl:
         # (the cover parser is what produces it), so gate the lookup.
         ttcn = repos.cr_ttcn.get_by_url(ftp_url) if cover is not None else None
         changes = repos.cr_change_details.get_by_url(ftp_url)
+        ls = repos.ls.get_by_url(ftp_url)
         files = tuple(repos.file.get_by_ftp_url(ftp_url))
         return cls(
             ftp_url=ftp_url,
@@ -190,6 +204,7 @@ class TDocShowRecordByUrl:
             cover=cover,
             ttcn=ttcn,
             changes=changes,
+            ls=ls,
             extracted_at=extracted_at,
             files=files,
         )
@@ -199,9 +214,9 @@ class TDocShowRecordByUrl:
 class TDocShowRepos:
     """Bag of repository handles consumed by the :class:`TDocShowRecord` classmethods.
 
-    Captures the five repositories the show-composition reads from so
+    Captures the six repositories the show-composition reads from so
     the CLI and the web route can hand a single object to the
-    classmethod instead of repeating five ``build_*`` calls at every
+    classmethod instead of repeating six ``build_*`` calls at every
     call site. Tests can construct an instance with fake repositories
     directly to assert the composition round-trip.
     """
@@ -211,6 +226,7 @@ class TDocShowRepos:
     cr_ttcn: "object"  # TDocCrTTCNDetailRepository
     cr_change_details: "object"  # TDocCrChangeDetailsRepository
     file: "object"  # TDocFileRepository
+    ls: "object"  # LSParserRepository
 
 
 __all__ = [

@@ -3170,6 +3170,176 @@ def test_tdoc_show_ftp_url_does_not_trigger_auto_sync(
 
 
 # ---------------------------------------------------------------------------
+# tdoc show — LS sidecar (tdoc_cr_ls_details)
+# ---------------------------------------------------------------------------
+
+
+def _seed_ls_sidecar(tdoc_id: str, url: str) -> None:
+    """Insert a parent TDoc + an LS sidecar row under the same ``ftp_url``.
+
+    Uses the SQL repositories directly so the test exercises the same
+    write path the production LS parse flow relies on. The LS row is
+    URL-keyed, so the parent TDoc must carry the same ``ftp_url``.
+    """
+    from doc3gpp.models.tdoc_ls import TDocLSDetails
+    from doc3gpp.storage.repositories.tdoc_cr_ls_sql import (
+        SQLAlchemyLSParserRepository,
+    )
+
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="LS", ftp_url=url)
+    )
+    SQLAlchemyLSParserRepository().upsert(
+        TDocLSDetails(
+            ftp_url=url,
+            tdoc_id=tdoc_id,
+            variant="3gpp",
+            title="LS on 5G_eHealth WI status update",
+            response_to_doc="R5-234567",
+            response_to_title="LS on 5G_eHealth WI status from RAN WG3",
+            response_to_group="RAN WG3",
+            release="Release 17",
+            work_item_name="5G_eHealth",
+            work_item_code="WI-123456",
+            source="3GPP TSG RAN WG2",
+            to_groups="RAN WG3\nRAN WG4",
+            cc_groups="SA WG2",
+            attachments=(
+                {"doc_number": "TR 38.901 v0.1.0 [draft]", "description": "draft TR"},
+                {"doc_number": "TS 38.300 v17.1.0", "description": ""},
+            ),
+        )
+    )
+
+
+def test_tdoc_show_ls_sidecar_table_block(sqlite_env) -> None:
+    """``tdoc show --tdoc`` on an LS TDoc with a sidecar emits the
+    ``[LS Cover]`` block with the header fields."""
+    create_schema()
+    _seed_ls_sidecar("R5-240001", "tsg/ls/R5-240001.doc")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5-240001"])
+    assert result.exit_code == 0, result.output
+    assert "[LS Cover]" in result.output
+    assert "title: LS on 5G_eHealth WI status update" in result.output
+    assert "to_groups: RAN WG3, RAN WG4" in result.output
+    assert "attachments: 2 item(s)" in result.output
+
+
+def test_tdoc_show_ls_sidecar_json_block(sqlite_env) -> None:
+    """``tdoc show --tdoc --format json`` emits the ``ls`` block with
+    the attachments array; the key is omitted when no sidecar exists."""
+    create_schema()
+    _seed_ls_sidecar("R5-240001", "tsg/ls/R5-240001.doc")
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-240002", type="LS", ftp_url="tsg/ls/R5-240002.doc")
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5-240001", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ls"]["title"] == "LS on 5G_eHealth WI status update"
+    assert payload["ls"]["to_groups"] == "RAN WG3\nRAN WG4"
+    assert payload["ls"]["attachments"] == [
+        {"doc_number": "TR 38.901 v0.1.0 [draft]", "description": "draft TR"},
+        {"doc_number": "TS 38.300 v17.1.0", "description": ""},
+    ]
+
+    result_blank = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5-240002", "--format", "json"]
+    )
+    assert result_blank.exit_code == 0, result_blank.output
+    assert "ls" not in json.loads(result_blank.output)
+
+
+def test_tdoc_show_ls_sidecar_markdown_section(sqlite_env) -> None:
+    """``tdoc show --tdoc --format markdown`` renders the ``## LS``
+    section; compact mode strips the decorators."""
+    create_schema()
+    _seed_ls_sidecar("R5-240001", "tsg/ls/R5-240001.doc")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5-240001", "--format", "markdown"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "## LS" in result.output
+    assert "- **title**: LS on 5G_eHealth WI status update" in result.output
+    assert "- **to_groups**: RAN WG3, RAN WG4" in result.output
+    assert "- **attachments**:" in result.output
+    assert "  * TR 38.901 v0.1.0 [draft] — draft TR" in result.output
+
+    compact = runner.invoke(
+        app,
+        [
+            "tdoc", "show", "--tdoc", "R5-240001",
+            "--format", "markdown", "--compact",
+        ],
+    )
+    assert compact.exit_code == 0, compact.output
+    assert "##" not in compact.output
+    assert "title: LS on 5G_eHealth WI status update" in compact.output
+    assert "to_groups: RAN WG3, RAN WG4" in compact.output
+
+
+def test_tdoc_show_ftp_url_ls_sidecar_surfaces(sqlite_env) -> None:
+    """``tdoc show --ftp-url`` surfaces the LS sidecar row at the URL."""
+    create_schema()
+    _seed_ls_sidecar("R5-240001", "tsg/ls/R5-240001.doc")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--ftp-url", "tsg/ls/R5-240001.doc", "--format", "json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ftp_url"] == "tsg/ls/R5-240001.doc"
+    assert payload["ls"]["title"] == "LS on 5G_eHealth WI status update"
+
+
+def test_tdoc_show_ftp_url_ls_only_row_does_not_raise(sqlite_env) -> None:
+    """A URL that matches ONLY the LS sidecar (no tdocs / cover / files
+    rows at that URL) still renders — the LS row counts as a match.
+
+    The LS row's ``tdoc_id`` FK requires a parent ``tdocs`` row, but
+    the parent may be stored at a *different* ``ftp_url`` than the LS
+    row's URL-keyed PK — so the URL-keyed ``tdocs`` lookup misses while
+    the URL-keyed LS lookup hits.
+    """
+    create_schema()
+    from doc3gpp.models.tdoc_ls import TDocLSDetails
+    from doc3gpp.storage.repositories.tdoc_cr_ls_sql import (
+        SQLAlchemyLSParserRepository,
+    )
+
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-240099", type="LS", ftp_url="tsg/ls/other.doc")
+    )
+    SQLAlchemyLSParserRepository().upsert(
+        TDocLSDetails(
+            ftp_url="tsg/ls/orphan.doc",
+            tdoc_id="R5-240099",
+            title="Orphan LS",
+        )
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["tdoc", "show", "--ftp-url", "tsg/ls/orphan.doc", "--format", "json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ls"]["title"] == "Orphan LS"
+    assert "tdoc" not in payload
+
+
+# ---------------------------------------------------------------------------
 # tdoc parse --from-url — auto-sync wiring (3GPP URL only)
 # ---------------------------------------------------------------------------
 

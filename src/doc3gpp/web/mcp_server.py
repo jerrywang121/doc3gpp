@@ -275,6 +275,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
         from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import SQLAlchemyTDocCrChangeDetailsRepository
         from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+        from doc3gpp.storage.repositories.tdoc_cr_ls_sql import SQLAlchemyLSParserRepository
         from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
         from doc3gpp.web.routes.tdocs import TDocShowRepos, TDocShowRecord
 
@@ -284,6 +285,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
             cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
             file=services.tdoc_file_repo,
+            ls=SQLAlchemyLSParserRepository(),
         )
         record = TDocShowRecord.from_tdoc_id(tdoc_id, repos)
         return _to_json(render.to_jsonable(record))

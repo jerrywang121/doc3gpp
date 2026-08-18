@@ -35,6 +35,7 @@ from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
+from doc3gpp.storage.repositories.tdoc_cr_ls_sql import SQLAlchemyLSParserRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.web.deps import get_pending_jobs, get_settings, get_tdoc_file_repo, get_tdoc_service
 from doc3gpp.web.errors import CacheMissError, InvalidFilterError
@@ -95,6 +96,7 @@ def _build_show_repos(
         cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
         file=file_repo,
+        ls=SQLAlchemyLSParserRepository(),
     )
 
 

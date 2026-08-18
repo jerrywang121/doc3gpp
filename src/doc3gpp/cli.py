@@ -56,6 +56,7 @@ from doc3gpp.parsers.direct_extractor import (
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
+    build_ls_repository,
     build_meeting_service,
     build_spec_service,
     build_tdoc_cr_change_details_repository,
@@ -2228,6 +2229,12 @@ def _serialise_show_value(value: object) -> object:
 # HTTP web route can share the same record-building path.
 
 
+def _join_group_lines(value: str) -> str:
+    """Join newline-delimited group cells (``to_groups`` / ``cc_groups``)
+    into a single comma-separated line for the table renderer."""
+    return ", ".join(line.strip() for line in value.splitlines() if line.strip())
+
+
 def _build_show_payload(
     record: TDocShowRecord | TDocShowRecordByUrl,
     *,
@@ -2238,8 +2245,8 @@ def _build_show_payload(
     """Build the omit-when-null JSON payload for the show renderers.
 
     Both the by-id and by-url JSON renderers share the same payload
-    shape (cover / ttcn / changes / extracted_at / files keys) and the
-    same omit-when-null convention. The by-id renderer anchors on a
+    shape (cover / ttcn / changes / ls / extracted_at / files keys) and
+    the same omit-when-null convention. The by-id renderer anchors on a
     required ``tdoc`` key; the by-url renderer anchors on a required
     ``anchor_key`` (``"ftp_url"``) and treats ``tdoc`` as optional.
 
@@ -2273,6 +2280,11 @@ def _build_show_payload(
                 {"clauses": list(b["clauses"]), "text": b["text"]}
                 for b in record.changes.changes
             ],
+        }
+    if record.ls is not None:
+        payload["ls"] = {
+            f.name: _serialise_show_value(getattr(record.ls, f.name))
+            for f in dataclass_fields(record.ls)
         }
     if record.extracted_at is not None:
         payload["extracted_at"] = _serialise_show_value(record.extracted_at)
@@ -2334,6 +2346,11 @@ def _render_tdoc_show_json(
       dataclass field of :class:`TDocCRTTCNDetails` is serialised. The
       ``required_changes`` ``list[dict]`` falls through to the default
       branch and serialises as a JSON array.
+    - ``ls``: LS header sidecar keyed by ``tdoc.ftp_url``; every
+      dataclass field of :class:`TDocLSDetails` is serialised. The
+      ``attachments`` ``tuple[dict]`` falls through to the default
+      branch and serialises as a JSON array. The key is **omitted**
+      when no LS row exists for the URL.
     - ``extracted_at``: ISO-8601 string for the cache-extract
       timestamp sourced from the ``tdoc_extracts`` row at
       ``tdoc.ftp_url``. Lives at the top level rather than nested
@@ -2388,6 +2405,7 @@ def _render_tdoc_show_markdown_compact(
         and record.ttcn is None
         and record.extracted_at is None
         and record.changes is None
+        and record.ls is None
     ):
         stream.write(f"\nnote: No extracted details; run doc3gpp tdoc parse {parse_hint} first.\n")
     else:
@@ -2420,6 +2438,29 @@ def _render_tdoc_show_markdown_compact(
                         stream.write(f"{f.name}: -\n")
                     else:
                         stream.write(f"{f.name}: {', '.join(value)}\n")
+                    continue
+                formatted = _serialise_show_value(value)
+                rendered = "-" if formatted is None else str(formatted)
+                stream.write(f"{f.name}: {rendered}\n")
+
+        if record.ls is not None:
+            stream.write("\n")
+            for f in dataclass_fields(record.ls):
+                value = getattr(record.ls, f.name)
+                if f.name == "attachments" and isinstance(value, tuple):
+                    if not value:
+                        stream.write(f"{f.name}: -\n")
+                    else:
+                        inline = json.dumps(
+                            list(value), ensure_ascii=False, separators=(",", ":")
+                        )
+                        stream.write(f"{f.name}: {inline}\n")
+                    continue
+                if f.name in {"to_groups", "cc_groups"} and isinstance(value, str):
+                    joined = ", ".join(
+                        line.strip() for line in value.splitlines() if line.strip()
+                    )
+                    stream.write(f"{f.name}: {joined or '-'}\n")
                     continue
                 formatted = _serialise_show_value(value)
                 rendered = "-" if formatted is None else str(formatted)
@@ -2519,6 +2560,7 @@ def _render_tdoc_show_markdown_full(
         and record.ttcn is None
         and record.extracted_at is None
         and record.changes is None
+        and record.ls is None
         and not show_extracted_details_fallback
     ):
         # by-id: when nothing is known, emit a single "no extracted
@@ -2547,6 +2589,32 @@ def _render_tdoc_show_markdown_full(
                     stream.write(f"- **{f.name}**:\n")
                     for entry in value:
                         stream.write(f"  * {entry}\n")
+                continue
+            formatted = _serialise_show_value(value)
+            rendered = "—" if formatted is None else str(formatted)
+            stream.write(f"- **{f.name}**: {rendered}\n")
+
+    if record.ls is not None:
+        stream.write("\n## LS\n\n")
+        for f in dataclass_fields(record.ls):
+            value = getattr(record.ls, f.name)
+            if f.name == "attachments" and isinstance(value, tuple):
+                if not value:
+                    stream.write(f"- **{f.name}**: —\n")
+                else:
+                    stream.write(f"- **{f.name}**:\n")
+                    for entry in value:
+                        desc = entry.get("description") or ""
+                        line = f"  * {entry.get('doc_number', '')}"
+                        if desc:
+                            line += f" — {desc}"
+                        stream.write(f"{line}\n")
+                continue
+            if f.name in {"to_groups", "cc_groups"} and isinstance(value, str):
+                joined = ", ".join(
+                    line.strip() for line in value.splitlines() if line.strip()
+                )
+                stream.write(f"- **{f.name}**: {joined or '—'}\n")
                 continue
             formatted = _serialise_show_value(value)
             rendered = "—" if formatted is None else str(formatted)
@@ -2602,7 +2670,8 @@ def _render_tdoc_show_markdown(
     The TDoc row becomes a bullet list under a ``Metadata`` heading.
     When a slim cover-page row exists for ``tdoc.ftp_url`` it renders
     under ``## Extracted Cover Details``; when a TTCN sidecar exists it
-    renders under ``## TTCN Details``. When neither is present and no
+    renders under ``## TTCN Details``; when an LS header sidecar exists
+    it renders under ``## LS``. When none of these is present and no
     ``extracted_at`` is known, a "_no extracted details_" placeholder
     is emitted. Every ``tdoc_files`` row matching ``tdoc_id`` renders
     under ``## Auxiliary Files`` (or a placeholder when none exist);
@@ -2611,11 +2680,14 @@ def _render_tdoc_show_markdown(
     ``required_changes`` on the TTCN sidecar renders as a JSON fenced
     block (matching the legacy ``details``-field rendering convention)
     so the structured content round-trips through any Markdown viewer.
-    Long free-text fields are **not** truncated in this mode — callers
-    using Markdown for archival want the full text. ``extracted_at``
-    is sourced from the ``tdoc_extracts`` row and lives under the
-    ``Extracted Cover Details`` section (or as its own bullet when
-    only the timestamp is known).
+    The LS sidecar's ``attachments`` renders as a bulleted list of
+    ``doc_number — description`` entries; the newline-delimited
+    ``to_groups`` / ``cc_groups`` cells are comma-joined onto a single
+    line. Long free-text fields are **not** truncated in this mode —
+    callers using Markdown for archival want the full text.
+    ``extracted_at`` is sourced from the ``tdoc_extracts`` row and
+    lives under the ``Extracted Cover Details`` section (or as its own
+    bullet when only the timestamp is known).
 
     When ``compact=True`` every CommonMark decorator (``**bold**``,
     ``*italic*``, ``## headings``, ``- `` bullets, ```` ```json ````
@@ -2623,7 +2695,9 @@ def _render_tdoc_show_markdown(
     sections are separated by a single blank line. ``None`` values
     render as ``-`` and ``—`` is normalised to ``-``.
     ``required_changes`` becomes a single-line JSON literal;
-    ``changed_functions`` becomes a comma-joined line. Placeholder
+    ``changed_functions`` becomes a comma-joined line; the LS sidecar's
+    ``attachments`` becomes a single-line JSON literal and its
+    ``to_groups`` / ``cc_groups`` cells are comma-joined. Placeholder
     text becomes a single ``note: <plain>`` line.
     """
     stream, close_after = _open_output(output)
@@ -2769,6 +2843,28 @@ def _render_tdoc_show_table_body(
             for entry in ttcn.changed_functions:
                 stream.write(f"  - {entry}\n")
 
+    if record.ls is not None:
+        ls = record.ls
+        stream.write("\n[LS Cover]\n")
+        if ls.ftp_url:
+            stream.write(f"ftp_url: {ls.ftp_url}\n")
+        stream.write(f"tdoc_id: {ls.tdoc_id or '-'}\n")
+        stream.write(f"variant: {ls.variant or '-'}\n")
+        stream.write(f"title: {ls.title or '-'}\n")
+        stream.write(f"response_to_doc: {ls.response_to_doc or '-'}\n")
+        stream.write(f"response_to_title: {ls.response_to_title or '-'}\n")
+        stream.write(f"response_to_group: {ls.response_to_group or '-'}\n")
+        stream.write(f"release: {ls.release or '-'}\n")
+        stream.write(f"work_item_name: {ls.work_item_name or '-'}\n")
+        stream.write(f"work_item_code: {ls.work_item_code or '-'}\n")
+        stream.write(f"source: {ls.source or '-'}\n")
+        stream.write(f"to_groups: {_join_group_lines(ls.to_groups) or '-'}\n")
+        stream.write(f"cc_groups: {_join_group_lines(ls.cc_groups) or '-'}\n")
+        stream.write(f"attachments: {len(ls.attachments)} item(s)\n")
+        stream.write(f"parser_version: {ls.parser_version or '-'}\n")
+        if ls.extracted_at is not None:
+            stream.write(f"extracted_at: {_fmt_dt(ls.extracted_at)}\n")
+
     if record.changes is not None:
         stream.write("\n[Change Details]\n")
         stream.write(
@@ -2911,9 +3007,9 @@ def _tdoc_show_by_ftp_url(
     """Dispatch ``tdoc show --ftp-url`` to the right renderer.
 
     Normalises the URL via :func:`_normalise_cli_ftp_url`, fans out
-    to four URL-keyed reads (``tdocs``, ``tdoc_cr_cover_page``,
-    ``tdoc_cr_ttcn_details``, ``tdoc_files`` — the
-    ``tdoc_extracts`` timestamp is sourced via
+    to five URL-keyed reads (``tdocs``, ``tdoc_cr_cover_page``,
+    ``tdoc_cr_ttcn_details``, ``tdoc_cr_ls_details``, ``tdoc_files``
+    — the ``tdoc_extracts`` timestamp is sourced via
     ``TDocCrDetailRepository.get_extract_meta_by_url``), and
     raises :class:`typer.BadParameter` when the URL matches no row
     in any of them.
@@ -2942,6 +3038,7 @@ def _tdoc_show_by_ftp_url(
         cr_ttcn=build_tdoc_cr_ttcn_repository(),
         cr_change_details=build_tdoc_cr_change_details_repository(),
         file=build_tdoc_file_repository(),
+        ls=build_ls_repository(),
     )
     record = TDocShowRecordByUrl.from_ftp_url(url, show_repos)
 
@@ -2951,11 +3048,13 @@ def _tdoc_show_by_ftp_url(
         and record.extracted_at is None
         and record.ttcn is None
         and record.changes is None
+        and record.ls is None
         and not record.files
     ):
         raise typer.BadParameter(
             f"No row in tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
-            f"tdoc_cr_change_details, or tdoc_files matches ftp_url {url!r}."
+            f"tdoc_cr_change_details, tdoc_cr_ls_details, or tdoc_files "
+            f"matches ftp_url {url!r}."
         )
 
     if fmt == "json":
@@ -3007,8 +3106,9 @@ def _render_tdoc_show_by_url_json(
     Payload shape mirrors :func:`_render_tdoc_show_json` but
     anchored on the URL. ``ftp_url`` is always emitted; ``tdoc``
     is omitted when no matching ``TDoc`` row exists. Optional keys
-    (``cover`` / ``ttcn`` / ``extracted_at`` / ``files``) follow
-    the same omit-when-null convention as the existing renderer.
+    (``cover`` / ``ttcn`` / ``changes`` / ``ls`` / ``extracted_at`` /
+    ``files``) follow the same omit-when-null convention as the
+    existing renderer.
 
     When ``compact=True`` the output is a single line with no indent,
     no operator-space, and no trailing newline — sized for tight
@@ -3031,9 +3131,9 @@ def _render_tdoc_show_by_url_markdown(
     The URL is the document anchor (``# FTP URL ...``); each
     populated table gets its own ``## ...`` section. Optional
     sections (``## TDoc``, ``## Extracted Cover Details``,
-    ``## TTCN Details``, ``## Auxiliary Files``) are emitted only
-    when populated. ``tdoc_files`` rows mirror the per-row layout
-    used by :func:`_render_tdoc_show_markdown`.
+    ``## TTCN Details``, ``## LS``, ``## Auxiliary Files``) are
+    emitted only when populated. ``tdoc_files`` rows mirror the
+    per-row layout used by :func:`_render_tdoc_show_markdown`.
 
     When ``compact=True`` every CommonMark decorator (``**bold**``,
     ``*italic*``, ``## headings``, ``- `` bullets, ```` ```json ````
@@ -3559,8 +3659,8 @@ def tdoc_show(
         help=(
             "3GPP FTP URL (full URL or relative path) to show. "
             "Surfaces every row in tdocs, tdoc_cr_cover_page, "
-            "tdoc_cr_ttcn_details, and tdoc_files whose ftp_url "
-            "matches. Mutually exclusive with --tdoc."
+            "tdoc_cr_ttcn_details, tdoc_cr_ls_details, and tdoc_files "
+            "whose ftp_url matches. Mutually exclusive with --tdoc."
         ),
     ),
     fmt: str | None = typer.Option(
@@ -3597,16 +3697,17 @@ def tdoc_show(
     - ``--tdoc <id>`` anchors on the parent TDoc row. Auto-sync
       fires when ``Settings.sync.auto_sync`` is enabled; the parent
       TDoc's ``ftp_url`` is then used to look up the cover-page,
-      TTCN sidecar, extract meta, and any ``tdoc_files`` rows
-      matching the parent ``tdoc_id``.
+      TTCN sidecar, LS sidecar, extract meta, and any ``tdoc_files``
+      rows matching the parent ``tdoc_id``.
     - ``--ftp-url <url>`` anchors on the URL. Accepts both full
       URLs (``https://www.3gpp.org/ftp/TSG_RAN/...``) and bare
       relative paths; the value is normalised via
       :func:`normalize_ftp_path` before lookup. Surfaces every
-      matching row across the four tables (``tdocs``,
+      matching row across the five tables (``tdocs``,
       ``tdoc_cr_cover_page``, ``tdoc_cr_ttcn_details``,
-      ``tdoc_files``); auto-sync does NOT fire because no parent
-      meeting sync is meaningful for an arbitrary URL.
+      ``tdoc_cr_ls_details``, ``tdoc_files``); auto-sync does NOT
+      fire because no parent meeting sync is meaningful for an
+      arbitrary URL.
 
     ``--format`` controls the output representation; ``raw`` emits
     the converted .docx markdown instead of the DB-row render and
@@ -3655,6 +3756,7 @@ def tdoc_show(
         cr_ttcn=build_tdoc_cr_ttcn_repository(),
         cr_change_details=build_tdoc_cr_change_details_repository(),
         file=build_tdoc_file_repository(),
+        ls=build_ls_repository(),
     )
     try:
         show_record = TDocShowRecord.from_tdoc_id(normalised_tdoc_id, show_repos)

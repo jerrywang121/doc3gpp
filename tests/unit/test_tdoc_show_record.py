@@ -61,12 +61,16 @@ def _make_fake_repos(
     file_repo.get_for_tdoc_id.return_value = files
     file_repo.get_by_ftp_url.return_value = files
 
+    ls_repo = MagicMock()
+    ls_repo.get_by_url.return_value = None
+
     return TDocShowRepos(
         tdoc=tdoc_repo,
         cr=cr_repo,
         cr_ttcn=cr_ttcn_repo,
         cr_change_details=cr_change_details_repo,
         file=file_repo,
+        ls=ls_repo,
     )
 
 

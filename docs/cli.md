@@ -1279,12 +1279,13 @@ Single-file behaviour:
   `trigger_auto_sync(...)` first (TSG sync → meeting sync → parse), then
   the stored `tdocs.type` / `tdocs.source` are read back to drive
   parser dispatch. The database is only ever **read** by this path —
-  no `tdocs` / sidecar writes occur for local files. Note that the
+  no `tdocs` / sidecar writes occur for local files. The
   type-confirm read only reaches the LS parser in raw-markdown mode
   (`extract_from_bytes(..., filename=None)`); real `.docx` / `.zip`
-  files are dispatched by `direct_parse_bytes`, which hardcodes the
-  CR family — an LS local file parses as a CR and fails with
-  `CRHeaderMissingError` (use `--from-url` for LS documents).
+  files are dispatched by `direct_parse_bytes`, which sniffs the
+  converted markdown via `is_ls_header_present` and routes an
+  LS-shaped body to `ThreeGPPLSParser.parse_ls` (a CR cover-shape
+  keeps the CR family).
 - No cache or database writes occur.
 - Exit code `0` when the parsed record (or raw markdown) is emitted
   successfully; `1` on file missing, permission denied, parser error

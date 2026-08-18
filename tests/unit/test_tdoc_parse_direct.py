@@ -405,6 +405,97 @@ def test_direct_parse_bytes_rejects_malformed_zip() -> None:
         direct_parse_bytes(b"PK\x03\x04 corrupt", filename="x.zip", full=False)
 
 
+def test_direct_parse_bytes_ls_sniff_dispatches_to_ls_parser(monkeypatch) -> None:
+    """An LS-shaped markdown payload dispatches to :class:`ThreeGPPLSParser`.
+
+    Pre-change behavior: :func:`direct_parse_bytes` hardcoded
+    ``tdoc_type='CR'``, so an LS-shaped ``.docx``/``.zip`` payload
+    crashed with :class:`CRHeaderMissingError`. The sniff on
+    :func:`is_ls_header_present` flips the type to ``"LS"`` so the
+    registry returns an LS parser. The wrapper also forwards to
+    ``parse_ls`` so the orchestrator's ``NotImplementedError`` on
+    ``parse()`` never fires.
+    """
+    from doc3gpp.models.tdoc_ls import TDocLSParserResult
+
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "ls" / "LS_sample_r5_240001.md"
+    ls_markdown = fixture_path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        "doc3gpp.parsers.docx_converter.convert_document_to_markdown",
+        lambda *args, **kwargs: ls_markdown,
+    )
+
+    called: dict[str, bool] = {}
+
+    def _fake_parse_ls(self, markdown, *, tdoc_id, max_text_length=0):
+        called["parse_ls"] = True
+        from doc3gpp.models.tdoc_ls import TDocLSDetails
+        return TDocLSParserResult(cover=TDocLSDetails(tdoc_id=tdoc_id))
+
+    monkeypatch.setattr(
+        "doc3gpp.parsers.ls.variants.three_gpp.ThreeGPPLSParser.parse_ls",
+        _fake_parse_ls,
+    )
+
+    def _fail_parse(self, markdown, *, tdoc_id, full=False, **kwargs):
+        called["parse"] = True
+        raise AssertionError(
+            "CR-family parse() should not be reached on an LS-shaped payload"
+        )
+
+    monkeypatch.setattr(
+        "doc3gpp.parsers.cr.cr_parsers.CRParserBase.parse",
+        _fail_parse,
+    )
+
+    _markdown, _docx_filename, parsed = direct_parse_bytes(
+        b"docx-shaped stub", filename="R5-240001.docx", full=False,
+    )
+
+    assert called["parse_ls"] is True
+    assert "parse" not in called
+    assert isinstance(parsed, TDocLSParserResult)
+    assert parsed.cover is not None
+    assert parsed.cover.variant == "3gpp"
+    assert parsed.cover.tdoc_id == "R5-240001"
+
+
+def test_direct_parse_bytes_cr_payload_keeps_cr_family(monkeypatch) -> None:
+    """A CR-shaped payload still routes through the CR parser.
+
+    Negative case for the LS sniff: an existing CR document must
+    continue to parse via the CR family — the sniff must not flip
+    CR traffic onto the LS branch.
+    """
+    monkeypatch.setattr(
+        "doc3gpp.parsers.docx_converter.convert_document_to_markdown",
+        lambda *args, **kwargs: (
+            "3GPP TSG-RAN WG2 Meeting #104\tTDoc R5-260001\n"
+            "| CHANGE REQUEST |\n"
+            "|  | 38.300 | CR | 1 | rev | - | Current version: | 17.1.0 |  |\n"
+        ),
+    )
+
+    def _fail_parse_ls(self, markdown, *, tdoc_id, max_text_length=0):
+        raise AssertionError(
+            "parse_ls() should not be reached on a CR-shaped payload"
+        )
+
+    monkeypatch.setattr(
+        "doc3gpp.parsers.ls.variants.three_gpp.ThreeGPPLSParser.parse_ls",
+        _fail_parse_ls,
+    )
+
+    _markdown, _docx_filename, parsed = direct_parse_bytes(
+        b"docx-shaped stub", filename="R5-260001.docx", full=False,
+    )
+
+    from doc3gpp.models.tdoc_cr import TDocCRParseResult
+    assert isinstance(parsed, TDocCRParseResult)
+    assert parsed.cover.tdoc_id == "R5-260001"
+
+
 # ---------------------------------------------------------------------------
 # Service layer: extract_from_bytes
 # ---------------------------------------------------------------------------

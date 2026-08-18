@@ -89,12 +89,13 @@ change set so the docs stay honest.
 - **`TDoc` types other than CR and LS (DRAFT, BB, …) are not handled.**
   The extractor's type guard raises `TDocTypeUnsupportedError` for
   unsupported ids. LS rows are supported on the direct-mode
-  `--from-url` path only: DB-mode `tdoc parse` raises
-  `TDocTypeUnsupportedError` for LS rows, and real local `.docx` /
-  `.zip` files dispatched through `direct_parse_bytes` hardcode the CR
-  family (a local LS file parses as a CR and fails with
-  `CRHeaderMissingError`). IEEE / ETSI LS format variants are v2
-  stubs and are not registered in the parser registry.
+  `--from-url` path; DB-mode `tdoc parse` still raises
+  `TDocTypeUnsupportedError` for LS rows, but real local `.docx` /
+  `.zip` files dispatched through `direct_parse_bytes` now sniff the
+  converted markdown via `is_ls_header_present` and route an
+  LS-shaped body to `ThreeGPPLSParser.parse_ls` — a CR cover-shape
+  keeps the CR family. IEEE / ETSI LS format variants are v2 stubs
+  and are not registered in the parser registry.
 - **`tdoc_cr_ls_details` is created lazily on first write, not on
   `doc3gpp db init`** (same lazy-bootstrap contract as
   `tdoc_cr_ttcn_details`): `TDocCrLSDetailOrm` is registered with

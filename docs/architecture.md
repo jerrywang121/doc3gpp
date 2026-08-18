@@ -385,9 +385,10 @@ rows)`). The supported paths are the direct-mode parses:
    tests and by callers holding the markdown in memory; the LS branch
    parses and upserts the sidecar the same way. Real `.docx` /
    `.zip` local files are dispatched by `direct_parse_bytes`, which
-   currently hardcodes the CR family — a real local LS file parses
-   as a CR and fails with `CRHeaderMissingError` (a known v1 gap;
-   use `--from-url` for LS documents).
+   sniffs the converted markdown via `is_ls_header_present`: an
+   LS-shaped body routes to `ThreeGPPLSParser.parse_ls` and a CR
+   cover-shape routes to the CR family, so local LS `.docx` /
+   `.zip` payloads parse without `CRHeaderMissingError`.
 3. `doc3gpp tdoc show --tdoc <id>` / `--ftp-url <url>` renders the
    persisted `tdoc_cr_ls_details` row (see the show flow above); the
    MCP `get_tdoc` tool and the web `GET /tdocs/{id}` route surface

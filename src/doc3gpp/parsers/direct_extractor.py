@@ -47,6 +47,8 @@ from doc3gpp.parsers.cr_parser import (
     _TDOC_HEADER_PATTERN,
     extract_docx_from_zip,
 )
+from doc3gpp.parsers.ls.header import is_ls_header_present
+from doc3gpp.parsers.ls.ls_parsers import LSParserBase
 from doc3gpp.parsers.normalizers import FTP_BASE_URL
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
 
@@ -441,8 +443,13 @@ def direct_parse_bytes(
     markdown = convert_document_to_markdown(docx_bytes, docx_filename)
 
     tdoc_id = extract_tdoc_id_from_filename(filename) or _synthetic_tdoc_id(filename)
-    parser = build_default_registry().resolve(tdoc_id, tdoc_type="CR")
-    parsed = parser.parse(markdown, tdoc_id=tdoc_id, full=full)
+    ls_present, _ = is_ls_header_present(markdown)
+    tdoc_type = "LS" if ls_present else "CR"
+    parser = build_default_registry().resolve(tdoc_id, tdoc_type=tdoc_type)
+    if isinstance(parser, LSParserBase):
+        parsed = parser.parse_ls(markdown, tdoc_id=tdoc_id)
+    else:
+        parsed = parser.parse(markdown, tdoc_id=tdoc_id, full=full)
     return markdown, docx_filename, parsed
 
 

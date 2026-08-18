@@ -9,7 +9,12 @@ from doc3gpp.cli_filters import (
     split_not_like_prefix,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocORM, MeetingORM
+from doc3gpp.storage.db.models import (
+    TDocCrDetailOrm,
+    TDocCrLSDetailOrm,
+    TDocORM,
+    MeetingORM,
+)
 from doc3gpp.storage.db.session import get_session_factory
 
 
@@ -175,6 +180,9 @@ class SQLAlchemyTDocRepository:
                 stmt = stmt.where(
                     ~select(TDocCrDetailOrm.tdoc_id)
                     .where(TDocCrDetailOrm.tdoc_id == TDocORM.tdoc_id)
+                    .exists()
+                    & ~select(TDocCrLSDetailOrm.tdoc_id)
+                    .where(TDocCrLSDetailOrm.tdoc_id == TDocORM.tdoc_id)
                     .exists()
                 )
 

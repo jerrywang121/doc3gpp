@@ -670,6 +670,12 @@ class TDocCrService:
             tdoc_type=tdoc.type,
             source=tdoc.source,
         )
+        if isinstance(parser, LSParserBase):
+            raise TDocTypeUnsupportedError(
+                normalised,
+                f"{tdoc.type!r} (DB-mode LS extraction is not yet supported; "
+                "use 'tdoc parse --from-url' for LS rows)",
+            )
         parsed: TDocCRParseResult = parser.parse(
             markdown, tdoc_id=normalised, full=full,
         )
@@ -703,15 +709,6 @@ class TDocCrService:
             self._cr_ttcn_repo.upsert(ttcn)
         if changes is not None:
             self._change_details_repo.upsert(changes)
-        if isinstance(parser, LSParserBase) and self._ls_repository is not None:
-            ls_result = parser.parse_ls(markdown, tdoc_id=normalised)
-            if ls_result.cover is not None:
-                details = replace(
-                    ls_result.cover,
-                    tdoc_id=normalised,
-                    ftp_url=stored_ftp_url,
-                )
-                self._ls_repository.upsert(details)
         self._repo.upsert_extract_meta(meta)
         self._index_after_parse(normalised)
         self._embed_after_parse(normalised)
@@ -1269,6 +1266,45 @@ class TDocCrService:
             tdoc_type=tdoc_type,
             source=source,
         )
+        if isinstance(parser, LSParserBase):
+            if self._ls_repository is None:
+                logger.warning(
+                    "LS parser resolved for tdoc_id %s but no ls_repository; "
+                    "skipping sidecar write",
+                    tdoc_id,
+                )
+                return DirectParseResult(
+                    source_kind="url-3gpp",
+                    markdown=markdown,
+                    details=None,
+                    extract_meta=None,
+                    from_cache=False,
+                    persisted=False,
+                    tdoc_id=tdoc_id,
+                    tdoc_id_in_tdocs=True,
+                    source_url=url,
+                )
+            ls_result = parser.parse_ls(markdown, tdoc_id=tdoc_id)
+            if ls_result.cover is not None:
+                details = replace(
+                    ls_result.cover,
+                    tdoc_id=tdoc_id,
+                    ftp_url=stored_ftp_url,
+                )
+                self._ls_repository.upsert(details)
+            self._index_after_parse(tdoc_id)
+            self._embed_after_parse(tdoc_id)
+            return DirectParseResult(
+                source_kind="url-3gpp",
+                markdown=markdown,
+                details=None,
+                extract_meta=None,
+                from_cache=False,
+                persisted=True,
+                tdoc_id=tdoc_id,
+                tdoc_id_in_tdocs=True,
+                source_url=url,
+            )
         parsed: TDocCRParseResult = parser.parse(
             markdown, tdoc_id=tdoc_id, full=full,
         )
@@ -1302,15 +1338,6 @@ class TDocCrService:
             self._cr_ttcn_repo.upsert(ttcn)
         if changes is not None:
             self._change_details_repo.upsert(changes)
-        if isinstance(parser, LSParserBase) and self._ls_repository is not None:
-            ls_result = parser.parse_ls(markdown, tdoc_id=tdoc_id)
-            if ls_result.cover is not None:
-                details = replace(
-                    ls_result.cover,
-                    tdoc_id=tdoc_id,
-                    ftp_url=stored_ftp_url,
-                )
-                self._ls_repository.upsert(details)
         self._repo.upsert_extract_meta(meta)
         self._index_after_parse(tdoc_id)
         self._embed_after_parse(tdoc_id)

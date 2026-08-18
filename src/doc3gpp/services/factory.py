@@ -177,6 +177,7 @@ def build_embedder(settings: Settings | None = None) -> SentenceTransformerEmbed
 def build_tdoc_cr_service(
     cr_ttcn_repository: TDocCrTTCNDetailRepository | None = None,
     cr_change_details_repository: TDocCrChangeDetailsRepository | None = None,
+    ls_repository: LSParserRepository | None = None,
     *,
     max_tdoc_size_bytes: int | None = None,
     embedder: Embedder | None = None,  # noqa: F821
@@ -221,6 +222,10 @@ def build_tdoc_cr_service(
         cr_change_details_repository: Optional override for the
             body-derived change-details sidecar repository (tests
             inject a stub here).
+        ls_repository: Optional override for the LS sidecar
+            repository (tests inject a stub here). When ``None``
+            the factory constructs the real
+            :class:`SQLAlchemyLSParserRepository`.
         max_tdoc_size_bytes: Optional explicit cap (bytes). When
             ``None`` (default), the factory resolves from
             ``settings.tdoc_parse.max_tdoc_size_kb * 1024``. When an
@@ -246,6 +251,7 @@ def build_tdoc_cr_service(
             or build_tdoc_cr_change_details_repository()  # type: ignore[call-arg]
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
+        ls_repository=ls_repository or build_ls_repository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
         search_service=build_search_service(embedder=embedder),
         semantic_service=build_semantic_search_service(embedder=embedder),

@@ -61,7 +61,7 @@
     </section>
   {% endif %}
 
-  {% if record.cover %}
+  {% if record.tdoc.type != 'LS' and record.cover %}
     <section class="card">
       <h2>Cover page</h2>
       <dl class="kv">
@@ -80,11 +80,51 @@
         <dt>Consequences if not approved</dt><dd>{{ record.cover.consequences_if_not_approved or '-' }}</dd>
       </dl>
     </section>
-  {% else %}
+  {% elif record.tdoc.type != 'LS' %}
     <section class="card placeholder">
       <h2>Cover page</h2>
       <p>Not yet extracted. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code> to populate.</p>
     </section>
+  {% endif %}
+
+  {% if record.tdoc.type == 'LS' and record.ls %}
+  <section class="card">
+    <h2>LS Cover</h2>
+    <dl>
+      <dt>Title</dt><dd>{{ record.ls.title or '—' }}</dd>
+      <dt>Response to</dt><dd>
+        {% if record.ls.response_to_doc %}<code>{{ record.ls.response_to_doc }}</code>{% endif %}
+        {% if record.ls.response_to_group %} from {{ record.ls.response_to_group }}{% endif %}
+      </dd>
+      <dt>Release</dt><dd>{{ record.ls.release or '—' }}</dd>
+      <dt>Work Item</dt><dd>
+        {{ record.ls.work_item_name or '—' }}
+        {% if record.ls.work_item_code %} (<code>{{ record.ls.work_item_code }}</code>){% endif %}
+      </dd>
+      <dt>Source</dt><dd>{{ record.ls.source or '—' }}</dd>
+      <dt>To</dt><dd>
+        {% for g in (record.ls.to_groups or '').splitlines() if g %}
+          <span class="tag">{{ g }}</span>
+        {% endfor %}
+      </dd>
+      <dt>Cc</dt><dd>
+        {% for g in (record.ls.cc_groups or '').splitlines() if g %}
+          <span class="tag">{{ g }}</span>
+        {% endfor %}
+      </dd>
+      <dt>Attachments</dt><dd>
+        {% if record.ls.attachments %}
+          <ul>
+          {% for a in record.ls.attachments %}
+            <li><code>{{ a.doc_number }}</code>{% if a.description %} — {{ a.description }}{% endif %}</li>
+          {% endfor %}
+          </ul>
+        {% else %}—{% endif %}
+      </dd>
+    </dl>
+  </section>
+  {% elif record.tdoc.type == 'LS' %}
+  <section class="card"><h2>LS Cover</h2><p>No LS sidecar parsed yet. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code>.</p></section>
   {% endif %}
 
   {% if record.ttcn %}

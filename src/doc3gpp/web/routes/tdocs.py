@@ -24,7 +24,9 @@ from markdown_it import MarkdownIt
 
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRepos
+from doc3gpp.repository.protocols import LSParserRepository
 from doc3gpp.scraping.cache_keys import derive_cache_file
+from doc3gpp.services.factory import build_ls_repository
 from doc3gpp.services.tdoc_cr_service import TDocNotFoundError, _read_cached_markdown_path
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.settings.schema import Settings
@@ -35,7 +37,6 @@ from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
-from doc3gpp.storage.repositories.tdoc_cr_ls_sql import SQLAlchemyLSParserRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.web.deps import get_pending_jobs, get_settings, get_tdoc_file_repo, get_tdoc_service
 from doc3gpp.web.errors import CacheMissError, InvalidFilterError
@@ -80,6 +81,7 @@ _MD_RENDERER = MarkdownIt("commonmark", {"html": True, "linkify": True}).enable(
 def _build_show_repos(
     request: Request,
     file_repo: Any,
+    ls_repo: LSParserRepository,
 ) -> TDocShowRepos:
     """Build a :class:`TDocShowRepos` from the per-app state collaborators.
 
@@ -87,8 +89,9 @@ def _build_show_repos(
     state container; we re-build concrete instances because the
     show-composition is an inner-layer read, not a service-layer
     operation. The same six repos the CLI's ``tdoc show`` uses.
-    The file repo is injected via :func:`get_tdoc_file_repo` so tests
-    can override it without poking at ``app.state``.
+    The file repo is injected via :func:`get_tdoc_file_repo` and the
+    LS repo via :func:`get_ls_repository` so tests can override them
+    without poking at ``app.state``.
     """
     return TDocShowRepos(
         tdoc=SQLAlchemyTDocRepository(),
@@ -96,8 +99,20 @@ def _build_show_repos(
         cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
         file=file_repo,
-        ls=SQLAlchemyLSParserRepository(),
+        ls=ls_repo,
     )
+
+
+def get_ls_repository() -> LSParserRepository:
+    """Return the :class:`LSParserRepository` for the LS sidecar table.
+
+    Consumed by the TDoc detail route so tests can swap the LS
+    repository via ``dependency_overrides`` without poking at
+    ``app.state``. The concrete instance is built through the
+    :func:`doc3gpp.services.factory.build_ls_repository` factory so
+    the route stays a thin adapter over the service layer.
+    """
+    return build_ls_repository()
 
 
 def _resolve_cache_file(tdoc: TDoc) -> str:
@@ -258,10 +273,11 @@ async def show_tdoc(
     tdoc_id: str = PathParam(...),
     format: str | None = Query(default=None, alias="format"),
     file_repo: Any = Depends(get_tdoc_file_repo),
+    ls_repo: LSParserRepository = Depends(get_ls_repository),
     settings: Settings = Depends(get_settings),
 ) -> Any:
     """Render ``tdoc_show.html`` or a :class:`TDocShowRecord` JSON payload."""
-    repos = _build_show_repos(request, file_repo)
+    repos = _build_show_repos(request, file_repo, ls_repo)
     # The composition is delegated to the models layer so HTTP and CLI
     # JSON stay byte-identical.
     record = TDocShowRecord.from_tdoc_id(tdoc_id, repos)

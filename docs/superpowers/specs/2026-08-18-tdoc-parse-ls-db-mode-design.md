@@ -62,8 +62,11 @@ The user-reported goal is two-fold:
    `tdoc_cr_ls_details`. Both share `tdoc_extracts.cache_file`, so a cache
    hit returns the same `derive_cache_file` basename for `tdoc show
    --format raw` and for FTS5 / vector lookups.
-6. The batch summary (`tdoc parse <filters>`) renders two parallel "Extracted"
-   groups (CR + LS) with their respective `from_cache` counts.
+6. The batch summary (`tdoc parse <filters>`) reports a flat count of
+   successes / failures / skipped — no per-type (CR vs LS) split. Operators
+   see how many TDocs parsed (CR + LS combined), how many failed, how many
+   were skipped (e.g. `tdoc.ftp_url` not yet propagated). The existing
+   `already_parsed` distinction that `--force` toggles stays as-is.
 7. `tdoc show --tdoc <id>` keeps rendering the existing `LS Cover` card from
    the sidecar — no render change.
 8. Unit + integration tests; existing "LS row raises `TDocTypeUnsupportedError`"
@@ -198,12 +201,35 @@ class BatchExtractResult:
     skipped: dict[str, str] = field(default_factory=dict)
 ```
 
-`extract_many` populates `ls_successes` when an LS row succeeds and leaves
-`successes` for CR rows. The CLI batch summary renders two parallel
-"Extracted" groups when either dict is non-empty. The renderer follows the
-pattern at `src/doc3gpp/cli.py:1709-1758` — a new `_print_parse_group`
-call for "Extracted LS" with a slim column set (`tdoc_id`, `meeting`,
-`title`, `variant`, `parser_version`).
+The two dicts are kept distinct at the service layer because the
+downstream consumer needs the type-specific wrapper (`ExtractResult`
+carries a `TDocCRDetails`; `LSResult` carries a `TDocLSDetails`).
+`extract_many` populates `ls_successes` when an LS row succeeds and
+`successes` for CR rows.
+
+For **summary reporting** the two are merged before the CLI prints. The
+existing CLI summary at `src/doc3gpp/cli.py:1709-1758` already aggregates
+successes/failures/skipped counts and prints a single "Extracted" group
+plus optional "Already parsed" + "Skipped" groups. After the change:
+
+* Successes count = `len(successes) + len(ls_successes)` (CR + LS, not
+  distinguished).
+* Failures / skipped counts unchanged in shape; LS
+  `LSHeaderMissingError` failures land in `failures["<id>"]` exactly like
+  CR `CRHeaderMissingError` does today.
+* No new "Extracted LS" or "Extracted CR" render group — the user-facing
+  summary shows how many total rows parsed, not the per-type breakdown.
+
+The CLI keeps the `--force` "re-parse" semantics unchanged: in force
+mode, already-parsed rows surface under an "Already parsed in
+`tdoc_cr_*_details`" group (the column count is what changes — see the
+step 4 `exclude_parsed` extension for the LS-side row skip).
+
+Per-row cache-hit reporting (`from_cache=True`) for both CR and LS stays
+available on the service-level objects (`ExtractResult.from_cache` /
+`LSResult.from_cache`), in case future CLI / web renderers want to
+distinguish "fresh extract" vs "already in `tdoc_cr_*_details`". v1 does
+not surface it in the CLI summary line.
 
 ### 4. DB-side cache probe dispatches by `tdoc_type`
 
@@ -316,7 +342,7 @@ construction).
 
 | Layer | Change |
 |---|---|
-| `cli.py` | drop default-CR at line 1673; new `_print_parse_group` line for "Extracted LS"; auto-sync contract reaffirmed (no behaviour change) |
+| `cli.py` | drop default-CR at line 1673; flat successes/failures/skipped counter extension (merge CR + LS into one "Extracted" line — no new render group); auto-sync contract reaffirmed (no behaviour change) |
 | `services/tdoc_cr_service.py` | new `LSResult` dataclass; `extract` branches on `LSParserBase`; new LS-aware DB cache probe; `extract_many` populates `ls_successes`; `BatchExtractResult` gains `ls_successes` |
 | `storage/repositories/tdoc_sql.py` | `list()` `exclude_parsed` sub-query gains an OR-clause against `tdoc_cr_ls_details` |
 | `storage/repositories/tdoc_cr_ls_sql.py` | **(unchanged)** — already implements `upsert` / `get_by_url` |
@@ -342,39 +368,88 @@ construction).
 ## Testing strategy
 
 1. **Unit (mocked repos)** — new `tests/unit/test_tdoc_cr_service_db_mode_ls.py`:
-   * `extract()` writes the LS sidecar + skips cover-page sidecar when
-     `tdoc.type == "LS in"` and the markdown parses as an LS.
-   * `extract()` returns `from_cache=True` when `ls_repo.get_by_url` hits.
+   * `extract()` writes the LS sidecar + `tdoc_extracts.cache_file` row
+     (no cover-page sidecar) when `tdoc.type == "LS in"` and the
+     markdown parses as an LS.
+   * `extract()` returns `from_cache=True` when `ls_repo.get_by_url`
+     hits.
    * `extract()` raises `LSHeaderMissingError` when the rendered markdown
      is unrecognisable (no DB writes).
    * `extract_many` populates `ls_successes["R5-260017"]` and leaves
      `successes={}`.
+   * `BatchExtractResult.successes + ls_successes` total equals the
+     consolidated "Extracted" count surfaced by the CLI summary (no
+     per-type split in the printed line).
 
 2. **CLI** — `tests/unit/test_tdoc_parse_cli.py`:
-   * Replace the `LS in` → `TDocTypeUnsupportedError` expectation with an
-     LS-success assertion in the batch-math test (line ~598).
+   * Replace the `LS in` → `TDocTypeUnsupportedError` expectation with
+     an LS-success assertion in the batch-math test (line ~598). The
+     printed summary line now reads
+     `Extracted 1 (skipping N, failing M)` — no `Extracted LS` /
+     `Extracted CR` subgroup.
    * Add `--type LS` filter test (now an explicit narrower).
 
-3. **Integration** — extend `tests/integration/test_tdoc_cr_sqlite.py`:
+3. **Web worker** — `tests/unit/test_job_worker.py`:
+   * `_parse_tdocs` aggregates `len(result.successes) +
+     len(result.ls_successes)` into the `successes` count of the
+     returned envelope; same for the per-batch progress log line.
+   * `_parse_tdocs` returns the same envelope shape
+     `{requested, successes, failures, skipped}` for a mixed CR + LS
+     batch.
+
+4. **Integration** — extend `tests/integration/test_tdoc_cr_sqlite.py`:
    * Rewrite `test_ls_row_raises_TDocTypeUnsupportedError` (line 437) to
      assert: LS row writes to `tdoc_cr_ls_details` via
      `tdoc parse --tdoc <id>`; cache hit on a second call; parser-version
-     stamped correctly.
-   * Add `exclude_parsed` test: an LS row already in `tdoc_cr_ls_details`
-     is excluded from a non-`--force` batch.
+     stamped correctly; `tdoc_extracts.cache_file` row populated.
+   * Add `exclude_parsed` test: an LS row already in
+     `tdoc_cr_ls_details` is excluded from a non-`--force` batch.
 
-4. **Optional online smoke** — left out of the test surface (LS markdown
+5. **Optional online smoke** — left out of the test surface (LS markdown
    rendering depends on the upstream docx + python-docx installation that
    may not be available in CI); operators can verify by running
    `doc3gpp tdoc parse --tdoc R5-260017` against a live 3GPP FTP.
 
-## Open questions
+## Surface compatibility — web / MCP / CLI renderers
 
-* **Return-type shape**: `ExtractResult | LSResult` (tagged union) vs two
-  parallel dataclasses with a sibling `ls_successes` dict. **Pick: parallel
-  dataclasses** — the CLI already prints parallel groups, and the web/MCP
-  layers never read `ExtractResult`, they consult sidecar rows directly.
-  Less invasive.
+The change touches the service layer and the CLI's filter-resolution
+default; the surface code that consumes parsed bytes is already
+type-agnostic and **needs no per-surface edits**. Verified by reading:
+
+| Surface | Reads from | Behaviour today | After this change |
+|---|---|---|---|
+| `tdoc show --tdoc` / `tdoc show --ftp-url` (CLI) | `TDocShowRecord` (composition in `models/tdoc_show.py`) — pulls `ls` from `ls_repo.get_by_url(...)` | LS rows already show an "LS Cover" block when `record.ls` is populated; "Not yet extracted" placeholder otherwise | Identical. Once the LS sidecar is populated (DB-mode or direct-mode), `record.ls` is non-`None` and renders. No render code change. |
+| `GET /tdocs/{id}` (web) | `tdoc_show.html` — branches on `record.tdoc.type`: skip "Cover page" card, render "LS Cover" card when `record.tdoc.type == 'LS'` and `record.ls` | Already renders LS Cover card with sidecar presence gating | Identical. `ls_repo` dep is already wired (`web/routes/tdocs.py:get_ls_repository`). |
+| `GET /tdocs/{id}/content?format=...` (web) | `_resolve_cache_file(tdoc)` (`web/routes/tdocs.py:118-132`) reads `tdoc_extracts.cache_file`; on disk reads `markdown/<cache_file>` | Type-agnostic | After this change, an LS row that ran through the new DB-mode `extract` populates a `tdoc_extracts` row whose `cache_file` key matches the `markdown/<cache_file>` slot. The route works without edits. Before this change, an LS row had no DB-mode path, so the markdown cache would already have been populated via direct-mode (the new branch keeps parity). |
+| `GET /tdocs/{id}/download` (web) | Same `_resolve_cache_file` + `zips/<cache_file>` | Type-agnostic | Same — the new DB-mode branch writes the zip cache via `download_tdoc_zip`; the route serves it. |
+| `POST /jobs/parse/tdocs` (web, sync hub) | `_parse_tdocs` (`web/workers/handlers.py:240-318`) — aggregates `BatchExtractResult` to flat `{requested, successes, failures, skipped}` envelope | Aggregates `result.successes` (and `result.failures` / `result.skipped`) into flat count totals — no per-type split | After this change, `extract_many` populates both `successes` (CR) and `ls_successes` (LS); `_parse_tdocs` lines 306-308 aggregate `result.successes` only — needs a one-line edit to add `result.ls_successes` to the total (the per-batch progress line on lines 309-312 says `"... {len(result.successes)} ok, ..."` — extend to `"... {len(result.successes) + len(result.ls_successes)} ok, ..."`). Returned envelope stays `{requested, successes, failures, skipped}` — no schema change. |
+| `POST /jobs/parse/tdocs` form on the tdoc detail page (`tdoc_show.html` lines 41-62) | Same `_parse_tdocs` | Sends `{"filter": {"tdoc_id": "..."}, "force": ..., "full": ...}` | After this change, `tdoc_id` no longer needs an implicit `--type` narrow; an LS row parses through the new DB-mode branch. |
+| MCP `parse_tdocs` tool | `_enqueue(state, JobKind.PARSE_TDOCS, ...)` — same `_parse_tdocs` worker | Enqueues and returns `job_id`; result envelope is `{requested, successes, failures, skipped}` | After this change, `_parse_tdocs` counts CR + LS into `successes`. Tool description (`"Enqueue extraction of tdoc cover pages + change details."`) stays accurate — LS extraction writes the **change** (= sidecar) for an LS row, the same intent the description targets. (Optional polish: rename to "extraction of tdoc cover pages, sidecars, and change details." Deferred unless tooling demands it.) |
+| MCP `parse_tdoc_url` tool + `POST /jobs/parse/tdoc-url` (web) | `_parse_tdoc_url` already routes LS via `_extract_from_3gpp_url` → `ThreeGPPLSParser`; auto-sync runs TSG → meeting → tdoc before the parse | Already handles LS for direct URL mode | No change — already correct. |
+| MCP `get_tdoc` tool | `TDocShowRecord` composition (same as CLI/web `tdoc show`) | LS rows already populate `ls` | Identical. |
+
+### Net surface diff
+
+* `services/tdoc_cr_service.py` — service contract changes (the meat).
+* `cli.py:1673` — one-line filter default.
+* `storage/repositories/tdoc_sql.py:174-179` — `exclude_parsed` OR-clause
+  extension for LS sidecar.
+* `web/workers/handlers.py:_parse_tdocs` (lines 306-312) — extend the
+  per-batch counter to include `ls_successes`. Pure counter change, no
+  schema change. (Optional polish: rename the variable from
+  `total_successes` to `total_ok` or add a sibling
+  `total_ls_successes` for the progress message — recommended for
+  debuggability, optional for v1.)
+* **No** change to `web/routes/tdocs.py`, `web/mcp_server.py`,
+  `web/static/js/*`, `web/templates/tdoc_show.html`, or
+  `models/tdoc_show.py`.
+
+The only operator-visible cosmetic update is removing the stale
+"Fallback: DB-mode LS extraction is not yet supported; use
+`tdoc parse --from-url` for LS rows" sentences from
+`docs/cli.md`, `docs/architecture.md`, `docs/code-map.md`,
+`docs/web-server.md`, and `AGENTS.md` (left as a documentation-sync
+follow-up at the end of the spec).
 
 ## Out-of-scope follow-ups
 
@@ -382,3 +457,23 @@ construction).
   `--type LS` (no flag change needed).
 * A `--family ls`/`cr` shorthand filter is **deferred** — can ride on the
   same rich-filter grammar in `docs/cli.md` if it becomes a request.
+* The MCP `parse_tdocs` tool description ("Enqueue extraction of tdoc
+  cover pages + change details") could be widened to "extraction of
+  tdoc cover pages, sidecars, and change details" so LS-aware callers
+  know LS writes the sidecar. Left as a polish follow-up.
+
+## Resolved questions
+
+* **Return-type shape**: `ExtractResult | LSResult` (tagged union) vs two
+  parallel dataclasses with a sibling `ls_successes` dict. **Picked:
+  parallel dataclasses** — keeps the service / CLI summary math
+  straightforward (`len(successes) + len(ls_successes)` for the printed
+  total) and avoids a tagged-union discriminator at every CLI / web
+  consumption point. The web / MCP surfaces never read `ExtractResult`,
+  they consult sidecar rows directly.
+* **CLI summary grouping**: per-type ("Extracted LS" / "Extracted CR")
+  vs flat ("Extracted N, failed M, skipped S"). **Picked: flat** —
+  matches user intent ("just report how many parsed successfully, how
+  many skipped, how many failed") and matches the existing
+  `_parse_tdocs` envelope that the web worker / MCP tool already
+  returns.

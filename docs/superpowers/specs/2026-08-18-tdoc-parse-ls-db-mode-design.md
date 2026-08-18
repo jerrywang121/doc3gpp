@@ -43,13 +43,30 @@ The user-reported goal is two-fold:
 3. `tdoc parse --from-url <3gpp-url>` continues to auto-sync, lands the parent
    row in `tdocs`, then routes via the same dispatch — no behaviour change
    expected, but the auto-sync contract is reaffirmed and documented.
-4. The DB cache short-circuit honours `tdoc_type`: CR probes
-   `tdoc_cr_cover_page`, LS probes `tdoc_cr_ls_details`.
-5. The batch summary (`tdoc parse <filters>`) renders two parallel "Extracted"
+4. The on-disk zip and markdown caches are type-agnostic — both CR and LS
+   rows share the same `zips/<cache_file>` and `markdown/<cache_file>` slots,
+   keyed on `derive_cache_file(tdoc.ftp_url)`. The flow is identical for
+   both families:
+   * Download the zip from `tdocs.ftp_url` (or the URL-template fallback
+     via `resolve_download_url`), write to `zips/<cache_file>` —
+     `_load_or_render_markdown`'s caller does this via the existing
+     `download_tdoc_zip` / `_extract_from_3gpp_url` paths.
+   * Extract the matching `.docx` from the zip, convert to markdown via
+     `convert_document_to_markdown`, write to `markdown/<cache_file>` as
+     a real `zipfile.ZipFile` archive (single `<docx-stem>.md` entry).
+   * On a subsequent call: hit the markdown cache first; on `--force`,
+     re-download the zip and re-render the markdown, replacing the
+     previous cached bytes.
+5. The DB-side sidecar cache short-circuit is the only part that branches by
+   `tdoc_type`: CR probes `tdoc_cr_cover_page`, LS probes
+   `tdoc_cr_ls_details`. Both share `tdoc_extracts.cache_file`, so a cache
+   hit returns the same `derive_cache_file` basename for `tdoc show
+   --format raw` and for FTS5 / vector lookups.
+6. The batch summary (`tdoc parse <filters>`) renders two parallel "Extracted"
    groups (CR + LS) with their respective `from_cache` counts.
-6. `tdoc show --tdoc <id>` keeps rendering the existing `LS Cover` card from
+7. `tdoc show --tdoc <id>` keeps rendering the existing `LS Cover` card from
    the sidecar — no render change.
-7. Unit + integration tests; existing "LS row raises `TDocTypeUnsupportedError`"
+8. Unit + integration tests; existing "LS row raises `TDocTypeUnsupportedError`"
    expectations are updated to "LS row writes the LS sidecar".
 
 ## Non-goals (out of scope for v1)
@@ -115,27 +132,48 @@ parser = self._resolve_parser(
 …with the same two-branch pattern already in
 `_extract_from_3gpp_url` (`src/doc3gpp/services/tdoc_cr_service.py:1264-1307`),
 minus the cache-probe prelude (replaced by a new LS-aware cache probe, see
-step 4):
+step 4). The zip + markdown cache lifecycle is **type-agnostic** — both
+branches go through the same `download_tdoc_zip` → `_load_or_render_markdown`
+helpers (lines 614-651, unchanged):
 
+* **Shared prelude** (`extract`, lines 564-651, unchanged):
+  1. `download_tdoc_zip` probes `zips/<cache_file>` keyed on
+     `derive_cache_file(tdoc.ftp_url)`. Cache hit returns the cached zip
+     path without re-downloading (regardless of `force`).
+  2. `extract_docx_from_zip` pulls the matching `.docx` out of the zip.
+  3. `_load_or_render_markdown` checks `markdown/<cache_file>`; on miss
+     (or `--force`) it renders a fresh `.docx → .md` and writes the
+     wrapped zip.
+  4. `parser = _resolve_parser(normalised, tdoc_type=tdoc.type,
+     source=tdoc.source)`.
 * **LS branch** (`isinstance(parser, LSParserBase)`):
   * `ls_result = parser.parse_ls(markdown, tdoc_id=normalised)`.
   * If `ls_result.cover is not None`, build a `TDocLSDetails` via
     `dataclasses.replace(..., ftp_url=stored_ftp_url)`.
   * Upsert via `self._ls_repository.upsert(details)`. If `_ls_repository
-    is None`, raise `TDocTypeUnsupportedError` (factory should always
-    inject — see step 6).
-  * No `tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` / `tdoc_extracts`
-    rows.
-  * Run `_index_after_parse(normalised)` and
-    `_embed_after_parse(normalised)`.
+    is None`, raise `RuntimeError` (factory should always inject — see
+    step 6). The previously-launched `TDocTypeUnsupportedError` for LS
+    rows is removed entirely.
+  * Build a `TDocExtractMeta` (carries `cache_file`, `doc_filename`,
+    `tdoc_id`, `ftp_url`) and `self._repo.upsert_extract_meta(meta)` so
+    the **on-disk cache identity** is recorded in `tdoc_extracts` the
+    same way CR rows do. No `tdoc_cr_cover_page` /
+    `tdoc_cr_ttcn_details` row; the LS sidecar `tdoc_cr_ls_details`
+    replaces the cover row.
+  * Run `_index_after_parse(normalised)` and `_embed_after_parse(normalised)`.
   * Return a new `LSResult(details=details, extract_meta=meta,
-    from_cache=False)` (or `from_cache=True` on a cache hit — see
-    step 4).
-* **CR branch**: unchanged from the existing implementation.
+    from_cache=False)` (or `from_cache=True` on a sidecar cache hit —
+    see step 4).
+* **CR branch**: unchanged from the existing implementation; the
+  `parser.parse(markdown, ...)` call dispatches `TDocCRParseResult` and
+  the three cover-page / TTCN / extract-meta upserts run as today.
 
-The existing `parser.parse(markdown, ...)` call at the bottom of
-`extract()` is replaced by an `if/else` that dispatches the parser method
-(`parse_ls` vs `parse`) based on the resolved parser type.
+The reason `tdoc_extracts.cache_file` is written for LS rows even though
+LS has no cover-page row: `tdoc show --format raw`,
+`doc3gpp ... markdown/<cache_file>` reuse, and FTS5 / vector lookups all
+read `tdoc_extracts.cache_file` to find the markdown on disk. Skipping
+the row would orphan the cached bytes the zip + markdown caches just
+wrote.
 
 ### 3. Adapt `ExtractResult` / `BatchExtractResult` / CLI summary
 
@@ -167,29 +205,46 @@ pattern at `src/doc3gpp/cli.py:1709-1758` — a new `_print_parse_group`
 call for "Extracted LS" with a slim column set (`tdoc_id`, `meeting`,
 `title`, `variant`, `parser_version`).
 
-### 4. DB cache probe for LS rows in `TDocCrService.extract`
+### 4. DB-side cache probe dispatches by `tdoc_type`
 
-Before the existing zip-download + cover-page cache probe
-(`src/doc3gpp/services/tdoc_cr_service.py:596-642`), when the resolved
-parser is `LSParserBase`, probe the LS sidecar:
+**Today** (before this change) the DB-mode short-circuit in `extract()`
+(`src/doc3gpp/services/tdoc_cr_service.py:596-642`) only consults the
+cover-page repo, so LS rows fall through to a download every time. The
+direct-mode precedent
+(`_extract_from_3gpp_url`, lines 1220-1240) already probes
+`ls_repo.get_by_url` for LS rows — the change ports that logic into the
+DB-mode path so the two flows converge.
+
+Replace the existing pre-download probe with a `tdoc_type`-dispatched
+probe:
 
 ```python
 if not force:
     for candidate in candidates:
-        cached = self._ls_repository.get_by_url(
-            normalize_ftp_path(candidate)
-        )
-        if cached is not None:
-            meta = self._repo.get_extract_meta_by_url(
-                normalize_ftp_path(candidate)
-            )
-            if meta is not None:
+        normalised_url = normalize_ftp_path(candidate)
+        if isinstance(parser, LSParserBase):
+            cached = self._ls_repository.get_by_url(normalised_url)
+            cached_meta = self._repo.get_extract_meta_by_url(normalised_url)
+            if cached is not None and cached_meta is not None:
                 return LSResult(
-                    details=cached, extract_meta=meta, from_cache=True,
+                    details=cached,
+                    extract_meta=cached_meta,
+                    from_cache=True,
+                )
+        else:
+            cached_details = self._repo.get_by_url(normalised_url)
+            cached_meta = self._repo.get_extract_meta_by_url(normalised_url)
+            if cached_details is not None and cached_meta is not None:
+                return ExtractResult(
+                    details=cached_details,
+                    extract_meta=cached_meta,
+                    from_cache=True,
                 )
 ```
 
-A cache hit returns immediately — same contract as the CR branch.
+A hit returns immediately — same contract for both branches. The
+underlying zip + markdown caches are still consulted by the next call
+via `_load_or_render_markdown` (cache key `cache_file`, type-agnostic).
 
 The `exclude_parsed` filter in `SQLAlchemyTDocRepository.list`
 (`src/doc3gpp/storage/repositories/tdoc_sql.py:174-179`) is extended to

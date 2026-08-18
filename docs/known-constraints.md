@@ -1,6 +1,6 @@
 # Known Constraints
 
-> Last reviewed: 2026-08-13
+> Last reviewed: 2026-08-18
 
 Open / known limitations that future work should respect. This file is
 the single source of truth — `docs/architecture.md` §Out of scope (today)
@@ -86,9 +86,22 @@ change set so the docs stay honest.
   `src/doc3gpp/scraping/tdoc_zip_source.py:_build_tdoc_zip_url`.
 - **`python-docx` is an opt-in extra.** Without `doc3gpp[extract]`
   installed, the CLI prints a friendly install hint and exits 1.
-- **`TDoc` types other than CR (LS, DRAFT, BB, …) are not handled.**
+- **`TDoc` types other than CR and LS (DRAFT, BB, …) are not handled.**
   The extractor's type guard raises `TDocTypeUnsupportedError` for
-  non-CR ids; future expansion is a separate change.
+  unsupported ids. LS rows are supported on the direct-mode
+  `--from-url` path only: DB-mode `tdoc parse` raises
+  `TDocTypeUnsupportedError` for LS rows, and real local `.docx` /
+  `.zip` files dispatched through `direct_parse_bytes` hardcode the CR
+  family (a local LS file parses as a CR and fails with
+  `CRHeaderMissingError`). IEEE / ETSI LS format variants are v2
+  stubs and are not registered in the parser registry.
+- **`tdoc_cr_ls_details` is created lazily on first write, not on
+  `doc3gpp db init`** (same lazy-bootstrap contract as
+  `tdoc_cr_ttcn_details`): `TDocCrLSDetailOrm` is registered with
+  `Base.metadata`, so a fresh install picks the table up via
+  `create_schema()`, but existing installs gain it only when the LS
+  repo writes its first row (`SQLAlchemyLSParserRepository._ensure_table_exists`
+  runs `Base.metadata.create_all` on a missing-table probe).
 - **`tdoc_cr_ttcn_details` is created lazily on first write, not on
   `doc3gpp db init`.** `TDocCrTtcnDetailOrm` is registered with
   `Base.metadata` so a fresh install picks it up via the standard

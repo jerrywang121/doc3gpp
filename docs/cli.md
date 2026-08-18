@@ -2,7 +2,7 @@
 
 This document describes the currently implemented command surface in src/doc3gpp/cli.py.
 
-> Last reviewed: 2026-08-13
+> Last reviewed: 2026-08-18
 
 ## Installation
 
@@ -484,8 +484,9 @@ Options:
 - `--ftp-url URL`: 3GPP FTP URL (full URL like
   `https://www.3gpp.org/ftp/TSG_RAN/...` or bare relative path like
   `TSG_RAN/...`) to anchor the read on. Surfaces every matching row
-  across `tdocs`, `tdoc_cr_cover_page`, `tdoc_cr_ttcn_details`, and
-  `tdoc_files`. Normalised via `normalize_ftp_path` before lookup so
+  across `tdocs`, `tdoc_cr_cover_page`, `tdoc_cr_ttcn_details`,
+  `tdoc_cr_ls_details`, and `tdoc_files`. Normalised via
+  `normalize_ftp_path` before lookup so
   both URL spellings resolve the same row. Mutually exclusive with
   `--tdoc`. Does NOT trigger auto-sync (no parent TDoc to anchor a
   meeting sync).
@@ -501,7 +502,13 @@ Options:
     `changed_functions: N item(s)` summary line with one indented
     entry per `<module>.<function>` aggregate (`-` when the
     aggregate column is `NULL`, `0 item(s)` when the aggregate is
-    an empty list). The `parser_version` and `details` lines are
+    an empty list). When a matching `tdoc_cr_ls_details` row
+    exists instead, an extra `[LS Cover]` block renders the eleven
+    header fields (`title`, `response_to_doc` / `response_to_title`
+    / `response_to_group`, `release`, `work_item_name` /
+    `work_item_code`, `source`, `to_groups`, `cc_groups`,
+    `attachments: N item(s)`) plus `variant`, `parser_version`, and
+    `extracted_at`. The `parser_version` and `details` lines are
     gone — `extracted_at` is sourced from `tdoc_extracts` at the
     same URL and rendered as `extracted_at: -` when the row is
     missing. Every `tdoc_files` row matching `tdoc_id` renders
@@ -529,11 +536,16 @@ Options:
       `changed_functions` aggregate list, which appears as a JSON
       array (`[]` when the aggregate is empty or the row
       predates the column).
+    - `ls` — the LS header sidecar dataclass keyed by
+      `tdoc.ftp_url` (omitted when no `tdoc_cr_ls_details` row).
+      Every dataclass field of `TDocLSDetails` is serialised — the
+      `attachments` tuple appears as a JSON array.
     - `extracted_at` — ISO-8601 cache-extract timestamp from the
       `tdoc_extracts` row at `tdoc.ftp_url` (omitted when no row
       exists). Sits at the top level rather than nested under
       `cover` / `ttcn` because neither detail table carries its
-      own timestamp.
+      own timestamp. LS rows carry their own `extracted_at` inside
+      the `ls` block (stamped by the sidecar repo on upsert).
     - `files` — array of every `TDocFile` row matching `tdoc_id`
       (auxiliary revisions / reviews / support files). Every
       dataclass field of `TDocFile` is serialised (`id`,
@@ -546,7 +558,11 @@ Options:
     JSON fenced block + `changed_functions` as a bullet list when
     the TDoc is a TTCN CR and the sidecar exists). The
     `changed_functions` bullet list renders one `* <entry>` per
-    line, or `—` when the aggregate is empty. When no extract row
+    line, or `—` when the aggregate is empty. When an LS sidecar
+    row exists, a `## LS` section renders every `TDocLSDetails`
+    field instead (the `attachments` tuple as one nested bullet per
+    attachment, `to_groups` / `cc_groups` as comma-joined lines).
+    When no extract row
     is present, a single `_No extracted details; run \`doc3gpp
     tdoc parse --tdoc <id>\` first._ placeholder is emitted.
     Every `tdoc_files` row matching `tdoc_id` renders under `##
@@ -564,9 +580,10 @@ Options:
     (`pip install doc3gpp[extract]`) when the cache is cold; surfaces a
     friendly error otherwise. When no cached markdown exists, this
     format triggers a fresh `TDocCrService.extract()` to populate the
-    cache + DB. Non-CR-type TDocs are rejected with a friendly error.
-    If the markdown cache file is missing or unreadable, the error
-    message is:
+    cache + DB. Non-CR-type TDocs (including LS rows) are rejected with
+    a friendly error — use `doc3gpp tdoc parse --from-url <url>
+    --format raw` for LS documents. If the markdown cache file is
+    missing or unreadable, the error message is:
     `Markdown cache for TDoc '<tdoc>' is empty or unreadable (cache_file: <cache_file>, cache_dir: <dir>)`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Pass `-` for stdout (the historical default).
@@ -591,16 +608,21 @@ Behavior:
     `SQLAlchemyTDocCrTtcnRepository.get_by_url(tdoc.ftp_url)`,
     gated on `is_ttcn_tdoc(tdoc.tdoc_id)` so non-TTCN CRs never hit
     the sidecar table.
+  - `tdoc_cr_ls_details` sidecar via
+    `SQLAlchemyLSParserRepository.get_by_url(tdoc.ftp_url)`,
+    joined in unconditionally — an LS row never carries a cover /
+    TTCN sidecar, so the LS and cover/TTCN reads are mutually
+    exclusive in practice.
   - A single `tdoc_id`-keyed read on `tdoc_files` via
     `SQLAlchemyTDocFileRepository.get_for_tdoc_id(tdoc.tdoc_id)`,
     ordered by `(type, ftp_url) ASC` so the output groups by
     category (revision / review / support). Runs unconditionally —
     a TDoc may have auxiliary files even when the cover has not
     been extracted.
-- The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at,
-  files)` is rendered by `table` (default) / `json` / `markdown`
-  to four separate sections (`cover`, optional `ttcn` block, the
-  standalone `extracted_at` line, and the auxiliary files block
+- The bundled `TDocShowRecord(tdoc, cover, ttcn, changes, ls,
+  extracted_at, files)` is rendered by `table` (default) / `json` / `markdown`
+  to separate sections (`cover`, optional `ttcn` block, optional `ls`
+  block, the standalone `extracted_at` line, and the auxiliary files block
   or placeholder). Optional keys are **omitted** (not emitted as
   `null`) in the JSON payload when the corresponding row is
   absent. The legacy `details` / `parser_version` fields no longer
@@ -625,9 +647,10 @@ Behavior:
   `WHERE ftp_url == :url ORDER BY tdoc_id ASC LIMIT 1` lookup on the
   unindexed-but-narrow `tdocs.ftp_url` text column),
   `SQLAlchemyTDocCrRepository.get_by_url`, the existing TTCN sidecar
-  lookup (gated on the cover row's presence), and the new
+  lookup (gated on the cover row's presence), the LS sidecar lookup
+  (`SQLAlchemyLSParserRepository.get_by_url`), and the new
   `SQLAlchemyTDocFileRepository.get_by_ftp_url` (URL-unique-indexed).
-  No row in any of the four tables → `BadParameter` with the URL
+  No row in any of the five tables → `BadParameter` with the URL
   quoted in the message.
 - Does NOT trigger `trigger_auto_sync` — the URL is the row identity,
   there's no parent TDoc / meeting sync meaningful for an arbitrary
@@ -635,7 +658,8 @@ Behavior:
   DB. Users wanting to backfill the DB must run `meeting sync` /
   `tdoc sync` / `tdoc parse --from-url` explicitly.
 - Bundles the result into `TDocShowRecordByUrl(ftp_url, tdoc, cover,
-  ttcn, extracted_at, files)` and renders under a `# FTP URL` /
+  ttcn, changes, ls, extracted_at, files)` and renders under a
+  `# FTP URL` /
   `[FTP URL]` anchor with the same omit-when-null convention as the
   `--tdoc` path.
 - `--format raw` on the URL path reads the cache file directly via
@@ -659,7 +683,7 @@ doc3gpp tdoc show --tdoc R5s260009 --format markdown -o R5s260009.md
 # Converted .docx markdown (raw). Triggers an extract on cache miss.
 doc3gpp tdoc show --tdoc R5s260009 --format raw -o R5s260009.md
 
-# URL-keyed read — show every row matching the URL across the four
+# URL-keyed read — show every row matching the URL across the five
 # tables (default table format). Normalises both full URLs and bare
 # relative paths via `normalize_ftp_path`.
 doc3gpp tdoc show --ftp-url TSG_RAN/WG5_Test_ex-T1/.../R5s260009.zip
@@ -838,9 +862,16 @@ Purpose:
   unchanged — only the storage fan-out is wider. Wraps the Phase 6
   `TDocCrService.extract_many` for batch CLI use.
 
+  LS rows (a `tdocs.type` of `LS`) are **rejected** in DB mode: the
+  service resolves the LS parser and raises
+  `TDocTypeUnsupportedError` (`{type!r} (DB-mode LS extraction is not
+  yet supported; use 'tdoc parse --from-url' for LS rows)`). Use the
+  direct mode below for LS documents.
+
 Every flag is a **filter** — the candidate set is the intersection of
 every supplied predicate, and CR-type is the implicit default (the
-extractor only handles CR TDocs). The two batch-style selectors from
+extractor only handles CR TDocs; LS rows match only with an explicit
+`--type LS` and then fail the LS guard above). The two batch-style selectors from
 earlier releases (`--tdoc-id` as an integer PK and the mutual
 exclusivity with `--meeting-id`) have been removed; `--tdoc` is now a
 LIKE pattern on `tdoc_id` that can be freely combined with
@@ -1157,14 +1188,21 @@ Options:
 - `--from-path PATH`: parse a local `.docx`/`.zip` file, or parse
   every `.docx`/`.zip` under a directory tree. The path type is auto-
   detected: a file is parsed as a single source, a directory is
-  processed as a batch. The cache and database are never touched for
-  local files.
+  processed as a batch. Local files never write to the cache or the
+  database, but when `sync.auto_sync` is enabled a single file first
+  triggers auto-sync for the TDoc id extracted from its filename (and
+  the parser registry confirms the stored `tdocs.type` / `tdocs.source`
+  to dispatch — LS rows parse as LS, everything else as CR; a row still
+  missing after the sync is assumed CR, and an uninitialized database
+  degrades the same way instead of crashing the parse).
 - `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.
   When the URL is on the canonical 3GPP FTP root
   (`https://www.3gpp.org/ftp/...`) the result is cached on disk and
   written to `tdoc_extracts` + `tdoc_cr_cover_page` (and to
-  `tdoc_cr_ttcn_details` when the parser produced a TTCN sidecar —
-  subject to the FK matrix below); any other URL is parsed
+  `tdoc_cr_ttcn_details` when the parser produced a TTCN sidecar, or
+  to the `tdoc_cr_ls_details` LS sidecar when the row's `tdocs.type`
+  is `LS` — both subject to the FK matrix below); any other URL is
+  parsed
   in-memory only. Schemes other than `http(s)` (e.g. `ftp://`,
   `file://`) are rejected — download out of band and use
   `--from-path` instead. A URL ending in `/` is treated as a 3GPP
@@ -1232,10 +1270,15 @@ Single-file behaviour:
   matching pattern get a synthetic `LOCAL-<stem>` id internally so
   the parser can still run, but no DB row is ever written under that
   synthetic id.
+- When `sync.auto_sync` is enabled, the extracted id is handed to
+  `trigger_auto_sync(...)` first (TSG sync → meeting sync → parse), then
+  the stored `tdocs.type` / `tdocs.source` are read back to drive
+  parser dispatch. The database is only ever **read** by this path —
+  no `tdocs` / sidecar writes occur for local files.
 - No cache or database writes occur.
 - Exit code `0` when the parsed record (or raw markdown) is emitted
   successfully; `1` on file missing, permission denied, parser error
-  (`CRHeaderMissingError`), or rejected flags.
+  (`CRHeaderMissingError` / `LSHeaderMissingError`), or rejected flags.
 
 Directory (batch) behaviour (local or 3GPP URL folder):
 
@@ -1265,14 +1308,28 @@ Directory (batch) behaviour (local or 3GPP URL folder):
 
 FK-aware behaviour matrix (3GPP URL):
 
-| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_cover_page` row? | `tdoc_cr_ttcn_details` row? | Output? | Warning? |
-|---|---|---|---|---|---|---|
-| `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | yes — only when the parser emitted a TTCN sidecar (i.e. `is_ttcn_tdoc(tdoc_id)` and the document contained a TTCN overview / corrections section) | always | no |
-| `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
-| No `tdoc_id` pattern in filename | no | no | no | no | always | yes — pattern-miss notice |
+| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_cover_page` row? | `tdoc_cr_ttcn_details` row? | `tdoc_cr_ls_details` row? | Output? | Warning? |
+|---|---|---|---|---|---|---|---|
+| `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | yes — only when the parser emitted a TTCN sidecar (i.e. `is_ttcn_tdoc(tdoc_id)` and the document contained a TTCN overview / corrections section) | no | always | no |
+| `tdoc_id ∈ tdocs` **and** the row's `type` is `LS` | yes (zip + markdown) | no | no | no | yes — LS sidecar upserted (no cover / TTCN / change sidecars) | always | no |
+| `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
+| No `tdoc_id` pattern in filename | no | no | no | no | no | always | yes — pattern-miss notice |
+
+LS rows: the LS branch of the 3GPP-URL path (`_extract_from_3gpp_url`)
+parses with `parse_ls` and persists the `tdoc_cr_ls_details` sidecar
+only. It returns `details=None` and writes no `tdoc_extracts` /
+`tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` rows, so non-`raw`
+`--format` output errors with
+`FAILED - ValueError: --format {fmt!r} requires parsed fields; the parser did not run for this source.`
+(use `--format raw` to emit the converted markdown). The FTS5 index
+and the vector embeddings are refreshed for the parsed id on the LS
+write path (`_index_after_parse` / `_embed_after_parse`), mirroring
+the CR happy path.
 
 Local files and non-3GPP URLs always emit output and never touch
-the cache or the database.
+the cache or the database — with the single exception that
+`--from-path` may read the `tdocs` table to confirm the stored
+type/source for parser dispatch (see "Single-file behaviour" above).
 
 Auto-sync from URL candidates (3GPP only): when `Settings.sync.auto_sync`
 is enabled, `tdoc parse --from-url` extracts `tdoc_id` candidates from
@@ -1383,6 +1440,15 @@ doc3gpp tdoc parse --from-url \
 #       doc3gpp meeting sync --tsg R5
 #       doc3gpp meeting list --tdoc R5s260043
 #       doc3gpp tdoc sync --meeting-id <meeting_id_from_previous_step>
+
+# LS TDoc (row present in `tdocs` with `type = LS`): the 3GPP-URL
+# path parses the LS header and persists the `tdoc_cr_ls_details`
+# sidecar. The parse result carries no cover-page details, so only
+# `--format raw` emits output.
+doc3gpp tdoc parse --from-url \
+    https://www.3gpp.org/ftp/tsg_ran/WG3_IoV/.../R5s260101.zip --format raw
+# (non-raw formats error: `FAILED - ValueError: --format 'table'
+#  requires parsed fields; the parser did not run for this source.`)
 ```
 
 ## cache Commands

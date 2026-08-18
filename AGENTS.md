@@ -70,6 +70,7 @@ For the full symbol-to-file table, see
 | Add a config writer / CLI set command | `src/doc3gpp/settings/config_writer.py` + `src/doc3gpp/cli.py` (`config_app`) | TOML read-modify-write helpers; Typer `config set` command. |
 | Add a data source | `src/doc3gpp/scraping/` + `src/doc3gpp/parsers/` | Network in `scraping/`, parsing in `parsers/`. |
 | Add a body-change extraction | `src/doc3gpp/parsers/cr/body_changes.py` + `src/doc3gpp/storage/repositories/tdoc_cr_change_details_sql.py` | Pure function in parsers, sidecar repo in storage. |
+| Add an LS TDoc parser | `parsers/ls/` (incl. `variants/`) + `models/tdoc_ls.py` + `storage/repositories/tdoc_cr_ls_sql.py` |
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
 | Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and honours the per-spec `specs.last_synced_at` skip rule (one row per spec, no TSG-level gate) — each per-worker `_sync_one_spec` short-circuits specs whose `last_synced_at` is within `Settings.sync.spec_sync_interval` and stamps the spec's own `last_synced_at` on a successful re-sync. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. |
@@ -84,7 +85,7 @@ For the full symbol-to-file table, see
 | Add an embedding model | `src/doc3gpp/services/embedding/embedder.py` | Lazy model load; `Embedder` Protocol in `repository/protocols.py`. |
 | Add a vector DDL change | `src/doc3gpp/storage/db/migrate.py` (`_create_vector_schema`) + `src/doc3gpp/storage/repositories/vector_sql.py` | Gated on sqlite + sqlite-vec. |
 | Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. List routes that pair with an HTMX filter form (e.g. meetings / tdocs / wis / search) must render a `partials/<resource>_results.html` fragment when the request sets `HX-Request: true` and the full page otherwise — the `outerHTML` swap target `#results` only fits a fragment, not a full HTML document. The tdoc detail page's Parse card enqueues `POST /jobs/parse/tdocs` (single-tdoc filter) and polls `partials/job_status.html` via `static/js/tdoc_parse.js`; the search pages share a 5-column grid form with a `sem` rerank input on `/search` and full filter parity on `/search/sem`. The web app builds ONE shared `SentenceTransformerEmbedder` in `build_state` and injects it into `build_tdoc_cr_service` / `build_search_service` / `build_semantic_search_service` so the model loads once per process.
-- The tdoc detail page (`tdoc_show.html`) renders two extra cards when the parent TDoc has been parsed: 'Required changes' (one entry per TTCN `required_changes` dict) for TTCN CRs, and 'Extracted changes' (one entry per body-derived change block) for non-TTCN CRs. Both cards are gated on the sidecar's presence and are mutually exclusive. |
+- The tdoc detail page (`tdoc_show.html`) renders two extra cards when the parent TDoc has been parsed: 'Required changes' (one entry per TTCN `required_changes` dict) for TTCN CRs, and 'Extracted changes' (one entry per body-derived change block) for non-TTCN CRs. Both cards are gated on the sidecar's presence and are mutually exclusive. For LS rows (`tdoc.type == 'LS'`) the page renders an 'LS Cover' card instead of the Cover-page card (gated on the `ls` sidecar; placeholder when not yet parsed) — the Parse card still shows, but DB-mode parse jobs on LS rows fail with `TDocTypeUnsupportedError`, so LS extraction runs via `doc3gpp tdoc parse --from-url <url> --format raw`. |
 | Add a sync hub panel / sync hub page | `src/doc3gpp/web/routes/sync.py` + `src/doc3gpp/web/templates/sync.html` + `src/doc3gpp/web/static/js/sync_hub.js` | Each new enqueue panel follows the existing nine-form pattern (one `<form id="*-form">` per MCP tool) and reuses `bindJobPolling` + `JobRepository.create`. New routes that need HTTP exposure land in `web/routes/jobs.py` next to their existing siblings (e.g. `POST /jobs/parse/tdoc-url` closed the MCP-vs-HTTP gap for the MCP `parse_tdoc_url` tool). |
 | Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). The MCP mount supports both `streamable_http` (default) and `sse` transports, selected via `[mcp] transport` in `doc3gpp.toml`; browser origins are allowed via `[mcp] allowed_origins` (defaults to `http://127.0.0.1` and `http://localhost`). |
 | Add a background job kind | `src/doc3gpp/models/jobs.py` (`JobKind`, e.g. `JobKind.PARSE_TDOC_URL`) + `src/doc3gpp/web/workers/handlers.py` (`KIND_TO_HANDLER`, e.g. `_parse_tdoc_url`) + `src/doc3gpp/web/routes/jobs.py` | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; SSE progress via `append_log`/progress callbacks. |
@@ -241,13 +242,17 @@ Workflows in one line (full prose in `docs/architecture.md`):
 - `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row, then
   looks up the slim cover-page details and the extract metadata by the
   row's immutable `tdoc.ftp_url` (one row per URL — the URL is the row
-  identity for both `tdoc_cr_cover_page` and `tdoc_extracts`). The TTCN
+  identity for `tdoc_cr_cover_page`, `tdoc_extracts`, and the LS
+  sidecar `tdoc_cr_ls_details`). The TTCN
   sidecar is joined in via `cr_ttcn_repo.get_by_url(tdoc.ftp_url)` only
-  when `is_ttcn_tdoc(tdoc.tdoc_id)` is `True`. Auxiliary files are
+  when `is_ttcn_tdoc(tdoc.tdoc_id)` is `True`; the LS sidecar is joined
+  in unconditionally via `ls_repo.get_by_url(tdoc.ftp_url)` (an LS row
+  never carries a cover / TTCN sidecar, so the two are mutually
+  exclusive in practice). Auxiliary files are
   read once via `file_repo.get_for_tdoc_id(tdoc.tdoc_id)` and match
   by `tdoc_id` (not URL) so all revisions / reviews / support files
   surface in a single pass. The CLI's renderers emit `cover`, the
-  optional `ttcn` block, `extracted_at` (sourced from the
+  optional `ttcn` block, the optional `ls` block, `extracted_at` (sourced from the
   `tdoc_extracts` row via PK JOIN), and `files` (the auxiliary files
   block / placeholder) as separate sections — the legacy `details` /
   `parser_version` fields no longer appear in the output. The `tdoc_extracts` row carries a single `cache_file` column
@@ -261,11 +266,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `_wrap_markdown_zip` (single entry named `<docx stem>.md`,
   `ZIP_DEFLATED`).
 - `doc3gpp tdoc show --ftp-url <url>` resolves the URL into matching
-  rows across four tables (`tdocs`, `tdoc_cr_cover_page`,
-  `tdoc_cr_ttcn_details`, `tdoc_files`) directly — `tdocs` and
+  rows across five tables (`tdocs`, `tdoc_cr_cover_page`,
+  `tdoc_cr_ttcn_details`, `tdoc_cr_ls_details`, `tdoc_files`) directly
+  — `tdocs` and
   `tdoc_files` use the new `get_by_ftp_url` lookups
   (`SQLAlchemyTDocRepository.get_by_ftp_url` /
-  `SQLAlchemyTDocFileRepository.get_by_ftp_url`); the cover / TTCN
+  `SQLAlchemyTDocFileRepository.get_by_ftp_url`); the cover / TTCN /
+  LS
   tables use the existing URL-PK lookups. The `--ftp-url` path is
   **mutually exclusive** with `--tdoc` (an XOR validator raises
   `BadParameter` when neither or both are supplied) and **does NOT
@@ -283,8 +290,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
   because the URL is the row identity — a cache miss raises
   `BadParameter` pointing at `doc3gpp tdoc parse --from-url <url>`
   or `doc3gpp tdoc parse --tdoc <id>`. The CLI bundles the result
-  into a new `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn,
-  extracted_at, files)` DTO and renders it under a
+  into a new `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn, changes,
+  ls, extracted_at, files)` DTO and renders it under a
   `# FTP URL` / `[FTP URL]` anchor; the renderer contract follows
   the same omit-when-null convention as the `--tdoc` path's
   `TDocShowRecord`.
@@ -339,12 +346,16 @@ Workflows in one line (full prose in `docs/architecture.md`):
   same meeting-calendar and TDoc-list sync paths used by explicit
   `meeting sync` / `tdoc sync`. The same skip rules apply and are never
   bypassed; failures are logged as warnings and do not abort the read
-  command. Direct-mode `tdoc parse --from-path` / `--from-url` never
-  triggers auto-sync. The `tdoc show --ftp-url` selector also never
-  triggers auto-sync — the URL is the row identity and there's no
-  parent TDoc / meeting to anchor a sync on; users wanting a fresh
-  extract at the URL must run `tdoc parse --from-url <url>` or
-  `tdoc parse --tdoc <id>` explicitly.
+  command. Direct-mode `tdoc parse --from-path` extracts the TDoc id
+  from the file name and triggers auto-sync for that id (the stored
+  `tdocs.type` / `tdocs.source` then drive parser dispatch — LS rows
+  parse as LS, everything else as CR; a row still missing after the
+  sync is assumed CR, and an uninitialized database degrades the same
+  way). Direct-mode `tdoc parse --from-url` never triggers auto-sync.
+  The `tdoc show --ftp-url` selector also never triggers auto-sync —
+  the URL is the row identity and there's no parent TDoc / meeting to
+  anchor a sync on; users wanting a fresh extract at the URL must run
+  `tdoc parse --from-url <url>` or `tdoc parse --tdoc <id>` explicitly.
 
 ## Common commands
 

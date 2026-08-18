@@ -1,6 +1,6 @@
 # Architecture
 
-> Last reviewed: 2026-08-13
+> Last reviewed: 2026-08-18
 
 The project is implemented as a layered Python package under `src/doc3gpp/`,
 shipped both as a library (SDK) and a CLI. Each layer depends only on the
@@ -16,7 +16,9 @@ Current scope:
 - Work-item (WI) scraping from the per-TSG DynaReport WI pages.
 - TDoc CR extraction pipeline (download zip → on-disk cache → python-docx
   render → markdown cache → cover-page parser → persist).
-- Calendar / TDoc / WI / TDoc-CR persistence in SQLAlchemy.
+- LS TDoc header extraction (3GPP-variant parser → `tdoc_cr_ls_details`
+  sidecar; IEEE / ETSI variants are v2 stubs).
+- Calendar / TDoc / WI / TDoc-CR / TDoc-LS persistence in SQLAlchemy.
 
 ## Layers
 
@@ -96,6 +98,14 @@ Per-layer modules:
       `ttcn_sections.py`) live in the `parsers/cr/` subpackage; the
       shim delegates to `build_default_registry()` so the public
       surface stays a single import.
+    - `parsers/ls/` — LS-family parsers. `ls_parsers.py`
+      (`LSParserBase` orchestrator), `cover_page.py`
+      (`LSCoverPageParser` 3GPP header extractor), `header.py`
+      (`is_ls_header_present` / `LSHeaderMissingError`), and
+      `variants/` (`ThreeGPPLSParser` — v1, registered;
+      `IEEELSParser` / `ETSILSParser` — v2 stubs, unregistered).
+      Dispatch is via `tdocs.type == "LS"` + `tdocs.source` through
+      the same `TDocParserRegistry` used by the CR family.
 - `models/` — pure domain dataclasses (`@dataclass(slots=True)`),
   passed between layers; never leak ORM attributes.
     - `models/meeting.py`, `models/tdoc.py`, `models/tsg.py`,
@@ -103,6 +113,8 @@ Per-layer modules:
       (`TDocCRDetails` slim cover-page dataclass, `TDocCRTTCNDetails`
       sidecar, `TDocCRParseResult` parser bundle, `TDocExtractMeta`
       cache-pointer sidecar, `DirectParseResult` direct-mode outcome)
+    - `models/tdoc_ls.py` (`TDocLSDetails` sidecar, `TDocLSParserResult`
+      parser envelope, `LSAttachment` TypedDict)
 - `repository/` — abstract `Protocol` contracts used by services.
     - `repository/protocols.py` — `MeetingRepository`,
       `TDocRepository` (+ `get_by_id`), `TsgRepository`,
@@ -110,7 +122,9 @@ Per-layer modules:
       `TDocCrDetailRepository` (slim cover-page repo + the
       `tdoc_extracts` sidecar, written through a separate
       `upsert_extract_meta` method),
-      `TDocCrTTCNDetailRepository` (TTCN sidecar)
+      `TDocCrTTCNDetailRepository` (TTCN sidecar),
+      `LSParserRepository` (LS sidecar: `upsert` /
+      `get_by_url` / `get_by_tdoc_id` / `get_by_variant`)
 - `services/` — orchestration. Constructed via `services/factory.py`
   (`build_*` helpers); the CLI never imports a concrete SQL repository
   directly.
@@ -122,22 +136,30 @@ Per-layer modules:
     - `services/tdoc_cr_service.py` — end-to-end CR extraction pipeline
       (accepts `cr_ttcn_repository` in its constructor; fans the
       parser's `TDocCRParseResult` out across the cover-page repo,
-      the TTCN sidecar repo, and the extract-metadata repo)
+      the TTCN sidecar repo, and the extract-metadata repo).
+      Also accepts `ls_repository` (default
+      `SQLAlchemyLSParserRepository`): for LS rows
+      (`tdocs.type == "LS"`) the DB-mode `extract` raises
+      `TDocTypeUnsupportedError`, while the direct-mode paths parse
+      with `parse_ls` and upsert the `tdoc_cr_ls_details` sidecar.
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
       `build_tdoc_sync_coordinator`, `build_tdoc_cr_service`,
       `build_tsg_service`, `build_wi_service`,
       `build_tdoc_repository`, `build_tdoc_cr_repository`,
-      `build_tdoc_cr_ttcn_repository`
+      `build_tdoc_cr_ttcn_repository`, `build_ls_repository`
 - `storage/` — SQLAlchemy ORM models, engine / session factory,
   backend-specific options, concrete Protocol implementations.
     - `storage/db/models.py` — ORM classes (including
       `TDocCrDetailOrm` slim cover-page, `TDocCrTtcnDetailOrm`
-      TTCN sidecar, `TDocExtractOrm` cache-pointer sidecar)
+      TTCN sidecar, `TDocCrLSDetailOrm` LS sidecar,
+      `TDocCrChangeDetailOrm` body-change sidecar,
+      `TDocExtractOrm` cache-pointer sidecar)
     - `storage/compression.py` — shared gzip JSON helpers
       (`compress_json` / `decompress_json`) used by the cover-page
-      repo and the TTCN sidecar repo for any binary JSON column
-      (the sidecar's `required_changes` blob today; tolerant
+      repo, the TTCN sidecar repo, and the LS sidecar repo for any
+      binary JSON column (the TTCN sidecar's `required_changes` and
+      the LS sidecar's `attachments_json` today; tolerant
       decoding covers future binary detail columns)
     - `storage/db/session.py` — `get_engine`, `get_session_factory`
       (cached)
@@ -147,7 +169,8 @@ Per-layer modules:
     - `storage/db/migrations/` — placeholder for future Alembic
     - `storage/backends/sqlite.py` — engine kwargs
     - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
-      and `storage/repositories/tdoc_cr_ttcn_sql.py` — concrete
+      and `storage/repositories/tdoc_cr_ttcn_sql.py` /
+      `storage/repositories/tdoc_cr_ls_sql.py` — concrete
       `SQLAlchemy*Repository` classes (the cover-page repo also
       owns `tdoc_extracts` writes via `upsert_extract_meta`)
 
@@ -161,7 +184,9 @@ The CLI composes a service via the factory, the service drives the
 scrapers + parsers + repos through the Protocols, and the repos own the
 SQLAlchemy session. There are four primary end-to-end flows; the
 "meeting-based TDoc sync" flow is itself composed of two sub-flows,
-and the TDoc CR extraction is the deepest.
+and the TDoc CR extraction is the deepest. LS TDoc header extraction
+rides on the direct-mode parse paths (see below) rather than having
+a flow of its own.
 
 ### Meetings sync\n\n1. `doc3gpp meeting sync --tsg <short>` validates `<short>` against\n   the `tsgs` table (auto-seeded if empty).\n2. `MeetingService.sync` checks `tsgs.meeting_last_sync` against\n   `Settings.sync.meeting_sync_interval` (default `24h`) and skips\n   the upstream fetch when the last sync is still fresh. `--force`\n   bypasses this check.\n3. On a non-skipped run: `fetch_calendar` (DynaReport HTML) →\n   `parse_3gpp_calendar` (HTML → `Meeting` list). Every parsed\n   `Meeting` is then stamped with `Meeting.tsg = <short>` (canonicalised\n   to upper case) before being handed to\n   `SQLAlchemyMeetingRepository.upsert_many`. The FK constraint\n   requires the parent row to exist in `tsgs`, so the auto-seed in\n   step 1 is a hard prerequisite.\n4. `SQLAlchemyMeetingRepository.upsert_many` writes the rows; a final\n   `delete_with_end_before(cutoff)` pass trims out-of-window rows.\n5. `doc3gpp meeting list --tsg <pattern>` is a SQL ``LIKE`` lookup on\n     the indexed `meetings.tsg` column (case-insensitive on input). Rows\n     without an owning TSG are excluded.
 
@@ -302,7 +327,7 @@ and the TDoc CR extraction is the deepest.
     - Returns `ExtractResult(details, extract_meta, from_cache=False)`.
   3. `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row
     via `TDocRepository.get_by_id` (PK lookup on `tdocs.tdoc_id`),
-    then performs THREE URL-keyed reads against the immutable
+    then performs FOUR URL-keyed reads against the immutable
     `tdoc.ftp_url`:
     1. `SQLAlchemyTDocCrRepository.get_by_url(tdoc.ftp_url)` — the
        slim cover-page row from `tdoc_cr_cover_page`.
@@ -315,10 +340,16 @@ and the TDoc CR extraction is the deepest.
        the TTCN sidecar from `tdoc_cr_ttcn_details`, gated on
        `is_ttcn_tdoc(tdoc.tdoc_id)` so non-TTCN CRs never hit the
        sidecar table.
+    4. `SQLAlchemyLSParserRepository.get_by_url(tdoc.ftp_url)` — the
+       LS sidecar from `tdoc_cr_ls_details`, joined in
+       unconditionally (an LS row never carries a cover / TTCN
+       sidecar, so the reads are mutually exclusive in practice).
 
-    The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at)`
-    is rendered by `table` / `json` / `markdown` to three separate
-    sections: `cover`, the optional `ttcn` block, and the standalone
+    The bundled `TDocShowRecord(tdoc, cover, ttcn, changes, ls,
+    extracted_at)` is rendered by `table` / `json` / `markdown` to
+    separate sections: `cover`, the optional `ttcn` block, the
+    optional `ls` block (`## LS` in markdown, `[LS Cover]` in table
+    mode), and the standalone
     `extracted_at` line. Optional keys are **omitted** (not emitted
     as `null`) in the JSON payload when the corresponding row is
     absent. The legacy `details` / `parser_version` fields no longer
@@ -326,6 +357,41 @@ and the TDoc CR extraction is the deepest.
     `TDocCrService.extract()` and writes the converted `.docx`
     markdown (DB-cache short-circuit, otherwise download + render +
     persist).
+
+### LS TDoc header extraction
+
+LS rows (`tdocs.type == "LS"`) never go through the DB-mode
+`TDocCrService.extract` pipeline — the service resolves the LS
+parser and raises `TDocTypeUnsupportedError` (`'LS' (DB-mode LS
+extraction is not yet supported; use 'tdoc parse --from-url' for LS
+rows)`). The supported paths are the direct-mode parses:
+
+1. `doc3gpp tdoc parse --from-url <3gpp-url>` on a row present in
+   `tdocs` with `type = LS`:
+   `extract_from_url` → `_extract_from_3gpp_url` resolves the parser
+   via `_resolve_parser(tdoc_id, tdoc_type=row.type, source=row.source)`
+   → `ThreeGPPLSParser` → `parse_ls(markdown)` (header detection via
+   `is_ls_header_present` → `LSCoverPageParser`) → the parsed
+   `TDocLSDetails` (stamped with `tdoc_id` / `ftp_url`) is upserted
+   to `tdoc_cr_ls_details`. The zip + markdown caches are written
+   (keyed on `derive_cache_file`), and the FTS5 index + vector
+   embeddings are refreshed via `_index_after_parse` /
+   `_embed_after_parse`. The result carries `details=None` — no
+   `tdoc_cr_cover_page` / `tdoc_extracts` / `tdoc_cr_ttcn_details`
+   rows are written, and non-`raw` `--format` output errors (the CLI
+   requires parsed fields).
+2. `doc3gpp tdoc parse --from-path <file>` (raw-markdown mode via
+   `extract_from_bytes(..., filename=None)`): used by the service
+   tests and by callers holding the markdown in memory; the LS branch
+   parses and upserts the sidecar the same way. Real `.docx` /
+   `.zip` local files are dispatched by `direct_parse_bytes`, which
+   currently hardcodes the CR family — a real local LS file parses
+   as a CR and fails with `CRHeaderMissingError` (a known v1 gap;
+   use `--from-url` for LS documents).
+3. `doc3gpp tdoc show --tdoc <id>` / `--ftp-url <url>` renders the
+   persisted `tdoc_cr_ls_details` row (see the show flow above); the
+   MCP `get_tdoc` tool and the web `GET /tdocs/{id}` route surface
+   the same `ls` block.
 
 ### Spec sync (list + detail)
 
@@ -546,7 +612,27 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `extracted_at` or `parser_version` — the sidecar is purely the
       parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
-- `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).
+- `tdoc_cr_ls_details`:
+    - `ftp_url` (PK, immutable download URL — same identity
+      convention as the other sidecars) + `tdoc_id` (non-PK FK →
+      `tdocs.tdoc_id` with `ondelete="CASCADE"`), `variant` (default
+      `"3gpp"` — tags the format family so the show record and the
+      search index can branch without re-running the parser),
+      eleven header fields (`title`, `response_to_doc`,
+      `response_to_title`, `response_to_group`, `release`,
+      `work_item_name`, `work_item_code`, `source`, `to_groups`,
+      `cc_groups`), `attachments_json` (`LargeBinary` —
+      gzip-compressed UTF-8 JSON list of `{doc_number, description}`
+      dicts via `storage/compression.py`), `parser_version`,
+      `extracted_at` (server-side UTC, stamped by the repo's
+      `upsert` — the LS sidecar carries its own timestamp rather
+      than relying on `tdoc_extracts`, which the LS parse path does
+      not write). One row per immutable URL. The FTS5 `tdoc_search`
+      projection and the vector `_build_embed_text` projection both
+      fall back to this table's `title` / `response_to_title` /
+      `to_groups` / `cc_groups` when no `tdoc_cr_cover_page` row
+      exists for the `tdoc_id`.
+- `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` / `tdoc_cr_ls_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).
 - `tdoc_search_meta`: Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
 - `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`; one row per embedding chunk produced by the semantic-search subsystem. Schema is gated on the sqlite + sqlite-vec support matrix (created by `_create_vector_schema` in `storage/db/migrate.py`; silently skipped when the sqlite-vec extension is unavailable). Dimensions match the active `SemanticSearchSettings.embedding_model`.
 - `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
@@ -621,16 +707,20 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       and the meeting row may not exist in our database yet.
 
 Cascading FK deletes are deliberately inconsistent across the schema:
-`tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` / `tdoc_extracts` cascade
+`tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` / `tdoc_cr_ls_details` /
+`tdoc_cr_change_details` / `tdoc_extracts` cascade
 on `tdocs.tdoc_id` deletion (they are derived artefacts of the parent
 TDoc and are safe to wipe with it), while `tdoc_files` does not
 (revision files survive a TDoc re-sync). The `tdoc_cr_cover_page`,
-`tdoc_cr_ttcn_details`, and `tdoc_extracts` tables have **no FK
+`tdoc_cr_ttcn_details`, `tdoc_cr_ls_details`, `tdoc_cr_change_details`,
+and `tdoc_extracts` tables have **no FK
 between each other**: the cache sidecar can be purged without
 dropping parsed detail history, the parsed detail can be rebuilt
-without invalidating the cached zip/markdown, and the TTCN sidecar
-lives independently of the cover-page row at the same URL (a
-non-TTCN extract leaves no `tdoc_cr_ttcn_details` row). The
+without invalidating the cached zip/markdown, and the TTCN / LS /
+change sidecars
+live independently of the cover-page row at the same URL (a
+non-TTCN extract leaves no `tdoc_cr_ttcn_details` row, an LS extract
+leaves no cover / TTCN / change rows). The
 `test_cascade_delete_via_fk` ORM test exercises the cascade
 end-to-end via a `PRAGMA foreign_keys=ON` connect listener (SQLite
 default is OFF).
@@ -691,23 +781,32 @@ twenty commands):
       `--force` re-extracts already-parsed rows, `--full` is reserved
       for the parser's `full=True` mode. End-to-end filter-driven:
       candidates are the intersection of every supplied predicate, with
-      CR-type as the implicit default and a `max_batch` cap.
+      CR-type as the implicit default and a `max_batch` cap. LS rows
+      (`tdocs.type == "LS"`) are rejected in DB mode
+      (`TDocTypeUnsupportedError`) — parse them via
+      `--from-url` instead, which writes the `tdoc_cr_ls_details`
+      sidecar.
     - `show` — `--tdoc` (mutually exclusive with `--ftp-url`); renders
       the matching TDoc, the slim cover-page row from
       `tdoc_cr_cover_page` (URL-keyed on `tdoc.ftp_url`), the
       `extracted_at` timestamp from `tdoc_extracts` (same URL), and,
       when the TDoc is a TTCN CR, a `[TTCN Details]` block from
-      `tdoc_cr_ttcn_details`. Every matching `tdoc_files` row
+      `tdoc_cr_ttcn_details`; when an LS sidecar row exists instead,
+      an `[LS Cover]` block from `tdoc_cr_ls_details`. Every matching
+      `tdoc_files` row
       (`tdoc_id`-keyed read, no URL match) renders under an
       `[Auxiliary Files]` block (table), `## Auxiliary Files`
       section (markdown), or `files` key (JSON). JSON payload keys
       are `tdoc` (always), `cover` (omitted when absent), `ttcn`
-      (omitted when absent), `extracted_at` (omitted when absent),
+      (omitted when absent), `ls` (omitted when absent),
+      `extracted_at` (omitted when absent),
       `files` (omitted when no auxiliary files exist). `--ftp-url`
       resolves the URL across `tdocs` / `tdoc_cr_cover_page` /
-      `tdoc_cr_ttcn_details` / `tdoc_files` directly (no parent
+      `tdoc_cr_ttcn_details` / `tdoc_cr_ls_details` / `tdoc_files`
+      directly (no parent
       TDoc needed) and bundles the result into a separate
-      `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn, extracted_at,
+      `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn, changes, ls,
+      extracted_at,
       files)` DTO rendered under a `# FTP URL` / `[FTP URL]`
       anchor.
 - `tsg`:
@@ -797,7 +896,8 @@ uvicorn with `build_app`.
     - parser fixtures (`test_calendar_parser.py`,
       `test_cr_parser.py`, `test_tdoc_parser.py`,
       `test_tdoc_file_parser.py`, `test_wi_parser.py`,
-      `test_docx_converter.py`)
+      `test_docx_converter.py`, `test_ls_parser.py`,
+      `test_ls_header.py`, `test_ls_cover_page.py`)
     - scraping + cache contracts (`test_tdoc_cache.py`,
       `test_tdoc_zip_source.py`, `test_ftp_source.py`,
       `test_scraper_client.py`)
@@ -815,7 +915,9 @@ uvicorn with `build_app`.
       `test_cli_sqlite.py`, `test_db_reset_sqlite.py`
     - `test_meeting_service_sqlite.py`,
       `test_tdoc_sqlite.py`, `test_tdoc_file_sqlite.py`,
-      `test_tdoc_cr_sqlite.py`, `test_tsg_sqlite.py`, `test_wi_sqlite.py`
+      `test_tdoc_cr_sqlite.py`, `test_tsg_sqlite.py`, `test_wi_sqlite.py`,
+      `test_ls_sqlite_repo.py`, `test_ls_e2e_sqlite.py`,
+      `test_ls_search_sqlite.py`
     - web + MCP end-to-end (`test_web_end_to_end.py`,
       `test_mcp_end_to_end.py`, `test_cli_server.py`)
     - `test_online_3gpp_calendar.py`, `test_online_tdoc_parse.py`,
@@ -826,6 +928,8 @@ uvicorn with `build_app`.
   `R5s260009.zip`, `R5s260051.zip`, `R5s260135.zip`,
   `R5s260176.zip`). Regression corpus for `cr_parser` and
   `tdoc_cr_service`.
+- `tests/fixtures/ls/` — `LS_sample_r5_240001.md` raw-markdown LS
+  fixture for the LS parser + sidecar tests.
 - Pytest markers: `online`. The sqlite profile is
   `pytest -m "not online"`; `./scripts/test_sqlite.sh`
   is the canonical wrapper.
@@ -866,7 +970,9 @@ constraint is lifted.
 
 Out-of-scope features that have not been implemented yet:
 
-- TDoc types other than CR (LS, DRAFT, BB, etc.).
+- TDoc types other than CR and LS (DRAFT, BB, etc.).
+- LS format variants beyond 3GPP (IEEE / ETSI v2 stubs exist but are
+  not registered in the parser registry).
 - Workplan / spec status extraction.
 - Alembic / versioned migrations (the schema bootstrap is
   `Base.metadata.create_all` via `db init`).

@@ -46,6 +46,7 @@ SQLite is the sole storage backend.
 
 - **Meeting / TDoc / WI / Spec sync** — fetch the 3GPP Meetings, TDocs, Work Items List, and 3GPP specifications (TS/TR) with versions. Spec sync fans out across per-spec detail pages in a thread pool and caches the result for `spec list` / `spec show`.
 - **TDoc CR extraction** — Download and parse TDoc CR into structured records.
+- **LS TDoc header parsing** — Parse 3GPP Liaison Statement (LS) TDoc headers (`tdoc_cr_ls_details` sidecar).
 - **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
 - **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
 - **Web server + MCP** — a single-port HTTP server (FastAPI + HTMX + Jinja2) for browsing and searching 3GPP data in a browser, plus a Streamable-HTTP Model Context Protocol endpoint (`/mcp`) exposing the same data to AI clients with byte-for-byte JSON parity with the HTTP `?format=json` routes. Background jobs (sync, parse, search rebuild, cache purge) run on a shared asyncio worker with live SSE progress.

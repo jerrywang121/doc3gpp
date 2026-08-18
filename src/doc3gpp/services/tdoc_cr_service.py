@@ -89,6 +89,7 @@ from doc3gpp.parsers.direct_extractor import (
     is_3gpp_ftp_url,
     list_3gpp_directory,
 )
+from doc3gpp.parsers.ls.ls_parsers import LSParserBase
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.parsers.tdoc_parsers import (
     TDocParser,
@@ -96,6 +97,7 @@ from doc3gpp.parsers.tdoc_parsers import (
     build_default_registry,
 )
 from doc3gpp.repository.protocols import (
+    LSParserRepository,
     TDocCrChangeDetailsRepository,
     TDocCrDetailRepository,
     TDocCrTTCNDetailRepository,
@@ -391,6 +393,7 @@ class TDocCrService:
         cr_ttcn_repository: TDocCrTTCNDetailRepository,
         cr_change_details_repository: TDocCrChangeDetailsRepository,
         tdoc_repository: TDocRepository,
+        ls_repository: LSParserRepository | None = None,
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
         max_tdoc_size_bytes: int = 0,
@@ -403,6 +406,7 @@ class TDocCrService:
         self._cr_ttcn_repo = cr_ttcn_repository
         self._change_details_repo = cr_change_details_repository
         self._tdoc_repo = tdoc_repository
+        self._ls_repository = ls_repository
         self._parser = parser
         self._parser_registry = parser_registry
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
@@ -411,18 +415,32 @@ class TDocCrService:
         from doc3gpp.settings.loader import get_settings as _gs
         self._settings = _gs()
 
-    def _resolve_parser(self, tdoc_id: str) -> TDocParser:
+    def _resolve_parser(
+        self,
+        tdoc_id: str,
+        *,
+        tdoc_type: str | None = None,
+        source: str | None = None,
+    ) -> TDocParser:
         """Return the parser to use for ``tdoc_id``.
 
         When a single parser was injected at construction, it is used
         for every call. Otherwise the registry resolves a parser per
-        ``tdoc_id`` so TTCN ids route to :class:`TTCNCRParser` and
-        other ids fall back to the generic :class:`CRParser`.
+        ``tdoc_id`` so TTCN ids route to :class:`TTCNCRParser`, LS ids
+        route to an :class:`LSParserBase` variant (when ``tdoc_type``
+        / ``source`` select one), and other ids fall back to the
+        generic :class:`CRParser`. ``tdoc_type`` / ``source`` are the
+        row's ``tdocs.type`` / ``tdocs.source`` values; LS variants
+        dispatch on them, the CR family ignores them.
         """
         if self._parser is not None:
             return self._parser
         registry = self._parser_registry or build_default_registry()
-        return registry.resolve(tdoc_id, tdoc_type="CR")
+        return registry.resolve(
+            tdoc_id,
+            tdoc_type=tdoc_type,
+            source=source,
+        )
 
     def _index_after_parse(self, tdoc_id: str) -> None:
         """Best-effort FTS5 upsert after a successful parse.
@@ -647,7 +665,12 @@ class TDocCrService:
         else:
             stored_ftp_url = normalize_ftp_path(candidates[0])
 
-        parsed: TDocCRParseResult = self._resolve_parser(normalised).parse(
+        parser = self._resolve_parser(
+            normalised,
+            tdoc_type=tdoc.type,
+            source=tdoc.source,
+        )
+        parsed: TDocCRParseResult = parser.parse(
             markdown, tdoc_id=normalised, full=full,
         )
         cover = replace(parsed.cover, ftp_url=stored_ftp_url)
@@ -680,6 +703,15 @@ class TDocCrService:
             self._cr_ttcn_repo.upsert(ttcn)
         if changes is not None:
             self._change_details_repo.upsert(changes)
+        if isinstance(parser, LSParserBase) and self._ls_repository is not None:
+            ls_result = parser.parse_ls(markdown, tdoc_id=normalised)
+            if ls_result.cover is not None:
+                details = replace(
+                    ls_result.cover,
+                    tdoc_id=normalised,
+                    ftp_url=stored_ftp_url,
+                )
+                self._ls_repository.upsert(details)
         self._repo.upsert_extract_meta(meta)
         self._index_after_parse(normalised)
         self._embed_after_parse(normalised)
@@ -789,6 +821,7 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = False,
+        source: str | None = None,
         max_tdoc_size_bytes: int | None = None,
     ) -> DirectParseResult:
         """Download ``url`` and return a :class:`DirectParseResult`.
@@ -900,6 +933,10 @@ class TDocCrService:
                 source_url=url,
             )
 
+        row = self._tdoc_repo.get_by_id(extracted_id)
+        row_type = (row.type if row is not None else None)
+        row_source = (row.source if row is not None else source)
+
         # 3GPP URL + tdoc_id ∈ tdocs: full happy path.
         return self._extract_from_3gpp_url(
             url=url,
@@ -908,6 +945,8 @@ class TDocCrService:
             tdoc_id=extracted_id,
             force=force,
             full=full,
+            tdoc_type=row_type,
+            source=row_source,
             max_bytes=(
                 max_tdoc_size_bytes
                 if max_tdoc_size_bytes is not None
@@ -1033,8 +1072,12 @@ class TDocCrService:
     def extract_from_bytes(
         self,
         docx_bytes: bytes,
-        filename: str,
+        filename: str | None = None,
         *,
+        tdoc_id: str | None = None,
+        ftp_url: str | None = None,
+        tdoc_type: str | None = None,
+        source: str | None = None,
         force: bool = False,
         full: bool = True,
         max_tdoc_size_bytes: int | None = None,
@@ -1052,9 +1095,24 @@ class TDocCrService:
             docx_bytes: Raw bytes of the document. The helper
                 :func:`direct_parse_bytes` dispatches on the leading
                 ``b"PK"`` to handle both bare ``.docx`` and zip-
-                wrapped ``.docx`` inputs.
+                wrapped ``.docx`` inputs. When ``filename`` is
+                ``None`` the payload is treated as raw markdown text
+                (UTF-8) and parsed directly — used by the LS-sidecar
+                tests to exercise the parser without a docx.
             filename: Source filename; used to drive the docx
                 extension guard and to auto-extract the TDoc id.
+                ``None`` switches the call to raw-markdown mode.
+            tdoc_id: Explicit TDoc id override. When supplied it wins
+                over the filename-derived id; when ``None`` the id is
+                auto-extracted from ``filename``.
+            ftp_url: Relative FTP URL for the parsed row. Used as the
+                sidecar row identity when the LS branch persists.
+            tdoc_type: The ``tdocs.type`` value (``"LS"`` / ``"CR"``)
+                driving registry dispatch; ``None`` falls back to the
+                CR family.
+            source: The ``tdocs.source`` value (submitting
+                organisation) driving LS variant dispatch; ``None``
+                falls back to the 3GPP catch-all variant.
             force: Accepted for signature parity with
                 :meth:`extract_from_url`; local files always bypass
                 the cache so the flag is a no-op.
@@ -1068,6 +1126,42 @@ class TDocCrService:
             ``"local"`` and whose persistence fields are all false.
         """
         del force
+        if filename is None:
+            markdown = docx_bytes.decode("utf-8")
+            docx_filename = "<markdown>"
+            parser = self._resolve_parser(
+                tdoc_id or "",
+                tdoc_type=tdoc_type,
+                source=source,
+            )
+            parsed: TDocCRParseResult | None = None
+            if isinstance(parser, LSParserBase):
+                if self._ls_repository is not None:
+                    ls_result = parser.parse_ls(markdown, tdoc_id=tdoc_id)
+                    if ls_result.cover is not None:
+                        details = replace(
+                            ls_result.cover,
+                            tdoc_id=tdoc_id,
+                            ftp_url=ftp_url,
+                        )
+                        self._ls_repository.upsert(details)
+            else:
+                parsed = parser.parse(
+                    markdown,
+                    tdoc_id=tdoc_id or "",
+                    full=full,
+                )
+            return DirectParseResult(
+                source_kind="local",
+                markdown=markdown,
+                details=parsed.cover if parsed is not None else None,
+                extract_meta=None,
+                from_cache=False,
+                persisted=False,
+                tdoc_id=tdoc_id,
+                tdoc_id_in_tdocs=False,
+            )
+
         markdown, docx_filename, parsed = direct_parse_bytes(
             docx_bytes, filename=filename, full=full,
             max_bytes=(
@@ -1076,7 +1170,7 @@ class TDocCrService:
                 else self._max_tdoc_size_bytes
             ),
         )
-        tdoc_id = extract_tdoc_id_from_filename(filename)
+        extracted_id = tdoc_id or extract_tdoc_id_from_filename(filename)
         return DirectParseResult(
             source_kind="local",
             markdown=markdown,
@@ -1084,7 +1178,7 @@ class TDocCrService:
             extract_meta=None,
             from_cache=False,
             persisted=False,
-            tdoc_id=tdoc_id,
+            tdoc_id=extracted_id,
             tdoc_id_in_tdocs=False,
         )
 
@@ -1107,6 +1201,8 @@ class TDocCrService:
         tdoc_id: str,
         force: bool,
         full: bool,
+        tdoc_type: str | None = None,
+        source: str | None = None,
         max_bytes: int = 0,
     ) -> DirectParseResult:
         """Run the full extract pipeline for a 3GPP URL whose FK target exists.
@@ -1168,7 +1264,12 @@ class TDocCrService:
             doc_filename=doc_filename,
             force=force,
         )
-        parsed: TDocCRParseResult = self._resolve_parser(tdoc_id).parse(
+        parser = self._resolve_parser(
+            tdoc_id,
+            tdoc_type=tdoc_type,
+            source=source,
+        )
+        parsed: TDocCRParseResult = parser.parse(
             markdown, tdoc_id=tdoc_id, full=full,
         )
         cover = replace(parsed.cover, ftp_url=stored_ftp_url)
@@ -1201,6 +1302,15 @@ class TDocCrService:
             self._cr_ttcn_repo.upsert(ttcn)
         if changes is not None:
             self._change_details_repo.upsert(changes)
+        if isinstance(parser, LSParserBase) and self._ls_repository is not None:
+            ls_result = parser.parse_ls(markdown, tdoc_id=tdoc_id)
+            if ls_result.cover is not None:
+                details = replace(
+                    ls_result.cover,
+                    tdoc_id=tdoc_id,
+                    ftp_url=stored_ftp_url,
+                )
+                self._ls_repository.upsert(details)
         self._repo.upsert_extract_meta(meta)
         self._index_after_parse(tdoc_id)
         self._embed_after_parse(tdoc_id)

@@ -291,6 +291,7 @@ async def _parse_tdocs(
 
     progress(f"parsing {len(tdoc_ids)} TDocs in batches of {max_batch}")
     total_successes: dict[str, object] = {}
+    total_ls_successes: dict[str, object] = {}
     total_failures: dict[str, str] = {}
     total_skipped: dict[str, str] = {}
     for start in range(0, len(tdoc_ids), max_batch):
@@ -304,15 +305,17 @@ async def _parse_tdocs(
             is_cancelled=cancel_event.is_set,
         )
         total_successes.update(result.successes)
+        total_ls_successes.update(result.ls_successes)
         total_failures.update(result.failures)
         total_skipped.update(result.skipped)
+        batch_ok = len(result.successes) + len(result.ls_successes)
         progress(
             f"batch {start // max_batch + 1}: {len(batch)} requested, "
-            f"{len(result.successes)} ok, {len(result.failures)} failed"
+            f"{batch_ok} ok, {len(result.failures)} failed"
         )
     return {
         "requested": len(tdoc_ids),
-        "successes": len(total_successes),
+        "successes": len(total_successes) + len(total_ls_successes),
         "failures": len(total_failures),
         "skipped": len(total_skipped),
     }

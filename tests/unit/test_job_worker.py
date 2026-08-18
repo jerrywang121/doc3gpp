@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -1679,3 +1680,90 @@ def test_parse_tdoc_url_mid_flight_cancel_lands_cancelled() -> None:
         f"expected cancel to land before batch completion; "
         f"processed {len(progress_calls)}/5 files: {progress_calls}"
     )
+
+
+def test_parse_tdocs_merges_ls_successes_into_count() -> None:
+    """``_parse_tdocs`` counts ``ls_successes`` into the envelope ``successes``.
+
+    A mixed CR + LS batch through the handler must report a merged
+    success total (``successes == len(successes) + len(ls_successes)``)
+    both in the per-batch progress line and in the returned envelope,
+    instead of silently dropping the LS successes.
+    """
+    from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+    from doc3gpp.models.tdoc_ls import TDocLSDetails
+    from doc3gpp.services.tdoc_cr_service import (
+        BatchExtractResult,
+        ExtractResult,
+        LSResult,
+    )
+    from doc3gpp.web.workers.handlers import _parse_tdocs
+
+    repo = _make_repo()
+
+    class _FakeTDocRepo:
+        def list(self, **kwargs):
+            return [
+                MagicMock(tdoc_id="R5-260010", meeting_id=110),  # CR
+                MagicMock(tdoc_id="R5-260017", meeting_id=110),  # LS
+            ]
+
+    class _FakeTDocCrService:
+        def extract_many(self, tdoc_ids, **kwargs):
+            return BatchExtractResult(
+                successes={
+                    "R5-260010": ExtractResult(
+                        details=TDocCRDetails(tdoc_id="R5-260010", ftp_url="x"),
+                        extract_meta=TDocExtractMeta(
+                            ftp_url="x",
+                            tdoc_id="R5-260010",
+                            cache_file="x",
+                            doc_filename="x",
+                        ),
+                        from_cache=False,
+                    ),
+                },
+                ls_successes={
+                    "R5-260017": LSResult(
+                        details=TDocLSDetails(tdoc_id="R5-260017", ftp_url="y"),
+                        extract_meta=TDocExtractMeta(
+                            ftp_url="y",
+                            tdoc_id="R5-260017",
+                            cache_file="y",
+                            doc_filename="y",
+                        ),
+                        from_cache=False,
+                    ),
+                },
+                failures={},
+            )
+
+    state = _make_state_with_services(
+        repo,
+        tdoc_repo=_FakeTDocRepo(),  # type: ignore[arg-type]
+        tdoc_cr=_FakeTDocCrService(),  # type: ignore[arg-type]
+    )
+    job = repo.create(
+        JobKind.PARSE_TDOCS,
+        {"filter": {"meeting_id": "110"}, "force": True},
+    )
+
+    progress_calls: list[str] = []
+
+    def progress(message: str, force: bool = False) -> None:
+        progress_calls.append(message)
+
+    result = asyncio.run(
+        _parse_tdocs(
+            job,
+            state.services,
+            state.settings,
+            progress=progress,
+            cancel_event=asyncio.Event(),
+        )
+    )
+
+    assert result["requested"] == 2
+    assert result["successes"] == 2  # 1 CR + 1 LS
+    assert result["failures"] == 0
+    assert any("2 ok" in line for line in progress_calls)

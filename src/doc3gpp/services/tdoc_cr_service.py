@@ -629,26 +629,53 @@ class TDocCrService:
         # next probe without re-resolving.
         candidates = resolve_download_url(normalised, primary_url)
 
+        # Resolve the parser here so the DB cache probe can dispatch by
+        # family. Cheap for CR (registry has 3 candidates) and the only way
+        # the LS short-circuit works.
+        parser = self._resolve_parser(
+            normalised,
+            tdoc_type=tdoc.type,
+            source=tdoc.source,
+        )
+
         # Pre-download cache probe: known candidate URLs can be
         # resolved without touching the network, so the DB cache
-        # short-circuits the zip fetch.
+        # short-circuits the zip fetch. The probe dispatches on the
+        # resolved parser type — CR rows probe tdoc_cr_cover_page,
+        # LS rows probe tdoc_cr_ls_details — so both families share
+        # the same short-circuit.
         if not force:
             for candidate in candidates:
-                cached_details = self._repo.get_by_url(
-                    normalize_ftp_path(candidate)
-                )
-                cached_meta = self._repo.get_extract_meta_by_url(
-                    normalize_ftp_path(candidate)
-                )
-                if cached_details is not None and cached_meta is not None:
-                    logger.debug(
-                        "DB cache hit for TDoc %s at URL %s", normalised, candidate
-                    )
-                    return ExtractResult(
-                        details=cached_details,
-                        extract_meta=cached_meta,
-                        from_cache=True,
-                    )
+                normalised_url = normalize_ftp_path(candidate)
+                cached_meta = self._repo.get_extract_meta_by_url(normalised_url)
+                if cached_meta is None:
+                    continue
+                if isinstance(parser, LSParserBase):
+                    if self._ls_repository is None:
+                        continue
+                    cached_details = self._ls_repository.get_by_url(normalised_url)
+                    if cached_details is not None:
+                        logger.debug(
+                            "DB cache hit (LS) for TDoc %s at URL %s",
+                            normalised, candidate,
+                        )
+                        return LSResult(
+                            details=cached_details,
+                            extract_meta=cached_meta,
+                            from_cache=True,
+                        )
+                else:
+                    cached_details = self._repo.get_by_url(normalised_url)
+                    if cached_details is not None:
+                        logger.debug(
+                            "DB cache hit (CR) for TDoc %s at URL %s",
+                            normalised, candidate,
+                        )
+                        return ExtractResult(
+                            details=cached_details,
+                            extract_meta=cached_meta,
+                            from_cache=True,
+                        )
 
         downloaded = download_tdoc_zip(
             normalised,
@@ -704,11 +731,6 @@ class TDocCrService:
         else:
             stored_ftp_url = normalize_ftp_path(candidates[0])
 
-        parser = self._resolve_parser(
-            normalised,
-            tdoc_type=tdoc.type,
-            source=tdoc.source,
-        )
         if isinstance(parser, LSParserBase):
             if self._ls_repository is None:
                 raise RuntimeError(

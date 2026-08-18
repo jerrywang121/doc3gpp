@@ -63,8 +63,13 @@ commands. When a sync actually runs, the command prints
 with the same prefix. Sync failures are logged as warnings and do not abort
 the parent read command.
 
-Direct-mode `tdoc parse` (`--from-path` or `--from-url`) never triggers
-auto-sync.
+Direct-mode `tdoc parse` (`--from-path`) extracts the TDoc id from the
+file name and triggers auto-sync for that id when `sync.auto_sync` is
+enabled, then confirms the stored `tdocs.type` / `tdocs.source` so the
+parser registry can dispatch (LS rows parse as LS, everything else as
+CR). When the id is still missing after auto-sync, the parse assumes
+CR. `--from-url` triggers auto-sync for the URL's candidates as
+described below.
 
 ## db Commands
 
@@ -845,8 +850,9 @@ required — an empty call exits non-zero before any DB lookup.
 Auto-sync: when `sync.auto_sync` is enabled, the database-mode path
 (without `--from-path` or `--from-url`) triggers the same internal sync
 logic as `tdoc list` with the same filters before building the candidate
-set. Direct-mode parse (`--from-path` or `--from-url`) never triggers
-auto-sync. See [Auto-sync behavior](#auto-sync-behavior) above.
+set. Direct-mode parse fires auto-sync for the filename-derived /
+URL-derived TDoc ids (see [Auto-sync behavior](#auto-sync-behavior)
+above).
 
 Options:
 

@@ -1994,6 +1994,37 @@ def _resolve_direct_format(fmt: str | None) -> str:
     return normalised
 
 
+def _resolve_direct_tdoc_type(
+    from_path: str,
+) -> tuple[str | None, str | None]:
+    """Confirm the tdoc type for a direct-mode single file.
+
+    Extracts the tdoc_id from the filename, triggers auto-sync for it
+    (when enabled), then reads the stored ``tdocs.type`` /
+    ``tdocs.source`` so the parser registry can dispatch. Returns
+    ``(None, None)`` when no id is extracted or the row is still
+    missing after auto-sync — the caller then assumes CR (the
+    existing direct-mode behaviour).
+    """
+    from doc3gpp.cli_auto_sync import trigger_auto_sync
+    from doc3gpp.parsers.direct_extractor import extract_tdoc_id_from_filename
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    extracted = extract_tdoc_id_from_filename(from_path)
+    if extracted is None:
+        return None, None
+    trigger_auto_sync(
+        auto_sync_enabled=get_settings().sync.auto_sync,
+        meeting_service=build_meeting_service(),
+        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+        tdoc_ids=[extracted],
+    )
+    row = SQLAlchemyTDocRepository().get_by_id(extracted)
+    if row is None:
+        return None, None
+    return row.type, row.source
+
+
 def _tdoc_parse_direct(
     *,
     from_path: str | None,
@@ -2033,12 +2064,19 @@ def _tdoc_parse_direct(
     raw = from_path if from_path is not None else from_url
     assert raw is not None
 
+    direct_tdoc_type: str | None = None
+    direct_source: str | None = None
+    if from_path is not None:
+        direct_tdoc_type, direct_source = _resolve_direct_tdoc_type(from_path)
+
     try:
         if from_path is not None:
             payload = Path(from_path).read_bytes()
             result = service.extract_from_bytes(
                 payload, from_path, force=False, full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes,
+                tdoc_type=direct_tdoc_type,
+                source=direct_source,
             )
         else:
             result = service.extract_from_url(
@@ -3355,9 +3393,14 @@ def _tdoc_parse_local_batch(
 
         try:
             payload = input_path.read_bytes()
+            direct_tdoc_type, direct_source = _resolve_direct_tdoc_type(
+                str(input_path)
+            )
             result = service.extract_from_bytes(
                 payload, str(input_path), force=False, full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes,
+                tdoc_type=direct_tdoc_type,
+                source=direct_source,
             )
         except TDocTooLargeError as exc:
             logger.warning("Skipping %s: %s", input_path, exc)

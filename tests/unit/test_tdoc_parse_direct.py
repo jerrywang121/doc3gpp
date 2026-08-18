@@ -700,7 +700,8 @@ class _FakeService:
 
     def extract_from_bytes(
         self, payload: bytes, filename: str, *, force: bool, full: bool,
-        max_tdoc_size_bytes: int = 0,
+        max_tdoc_size_bytes: int = 0, tdoc_type: str | None = None,
+        source: str | None = None,
     ) -> DirectParseResult:
         self.bytes_calls.append((payload, filename, force, full))
         if isinstance(self._result, Exception):
@@ -1290,7 +1291,8 @@ def test_cli_from_path_recursive_mirrors_subfolders(
     class _CountingFakeService(_FakeService):
         def extract_from_bytes(
             self, payload: bytes, filename: str, *, force: bool, full: bool,
-            max_tdoc_size_bytes: int = 0,
+            max_tdoc_size_bytes: int = 0, tdoc_type: str | None = None,
+            source: str | None = None,
         ) -> DirectParseResult:
             call_count["n"] += 1
             tdoc_id = extract_tdoc_id_from_filename(filename) or "R5s260009"

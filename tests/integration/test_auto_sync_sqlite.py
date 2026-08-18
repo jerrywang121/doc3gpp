@@ -6,7 +6,8 @@ These tests exercise the full CLI path with local fixtures standing in for
 - enabling ``sync.auto_sync`` causes ``meeting list``, ``tdoc list`` and
   ``tdoc show`` to internally trigger syncs,
 - DB-mode ``tdoc parse`` triggers auto-sync,
-- direct-mode ``tdoc parse --from-path`` does not trigger auto-sync.
+- direct-mode ``tdoc parse --from-path`` triggers auto-sync for the
+  filename's TDoc id (Blocker-7 ruling; previously it did not).
 """
 
 from __future__ import annotations
@@ -247,10 +248,18 @@ def test_tdoc_parse_db_mode_auto_sync_triggers_sync(
     assert "[auto-sync]" in result.stdout
 
 
-def test_tdoc_parse_direct_mode_does_not_auto_sync(
+def test_tdoc_parse_direct_mode_auto_syncs_filename_id(
     monkeypatch, sqlite_env
 ) -> None:
-    """Direct-mode tdoc parse (--from-path) must not trigger auto-sync."""
+    """Direct-mode tdoc parse (--from-path) fires auto-sync for the filename's id.
+
+    Per the adjudicated Task 15 Blocker-7 ruling, the direct-mode path
+    extracts the tdoc_id from the filename and triggers auto-sync for
+    it (gated on ``Settings.sync.auto_sync``); when the id is still
+    missing after auto-sync the parse assumes CR. This test patches the
+    scraper so the internal meeting sync succeeds without the network.
+    """
+    _patch_scraper_client(monkeypatch)
     runner = CliRunner()
     assert runner.invoke(app, ["db", "init"]).exit_code == 0
     _enable_auto_sync(monkeypatch)
@@ -273,4 +282,4 @@ def test_tdoc_parse_direct_mode_does_not_auto_sync(
         ],
     )
     assert result.exit_code == 0
-    assert "[auto-sync]" not in result.stdout
+    assert "[auto-sync]" in result.stdout

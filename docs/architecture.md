@@ -958,6 +958,19 @@ readers:
   `DOC3GPP_*` env var must call `cache_clear()` on both in teardown
   (the `sqlite_env` fixture is the canonical pattern).
 
+## Future variants
+
+The LS parser is built as a multi-variant framework (see the design spec
+§"Multi-variant design"): `LSParserBase` orchestrates a variant-specific
+`LSCoverPageParser`, dispatch flows through `tdocs.source` →
+`supports_source`, and the `tdoc_cr_ls_details.variant` column tags each
+row's format family. v1 ships the 3GPP variant only
+(`ThreeGPPLSParser`, registered in `build_default_registry`). The IEEE
+and ETSI variants are v2 hooks: `IEEELSParser` / `ETSILSParser` stubs
+exist under `parsers/ls/variants/` but are **not** registered — their
+`parse_ls` raises `NotImplementedError` until the respective header
+formats are documented and a variant cover extractor is written.
+
 ## Out of scope (today)
 
 The full list of open constraints — schema bootstrap policy, settings
@@ -971,8 +984,6 @@ constraint is lifted.
 Out-of-scope features that have not been implemented yet:
 
 - TDoc types other than CR and LS (DRAFT, BB, etc.).
-- LS format variants beyond 3GPP (IEEE / ETSI v2 stubs exist but are
-  not registered in the parser registry).
 - Workplan / spec status extraction.
 - Alembic / versioned migrations (the schema bootstrap is
   `Base.metadata.create_all` via `db init`).

@@ -1,6 +1,6 @@
 # Web server + MCP
 
-> Last reviewed: 2026-08-13
+> Last reviewed: 2026-08-18
 
 The `doc3gpp` web server serves a browsable HTML interface over the same
 services the CLI uses, plus an MCP (Model Context Protocol) endpoint for
@@ -289,7 +289,7 @@ page section keeps its own separate Related WIs field (parsed from the
 docx). The TTCN section lists the `changed_functions` aggregate when
 present, and auxiliary files link to their FTP locations.
 
-When a parsed TDoc has structured sidecar data, the page also surfaces a 'Required changes' card (TTCN CRs) and an 'Extracted changes' card (non-TTCN CRs); both are mutually exclusive and omitted when their respective sidecar is absent. LS rows (`type == 'LS'`) render an 'LS Cover' card instead of the Cover-page card — the eleven header fields plus the `variant` tag, gated on the `tdoc_cr_ls_details` sidecar (placeholder when not yet parsed). The Parse card still shows on LS rows, but the DB-mode parse job fails with `TDocTypeUnsupportedError` — use `doc3gpp tdoc parse --from-url <url> --format raw` to populate the LS sidecar.
+When a parsed TDoc has structured sidecar data, the page also surfaces a 'Required changes' card (TTCN CRs) and an 'Extracted changes' card (non-TTCN CRs); both are mutually exclusive and omitted when their respective sidecar is absent. LS rows (`type == 'LS'`) render an 'LS Cover' card instead of the Cover-page card — ten of the eleven header fields (`response_to_title` is dropped; `variant` is not shown), gated on the `tdoc_cr_ls_details` sidecar (placeholder when not yet parsed). The Parse card still shows on LS rows, but the DB-mode parse job fails with `TDocTypeUnsupportedError` — use `doc3gpp tdoc parse --from-url <url> --format raw` to populate the LS sidecar.
 
 The TDoc list page accepts repeated `fields` query params selecting the
 visible columns; values are validated against the column catalogue and

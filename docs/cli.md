@@ -66,8 +66,9 @@ the parent read command.
 Direct-mode `tdoc parse` (`--from-path`) extracts the TDoc id from the
 file name and triggers auto-sync for that id when `sync.auto_sync` is
 enabled, then confirms the stored `tdocs.type` / `tdocs.source` so the
-parser registry can dispatch (LS rows parse as LS, everything else as
-CR). When the id is still missing after auto-sync, the parse assumes
+parser registry can dispatch (LS rows parse as LS in raw-markdown mode
+only; real local files still hit the CR family — see the FK matrix
+below). When the id is still missing after auto-sync, the parse assumes
 CR. `--from-url` triggers auto-sync for the URL's candidates as
 described below.
 
@@ -650,8 +651,10 @@ Behavior:
   lookup (gated on the cover row's presence), the LS sidecar lookup
   (`SQLAlchemyLSParserRepository.get_by_url`), and the new
   `SQLAlchemyTDocFileRepository.get_by_ftp_url` (URL-unique-indexed).
-  No row in any of the five tables → `BadParameter` with the URL
-  quoted in the message.
+  No row in any of the six tables → `BadParameter` with the URL
+  quoted in the message (the message names `tdocs`,
+  `tdoc_cr_cover_page`, `tdoc_cr_ttcn_details`,
+  `tdoc_cr_change_details`, `tdoc_cr_ls_details`, and `tdoc_files`).
 - Does NOT trigger `trigger_auto_sync` — the URL is the row identity,
   there's no parent TDoc / meeting sync meaningful for an arbitrary
   URL, and a URL-keyed read should be a deterministic snapshot of the
@@ -1192,7 +1195,9 @@ Options:
   database, but when `sync.auto_sync` is enabled a single file first
   triggers auto-sync for the TDoc id extracted from its filename (and
   the parser registry confirms the stored `tdocs.type` / `tdocs.source`
-  to dispatch — LS rows parse as LS, everything else as CR; a row still
+  to dispatch — LS rows parse as LS in raw-markdown mode only; real
+  local files still hit the CR family and fail with
+  `CRHeaderMissingError`, see the FK matrix below; a row still
   missing after the sync is assumed CR, and an uninitialized database
   degrades the same way instead of crashing the parse).
 - `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.
@@ -1274,7 +1279,12 @@ Single-file behaviour:
   `trigger_auto_sync(...)` first (TSG sync → meeting sync → parse), then
   the stored `tdocs.type` / `tdocs.source` are read back to drive
   parser dispatch. The database is only ever **read** by this path —
-  no `tdocs` / sidecar writes occur for local files.
+  no `tdocs` / sidecar writes occur for local files. Note that the
+  type-confirm read only reaches the LS parser in raw-markdown mode
+  (`extract_from_bytes(..., filename=None)`); real `.docx` / `.zip`
+  files are dispatched by `direct_parse_bytes`, which hardcodes the
+  CR family — an LS local file parses as a CR and fails with
+  `CRHeaderMissingError` (use `--from-url` for LS documents).
 - No cache or database writes occur.
 - Exit code `0` when the parsed record (or raw markdown) is emitted
   successfully; `1` on file missing, permission denied, parser error

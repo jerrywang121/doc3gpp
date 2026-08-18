@@ -238,7 +238,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   ordering is TSG sync → meeting sync → parse, so the meeting_id
   resolution can usually find the parent row by the time the parse
   fires. Same skip rules as DB-mode apply; non-3GPP URLs never
-  trigger auto-sync; failures stay warnings.
+  trigger auto-sync; failures stay warnings. The `--from-path` type
+  confirm only reaches the LS parser in raw-markdown mode — real
+  local files still hit the CR family (see the FK matrix in
+  `docs/cli.md`).
 - `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row, then
   looks up the slim cover-page details and the extract metadata by the
   row's immutable `tdoc.ftp_url` (one row per URL — the URL is the row
@@ -349,10 +352,14 @@ Workflows in one line (full prose in `docs/architecture.md`):
   command. Direct-mode `tdoc parse --from-path` extracts the TDoc id
   from the file name and triggers auto-sync for that id (the stored
   `tdocs.type` / `tdocs.source` then drive parser dispatch — LS rows
-  parse as LS, everything else as CR; a row still missing after the
-  sync is assumed CR, and an uninitialized database degrades the same
-  way). Direct-mode `tdoc parse --from-url` never triggers auto-sync.
-  The `tdoc show --ftp-url` selector also never triggers auto-sync —
+  parse as LS in raw-markdown mode only; real local files still hit
+  the CR family and fail with `CRHeaderMissingError`, see the FK
+  matrix in `docs/cli.md`; a row still missing after the sync is
+  assumed CR, and an uninitialized database degrades the same way).
+  Direct-mode `tdoc parse --from-url` triggers auto-sync for the URL's
+  tdoc-id candidates (3GPP FTP URLs only — basename for file URLs, BFS
+  for folder URLs; non-3GPP URLs never trigger it). The
+  `tdoc show --ftp-url` selector also never triggers auto-sync —
   the URL is the row identity and there's no parent TDoc / meeting to
   anchor a sync on; users wanting a fresh extract at the URL must run
   `tdoc parse --from-url <url>` or `tdoc parse --tdoc <id>` explicitly.

@@ -1536,6 +1536,8 @@ def tdoc_parse(
                     f"--from-path is neither a file nor a directory: {from_path}"
                 )
         else:
+            from sqlalchemy.exc import OperationalError
+
             effective_depth = _resolve_url_batch_depth(
                 recursive=recursive,
                 max_depth=max_depth,
@@ -1549,12 +1551,17 @@ def tdoc_parse(
                     max_depth=effective_depth,
                 )
                 if candidates:
-                    trigger_auto_sync(
-                        auto_sync_enabled=get_settings().sync.auto_sync,
-                        meeting_service=build_meeting_service(),
-                        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
-                        tdoc_ids=candidates,
-                    )
+                    try:
+                        trigger_auto_sync(
+                            auto_sync_enabled=get_settings().sync.auto_sync,
+                            meeting_service=build_meeting_service(),
+                            tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+                            tdoc_ids=candidates,
+                        )
+                    except OperationalError as exc:
+                        logger.warning(
+                            "auto-sync skipped — DB not initialised: %s", exc
+                        )
             if not is_3gpp_ftp_url(from_url) or _looks_like_3gpp_file_url(from_url):
                 _tdoc_parse_direct(
                     from_path=None,

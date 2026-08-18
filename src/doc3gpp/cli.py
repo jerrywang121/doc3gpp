@@ -71,6 +71,7 @@ from doc3gpp.services.factory import (
     build_wi_service,
 )
 from doc3gpp.services.tdoc_cr_service import (
+    LSResult,
     TDocNotFoundError,
     TDocTypeUnsupportedError,
     TDocZipDownloadError,
@@ -1784,6 +1785,10 @@ def tdoc_parse(
         )
         raise typer.Exit(code=1) from None
 
+    total_ok = len(batch.successes) + len(batch.ls_successes)
+    total_failed = len(batch.failures)
+    total_skipped = len(batch.skipped)
+
     failures: list[str] = []
     skipped_ftp: list[str] = []
     skipped_size: list[str] = []
@@ -1794,6 +1799,12 @@ def tdoc_parse(
             typer.echo(
                 f"{normalised}: spec={result.details.spec} "
                 f"cr_num={result.details.cr_num} "
+                f"title={result.details.title}"
+            )
+        elif normalised in batch.ls_successes:
+            result = batch.ls_successes[normalised]
+            typer.echo(
+                f"{normalised}: variant={result.details.variant} "
                 f"title={result.details.title}"
             )
         elif normalised in batch.skipped:
@@ -1816,6 +1827,18 @@ def tdoc_parse(
     newly_parsed = len(success_set - parsed_ids)
     typer.echo("---")
     typer.echo(
+        f"Extracted {total_ok} TDoc(s); {total_failed} failed; {total_skipped} skipped."
+    )
+    if batch.ls_successes:
+        meeting_names = {
+            m.tdoc.tdoc_id: m.meeting_name for m in to_parse
+        }
+        _print_ls_parse_group(
+            "LS extracted",
+            list(batch.ls_successes.values()),
+            meeting_names,
+        )
+    typer.echo(
         f"Skipped (exceeds max_tdoc_size_kb):          {len(skipped_size)}"
     )
     typer.echo(f"Skipped (already parsed before this run): {already_parsed}")
@@ -1829,11 +1852,11 @@ def tdoc_parse(
             f"at least 1 — re-run the same command (without --force) "
             f"to continue."
         )
-    if failures and not batch.successes:
+    if failures and not total_ok:
         raise typer.Exit(code=1)
     if not tdoc_ids:
         raise typer.Exit(code=1)
-    if not batch.successes and not batch.skipped:
+    if not total_ok and not batch.skipped:
         raise typer.Exit(code=1)
 
 
@@ -3635,6 +3658,13 @@ def _serialise_cell(record: TDocCRDetails, field_name: str) -> str:
 
 
 _BASE_PARSE_COLUMNS: tuple[str, ...] = ("tdoc_id", "title", "type", "cr_cat", "status")
+_LS_PARSE_COLUMNS: tuple[str, ...] = (
+    "tdoc_id",
+    "meeting_name",
+    "title",
+    "variant",
+    "parser_version",
+)
 _FILTER_TO_PARSE_COLUMN: dict[str, str] = {
     "spec": "spec",
     "wi": "related_wis",
@@ -3717,6 +3747,52 @@ def _print_parse_group(
         typer.echo("  " + "  ".join(f"{cell:<32}" for cell in cells))
     if len(rows) > len(preview):
         typer.echo(f"  ... and {len(rows) - len(preview)} more")
+
+
+def _ls_parse_field(
+    result: LSResult,
+    name: str,
+    meeting_names: dict[str, str | None],
+) -> object | None:
+    """Resolve a CLI field name against an :class:`LSResult`.
+
+    ``meeting_name`` comes from the pre-built lookup (the caller
+    already resolved it via the ``list_with_meeting`` JOIN for the
+    dispatched rows); every other field lives on ``result.details``.
+    Mirrors :func:`_tdoc_field`'s routing so the LS summary group can
+    reuse the same print loop.
+    """
+    if name == "meeting_name":
+        return meeting_names.get(result.details.tdoc_id)
+    return getattr(result.details, name, None)
+
+
+def _print_ls_parse_group(
+    label: str,
+    results: list[LSResult],
+    meeting_names: dict[str, str | None],
+) -> None:
+    """Print the LS batch summary group with a slim column set.
+
+    Sibling of :func:`_print_parse_group` for LS rows, which carry no
+    ``TDocWithMeeting`` wrapper — the flat :class:`LSResult` values
+    from ``BatchExtractResult.ls_successes`` are rendered directly.
+    """
+    typer.echo(f"{label} [count={len(results)}]:")
+    if not results:
+        typer.echo("  (none)")
+        return
+    preview = results[:20]
+    header = "  " + "  ".join(f"{col:<32}" for col in _LS_PARSE_COLUMNS)
+    typer.echo(header)
+    for result in preview:
+        cells = [
+            _format_parse_cell(_ls_parse_field(result, col, meeting_names))
+            for col in _LS_PARSE_COLUMNS
+        ]
+        typer.echo("  " + "  ".join(f"{cell:<32}" for cell in cells))
+    if len(results) > len(preview):
+        typer.echo(f"  ... and {len(results) - len(preview)} more")
 
 
 @tdoc_app.command("show")

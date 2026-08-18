@@ -544,8 +544,8 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = False,
-    ) -> ExtractResult:
-        """Return parsed CR details + extract metadata for ``tdoc_id``.
+    ) -> ExtractResult | LSResult:
+        """Return parsed CR/LS details + extract metadata for ``tdoc_id``.
 
         Sequence:
 
@@ -583,13 +583,14 @@ class TDocCrService:
         Args:
             tdoc_id: Canonical TDoc identifier.
             force: Bypass the DB short-circuit probe (``tdoc_cr_cover_page``
-                / ``tdoc_extracts``) and the markdown cache on a fresh
-                parse. The on-disk zip cache is **always** consulted
+                / ``tdoc_extracts`` for CR rows, ``tdoc_cr_ls_details``
+                for LS rows) and the markdown cache on a fresh parse.
+                The on-disk zip cache is **always** consulted
                 first regardless of ``force`` — :func:`download_tdoc_zip`
                 keys the cache on ``tdocs.ftp_url`` (via
                 :func:`derive_cache_file`), and a hit returns the cached
                 path without re-downloading, even when ``force=True``.
-                The ``tdoc_cr_cover_page`` / ``tdoc_extracts`` rows are
+                The sidecar / ``tdoc_extracts`` rows are
                 always re-upserted on the parse path that runs.
             full: Forwarded to the parser as ``full=True``. For TTCN
                 CRs this enables extraction of the per-correction
@@ -841,7 +842,8 @@ class TDocCrService:
         Args:
             tdoc_ids: Iterable of TDoc ids to extract. Strings that
                 fail the shape guard, are missing from the ``tdocs``
-                table, or aren't CR type are logged and skipped.
+                table, or have an unrecognised type are logged and
+                skipped.
             force: Forwarded to :meth:`extract`. When ``True`` every
                 TDoc is re-fetched and re-parsed from scratch.
             full: Forwarded to :meth:`extract` for every id in the
@@ -851,8 +853,10 @@ class TDocCrService:
 
         Returns:
             A :class:`BatchExtractResult` whose ``successes`` dict maps
-            the canonical tdoc_id to its :class:`ExtractResult`,
-            whose ``failures`` dict maps the normalised tdoc_id to a
+            the canonical tdoc_id to its :class:`ExtractResult` for CR
+            rows, whose ``ls_successes`` dict maps the canonical
+            tdoc_id to its :class:`LSResult` for LS rows, whose
+            ``failures`` dict maps the normalised tdoc_id to a
             short reason string (``"{ExceptionClassName}: {exc}"``),
             and whose ``skipped`` dict maps the normalised tdoc_id to
             a short reason string for ids whose ``ftp_url`` is NULL
@@ -862,6 +866,7 @@ class TDocCrService:
             batch had real failures".
         """
         successes: dict[str, ExtractResult] = {}
+        ls_successes: dict[str, LSResult] = {}
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
         tdoc_ids = list(tdoc_ids)
@@ -893,8 +898,16 @@ class TDocCrService:
                 )
                 failures[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
                 continue
-            successes[result.details.tdoc_id] = result
-        return BatchExtractResult(successes=successes, failures=failures, skipped=skipped)
+            if isinstance(result, LSResult):
+                ls_successes[result.details.tdoc_id] = result
+            else:
+                successes[result.details.tdoc_id] = result
+        return BatchExtractResult(
+            successes=successes,
+            ls_successes=ls_successes,
+            failures=failures,
+            skipped=skipped,
+        )
 
     # ------------------------------------------------------------------
     # Direct-parse path: ``tdoc parse --from-path/--from-url``

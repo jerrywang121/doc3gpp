@@ -140,3 +140,40 @@ def test_db_mode_extract_returns_from_cache_for_cached_ls(svc_factory, tmp_path,
     assert result.details is cached_details
     ls_repo.upsert.assert_not_called()
     download_called.assert_not_called()
+
+
+def test_extract_many_populates_ls_successes(svc_factory, tmp_path, monkeypatch):
+    """extract_many routes an LS row to ls_successes (not successes)."""
+    from doc3gpp.models.tdoc import TDoc
+
+    tdoc = TDoc(
+        tdoc_id="R5-260017",
+        meeting_id=110,
+        ftp_url="tsg_ran/WG4_Radio/TSGR4_110/Inbox/R5-260017.zip",
+        source="TSG WG RAN4",
+        type="LS in",
+        status="noted",
+    )
+    svc, ls_repo, cr_repo = svc_factory(tdoc)
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.download_tdoc_zip",
+        lambda *a, **kw: MagicMock(
+            path=MagicMock(read_bytes=lambda: b"unused"),
+            url=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.extract_docx_from_zip",
+        lambda _: ("R5-260017.docx", _LS_MD.encode("utf-8")),
+    )
+    svc._cache.put_bytes = MagicMock()
+    svc._cache.get_bytes = MagicMock(return_value=None)
+    svc._load_or_render_markdown = MagicMock(return_value=_LS_MD)  # type: ignore[method-assign]
+
+    result = svc.extract_many(["R5-260017"], force=True)
+
+    assert result.successes == {}
+    assert "R5-260017" in result.ls_successes
+    assert isinstance(result.ls_successes["R5-260017"], LSResult)
+    assert result.failures == {}

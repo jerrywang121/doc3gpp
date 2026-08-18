@@ -2004,22 +2004,37 @@ def _resolve_direct_tdoc_type(
     ``tdocs.source`` so the parser registry can dispatch. Returns
     ``(None, None)`` when no id is extracted or the row is still
     missing after auto-sync — the caller then assumes CR (the
-    existing direct-mode behaviour).
+    existing direct-mode behaviour). An uninitialized database
+    (no ``tdocs`` table) is treated as the strongest form of "row
+    missing": the lookup degrades to ``(None, None)`` instead of
+    crashing the parse.
     """
-    from doc3gpp.cli_auto_sync import trigger_auto_sync
     from doc3gpp.parsers.direct_extractor import extract_tdoc_id_from_filename
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from sqlalchemy.exc import OperationalError as SAOperationalError
 
     extracted = extract_tdoc_id_from_filename(from_path)
     if extracted is None:
         return None, None
-    trigger_auto_sync(
-        auto_sync_enabled=get_settings().sync.auto_sync,
-        meeting_service=build_meeting_service(),
-        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
-        tdoc_ids=[extracted],
-    )
-    row = SQLAlchemyTDocRepository().get_by_id(extracted)
+    try:
+        if get_settings().sync.auto_sync:
+            from doc3gpp.cli_auto_sync import trigger_auto_sync
+
+            trigger_auto_sync(
+                auto_sync_enabled=True,
+                meeting_service=build_meeting_service(),
+                tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+                tdoc_ids=[extracted],
+            )
+        from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+        row = SQLAlchemyTDocRepository().get_by_id(extracted)
+    except SAOperationalError:
+        logger.warning(
+            "Could not confirm tdoc type for %s (database uninitialized?); "
+            "assuming CR",
+            extracted,
+        )
+        return None, None
     if row is None:
         return None, None
     return row.type, row.source

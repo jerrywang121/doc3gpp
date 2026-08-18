@@ -11,6 +11,8 @@ Covers Blocker-7 rulings from the adjudicated Task 15 brief:
    disabled), the caller assumes CR — ``(None, None)``.
 3. A filename with no TDoc-id pattern returns ``(None, None)`` and
    never triggers auto-sync.
+4. An uninitialized database (no ``tdocs`` table) degrades to the
+   CR assumption instead of raising.
 
 All tests are monkeypatched — no network, no subprocess.
 """
@@ -18,6 +20,7 @@ All tests are monkeypatched — no network, no subprocess.
 from __future__ import annotations
 
 from doc3gpp.cli import _resolve_direct_tdoc_type, _tdoc_parse_direct
+from doc3gpp.config import get_settings
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
@@ -29,8 +32,15 @@ def _seed_tdocs_row(tdoc_id: str, *, type: str | None, source: str | None) -> No
     )
 
 
+def _set_auto_sync(monkeypatch, enabled: bool) -> None:
+    """Pin ``sync.auto_sync`` and clear the settings cache."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "true" if enabled else "false")
+    get_settings.cache_clear()
+
+
 def test_direct_type_confirmed_from_tdocs_row(sqlite_env, monkeypatch) -> None:
     """An LS row seeded in ``tdocs`` drives the direct-parse dispatch."""
+    _set_auto_sync(monkeypatch, True)
     create_schema()
     _seed_tdocs_row("R5-240001", type="LS", source="3GPP TSG RAN WG2")
 
@@ -51,6 +61,7 @@ def test_direct_type_confirmed_from_tdocs_row(sqlite_env, monkeypatch) -> None:
 
 def test_direct_type_missing_row_assumes_cr(sqlite_env, monkeypatch) -> None:
     """No ``tdocs`` row after auto-sync → caller assumes CR."""
+    _set_auto_sync(monkeypatch, True)
     create_schema()
     calls: list[tuple] = []
 
@@ -63,10 +74,12 @@ def test_direct_type_missing_row_assumes_cr(sqlite_env, monkeypatch) -> None:
     resolved_type, resolved_source = _resolve_direct_tdoc_type("R5-240001.zip")
     assert (resolved_type, resolved_source) == (None, None)
     assert len(calls) == 1
+    assert calls[0]["tdoc_ids"] == ["R5-240001"]
 
 
 def test_direct_type_no_id_in_filename(sqlite_env, monkeypatch) -> None:
     """A filename without a TDoc-id pattern never triggers auto-sync."""
+    _set_auto_sync(monkeypatch, True)
     create_schema()
     calls: list[tuple] = []
 
@@ -77,6 +90,28 @@ def test_direct_type_no_id_in_filename(sqlite_env, monkeypatch) -> None:
     monkeypatch.setattr("doc3gpp.cli_auto_sync.trigger_auto_sync", _record)
 
     resolved_type, resolved_source = _resolve_direct_tdoc_type("notes.docx")
+    assert (resolved_type, resolved_source) == (None, None)
+    assert calls == []
+
+
+def test_direct_type_db_absent_assumes_cr(sqlite_env, monkeypatch) -> None:
+    """An uninitialized DB (no ``tdocs`` table) degrades to the CR assumption.
+
+    No ``create_schema()`` call — the engine points at a fresh empty
+    sqlite file, so ``SQLAlchemyTDocRepository().get_by_id`` raises
+    ``OperationalError``, which the helper must swallow and convert to
+    ``(None, None)`` (the Blocker-7 "assume CR" contract).
+    """
+    _set_auto_sync(monkeypatch, False)
+    calls: list[tuple] = []
+
+    def _record(**kwargs):
+        calls.append(kwargs)
+        return 0, 0
+
+    monkeypatch.setattr("doc3gpp.cli_auto_sync.trigger_auto_sync", _record)
+
+    resolved_type, resolved_source = _resolve_direct_tdoc_type("R5-240001.zip")
     assert (resolved_type, resolved_source) == (None, None)
     assert calls == []
 

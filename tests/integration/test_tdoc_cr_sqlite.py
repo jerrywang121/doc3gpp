@@ -447,6 +447,121 @@ def test_extract_non_cr_tdoc_raises_type_unsupported(sqlite_env, tmp_path) -> No
 
 
 # ---------------------------------------------------------------------------
+# 5b. DB-mode LS row: extract() routes to the LS parser and persists the
+#     LS sidecar (tdoc_cr_ls_details) + the tdoc_extracts metadata row.
+# ---------------------------------------------------------------------------
+
+
+def test_db_mode_ls_row_writes_sidecar(sqlite_env, monkeypatch) -> None:
+    """DB-mode ``extract`` on an LS row runs the real service + LS parser
+    against real SQLite and persists the ``tdoc_cr_ls_details`` sidecar
+    plus the ``tdoc_extracts`` row (``cache_file`` derived from the
+    stored ``ftp_url``)."""
+    from doc3gpp.parsers.ls.header import is_ls_header_present
+    from doc3gpp.scraping.cache_keys import derive_cache_file
+    from doc3gpp.services.factory import build_tdoc_cr_service
+    from doc3gpp.services.tdoc_cr_service import LSResult
+    from doc3gpp.storage.db.models import MeetingORM, TDocORM
+    from doc3gpp.storage.db.session import get_session_factory
+    from doc3gpp.storage.repositories.tdoc_cr_ls_sql import (
+        SQLAlchemyLSParserRepository,
+    )
+
+    create_schema()
+
+    # Seed the parent meeting (``meeting_id`` is an enforced FK under
+    # SQLite) and the LS-type TDoc row.
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        session.add(
+            MeetingORM(
+                meeting_id=110,
+                name="RAN5#104",
+                title="RAN WG5 #104",
+                location="Online",
+            )
+        )
+        session.add(
+            TDocORM(
+                tdoc_id="R5-260017",
+                meeting_id=110,
+                ftp_url="tsg/ls/R5-260017.zip",
+                source="TSG WG RAN4",
+                type="LS in",
+                status="noted",
+            )
+        )
+        session.commit()
+
+    ls_md = (
+        "3GPP TSG RAN WG2 Meeting #104\tTDoc R5-260017\n\n"
+        "Title:\tLS on frequency separation for Type 4b UE NR-CA PDSCH "
+        "demodulation requirements\n"
+        "Source:\tTSG WG RAN4\n"
+        "To:\tRAN WG5\n"
+    )
+    assert is_ls_header_present(ls_md)[0]
+
+    # Real service wiring (factory) with the real LS repo; the network,
+    # zip extraction, and docx rendering are stubbed so the parser sees
+    # the LS markdown body.
+    service = build_tdoc_cr_service(
+        ls_repository=SQLAlchemyLSParserRepository(),
+        max_tdoc_size_bytes=0,  # disable the size guard
+    )
+    # The auto-embed hook is out of scope here — dropping it keeps the
+    # test from lazily loading the sentence-transformer model (mirrors
+    # ``test_embed_hook_skipped_when_service_none``).
+    service._semantic_service = None  # type: ignore[attr-defined]
+    service._scraper.get_bytes = MagicMock()
+    service._cache.put_bytes = MagicMock()
+    service._cache.get_bytes = MagicMock(return_value=None)
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.download_tdoc_zip",
+        lambda *a, **kw: MagicMock(
+            path=MagicMock(
+                read_bytes=lambda: ls_md.encode("utf-8")
+            ),
+            url="https://www.3gpp.org/ftp/tsg/ls/R5-260017.zip",
+        ),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.extract_docx_from_zip",
+        lambda _: ("R5-260017.docx", ls_md.encode("utf-8")),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.parsers.docx_converter.convert_document_to_markdown",
+        lambda *a, **kw: ls_md,
+    )
+
+    result = service.extract("R5-260017", force=True)
+
+    assert isinstance(result, LSResult)
+    assert result.details.tdoc_id == "R5-260017"
+    assert result.details.variant == "3gpp"
+    assert result.from_cache is False
+    assert result.extract_meta.cache_file == derive_cache_file(
+        "tsg/ls/R5-260017.zip"
+    )
+
+    # The LS sidecar row landed under the stored ``ftp_url``.
+    ls_repo = SQLAlchemyLSParserRepository()
+    sidecar = ls_repo.get_by_url("tsg/ls/R5-260017.zip")
+    assert sidecar is not None
+    assert sidecar.tdoc_id == "R5-260017"
+    assert sidecar.variant == "3gpp"
+
+    # The tdoc_extracts metadata row landed with the URL-derived basename.
+    meta = SQLAlchemyTDocCrRepository().get_extract_meta_by_url(
+        "tsg/ls/R5-260017.zip"
+    )
+    assert meta is not None
+    assert meta.tdoc_id == "R5-260017"
+    assert meta.cache_file == derive_cache_file("tsg/ls/R5-260017.zip")
+    assert meta.doc_filename == "R5-260017.docx"
+
+
+# ---------------------------------------------------------------------------
 # 6. Unknown TDoc → TDocNotFoundError.
 # ---------------------------------------------------------------------------
 

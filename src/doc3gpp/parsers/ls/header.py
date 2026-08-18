@@ -16,10 +16,12 @@ from __future__ import annotations
 import re
 
 _LS_TITLE_PREFIX = re.compile(r"^\s*LS\s+on\b", re.IGNORECASE)
-_FIRST_LINE_TAB = re.compile(
-    r"^3GPP\s+TSG\b.*\bMeeting\b.*\t.*\bTDoc\b", re.IGNORECASE
+_FIRST_LINE_RE = re.compile(
+    r"^3GPP\b.*\bMeeting\b\s*[#\w]",
+    re.IGNORECASE,
 )
-_ANY_OF_SOURCE_TO_CC = re.compile(r"^(?:Source|To|Cc):", re.IGNORECASE)
+_TDOC_ID_RE = re.compile(r"\bR[1-9]-\d{6}\b|\bR[1-9]s\d{6}\b", re.IGNORECASE)
+_ANY_OF_SOURCE_TO_CC = re.compile(r"^(?:Source|To|Cc)\s*:", re.IGNORECASE)
 
 
 class LSHeaderMissingError(ValueError):
@@ -44,10 +46,14 @@ def is_ls_header_present(markdown: str) -> tuple[bool, str]:
     head = lines[:100]
     blob = "\n".join(head)
 
-    first_match = bool(_FIRST_LINE_TAB.search(blob))
-    if not first_match:
-        for line in head:
-            if "\t" in line and "Meeting" in line and "TDoc" in line:
+    first_match = False
+    for line in head:
+        if _FIRST_LINE_RE.search(line):
+            # An LS header always pairs the meeting reference with a
+            # 3GPP TDoc id (``R5-…`` / ``R5s…``). Tab-separated
+            # markdown carries the id verbatim; the docx→md converter
+            # emits the same id bare on the same line or shortly after.
+            if _TDOC_ID_RE.search(line):
                 first_match = True
                 break
 

@@ -45,7 +45,14 @@ class LSParserBase(TDocParser):
         spec: str | None = None,
         source: str | None = None,
     ) -> bool:
-        if tdoc_type != "LS":
+        # The 3GPP portal stores the LS family as the bare ``LS``
+        # value plus ``LS in`` (received from another 3GPP WG / external
+        # body) and ``LS out`` (originated by the current WG). All three
+        # are LS documents and route to this parser; the CR family
+        # ignores ``tdoc_type`` so it never gets a chance to claim them.
+        if tdoc_type is None:
+            return False
+        if tdoc_type != "LS" and not tdoc_type.startswith("LS "):
             return False
         return bool(self._cover.supports_source(source))
 

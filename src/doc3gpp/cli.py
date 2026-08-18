@@ -1821,7 +1821,7 @@ def tdoc_parse(
             typer.echo(f"{normalised}: FAILED - extract error (no diagnostic)")
             failures.append(normalised)
 
-    success_set = set(batch.successes.keys())
+    success_set = set(batch.successes.keys()) | set(batch.ls_successes.keys())
     already_parsed = len(parsed_ids - dispatched_set)
     re_parsed = len(parsed_ids & success_set)
     newly_parsed = len(success_set - parsed_ids)

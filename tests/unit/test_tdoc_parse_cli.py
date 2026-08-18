@@ -28,12 +28,13 @@ from doc3gpp.models.tdoc_cr import (
     TDocExtractMeta,
 )
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.tdoc_ls import TDocLSDetails
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.services.tdoc_cr_service import (
     BatchExtractResult,
     ExtractResult,
+    LSResult,
     TDocNotFoundError,
-    TDocTypeUnsupportedError,
     TDocZipDownloadError,
 )
 from doc3gpp.settings.loader import get_settings
@@ -87,12 +88,14 @@ class _FakeCrService:
     def __init__(
         self,
         results: dict[str, ExtractResult] | None = None,
+        ls_results: dict[str, LSResult] | None = None,
         failures: dict[str, str] | None = None,
         skipped: dict[str, str] | None = None,
         raise_from_many: Exception | None = None,
         raise_from_extract: Exception | None = None,
     ) -> None:
         self._results = results or {}
+        self._ls_results = ls_results or {}
         self._failures = failures or {}
         self._skipped = skipped or {}
         self._raise_from_many = raise_from_many
@@ -114,6 +117,7 @@ class _FakeCrService:
             raise self._raise_from_many
         return BatchExtractResult(
             successes=dict(self._results),
+            ls_successes=dict(self._ls_results),
             failures=dict(self._failures),
             skipped=dict(self._skipped),
         )
@@ -412,6 +416,33 @@ def _make_result(
     )
 
 
+def _make_ls_result(
+    tdoc_id: str = "R5s260010",
+    *,
+    variant: str = "3gpp",
+    title: str | None = "LS on 5G_eHealth WI status update",
+) -> LSResult:
+    """Build a fully-wired :class:`LSResult` for the fake service."""
+    url = f"stored/{tdoc_id}.zip"
+    meta = TDocExtractMeta(
+        ftp_url=url,
+        tdoc_id=tdoc_id,
+        cache_file=f"{tdoc_id}.zip",
+        doc_filename=f"{tdoc_id}.docx",
+        extracted_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+    )
+    return LSResult(
+        details=TDocLSDetails(
+            tdoc_id=tdoc_id,
+            ftp_url=url,
+            variant=variant,
+            title=title,
+        ),
+        extract_meta=meta,
+        from_cache=False,
+    )
+
+
 def _pin_max_batch_via_toml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -580,41 +611,43 @@ def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
     assert "Failures:                                  1" in result.output
 
 
-def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
-    """``extract_many`` reporting every id as a failure (no successes)
-    yields exit 1 and an all-failures summary that surfaces the per-id
-    reason instead of the old generic "see logs" message."""
+def test_tdoc_parse_ls_row_succeeds_alongside_cr_failure(
+    sqlite_env, monkeypatch
+) -> None:
+    """An LS row in the batch succeeds via ``batch.ls_successes`` while a
+    CR row fails — the CLI prints the LS per-id line, the flat
+    ``Extracted 1 TDoc(s)`` headline, and exits 0 (one success keeps
+    the batch non-fatal)."""
     runner = CliRunner()
     cr_tdocs = [
         TDoc(tdoc_id="R5s260009", type="CR"),
-        TDoc(tdoc_id="R5s260010", type="CR"),
+        TDoc(tdoc_id="R5s260010", type="LS"),
     ]
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
     _patch_cr_repo(monkeypatch, set())
     fake = _FakeCrService(
         results={},
+        ls_results={"R5s260010": _make_ls_result("R5s260010")},
         failures={
             "R5s260009": "TDocNotFoundError: TDoc 'R5s260009' is not stored",
-            "R5s260010": "TDocTypeUnsupportedError: TDoc 'R5s260010' has type 'LS'",
         },
     )
     _patch_service(monkeypatch, fake)
 
     result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s26%", "--yes"])
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.output
     assert "R5s260009: FAILED - TDocNotFoundError:" in result.output
-    assert "R5s260010: FAILED - TDocTypeUnsupportedError:" in result.output
-    assert "Newly parsed:                              0" in result.output
+    assert "R5s260010: variant=3gpp title=LS on 5G_eHealth WI status update" in result.output
+    assert "Extracted 1 TDoc(s); 1 failed; 0 skipped." in result.output
+    assert "LS extracted [count=1]:" in result.output
+    assert "Newly parsed:                              1" in result.output
+    assert "Failures:                                  1" in result.output
 
 
 @pytest.mark.parametrize(
     ("exc_factory", "expected_class"),
     [
         (lambda: TDocNotFoundError("R5s260010"), "TDocNotFoundError"),
-        (
-            lambda: TDocTypeUnsupportedError("R5s260010", "LS"),
-            "TDocTypeUnsupportedError",
-        ),
         (
             lambda: TDocZipDownloadError(
                 "https://www.3gpp.org/ftp/R5s260010.zip",
@@ -632,8 +665,10 @@ def test_tdoc_parse_failure_message_names_the_step(
     sqlite_env, monkeypatch, exc_factory, expected_class
 ) -> None:
     """The ``FAILED - {ExceptionClassName}: {message}`` format lets the
-    operator see *which* step failed (type guard, DB lookup, network,
-    shape check) without opening the log file."""
+    operator see *which* step failed (DB lookup, network, shape check)
+    without opening the log file. LS rows no longer raise
+    ``TDocTypeUnsupportedError`` — they succeed via ``ls_successes``
+    (covered by :func:`test_tdoc_parse_ls_row_succeeds_alongside_cr_failure`)."""
     exc = exc_factory()
     cr_tdocs = [TDoc(tdoc_id="R5s260010", type="CR")]
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
@@ -2691,27 +2726,33 @@ def test_tdoc_show_format_raw_output_writes_to_file(
     assert out_path.read_text() == cached_md
 
 
-def test_tdoc_show_format_raw_non_cr_tdoc_raises_bad_parameter(
+def test_tdoc_show_format_raw_ls_tdoc_emits_cached_markdown(
     sqlite_env, monkeypatch
 ) -> None:
-    """``--format raw`` on a non-CR TDoc surfaces a friendly error."""
+    """``--format raw`` on an LS TDoc emits the converted markdown from
+    the cache — the service's ``extract`` now returns an ``LSResult``
+    for LS rows instead of raising ``TDocTypeUnsupportedError``."""
     create_schema()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260020", type="LS"))
 
-    class _RaisingCrService:
-        def extract(self, tdoc_id):
-            raise TDocTypeUnsupportedError(tdoc_id, observed_type="LS")
+    cached_md = "# LS body\n\nparagraph\n"
+    monkeypatch.setattr(
+        "doc3gpp.cli._read_cached_markdown_path",
+        lambda cache_file, cache_root: cached_md,
+    )
 
-    _patch_service(monkeypatch, _RaisingCrService())
+    class _LsCrService:
+        def extract(self, tdoc_id):
+            return _make_ls_result(tdoc_id)
+
+    _patch_service(monkeypatch, _LsCrService())
 
     runner = CliRunner()
     result = runner.invoke(
         app, ["tdoc", "show", "--tdoc", "R5-260020", "--format", "raw"]
     )
-    assert result.exit_code != 0
-    assert "R5-260020" in result.output
-    assert "type" in result.output.lower()
-    assert "CR-type" in result.output or "CR" in result.output
+    assert result.exit_code == 0, result.output
+    assert result.output == cached_md
 
 
 def test_tdoc_show_format_raw_python_docx_missing_raises_bad_parameter(

@@ -985,3 +985,82 @@ def test_mcp_get_tdoc_includes_cover_summary_of_change(sqlite_env) -> None:
     result = asyncio.run(run())
     payload = json.loads(result.content[0].text)
     assert payload["cover"]["summary_of_change"] == "Add USIM config setter."
+
+
+def test_mcp_get_tdoc_includes_ls_block(sqlite_env) -> None:
+    """The ``get_tdoc`` MCP tool surfaces the ``ls`` sidecar block."""
+    import asyncio
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_ls import TDocLSDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_ls_sql import (
+        SQLAlchemyLSParserRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import (
+        SQLAlchemyTDocRepository,
+    )
+
+    create_schema()
+    url = "tsg/ls/R5-240001.doc"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-240001", ftp_url=url, type="LS"),
+    )
+    SQLAlchemyLSParserRepository().upsert(
+        TDocLSDetails(
+            tdoc_id="R5-240001",
+            ftp_url=url,
+            title="LS on foo",
+            response_to_doc="R5-234567",
+            response_to_group="RAN WG3",
+            release="Release 17",
+            work_item_name="5G_eHealth",
+            work_item_code="WI-123456",
+            source="3GPP TSG RAN WG2",
+            to_groups="RAN WG3\nRAN WG4",
+            cc_groups="SA WG2",
+            attachments=(
+                {"doc_number": "TR 38.901 v0.1.0 [draft]", "description": "draft TR"},
+                {"doc_number": "TS 38.300 v17.1.0", "description": ""},
+            ),
+        ),
+    )
+
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("get_tdoc", {"tdoc_id": "R5-240001"})
+
+    result = asyncio.run(run())
+    payload = json.loads(result.content[0].text)
+    assert payload["ls"]["title"] == "LS on foo"
+    assert payload["ls"]["to_groups"] == "RAN WG3\nRAN WG4"
+    assert payload["ls"]["attachments"] == [
+        {"doc_number": "TR 38.901 v0.1.0 [draft]", "description": "draft TR"},
+        {"doc_number": "TS 38.300 v17.1.0", "description": ""},
+    ]
+
+
+def test_mcp_get_tdoc_omits_ls_when_absent(sqlite_env) -> None:
+    """No LS sidecar row -> the ``ls`` key is omitted (not null)."""
+    import asyncio
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import (
+        SQLAlchemyTDocRepository,
+    )
+
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-240001", ftp_url="tsg/ls/R5-240001.doc", type="LS"),
+    )
+
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("get_tdoc", {"tdoc_id": "R5-240001"})
+
+    result = asyncio.run(run())
+    payload = json.loads(result.content[0].text)
+    assert "ls" not in payload

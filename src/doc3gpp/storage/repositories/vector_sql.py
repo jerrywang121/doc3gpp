@@ -451,6 +451,31 @@ def _build_embed_text(tdoc_id: str) -> str | None:
                 parts.append(cover[0])
             if cover[1]:
                 parts.append(cover[1])
+        ls = conn.execute(
+            text(
+                """
+                SELECT ls.title, ls.response_to_title, ls.to_groups,
+                       ls.cc_groups
+                  FROM tdoc_cr_ls_details ls
+                  JOIN tdocs t ON t.tdoc_id = ls.tdoc_id
+                 WHERE t.tdoc_id = :id
+                   AND t.ftp_url IS NOT NULL
+                   AND ls.ftp_url = t.ftp_url
+                """
+            ),
+            {"id": tdoc_id},
+        ).first()
+        if ls is not None:
+            ls_parts: list[str] = []
+            if ls[0]:
+                ls_parts.append(ls[0])
+            if ls[1]:
+                ls_parts.append(ls[1])
+            if ls[2]:
+                ls_parts.append(ls[2].replace("\n", " "))
+            if ls[3]:
+                ls_parts.append(ls[3].replace("\n", " "))
+            parts.extend(ls_parts)
         ttcn = conn.execute(
             text(
                 """

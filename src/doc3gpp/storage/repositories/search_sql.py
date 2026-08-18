@@ -546,9 +546,29 @@ def _cover_text(*, conn: Engine, tdoc_id: str) -> str:
             ),
             {"id": tdoc_id},
         ).first()
-    if row is None:
+        if row is not None:
+            return " ".join(str(v) for v in row if v is not None)
+        ls_row = c.execute(
+            text(
+                """
+                SELECT ls.title, ls.response_to_title, ls.to_groups,
+                       ls.cc_groups
+                  FROM tdoc_cr_ls_details ls
+                  JOIN tdocs t ON t.tdoc_id = ls.tdoc_id
+                 WHERE t.tdoc_id = :id
+                   AND t.ftp_url IS NOT NULL
+                   AND ls.ftp_url = t.ftp_url
+                """
+            ),
+            {"id": tdoc_id},
+        ).first()
+    if ls_row is None:
         return ""
-    return " ".join(str(v) for v in row if v is not None)
+    return " ".join(
+        str(v).replace("\n", " ")
+        for v in ls_row
+        if v is not None and str(v).strip()
+    )
 
 
 def _change_text(*, conn: Engine, tdoc_id: str) -> str:

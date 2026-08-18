@@ -42,6 +42,20 @@ def test_supports_requires_ls_tdoc_type():
     assert parser.supports("R5-240001", tdoc_type=None) is False
 
 
+def test_supports_matches_ls_in_and_ls_out_3gpp_rows():
+    """``tdocs.type`` stores 'LS in' / 'LS out' (the inbound/outbound
+    flags surfaced by the 3GPP portal) — the registry must dispatch
+    the LS parser for these rows, not only for the bare 'LS' value the
+    parser internals were originally prototyped against."""
+    parser = ThreeGPPLSParser()
+    assert parser.supports("R5-261001", tdoc_type="LS in", source="3GPP TSG") is True
+    assert parser.supports("R5-261602", tdoc_type="LS out", source="3GPP TSG RAN5") is True
+    # Non-LS types still rejected.
+    assert parser.supports("R5-240001", tdoc_type="CR", source="3GPP TSG") is False
+    assert parser.supports("R5-240001", tdoc_type="discussion", source="3GPP TSG") is False
+    assert parser.supports("R5-240001", tdoc_type=None, source="3GPP TSG") is False
+
+
 def test_parse_method_raises_for_ls_variant():
     parser = ThreeGPPLSParser()
     with pytest.raises(NotImplementedError, match="does not parse CR"):

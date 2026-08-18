@@ -78,6 +78,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocExtractMeta,
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+from doc3gpp.models.tdoc_ls import TDocLSDetails
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
     extract_docx_from_zip,
@@ -332,6 +333,36 @@ class ExtractResult:
 
 
 @dataclass(slots=True, frozen=True)
+class LSResult:
+    """Outcome of a single DB-mode :meth:`TDocCrService.extract` for an LS row.
+
+    Mirror of :class:`ExtractResult` for the LS family. Carries the
+    parsed LS fields plus the extract metadata that anchors the on-disk
+    zip + markdown cache. The cover-page slots are absent because LS
+    rows never write to ``tdoc_cr_cover_page`` / ``tdoc_cr_ttcn_details``
+    — the LS sidecar (``tdoc_cr_ls_details``) is the source of truth.
+
+    Attributes:
+        details: The parsed LS fields. On a cache hit, these come
+            straight from the persisted sidecar row; on a fresh
+            extract, they come from the in-memory parser output that
+            was just upserted.
+        extract_meta: Metadata pointing at the on-disk cache artefacts
+            (the ``cache_file`` basename and the inner docx filename).
+            On a DB-cache hit the basename reflects what the previous
+            successful extract wrote.
+        from_cache: ``True`` iff the result was returned from the
+            ``tdoc_cr_ls_details`` row **without** re-downloading the
+            zip or re-rendering the markdown. A hot markdown cache
+            alone does NOT set this flag.
+    """
+
+    details: TDocLSDetails
+    extract_meta: TDocExtractMeta
+    from_cache: bool
+
+
+@dataclass(slots=True, frozen=True)
 class BatchExtractResult:
     """Outcome of a batch :meth:`TDocCrService.extract_many` call.
 
@@ -350,6 +381,11 @@ class BatchExtractResult:
         successes: ``{tdoc_id: ExtractResult}`` for every id that
             produced a usable extract (cache hit or fresh). The keys are
             the canonical (normalised) ids as stored in the database.
+        ls_successes: ``{tdoc_id: LSResult}`` for every LS-type id that
+            produced a usable extract (cache hit or fresh). Kept apart
+            from :attr:`successes` because the LS sidecar
+            (``tdoc_cr_ls_details``) is the source of truth for these
+            rows — the CR cover-page slots never exist for them.
         failures: ``{tdoc_id: short reason}`` for every id that the
             per-id ``try/except`` swallowed. The reason is formatted as
             ``"{ExceptionClassName}: {exc}"`` — the class name tells
@@ -368,6 +404,7 @@ class BatchExtractResult:
 
     successes: dict[str, ExtractResult]
     failures: dict[str, str]
+    ls_successes: dict[str, LSResult] = field(default_factory=dict)
     skipped: dict[str, str] = field(default_factory=dict)
 
 

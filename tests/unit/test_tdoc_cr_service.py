@@ -698,7 +698,7 @@ def test_extract_many_routes_null_ftp_url_into_skip_bucket(
     surface "FTP hasn't published yet" as its own summary line.
     Mixed batch: one row's ftp_url is None (skipped), one row has a
     real URL (would succeed but the fake parse layer just skips it
-    here), one row is type="LS" (real failure).
+    here), one row has an unsupported type (real failure).
     """
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
@@ -718,7 +718,7 @@ def test_extract_many_routes_null_ftp_url_into_skip_bucket(
         ),
         "R5s263499": TDoc(
             tdoc_id="R5s263499",
-            type="LS",
+            type="DRAFT",
             ftp_url=f"tsg_ran/{tdoc_id}.zip",
         ),
     }[tdoc_id]

@@ -434,15 +434,16 @@ def test_extract_zip_cache_hit_persists_with_candidate_url(
 
 
 def test_extract_non_cr_tdoc_raises_type_unsupported(sqlite_env, tmp_path) -> None:
-    """A TDoc row with ``type='LS'`` must raise ``TDocTypeUnsupportedError``."""
+    """A TDoc row with an unrecognised ``type`` must raise
+    ``TDocTypeUnsupportedError``."""
     create_schema()
     service, _, _, _, _cr_ttcn_repo, tdoc_repo = _build_service(tmp_path, zip_bytes=b"unused")
-    tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="LS")])
+    tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="DRAFT")])
 
     with pytest.raises(TDocTypeUnsupportedError) as excinfo:
         service.extract("R5s260009")
     assert excinfo.value.tdoc_id == "R5s260009"
-    assert excinfo.value.observed_type == "LS"
+    assert excinfo.value.observed_type == "DRAFT"
 
 
 # ---------------------------------------------------------------------------

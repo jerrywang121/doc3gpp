@@ -90,6 +90,7 @@ from doc3gpp.parsers.direct_extractor import (
     is_3gpp_ftp_url,
     list_3gpp_directory,
 )
+from doc3gpp.parsers.ls.header import LSHeaderMissingError
 from doc3gpp.parsers.ls.ls_parsers import LSParserBase
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.parsers.tdoc_parsers import (
@@ -552,7 +553,8 @@ class TDocCrService:
         2. Look up the TDoc in the ``tdocs`` table via
            :meth:`TDocRepository.get_by_id` — raise
            :class:`TDocNotFoundError` on miss and
-           :class:`TDocTypeUnsupportedError` if ``type != "CR"``.
+           :class:`TDocTypeUnsupportedError` for an unrecognised
+           ``type`` (neither ``"CR"`` nor an LS-family value).
         3. Pre-resolve the candidate download URL(s) via
            :func:`resolve_download_url` and probe the DB cache by URL
            before any network I/O. A hit short-circuits with
@@ -708,11 +710,38 @@ class TDocCrService:
             source=tdoc.source,
         )
         if isinstance(parser, LSParserBase):
-            raise TDocTypeUnsupportedError(
-                normalised,
-                f"{tdoc.type!r} (DB-mode LS extraction is not yet supported; "
-                "use 'tdoc parse --from-url' for LS rows)",
+            if self._ls_repository is None:
+                raise RuntimeError(
+                    "TDocCrService requires an ls_repository; "
+                    "construct via services.factory.build_tdoc_cr_service()"
+                )
+            ls_result = parser.parse_ls(markdown, tdoc_id=normalised)
+            if ls_result.cover is None:
+                raise LSHeaderMissingError(
+                    "LS parser returned no cover payload for tdoc_id "
+                    f"{normalised!r}; the markdown does not look like an LS document"
+                )
+            details = replace(
+                ls_result.cover,
+                tdoc_id=normalised,
+                ftp_url=stored_ftp_url,
             )
+            self._ls_repository.upsert(details)
+            meta = TDocExtractMeta(
+                ftp_url=stored_ftp_url or "",
+                tdoc_id=normalised,
+                cache_file=cache_file,
+                doc_filename=doc_filename,
+            )
+            self._repo.upsert_extract_meta(meta)
+            self._index_after_parse(normalised)
+            self._embed_after_parse(normalised)
+            logger.info(
+                "Persisted LS sidecar for TDoc %s at ftp_url %s (variant=%s)",
+                normalised, stored_ftp_url, details.variant,
+            )
+            return LSResult(details=details, extract_meta=meta, from_cache=False)
+
         parsed: TDocCRParseResult = parser.parse(
             markdown, tdoc_id=normalised, full=full,
         )
@@ -1426,14 +1455,19 @@ class TDocCrService:
 
         Raises:
             TDocNotFoundError: The row is absent.
-            TDocTypeUnsupportedError: The row's ``type`` is not ``"CR"``
-                (case-insensitive).
+            TDocTypeUnsupportedError: The row's ``type`` is neither
+                ``"CR"`` nor an LS-family type (``"LS"`` / ``"LS in"`` /
+                ``"LS out"``, case-insensitive). LS rows pass through
+                here — the parser registry dispatches them downstream;
+                genuinely unrecognised types (e.g. ``DRAFT``) stay a
+                hard error.
         """
         tdoc = self._tdoc_repo.get_by_id(tdoc_id)
         if tdoc is None:
             raise TDocNotFoundError(tdoc_id)
         observed = (tdoc.type or "").strip().upper()
-        if observed != _CR_TDOC_TYPE:
+        is_ls = observed == "LS" or observed.startswith("LS ")
+        if observed != _CR_TDOC_TYPE and not is_ls:
             raise TDocTypeUnsupportedError(tdoc_id, tdoc.type)
         return tdoc
 

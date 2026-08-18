@@ -1362,7 +1362,7 @@ def tdoc_parse(
     tdoc_type: str | None = typer.Option(
         None,
         "--type",
-        help="SQL LIKE pattern on type (defaults to 'CR'; null/not-null/!pattern).",
+        help="SQL LIKE pattern on type (null/not-null/!pattern).",
     ),
     uploaded_date: str | None = typer.Option(
         None,
@@ -1671,7 +1671,7 @@ def tdoc_parse(
         "tdoc_id": normalised_tdoc,
         "meeting_like": meeting,
         "meeting_id": meeting_id,
-        "tdoc_type": tdoc_type or "CR",
+        "tdoc_type": tdoc_type,
         "status": status,
         "cr_cat": cr_cat,
         "spec": spec,

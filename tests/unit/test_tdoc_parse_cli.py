@@ -936,7 +936,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
         "tdoc_id": None,
         "meeting_like": None,
         "meeting_id": meeting_id,
-        "tdoc_type": "CR",
+        "tdoc_type": None,
         "status": None,
         "cr_cat": None,
         "spec": None,
@@ -1358,6 +1358,28 @@ def test_tdoc_parse_passes_not_like_prefix(
     )
     assert result.exit_code == 0, result.output
     assert ns.tdoc_repo.list_with_meeting_calls[0][kwarg] == "!%X%"
+
+
+def test_tdoc_parse_omits_default_cr_filter_when_type_unset(
+    sqlite_env, monkeypatch
+) -> None:
+    """``--type`` is no longer a hidden default — an unset value keeps
+    every row (including LS) in scope and forwards ``tdoc_type=None``
+    to the repo instead of ``"CR"``."""
+    runner = CliRunner()
+    ls_tdocs = [TDoc(tdoc_id="R5s260010", type="LS")]
+    repo = _patch_tdoc_repo_for_listing(monkeypatch, ls_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    fake = _FakeCrService(
+        ls_results={"R5s260010": _make_ls_result("R5s260010")},
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260010", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "No TDoc matched" not in result.output
+    # The new contract: tdoc_type filter is None when --type is unset, not "CR".
+    assert repo.list_with_meeting_calls[0]["tdoc_type"] is None
 
 
 def test_tdoc_parse_combines_filters(_meeting_with_cr_tdocs) -> None:

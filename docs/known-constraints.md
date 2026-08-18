@@ -88,10 +88,10 @@ change set so the docs stay honest.
   installed, the CLI prints a friendly install hint and exits 1.
 - **`TDoc` types other than CR and LS (DRAFT, BB, …) are not handled.**
   The extractor's type guard raises `TDocTypeUnsupportedError` for
-  unsupported ids. LS rows are supported on the direct-mode
-  `--from-url` path; DB-mode `tdoc parse` still raises
-  `TDocTypeUnsupportedError` for LS rows, but real local `.docx` /
-  `.zip` files dispatched through `direct_parse_bytes` now sniff the
+  unsupported ids. LS rows are supported on both the direct-mode
+  `--from-url` path and DB-mode `tdoc parse` (which writes the
+  `tdoc_cr_ls_details` sidecar via `LSParserBase`), and real local `.docx` /
+  `.zip` files dispatched through `direct_parse_bytes` sniff the
   converted markdown via `is_ls_header_present` and route an
   LS-shaped body to `ThreeGPPLSParser.parse_ls` — a CR cover-shape
   keeps the CR family. IEEE / ETSI LS format variants are v2 stubs

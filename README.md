@@ -134,7 +134,7 @@ doc3gpp meeting list --tdoc R5-260013       # find the meeting containing a TDoc
 doc3gpp tdoc sync --meeting-id 85434       # requires a stored meeting row
 doc3gpp tdoc sync                          # sync every tracked meeting_id in tdocs
 doc3gpp tdoc list --tdoc 'R5%'
-doc3gpp tdoc parse --meeting-id 85434      # extract CR cover pages; prompts before batch
+doc3gpp tdoc parse --meeting-id 85434      # parse cover pages (CR + LS); prompts before batch
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes   # pattern match, skip confirmation
 doc3gpp wi sync --tsg r5                   # scrape WI DynaReport for R5
 doc3gpp wi list --release "Rel-19" --limit 50
@@ -149,7 +149,7 @@ doc3gpp spec show 36.579-5                 # header + version rows
 The CLI ships ten sub-apps. The most common
 entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
 (TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR cover
-pages), `tdoc show --format raw` (render the converted `.docx`
+pages and LS headers), `tdoc show --format raw` (render the converted `.docx`
 markdown), `spec sync` (3GPP specification records with versions), and
 `search query` (FTS5 + BM25 full-text search).
 
@@ -193,7 +193,7 @@ doc3gpp tdoc list --tdoc 'R5%' --meeting "%RAN3%"
 doc3gpp tdoc list --title '!%Sidelink%'          # NOT LIKE
 
 # parse (DB mode) — every flag is a filter
-doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts before batch (pending only)
+doc3gpp tdoc parse --meeting-id 85434            # all types (CR + LS); prompts before batch (pending only)
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes         # LIKE pattern; non-interactive
 doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --cr-cat F
 doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
@@ -208,7 +208,7 @@ doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --o
 
 # show — --tdoc and --ftp-url are mutually exclusive
 doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
-doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # converted .docx markdown
+doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # converted .docx markdown (CR or LS)
 doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 ```

@@ -139,9 +139,9 @@ Per-layer modules:
       the TTCN sidecar repo, and the extract-metadata repo).
       Also accepts `ls_repository` (default
       `SQLAlchemyLSParserRepository`): for LS rows
-      (`tdocs.type == "LS"`) the DB-mode `extract` raises
-      `TDocTypeUnsupportedError`, while the direct-mode paths parse
-      with `parse_ls` and upsert the `tdoc_cr_ls_details` sidecar.
+      (`tdocs.type == "LS"`) the DB-mode `extract` resolves the
+      `LSParserBase` variant and upserts the `tdoc_cr_ls_details`
+      sidecar, mirroring the direct-mode paths.
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
       `build_tdoc_sync_coordinator`, `build_tdoc_cr_service`,
@@ -242,9 +242,11 @@ a flow of its own.
 1. `doc3gpp tdoc parse` is filter-driven. At least one filter must be
    supplied (`--tdoc` as a LIKE pattern, `--meeting-id`, `--meeting`, or
    any text/date filter); the CLI validates `--meeting-id` when present,
-   applies `type == "CR"` by default when no explicit `--type` is
-   supplied, and in normal mode the SQL query excludes rows already
-   present in `tdoc_cr_cover_page` before applying the batch cap, so the
+   applies **no** implicit type default — every `tdocs.type` value is a
+   candidate, and an explicit `--type` narrows via SQL `LIKE` — and in
+   normal mode the SQL query excludes rows already
+   present in `tdoc_cr_cover_page` **or** `tdoc_cr_ls_details` before
+   applying the batch cap, so the
    preview and confirmation list only pending TDocs. With `--force`, the
    exclusion is disabled and every match (including already-parsed rows)
    becomes a candidate. If the pending set is empty, the CLI prints
@@ -360,13 +362,30 @@ a flow of its own.
 
 ### LS TDoc header extraction
 
-LS rows (`tdocs.type == "LS"`) never go through the DB-mode
-`TDocCrService.extract` pipeline — the service resolves the LS
-parser and raises `TDocTypeUnsupportedError` (`'LS' (DB-mode LS
-extraction is not yet supported; use 'tdoc parse --from-url' for LS
-rows)`). The supported paths are the direct-mode parses:
+LS rows (`tdocs.type == "LS"`) go through the same
+`TDocCrService.extract` pipeline as CR rows in DB mode — the service
+resolves the LS parser via `_resolve_parser(tdoc_id, tdoc_type,
+source)` (see `services/tdoc_cr_service.py::extract`) and branches on
+`LSParserBase`, exactly like the direct-mode path:
 
-1. `doc3gpp tdoc parse --from-url <3gpp-url>` on a row present in
+1. `doc3gpp tdoc parse --tdoc <id>` / any DB-mode filter batch (LS row):
+   `extract` → `_load_tdoc` (LS rows pass the type guard; only
+   unrecognised types such as `DRAFT` raise `TDocTypeUnsupportedError`)
+   → `_resolve_parser` → `ThreeGPPLSParser` → `parse_ls(markdown)`
+   (header detection via `is_ls_header_present` → `LSCoverPageParser`)
+   → the parsed `TDocLSDetails` (stamped with `tdoc_id` / `ftp_url`)
+   is upserted to `tdoc_cr_ls_details`, and a `TDocExtractMeta` row is
+   written to `tdoc_extracts` (same `cache_file` contract as CR). The
+   zip + markdown caches are written (keyed on `derive_cache_file`),
+   and the FTS5 index + vector embeddings are refreshed via
+   `_index_after_parse` / `_embed_after_parse`. No
+   `tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` / `tdoc_cr_change_details`
+   rows are written; the DB-cache short-circuit probes
+   `tdoc_cr_ls_details` instead of the cover-page table. The result
+   is an `LSResult` (returned alongside `ExtractResult` from
+   `extract_many`, which aggregates the two into a flat
+   successes/failures/skipped total for the CLI summary).
+2. `doc3gpp tdoc parse --from-url <3gpp-url>` on a row present in
    `tdocs` with `type = LS`:
    `extract_from_url` → `_extract_from_3gpp_url` resolves the parser
    via `_resolve_parser(tdoc_id, tdoc_type=row.type, source=row.source)`
@@ -380,7 +399,7 @@ rows)`). The supported paths are the direct-mode parses:
    `tdoc_cr_cover_page` / `tdoc_extracts` / `tdoc_cr_ttcn_details`
    rows are written, and non-`raw` `--format` output errors (the CLI
    requires parsed fields).
-2. `doc3gpp tdoc parse --from-path <file>` (raw-markdown mode via
+3. `doc3gpp tdoc parse --from-path <file>` (raw-markdown mode via
    `extract_from_bytes(..., filename=None)`): used by the service
    tests and by callers holding the markdown in memory; the LS branch
    parses and upserts the sidecar the same way. Real `.docx` /
@@ -389,7 +408,7 @@ rows)`). The supported paths are the direct-mode parses:
    LS-shaped body routes to `ThreeGPPLSParser.parse_ls` and a CR
    cover-shape routes to the CR family, so local LS `.docx` /
    `.zip` payloads parse without `CRHeaderMissingError`.
-3. `doc3gpp tdoc show --tdoc <id>` / `--ftp-url <url>` renders the
+4. `doc3gpp tdoc show --tdoc <id>` / `--ftp-url <url>` renders the
    persisted `tdoc_cr_ls_details` row (see the show flow above); the
    MCP `get_tdoc` tool and the web `GET /tdocs/{id}` route surface
    the same `ls` block.
@@ -627,8 +646,9 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       dicts via `storage/compression.py`), `parser_version`,
       `extracted_at` (server-side UTC, stamped by the repo's
       `upsert` — the LS sidecar carries its own timestamp rather
-      than relying on `tdoc_extracts`, which the LS parse path does
-      not write). One row per immutable URL. The FTS5 `tdoc_search`
+      than relying on `tdoc_extracts`, which the direct-mode LS
+      parse path does not write; DB-mode LS extracts do write a
+      `tdoc_extracts` row via `TDocCrService.extract`). One row per immutable URL. The FTS5 `tdoc_search`
       projection and the vector `_build_embed_text` projection both
       fall back to this table's `title` / `response_to_title` /
       `to_groups` / `cc_groups` when no `tdoc_cr_cover_page` row
@@ -782,11 +802,9 @@ twenty commands):
       `--force` re-extracts already-parsed rows, `--full` is reserved
       for the parser's `full=True` mode. End-to-end filter-driven:
       candidates are the intersection of every supplied predicate, with
-      CR-type as the implicit default and a `max_batch` cap. LS rows
-      (`tdocs.type == "LS"`) are rejected in DB mode
-      (`TDocTypeUnsupportedError`) — parse them via
-      `--from-url` instead, which writes the `tdoc_cr_ls_details`
-      sidecar.
+      no implicit type default and a `max_batch` cap. LS rows
+      (`tdocs.type == "LS"`) parse in DB mode through the LS parser
+      and write the `tdoc_cr_ls_details` sidecar.
     - `show` — `--tdoc` (mutually exclusive with `--ftp-url`); renders
       the matching TDoc, the slim cover-page row from
       `tdoc_cr_cover_page` (URL-keyed on `tdoc.ftp_url`), the

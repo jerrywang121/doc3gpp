@@ -261,7 +261,7 @@ mutual exclusivity with `--meeting-id` are gone — pick the filter
 combination that targets the intended subset.
 
 In normal mode the SQL query excludes rows already present in
-`tdoc_cr_cover_page` before applying the batch cap, so the preview and
+`tdoc_cr_cover_page` **or** `tdoc_cr_ls_details` before applying the batch cap, so the preview and
 confirmation list only **pending** TDocs. With `--force`, the exclusion
 is disabled and every match (including already-parsed rows) becomes a
 candidate. If the pending set is empty, the CLI prints

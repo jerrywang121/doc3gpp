@@ -3064,7 +3064,7 @@ def _render_tdoc_show_raw(
     except TDocTypeUnsupportedError as exc:
         raise typer.BadParameter(
             f"TDoc {tdoc_id!r} has type {exc.observed_type!r}; "
-            f"--format raw is only available for CR-type TDocs"
+            f"--format raw is only available for CR- and LS-type TDocs"
         ) from None
     except TDocZipDownloadError as exc:
         raise typer.BadParameter(
@@ -3821,7 +3821,7 @@ def tdoc_show(
         "--format",
         help=(
             "Output format: table (default), json, markdown, or raw "
-            "(the converted .docx markdown for CR-type TDocs)."
+            "(the converted .docx markdown body for CR- and LS-type TDocs)."
         ),
     ),
     output: str | None = typer.Option(

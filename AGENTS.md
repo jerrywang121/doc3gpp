@@ -85,7 +85,7 @@ For the full symbol-to-file table, see
 | Add an embedding model | `src/doc3gpp/services/embedding/embedder.py` | Lazy model load; `Embedder` Protocol in `repository/protocols.py`. |
 | Add a vector DDL change | `src/doc3gpp/storage/db/migrate.py` (`_create_vector_schema`) + `src/doc3gpp/storage/repositories/vector_sql.py` | Gated on sqlite + sqlite-vec. |
 | Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. List routes that pair with an HTMX filter form (e.g. meetings / tdocs / wis / search) must render a `partials/<resource>_results.html` fragment when the request sets `HX-Request: true` and the full page otherwise — the `outerHTML` swap target `#results` only fits a fragment, not a full HTML document. The tdoc detail page's Parse card enqueues `POST /jobs/parse/tdocs` (single-tdoc filter) and polls `partials/job_status.html` via `static/js/tdoc_parse.js`; the search pages share a 5-column grid form with a `sem` rerank input on `/search` and full filter parity on `/search/sem`. The web app builds ONE shared `SentenceTransformerEmbedder` in `build_state` and injects it into `build_tdoc_cr_service` / `build_search_service` / `build_semantic_search_service` so the model loads once per process.
-- The tdoc detail page (`tdoc_show.html`) renders two extra cards when the parent TDoc has been parsed: 'Required changes' (one entry per TTCN `required_changes` dict) for TTCN CRs, and 'Extracted changes' (one entry per body-derived change block) for non-TTCN CRs. Both cards are gated on the sidecar's presence and are mutually exclusive. For LS rows (`tdoc.type == 'LS'`) the page renders an 'LS Cover' card instead of the Cover-page card (gated on the `ls` sidecar; placeholder when not yet parsed) — the Parse card still shows, but DB-mode parse jobs on LS rows fail with `TDocTypeUnsupportedError`, so LS extraction runs via `doc3gpp tdoc parse --from-url <url> --format raw`. |
+- The tdoc detail page (`tdoc_show.html`) renders two extra cards when the parent TDoc has been parsed: 'Required changes' (one entry per TTCN `required_changes` dict) for TTCN CRs, and 'Extracted changes' (one entry per body-derived change block) for non-TTCN CRs. Both cards are gated on the sidecar's presence and are mutually exclusive. For LS rows (`tdoc.type == 'LS'`) the page renders an 'LS Cover' card instead of the Cover-page card (gated on the `ls` sidecar; placeholder when not yet parsed) — the Parse card also shows, and DB-mode `tdoc parse --tdoc <id>` dispatches LS rows to `ThreeGPPLSParser`; the on-disk zip + markdown caches are populated identically to CR rows. |
 | Add a sync hub panel / sync hub page | `src/doc3gpp/web/routes/sync.py` + `src/doc3gpp/web/templates/sync.html` + `src/doc3gpp/web/static/js/sync_hub.js` | Each new enqueue panel follows the existing nine-form pattern (one `<form id="*-form">` per MCP tool) and reuses `bindJobPolling` + `JobRepository.create`. New routes that need HTTP exposure land in `web/routes/jobs.py` next to their existing siblings (e.g. `POST /jobs/parse/tdoc-url` closed the MCP-vs-HTTP gap for the MCP `parse_tdoc_url` tool). |
 | Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). The MCP mount supports both `streamable_http` (default) and `sse` transports, selected via `[mcp] transport` in `doc3gpp.toml`; browser origins are allowed via `[mcp] allowed_origins` (defaults to `http://127.0.0.1` and `http://localhost`). |
 | Add a background job kind | `src/doc3gpp/models/jobs.py` (`JobKind`, e.g. `JobKind.PARSE_TDOC_URL`) + `src/doc3gpp/web/workers/handlers.py` (`KIND_TO_HANDLER`, e.g. `_parse_tdoc_url`) + `src/doc3gpp/web/routes/jobs.py` | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; SSE progress via `append_log`/progress callbacks. |
@@ -197,7 +197,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
   per-file byte cap is `Settings.tdoc_parse.max_tdoc_size_kb` (default
   `1000` KB; `0` = unlimited); oversized sources are routed to the skip
   bucket via `TDocTooLargeError`. In normal
-  mode the SQL query excludes rows already present in `tdoc_cr_cover_page`,
+  mode the SQL query excludes rows already present in `tdoc_cr_cover_page`
+  **or** `tdoc_cr_ls_details`,
   so the batch cap applies only to pending TDocs; the preview and
   confirmation list only pending rows. `--force` explicitly includes and
   re-parses already-parsed matches. The parser returns
@@ -217,6 +218,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   when the parser recognised a TTCN CR), and the `tdoc_extracts`
   metadata row. `TDocCrService` also writes a `tdoc_cr_change_details`
   row (non-TTCN CRs only) when the parser detects revision marks.
+  LS rows (`tdocs.type` of `LS`) run through the same DB-mode
+  pipeline — `extract` resolves the `LSParserBase` variant, runs
+  `parse_ls`, writes the `tdoc_cr_ls_details` sidecar + the
+  `tdoc_extracts` cache metadata row, and the completion summary
+  counts CR + LS successes on one flat line
+  (`Extracted N TDoc(s); M failed; K skipped.`). There is no implicit
+  `--type` default — every `tdocs.type` value is a candidate.
   Full grammar and prompt-completion semantics in
   [`docs/conventions.md`](docs/conventions.md) and
   [`docs/cli.md`](docs/cli.md).
@@ -240,7 +248,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
   fires. Same skip rules as DB-mode apply; non-3GPP URLs never
   trigger auto-sync; failures stay warnings. The `--from-path` type
   confirm only reaches the LS parser in raw-markdown mode — real
-  local files still hit the CR family (see the FK matrix in
+  local `.docx` / `.zip` files are sniffed via `is_ls_header_present`
+  so an LS-shaped body routes to `ThreeGPPLSParser.parse_ls`
+  regardless of the stored type (see the FK matrix in
   `docs/cli.md`).
 - `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row, then
   looks up the slim cover-page details and the extract metadata by the
@@ -352,9 +362,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   command. Direct-mode `tdoc parse --from-path` extracts the TDoc id
   from the file name and triggers auto-sync for that id (the stored
   `tdocs.type` / `tdocs.source` then drive parser dispatch — LS rows
-  parse as LS in raw-markdown mode only; real local files still hit
-  the CR family and fail with `CRHeaderMissingError`, see the FK
-  matrix in `docs/cli.md`; a row still missing after the sync is
+  parse as LS in raw-markdown mode; real local `.docx` / `.zip` files
+  are sniffed via `is_ls_header_present` so an LS-shaped body routes
+  to `ThreeGPPLSParser.parse_ls` regardless of the stored type, see
+  the FK matrix in `docs/cli.md`; a row still missing after the sync is
   assumed CR, and an uninitialized database degrades the same way).
   Direct-mode `tdoc parse --from-url` triggers auto-sync for the URL's
   tdoc-id candidates (3GPP FTP URLs only — basename for file URLs, BFS

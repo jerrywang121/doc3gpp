@@ -66,9 +66,10 @@ the parent read command.
 Direct-mode `tdoc parse` (`--from-path`) extracts the TDoc id from the
 file name and triggers auto-sync for that id when `sync.auto_sync` is
 enabled, then confirms the stored `tdocs.type` / `tdocs.source` so the
-parser registry can dispatch (LS rows parse as LS in raw-markdown mode
-only; real local files still hit the CR family — see the FK matrix
-below). When the id is still missing after auto-sync, the parse assumes
+parser registry can dispatch (LS rows parse as LS in raw-markdown mode;
+real local `.docx` / `.zip` files are sniffed via `is_ls_header_present`
+so an LS-shaped body routes to `ThreeGPPLSParser.parse_ls` regardless of
+the stored type — see the FK matrix below). When the id is still missing after auto-sync, the parse assumes
 CR. `--from-url` triggers auto-sync for the URL's candidates as
 described below.
 
@@ -573,17 +574,16 @@ Options:
     first if you haven't synced this meeting yet._` placeholder
     keeps the document skeleton stable. Long fields are **not**
     truncated in this mode.
-  - `raw`: the converted `.docx` markdown body (the artefact the CR
-    parser consumes) for CR-type TDocs. The markdown is loaded from
+  - `raw`: the converted `.docx` markdown body (the artefact the
+    parsers consume) for both CR- and LS-type TDocs. The markdown is loaded from
     `{cache.dir}/markdown/<cache_file>` where `cache_file` is the
     `tdoc_extracts.cache_file` column value derived from
     `tdoc.ftp_url` via `derive_cache_file()`. Requires `python-docx`
     (`pip install doc3gpp[extract]`) when the cache is cold; surfaces a
     friendly error otherwise. When no cached markdown exists, this
     format triggers a fresh `TDocCrService.extract()` to populate the
-    cache + DB. Non-CR-type TDocs (including LS rows) are rejected with
-    a friendly error — use `doc3gpp tdoc parse --from-url <url>
-    --format raw` for LS documents. If the markdown cache file is
+    cache + DB (LS rows route through the LS parser; the sidecar
+    `tdoc_cr_ls_details` + `tdoc_extracts` row are written). If the markdown cache file is
     missing or unreadable, the error message is:
     `Markdown cache for TDoc '<tdoc>' is empty or unreadable (cache_file: <cache_file>, cache_dir: <dir>)`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
@@ -865,16 +865,17 @@ Purpose:
   unchanged — only the storage fan-out is wider. Wraps the Phase 6
   `TDocCrService.extract_many` for batch CLI use.
 
-  LS rows (a `tdocs.type` of `LS`) are **rejected** in DB mode: the
-  service resolves the LS parser and raises
-  `TDocTypeUnsupportedError` (`{type!r} (DB-mode LS extraction is not
-  yet supported; use 'tdoc parse --from-url' for LS rows)`). Use the
-  direct mode below for LS documents.
+  LS rows (a `tdocs.type` of `LS`) are parsed through the same
+  DB-mode pipeline: the service resolves the LS parser, runs
+  `parse_ls` on the converted markdown, and writes the
+  `tdoc_cr_ls_details` sidecar (plus the `tdoc_extracts` cache
+  metadata row). A single batch may mix CR and LS rows; the
+  completion summary counts them together (see below).
 
 Every flag is a **filter** — the candidate set is the intersection of
-every supplied predicate, and CR-type is the implicit default (the
-extractor only handles CR TDocs; LS rows match only with an explicit
-`--type LS` and then fail the LS guard above). The two batch-style selectors from
+every supplied predicate. There is no implicit type default: every
+`tdocs.type` value (CR, LS, LS in, LS out, …) is a candidate, and an
+explicit `--type` narrows via SQL `LIKE`. The two batch-style selectors from
 earlier releases (`--tdoc-id` as an integer PK and the mutual
 exclusivity with `--meeting-id`) have been removed; `--tdoc` is now a
 LIKE pattern on `tdoc_id` that can be freely combined with
@@ -911,9 +912,10 @@ Options:
 - `--title PATTERN`: filter on `title`.
 - `--ftp-url PATTERN`: filter on `ftp_url`.
 - `--source PATTERN`: filter on source / contributor.
-- `--type PATTERN`: filter on document `type`. Defaults to `CR`
-  when no type filter is supplied (the extractor only handles CR
-  TDocs); pass an explicit `--type` to override.
+- `--type PATTERN`: filter on document `type` (e.g. `CR`, `LS`,
+  `LS in`, `LS out`). No default — every `tdocs.type` value is a
+  candidate when the flag is absent; an explicit value narrows the
+  set via SQL `LIKE` (see [Filter syntax](#filter-syntax)).
 - `--release PATTERN`: filter on the TDoc's `release` (e.g.
   `Rel-18`). Accepts the same rich-filter grammar as `--spec`.
 - `--version PATTERN`: filter on `version` (e.g. `18.1.0`).
@@ -1008,9 +1010,10 @@ table is truncated to the first 20 rows per group with an explicit
 After filters resolve, the CLI:
 
 1. In normal mode, the SQL query already excludes rows that have a
-   `tdoc_cr_cover_page` entry, so the candidate set consists only of
-   **pending** TDocs. With `--force`, the exclusion is disabled and
-   every match (including already-parsed rows) becomes a candidate.
+   `tdoc_cr_cover_page` **or** `tdoc_cr_ls_details` entry, so the
+   candidate set consists only of **pending** TDocs. With `--force`,
+   the exclusion is disabled and every match (including already-parsed
+   rows) becomes a candidate.
 2. Prints the candidate table with the column set above. If the
    candidate set is empty, prints `Nothing to extract — every match is
    already parsed.` and exits `0` (successful no-op).
@@ -1018,9 +1021,16 @@ After filters resolve, the CLI:
    (`y/N`, default `N`). A declined prompt exits 0 with `Aborted.`
    — no work happened, so non-zero is misleading.
 4. Dispatches the batch through `TDocCrService.extract_many`.
-5. Prints a completion summary on five counters:
+5. Prints a completion summary: a single flat line
+   `Extracted N TDoc(s); M failed; K skipped.` with the CR and LS
+   parses counted together (no per-type split). When LS rows
+   succeeded, an `LS extracted [count=N]:` group follows the flat
+   line with the slim per-row column set
+   (`tdoc_id`, `meeting_name`, `title`, `variant`, `parser_version`).
+   Then come the six counters:
    - `Skipped (exceeds max_tdoc_size_kb): N`
    - `Skipped (already parsed before this run): N`
+   - `Skipped (not yet on FTP): N`
    - `Re-parsed (with --force): N`
    - `Newly parsed: N`
    - `Failures: N`
@@ -1111,7 +1121,8 @@ Behavior:
 - When `python-docx` is not installed the entire batch fails before any
   per-id work happens — the CLI prints an install hint and exits 1.
 - Output per id: `<tdoc_id>: spec=<spec> cr_num=<cr_num> title=<title>`
-  on success; `<tdoc_id>: FAILED - {ExceptionClassName}: {exc}` on
+  on CR success; `<tdoc_id>: variant=<variant> title=<title>` on LS
+  success (the LS result has no CR fields); `<tdoc_id>: FAILED - {ExceptionClassName}: {exc}` on
   failure (e.g. `R5s260010: FAILED - TDocNotFoundError: TDoc 'R5s260010'
   is not stored in the tdocs table; run \`doc3gpp tdoc sync\` first`).
   The class name tells the operator *which* step failed (type guard,
@@ -1139,16 +1150,16 @@ pip install "doc3gpp[extract]"
 Examples:
 
 ```bash
-# Extract a single CR.
+# Extract a single TDoc (type auto-detected from the stored row — CR or LS).
 doc3gpp tdoc parse --tdoc R5s260009
 
 # Wildcard pattern — any TDoc id starting with the 2026 source prefix.
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes
 
-# Parse every not-yet-parsed CR-type TDoc under meeting 85434.
+# Parse every not-yet-parsed TDoc under meeting 85434 (any type).
 doc3gpp tdoc parse --meeting-id 85434
 
-# Re-parse every CR-type TDoc under the meeting (DB row + markdown
+# Re-parse every TDoc under the meeting (DB row + markdown
 # cache bypassed; on-disk zip cache is still consulted first).
 doc3gpp tdoc parse --meeting-id 85434 --force
 
@@ -1195,9 +1206,10 @@ Options:
   database, but when `sync.auto_sync` is enabled a single file first
   triggers auto-sync for the TDoc id extracted from its filename (and
   the parser registry confirms the stored `tdocs.type` / `tdocs.source`
-  to dispatch — LS rows parse as LS in raw-markdown mode only; real
-  local files still hit the CR family and fail with
-  `CRHeaderMissingError`, see the FK matrix below; a row still
+  to dispatch — LS rows parse as LS in raw-markdown mode; real local
+  `.docx` / `.zip` files are sniffed via `is_ls_header_present` so an
+  LS-shaped body routes to `ThreeGPPLSParser.parse_ls` regardless of
+  the stored type, see the FK matrix below; a row still
   missing after the sync is assumed CR, and an uninitialized database
   degrades the same way instead of crashing the parse).
 - `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.

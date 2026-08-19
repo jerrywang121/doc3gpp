@@ -225,7 +225,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json({"meeting": render.to_jsonable(meeting)})
 
     # ---- TDocs ----------------------------------------------------
-    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, ls_to, ls_cc, original_ls, tdoc_for, abstract, secretary_remarks, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def list_tdocs(
         limit: Annotated[int, Field(description="Maximum number of tdocs to return.")] = 50,
@@ -246,6 +246,12 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         version: Annotated[str | None, Field(description="Rich filter on the version (e.g. '17.1.0').")] = None,
         cr_num: Annotated[str | None, Field(description="Rich filter on the CR number.")] = None,
         cr_pack: Annotated[str | None, Field(description="Rich filter on the CR pack.")] = None,
+        ls_to: Annotated[str | None, Field(description="Rich filter on ls_to.")] = None,
+        ls_cc: Annotated[str | None, Field(description="Rich filter on ls_cc.")] = None,
+        original_ls: Annotated[str | None, Field(description="Rich filter on original_ls.")] = None,
+        tdoc_for: Annotated[str | None, Field(description="Rich filter on tdoc_for.")] = None,
+        abstract: Annotated[str | None, Field(description="Rich filter on abstract.")] = None,
+        secretary_remarks: Annotated[str | None, Field(description="Rich filter on secretary_remarks.")] = None,
     ) -> str:
         rows = services.tdoc.list_recent_with_meeting(
             limit=limit,
@@ -266,6 +272,12 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             version=version,
             cr_num=cr_num,
             cr_pack=cr_pack,
+            ls_to=ls_to,
+            ls_cc=ls_cc,
+            original_ls=original_ls,
+            tdoc_for=tdoc_for,
+            abstract=abstract,
+            secretary_remarks=secretary_remarks,
         )
         return _to_json(render.tdoc_rows(rows, _TDOC_FIELDS))
 

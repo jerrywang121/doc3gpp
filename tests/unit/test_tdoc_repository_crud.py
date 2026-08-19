@@ -141,3 +141,46 @@ def test_reservation_date_orm_column_is_date_type() -> None:
 
     assert isinstance(TDocORM.reservation_date.type, Date)
     assert isinstance(TDocORM.uploaded_date.type, Date)
+
+
+# ---------------------------------------------------------------------------
+# XLSX metadata fields round-trip through the ORM.
+# ---------------------------------------------------------------------------
+
+
+def test_round_trip_preserves_xlsx_metadata_fields() -> None:
+    repo = _make_repo()
+
+    original = TDoc(
+        tdoc_id="R5-260001",
+        title="Doc A",
+        ftp_url="tsg_ran/WG5_RL5/TSGR5_124/R5-260001.zip",
+        source="Acme",
+        type="LS",
+        status="Noted",
+        release="Rel-18",
+        spec="38.331",
+        version="18.1.0",
+        cr_num="3790",
+        cr_pack="RP-220001",
+        related_wis="NR_ext",
+        tdoc_for="Information",
+        abstract="TL;DR here.",
+        secretary_remarks="Sec notes.",
+        ls_to="RAN2",
+        ls_cc="RAN3, RAN4",
+        original_ls="C1-260001",
+    )
+
+    repo.upsert(original)
+    fetched = repo.get_by_id("R5-260001")
+    assert fetched is not None
+    assert fetched.tdoc_for == "Information"
+    assert fetched.abstract == "TL;DR here."
+    assert fetched.secretary_remarks == "Sec notes."
+    assert fetched.ls_to == "RAN2"
+    assert fetched.ls_cc == "RAN3, RAN4"
+    assert fetched.original_ls == "C1-260001"
+    # Untouched columns still round-trip.
+    assert fetched.title == "Doc A"
+    assert fetched.cr_pack == "RP-220001"

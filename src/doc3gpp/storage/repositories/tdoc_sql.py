@@ -81,6 +81,12 @@ class SQLAlchemyTDocRepository:
         target.related_wis = tdoc.related_wis
         target.cr_num = tdoc.cr_num
         target.cr_pack = tdoc.cr_pack
+        target.tdoc_for = tdoc.tdoc_for
+        target.abstract = tdoc.abstract
+        target.secretary_remarks = tdoc.secretary_remarks
+        target.ls_to = tdoc.ls_to
+        target.ls_cc = tdoc.ls_cc
+        target.original_ls = tdoc.original_ls
 
     def list(
         self,
@@ -326,6 +332,12 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
         related_wis=row.related_wis,
         cr_num=row.cr_num,
         cr_pack=row.cr_pack,
+        tdoc_for=row.tdoc_for,
+        abstract=row.abstract,
+        secretary_remarks=row.secretary_remarks,
+        ls_to=row.ls_to,
+        ls_cc=row.ls_cc,
+        original_ls=row.original_ls,
     )
 
 

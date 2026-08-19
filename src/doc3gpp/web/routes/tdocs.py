@@ -23,9 +23,18 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from markdown_it import MarkdownIt
 
 from doc3gpp.models.tdoc import TDoc
-from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRepos
+from doc3gpp.models.tdoc_show import (
+    TDocShowRecord,
+    TDocShowRecordByUrl,
+    TDocShowRepos,
+)
+from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.cache_keys import derive_cache_file
-from doc3gpp.services.tdoc_cr_service import TDocNotFoundError, _read_cached_markdown_path
+from doc3gpp.services.tdoc_cr_service import (
+    TDocNotFoundError,
+    TDocUrlNotFoundError,
+    _read_cached_markdown_path,
+)
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
@@ -264,6 +273,60 @@ async def list_tdocs(
                 "uploaded_date": uploaded_date or "",
                 "limit": parsed_limit,
             },
+        },
+    )
+
+
+@router.get("/by-url", include_in_schema=False)
+async def show_tdoc_by_url(
+    request: Request,
+    ftp_url: str | None = Query(default=None),
+    format: str | None = Query(default=None, alias="format"),
+    file_repo: Any = Depends(get_tdoc_file_repo),
+    settings: Settings = Depends(get_settings),
+) -> Any:
+    """Render ``tdoc_show.html`` polymorphed on URL mode, or return JSON.
+
+    The URL-anchored read; mirrors ``doc3gpp tdoc show --ftp-url``.
+    Auto-sync is never triggered because there is no parent TDoc /
+    meeting to anchor a sync on (CLI parity).
+    """
+    if not ftp_url:
+        raise InvalidFilterError("ftp_url query param is required")
+    normalised = normalize_ftp_path(ftp_url)
+    if not normalised:
+        raise InvalidFilterError(
+            f"ftp_url {ftp_url!r} normalised to an empty path"
+        )
+
+    repos = _build_show_repos(request, file_repo)
+    record = TDocShowRecordByUrl.from_ftp_url(normalised, repos)
+
+    if (
+        record.tdoc is None
+        and record.cover is None
+        and record.extracted_at is None
+        and record.ttcn is None
+        and record.changes is None
+        and not record.files
+    ):
+        raise TDocUrlNotFoundError(normalised)
+
+    if format == "json":
+        return JSONResponse(content=to_jsonable(record))
+
+    has_cached_zip = False
+    if record.ftp_url:
+        cache_file = derive_cache_file(record.ftp_url)
+        has_cached_zip = (Path(settings.cache.dir) / "zips" / cache_file).exists()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="tdoc_show.html",
+        context={
+            "active_nav": "tdocs",
+            "record": record,
+            "has_cached_zip": has_cached_zip,
         },
     )
 

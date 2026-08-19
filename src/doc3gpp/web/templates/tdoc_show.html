@@ -1,44 +1,63 @@
 {% extends "base.html" %}
-{% block title %}doc3gpp · tdoc {{ record.tdoc.tdoc_id }}{% endblock %}
+{% if record.tdoc %}
+  {% set anchor = record.tdoc.tdoc_id %}
+  {% set anchor_kind = "tdoc" %}
+{% else %}
+  {% set anchor = record.ftp_url %}
+  {% set anchor_kind = "ftp_url" %}
+{% endif %}
+{% block title %}doc3gpp · {{ anchor_kind }} {{ anchor }}{% endblock %}
 {% block content %}
-  <h1>TDoc <code>{{ record.tdoc.tdoc_id }}</code></h1>
+  <h1>TDoc <code>{{ anchor }}</code></h1>
   <p class="meta">
-    {% if record.tdoc.title %}<span>{{ record.tdoc.title }}</span>{% endif %}
+    {% if record.tdoc and record.tdoc.title %}<span>{{ record.tdoc.title }}</span>{% endif %}
   </p>
 
-  <section class="card">
-    <h2>TDoc</h2>
-    <dl class="kv">
-      <dt>Meeting ID</dt><dd>{{ record.tdoc.meeting_id or '-' }}</dd>
-      <dt>Type</dt><dd>{{ record.tdoc.type or '-' }}</dd>
-      <dt>Status</dt><dd>{{ record.tdoc.status or '-' }}</dd>
-      <dt>Spec</dt><dd>{{ record.tdoc.spec or '-' }}</dd>
-      <dt>Version</dt><dd>{{ record.tdoc.version or '-' }}</dd>
-      <dt>Release</dt><dd>{{ record.tdoc.release or '-' }}</dd>
-      <dt>CR Num</dt><dd>{{ record.tdoc.cr_num or '-' }}</dd>
-      <dt>CR Cat</dt><dd>{{ record.tdoc.cr_cat or '-' }}</dd>
-      <dt>FTP URL</dt>
-      <dd>
-        {% if record.tdoc.ftp_url %}
-          {% if has_cached_zip %}
-            <a href="/tdocs/{{ record.tdoc.tdoc_id }}/download"><code>{{ record.tdoc.ftp_url }}</code></a>
-          {% else %}
-            <a href="https://www.3gpp.org/ftp/{{ record.tdoc.ftp_url }}"><code>{{ record.tdoc.ftp_url }}</code></a>
-          {% endif %}
-        {% else %}-{% endif %}
-      </dd>
-      <dt>Uploaded</dt><dd>{{ record.tdoc.uploaded_date.isoformat() if record.tdoc.uploaded_date else '-' }}</dd>
-      <dt>Related WIs</dt><dd>{{ record.tdoc.related_wis or '-' }}</dd>
-    </dl>
-    {% if record.tdoc.ftp_url %}
-      <p>
-        <a class="btn" href="/tdocs/{{ record.tdoc.tdoc_id }}/content?format=html">View as HTML</a>
-        <a class="btn" href="/tdocs/{{ record.tdoc.tdoc_id }}/content?format=markdown">Download markdown</a>
-      </p>
-    {% endif %}
-  </section>
+  {% if record.tdoc %}
+    <section class="card">
+      <h2>TDoc</h2>
+      <dl class="kv">
+        <dt>Meeting ID</dt><dd>{{ record.tdoc.meeting_id or '-' }}</dd>
+        <dt>Type</dt><dd>{{ record.tdoc.type or '-' }}</dd>
+        <dt>Status</dt><dd>{{ record.tdoc.status or '-' }}</dd>
+        <dt>Spec</dt><dd>{{ record.tdoc.spec or '-' }}</dd>
+        <dt>Version</dt><dd>{{ record.tdoc.version or '-' }}</dd>
+        <dt>Release</dt><dd>{{ record.tdoc.release or '-' }}</dd>
+        <dt>CR Num</dt><dd>{{ record.tdoc.cr_num or '-' }}</dd>
+        <dt>CR Cat</dt><dd>{{ record.tdoc.cr_cat or '-' }}</dd>
+        <dt>FTP URL</dt>
+        <dd>
+          {% if record.tdoc.ftp_url %}
+            {% if has_cached_zip %}
+              <a href="/tdocs/{{ record.tdoc.tdoc_id }}/download"><code>{{ record.tdoc.ftp_url }}</code></a>
+            {% else %}
+              <a href="https://www.3gpp.org/ftp/{{ record.tdoc.ftp_url }}"><code>{{ record.tdoc.ftp_url }}</code></a>
+            {% endif %}
+          {% else %}-{% endif %}
+        </dd>
+        <dt>Uploaded</dt><dd>{{ record.tdoc.uploaded_date.isoformat() if record.tdoc.uploaded_date else '-' }}</dd>
+        <dt>Related WIs</dt><dd>{{ record.tdoc.related_wis or '-' }}</dd>
+      </dl>
+      {% if record.tdoc.ftp_url %}
+        <p>
+          <a class="btn" href="/tdocs/{{ record.tdoc.tdoc_id }}/content?format=html">View as HTML</a>
+          <a class="btn" href="/tdocs/{{ record.tdoc.tdoc_id }}/content?format=markdown">Download markdown</a>
+        </p>
+      {% endif %}
+    </section>
+  {% else %}
+    <section class="card placeholder">
+      <h2>TDoc</h2>
+      <p>No parent tdocs row matches this URL. The URL still surfaces in <code>tdoc_cr_cover_page</code> / <code>tdoc_cr_ttcn_details</code> / <code>tdoc_files</code> because the upstream document appeared in a sync but no parent TDoc row was stored.</p>
+      {% if record.ftp_url %}
+        <p>
+          <a class="btn" href="https://www.3gpp.org/ftp/{{ record.ftp_url }}">Open on 3GPP FTP</a>
+        </p>
+      {% endif %}
+    </section>
+  {% endif %}
 
-  {% if record.tdoc.ftp_url %}
+  {% if record.tdoc and record.tdoc.ftp_url %}
     <section class="card">
       <h2>Parse</h2>
       <form
@@ -83,7 +102,11 @@
   {% else %}
     <section class="card placeholder">
       <h2>Cover page</h2>
-      <p>Not yet extracted. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code> to populate.</p>
+      {% if record.tdoc %}
+        <p>Not yet extracted. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code> to populate.</p>
+      {% else %}
+        <p>Not yet extracted. Run <code>doc3gpp tdoc parse --from-url {{ record.ftp_url }}</code> to populate.</p>
+      {% endif %}
     </section>
   {% endif %}
 
@@ -163,7 +186,11 @@
   {% else %}
     <section class="card placeholder">
       <h2>Auxiliary files</h2>
-      <p>No auxiliary files attached.</p>
+      {% if record.tdoc %}
+        <p>No auxiliary files attached.</p>
+      {% else %}
+        <p>No auxiliary files match this URL. Run <code>doc3gpp tdoc parse --from-url {{ record.ftp_url }}</code> to populate auxiliary rows.</p>
+      {% endif %}
     </section>
   {% endif %}
 

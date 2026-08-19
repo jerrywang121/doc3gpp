@@ -178,6 +178,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
 | GET | `/tdocs/{id}/content` | Parsed markdown/HTML content (`?format=markdown\|html`). 404 `cache_miss` with a hint when unparsed. |
 | GET | `/tdocs/{id}/download` | Download the cached source zip (404 `cache_miss` with a hint when unparsed). |
+| GET | `/tdocs/by-url` | URL-anchored TDoc show (`?ftp_url=<url>`; HTML or JSON). 404 when the URL matches no row in any of the six URL-keyed tables. |
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
@@ -234,6 +235,14 @@ The TDoc detail page links the FTP URL field to the cached source zip
 `https://www.3gpp.org/ftp/{ftp_url}`. The TTCN section lists the
 `changed_functions` aggregate when present, and auxiliary files link to
 their FTP locations.
+
+The same template (`tdoc_show.html`) renders in URL-anchored mode
+when invoked by `GET /tdocs/by-url?ftp_url=<url>`: the TDoc card is
+replaced with a "no parent tdocs row" placeholder when no parent
+TDoc matches, the Parse card is omitted (no parent TDoc to filter
+on), and the FTP URL field links directly to the 3GPP FTP site.
+Cover / TTCN / auxiliary-files cards render identically to the
+`tdoc_id`-anchored view.
 
 The TDoc detail page renders an additional **XLSX metadata** panel
 when any of the six new `tdocs` columns (`tdoc_for` / `abstract` /
@@ -338,7 +347,11 @@ bootstrap — there is no migration step.
 The MCP endpoint is mounted at `/mcp` whenever `server.enabled` and
 `mcp.enabled` are both true. The transport is selected by `[mcp] transport`:
 
-- `streamable_http` (default) — a single POST endpoint at `/mcp`.
+- `streamable_http` (default) — a single POST endpoint at `/mcp`, answered
+  with a plain `application/json` body (the mode every modern MCP client,
+  including the TypeScript SDK, expects; the legacy SSE-streamed response
+  is rejected by those clients with "Legacy MCP SSE endpoints are not
+  supported").
 - `sse` — the legacy two-endpoint protocol: `GET /mcp/sse` (event stream)
   and `POST /mcp/messages/` (client→server messages).
 
@@ -348,12 +361,27 @@ transport-security layer otherwise rejects cross-origin requests with a
 403 "Invalid Origin header". The default allows `http://127.0.0.1` and
 `http://localhost`. Set `allowed_origins = []` to disable the origin check.
 
+Chrome extensions send `Origin: chrome-extension://<extension-id>`, which
+is never in the defaults — add the extension's id to `allowed_origins`
+(e.g. `"chrome-extension://jfgfiigpkhlkbnfnbobbkinehhfdhndo"`). Some
+clients surface the resulting 403 as the misleading "Legacy MCP SSE
+endpoints are not supported" error; when you see that, check the server
+log for an `Invalid Origin header` warning before touching the transport.
+
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
 It exposes 24 tools:
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
 `get_spec`, `search_tdocs`, `semantic_search_tdocs`.
+
+`get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
+`ftp_url` (a 3GPP FTP URL or relative path); when both are supplied
+`ftp_url` wins and `tdoc_id` is ignored, and an invalid-params error
+is raised only when neither is supplied. The URL mode surfaces every
+row across the six URL-keyed tables whose `ftp_url` matches; auto-sync
+is never triggered (no parent TDoc / meeting to anchor on). A
+`tdoc_url_not_found` error is raised when the URL resolves to no rows.
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,

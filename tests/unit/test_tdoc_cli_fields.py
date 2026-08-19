@@ -29,6 +29,8 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
         source=None, spec=None, wi=None, title=None, cr_cat=None,
         status=None, tdoc_type=None,
         revision_of=None, revised_to=None, ftp_url=None, uploaded_date=None,
+        ls_to=None, ls_cc=None, original_ls=None,
+        tdoc_for=None, abstract=None, secretary_remarks=None,
         **_kwargs,
     ):
         observed_filters.update({
@@ -47,6 +49,12 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
             "revised_to": revised_to,
             "ftp_url": ftp_url,
             "uploaded_date": uploaded_date,
+            "ls_to": ls_to,
+            "ls_cc": ls_cc,
+            "original_ls": original_ls,
+            "tdoc_for": tdoc_for,
+            "abstract": abstract,
+            "secretary_remarks": secretary_remarks,
         })
         return sample
 
@@ -109,6 +117,23 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     assert observed_filters["revised_to"] == "R5s260100"
     assert observed_filters["ftp_url"] == "tsg_ran/%"
     assert observed_filters["uploaded_date"] == ">= '2026-01-01'"
+
+    # XLSX-metadata filters route through the same rich-filter grammar.
+    runner.invoke(app, [
+        "tdoc", "list",
+        "--ls-to", "RAN2",
+        "--ls-cc", "!%RAN3%",
+        "--original-ls", "C1-%",
+        "--for", "Information",
+        "--abstract", "%TL;DR%",
+        "--secretary-remarks", "not-null",
+    ])
+    assert observed_filters["ls_to"] == "RAN2"
+    assert observed_filters["ls_cc"] == "!%RAN3%"
+    assert observed_filters["original_ls"] == "C1-%"
+    assert observed_filters["tdoc_for"] == "Information"
+    assert observed_filters["abstract"] == "%TL;DR%"
+    assert observed_filters["secretary_remarks"] == "not-null"
 
 
 def test_cli_tdoc_list_forwards_tdoc_pattern(monkeypatch):

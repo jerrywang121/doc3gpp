@@ -305,6 +305,7 @@ async def show_tdoc_by_url(
     if (
         record.tdoc is None
         and record.cover is None
+        and record.extracted_at is None
         and record.ttcn is None
         and record.changes is None
         and not record.files

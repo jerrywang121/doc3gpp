@@ -1017,9 +1017,11 @@ def test_mcp_get_tdoc_by_url_matches_http_route(sqlite_env) -> None:
         )
     )
     with TestClient(app) as client:
-        http_payload = client.get(
+        http_response = client.get(
             "/tdocs/by-url", params={"ftp_url": url, "format": "json"}
-        ).json()
+        )
+        assert http_response.status_code == 200
+        http_payload = http_response.json()
 
         async def call(name: str, args: dict):
             result = await server.call_tool(name, args)

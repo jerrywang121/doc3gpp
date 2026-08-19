@@ -306,7 +306,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             Field(
                 description=(
                     "3GPP FTP URL (full URL or relative path) — surfaces every row "
-                    "across the four URL-keyed tables whose ftp_url matches. "
+                    "across the six URL-keyed tables whose ftp_url matches. "
                     "Takes precedence over tdoc_id when both are supplied."
                 )
             ),
@@ -357,6 +357,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             if (
                 record.tdoc is None
                 and record.cover is None
+                and record.extracted_at is None
                 and record.ttcn is None
                 and record.changes is None
                 and not record.files

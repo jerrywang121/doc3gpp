@@ -102,7 +102,11 @@
   {% else %}
     <section class="card placeholder">
       <h2>Cover page</h2>
-      <p>Not yet extracted. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code> to populate.</p>
+      {% if record.tdoc %}
+        <p>Not yet extracted. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code> to populate.</p>
+      {% else %}
+        <p>Not yet extracted. Run <code>doc3gpp tdoc parse --from-url {{ record.ftp_url }}</code> to populate.</p>
+      {% endif %}
     </section>
   {% endif %}
 

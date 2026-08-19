@@ -3039,13 +3039,14 @@ def test_show_tdoc_by_url_parse_card_omitted_in_url_mode(
     assert "id=\"parse-form\"" not in response.text
 
 
-def test_show_tdoc_by_url_404_when_only_extracted_at_present(
+def test_show_tdoc_by_url_lone_extracted_at_renders(
     client: TestClient, sqlite_env: Any,
 ) -> None:
-    """A lone ``tdoc_extracts`` row (extracted_at only) still raises 404.
+    """A lone ``tdoc_extracts`` row (extracted_at only) renders 200.
 
-    The 404 rule is "every of tdoc / cover / ttcn / changes / files
-    is empty" — a lone ``extracted_at`` is not a meaningful hit.
+    The 404 rule is "every of tdoc / cover / ttcn / changes / files /
+    extracted_at is empty" — a lone ``extracted_at`` keeps the record
+    alive, matching the CLI's ``tdoc show --ftp-url`` all-empty check.
     The parent ``tdocs`` row exists but its ``ftp_url`` does not match
     the queried URL.
     """
@@ -3073,5 +3074,50 @@ def test_show_tdoc_by_url_404_when_only_extracted_at_present(
         )
     )
     response = client.get("/tdocs/by-url", params={"ftp_url": url})
-    assert response.status_code == 404
-    assert response.json()["error"] == "tdoc_url_not_found"
+    assert response.status_code == 200
+    assert "<h2>Extracted at</h2>" in response.text
+
+
+def test_show_tdoc_by_url_cover_placeholder_uses_from_url_hint(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """URL mode with no cover row renders the ``--from-url`` hint, not ``--tdoc``.
+
+    When ``record.tdoc`` is None (no parent ``tdocs`` row matches the
+    URL) the cover placeholder must not render an empty ``--tdoc`` id;
+    the hint falls back to ``doc3gpp tdoc parse --from-url <url>``. The
+    record stays alive via a ``tdoc_files`` row.
+    """
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.web.deps import get_tdoc_file_repo
+
+    create_schema()
+    url = "R5/26.001/R5s260005.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260005", ftp_url="R5/unrelated/parent.zip")
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5s260005",
+                type="revision",
+                file="R5s260005r1.zip",
+                ftp_url=url,
+            ),
+        ],
+    )
+    app = client.app
+    app.dependency_overrides[get_tdoc_file_repo] = (
+        lambda: SQLAlchemyTDocFileRepository()
+    )
+    try:
+        response = client.get("/tdocs/by-url", params={"ftp_url": url})
+    finally:
+        app.dependency_overrides.pop(get_tdoc_file_repo, None)
+    assert response.status_code == 200
+    assert "doc3gpp tdoc parse --from-url" in response.text
+    assert "--tdoc " not in response.text

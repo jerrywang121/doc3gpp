@@ -240,7 +240,7 @@ The same template (`tdoc_show.html`) renders in URL-anchored mode
 when invoked by `GET /tdocs/by-url?ftp_url=<url>`: the TDoc card is
 replaced with a "no parent tdocs row" placeholder when no parent
 TDoc matches, the Parse card is omitted (no parent TDoc to filter
-on), and the FTP URL field links directly to the 3GPP FTP root.
+on), and the FTP URL field links directly to the 3GPP FTP site.
 Cover / TTCN / auxiliary-files cards render identically to the
 `tdoc_id`-anchored view.
 
@@ -369,8 +369,8 @@ It exposes 24 tools:
 `ftp_url` wins and `tdoc_id` is ignored, and an invalid-params error
 is raised only when neither is supplied. The URL mode surfaces every
 row across the six URL-keyed tables whose `ftp_url` matches; auto-sync
-is never triggered (no parent TDoc / meeting to anchor on). 404 when
-the URL resolves to no rows.
+is never triggered (no parent TDoc / meeting to anchor on). A
+`tdoc_url_not_found` error is raised when the URL resolves to no rows.
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,

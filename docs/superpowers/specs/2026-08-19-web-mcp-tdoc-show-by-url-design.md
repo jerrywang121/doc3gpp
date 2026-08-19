@@ -289,12 +289,13 @@ New tests in `show_tdoc_by_url`:
 - `test_show_tdoc_by_url_no_auto_sync` — set `settings.sync.auto_sync=True`,
   mount a spy on `trigger_auto_sync`; assert it is not called (URL
   mode never triggers auto-sync).
-- `test_show_tdoc_by_url_404_when_only_extracted_at_present` —
+- `test_show_tdoc_by_url_lone_extracted_at_renders` —
   seed only a `tdoc_extracts` row (so `extracted_at` is populated
   but `tdoc`, `cover`, `ttcn`, `changes`, `files` are all `None`/`[]`).
-  The route must still raise `TDocUrlNotFoundError` → 404: the
-  "all six sources empty" rule means a lone `extracted_at` is not
-  a meaningful hit.
+  The route must render 200 with the "Extracted at" card: the
+  "all six sources empty" rule includes `extracted_at`, so a lone
+  `extracted_at` keeps the record alive (CLI parity — the CLI's
+  `_tdoc_show_by_ftp_url` all-empty check includes `extracted_at`).
 
 ### Unit — `tests/unit/web/test_mcp_server.py`
 

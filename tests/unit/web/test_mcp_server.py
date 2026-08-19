@@ -213,6 +213,7 @@ def test_mcp_get_tdoc_rejects_neither(sqlite_env) -> None:
 
     with pytest.raises(MCPError) as exc_info:
         asyncio.run(run())
+    assert exc_info.value.code == -32602
     assert "exactly one of tdoc_id or ftp_url" in exc_info.value.message
 
 
@@ -229,6 +230,7 @@ def test_mcp_get_tdoc_by_url_404_on_no_rows(sqlite_env) -> None:
 
     with pytest.raises(MCPError) as exc_info:
         asyncio.run(run())
+    assert exc_info.value.code == -32004
     assert "no stored rows match ftp_url" in exc_info.value.message.lower()
 
 

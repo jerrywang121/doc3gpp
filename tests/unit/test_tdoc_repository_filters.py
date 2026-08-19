@@ -53,6 +53,7 @@ def insert_data(session):
             cr_num="3790",
             cr_pack="RP-220001",
             related_wis="NR_ext",
+            abstract="RedCap CR abstract",
         ),
         TDocORM(
             tdoc_id="R5-260002",
@@ -613,3 +614,80 @@ def test_list_filter_combined_release_and_cr_num(repo):
     res = repo.list(release="Rel-18", cr_num="3790")
     assert len(res) == 1
     assert res[0].tdoc_id == "R5-260001"
+
+
+# ---------------------------------------------------------------------------
+# New XLSX-metadata text-column filters: ls_to / ls_cc / original_ls /
+# tdoc_for / abstract / secretary_remarks. Each accepts the full rich
+# grammar (LIKE / null / not-null / NOT LIKE) shared with the other text
+# columns. The fixture seeds abstract on R5-260001; the other five
+# columns are NULL on all fixture rows, so each test adds its own row.
+# ---------------------------------------------------------------------------
+
+
+def test_filter_by_abstract_like_pattern(repo):
+    """`abstract="%RedCap%"` matches the fixture row whose abstract
+    contains ``RedCap`` (R5-260001)."""
+    res = repo.list(abstract="%RedCap%")
+    assert {r.tdoc_id for r in res} == {"R5-260001"}
+
+
+def test_filter_by_tdoc_for_exact_match(repo):
+    """`tdoc_for="Approval"` matches the added row; `tdoc_for="null"`
+    excludes it (the other fixture rows have NULL tdoc_for)."""
+    with repo._session_factory() as session:
+        session.add(TDocORM(
+            tdoc_id="R5-260099", title="Approval doc", source="Acme",
+            type="LS", spec="38.331", version="17.1.0", tdoc_for="Approval",
+        ))
+        session.commit()
+    rows = repo.list(tdoc_for="Approval")
+    assert {r.tdoc_id for r in rows} == {"R5-260099"}
+    rows_none = repo.list(tdoc_for="null")
+    assert "R5-260099" not in {r.tdoc_id for r in rows_none}
+
+
+def test_filter_by_ls_to_with_bang_pattern(repo):
+    """`ls_to="!%RAN2%"` emits ``NOT LIKE '%RAN2%'`` and excludes the
+    added row whose ls_to is ``RAN2``."""
+    with repo._session_factory() as session:
+        session.add(TDocORM(
+            tdoc_id="R5-260099", title="x", ls_to="RAN2",
+        ))
+        session.commit()
+    rows = repo.list(ls_to="!%RAN2%")
+    assert "R5-260099" not in {r.tdoc_id for r in rows}
+
+
+def test_filter_by_ls_cc_null_match(repo):
+    """`ls_cc="not-null"` matches only the added row with a populated
+    ls_cc; the other added row (NULL ls_cc) and the fixture rows are
+    excluded."""
+    with repo._session_factory() as session:
+        session.add(TDocORM(tdoc_id="R5-260099", title="x"))
+        session.add(TDocORM(tdoc_id="R5-260100", title="y", ls_cc="RAN3"))
+        session.commit()
+    assert {r.tdoc_id for r in repo.list(ls_cc="not-null")} == {"R5-260100"}
+
+
+def test_filter_by_original_ls_like(repo):
+    """`original_ls="C1-%"` matches the added row whose original_ls
+    starts with ``C1-``."""
+    with repo._session_factory() as session:
+        session.add(TDocORM(tdoc_id="R5-260099", title="x", original_ls="C1-260001"))
+        session.commit()
+    rows = repo.list(original_ls="C1-%")
+    assert {r.tdoc_id for r in rows} == {"R5-260099"}
+
+
+def test_filter_by_secretary_remarks(repo):
+    """`secretary_remarks="%failing initial registration%"` matches the
+    added row whose secretary_remarks contains that phrase."""
+    with repo._session_factory() as session:
+        session.add(TDocORM(
+            tdoc_id="R5-260099", title="x",
+            secretary_remarks="LS R5-206259 on failing initial registration",
+        ))
+        session.commit()
+    rows = repo.list(secretary_remarks="%failing initial registration%")
+    assert {r.tdoc_id for r in rows} == {"R5-260099"}

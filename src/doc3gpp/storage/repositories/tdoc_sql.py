@@ -110,6 +110,12 @@ class SQLAlchemyTDocRepository:
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        ls_to: str | None = None,
+        ls_cc: str | None = None,
+        original_ls: str | None = None,
+        tdoc_for: str | None = None,
+        abstract: str | None = None,
+        secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
     ) -> list[TDoc]:
         """Return recent TDoc records ordered by descending ``tdoc_id``.
@@ -175,6 +181,12 @@ class SQLAlchemyTDocRepository:
             stmt = _apply_text_filter(stmt, TDocORM.version, version)
             stmt = _apply_text_filter(stmt, TDocORM.cr_num, cr_num)
             stmt = _apply_text_filter(stmt, TDocORM.cr_pack, cr_pack)
+            stmt = _apply_text_filter(stmt, TDocORM.ls_to, ls_to)
+            stmt = _apply_text_filter(stmt, TDocORM.ls_cc, ls_cc)
+            stmt = _apply_text_filter(stmt, TDocORM.original_ls, original_ls)
+            stmt = _apply_text_filter(stmt, TDocORM.tdoc_for, tdoc_for)
+            stmt = _apply_text_filter(stmt, TDocORM.abstract, abstract)
+            stmt = _apply_text_filter(stmt, TDocORM.secretary_remarks, secretary_remarks)
             stmt = _apply_date_filter(stmt, TDocORM.uploaded_date, uploaded_date)
 
             if exclude_parsed:
@@ -260,6 +272,12 @@ class SQLAlchemyTDocRepository:
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        ls_to: str | None = None,
+        ls_cc: str | None = None,
+        original_ls: str | None = None,
+        tdoc_for: str | None = None,
+        abstract: str | None = None,
+        secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its parent meeting's name.
@@ -290,6 +308,12 @@ class SQLAlchemyTDocRepository:
             version=version,
             cr_num=cr_num,
             cr_pack=cr_pack,
+            ls_to=ls_to,
+            ls_cc=ls_cc,
+            original_ls=original_ls,
+            tdoc_for=tdoc_for,
+            abstract=abstract,
+            secretary_remarks=secretary_remarks,
             exclude_parsed=exclude_parsed,
         )
         if not tdocs:

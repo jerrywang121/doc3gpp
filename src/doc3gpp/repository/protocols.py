@@ -93,6 +93,12 @@ class TDocRepository(Protocol):
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        ls_to: str | None = None,
+        ls_cc: str | None = None,
+        original_ls: str | None = None,
+        tdoc_for: str | None = None,
+        abstract: str | None = None,
+        secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
@@ -125,6 +131,16 @@ class TDocRepository(Protocol):
           ``tdoc list`` and ``tdoc parse`` — they accept the same
           ``null`` / ``not-null`` / ``!pattern`` / plain LIKE grammar
           as the other text columns.
+        - ``ls_to``, ``ls_cc``, ``original_ls``, ``tdoc_for``,
+          ``abstract``, ``secretary_remarks``: rich-filter grammar
+          applied to ``tdocs.ls_to`` / ``tdocs.ls_cc`` /
+          ``tdocs.original_ls`` / ``tdocs.tdoc_for`` /
+          ``tdocs.abstract`` / ``tdocs.secretary_remarks``. Same
+          null/not-null/!pattern/LIKE rules as every other text
+          column above. Powers the matching CLI flags on
+          ``tdoc list`` / ``tdoc parse`` and the matching query
+          parameters on the web ``/tdocs`` route / MCP
+          ``list_tdocs``.
         - ``exclude_parsed``: when ``True``, drop every TDoc whose
           ``tdoc_id`` already has a row in ``tdoc_cr_cover_page`` —
           applied in SQL *before* ``ORDER BY ... OFFSET ... LIMIT`` so
@@ -183,6 +199,12 @@ class TDocRepository(Protocol):
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        ls_to: str | None = None,
+        ls_cc: str | None = None,
+        original_ls: str | None = None,
+        tdoc_for: str | None = None,
+        abstract: str | None = None,
+        secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its meeting's display name.
@@ -190,7 +212,9 @@ class TDocRepository(Protocol):
         Equivalent to ``list(...)`` plus a ``meetings`` lookup to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
         the meeting name alongside TDoc fields. Accepts the same filters
-        and pagination as :meth:`list` (including ``exclude_parsed``).
+        and pagination as :meth:`list` (including ``exclude_parsed`` and
+        the ``ls_to`` / ``ls_cc`` / ``original_ls`` / ``tdoc_for`` /
+        ``abstract`` / ``secretary_remarks`` rich-filter grammar).
         """
         ...
 

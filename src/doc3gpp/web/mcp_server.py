@@ -286,8 +286,10 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         name="get_tdoc",
         description=(
             "Get a single tdoc by id (or by FTP URL), including its cover-page, "
-            "TTCN sidecar, and extract metadata. Exactly one of `tdoc_id` or "
-            "`ftp_url` must be supplied. In URL mode the response surfaces every "
+            "TTCN sidecar, and extract metadata. Accepts `tdoc_id` and/or "
+            "`ftp_url`; when both are supplied `ftp_url` takes precedence and "
+            "`tdoc_id` is ignored — an error is raised only when neither is "
+            "supplied. In URL mode the response surfaces every "
             "row across tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
             "tdoc_files, and tdoc_extracts whose ftp_url matches; auto-sync is "
             "never triggered."

@@ -364,12 +364,13 @@ It exposes 24 tools:
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
 `get_spec`, `search_tdocs`, `semantic_search_tdocs`.
 
-`get_tdoc` accepts either `tdoc_id` (canonical id, e.g. `R5-260013`)
-or `ftp_url` (a 3GPP FTP URL or relative path) — exactly one of the
-two must be supplied. The URL mode surfaces every row across the
-six URL-keyed tables whose `ftp_url` matches; auto-sync is never
-triggered (no parent TDoc / meeting to anchor on). 404 when the URL
-resolves to no rows.
+`get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
+`ftp_url` (a 3GPP FTP URL or relative path); when both are supplied
+`ftp_url` wins and `tdoc_id` is ignored, and an invalid-params error
+is raised only when neither is supplied. The URL mode surfaces every
+row across the six URL-keyed tables whose `ftp_url` matches; auto-sync
+is never triggered (no parent TDoc / meeting to anchor on). 404 when
+the URL resolves to no rows.
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,

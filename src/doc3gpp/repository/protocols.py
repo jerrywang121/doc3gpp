@@ -138,9 +138,8 @@ class TDocRepository(Protocol):
           ``tdocs.abstract`` / ``tdocs.secretary_remarks``. Same
           null/not-null/!pattern/LIKE rules as every other text
           column above. Powers the matching CLI flags on
-          ``tdoc list`` / ``tdoc parse`` and the matching query
-          parameters on the web ``/tdocs`` route / MCP
-          ``list_tdocs``.
+          ``tdoc list`` and the matching query parameters on the
+          web ``/tdocs`` route / MCP ``list_tdocs``.
         - ``exclude_parsed``: when ``True``, drop every TDoc whose
           ``tdoc_id`` already has a row in ``tdoc_cr_cover_page`` —
           applied in SQL *before* ``ORDER BY ... OFFSET ... LIMIT`` so

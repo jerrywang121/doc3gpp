@@ -176,11 +176,11 @@ async def list_tdocs(
                 + ", ".join(sorted(unknown))
                 + f"; valid: {', '.join(sorted(_TDOC_ALLOWED_FIELDS))}"
             )
-        html_fields = [f for f in fields if f]
+        selected_fields = [f for f in fields if f]
     else:
-        html_fields = list(TDOC_HTML_DEFAULT_FIELDS)
-    if not html_fields:
-        html_fields = list(TDOC_HTML_DEFAULT_FIELDS)
+        selected_fields = None
+    html_fields = selected_fields or list(TDOC_HTML_DEFAULT_FIELDS)
+    json_fields = selected_fields or list(_TDOC_DEFAULT_FIELDS)
 
     rows = service.list_recent_with_meeting(
         limit=parsed_limit,
@@ -212,7 +212,7 @@ async def list_tdocs(
     )
 
     if format == "json":
-        return JSONResponse(content=tdoc_rows(rows, _TDOC_DEFAULT_FIELDS))
+        return JSONResponse(content=tdoc_rows(rows, json_fields))
 
     next_offset = (
         parsed_offset + len(rows) if len(rows) == parsed_limit else None

@@ -410,7 +410,38 @@ def test_web_tdocs_show_renders_xlsx_metadata_panel(sqlite_env, app_with_deps) -
     assert "XLSX metadata" in html
     assert "Information" in html
     assert "RAN2" in html
+    assert "RAN3" in html
+    assert "RAN2#116" in html
     assert "TL;DR here." in html
+    assert "Secretary note." in html
+    assert '<pre class="xlsx-meta-pre">' in html
+    get_engine.cache_clear()
+
+
+def test_web_tdocs_list_xlsx_metadata_fields_opt_in(sqlite_env, app_with_deps) -> None:
+    """``?fields=abstract&format=json`` surfaces the abstract column; the default omits it."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    app, _ = app_with_deps
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", abstract="TL;DR here.")
+    )
+
+    with TestClient(app) as client:
+        default = client.get("/tdocs?format=json")
+        opted = client.get("/tdocs?fields=abstract&format=json")
+    assert default.status_code == 200
+    assert opted.status_code == 200
+    default_rows = default.json()
+    opted_rows = opted.json()
+    assert isinstance(default_rows, list) and default_rows
+    assert isinstance(opted_rows, list) and opted_rows
+    assert "abstract" not in default_rows[0]
+    assert opted_rows[0]["abstract"] == "TL;DR here."
     get_engine.cache_clear()
 
 

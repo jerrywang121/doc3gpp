@@ -915,8 +915,9 @@ Options:
 Every text-column filter above (`--tdoc`, `--meeting`, `--status`,
 `--cr-cat`, `--spec`, `--wi`, `--revision-of`, `--revised-to`,
 `--title`, `--ftp-url`, `--source`, `--type`, `--release`,
-`--version`, `--cr-num`, `--cr-pack`) accepts the same value
-grammar:
+`--version`, `--cr-num`, `--cr-pack`, `--ls-to`, `--ls-cc`,
+`--original-ls`, `--for`, `--abstract`, `--secretary-remarks`)
+accepts the same value grammar:
 
 | Value              | Effect                                                          |
 | ------------------ | --------------------------------------------------------------- |

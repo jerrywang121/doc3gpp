@@ -95,7 +95,10 @@ def test_xlsx_metadata_round_trips_end_to_end(engine):
 
     assert fetched["R5-260002"].tdoc_for == "Approval"
     assert fetched["R5-260002"].ls_to is None   # empty cell
+    assert fetched["R5-260002"].ls_cc is None   # empty cell
+    assert fetched["R5-260002"].original_ls is None  # empty cell
     assert fetched["R5-260002"].abstract is None
+    assert fetched["R5-260002"].secretary_remarks is None  # empty cell
 
 
 def test_cli_tdoc_list_filters_by_xlsx_metadata(engine, monkeypatch):

@@ -46,6 +46,15 @@ class TDoc:
     cr_num: str | None = None
     # TSG CR Pack value from XLSX (nullable)
     cr_pack: str | None = None
+    # Six new XLSX metadata fields. All come from the meeting TDoc-list
+    # spreadsheet; `None` when the cell is empty, the header is absent,
+    # or the row was synced before this column existed.
+    tdoc_for: str | None = None
+    abstract: str | None = None
+    secretary_remarks: str | None = None
+    ls_to: str | None = None
+    ls_cc: str | None = None
+    original_ls: str | None = None
 
 
 @dataclass(slots=True)

@@ -32,6 +32,7 @@ from doc3gpp.web.errors import (
     SettingsDisabledError,
     SpecNotFoundError,
     TDocNotFoundError,
+    TDocUrlNotFoundError,
     TSGNotFoundError,
     map_mcp_error,
 )
@@ -281,14 +282,60 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         )
         return _to_json(render.tdoc_rows(rows, _TDOC_FIELDS))
 
-    @server.tool(name="get_tdoc", description="Get a single tdoc by id, including its cover-page and extract details.")
+    @server.tool(
+        name="get_tdoc",
+        description=(
+            "Get a single tdoc by id (or by FTP URL), including its cover-page, "
+            "TTCN sidecar, and extract metadata. Exactly one of `tdoc_id` or "
+            "`ftp_url` must be supplied. In URL mode the response surfaces every "
+            "row across tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
+            "tdoc_files, and tdoc_extracts whose ftp_url matches; auto-sync is "
+            "never triggered."
+        ),
+    )
     @_mcp_error_guard
-    def get_tdoc(tdoc_id: Annotated[str, Field(description="Canonical tdoc id (e.g. 'R5-260013').")]) -> str:
-        from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
-        from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import SQLAlchemyTDocCrChangeDetailsRepository
-        from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
-        from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-        from doc3gpp.web.routes.tdocs import TDocShowRepos, TDocShowRecord
+    def get_tdoc(
+        tdoc_id: Annotated[
+            str | None,
+            Field(description="Canonical tdoc id (e.g. 'R5-260013'). Ignored when ftp_url is also supplied."),
+        ] = None,
+        ftp_url: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "3GPP FTP URL (full URL or relative path) — surfaces every row "
+                    "across the four URL-keyed tables whose ftp_url matches. "
+                    "Takes precedence over tdoc_id when both are supplied."
+                )
+            ),
+        ] = None,
+    ) -> str:
+        from doc3gpp.models.tdoc_show import (
+            TDocShowRecord,
+            TDocShowRecordByUrl,
+            TDocShowRepos,
+        )
+        from doc3gpp.parsers.normalizers import normalize_ftp_path
+        from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+            SQLAlchemyTDocCrChangeDetailsRepository,
+        )
+        from doc3gpp.storage.repositories.tdoc_cr_sql import (
+            SQLAlchemyTDocCrRepository,
+        )
+        from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+            SQLAlchemyTDocCrTtcnRepository,
+        )
+        from doc3gpp.storage.repositories.tdoc_sql import (
+            SQLAlchemyTDocRepository,
+        )
+
+        # Human ruling (pre-flight): when both tdoc_id and ftp_url are
+        # supplied, ftp_url wins and tdoc_id is silently ignored. Only
+        # neither-supplied raises.
+        if tdoc_id is None and ftp_url is None:
+            raise InvalidFilterError(
+                "Provide exactly one of tdoc_id or ftp_url"
+            )
 
         repos = TDocShowRepos(
             tdoc=SQLAlchemyTDocRepository(),
@@ -297,7 +344,25 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
             file=services.tdoc_file_repo,
         )
-        record = TDocShowRecord.from_tdoc_id(tdoc_id, repos)
+
+        if ftp_url is not None:
+            normalised = normalize_ftp_path(ftp_url)
+            if not normalised:
+                raise InvalidFilterError(
+                    f"ftp_url {ftp_url!r} normalised to an empty path"
+                )
+            record = TDocShowRecordByUrl.from_ftp_url(normalised, repos)
+            if (
+                record.tdoc is None
+                and record.cover is None
+                and record.ttcn is None
+                and record.changes is None
+                and not record.files
+            ):
+                raise TDocUrlNotFoundError(normalised)
+        else:
+            record = TDocShowRecord.from_tdoc_id(tdoc_id, repos)
+
         return _to_json(render.to_jsonable(record))
 
     @server.tool(name="get_tdoc_content", description="Return the cached markdown body for a tdoc id.")

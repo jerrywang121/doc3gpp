@@ -178,3 +178,126 @@ def test_parse_tdoc_url_enqueues_explicit_max_depth(sqlite_env) -> None:
     assert result.is_error is False
     _, params = captured[0]
     assert params["max_depth"] == 3
+
+
+def test_mcp_get_tdoc_prefers_url_when_both_supplied(sqlite_env) -> None:
+    """Both ``tdoc_id`` and ``ftp_url`` → URL wins, tdoc_id ignored (human ruling)."""
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.models.tdoc import TDoc
+    import json
+
+    _, server = _server()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url)
+    )
+
+    async def run():
+        return await _call(
+            server,
+            "get_tdoc",
+            {"tdoc_id": "other_tdoc", "ftp_url": url},
+        )
+
+    payload = json.loads(asyncio.run(run()).content[0].text)
+    assert payload["ftp_url"] == url
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+
+
+def test_mcp_get_tdoc_rejects_neither(sqlite_env) -> None:
+    """Neither ``tdoc_id`` nor ``ftp_url`` → invalid-params error."""
+    _, server = _server()
+
+    async def run():
+        return await _call(server, "get_tdoc", {})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert "exactly one of tdoc_id or ftp_url" in exc_info.value.message
+
+
+def test_mcp_get_tdoc_by_url_404_on_no_rows(sqlite_env) -> None:
+    """Empty DB → ``TDocUrlNotFoundError`` surfaces as an MCP error."""
+    _, server = _server()
+
+    async def run():
+        return await _call(
+            server,
+            "get_tdoc",
+            {"ftp_url": "TSG_RAN/missing.zip"},
+        )
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert "no stored rows match ftp_url" in exc_info.value.message.lower()
+
+
+def test_mcp_get_tdoc_url_normalisation(sqlite_env) -> None:
+    """A full https URL and a bare relative path resolve the same record."""
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.models.tdoc import TDoc
+    import json
+
+    _, server = _server()
+    bare = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=bare))
+
+    async def run(url):
+        return await _call(server, "get_tdoc", {"ftp_url": url})
+
+    full_payload = json.loads(asyncio.run(run(f"https://www.3gpp.org/ftp/{bare}")).content[0].text)
+    bare_payload = json.loads(asyncio.run(run(bare)).content[0].text)
+    assert full_payload == bare_payload
+
+
+def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
+    """The URL-mode JSON envelope mirrors the CLI ``--format json`` shape."""
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_file import TDocFile
+    import json
+
+    _, server = _server()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=url))
+    SQLAlchemyTDocCrRepository().upsert(
+        TDocCRDetails(tdoc_id="R5s260001", ftp_url=url, cr_num="0001")
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                ftp_url="R5/26.001/R5s260001.zip",
+                tdoc_id="R5s260001",
+                type="revision",
+                file="R5s260001.zip",
+            )
+        ]
+    )
+
+    async def run():
+        return await _call(server, "get_tdoc", {"ftp_url": url})
+
+    payload = json.loads(asyncio.run(run()).content[0].text)
+    assert payload["ftp_url"] == url
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+    assert payload["cover"]["cr_num"] == "0001"
+    assert len(payload["files"]) == 1
+
+
+def test_mcp_get_tdoc_existing_tdoc_id_path_unchanged(sqlite_env) -> None:
+    """Regression: the ``tdoc_id`` path still works (no behavioural change)."""
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.models.tdoc import TDoc
+    import json
+
+    _, server = _server()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url="x.zip"))
+
+    async def run():
+        return await _call(server, "get_tdoc", {"tdoc_id": "R5s260001"})
+
+    payload = json.loads(asyncio.run(run()).content[0].text)
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"

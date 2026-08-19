@@ -355,6 +355,75 @@ def test_list_tdoc_id_combines_with_other_filters():
     assert matches_none == []
 
 
+def test_list_tdoc_id_limit_one_finds_bracketing_row():
+    """``limit=1`` must still surface the meeting whose ``start_doc`` /
+    ``end_doc`` range brackets the queried TDoc.
+
+    Regression: the range predicate previously ran in Python *after*
+    ``ORDER BY ... LIMIT 1`` so a small ``limit`` returned only the
+    most-recent row, which often does not bracket the queried id, and
+    auto-sync silently lost the candidate meeting. The fix pushes the
+    numeric range filter into SQL so the SQL row set is already
+    bracketing before LIMIT clamps it.
+    """
+    from datetime import date as _date
+
+    from doc3gpp.storage.db.models import MeetingORM, TsgORM
+
+    engine = _make_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        s.add(
+            TsgORM(
+                tsg_name="RAN WG5",
+                short_name="R5",
+                description="Mobile terminal conformance testing",
+                url=None,
+            )
+        )
+        s.flush()
+        # Older meeting that brackets the queried id — this is the row
+        # we want ``limit=1`` to surface.
+        s.add(
+            MeetingORM(
+                meeting_id=60602,
+                name="R5-108",
+                title="R5-108",
+                location="Bengaluru",
+                start_date=_date(2025, 8, 25),
+                end_date=_date(2025, 8, 29),
+                start_doc="R5-253700",
+                end_doc="R5-255421",
+                tsg="R5",
+            )
+        )
+        # Newer meeting that does NOT bracket the id — with the buggy
+        # post-LIMIT Python filter this would be the row ``limit=1``
+        # returned and the in-Python filter would then drop it,
+        # yielding no rows at all.
+        s.add(
+            MeetingORM(
+                meeting_id=60611,
+                name="R5-109",
+                title="R5-109",
+                location="TBD",
+                start_date=_date(2025, 11, 17),
+                end_date=_date(2025, 11, 21),
+                start_doc="R5-255500",
+                end_doc="R5-256994",
+                tsg="R5",
+            )
+        )
+        s.commit()
+
+    repo = SQLAlchemyMeetingRepository()
+    repo._session_factory = Session
+
+    matches = repo.list(limit=1, tdoc_id=("R5-", 253716))
+    assert {m.meeting_id for m in matches} == {60602}
+
+
 def test_list_tdoc_id_prefix_match_is_case_insensitive():
     """``r5s``, ``R5S``, ``r5S`` must all match a stored ``R5s...`` row."""
     from sqlalchemy import create_engine

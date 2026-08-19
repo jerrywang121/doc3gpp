@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import distinct, func, select, extract, update
+from sqlalchemy import and_, cast, distinct, func, Integer, or_, select, extract, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.models.meeting import Meeting
@@ -97,14 +97,45 @@ class SQLAlchemyMeetingRepository:
             if tdoc_id is not None:
                 prefix, number = tdoc_id
                 canonical_prefix = prefix.upper()
-                # Prefix-only predicate in SQL so the numeric range
-                # comparison can stay in Python (avoids dialect-specific
-                # text→int CAST). UPPER makes the prefix match case-
-                # insensitive on every dialect.
+                # All clauses below run in SQL so the bracketing meeting is
+                # found even when ``limit`` is small (the in-Python fallback
+                # used to drop everything when ``limit`` was smaller than
+                # the candidate set because the range check ran *after*
+                # ``ORDER BY ... LIMIT``). The numeric CAST is gated on a
+                # ``GLOB '[0-9]*'`` shape check so a malformed
+                # ``start_doc`` like ``"R5-ABC123"`` (length 9, prefix ok)
+                # cannot spuriously match via SQLite's ``CAST(... AS
+                # INTEGER) -> 0`` coercion; the GLOB is SQLite-only and
+                # the project is sqlite-only today (see
+                # ``storage/backends``).
+                start_doc_substr = func.substr(MeetingORM.start_doc, 4)
+                start_doc_num = cast(start_doc_substr, Integer)
+                end_doc_substr = func.substr(MeetingORM.end_doc, 4)
+                end_doc_num = cast(end_doc_substr, Integer)
                 stmt = stmt.where(
                     MeetingORM.start_doc.isnot(None),
+                    func.length(MeetingORM.start_doc).in_((9, 10)),
                     func.upper(func.substr(MeetingORM.start_doc, 1, 3))
                     == canonical_prefix,
+                    # The numeric suffix must be all digits; otherwise the
+                    # CAST below would coerce non-numeric junk to 0 on
+                    # SQLite and falsely satisfy ``<= number``.
+                    start_doc_substr.op("GLOB")("[0-9]*"),
+                    start_doc_num <= number,
+                    # Open-ended upper bound: ``end_doc IS NULL`` matches
+                    # any number at or above the start. Otherwise the end
+                    # doc must satisfy the same shape + prefix + numeric
+                    # guards and bracket the number from above.
+                    or_(
+                        MeetingORM.end_doc.is_(None),
+                        and_(
+                            func.length(MeetingORM.end_doc).in_((9, 10)),
+                            func.upper(func.substr(MeetingORM.end_doc, 1, 3))
+                            == canonical_prefix,
+                            end_doc_substr.op("GLOB")("[0-9]*"),
+                            end_doc_num >= number,
+                        ),
+                    ),
                 )
 
             stmt = stmt.order_by(
@@ -112,13 +143,6 @@ class SQLAlchemyMeetingRepository:
                 MeetingORM.meeting_id.desc(),
             ).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()
-
-        if tdoc_id is not None:
-            prefix, number = tdoc_id
-            rows = [
-                row for row in rows
-                if _tdoc_id_in_range(row, prefix.upper(), number)
-            ]
 
         return [_orm_to_domain(row) for row in rows]
 
@@ -195,40 +219,6 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def _tdoc_id_in_range(row: MeetingORM, prefix: str, number: int) -> bool:
-    """Return True iff ``row`` brackets the TDoc identified by ``(prefix, number)``.
-
-    ``prefix`` must already be upper-cased (the caller is responsible
-    for canonicalisation). The stored prefix side is upper-cased here
-    so a stored ``r5s...`` row still matches a ``R5S`` query.
-    See :meth:`MeetingRepository.list` for the matching contract.
-    Returns ``False`` (rather than raising) on malformed stored values
-    so a stray scraper artifact never breaks a list query.
-
-    Accepts 9-char (6-digit) and 10-char (7-digit) start/end doc shapes.
-    """
-    start_doc = row.start_doc
-    if start_doc is None or len(start_doc) not in (9, 10) or start_doc[:3].upper() != prefix:
-        return False
-    try:
-        start_num = int(start_doc[3:])
-    except ValueError:
-        return False
-    if start_num > number:
-        return False
-
-    end_doc = row.end_doc
-    if end_doc is None:
-        return True
-    if len(end_doc) not in (9, 10) or end_doc[:3].upper() != prefix:
-        return False
-    try:
-        end_num = int(end_doc[3:])
-    except ValueError:
-        return False
-    return end_num >= number
 
 
 def _persist(session: Session, meetings: list[Meeting]) -> None:

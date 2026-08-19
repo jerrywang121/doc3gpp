@@ -34,7 +34,10 @@ from doc3gpp.models.search import SearchQueryError
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
 )
-from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
+from doc3gpp.services.tdoc_cr_service import (
+    TDocNotFoundError,
+    TDocUrlNotFoundError,
+)
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -92,6 +95,7 @@ MCP_CODE_INTERNAL_ERROR = -32603
 # to one canonical resource on both transports).
 _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     TDocNotFoundError: ("tdoc", MCP_CODE_NOT_FOUND),
+    TDocUrlNotFoundError: ("tdoc", MCP_CODE_NOT_FOUND),
     MeetingNotFoundError: ("meeting", MCP_CODE_NOT_FOUND),
     TSGNotFoundError: ("tsg", MCP_CODE_NOT_FOUND),
     WINotFoundError: ("wi", MCP_CODE_NOT_FOUND),
@@ -129,6 +133,7 @@ def map_mcp_error(exc: Exception) -> tuple[int, str, dict[str, Any]] | None:
 
 _ERROR_SLUGS: dict[type[Exception], str] = {
     TDocNotFoundError: "tdoc_not_found",
+    TDocUrlNotFoundError: "tdoc_url_not_found",
     MeetingNotFoundError: "meeting_not_found",
     TSGNotFoundError: "tsg_not_found",
     WINotFoundError: "wi_not_found",
@@ -144,6 +149,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
 
 _STATUS_BY_EXC: dict[type[Exception], int] = {
     TDocNotFoundError: 404,
+    TDocUrlNotFoundError: 404,
     MeetingNotFoundError: 404,
     TSGNotFoundError: 404,
     WINotFoundError: 404,

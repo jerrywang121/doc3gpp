@@ -298,6 +298,31 @@ class TDocNotYetOnFTPError(ValueError):
         )
 
 
+class TDocUrlNotFoundError(LookupError):
+    """No row matches the requested FTP URL across any of the six URL-keyed tables.
+
+    Raised by ``TDocShowRecordByUrl.from_ftp_url`` consumers (the web
+    ``GET /tdocs/by-url`` route and the MCP ``get_tdoc(ftp_url=...)``
+    tool) when the normalised URL resolves to no rows in ``tdocs``,
+    ``tdoc_cr_cover_page``, ``tdoc_cr_ttcn_details``, ``tdoc_extracts``,
+    ``tdoc_cr_change_details``, or ``tdoc_files``. Distinct from
+    :class:`TDocNotFoundError` (which is raised for a missing
+    ``tdoc_id`` lookup).
+    """
+
+    def __init__(self, ftp_url: str) -> None:
+        self.ftp_url = ftp_url
+        super().__init__(
+            f"No stored rows match ftp_url {ftp_url!r}. The URL was looked "
+            "up against tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
+            "tdoc_extracts, tdoc_cr_change_details, and tdoc_files; "
+            "none matched. The upstream document may not have been "
+            "ingested yet — run 'doc3gpp tdoc sync' on the parent "
+            f"meeting, or 'doc3gpp tdoc parse --from-url {ftp_url}' to "
+            "populate the URL-keyed tables."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Service result DTO.
 # ---------------------------------------------------------------------------

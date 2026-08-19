@@ -117,6 +117,7 @@ async def _mount_mcp_in_lifespan(app: FastAPI):
                 "/mcp",
                 server.streamable_http_app(
                     streamable_http_path="/",
+                    json_response=True,
                     transport_security=security,
                 ),
             )

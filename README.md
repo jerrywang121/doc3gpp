@@ -417,7 +417,12 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
   TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
   (legacy two-endpoint `GET /mcp/sse` + `POST /mcp/messages/`). Browser
   clients must have their origin in `[mcp] allowed_origins` (defaults to
-  `http://127.0.0.1` and `http://localhost`).
+  `http://127.0.0.1` and `http://localhost`). Chrome extensions send
+  `Origin: chrome-extension://<extension-id>` — never in the defaults —
+  so add the extension's id to `allowed_origins`; some clients surface
+  the resulting 403 as the misleading "Legacy MCP SSE endpoints are not
+  supported" error (check the server log for an `Invalid Origin header`
+  warning before touching the transport).
 - **Jobs** — sync, parse, search rebuild, and cache purge run on a shared
   asyncio worker; watch live progress over SSE at `/jobs/{id}/events`.
 

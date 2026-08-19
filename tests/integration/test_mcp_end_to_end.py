@@ -324,6 +324,7 @@ def test_mcp_allows_configured_browser_origin(sqlite_env) -> None:
             },
         )
         assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/json"), resp.headers
 
     get_engine.cache_clear()
     del state.engine

@@ -362,6 +362,15 @@ details.hit-details summary {
   overflow-x: auto;
 }
 
+.xlsx-meta-pre {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--code-bg);
+  padding: 0.5rem;
+  border-radius: 4px;
+}
+
 /* TDoc list: status-derived row backgrounds (soft pastels, dark text) */
 tr.status-lgreen td { background: #e2f5d8; }
 tr.status-green td { background: #c8e6c9; }

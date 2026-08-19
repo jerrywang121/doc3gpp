@@ -38,6 +38,20 @@
     {% endif %}
   </section>
 
+  {% if record.tdoc.ls_to or record.tdoc.ls_cc or record.tdoc.original_ls or record.tdoc.tdoc_for or record.tdoc.abstract or record.tdoc.secretary_remarks %}
+    <section class="card">
+      <h2>XLSX metadata</h2>
+      <dl class="kv">
+        {% if record.tdoc.tdoc_for %}<dt>For</dt><dd>{{ record.tdoc.tdoc_for }}</dd>{% endif %}
+        {% if record.tdoc.ls_to %}<dt>LS To</dt><dd>{{ record.tdoc.ls_to }}</dd>{% endif %}
+        {% if record.tdoc.ls_cc %}<dt>LS Cc</dt><dd>{{ record.tdoc.ls_cc }}</dd>{% endif %}
+        {% if record.tdoc.original_ls %}<dt>Original LS</dt><dd><pre class="xlsx-meta-pre">{{ record.tdoc.original_ls }}</pre></dd>{% endif %}
+        {% if record.tdoc.abstract %}<dt>Abstract</dt><dd><pre class="xlsx-meta-pre">{{ record.tdoc.abstract }}</pre></dd>{% endif %}
+        {% if record.tdoc.secretary_remarks %}<dt>Secretary Remarks</dt><dd><pre class="xlsx-meta-pre">{{ record.tdoc.secretary_remarks }}</pre></dd>{% endif %}
+      </dl>
+    </section>
+  {% endif %}
+
   {% if record.tdoc.ftp_url %}
     <section class="card">
       <h2>Parse</h2>

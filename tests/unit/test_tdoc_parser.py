@@ -529,3 +529,78 @@ def test_read_tdoc_sheet_resilient_when_xlsx_bytes_are_corrupt() -> None:
     with pytest.raises(Exception):
         # An empty buffer is not a valid zip; openpyxl raises.
         read_tdoc_sheet(b"")
+
+
+# ---------------------------------------------------------------------------
+# Six-column XLSX-metadata capture: To / Cc / Original LS / For / Abstract /
+# Secretary Remarks. The parser stores them on every row (no LS gate).
+# ---------------------------------------------------------------------------
+
+
+def test_read_tdoc_sheet_captures_six_xlsx_metadata_columns() -> None:
+    headers = [
+        "TDoc", "Title", "Source", "Type",
+        "For", "Abstract", "Secretary Remarks",
+        "To", "Cc", "Original LS",
+    ]
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            headers,
+            [
+                "R5-260001", "Doc A", "Acme", "LS",
+                "Information", "TL;DR of doc A", "Secretary has no remarks",
+                "RAN2", "RAN3, RAN4", "C1-260001",
+            ],
+            # Empty cells become None for every column (mirrors title/source).
+            [
+                "R5-260002", "Doc B", "Acme", "CR",
+                "", "", "",
+                "", "", "",
+            ],
+        ]
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+
+    assert len(records) == 2
+    a, b = records
+    assert a["tdoc_for"] == "Information"
+    assert a["abstract"] == "TL;DR of doc A"
+    assert a["secretary_remarks"] == "Secretary has no remarks"
+    assert a["ls_to"] == "RAN2"
+    assert a["ls_cc"] == "RAN3, RAN4"
+    assert a["original_ls"] == "C1-260001"
+
+    # Empty cells normalise to None like every other column.
+    assert b["tdoc_for"] is None
+    assert b["abstract"] is None
+    assert b["secretary_remarks"] is None
+    assert b["ls_to"] is None
+    assert b["ls_cc"] is None
+    assert b["original_ls"] is None
+    # Existing columns are unaffected.
+    assert a["title"] == "Doc A"
+    assert a["source"] == "Acme"
+    assert a["type"] == "LS"
+
+
+def test_read_tdoc_sheet_xlsx_metadata_none_when_header_absent() -> None:
+    # No "For" / "Abstract" / etc. columns in this fixture; the parser
+    # still completes and surfaces None for every new key.
+    xlsx_bytes = _make_xlsx_bytes(
+        [
+            ["TDoc", "Title", "Source", "Type"],
+            ["R5-260001", "Doc A", "Acme", "CR"],
+        ]
+    )
+
+    records = read_tdoc_sheet(xlsx_bytes)
+
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["tdoc_for"] is None
+    assert rec["abstract"] is None
+    assert rec["secretary_remarks"] is None
+    assert rec["ls_to"] is None
+    assert rec["ls_cc"] is None
+    assert rec["original_ls"] is None

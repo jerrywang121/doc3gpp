@@ -327,6 +327,12 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
         "related_wis": pick_col(header_map, ["Related WIs", "Work item code"]),
         "cr_num": pick_col(header_map, ["CR"]),
         "cr_pack": pick_col(header_map, ["TSG CR Pack", "TSG CR pack", "CR Pack"]),
+        "tdoc_for": pick_col(header_map, ["For"]),
+        "abstract": pick_col(header_map, ["Abstract"]),
+        "secretary_remarks": pick_col(header_map, ["Secretary Remarks"]),
+        "ls_to": pick_col(header_map, ["To"]),
+        "ls_cc": pick_col(header_map, ["Cc"]),
+        "original_ls": pick_col(header_map, ["Original LS"]),
     }
 
     result: List[Dict[str, object]] = []

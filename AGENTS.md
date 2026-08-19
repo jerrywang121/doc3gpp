@@ -288,6 +288,12 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `# FTP URL` / `[FTP URL]` anchor; the renderer contract follows
   the same omit-when-null convention as the `--tdoc` path's
   `TDocShowRecord`.
+  The same URL-anchored composition is reachable via
+  `GET /tdocs/by-url?ftp_url=<url>` (HTML or JSON) and the MCP
+  `get_tdoc(ftp_url=...)` tool. Both surfaces call
+  `TDocShowRecordByUrl.from_ftp_url(ftp_url, repos)` and emit the
+  byte-identical JSON envelope the CLI emits; auto-sync is never
+  triggered.
 - `doc3gpp search query "QUERY" [filters]` → `SearchService.search(query,
   filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
   `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →

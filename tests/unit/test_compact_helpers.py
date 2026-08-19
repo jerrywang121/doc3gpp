@@ -737,9 +737,19 @@ def test_tdoc_show_json_compact_via_cli(monkeypatch) -> None:
         def get_for_tdoc_id(self, _tdoc_id: str) -> tuple:
             return ()
 
+    class _ChangesRepoStub:
+        def get_for_tdoc_id(self, _tdoc_id: str) -> list:
+            return []
+
+    class _LsRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_repository", lambda: _TDocRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_repository", lambda: _CrRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_ttcn_repository", lambda: _TtcnRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_change_details_repository", lambda: _ChangesRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_ls_repository", lambda: _LsRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_file_repository", lambda: _FileRepoStub())
     monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", lambda **kwargs: None)
 
@@ -797,9 +807,22 @@ def test_tdoc_show_by_ftp_url_markdown_compact_via_cli(monkeypatch) -> None:
         def get_by_ftp_url(self, _url: str) -> tuple:
             return ()
 
+    class _ChangesRepoStub:
+        def get_for_tdoc_id(self, _tdoc_id: str) -> list:
+            return []
+
+        def get_by_url(self, _url: str):
+            return None
+
+    class _LsRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_repository", lambda: _TDocRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_repository", lambda: _CrRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_ttcn_repository", lambda: _TtcnRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_change_details_repository", lambda: _ChangesRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_ls_repository", lambda: _LsRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_file_repository", lambda: _FileRepoStub())
 
     result = CliRunner().invoke(
@@ -861,9 +884,19 @@ def test_tdoc_show_json_default_still_pretty_prints(monkeypatch) -> None:
         def get_for_tdoc_id(self, _tdoc_id: str) -> tuple:
             return ()
 
+    class _ChangesRepoStub:
+        def get_for_tdoc_id(self, _tdoc_id: str) -> list:
+            return []
+
+    class _LsRepoStub:
+        def get_by_url(self, _url: str):
+            return None
+
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_repository", lambda: _TDocRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_repository", lambda: _CrRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_ttcn_repository", lambda: _TtcnRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_change_details_repository", lambda: _ChangesRepoStub())
+    monkeypatch.setattr("doc3gpp.cli.build_ls_repository", lambda: _LsRepoStub())
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_file_repository", lambda: _FileRepoStub())
     monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", lambda **kwargs: None)
 

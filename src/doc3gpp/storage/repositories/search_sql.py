@@ -551,7 +551,7 @@ def _cover_text(*, conn: Engine, tdoc_id: str) -> str:
         ls_row = c.execute(
             text(
                 """
-                SELECT ls.title, ls.response_to_title, ls.to_groups,
+                SELECT ls.title, ls.response_to, ls.to_groups,
                        ls.cc_groups
                   FROM tdoc_cr_ls_details ls
                   JOIN tdocs t ON t.tdoc_id = ls.tdoc_id

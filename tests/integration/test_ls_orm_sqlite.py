@@ -16,7 +16,7 @@ def test_table_created_with_expected_columns(sqlite_env) -> None:
     cols = {c["name"] for c in insp.get_columns("tdoc_cr_ls_details")}
     expected = {
         "ftp_url", "tdoc_id", "variant",
-        "title", "response_to_doc", "response_to_title", "response_to_group",
+        "title", "response_to",
         "release", "work_item_name", "work_item_code",
         "source", "to_groups", "cc_groups", "attachments_json",
         "parser_version", "extracted_at",

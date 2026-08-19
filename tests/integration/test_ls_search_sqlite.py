@@ -11,12 +11,12 @@ Projection (one field per line, mirroring the ``summary_of_change``
 pattern):
 
 * ``title``
-* ``response_to_title``
+* ``response_to``
 * ``to_groups`` with newlines flattened to spaces
 * ``cc_groups`` with newlines flattened to spaces
 
 The FTS5 assertions query tokens that live ONLY in the LS sidecar
-(``ran4`` in ``response_to_title``, ``wg4`` / ``wg2`` in the group
+(``ran4`` in ``response_to``, ``wg4`` / ``wg2`` in the group
 lists) so the tests genuinely exercise the projection rather than
 matching through ``tdocs.title``.
 """
@@ -78,7 +78,7 @@ def ls_row(sqlite_env):
             variant="3gpp",
             title="5G_eHealth WI status update",
             source="3GPP TSG",
-            response_to_title="eHealth WI status from RAN4",
+            response_to="LS on eHealth WI status from RAN4",
             to_groups="RAN WG3\nRAN WG4",
             cc_groups="RAN WG2",
         )
@@ -94,8 +94,8 @@ def test_search_index_includes_ls_title(ls_row):
     assert any(h.tdoc_id == ls_row for h in hits)
 
 
-def test_search_index_matches_ls_response_to_title(ls_row):
-    """A token that lives ONLY in ``response_to_title`` matches."""
+def test_search_index_matches_ls_response_to(ls_row):
+    """A token that lives ONLY in ``response_to`` matches."""
     repo = SQLAlchemySearchIndexRepository()
     repo.upsert(ls_row)
     hits = repo.search("ran4", SearchFilters(limit=10))
@@ -118,6 +118,6 @@ def test_embed_text_includes_ls_fields(ls_row):
 
     out = _build_embed_text(ls_row)
     assert out is not None
-    assert "RAN4" in out  # response_to_title
+    assert "RAN4" in out  # response_to
     assert "RAN WG3 RAN WG4" in out  # to_groups, newlines flattened
     assert "RAN WG2" in out  # cc_groups, newlines flattened

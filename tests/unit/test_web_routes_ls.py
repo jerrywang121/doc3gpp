@@ -32,9 +32,8 @@ def _make_ls_details(**overrides: object) -> TDocLSDetails:
         tdoc_id="R5-240001",
         variant="3gpp",
         title="LS on foo",
-        response_to_doc="R5-234567",
-        response_to_group="RAN WG3",
-        release="Release 17",
+        response_to="LS R5-234567 on foo from RAN WG3",
+        release="Rel-17",
         work_item_name="5G_eHealth",
         work_item_code="WI-123456",
         source="3GPP TSG RAN WG2",
@@ -95,9 +94,8 @@ def test_ls_cover_card_renders_for_ls_row(sqlite_env: Any) -> None:
     html = response.text
     assert "<h2>LS Cover</h2>" in html
     assert "<dt>Title</dt><dd>LS on foo</dd>" in html
-    assert "<code>R5-234567</code>" in html
-    assert "from RAN WG3" in html
-    assert "<dt>Release</dt><dd>Release 17</dd>" in html
+    assert "LS R5-234567 on foo from RAN WG3" in html
+    assert "<dt>Release</dt><dd>Rel-17</dd>" in html
     assert "5G_eHealth" in html
     assert "<code>WI-123456</code>" in html
     assert "<dt>Source</dt><dd>3GPP TSG RAN WG2</dd>" in html

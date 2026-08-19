@@ -506,8 +506,8 @@ Options:
     aggregate column is `NULL`, `0 item(s)` when the aggregate is
     an empty list). When a matching `tdoc_cr_ls_details` row
     exists instead, an extra `[LS Cover]` block renders the eleven
-    header fields (`title`, `response_to_doc` / `response_to_title`
-    / `response_to_group`, `release`, `work_item_name` /
+    header fields (`title`, `response_to`,
+    `release`, `work_item_name` /
     `work_item_code`, `source`, `to_groups`, `cc_groups`,
     `attachments: N item(s)`) plus `variant`, `parser_version`, and
     `extracted_at`. The `parser_version` and `details` lines are

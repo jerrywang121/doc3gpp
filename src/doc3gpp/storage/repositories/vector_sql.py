@@ -454,7 +454,7 @@ def _build_embed_text(tdoc_id: str) -> str | None:
         ls = conn.execute(
             text(
                 """
-                SELECT ls.title, ls.response_to_title, ls.to_groups,
+                SELECT ls.title, ls.response_to, ls.to_groups,
                        ls.cc_groups
                   FROM tdoc_cr_ls_details ls
                   JOIN tdocs t ON t.tdoc_id = ls.tdoc_id

@@ -112,3 +112,185 @@ def test_positive_detection_for_ls_out_docx():
     )
     present, _blob = is_ls_header_present(docx_md)
     assert present is True
+
+
+def test_positive_detection_for_s_prefixed_tdoc_id():
+    """``S2-2606762`` (LS in, SA WG2) — the meeting reference line omits
+    the literal ``3GPP`` prefix and carries an ``S``-prefixed TDoc id,
+    which the detector must still recognise."""
+    docx_md = (
+        "SA WG2 Meeting #S2-176    S2-2606762\n"
+        "\n"
+        "24 - 28 August, 2026, Prague, CZ\n"
+        "\n"
+        "Title:    Reply LS on IMS network behaviour for new Contact header parameters\n"
+        "Response to:    LS S4-260901 on Reply LS on IMS network behaviour for new Contact header parameters from WG2\n"
+        "Release:    Rel-20\n"
+        "Work Item:    AvCall-MED, FS_Avatar_Ph2_MED\n"
+        "Source:    SA WG4\n"
+        "To:    SA WG2\n"
+        "Cc:    CT WG1, CT WG3, CT WG4\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_for_c_prefixed_tdoc_id():
+    """``C6-250418`` (LS in, CT WG6) — ``C``-prefixed TDoc id on the
+    meeting reference line."""
+    docx_md = (
+        "3GPP TSG CT WG6 Meeting #123    C6-250418\n"
+        "\n"
+        "Title:    LS to 3GPP CT WG6 on changes of the Universal PIN support\n"
+        "Source:    ETSI TC SET\n"
+        "To:    CT WG6\n"
+        "Cc:    -\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_for_reply_ls_title():
+    """``S3-263149`` (LS out, SA3) — the title starts with ``Reply LS on``
+    rather than the bare ``LS on`` prefix."""
+    docx_md = (
+        "3GPP TSG-SA3 Meeting #129    S3-263149\n"
+        "\n"
+        "Prague, Czech Republic 24 - 28 August 2026\n"
+        "\n"
+        "Title:    Reply LS on 6G study for secure SMS\n"
+        "Response to:    LS on 6G study for secure SMS (C1-262557)\n"
+        "Release:    Rel-20\n"
+        "Source:    Qualcomm Incorporated To be SA3\n"
+        "To:    CT1\n"
+        "Cc:    SA2\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_for_draft_reply_ls_title():
+    """``S3-263033`` (LS out, SA3) — bracketed draft marker before
+    ``Reply LS on`` in the title."""
+    docx_md = (
+        "3GPP TSG-SA3 Meeting #129    S3-263033\n"
+        "\n"
+        "Title:    [draft] Reply LS on single paging mechanism for idle and inactive in 6G\n"
+        "Source:    OPPO\n"
+        "To:    RAN2\n"
+        "Cc:    -\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_for_ls_to_title():
+    """``C6-250664`` (LS in) — ``LS to ... on ...`` title shape where the
+    ``on`` keyword does not immediately follow ``LS``."""
+    docx_md = (
+        "3GPP TSG CT WG6 Meeting #124    C6-250664\n"
+        "\n"
+        "Title:    LS to 3GPP regarding NG-eCall test URN\n"
+        "Source:    GSMA NG/UPG\n"
+        "To:    CT WG6\n"
+        "Cc:    -\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_for_ls_with_questions_title():
+    """``S1-263020`` (LS in) — title shape."""
+    docx_md = (
+        "3GPP TSG SA WG1 Meeting #115    S1-263020\n"
+        "\n"
+        "Title:    LS with questions on IMS voice over NB-IoT NTN\n"
+        "Source:    RAN WG2\n"
+        "To:    SA WG1\n"
+        "Cc:    -\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_for_hash_prefixed_title():
+    """``S2-2606763`` (LS in, SA WG4) — the docx converter emits the
+    header cells as markdown headings (``# Title:``) when the source
+    document styles them as heading paragraphs."""
+    docx_md = (
+        "SA WG2 Meeting #S2-176    S2-2606763\n"
+        "\n"
+        "24 - 28 August, 2026, Prague, CZ\n"
+        "\n"
+        "3GPP TSG- SA4 Meeting # 136    S4-261351\n"
+        "\n"
+        "Montreal, Canada 10th - 15th May 2026, Online\n"
+        "\n"
+        "# Title:    LS response on AI/ML for Media\n"
+        "# Response to:    LS (S4-260888/S2-2510954) on AI/ML for Media\n"
+        "# Release:    Release 20\n"
+        "# Work Item:    AIML_IMS-MED\n"
+        "Source:    TSG SA WG4\n"
+        "To:    TSG SA WG2\n"
+        "Cc:\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_for_lsout_title():
+    """``S2-2606790`` (LS out, SA WG5) — ``LSout on`` (no space) title
+    shape."""
+    docx_md = (
+        "SA WG2 Meeting #S2-176    S2-2606790\n"
+        "\n"
+        "24 - 28 August, 2026, Prague, CZ\n"
+        "\n"
+        "3GPP TSG-SA5 Meeting #167    S5-262805\n"
+        "\n"
+        "Dalian, China, 18-22 May 2026\n"
+        "\n"
+        "Title:    LSout on CHF info, Charging Groups and handling\n"
+        "Response to:    -\n"
+        "Release:    Rel-19\n"
+        "Work Item:    CHFSeg\n"
+        "Source:    SA5\n"
+        "To:    SA2\n"
+        "Cc:    CT4\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_positive_detection_without_tdoc_id_on_first_line():
+    """The first line can be a bare meeting reference without any TDoc
+    id (the id may live on a later line or be absent). Detection must
+    not depend on the id token."""
+    docx_md = (
+        "SA WG2 Meeting #S2-176\n"
+        "\n"
+        "24 - 28 August, 2026, Prague, CZ\n"
+        "\n"
+        "Title:    Reply LS on IMS network behaviour\n"
+        "Response to:    -\n"
+        "Source:    SA WG4\n"
+        "To:    SA WG2\n"
+        "Cc:    -\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is True
+
+
+def test_negative_when_title_has_no_ls_word():
+    """A document whose title carries no ``LS`` token (e.g. an external
+    organisation's liaison template) is not recognised as a 3GPP LS."""
+    docx_md = (
+        "3GPP TSG RAN WG1#126    R1-2605198\n"
+        "\n"
+        "Title:    LIAISON STATEMENT TO EXTERNAL ORGANIZATIONS - REQUEST FOR INPUTS\n"
+        "Source:    ITU-R WP 5A\n"
+        "To:    RAN WG1\n"
+        "Cc:    -\n"
+    )
+    present, _blob = is_ls_header_present(docx_md)
+    assert present is False

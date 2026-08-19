@@ -106,9 +106,7 @@ def _details_to_orm(target: TDocCrLSDetailOrm, details: TDocLSDetails) -> None:
     """
     target.variant = details.variant
     target.title = details.title
-    target.response_to_doc = details.response_to_doc
-    target.response_to_title = details.response_to_title
-    target.response_to_group = details.response_to_group
+    target.response_to = details.response_to
     target.release = details.release
     target.work_item_name = details.work_item_name
     target.work_item_code = details.work_item_code
@@ -143,9 +141,7 @@ def _orm_to_details(row: TDocCrLSDetailOrm) -> TDocLSDetails:
         tdoc_id=row.tdoc_id,
         variant=row.variant,
         title=row.title,
-        response_to_doc=row.response_to_doc,
-        response_to_title=row.response_to_title,
-        response_to_group=row.response_to_group,
+        response_to=row.response_to,
         release=row.release,
         work_item_name=row.work_item_name,
         work_item_code=row.work_item_code,

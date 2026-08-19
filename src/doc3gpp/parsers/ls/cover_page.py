@@ -23,18 +23,47 @@ logger = logging.getLogger(__name__)
 
 
 _TITLE_RE = re.compile(r"^Title:\s*(.*)$", re.IGNORECASE)
-_RESPONSE_TO_RE = re.compile(
-    r"^Response to:\s*LS\s+(\S+)\s+on\s+(.+?)\s+from\s+(.+?)\s*$",
-    re.IGNORECASE,
-)
+_RESPONSE_TO_RAW_RE = re.compile(r"^Response to:\s*(.*)$", re.IGNORECASE)
 _RELEASE_RE = re.compile(r"^Release:\s*(.*)$", re.IGNORECASE)
 _WORK_ITEM_RE = re.compile(
-    r"^Work Item:\s*(.+?)\s*\(([^)]*)\)\s*$", re.IGNORECASE
+    r"^Work Item:\s*(.+?)\s*(?:\(([^)]*)\))?\s*$", re.IGNORECASE
 )
 _SOURCE_RE = re.compile(r"^Source:\s*(.*)$", re.IGNORECASE)
 _TO_RE = re.compile(r"^To:\s*(.*)$", re.IGNORECASE)
 _CC_RE = re.compile(r"^Cc:\s*(.*)$", re.IGNORECASE)
 _ATTACHMENTS_RE = re.compile(r"^Attachments:\s*(.*)$", re.IGNORECASE)
+
+# Long / prose release labels: ``Release 20``, ``Release 1999``.
+_LONG_RELEASE_RE = re.compile(r"^Release\s+(\d+)$", re.IGNORECASE)
+# Compact short form without a hyphen: ``Rel17``, ``Rel9``.
+_COMPACT_RELEASE_RE = re.compile(r"^Rel(\d+)$", re.IGNORECASE)
+
+
+def _normalise_release(value: str | None) -> str | None:
+    """Canonicalise an LS cover-page release label.
+
+    Mirrors the CR cover-page normalisation
+    (:func:`doc3gpp.parsers.cr.cover_page._normalize_release`) plus the
+    pre-Rel-4 year markers: ``Release 20`` → ``Rel-20``, ``Release 9``
+    → ``Rel-9``, ``Release 1999`` → ``R99``, ``Release 1998`` → ``R98``
+    (the official pre-Rel-4 markers, matching
+    :func:`doc3gpp.parsers.spec_release.normalise_release`). Already
+    canonical values (``Rel-17``, ``R99``) pass through unchanged;
+    blank / ``None`` values pass through unchanged; any other shape is
+    left as-is so an unexpected value remains visible in the DB.
+    """
+    if value is None:
+        return None
+    match = _LONG_RELEASE_RE.match(value.strip())
+    if match:
+        digits = match.group(1)
+        if digits.startswith("199"):
+            return f"R{digits[2:]}"
+        return f"Rel-{digits}"
+    match = _COMPACT_RELEASE_RE.match(value.strip())
+    if match:
+        return f"Rel-{match.group(1)}"
+    return value
 
 
 def _normalise_groups(raw: str) -> str:
@@ -106,9 +135,7 @@ class LSCoverPageParser:
     ) -> tuple[bool, dict, int]:
         payload: dict = {
             "title": None,
-            "response_to_doc": None,
-            "response_to_title": None,
-            "response_to_group": None,
+            "response_to": None,
             "release": None,
             "work_item_name": None,
             "work_item_code": None,
@@ -120,37 +147,45 @@ class LSCoverPageParser:
         attachments: list[dict[str, str]] = []
 
         for line in lines:
-            if (m := _TITLE_RE.match(line)):
+            # The docx→md converter emits header cells as plain lines
+            # (``Title:``) or as markdown headings (``# Title:``) when
+            # the source document styles them as heading paragraphs.
+            stripped = line.lstrip("#").strip()
+            if (m := _TITLE_RE.match(stripped)):
                 payload["title"] = m.group(1).strip() or None
                 continue
-            if (m := _RESPONSE_TO_RE.match(line)):
-                payload["response_to_doc"] = m.group(1).strip()
-                payload["response_to_title"] = m.group(2).strip()
-                payload["response_to_group"] = m.group(3).strip()
+            if (m := _RESPONSE_TO_RAW_RE.match(stripped)):
+                raw = m.group(1).strip()
+                if raw and raw != "N/A":
+                    payload["response_to"] = raw
                 continue
-            if (m := _RELEASE_RE.match(line)):
-                payload["release"] = m.group(1).strip() or None
+            if (m := _RELEASE_RE.match(stripped)):
+                payload["release"] = _normalise_release(
+                    m.group(1).strip() or None
+                )
                 continue
-            if (m := _WORK_ITEM_RE.match(line)):
+            if (m := _WORK_ITEM_RE.match(stripped)):
                 payload["work_item_name"] = m.group(1).strip() or None
-                payload["work_item_code"] = m.group(2).strip() or None
+                payload["work_item_code"] = (
+                    m.group(2).strip() if m.group(2) else None
+                )
                 continue
-            if (m := _SOURCE_RE.match(line)):
+            if (m := _SOURCE_RE.match(stripped)):
                 payload["source"] = m.group(1).strip() or None
                 continue
-            if (m := _TO_RE.match(line)):
+            if (m := _TO_RE.match(stripped)):
                 payload["to_groups"] = _normalise_groups(m.group(1))
                 continue
-            if (m := _CC_RE.match(line)):
+            if (m := _CC_RE.match(stripped)):
                 payload["cc_groups"] = _normalise_groups(m.group(1))
                 continue
-            if (m := _ATTACHMENTS_RE.match(line)):
+            if (m := _ATTACHMENTS_RE.match(stripped)):
                 attachments.extend(_parse_attachments(m.group(1)))
 
         payload["attachments"] = attachments
 
         if max_text_length > 0:
-            for field in ("title", "response_to_title", "source"):
+            for field in ("title", "response_to", "source"):
                 v = payload.get(field)
                 if isinstance(v, str) and len(v) > max_text_length:
                     logger.warning(

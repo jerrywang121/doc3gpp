@@ -41,10 +41,9 @@ class TDocLSDetails:
             ``"3gpp"``. Future variants (e.g. ``"ieee"``, ``"etsi"``)
             register distinct parsers and stamp their own value here.
         title: P3 ``Title:`` cell, minus the ``LS on`` prefix.
-        response_to_doc: P4 regex group 1 — original LS-out doc number.
-        response_to_title: P4 regex group 2 — original LS title.
-        response_to_group: P4 regex group 3 — original LS group.
-        release: P5 ``Release:`` cell.
+        response_to: P4 ``Response to:`` cell, verbatim (raw text).
+        release: P5 ``Release:`` cell, normalised to ``Rel-<n>``
+            (``Rel-20``) or the pre-Rel-4 marker (``R99`` / ``R98``).
         work_item_name: P6 regex group 1 — work item name.
         work_item_code: P6 regex group 2 — work item code.
         source: P8 ``Source:`` cell — submitting organisation name(s).
@@ -61,9 +60,7 @@ class TDocLSDetails:
     tdoc_id: str | None = None
     variant: str = "3gpp"
     title: str | None = None
-    response_to_doc: str | None = None
-    response_to_title: str | None = None
-    response_to_group: str | None = None
+    response_to: str | None = None
     release: str | None = None
     work_item_name: str | None = None
     work_item_code: str | None = None

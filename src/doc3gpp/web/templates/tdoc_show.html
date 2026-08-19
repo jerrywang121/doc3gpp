@@ -92,10 +92,7 @@
     <h2>LS Cover</h2>
     <dl>
       <dt>Title</dt><dd>{{ record.ls.title or '—' }}</dd>
-      <dt>Response to</dt><dd>
-        {% if record.ls.response_to_doc %}<code>{{ record.ls.response_to_doc }}</code>{% endif %}
-        {% if record.ls.response_to_group %} from {{ record.ls.response_to_group }}{% endif %}
-      </dd>
+      <dt>Response to</dt><dd>{{ record.ls.response_to or '—' }}</dd>
       <dt>Release</dt><dd>{{ record.ls.release or '—' }}</dd>
       <dt>Work Item</dt><dd>
         {{ record.ls.work_item_name or '—' }}

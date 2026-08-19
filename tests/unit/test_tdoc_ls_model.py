@@ -9,9 +9,7 @@ def test_default_construction_is_valid():
     assert d.ftp_url is None
     assert d.variant == "3gpp"
     assert d.title is None
-    assert d.response_to_doc is None
-    assert d.response_to_title is None
-    assert d.response_to_group is None
+    assert d.response_to is None
     assert d.release is None
     assert d.work_item_name is None
     assert d.work_item_code is None
@@ -38,9 +36,7 @@ def test_none_string_fields_pass_through():
         tdoc_id="R5-240001",
         ftp_url="tsg/ls/R5-240001.doc",
         title="LS on foo",
-        response_to_doc="R5-234567",
-        response_to_title="foo",
-        response_to_group="RAN WG2",
+        response_to="LS R5-234567 on foo from RAN WG2",
         release="Rel-17",
         work_item_name="5G_eHealth",
         work_item_code="WI-123456",

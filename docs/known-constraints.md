@@ -103,6 +103,14 @@ change set so the docs stay honest.
   `create_schema()`, but existing installs gain it only when the LS
   repo writes its first row (`SQLAlchemyLSParserRepository._ensure_table_exists`
   runs `Base.metadata.create_all` on a missing-table probe).
+- **`tdoc_cr_ls_details.response_to` migration.** The response-to
+  cell collapsed to a single `response_to` column (raw cell text) —
+  the legacy `response_to_title` / `response_to_group` /
+  `response_to_doc` columns are gone. `create_schema()` runs
+  `_migrate_ls_response_to_columns` for legacy databases — existing
+  rows get `response_to` backfilled from the old columns, and the
+  legacy columns are dropped on sqlite >= 3.35 (they remain as orphan
+  columns on older sqlite but are never read/written).
 - **`tdoc_cr_ttcn_details` is created lazily on first write, not on
   `doc3gpp db init`.** `TDocCrTtcnDetailOrm` is registered with
   `Base.metadata` so a fresh install picks it up via the standard

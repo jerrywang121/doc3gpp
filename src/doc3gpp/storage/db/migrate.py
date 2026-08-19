@@ -159,6 +159,76 @@ def _migrate_spec_versions_drop_comment() -> None:
             return
 
 
+def _migrate_ls_response_to_columns() -> None:
+    """Migrate ``tdoc_cr_ls_details`` response-to columns.
+
+    The v1 LS sidecar split the response-to cell into
+    ``response_to_doc`` / ``response_to_title`` / ``response_to_group``;
+    the current schema collapses to a single ``response_to`` column
+    holding the raw ``Response to:`` cell text. Existing rows are
+    migrated:
+
+    * ``response_to`` = ``response_to_title`` when present, else the
+      doc / group text; ``NULL`` when the old columns are all empty.
+    * The legacy ``response_to_title`` / ``response_to_group`` /
+      ``response_to_doc`` columns are dropped.
+
+    Idempotent: probe ``PRAGMA table_info`` first — runs only when a
+    legacy column is present (older databases). Dropping columns is
+    deferred to sqlite >= 3.35 only; on older sqlite the orphan
+    columns remain but are never read/written by the ORM.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='tdoc_cr_ls_details' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(tdoc_cr_ls_details)")).all()
+        column_names = {row[1] for row in rows}
+        if not (
+            "response_to_title" in column_names
+            or "response_to_group" in column_names
+            or "response_to_doc" in column_names
+        ):
+            return
+        if "response_to" not in column_names:
+            conn.execute(
+                text("ALTER TABLE tdoc_cr_ls_details ADD COLUMN response_to TEXT")
+            )
+        if "response_to_title" in column_names:
+            conn.execute(
+                text(
+                    "UPDATE tdoc_cr_ls_details SET response_to = response_to_title "
+                    "WHERE response_to IS NULL AND response_to_title IS NOT NULL"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE tdoc_cr_ls_details SET response_to = "
+                    "CASE WHEN response_to_title IS NOT NULL THEN response_to_title "
+                    "WHEN response_to_doc IS NOT NULL THEN response_to_doc "
+                    "WHEN response_to_group IS NOT NULL THEN response_to_group "
+                    "END "
+                    "WHERE response_to IS NULL"
+                )
+            )
+        try:
+            for col in ("response_to_title", "response_to_group", "response_to_doc"):
+                if col in column_names:
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE tdoc_cr_ls_details DROP COLUMN {col}"
+                        )
+                    )
+        except Exception:  # noqa: BLE001 - older sqlite lacks DROP COLUMN
+            pass
+
+
 def _create_search_schema() -> None:
     """Create the FTS5 virtual table + meta sidecar.
 
@@ -309,6 +379,7 @@ def create_schema() -> None:
     _migrate_spec_rapporteurs()
     _migrate_tdoc_cr_cover_page_summary_of_change()
     _migrate_spec_versions_drop_comment()
+    _migrate_ls_response_to_columns()
     Base.metadata.create_all(bind=engine)
     _create_search_schema()
     _create_vector_schema()

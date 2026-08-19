@@ -640,8 +640,8 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `get_by_tdoc_id` lookup), `variant` (default
       `"3gpp"` — tags the format family so the show record and the
       search index can branch without re-running the parser),
-      eleven header fields (`title`, `response_to_doc`,
-      `response_to_title`, `response_to_group`, `release`,
+      eleven header fields (`title`, `response_to`,
+      `release`,
       `work_item_name`, `work_item_code`, `source`, `to_groups`,
       `cc_groups`), `attachments_json` (`LargeBinary` —
       gzip-compressed UTF-8 JSON list of `{doc_number, description}`
@@ -652,7 +652,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       parse path does not write; DB-mode LS extracts do write a
       `tdoc_extracts` row via `TDocCrService.extract`). One row per immutable URL. The FTS5 `tdoc_search`
       projection and the vector `_build_embed_text` projection both
-      fall back to this table's `title` / `response_to_title` /
+      fall back to this table's `title` / `response_to` /
       `to_groups` / `cc_groups` when no `tdoc_cr_cover_page` row
       exists for the `tdoc_id`.
 - `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` / `tdoc_cr_ls_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).

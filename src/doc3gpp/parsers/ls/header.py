@@ -1,11 +1,13 @@
 """Shared header detection for LS TDoc parsers.
 
-The 3GPP LS template carries a recognisable header shape — a tabbed
-``Meeting`` / ``TDoc`` first line, a ``Title:`` cell whose value
-starts with ``LS on`` (case-insensitive), and at least one of
-``Source:`` / ``To:`` / ``Cc:`` cells. Variants (IEEE, ETSI, …) keep
-their own header detection but share the same error contract via
-:class:`LSHeaderMissingError`.
+The 3GPP LS template carries a recognisable header shape — a
+``Meeting`` reference line (``3GPP TSG-RAN WG5 Meeting #110`` or the
+shorter ``SA WG2 Meeting #S2-176``), a ``Title:`` cell whose value
+carries an ``LS`` token (``LS on …``, ``Reply LS on …``,
+``[draft] Reply LS on …``, ``LS to … on …``, ``LSout on …``, …), and
+at least one of ``Source:`` / ``To:`` / ``Cc:`` cells. Variants
+(IEEE, ETSI, …) keep their own header detection but share the same
+error contract via :class:`LSHeaderMissingError`.
 
 The detection works on raw markdown because the LS template is
 already markdown-shaped when the converter hands it to the parser.
@@ -15,12 +17,14 @@ from __future__ import annotations
 
 import re
 
-_LS_TITLE_PREFIX = re.compile(r"^\s*LS\s+on\b", re.IGNORECASE)
+_LS_TITLE_RE = re.compile(r"\bLS(?:out)?\b", re.IGNORECASE)
+# First-line meeting reference: ``… Meeting …`` (with the meeting
+# number / code). The tdoc id is deliberately ignored — real LS docs
+# put the id on the same line, on a later line, or omit it.
 _FIRST_LINE_RE = re.compile(
-    r"^3GPP\b.*\bMeeting\b\s*[#\w]",
+    r"\bMeeting\b\s*[#\w]",
     re.IGNORECASE,
 )
-_TDOC_ID_RE = re.compile(r"\bR[1-9]-\d{6}\b|\bR[1-9]s\d{6}\b", re.IGNORECASE)
 _ANY_OF_SOURCE_TO_CC = re.compile(r"^(?:Source|To|Cc)\s*:", re.IGNORECASE)
 
 
@@ -46,26 +50,23 @@ def is_ls_header_present(markdown: str) -> tuple[bool, str]:
     head = lines[:100]
     blob = "\n".join(head)
 
-    first_match = False
-    for line in head:
-        if _FIRST_LINE_RE.search(line):
-            # An LS header always pairs the meeting reference with a
-            # 3GPP TDoc id (``R5-…`` / ``R5s…``). Tab-separated
-            # markdown carries the id verbatim; the docx→md converter
-            # emits the same id bare on the same line or shortly after.
-            if _TDOC_ID_RE.search(line):
-                first_match = True
-                break
+    first_match = any(_FIRST_LINE_RE.search(line) for line in head)
 
     title_match = False
     for line in head:
-        if line.startswith(("Title:", "Title :")) and _LS_TITLE_PREFIX.search(
-            line.split(":", 1)[1]
+        # The docx→md converter emits header cells as plain lines
+        # (``Title:``) or as markdown headings (``# Title:``) when the
+        # source document styles them as heading paragraphs.
+        stripped = line.lstrip("#").strip()
+        if stripped.startswith(("Title:", "Title :")) and _LS_TITLE_RE.search(
+            stripped.split(":", 1)[1]
         ):
             title_match = True
             break
 
-    any_destination = any(_ANY_OF_SOURCE_TO_CC.match(line) for line in head)
+    any_destination = any(
+        _ANY_OF_SOURCE_TO_CC.match(line.lstrip("#").strip()) for line in head
+    )
 
     return (first_match and title_match and any_destination), blob
 

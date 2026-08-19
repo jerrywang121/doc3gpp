@@ -23,6 +23,7 @@
 - Auto-sync (`trigger_auto_sync`) is never called from URL mode.
 - `LookupError` → HTTP 404, MCP `-32004` (`MCP_CODE_NOT_FOUND`) — keep the three tables in lock-step.
 - Tests use the existing `client` / `sqlite_env` fixtures from `tests/unit/test_web_routes.py` (FastAPI `TestClient`, in-process sqlite).
+- **MCP `get_tdoc` both-supplied ruling (human, pre-flight):** when both `tdoc_id` and `ftp_url` are supplied, `ftp_url` wins and `tdoc_id` is silently ignored (NOT strict XOR); only neither-supplied raises `InvalidFilterError("Provide exactly one of tdoc_id or ftp_url")`. The HTTP route has no both-supplied case (only `ftp_url`).
 - Ruff is the only configured linter (`ruff check .`).
 - Per `docs/conventions.md` §"Documentation sync", update `docs/web-server.md` and `AGENTS.md` in the same change set.
 
@@ -170,7 +171,7 @@ git commit -m "feat: add TDocUrlNotFoundError for URL-anchored reads"
 ## Task 2: Add `GET /tdocs/by-url` web route
 
 **Files:**
-- Modify: `src/doc3gpp/web/routes/tdocs.py` (after the existing `show_tdoc` route, around line 302)
+- Modify: `src/doc3gpp/web/routes/tdocs.py` (BEFORE the existing `show_tdoc` route at line 271 — FastAPI matches routes in registration order, and `/{tdoc_id}` would otherwise swallow `/by-url`)
 - Test: `tests/unit/test_web_routes.py` (append tests at end)
 
 **Interfaces:**
@@ -373,7 +374,13 @@ Expected: every `test_show_tdoc_by_url_*` test fails (404 / route-not-found / 42
 
 - [ ] **Step 2.3: Implement the route**
 
-In `src/doc3gpp/web/routes/tdocs.py`, after the existing `show_tdoc` route (after line 302), add:
+**Human ruling (pre-flight):** this route MUST be registered BEFORE
+the existing `/{tdoc_id}` route (currently line 271) — FastAPI
+matches in registration order and `/{tdoc_id}` would swallow
+`/by-url` as a tdoc_id. Insert the new route block above
+`show_tdoc`.
+
+In `src/doc3gpp/web/routes/tdocs.py`, add the route above the existing `show_tdoc` route (line 271):
 
 ```python
 @router.get("/by-url", include_in_schema=False)
@@ -679,150 +686,141 @@ git commit -m "feat(web): polymorphic tdoc_show.html for URL-anchored record"
 
 **Interfaces:**
 - Consumes: `TDocShowRepos` (existing), `TDocShowRecordByUrl.from_ftp_url` (existing), `normalize_ftp_path` (existing), `TDocUrlNotFoundError` (from Task 1), `InvalidFilterError` (existing).
-- Produces: extended `get_tdoc(tdoc_id=None, ftp_url=None)` tool with XOR validator; JSON string returned via `_to_json`.
+- Produces: extended `get_tdoc(tdoc_id=None, ftp_url=None)` tool — both-missing rejected; **when both are supplied, `ftp_url` wins and `tdoc_id` is silently ignored** (human ruling at pre-flight: "Prefer URL, ignore tdoc_id"). JSON string returned via `_to_json`.
 
 - [ ] **Step 4.1: Write the failing MCP tool tests**
 
-Check whether `tests/unit/web/test_mcp_server.py` exists. If not, create it:
+Check whether `tests/unit/web/test_mcp_server.py` exists (it does — 180 lines, `parse_tdoc_url` tests). Append the new tests to the END of the existing file, reusing its established pattern: `_server()` helper (builds `build_state(get_settings())` + `build_mcp_server(state)`, runs `create_schema()`), `asyncio.run(_call(server, "get_tdoc", args))`, `pytest.raises(MCPError)`.
+
+Append:
 
 ```python
-"""Unit tests for the MCP ``get_tdoc`` tool (tdoc_id / ftp_url XOR)."""
-from __future__ import annotations
-
-import json
-from typing import Any
-
-import pytest
-
-
-@pytest.fixture
-def mcp_state(sqlite_env: Any) -> Any:
-    """Build a minimal MCP state for the ``get_tdoc`` tool."""
-    from doc3gpp.web.state import WebState
-    from doc3gpp.services.factory import (
-        build_meeting_service,
-        build_tdoc_repository,
-        build_tdoc_file_repository,
-    )
-
-    state = WebState.__new__(WebState)
-    state.settings = sqlite_env["settings"]
-    state.services = type("S", (), {})()
-    state.services.meeting = build_meeting_service()
-    state.services.tdoc = build_tdoc_repository()
-    state.services.tdoc_file_repo = build_tdoc_file_repository()
-    state.services.tsg = None  # not exercised here
-    state.services.wi = None
-    state.services.spec = None
-    state.services.search = None
-    state.services.semantic_search = None
-    state.services.job_repo = None
-    state.jobs = None
-    return state
-
-
-def test_mcp_get_tdoc_xor_validator_rejects_both(mcp_state: Any) -> None:
-    from doc3gpp.web.mcp_server import build_mcp_server
-
-    server = build_mcp_server(mcp_state)
-    tool = next(t for t in server._tool_manager._tools.values() if t.name == "get_tdoc")
-    with pytest.raises(Exception) as exc_info:
-        tool.fn(tdoc_id="R5s260001", ftp_url="TSG_RAN/foo.zip")
-    assert "exactly one of tdoc_id or ftp_url" in str(exc_info.value).lower()
-
-
-def test_mcp_get_tdoc_xor_validator_rejects_neither(mcp_state: Any) -> None:
-    from doc3gpp.web.mcp_server import build_mcp_server
-
-    server = build_mcp_server(mcp_state)
-    tool = next(t for t in server._tool_manager._tools.values() if t.name == "get_tdoc")
-    with pytest.raises(Exception) as exc_info:
-        tool.fn()
-    assert "exactly one of tdoc_id or ftp_url" in str(exc_info.value).lower()
-
-
-def test_mcp_get_tdoc_404_on_no_rows(mcp_state: Any) -> None:
-    from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.web.mcp_server import build_mcp_server
-
-    create_schema()
-    server = build_mcp_server(mcp_state)
-    tool = next(t for t in server._tool_manager._tools.values() if t.name == "get_tdoc")
-    with pytest.raises(Exception) as exc_info:
-        tool.fn(ftp_url="TSG_RAN/missing.zip")
-    assert "no stored rows match ftp_url" in str(exc_info.value).lower()
-
-
-def test_mcp_get_tdoc_url_normalisation(mcp_state: Any) -> None:
-    """A full https URL and a bare relative path resolve the same record."""
-    from doc3gpp.storage.db.migrate import create_schema
+def test_mcp_get_tdoc_prefers_url_when_both_supplied(sqlite_env) -> None:
+    """Both ``tdoc_id`` and ``ftp_url`` → URL wins, tdoc_id ignored (human ruling)."""
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
     from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.web.mcp_server import build_mcp_server
+    import json
 
-    create_schema()
+    _, server = _server()
+    url = "R5/26.001/R5s260001.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260001", ftp_url=url)
+    )
+
+    async def run():
+        return await _call(
+            server,
+            "get_tdoc",
+            {"tdoc_id": "other_tdoc", "ftp_url": url},
+        )
+
+    payload = json.loads(asyncio.run(run()))
+    assert payload["ftp_url"] == url
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+
+
+def test_mcp_get_tdoc_rejects_neither(sqlite_env) -> None:
+    """Neither ``tdoc_id`` nor ``ftp_url`` → invalid-params error."""
+    _, server = _server()
+
+    async def run():
+        return await _call(server, "get_tdoc", {})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert "exactly one of tdoc_id or ftp_url" in exc_info.value.message
+
+
+def test_mcp_get_tdoc_by_url_404_on_no_rows(sqlite_env) -> None:
+    """Empty DB → ``TDocUrlNotFoundError`` surfaces as an MCP error."""
+    _, server = _server()
+
+    async def run():
+        return await _call(
+            server,
+            "get_tdoc",
+            {"ftp_url": "TSG_RAN/missing.zip"},
+        )
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert "no stored rows match ftp_url" in exc_info.value.message
+
+
+def test_mcp_get_tdoc_url_normalisation(sqlite_env) -> None:
+    """A full https URL and a bare relative path resolve the same record."""
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.models.tdoc import TDoc
+    import json
+
+    _, server = _server()
     bare = "R5/26.001/R5s260001.zip"
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=bare))
 
-    server = build_mcp_server(mcp_state)
-    tool = next(t for t in server._tool_manager._tools.values() if t.name == "get_tdoc")
-    payload_full = tool.fn(ftp_url=f"https://www.3gpp.org/ftp/{bare}")
-    payload_bare = tool.fn(ftp_url=bare)
-    assert payload_full == payload_bare
+    async def run(url):
+        return await _call(server, "get_tdoc", {"ftp_url": url})
+
+    full_payload = json.loads(asyncio.run(run(f"https://www.3gpp.org/ftp/{bare}")))
+    bare_payload = json.loads(asyncio.run(run(bare)))
+    assert full_payload == bare_payload
 
 
-def test_mcp_get_tdoc_by_url_returns_json_envelope(mcp_state: Any) -> None:
+def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
     """The URL-mode JSON envelope mirrors the CLI ``--format json`` shape."""
-    from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
-    from doc3gpp.storage.repositories.tdoc_file_sql import (
-        SQLAlchemyTDocFileRepository,
-    )
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.models.tdoc_file import TDocFile
-    from doc3gpp.web.mcp_server import build_mcp_server
+    import json
 
-    create_schema()
+    _, server = _server()
     url = "R5/26.001/R5s260001.zip"
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=url))
     SQLAlchemyTDocCrRepository().upsert(
         TDocCRDetails(tdoc_id="R5s260001", ftp_url=url, cr_num="0001")
     )
     SQLAlchemyTDocFileRepository().upsert_many(
-        [TDocFile(ftp_url="R5/26.001/R5s260001_rev1.zip", tdoc_id="R5s260001", type="revision")]
+        [
+            TDocFile(
+                ftp_url="R5/26.001/R5s260001_rev1.zip",
+                tdoc_id="R5s260001",
+                type="revision",
+            )
+        ]
     )
 
-    server = build_mcp_server(mcp_state)
-    tool = next(t for t in server._tool_manager._tools.values() if t.name == "get_tdoc")
-    payload = tool.fn(ftp_url=url)
-    parsed = json.loads(payload)
-    assert parsed["ftp_url"] == url
-    assert parsed["tdoc"]["tdoc_id"] == "R5s260001"
-    assert parsed["cover"]["cr_num"] == "0001"
-    assert len(parsed["files"]) == 1
+    async def run():
+        return await _call(server, "get_tdoc", {"ftp_url": url})
+
+    payload = json.loads(asyncio.run(run()))
+    assert payload["ftp_url"] == url
+    assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+    assert payload["cover"]["cr_num"] == "0001"
+    assert len(payload["files"]) == 1
 
 
-def test_mcp_get_tdoc_existing_tdoc_id_path_unchanged(mcp_state: Any) -> None:
+def test_mcp_get_tdoc_existing_tdoc_id_path_unchanged(sqlite_env) -> None:
     """Regression: the ``tdoc_id`` path still works (no behavioural change)."""
-    from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
     from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.web.mcp_server import build_mcp_server
+    import json
 
-    create_schema()
+    _, server = _server()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url="x.zip"))
-    server = build_mcp_server(mcp_state)
-    tool = next(t for t in server._tool_manager._tools.values() if t.name == "get_tdoc")
-    payload = json.loads(tool.fn(tdoc_id="R5s260001"))
+
+    async def run():
+        return await _call(server, "get_tdoc", {"tdoc_id": "R5s260001"})
+
+    payload = json.loads(asyncio.run(run()))
     assert payload["tdoc"]["tdoc_id"] == "R5s260001"
 ```
 
 - [ ] **Step 4.2: Run the new tests to verify they fail**
 
 Run: `python -m pytest tests/unit/web/test_mcp_server.py -v`
-Expected: `test_mcp_get_tdoc_xor_validator_rejects_both` and `test_mcp_get_tdoc_xor_validator_rejects_neither` fail because the current `get_tdoc` tool doesn't accept `ftp_url`. The other tests also fail.
+Expected: every new `test_mcp_get_tdoc_*` test fails — the current `get_tdoc` tool doesn't accept `ftp_url`.
 
 - [ ] **Step 4.3: Extend the `get_tdoc` tool**
 
@@ -868,7 +866,7 @@ with:
     def get_tdoc(
         tdoc_id: Annotated[
             str | None,
-            Field(description="Canonical tdoc id (e.g. 'R5-260013'). Mutually exclusive with ftp_url."),
+            Field(description="Canonical tdoc id (e.g. 'R5-260013'). Ignored when ftp_url is also supplied."),
         ] = None,
         ftp_url: Annotated[
             str | None,
@@ -876,7 +874,7 @@ with:
                 description=(
                     "3GPP FTP URL (full URL or relative path) — surfaces every row "
                     "across the four URL-keyed tables whose ftp_url matches. "
-                    "Mutually exclusive with tdoc_id."
+                    "Takes precedence over tdoc_id when both are supplied."
                 )
             ),
         ] = None,
@@ -900,7 +898,10 @@ with:
             SQLAlchemyTDocRepository,
         )
 
-        if (tdoc_id is None) == (ftp_url is None):
+        # Human ruling (pre-flight): when both tdoc_id and ftp_url are
+        # supplied, ftp_url wins and tdoc_id is silently ignored. Only
+        # neither-supplied raises.
+        if tdoc_id is None and ftp_url is None:
             raise InvalidFilterError(
                 "Provide exactly one of tdoc_id or ftp_url"
             )
@@ -956,7 +957,7 @@ Expected: clean.
 
 ```bash
 git add src/doc3gpp/web/mcp_server.py tests/unit/web/test_mcp_server.py
-git commit -m "feat(mcp): get_tdoc accepts ftp_url (XOR with tdoc_id)"
+git commit -m "feat(mcp): get_tdoc accepts ftp_url (preferred over tdoc_id)"
 ```
 
 ---

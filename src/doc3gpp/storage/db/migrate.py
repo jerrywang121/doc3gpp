@@ -134,6 +134,42 @@ def _migrate_tdoc_cr_cover_page_summary_of_change() -> None:
         )
 
 
+def _migrate_tdocs_xlsx_metadata() -> None:
+    """Add six XLSX-metadata columns to ``tdocs``.
+
+    Idempotent: probes ``PRAGMA table_info(tdocs)`` and only issues
+    ``ALTER TABLE`` statements for the columns that are absent. Same
+    shape as :func:`_migrate_spec_rapporteurs` /
+    :func:`_migrate_tdoc_cr_cover_page_summary_of_change`.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='tdocs' LIMIT 1"
+            )
+        ).first()
+        if not table_exists:
+            return
+        rows = conn.execute(text("PRAGMA table_info(tdocs)")).all()
+        column_names = {row[1] for row in rows}
+        additions = [
+            ("tdoc_for",          "VARCHAR(64)"),
+            ("abstract",          "TEXT"),
+            ("secretary_remarks", "TEXT"),
+            ("ls_to",             "VARCHAR(256)"),
+            ("ls_cc",             "VARCHAR(256)"),
+            ("original_ls",       "TEXT"),
+        ]
+        for name, ddl_type in additions:
+            if name in column_names:
+                continue
+            conn.execute(
+                text(f"ALTER TABLE tdocs ADD COLUMN {name} {ddl_type}")
+            )
+
+
 def _migrate_spec_versions_drop_comment() -> None:
     """Drop the unused ``spec_versions.comment`` column. Idempotent;
     degrades to leaving the orphan column on sqlite < 3.35 (no
@@ -307,6 +343,7 @@ def create_schema() -> None:
     _migrate_drop_tsg_spec_last_sync()
     _migrate_spec_rapporteurs()
     _migrate_tdoc_cr_cover_page_summary_of_change()
+    _migrate_tdocs_xlsx_metadata()
     _migrate_spec_versions_drop_comment()
     Base.metadata.create_all(bind=engine)
     _create_search_schema()

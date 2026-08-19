@@ -354,3 +354,112 @@ def test_cancel_button_omits_for_terminal_job(sqlite_env, app_with_deps) -> None
     assert "Cancel</button>" not in list_html.text
     assert f"/jobs/{job.id}/cancel" not in list_html.text
     get_engine.cache_clear()
+
+
+def test_web_tdocs_list_filter_by_abstract(sqlite_env, app_with_deps) -> None:
+    """``GET /tdocs?abstract=%25TL%25DR%25&format=json`` matches only the row with the abstract."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    app, _ = app_with_deps
+    create_schema()
+    SQLAlchemyTDocRepository().upsert_many(
+        [
+            TDoc(tdoc_id="R5-260001", abstract="TL;DR here."),
+            TDoc(tdoc_id="R5-260002", abstract="Unrelated."),
+        ]
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/tdocs?abstract=%25TL%25DR%25&format=json")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert body
+    assert all(r["tdoc_id"] == "R5-260001" for r in body)
+    get_engine.cache_clear()
+
+
+def test_web_tdocs_show_renders_xlsx_metadata_panel(sqlite_env, app_with_deps) -> None:
+    """``GET /tdocs/{id}`` renders the XLSX metadata panel when any field is set."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    app, _ = app_with_deps
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(
+            tdoc_id="R5-260001",
+            tdoc_for="Information",
+            ls_to="RAN2",
+            ls_cc="RAN3",
+            original_ls="RAN2#116",
+            abstract="TL;DR here.",
+            secretary_remarks="Secretary note.",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/tdocs/R5-260001")
+    assert response.status_code == 200
+    html = response.text
+    assert "XLSX metadata" in html
+    assert "Information" in html
+    assert "RAN2" in html
+    assert "RAN3" in html
+    assert "RAN2#116" in html
+    assert "TL;DR here." in html
+    assert "Secretary note." in html
+    assert '<pre class="xlsx-meta-pre">' in html
+    get_engine.cache_clear()
+
+
+def test_web_tdocs_list_xlsx_metadata_fields_opt_in(sqlite_env, app_with_deps) -> None:
+    """``?fields=abstract&format=json`` surfaces the abstract column; the default omits it."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    app, _ = app_with_deps
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260001", abstract="TL;DR here.")
+    )
+
+    with TestClient(app) as client:
+        default = client.get("/tdocs?format=json")
+        opted = client.get("/tdocs?fields=abstract&format=json")
+    assert default.status_code == 200
+    assert opted.status_code == 200
+    default_rows = default.json()
+    opted_rows = opted.json()
+    assert isinstance(default_rows, list) and default_rows
+    assert isinstance(opted_rows, list) and opted_rows
+    assert "abstract" not in default_rows[0]
+    assert opted_rows[0]["abstract"] == "TL;DR here."
+    get_engine.cache_clear()
+
+
+def test_web_tdocs_show_panel_omitted_when_all_six_are_null(
+    sqlite_env, app_with_deps
+) -> None:
+    """``GET /tdocs/{id}`` omits the XLSX metadata panel when all six fields are null."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    app, _ = app_with_deps
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260002"))
+
+    with TestClient(app) as client:
+        response = client.get("/tdocs/R5-260002")
+    assert response.status_code == 200
+    assert "XLSX metadata" not in response.text
+    get_engine.cache_clear()

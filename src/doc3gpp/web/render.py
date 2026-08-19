@@ -47,6 +47,12 @@ TDOC_COLUMN_LABELS: dict[str, str] = {
     "cr_cat": "CR Category",
     "version": "Version",
     "related_wis": "Related WIs",
+    "ls_to": "LS To",
+    "ls_cc": "LS Cc",
+    "original_ls": "Original LS",
+    "tdoc_for": "For",
+    "abstract": "Abstract",
+    "secretary_remarks": "Secretary Remarks",
 }
 
 # Default HTML table columns: the previous hard-coded set with

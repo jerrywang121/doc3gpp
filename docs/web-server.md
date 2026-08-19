@@ -235,6 +235,13 @@ The TDoc detail page links the FTP URL field to the cached source zip
 `changed_functions` aggregate when present, and auxiliary files link to
 their FTP locations.
 
+The TDoc detail page renders an additional **XLSX metadata** panel
+when any of the six new `tdocs` columns (`tdoc_for` / `abstract` /
+`secretary_remarks` / `ls_to` / `ls_cc` / `original_ls`) is
+non-`NULL`. The panel is omitted for legacy rows that were synced
+before this feature landed — they stay `NULL` until the next
+`doc3gpp tdoc sync` re-reads the meeting XLSX.
+
 The TDoc detail page shows a Parse card (only when the TDoc has an FTP
 URL) with "Force re-parse" and "Full extraction" checkboxes. Submitting
 enqueues a `parse_tdocs` job filtered to that single TDoc id; the job

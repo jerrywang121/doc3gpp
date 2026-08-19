@@ -1053,6 +1053,37 @@ def tdoc_list(
         "--cr-pack",
         help="SQL LIKE pattern on cr_pack (or null/not-null/!pattern).",
     ),
+    ls_to: str | None = typer.Option(
+        None,
+        "--ls-to",
+        help="SQL LIKE pattern on ls_to (or null/not-null/!pattern).",
+    ),
+    ls_cc: str | None = typer.Option(
+        None,
+        "--ls-cc",
+        help="SQL LIKE pattern on ls_cc (or null/not-null/!pattern).",
+    ),
+    original_ls: str | None = typer.Option(
+        None,
+        "--original-ls",
+        help="SQL LIKE pattern on original_ls (or null/not-null/!pattern).",
+    ),
+    tdoc_for: str | None = typer.Option(
+        None,
+        "--for",
+        "--tdoc-for",
+        help="SQL LIKE pattern on tdoc_for (or null/not-null/!pattern).",
+    ),
+    abstract: str | None = typer.Option(
+        None,
+        "--abstract",
+        help="SQL LIKE pattern on abstract (or null/not-null/!pattern).",
+    ),
+    secretary_remarks: str | None = typer.Option(
+        None,
+        "--secretary-remarks",
+        help="SQL LIKE pattern on secretary_remarks (or null/not-null/!pattern).",
+    ),
     uploaded_date: str | None = typer.Option(
         None,
         "--uploaded-date",
@@ -1090,7 +1121,8 @@ def tdoc_list(
     Filter optional flags are combinable; the query is ANDed together:
       --tdoc, --meeting-id, --meeting, --status, --cr-cat, --spec, --wi,
       --revision-of, --revised-to, --title, --ftp-url, --release, --version,
-      --cr-num, --cr-pack, --source, --type, --uploaded-date
+      --cr-num, --cr-pack, --source, --type, --uploaded-date,
+      --ls-to, --ls-cc, --original-ls, --for, --abstract, --secretary-remarks
     See docs/cli.md for full semantics and examples.
     """
 
@@ -1117,7 +1149,8 @@ def tdoc_list(
         "Listing %s recent TDocs (offset=%s) with filters tdoc=%s meeting=%s "
         "meeting_id=%s source=%s spec=%s wi=%s title=%s cr_cat=%s status=%s "
         "type=%s revision_of=%s revised_to=%s ftp_url=%s release=%s version=%s "
-        "cr_num=%s cr_pack=%s uploaded_date=%s",
+        "cr_num=%s cr_pack=%s uploaded_date=%s ls_to=%s ls_cc=%s original_ls=%s "
+        "tdoc_for=%s abstract=%s secretary_remarks=%s",
         limit,
         offset,
         tdoc,
@@ -1138,6 +1171,12 @@ def tdoc_list(
         cr_num,
         cr_pack,
         uploaded_date,
+        ls_to,
+        ls_cc,
+        original_ls,
+        tdoc_for,
+        abstract,
+        secretary_remarks,
     )
 
     service = build_tdoc_service()
@@ -1171,6 +1210,12 @@ def tdoc_list(
         cr_num=cr_num,
         cr_pack=cr_pack,
         uploaded_date=uploaded_date,
+        ls_to=ls_to,
+        ls_cc=ls_cc,
+        original_ls=original_ls,
+        tdoc_for=tdoc_for,
+        abstract=abstract,
+        secretary_remarks=secretary_remarks,
     )
 
     rows: list[list[str]] = []

@@ -43,6 +43,12 @@ class TDocORM(Base):
     related_wis: Mapped[str | None] = mapped_column(String(256), nullable=True)
     cr_num: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cr_pack: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tdoc_for: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secretary_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ls_to: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ls_cc: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    original_ls: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class MeetingORM(Base):

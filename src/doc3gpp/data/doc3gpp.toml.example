@@ -54,6 +54,9 @@
 #   "source", "type", "status",
 #   "cr_cat", "spec", "version", "related_wis",
 #   # "ftp_url" — relative path to the TDoc zip on https://www.3gpp.org/ftp/
+#   # "abstract" — TL;DR pulled from the XLSX "Abstract" column
+#   # "secretary_remarks" — free-form secretary annotations from XLSX
+#   # "original_ls" — LS origin pointer from the XLSX "Original LS" column
 # ]
 # tsg = ["tsg_name", "short_name", "description"]
 # wi = ["wi_id", "acronym", "release", "name"]

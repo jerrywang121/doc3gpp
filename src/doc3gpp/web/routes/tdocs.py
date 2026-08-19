@@ -136,6 +136,12 @@ async def list_tdocs(
     version: str | None = Query(default=None),
     cr_num: str | None = Query(default=None, alias="cr-num"),
     cr_pack: str | None = Query(default=None, alias="cr-pack"),
+    ls_to: str | None = Query(default=None, alias="ls-to"),
+    ls_cc: str | None = Query(default=None, alias="ls-cc"),
+    original_ls: str | None = Query(default=None, alias="original-ls"),
+    tdoc_for: str | None = Query(default=None, alias="for"),
+    abstract: str | None = Query(default=None, alias="abstract"),
+    secretary_remarks: str | None = Query(default=None, alias="secretary-remarks"),
     uploaded_date: str | None = Query(default=None, alias="uploaded-date"),
     limit: str | None = Query(default="50"),
     offset: str | None = Query(default="0"),
@@ -170,11 +176,11 @@ async def list_tdocs(
                 + ", ".join(sorted(unknown))
                 + f"; valid: {', '.join(sorted(_TDOC_ALLOWED_FIELDS))}"
             )
-        html_fields = [f for f in fields if f]
+        selected_fields = [f for f in fields if f]
     else:
-        html_fields = list(TDOC_HTML_DEFAULT_FIELDS)
-    if not html_fields:
-        html_fields = list(TDOC_HTML_DEFAULT_FIELDS)
+        selected_fields = None
+    html_fields = selected_fields or list(TDOC_HTML_DEFAULT_FIELDS)
+    json_fields = selected_fields or list(_TDOC_DEFAULT_FIELDS)
 
     rows = service.list_recent_with_meeting(
         limit=parsed_limit,
@@ -196,11 +202,17 @@ async def list_tdocs(
         version=parse_text_query(version),
         cr_num=parse_text_query(cr_num),
         cr_pack=parse_text_query(cr_pack),
+        ls_to=parse_text_query(ls_to),
+        ls_cc=parse_text_query(ls_cc),
+        original_ls=parse_text_query(original_ls),
+        tdoc_for=parse_text_query(tdoc_for),
+        abstract=parse_text_query(abstract),
+        secretary_remarks=parse_text_query(secretary_remarks),
         uploaded_date=parsed_uploaded_date,
     )
 
     if format == "json":
-        return JSONResponse(content=tdoc_rows(rows, _TDOC_DEFAULT_FIELDS))
+        return JSONResponse(content=tdoc_rows(rows, json_fields))
 
     next_offset = (
         parsed_offset + len(rows) if len(rows) == parsed_limit else None
@@ -243,6 +255,12 @@ async def list_tdocs(
                 "version": version or "",
                 "cr_num": cr_num or "",
                 "cr_pack": cr_pack or "",
+                "ls_to": ls_to or "",
+                "ls_cc": ls_cc or "",
+                "original_ls": original_ls or "",
+                "tdoc_for": tdoc_for or "",
+                "abstract": abstract or "",
+                "secretary_remarks": secretary_remarks or "",
                 "uploaded_date": uploaded_date or "",
                 "limit": parsed_limit,
             },

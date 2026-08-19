@@ -496,6 +496,10 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `TDocRepository.get_by_ftp_url` reads with
       `ORDER BY tdoc_id ASC LIMIT 1` as a deterministic fallback if
       the invariant is ever violated.
+    - `tdocs.tdoc_for` / `abstract` / `secretary_remarks` / `ls_to` /
+      `ls_cc` / `original_ls` — six optional XLSX metadata columns
+      captured per meeting TDoc-list sync; see
+      `docs/superpowers/specs/2026-08-19-tdocs-xlsx-metadata-design.md`.
 - `tdoc_files`:
     - `id` (PK), `tdoc_id` (FK → `tdocs.tdoc_id`, no cascade),
       `type` (`revision` / `review` / `support`), `file`, `ftp_url`

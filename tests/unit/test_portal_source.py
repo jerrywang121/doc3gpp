@@ -36,6 +36,25 @@ def test_fetch_tdocs_from_portal_returns_parsed_rows() -> None:
     )
 
 
+def test_fetch_tdocs_from_portal_forwards_xlsx_metadata_cells() -> None:
+    client = MagicMock(spec=ScraperClient)
+    client.get_bytes.return_value = _fixture_bytes()
+
+    tdocs = fetch_tdocs_from_portal(
+        meeting_id=85434,
+        url_template=PORTAL_TEMPLATE,
+        client=client,
+    )
+
+    agenda = next(t for t in tdocs if t.tdoc_id == "R5w260200")
+    assert agenda.tdoc_for == "Approval"
+    assert agenda.abstract is None
+    assert agenda.secretary_remarks is None
+    assert agenda.ls_to is None
+    assert agenda.ls_cc is None
+    assert agenda.original_ls is None
+
+
 def test_fetch_tdocs_from_portal_url_template_must_contain_meeting_id() -> None:
     client = MagicMock(spec=ScraperClient)
 

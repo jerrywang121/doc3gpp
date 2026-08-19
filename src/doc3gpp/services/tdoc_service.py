@@ -39,6 +39,12 @@ class TDocService:
         version: str | None = None,
         cr_num: str | None = None,
         cr_pack: str | None = None,
+        ls_to: str | None = None,
+        ls_cc: str | None = None,
+        original_ls: str | None = None,
+        tdoc_for: str | None = None,
+        abstract: str | None = None,
+        secretary_remarks: str | None = None,
     ) -> list[TDocWithMeeting]:
         """Return recent TDoc records joined with their parent meeting name.
 
@@ -81,6 +87,12 @@ class TDocService:
             version=version,
             cr_num=cr_num,
             cr_pack=cr_pack,
+            ls_to=ls_to,
+            ls_cc=ls_cc,
+            original_ls=original_ls,
+            tdoc_for=tdoc_for,
+            abstract=abstract,
+            secretary_remarks=secretary_remarks,
         )
 
     def sync_tdoc_list(

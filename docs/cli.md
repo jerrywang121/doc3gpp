@@ -391,10 +391,10 @@ Options:
 - --version: filter by `version` (e.g. `18.1.0`).
 - --cr-num: filter by `cr_num` (e.g. `3790`).
 - --cr-pack: filter by `cr_pack` (e.g. `RP-220001`).
-- --ls-to: filter by `ls_to` (e.g. `R5-260013`).
-- --ls-cc: filter by `ls_cc` (e.g. `R5-260013`).
+- --ls-to: filter by `ls_to` (e.g. `RAN5`).
+- --ls-cc: filter by `ls_cc` (e.g. `RAN2`).
 - --original-ls: filter by `original_ls` (e.g. `R5-260013`).
-- --for (alias `--tdoc-for`): filter by `tdoc_for` (e.g. `R5-260013`).
+- --for (alias `--tdoc-for`): filter by `tdoc_for` (e.g. `Information`).
 - --abstract: filter by `abstract` (e.g. `%RedCap%`).
 - --secretary-remarks: filter by `secretary_remarks` (e.g. `%withdrawn%`).
 - --uploaded-date: filter by `uploaded_date`. See

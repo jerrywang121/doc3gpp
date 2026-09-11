@@ -39,6 +39,7 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
+from doc3gpp.models.testcase import TestCaseDetail, TestCaseStatus, TestCaseWithStatuses
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     TDocCRDetails,
@@ -47,6 +48,7 @@ from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl, TDocSh
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
+from doc3gpp.parsers.testcase_parser import PATH_RANK
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.parsers.direct_extractor import (
@@ -66,6 +68,7 @@ from doc3gpp.services.factory import (
     build_tdoc_repository,
     build_tdoc_service,
     build_tdoc_sync_coordinator,
+    build_testcase_service,
     build_tsg_service,
     build_wi_service,
 )
@@ -105,6 +108,7 @@ tdoc_app = typer.Typer(help="tdoc commands")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
 spec_app = typer.Typer(help="spec commands")
+testcase_app = typer.Typer(help="testcase commands")
 config_app = typer.Typer(help="inspect the resolved configuration")
 cache_app = typer.Typer(help="TDoc extraction cache commands")
 app.add_typer(db_app, name="db")
@@ -113,6 +117,7 @@ app.add_typer(tdoc_app, name="tdoc")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
 app.add_typer(spec_app, name="spec")
+app.add_typer(testcase_app, name="testcase")
 app.add_typer(config_app, name="config")
 app.add_typer(cache_app, name="cache")
 search_app = typer.Typer(help="full-text search over TDocs, CRs, meetings, and WIs")
@@ -4262,6 +4267,349 @@ def spec_show(
         fmt=fmt,
         output=output,
         no_records_msg=f"No versions stored for {spec_id}",
+        compact=resolved_compact,
+    )
+
+
+VALID_TESTCASE_GROUPS: tuple[str, ...] = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
+
+TESTCASE_LIST_FIELDS: list[str] = [
+    "testcase_id",
+    "title",
+    "ats",
+    "feature",
+    "release",
+    "wis",
+    "spec",
+    "group",
+    "statuses",
+]
+
+TESTCASE_SHOW_HEADER_FIELDS: list[str] = [
+    "testcase_id",
+    "title",
+    "ats",
+    "feature",
+    "release",
+    "wis",
+    "spec",
+    "group",
+]
+
+TESTCASE_SHOW_STATUS_FIELDS: list[str] = ["path", "gcf_ptcrb", "ttcn_status"]
+
+
+def _validate_testcase_group(group: str) -> str:
+    """Return the canonical group name or raise typer.BadParameter."""
+    canonical = group.upper()
+    if canonical not in VALID_TESTCASE_GROUPS:
+        valid = ", ".join(VALID_TESTCASE_GROUPS)
+        raise typer.BadParameter(
+            f"Unknown testcase group '{group}'. Valid groups: {valid}."
+        )
+    return canonical
+
+
+def _format_testcase_statuses(statuses: dict[str, str | None]) -> str:
+    """Render a ``{path: ttcn_status}`` map as compact ``k=v;…`` pairs.
+
+    Pairs are sorted by :data:`PATH_RANK` (unknown paths last,
+    alphabetical); ``None`` values render as ``-`` so the table and
+    markdown cells stay non-empty.
+    """
+
+    def _rank(item: tuple[str, str | None]) -> tuple[int, str]:
+        path = item[0]
+        rank = PATH_RANK.index(path) if path in PATH_RANK else len(PATH_RANK)
+        return (rank, path)
+
+    return ";".join(
+        f"{path}={status if status is not None else '-'}"
+        for path, status in sorted(statuses.items(), key=_rank)
+    )
+
+
+@testcase_app.command("sync")
+def testcase_sync(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Re-download and re-parse the latest status file even when already recorded.",
+    ),
+) -> None:
+    """Fetch the latest RAN5 TTCN status file and store its testcases.
+
+    Resolves the single latest ``TTCN CR Agreement Status`` zip in the
+    upstream ``History/`` folder, downloads it once, and upserts the
+    parsed testcase headers and status rows. Re-running is a no-op
+    until a new file appears unless ``--force`` is passed.
+    """
+    create_schema()
+    service = build_testcase_service()
+
+    from tqdm import tqdm
+
+    bar: tqdm | None = None
+
+    def _on_progress(event: str, data: dict) -> None:
+        nonlocal bar
+        if event == "listing":
+            bar = tqdm(total=3, desc="testcase", unit="step", dynamic_ncols=True)
+            bar.update(1)
+        elif event in ("downloaded", "parsed") and bar is not None:
+            bar.update(1)
+
+    outcome = service.sync(force=force, on_progress=_on_progress)
+    if bar is not None:
+        bar.close()
+    typer.echo(outcome.reason)
+
+
+@testcase_app.command("list")
+def testcase_list(
+    limit: int = typer.Option(50, min=1, max=500),
+    offset: int = typer.Option(
+        0, min=0, help="Number of rows to skip before applying --limit (pagination)."
+    ),
+    testcase: str | None = typer.Option(
+        None, "--testcase", help="Rich filter on testcase id."
+    ),
+    title: str | None = typer.Option(None, "--title", help="Rich filter on title."),
+    ats: str | None = typer.Option(None, "--ats", help="Rich filter on ATS."),
+    feature: str | None = typer.Option(
+        None, "--feature", help="Rich filter on feature."
+    ),
+    release: str | None = typer.Option(
+        None, "--release", help="Rich filter on release (e.g. Rel-17)."
+    ),
+    wis: str | None = typer.Option(
+        None, "--wis", help="Rich filter on related WIs (comma-joined)."
+    ),
+    spec: str | None = typer.Option(
+        None, "--spec", help="Rich filter on spec (e.g. 38.523-1)."
+    ),
+    group: str | None = typer.Option(
+        None,
+        "--group",
+        help="Exact group match: 5G, LTE, IMS, UTRA, POS, or MCX.",
+    ),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Rich filter on ttcn_status (matches any path).",
+    ),
+    gcf_status: str | None = typer.Option(
+        None,
+        "--gcf-status",
+        help="Rich filter on gcf_ptcrb (matches any path).",
+    ),
+    fields: str | None = typer.Option(
+        None,
+        help="Comma-separated list of fields to include (or 'all' for all fields).",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
+) -> None:
+    """List stored RAN5 testcases matching optional filters.
+
+    All filter flags accept the rich filter grammar (``null`` /
+    ``not-null`` / ``!pattern`` / plain LIKE with ``%`` and ``_``
+    wildcards). ``--status`` matches ``ttcn_status`` on any path and
+    ``--gcf-status`` matches ``gcf_ptcrb`` on any path. Each row
+    carries a ``statuses`` projection mapping ``path → ttcn_status``.
+    Output columns default to ``testcase_id``, ``title``, ``spec``,
+    ``group``, ``release``, and ``statuses`` from
+    ``settings.output.fields.testcase``.
+    """
+    if group is not None:
+        group = _validate_testcase_group(group)
+    logger.info(
+        "Listing %s testcases (offset=%s) testcase=%s group=%s spec=%s",
+        limit,
+        offset,
+        testcase,
+        group,
+        spec,
+    )
+    service = build_testcase_service()
+    records = service.list_recent(
+        limit=limit,
+        offset=offset,
+        testcase_id=testcase,
+        title=title,
+        ats=ats,
+        feature=feature,
+        release=release,
+        wis=wis,
+        spec=spec,
+        group=group,
+        status=status,
+        gcf_status=gcf_status,
+    )
+
+    settings = get_settings()
+    default_fields = settings.output.fields.testcase
+    out_fields = _parse_field_selection(fields, TESTCASE_LIST_FIELDS, default_fields)
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+
+    if fmt == "json":
+        # ``statuses`` stays a dict (path → ttcn_status) — it must not
+        # go through ``_emit_records`` whose cells are plain strings.
+        # Every other field is coerced exactly like the table cells so
+        # the JSON payload stays byte-consistent with the web surface.
+        payload = [
+            {
+                f: (
+                    item.statuses
+                    if f == "statuses"
+                    else str(getattr(item.testcase, f, None) or "-")
+                )
+                for f in out_fields
+            }
+            for item in records
+        ]
+        stream, close_after = _open_output(output)
+        try:
+            if resolved_compact:
+                json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+            else:
+                json.dump(payload, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+        finally:
+            if close_after:
+                stream.close()
+        return
+
+    rows: list[list[str]] = []
+    for item in records:
+        assert isinstance(item, TestCaseWithStatuses)
+        cells: list[str] = []
+        for f in out_fields:
+            if f == "statuses":
+                cells.append(_format_testcase_statuses(item.statuses))
+            else:
+                cells.append(str(getattr(item.testcase, f, None) or "-"))
+        rows.append(cells)
+
+    _emit_records(
+        rows=rows,
+        fields=out_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg="No testcases found",
+        compact=resolved_compact,
+    )
+
+
+@testcase_app.command("show")
+def testcase_show(
+    testcase: str = typer.Option(
+        ...,
+        "--testcase",
+        help="Testcase id to render (e.g. TC_1).",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
+) -> None:
+    """Render one testcase with every stored status row.
+
+    Emits the header row first, a blank separator line, then one row
+    per stored ``(path, gcf_ptcrb, ttcn_status)`` status pair. The
+    JSON payload nests the header under a ``"testcase"`` key and the
+    status rows under ``"statuses"``.
+    """
+    service = build_testcase_service()
+    detail = service.get(testcase)
+    if detail is None:
+        raise typer.BadParameter(f"Testcase {testcase!r} not found")
+    assert isinstance(detail, TestCaseDetail)
+
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+
+    if fmt == "json":
+        payload = {
+            "testcase": {
+                f: _serialise_show_value(getattr(detail.testcase, f))
+                for f in TESTCASE_SHOW_HEADER_FIELDS
+            },
+            "statuses": [
+                {
+                    f: _serialise_show_value(getattr(status_row, f))
+                    for f in TESTCASE_SHOW_STATUS_FIELDS
+                }
+                for status_row in detail.statuses
+            ],
+        }
+        _dump_show_json(payload, output, compact=resolved_compact)
+        return
+
+    header_row = [
+        [str(getattr(detail.testcase, f) or "-") for f in TESTCASE_SHOW_HEADER_FIELDS]
+    ]
+    status_rows: list[list[str]] = []
+    for status_row in detail.statuses:
+        assert isinstance(status_row, TestCaseStatus)
+        status_rows.append(
+            [str(getattr(status_row, f) or "-") for f in TESTCASE_SHOW_STATUS_FIELDS]
+        )
+
+    _emit_records(
+        rows=header_row,
+        fields=TESTCASE_SHOW_HEADER_FIELDS,
+        fmt=fmt,
+        output=output,
+        no_records_msg=f"No testcase {testcase}",
+        compact=resolved_compact,
+    )
+    typer.echo("")
+    _emit_records(
+        rows=status_rows,
+        fields=TESTCASE_SHOW_STATUS_FIELDS,
+        fmt=fmt,
+        output=output,
+        no_records_msg=f"No statuses stored for {testcase}",
         compact=resolved_compact,
     )
 

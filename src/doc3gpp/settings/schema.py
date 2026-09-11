@@ -212,6 +212,16 @@ class OutputFieldsSettings(BaseModel):
             "rapporteurs",
         ]
     )
+    testcase: list[str] = Field(
+        default_factory=lambda: [
+            "testcase_id",
+            "title",
+            "spec",
+            "group",
+            "release",
+            "statuses",
+        ]
+    )
 
 
 class OutputSettings(BaseModel):

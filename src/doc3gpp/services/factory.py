@@ -24,6 +24,7 @@ from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_file_service import TDocFileService
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
+from doc3gpp.services.testcase_service import TestCaseService
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.loader import get_settings
@@ -38,6 +39,7 @@ from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
 from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
@@ -131,6 +133,11 @@ def build_spec_service() -> SpecService:
         SQLAlchemySpecRepository(),
         sync_interval=settings.sync.spec_sync_interval,
     )
+
+
+def build_testcase_service() -> TestCaseService:
+    """Construct a :class:`TestCaseService` backed by the configured repo."""
+    return TestCaseService(SQLAlchemyTestCaseRepository())
 
 
 def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:

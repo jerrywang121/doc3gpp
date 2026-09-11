@@ -1,3 +1,4 @@
+# ruff: noqa: F401,E702
 def test_skip_matrix():
     from datetime import datetime, timezone
     from doc3gpp.models.testcase import TestCaseSource

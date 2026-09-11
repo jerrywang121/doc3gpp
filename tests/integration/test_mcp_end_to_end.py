@@ -74,6 +74,7 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "get_spec",
         "list_testcases",
         "get_testcase",
+        "search_tdocs",
         "semantic_search_tdocs",
         "sync_meetings",
         "sync_tdocs",

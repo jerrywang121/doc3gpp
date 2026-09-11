@@ -451,3 +451,50 @@ class SpecVersionORM(Base):
     version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pdf_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     crs: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TestCaseORM(Base):
+    """Persisted RAN5 testcase header row (one per TC)."""
+
+    __tablename__ = "testcases"
+
+    testcase_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ats: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    feature: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    release: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    wis: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    spec: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    group: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+
+
+class TestCaseStatusORM(Base):
+    """One `(testcase_id, path)` status pair; single-path groups use `'default'`."""
+
+    __tablename__ = "testcase_status"
+
+    testcase_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("testcases.testcase_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+        index=True,
+    )
+    path: Mapped[str] = mapped_column(String(16), primary_key=True, nullable=False)
+    gcf_ptcrb: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ttcn_status: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
+
+class TestCaseSourceORM(Base):
+    """Sync ledger: one row per status file (filename identity is the skip key)."""
+
+    __tablename__ = "testcase_sources"
+
+    filename: Mapped[str] = mapped_column(String(256), primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    testcase_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

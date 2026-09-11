@@ -45,6 +45,7 @@ SQLite is the sole storage backend.
 ## Features
 
 - **Meeting / TDoc / WI / Spec sync** — fetch the 3GPP Meetings, TDocs, Work Items List, and 3GPP specifications (TS/TR) with versions. Spec sync fans out across per-spec detail pages in a thread pool and caches the result for `spec list` / `spec show`.
+- **RAN5 testcase sync** — fetch the latest `TTCN CR Agreement Status` snapshot (`testcase sync`) and query it via `testcase list` / `testcase show` (per-path `ttcn_status` / `gcf_ptcrb`).
 - **TDoc CR extraction** — Download and parse TDoc CR into structured records.
 - **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
 - **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
@@ -141,6 +142,9 @@ doc3gpp spec sync --tsg r5                 # scrape spec list + parallel detail 
 doc3gpp spec sync --spec-id 36.579-5       # sync a single stored spec
 doc3gpp spec list --type TS --limit 20
 doc3gpp spec show 36.579-5                 # header + version rows
+doc3gpp testcase sync                      # latest TTCN status History zip → testcases
+doc3gpp testcase list --group 5G --limit 20
+doc3gpp testcase show --testcase TC_1      # header + per-path status rows
 ```
 
 ## CLI Usage
@@ -250,6 +254,29 @@ re-syncs the rest; `--force` bypasses the check. Each spec's
 (ETSI PDF + CR list) are skipped by default; pass `--per-version-details`
 to fetch them. The default preserves any previously-cached `pdf_url` /
 `crs` values on existing rows.
+
+### `testcase` — RAN5 conformance testcases
+
+```bash
+# sync — latest TTCN CR Agreement Status History zip (file-identity skip)
+doc3gpp testcase sync
+doc3gpp testcase sync --force            # re-download + re-parse even when recorded
+
+# list — 10 filter flags combine freely (rich-filter grammar: %, !pattern, null, not-null)
+doc3gpp testcase list --limit 20
+doc3gpp testcase list --group 5G --spec '38.523-1'
+doc3gpp testcase list --status Approved --format json -o testcases.json
+
+# show — one testcase id; renders header + per-path status rows
+doc3gpp testcase show --testcase TC_1
+doc3gpp testcase show --testcase TC_1 --format json -o tc_1.json
+```
+
+`testcase list --status` / `--gcf-status` match `ttcn_status` /
+`gcf_ptcrb` on ANY path (`EXISTS`); each row carries a `statuses`
+dict (`path → ttcn_status`). Default columns
+`testcase_id,title,spec,group,release,statuses` (TOML
+`[output.fields] testcase`).
 
 ### `search` — FTS5 + BM25 full-text search
 
@@ -412,7 +439,7 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
 - **HTML UI** — browse meetings, TDocs, TSGs, WIs, and search results.
 - **JSON API** — every read route accepts `?format=json`, byte-for-byte
   identical to the MCP tools.
-- **MCP** — `http://127.0.0.1:8765/mcp` exposes 24 tools covering the
+- **MCP** — `http://127.0.0.1:8765/mcp` exposes 27 tools covering the
   same reads plus job lifecycle. The transport is set under `[mcp]` in the
   TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
   (legacy two-endpoint `GET /mcp/sse` + `POST /mcp/messages/`). Browser

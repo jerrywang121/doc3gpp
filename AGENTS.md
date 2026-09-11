@@ -3,7 +3,7 @@
 **Generated:** 2026-07-10
 **Branch:** main
 
-A Python CLI/library that scrapes 3GPP meeting calendars, TDoc lists, auxiliary TDoc files, CR cover pages, and WIs into SQL.
+A Python CLI/library that scrapes 3GPP meeting calendars, TDoc lists, auxiliary TDoc files, CR cover pages, WIs, specs, and RAN5 testcase status snapshots into SQL.
 
 This guide stays lean on purpose: it covers the **shape** of the
 codebase — layout, where to look for a change, architecture rules, and
@@ -37,7 +37,7 @@ or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
-│   ├── cli.py            # Typer commands (9 sub-apps, 26 commands) + cli_server.py (server sub-app, 6 commands)
+ │   ├── cli.py            # Typer commands (10 sub-apps, 29 commands) + cli_server.py (server sub-app, 6 commands)
 │   ├── models/           # domain dataclasses — never leak ORM attrs out
 │   ├── repository/       # abstract repo contracts (Protocols)
 │   ├── services/         # orchestration; CLI-injected via factory
@@ -73,6 +73,7 @@ For the full symbol-to-file table, see
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
 | Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and honours the per-spec `specs.last_synced_at` skip rule (one row per spec, no TSG-level gate) — each per-worker `_sync_one_spec` short-circuits specs whose `last_synced_at` is within `Settings.sync.spec_sync_interval` and stamps the spec's own `last_synced_at` on a successful re-sync. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. |
+| Add a testcase sync / list / show source | `src/doc3gpp/cli.py` (`testcase_app`) + `src/doc3gpp/services/testcase_service.py` + `src/doc3gpp/storage/repositories/testcase_sql.py` | History listing → `select_latest` → zip → workbook → `parse_testcase_workbook` → `upsert_many` + per-TC `replace_statuses`. See the workflow one-liners below. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
 | Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. Uses `-n auto` when xdist is installed. |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
@@ -85,7 +86,7 @@ For the full symbol-to-file table, see
 | Add a vector DDL change | `src/doc3gpp/storage/db/migrate.py` (`_create_vector_schema`) + `src/doc3gpp/storage/repositories/vector_sql.py` | Gated on sqlite + sqlite-vec. |
 | Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. List routes that pair with an HTMX filter form (e.g. meetings / tdocs / wis / search) must render a `partials/<resource>_results.html` fragment when the request sets `HX-Request: true` and the full page otherwise — the `outerHTML` swap target `#results` only fits a fragment, not a full HTML document. The tdoc detail page's Parse card enqueues `POST /jobs/parse/tdocs` (single-tdoc filter) and polls `partials/job_status.html` via `static/js/tdoc_parse.js`; the search pages share a 5-column grid form with a `sem` rerank input on `/search` and full filter parity on `/search/sem`. The web app builds ONE shared `SentenceTransformerEmbedder` in `build_state` and injects it into `build_tdoc_cr_service` / `build_search_service` / `build_semantic_search_service` so the model loads once per process.
 - The tdoc detail page (`tdoc_show.html`) renders two extra cards when the parent TDoc has been parsed: 'Required changes' (one entry per TTCN `required_changes` dict) for TTCN CRs, and 'Extracted changes' (one entry per body-derived change block) for non-TTCN CRs. Both cards are gated on the sidecar's presence and are mutually exclusive. |
-| Add a sync hub panel / sync hub page | `src/doc3gpp/web/routes/sync.py` + `src/doc3gpp/web/templates/sync.html` + `src/doc3gpp/web/static/js/sync_hub.js` | Each new enqueue panel follows the existing nine-form pattern (one `<form id="*-form">` per MCP tool) and reuses `bindJobPolling` + `JobRepository.create`. New routes that need HTTP exposure land in `web/routes/jobs.py` next to their existing siblings (e.g. `POST /jobs/parse/tdoc-url` closed the MCP-vs-HTTP gap for the MCP `parse_tdoc_url` tool). |
+| Add a sync hub panel / sync hub page | `src/doc3gpp/web/routes/sync.py` + `src/doc3gpp/web/templates/sync.html` + `src/doc3gpp/web/static/js/sync_hub.js` | Each new enqueue panel follows the existing ten-form pattern (one `<form id="*-form">` per MCP tool, the tenth being `id="testcase-form"` → `POST /jobs/sync/testcases`) and reuses `bindJobPolling` + `JobRepository.create`. New routes that need HTTP exposure land in `web/routes/jobs.py` next to their existing siblings (e.g. `POST /jobs/parse/tdoc-url` closed the MCP-vs-HTTP gap for the MCP `parse_tdoc_url` tool). |
 | Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). The MCP mount supports both `streamable_http` (default) and `sse` transports, selected via `[mcp] transport` in `doc3gpp.toml`; the streamable_http mount answers each POST with a plain `application/json` body (`json_response=True` in `src/doc3gpp/web/app.py::_mount_mcp_in_lifespan`) — the legacy SSE-streamed response is rejected by TypeScript-SDK clients with "Legacy MCP SSE endpoints are not supported"; browser origins are allowed via `[mcp] allowed_origins` (defaults to `http://127.0.0.1` and `http://localhost`). |
 | Add a background job kind | `src/doc3gpp/models/jobs.py` (`JobKind`, e.g. `JobKind.PARSE_TDOC_URL`) + `src/doc3gpp/web/workers/handlers.py` (`KIND_TO_HANDLER`, e.g. `_parse_tdoc_url`) + `src/doc3gpp/web/routes/jobs.py` | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; SSE progress via `append_log`/progress callbacks. |
 | Add a spec sync job / MCP tool | `src/doc3gpp/models/jobs.py` (`JobKind.SYNC_SPECS`) + `src/doc3gpp/web/workers/handlers.py` (`_sync_specs`) + `src/doc3gpp/web/routes/jobs.py` (`POST /jobs/sync/specs`) + `src/doc3gpp/web/mcp_server.py` (`sync_specs`) | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; the handler validates the `tsg` against the `tsgs` reference table (rejecting unknown/legacy TSGs before any network work) then calls `services.spec.sync(tsg, force=force, on_progress=...)`. The `_sync_meetings` handler applies the same `tsgs`-table validation before `services.meeting.sync`. |
@@ -120,6 +121,29 @@ runtime data flow, and ORM schema.
 
 Workflows in one line (full prose in `docs/architecture.md`):
 
+- `doc3gpp testcase sync [--force]` → `TestCaseService.sync` →
+  `list_history_files` → `select_latest` (max `(year, week,
+  revision)`) → `fetch_testcase_zip` → `extract_workbook` →
+  `parse_testcase_workbook` → `upsert_many` + per-TC
+  `replace_statuses` → `record_download` (before parsing) +
+  `record_parsed`. Skips when the latest file's `testcase_sources`
+  row already carries `parsed_at` unless `--force` is passed
+  (file-identity skip rule; no interval, no bootstrap seed).
+- `doc3gpp testcase list [filters]` → `TestCaseService.list_recent`
+  → `TestCaseRepository.list` (text cols via `apply_text_filter`;
+  `group` is an exact upper-cased match; `--status` / `--gcf-status`
+  are any-path `EXISTS` predicates on `ttcn_status` / `gcf_ptcrb`)
+  then one `{path: ttcn_status}` `statuses`-dict projection per
+  header via `list_statuses`. Pagination via `--limit` (default 50)
+  / `--offset` (default 0); columns from
+  `settings.output.fields.testcase` (default `testcase_id, title,
+  spec, group, release, statuses`), overridable with `--fields`
+  (`all` = all 9 list fields).
+- `doc3gpp testcase show --testcase <id>` → `TestCaseService.get`
+  → header via `TestCaseRepository.get` + status rows via
+  `list_statuses` (sorted by `PATH_RANK`). Miss raises
+  `typer.BadParameter(f"Testcase {id!r} not found")`. JSON nests
+  the header under `"testcase"` and the rows under `"statuses"`.
 - `doc3gpp meeting sync --tsg <s>` → `MeetingService.sync` → DynaReport
   HTML → `parse_3gpp_calendar` → stamp `Meeting.tsg` →
   `SQLAlchemyMeetingRepository.upsert_many`. Skips when the TSG was synced

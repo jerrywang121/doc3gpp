@@ -1386,6 +1386,165 @@ doc3gpp tdoc parse --from-url \
 #       doc3gpp tdoc sync --meeting-id <meeting_id_from_previous_step>
 ```
 
+## testcase Commands
+
+The `testcase` sub-app exposes RAN5 conformance testcase status
+snapshots. Each testcase (e.g. `TC_1`) carries a header row and one
+`testcase_status` row per `(testcase_id, path)` pair; single-path
+groups (`IMS`, `UTRA`, `POS`) store the literal path `'default'`
+(`path` is part of the composite PK, and the list JSON is a dict
+keyed by path, so a `NULL` path would neither deduplicate nor
+serialise cleanly).
+
+`testcase sync` is the only mutating entry point. After the first
+sync `testcase list` and `testcase show` read cached rows from the
+database — no network traffic.
+
+### doc3gpp testcase sync
+
+Purpose:
+
+- Resolve the single latest `TTCN CR Agreement Status` zip in the
+  upstream `History/` folder, download it once, and upsert the
+  parsed testcase headers and status rows.
+
+Options (verified against `doc3gpp testcase sync --help`):
+
+- `--force`, `-f`: re-download and re-parse the latest status file
+  even when already recorded.
+
+Behavior:
+
+- `list_history_files` → `select_latest` (max `(year, week,
+  revision)`) → `TestCaseRepository.get_source(filename)`; when the
+  row carries `parsed_at` and `--force` is absent the run is a
+  `skipped` no-op (file-identity skip rule; no interval, no
+  bootstrap seed).
+- Otherwise `fetch_testcase_zip` → `record_download` (BEFORE
+  parsing) → `extract_workbook` → `parse_testcase_workbook` →
+  `upsert_many` → per-TC `replace_statuses` → `record_parsed`.
+- Progress events mirror `spec sync` via tqdm (`listing →
+  downloaded → parsed`, 3 steps) and the CLI echoes
+  `outcome.reason`.
+
+Examples:
+
+```bash
+# Sync the latest status file (no-op when already parsed).
+doc3gpp testcase sync
+
+# Re-download and re-parse even when already recorded.
+doc3gpp testcase sync --force
+```
+
+### doc3gpp testcase list
+
+Purpose:
+
+- List stored RAN5 testcases matching optional filters.
+
+Options (verified against `doc3gpp testcase list --help`):
+
+- `--limit INTEGER RANGE [1<=x<=500]`: maximum rows to return.
+  default: 50.
+- `--offset INTEGER RANGE [x>=0]`: rows to skip before applying
+  `--limit` (pagination). default: 0.
+- `--testcase TEXT`: rich filter on testcase id.
+- `--title TEXT`: rich filter on title.
+- `--ats TEXT`: rich filter on ATS.
+- `--feature TEXT`: rich filter on feature.
+- `--release TEXT`: rich filter on release (e.g. `Rel-17`).
+- `--wis TEXT`: rich filter on related WIs (comma-joined).
+- `--spec TEXT`: rich filter on spec (e.g. `38.523-1`).
+- `--group TEXT`: exact group match: `5G`, `LTE`, `IMS`, `UTRA`,
+  `POS`, or `MCX`. Unknown values raise `typer.BadParameter`
+  listing the valid groups.
+- `--status TEXT`: rich filter on `ttcn_status` (matches any path).
+- `--gcf-status TEXT`: rich filter on `gcf_ptcrb` (matches any path).
+- `--fields TEXT`: comma-separated list of fields to include (or
+  `all` for all fields). Selectable from all 9 list fields via
+  `_parse_field_selection`.
+- `--format TEXT`: output format: table (default, tab-separated),
+  json, or markdown.
+- `--output, -o TEXT`: write results to FILE instead of stdout.
+  Pass `-` for stdout.
+- `--compact`: strip output formatting (see `Compact output`
+  below). No-op for `table`.
+
+Default output fields (configurable via
+`[output] fields.testcase` in `doc3gpp.toml`):
+
+- `testcase_id`, `title`, `spec`, `group`, `release`, `statuses`
+
+Filter grammar: every filter flag except `--group` accepts the
+rich filter grammar used by the other list commands — `null` /
+`not-null` / `!pattern` / plain LIKE with `%` and `_` wildcards.
+`--status` / `--gcf-status` are any-path `EXISTS` predicates on
+`testcase_status.ttcn_status` / `testcase_status.gcf_ptcrb`
+(a testcase matches when ANY of its status rows matches).
+
+`statuses` dict projection: the JSON payload keeps `statuses` as
+a **dict** (`path → ttcn_status`) — it is not pushed through
+`_emit_records` (whose cells are strings). `table` / `markdown`
+stringify it as `k=v;…` pairs sorted by `PATH_RANK` (`-` for
+`None` values). The same dict shape is what `GET /testcases` and
+the MCP `list_testcases` tool emit (byte-identical).
+
+Examples:
+
+```bash
+# Default listing (testcase_id, title, spec, group, release, statuses).
+doc3gpp testcase list
+
+# Just the 5G testcases.
+doc3gpp testcase list --group 5G
+
+# Testcases whose ttcn_status is Approved on any path.
+doc3gpp testcase list --status Approved
+
+# Dump every R5-group testcase to JSON for a downstream report.
+doc3gpp testcase list --group 5G --spec '38.523-1' --format json -o testcases.json
+```
+
+### doc3gpp testcase show
+
+Purpose:
+
+- Render one testcase with every stored status row.
+
+Options (verified against `doc3gpp testcase show --help`):
+
+- `--testcase TEXT` (required): testcase id to render (e.g.
+  `TC_1`).
+- `--format TEXT`: output format: table (default, tab-separated),
+  json, or markdown.
+- `--output, -o TEXT`: write results to FILE instead of stdout.
+  Pass `-` for stdout.
+- `--compact`: strip output formatting (see `Compact output`
+  below). No-op for `table`.
+
+Behavior:
+
+- Header via `TestCaseRepository.get` + status rows via
+  `list_statuses` (sorted by `PATH_RANK`).
+- Table: two `_emit_records` blocks (header, then statuses)
+  separated by a blank line, mirroring `spec show`.
+- JSON nests the header (8 fields: `testcase_id`, `title`,
+  `ats`, `feature`, `release`, `wis`, `spec`, `group`) under a
+  `"testcase"` key and the rows (`path`, `gcf_ptcrb`,
+  `ttcn_status`) under a `"statuses"` key.
+- Miss raises `typer.BadParameter(f"Testcase {id!r} not found")`.
+
+Examples:
+
+```bash
+# Quick console view of one testcase.
+doc3gpp testcase show --testcase TC_1
+
+# JSON export for downstream tooling.
+doc3gpp testcase show --testcase TC_1 --format json -o tc_1.json
+```
+
 ## cache Commands
 
 The `cache` sub-app exposes the on-disk cache that backs the TDoc
@@ -1995,7 +2154,7 @@ doc3gpp spec show 36.579-5 --format json --output 36_579-5.json
 
 ## Common list output options
 
-The `meeting list`, `tdoc list`, `tsg list`, and `wi list` commands all
+The `meeting list`, `tdoc list`, `tsg list`, `testcase list`, and `wi list` commands all
 accept the same two output-routing flags in addition to their
 command-specific filters:
 

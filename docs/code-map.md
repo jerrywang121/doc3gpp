@@ -31,6 +31,13 @@ table below is for navigation only.
 | `TDocShowRecord` | dataclass | `models/tdoc_show.py` | Composite render record for `tdoc show --tdoc`: `TDoc` + slim cover + optional TTCN + `extracted_at` + `TDocFile` list. |
 | `TDocShowRecordByUrl` | dataclass | `models/tdoc_show.py` | URL-anchored variant of `TDocShowRecord` for `tdoc show --ftp-url`. |
 | `TDocShowRepos` | dataclass | `models/tdoc_show.py` | Bundle of repos (`tdoc`, `cr`, `cr_ttcn`, `cr_change_details`, `file`) consumed by `TDocShowRecord.from_tdoc_id`. |
+| `TestCase` | dataclass | `models/testcase.py` | RAN5 testcase header (`testcase_id` PK + `title`, `ats`, `feature`, `release`, `wis`, `spec`, `group`). |
+| `TestCaseStatus` | dataclass | `models/testcase.py` | One `(testcase_id, path)` status pair (`gcf_ptcrb`, `ttcn_status`); single-path groups use the literal path `'default'`. |
+| `TestCaseWithStatuses` | dataclass | `models/testcase.py` | List-view DTO: `TestCase` + `statuses: dict[str, str \| None]` (`path → ttcn_status`). |
+| `TestCaseDetail` | dataclass | `models/testcase.py` | Detail-view DTO: `TestCase` + `statuses: list[TestCaseStatus]`. |
+| `TestCaseSource` | dataclass | `models/testcase.py` | Sync-ledger row for one status file (`filename` PK + `year`, `week`, `revision`, `downloaded_at`, `parsed_at`, counts). |
+| `TestcaseSourceNotFoundError` | exception | `models/testcase.py` | Raised when no status-file name matches the History grammar (`LookupError`). |
+| `TestcaseWorkbookNotFoundError` | exception | `models/testcase.py` | Raised when the status zip holds no `*.xlsx` member (`ValueError`). |
 
 ## Repository contracts (`src/doc3gpp/repository/`)
 
@@ -44,6 +51,7 @@ table below is for navigation only.
 | `TsgRepository` | Protocol | `repository/protocols.py` | Contract for TSG reference storage. Spec sync throttling is **not** in this Protocol — the per-spec skip rule lives on `SpecRepository` / `SpecORM.last_synced_at` and is enforced per-worker inside `SpecService.sync` and per-call inside `SpecService.sync_spec`. |
 | `WiRepository` | Protocol | `repository/protocols.py` | Contract for WI storage; upsert keyed by `(wi_id, tsg_short)`. |
 | `SpecRepository` | Protocol | `repository/protocols.py` | Contract for spec storage. `upsert(spec)` writes the header row; `upsert_versions(versions)` writes per-version rows; `list(filters)` returns filtered header rows; `list_distinct_tsgs()` returns the distinct TSGs present in the `specs` table (used by the no-selector `spec sync` fallback); `get(spec_id)` / `list_versions(spec_id)` are the lookups used by `spec show`. |
+| `TestCaseRepository` | Protocol | `repository/protocols.py` | Contract for testcase storage: `upsert_many`, `replace_statuses` (delete-then-insert per `testcase_id`), `list` (text cols + any-path `status`/`gcf_status` `EXISTS`), `get`, `list_statuses` (`PATH_RANK`-sorted), `get_source` / `record_download` / `record_parsed` (sync ledger). |
 
 ## Services (`src/doc3gpp/services/`)
 
@@ -57,12 +65,16 @@ table below is for navigation only.
 | `TsgService` | class | `services/tsg_service.py` | TSG seeding + validation; exposes `build_tsg_url`. |
 | `WiService` | class | `services/wi_service.py` | WI sync from DynaReport + list with SQL `LIKE` filters. |
 | `SpecService` | class | `services/spec_service.py` | Spec sync + list orchestration. `sync(tsg, force=False, per_version_details=False)` fetches the DynaReport list page once, then fans out across per-spec detail pages in a thread pool (capped at `min(32, cpu+4)` workers), runs ETSI PDF + CR-list follow-ups inside each worker (gated on recency / emptiness by default; `per_version_details=True` always re-fetches both for every version), and honours the **per-spec** `specs.last_synced_at` skip rule — each per-worker `_sync_one_spec` short-circuits specs whose own `last_synced_at` is within `Settings.sync.spec_sync_interval` (no TSG-level gate) and stamps the spec's own `last_synced_at` on a successful re-sync. `sync_spec(spec_id, force=False, per_version_details=False)` syncs a single stored spec (recovers its TSG, fetches only that spec's detail page + versions — no list page; honours the same per-spec `last_synced_at` skip rule). `list_distinct_tsgs()` returns the distinct TSGs in the `specs` table for the no-selector fallback. `list_recent` returns the cached header rows; `get` / `list_versions` are the lookups used by `spec show`. |
-| `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. `build_spec_service` injects `SQLAlchemySpecRepository` + the `sync.spec_sync_interval` setting. |
+| `TestCaseService` | class | `services/testcase_service.py` | Testcase sync + list orchestration. `sync(*, force=False, on_progress=None)` selects the latest History zip, skips when its `testcase_sources` row already carries `parsed_at` (file-identity skip rule), otherwise downloads → `record_download` (before parsing) → parse → `upsert_many` + per-TC `replace_statuses` → `record_parsed`. Progress events: `listing` / `downloaded` / `parsed`. `list_recent` returns headers with a `{path: ttcn_status}` `statuses` dict each; `get` returns `TestCaseDetail | None`. |
+| `TestCaseProgressFn` | alias | `services/testcase_service.py` | `Callable[[str, dict], None]` progress callback for `TestCaseService.sync`. |
+| `build_*` | helpers | `services/factory.py` | Factory used by the CLI to wire repo / service instances. `build_spec_service` injects `SQLAlchemySpecRepository` + the `sync.spec_sync_interval` setting. `build_testcase_service` returns `TestCaseService(SQLAlchemyTestCaseRepository())`. |
 
 ## Scraping, caching, parsers (`src/doc3gpp/scraping/`, `src/doc3gpp/parsers/`)
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
+| `HISTORY_URL` / `list_history_files` / `select_latest` / `parse_status_filename` / `fetch_testcase_zip` | constant / functions | `scraping/testcase_source.py` | RAN5 TTCN status History transport (network only): History-folder URL, filename-grammar parse + `(year, week, revision)` ordering, zip download. |
+| `SHEET_TO_GROUP` / `PATH_RANK` / `STATUS_PAIRS` / `FIXED_SPEC` / `extract_workbook` / `parse_testcase_workbook` | constants / functions | `parsers/testcase_parser.py` | Pure workbook parser: sheet→group map, path-rank order, `(gcf_idx, ttcn_idx, path)` pairs per group, fixed-spec overrides (`5G`→`38.523-1`, `LTE`→`36.523-1`), zip→xlsx extraction, header-validated parse with cross-sheet first-wins dedup. |
 | `ScraperClient` | class | `scraping/client.py` | HTTP transport with retry / backoff via `httpx`. |
 | `fetch_calendar` | function | `scraping/calendar_source.py` | Fetch DynaReport meeting HTML. |
 | `fetch_tdoc_files_from_meeting_ftp` | function | `scraping/ftp_source.py` | Scan a meeting's FTP subfolders for auxiliary TDoc files. |
@@ -117,6 +129,7 @@ table below is for navigation only.
 | `SQLAlchemyTsgRepository` | class | `storage/repositories/tsg_sql.py` | SQL impl of `TsgRepository`. |
 | `SQLAlchemyWiRepository` | class | `storage/repositories/wi_sql.py` | SQL impl of `WiRepository`. |
 | `SQLAlchemySpecRepository` | class | `storage/repositories/spec_sql.py` | SQL impl of `SpecRepository`. Owns `specs` (header, incl. `rapporteurs`) + `spec_versions` (one row per `(spec_id, version)`); `upsert(spec)` writes the header row, `upsert_versions(versions)` writes the per-version rows (PARAMS-bound via SQLAlchemy `insert` with `ON CONFLICT DO UPDATE`), `list(filters)` applies the rich filter grammar, `get(spec_id)` / `list_versions(spec_id)` are the lookups used by `spec show`. |
+| `SQLAlchemyTestCaseRepository` | class | `storage/repositories/testcase_sql.py` | SQL impl of `TestCaseRepository`. Owns `testcases` (header keyed by `testcase_id`) + `testcase_status` (one row per `(testcase_id, path)`) + `testcase_sources` (sync ledger keyed by `filename`). |
 | `_apply_text_filter` / `_apply_date_filter` | helpers | `storage/repositories/tdoc_sql.py` | SQLAlchemy helpers that consume `cli_filters.DATE_FILTER_RE` and the rich-filter grammar. |
 | `configure_sqlite_engine` | function | `storage/backends/sqlite.py` | SQLite engine configuration (sole backend). |
 
@@ -199,7 +212,7 @@ table below is for navigation only.
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 
-Seven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `spec` (`sync` / `list` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
+Eleven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `spec` (`sync` / `list` / `show`), `testcase` (`sync` / `list` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), `search` (`query` / `index` / `sem`), plus the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
@@ -221,20 +234,24 @@ The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API +
 | `get_state`/`get_settings`/`get_engine`/`get_services` | dependency | `web/deps.py` | FastAPI `Depends` helpers reading `request.app.state.web` |
 | `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_wi_service`/`get_tsg_service`/`get_search_service`/`get_semantic_search_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service `Depends` helpers |
 | `get_job_repo` / `get_job_worker` | dependency | `web/deps.py` | Job repository + worker-handle deps (overridden in tests) |
-| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 23 tools (12 read + 11 job) |
+| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 27 tools (14 read + 13 job). Read tools include `list_testcases` / `get_testcase` (same `render.testcase_rows` / `render.testcase_status_rows` payloads as `GET /testcases`); job tools include `sync_testcases` (enqueues `JobKind.SYNC_TESTCASES`). |
+| `testcase_rows` / `testcase_status_rows` | functions | `web/render.py` | List/detail rows matching CLI `testcase --format json` (`statuses` preserved as a dict; every other field coerced like the CLI cells). |
+| `routes/testcases.py` | APIRouter | `web/routes/testcases.py` | `/testcases` — list (filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; `_LIMIT_CAP=200`, default limit 50; unknown `group` → `InvalidFilterError`) + `/{testcase_id}` detail (HTML or `?format=json` → `{"testcase":{...},"statuses":[...]}`; unknown → 404 `testcase_not_found`). |
+| `TestcaseNotFoundError` | exception | `web/errors.py` | Lookup miss on a testcase id → HTTP 404 `testcase_not_found` / MCP `-32004`. |
+| `JobKind.SYNC_TESTCASES` | enum member | `models/jobs.py` | `"sync_testcases"`; handled by `_sync_testcases` (`services.testcase.sync`) and enqueued via `POST /jobs/sync/testcases` (tenth sync-hub panel `id="testcase-form"`). |
 | `_to_json` | function | `web/mcp_server.py` | `json.dumps(value, separators=(",", ":"), ensure_ascii=False)` — byte-matches Starlette `JSONResponse` |
 | `meeting_rows`/`tdoc_rows`/`tsg_rows`/`wi_rows`/`spec_rows`/`spec_version_rows` | function | `web/render.py` | List-of-dict rows matching CLI `--format json` (`_coerce_cell`: `None`→`"-"`, date→isoformat) |
 | `to_jsonable` | function | `web/render.py` | Recursively convert dataclasses/values to JSON-safe structures |
 | `register_error_handlers`/`map_domain_error` | function | `web/errors.py` | Map domain errors→HTTP status (404/400/409/503/502/500) with stable slugs |
 | `render_systemd_unit`/`render_launchd_plist`/`install_systemd`/`install_launchd`/`uninstall_systemd`/`uninstall_launchd` | function | `web/install.py` | OS service-unit install/uninstall helpers with `X-Doc3gpp-Managed` marker guard |
 | `InstallNotManagedError` | exception | `web/install.py` | Raised when uninstalling a missing/non-managed unit |
-| `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, tdocs, tsgs, wis, specs, search, jobs]` |
+| `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, tdocs, tsgs, wis, specs, testcases, search, jobs]` |
 | `is_htmx_request` | function | `web/filters.py` | `request.headers["HX-Request"] == "true"` — list routes use this to switch between full page (no header) and `partials/<resource>_results.html` fragment (HTMX-driven swap target). |
-| `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue (sync/meetings, sync/tdocs, sync/tdocs/all, sync/specs, parse/tdocs, search/rebuild, cache/purge, sync_tdocs), list (renders `templates/job_status.html` with `partials/_job_row.html` per row), get, SSE `/events`, cancel (idempotent on terminal jobs; `?format=html` returns the refreshed row partial as an `outerHTML` swap target for the list page's per-row Cancel button) |
+| `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue (sync/meetings, sync/tdocs, sync/tdocs/all, sync/specs, sync/testcases, parse/tdocs, search/rebuild, cache/purge, sync_tdocs), list (renders `templates/job_status.html` with `partials/_job_row.html` per row), get, SSE `/events`, cancel (idempotent on terminal jobs; `?format=html` returns the refreshed row partial as an `outerHTML` swap target for the list page's per-row Cancel button) |
 | `JobWorker` | class | `web/workers/job_worker.py` | asyncio worker: polls `QUEUED` jobs at `Settings.server.poll_interval_seconds` (default `1.0`s, range `0.05..60.0`), runs handlers (semaphore-bounded by `max_concurrent_jobs`), streams SSE, emits throttled periodic progress lines at `Settings.server.progress_interval_seconds` (default 10.0), cooperative cancel, skips handlers when the `mark_running` claim loses the race (`(claimed, job)` return), and sweeps orphaned `RUNNING` rows on startup → `FAILED` with `error="orphaned_after_restart"`. Retention cleanup runs on the independent `cleanup_interval_seconds` cadence. |
 | `JobHandlers.KIND_TO_HANDLER` | mapping | `web/workers/handlers.py` | `JobKind`→async handler (network-touching sync/parse/rebuild/purge) |
 | `Job` | dataclass | `models/jobs.py` | `id, kind, status, params, log_lines, result_summary, error, created_at, started_at, finished_at` |
-| `JobKind` / `JobStatus` | enum | `models/jobs.py` | `SYNC_MEETINGS/SYNC_TDOCS/SYNC_TDOCS_ALL/SYNC_SPECS/PARSE_TDOCS/REBUILD_SEARCH/CACHE_PURGE`; `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED` |
+| `JobKind` / `JobStatus` | enum | `models/jobs.py` | `SYNC_MEETINGS/SYNC_TDOCS/SYNC_TDOCS_ALL/SYNC_SPECS/SYNC_TESTCASES/PARSE_TDOCS/PARSE_TDOC_URL/REBUILD_SEARCH/CACHE_PURGE`; `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED` |
 | `SQLAlchemyJobRepository` | repository | `storage/repositories/jobs_sql.py` | SQL impl of `JobRepository`: `create/get/list/mark_running` (idempotent `UPDATE ... WHERE status = 'queued'` — `rowcount == 0` is a no-op so two workers can't both overwrite `started_at` / `log_lines`; returns `(claimed, job)` so the caller can detect a lost claim)/`append_log` (FIFO-capped at 50)/`mark_succeeded`/`mark_failed`/`mark_cancelled`/`delete_older_than` |
 | `server_app` (6 commands) | Typer group | `cli_server.py` | `server start|stop|status|logs|install|uninstall`; `_require_server_enabled` gates all |
 

@@ -1,0 +1,41 @@
+<div id="results" hx-target="this" hx-swap="outerHTML">
+  {% if testcases %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>TC</th>
+          <th>Title</th>
+          <th>Spec</th>
+          <th>Group</th>
+          <th>Release</th>
+          <th>Statuses</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in testcases %}
+          <tr>
+            <td><code>{{ row.testcase.testcase_id }}</code></td>
+            <td>{{ row.testcase.title or '-' }}</td>
+            <td>{{ row.testcase.spec or '-' }}</td>
+            <td><code>{{ row.testcase.group or '-' }}</code></td>
+            <td>{{ row.testcase.release or '-' }}</td>
+            <td>
+              {% if row.statuses %}
+                {% for path, status in row.statuses.items() %}
+                  <code>{{ path }}={{ status or '-' }}</code>{% if not loop.last %} {% endif %}
+                {% endfor %}
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            <td><a href="/testcases/{{ row.testcase.testcase_id }}">show</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% include "partials/pagination.html" %}
+  {% else %}
+    <p class="empty">No testcases match these filters.</p>
+  {% endif %}
+</div>

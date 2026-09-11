@@ -89,6 +89,7 @@ def _make_state(
         tsg=_FakeTsgService(known_tsgs),  # type: ignore[arg-type]
         wi=None,  # type: ignore[arg-type]
         spec=_FakeSpecService(fail=fail),  # type: ignore[arg-type]
+        testcase=None,  # type: ignore[arg-type]
         search=None,
         semantic_search=None,
         tdoc_file_repo=None,  # type: ignore[arg-type]
@@ -971,6 +972,7 @@ def _make_url_state(
         tsg=None,  # type: ignore[arg-type]
         wi=None,  # type: ignore[arg-type]
         spec=_FakeSpecService(),  # type: ignore[arg-type]
+        testcase=None,  # type: ignore[arg-type]
         search=None,
         semantic_search=None,
         tdoc_file_repo=None,  # type: ignore[arg-type]
@@ -1316,6 +1318,7 @@ def _make_state_with_services(repo: JobRepository, **services_kwargs) -> WebStat
         tsg=_FakeTsgService({"R5"}),
         wi=None,
         spec=_FakeSpecService(),
+        testcase=None,
         search=None,
         semantic_search=None,
         tdoc_file_repo=None,

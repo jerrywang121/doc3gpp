@@ -340,7 +340,8 @@ def test_nav_order_home_tsgs_meetings_tdocs_specs_wis_search_jobs(
     nav = html.split('<nav class="topnav">')[1].split("</nav>")[0]
     hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
     assert hrefs == [
-        "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/wis", "/search", "/jobs", "/sync",
+        "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/testcases", "/wis",
+        "/search", "/jobs", "/sync",
     ]
 
 
@@ -2224,6 +2225,286 @@ def test_spec_rows_coerces_cells() -> None:
         "title": "NR conformance",
         "status": "-",
     }
+
+
+class FakeTestCaseService:
+    """Stub :class:`TestCaseService` for the fake-wired app fixture."""
+
+    def __init__(self) -> None:
+        from doc3gpp.models.testcase import (
+            TestCase,
+            TestCaseStatus,
+            TestCaseWithStatuses,
+        )
+
+        self._rows = [
+            TestCaseWithStatuses(
+                testcase=TestCase(
+                    testcase_id="TC_1",
+                    title="5G FR1 test",
+                    ats="ATS_1",
+                    feature="Feature 1",
+                    release="Rel-17",
+                    wis="NR_5G_Test",
+                    spec="38.523-1",
+                    group="5G",
+                ),
+                statuses={"FR1": "Approved"},
+            ),
+        ]
+        self._statuses = [
+            TestCaseStatus(
+                testcase_id="TC_1",
+                path="FR1",
+                gcf_ptcrb="Approved",
+                ttcn_status="Approved",
+            ),
+        ]
+
+    def list_recent(self, **_kwargs: Any) -> list[Any]:
+        return list(self._rows)
+
+    def get(self, testcase_id: str) -> Any | None:
+        for row in self._rows:
+            if row.testcase.testcase_id == testcase_id:
+                from doc3gpp.models.testcase import TestCaseDetail
+
+                return TestCaseDetail(
+                    testcase=row.testcase,
+                    statuses=list(self._statuses),
+                )
+        return None
+
+
+def _testcase_override(app: FastAPI) -> Any:
+    """Wire ``FakeTestCaseService`` onto ``app``; returns the sentinel for pop."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    return get_testcase_service
+
+
+def test_testcases_json_parity(client: TestClient) -> None:
+    """``GET /testcases?format=json`` preserves the statuses dict.
+
+    Lock: ``render.testcase_rows`` must not string-coerce ``statuses``
+    (the CLI's ``testcase list --format json`` emits it as a dict).
+    """
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    assert response.json()[0]["statuses"] == {"FR1": "Approved"}
+
+
+def test_testcases_json_matches_render_rows(client: TestClient) -> None:
+    """``GET /testcases?format=json`` is the ``testcase_rows`` rendering."""
+    from doc3gpp.web.deps import get_testcase_service
+    from doc3gpp.web.render import testcase_rows
+
+    svc = FakeTestCaseService()
+    client.app.dependency_overrides[get_testcase_service] = lambda: svc
+    try:
+        response = client.get("/testcases?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    fields = ["testcase_id", "title", "spec", "group", "release", "statuses"]
+    assert response.json() == testcase_rows(svc.list_recent(), fields)
+
+
+def test_testcases_list_renders_html(client: TestClient) -> None:
+    """``GET /testcases`` returns 200 with the testcase list template."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    assert "TC_1" in response.text
+
+
+def test_testcases_list_htmx_returns_partial(client: TestClient) -> None:
+    """``GET /testcases`` with ``HX-Request: true`` returns the results partial."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases", headers={"HX-Request": "true"})
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    body = response.text
+    assert "<!DOCTYPE" not in body
+    assert "<html" not in body
+    assert 'id="results"' in body
+    assert "<table" in body
+    assert "TC_1" in body
+
+
+def test_testcases_list_unknown_group_returns_400(client: TestClient) -> None:
+    """``GET /testcases?group=NOPE`` is 400 with the invalid_filter envelope."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases?group=NOPE")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_filter"
+
+
+def test_testcases_list_forwards_limit_offset(client: TestClient) -> None:
+    """``GET /testcases?limit=..&offset=..`` is forwarded to the service."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    captured: dict[str, Any] = {}
+
+    class _RecordingService(FakeTestCaseService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            captured.update(kwargs)
+            return list(self._rows)
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: _RecordingService()
+    )
+    try:
+        response = client.get("/testcases?limit=7&offset=3")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    assert captured["limit"] == 7
+    assert captured["offset"] == 3
+
+
+def test_testcases_list_empty_numeric_filter_returns_200(client: TestClient) -> None:
+    """``GET /testcases?limit=`` is 200, not 422 (empty form field)."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases?limit=")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+
+
+def test_testcases_list_invalid_numeric_filter_returns_400(
+    client: TestClient,
+) -> None:
+    """``GET /testcases?limit=abc`` is 400 with invalid_filter envelope."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases?limit=abc")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_filter"
+
+
+def test_testcase_show_renders_html(client: TestClient) -> None:
+    """``GET /testcases/{id}`` returns 200 with the testcase detail template."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases/TC_1")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    assert "TC_1" in response.text
+    assert "FR1" in response.text
+
+
+def test_testcase_show_json(client: TestClient) -> None:
+    """``GET /testcases/{id}?format=json`` returns header + statuses."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases/TC_1?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["testcase"]["testcase_id"] == "TC_1"
+    assert body["statuses"][0]["path"] == "FR1"
+
+
+def test_testcase_show_404(client: TestClient) -> None:
+    """``GET /testcases/{unknown}`` returns 404 with the canonical envelope."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases/NOPE")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 404
+    assert response.json()["error"] == "testcase_not_found"
+
+
+def test_testcase_rows_preserves_statuses_dict() -> None:
+    """``testcase_rows`` keeps ``statuses`` a dict; other fields coerce."""
+    from doc3gpp.models.testcase import TestCase, TestCaseWithStatuses
+    from doc3gpp.web.render import testcase_rows
+
+    rows = [
+        TestCaseWithStatuses(
+            testcase=TestCase(testcase_id="TC_1", title="T", group="5G"),
+            statuses={"FR1": "Approved"},
+        ),
+    ]
+    out = testcase_rows(rows, ["testcase_id", "title", "group", "statuses"])
+    assert out[0]["statuses"] == {"FR1": "Approved"}
+    assert out[0]["title"] == "T"
+    assert out[0]["testcase_id"] == "TC_1"
+
+
+def test_testcase_status_rows_coerce_cells() -> None:
+    """``testcase_status_rows`` string-coerces plainly like ``spec_version_rows``."""
+    from doc3gpp.models.testcase import TestCaseStatus
+    from doc3gpp.web.render import testcase_status_rows
+
+    statuses = [
+        TestCaseStatus(
+            testcase_id="TC_1",
+            path="FR1",
+            gcf_ptcrb="Approved",
+            ttcn_status=None,
+        ),
+    ]
+    out = testcase_status_rows(statuses, ["path", "gcf_ptcrb", "ttcn_status"])
+    assert out == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "-"}]
 
 
 # ---------------------------------------------------------------------------

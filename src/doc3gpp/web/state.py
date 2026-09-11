@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from doc3gpp.services.tdoc_cr_service import TDocCrService
     from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
+    from doc3gpp.services.testcase_service import TestCaseService
     from doc3gpp.services.tsg_service import TsgService
     from doc3gpp.services.wi_service import WiService
 
@@ -150,6 +151,7 @@ class ServiceContainer:
     tsg: "TsgService"
     wi: "WiService"
     spec: "SpecService"
+    testcase: "TestCaseService"
     search: "SearchService | None"
     semantic_search: "SemanticSearchService | None"
     tdoc_file_repo: SQLAlchemyTDocFileRepository

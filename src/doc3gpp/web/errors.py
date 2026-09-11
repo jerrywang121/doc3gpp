@@ -55,6 +55,10 @@ class SpecNotFoundError(LookupError):
     """Raised when a spec id cannot be resolved."""
 
 
+class TestcaseNotFoundError(LookupError):
+    """Raised when a testcase id cannot be resolved."""
+
+
 class InvalidFilterError(ValueError):
     """Raised when a filter expression is malformed."""
 
@@ -100,6 +104,7 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     TSGNotFoundError: ("tsg", MCP_CODE_NOT_FOUND),
     WINotFoundError: ("wi", MCP_CODE_NOT_FOUND),
     SpecNotFoundError: ("spec", MCP_CODE_NOT_FOUND),
+    TestcaseNotFoundError: ("testcase", MCP_CODE_NOT_FOUND),
     SpecUnknownOnUpstreamError: ("spec", MCP_CODE_NOT_FOUND),
     JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
     CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
@@ -138,6 +143,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     TSGNotFoundError: "tsg_not_found",
     WINotFoundError: "wi_not_found",
     SpecNotFoundError: "spec_not_found",
+    TestcaseNotFoundError: "testcase_not_found",
     SpecUnknownOnUpstreamError: "spec_unknown_on_upstream",
     InvalidFilterError: "invalid_filter",
     SearchQueryError: "invalid_query",
@@ -154,6 +160,7 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     TSGNotFoundError: 404,
     WINotFoundError: 404,
     SpecNotFoundError: 404,
+    TestcaseNotFoundError: 404,
     SpecUnknownOnUpstreamError: 404,
     InvalidFilterError: 400,
     SearchQueryError: 400,
@@ -226,6 +233,7 @@ __all__ = [
     "TSGNotFoundError",
     "WINotFoundError",
     "SpecNotFoundError",
+    "TestcaseNotFoundError",
     "InvalidFilterError",
     "SearchQueryError",
     "JobNotFoundError",

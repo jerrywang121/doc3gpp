@@ -19,6 +19,7 @@ from doc3gpp.web.routes.search import router as search_router
 from doc3gpp.web.routes.specs import router as specs_router
 from doc3gpp.web.routes.sync import router as sync_router
 from doc3gpp.web.routes.tdocs import router as tdocs_router
+from doc3gpp.web.routes.testcases import router as testcases_router
 from doc3gpp.web.routes.tsgs import router as tsgs_router
 from doc3gpp.web.routes.wis import router as wis_router
 
@@ -32,6 +33,7 @@ def all_routers() -> list[APIRouter]:
         tsgs_router,
         wis_router,
         specs_router,
+        testcases_router,
         search_router,
         jobs_router,
         sync_router,

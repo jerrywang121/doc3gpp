@@ -267,6 +267,41 @@ def spec_version_rows(versions: list[Any], fields: list[str]) -> list[dict[str, 
     ]
 
 
+def testcase_rows(
+    rows: list[Any],
+    fields: list[str],
+) -> list[dict[str, Any]]:
+    """Build ``testcase list --format json``-shaped rows.
+
+    Like :func:`spec_rows` BUT preserves ``statuses`` as a dict
+    (``path → ttcn_status``) — it must not go through
+    :func:`_coerce_cell`. Every other field is coerced exactly like
+    the CLI's ``testcase_list`` JSON cell loop (``None`` renders as
+    ``"-"``).
+    """
+    out: list[dict[str, Any]] = []
+    for item in rows:
+        row: dict[str, Any] = {}
+        for f in fields:
+            if f == "statuses":
+                row[f] = item.statuses
+            else:
+                row[f] = _coerce_cell(getattr(item.testcase, f, None))
+        out.append(row)
+    return out
+
+
+def testcase_status_rows(
+    statuses: list[Any],
+    fields: list[str],
+) -> list[dict[str, str]]:
+    """Build testcase status rows for a testcase."""
+    return [
+        {f: _coerce_cell(getattr(status, f, None)) for f in fields}
+        for status in statuses
+    ]
+
+
 __all__ = [
     "TDOC_COLUMN_LABELS",
     "TDOC_HTML_DEFAULT_FIELDS",
@@ -274,6 +309,8 @@ __all__ = [
     "spec_rows",
     "spec_version_rows",
     "tdoc_rows",
+    "testcase_rows",
+    "testcase_status_rows",
     "to_jsonable",
     "tsg_rows",
     "wi_rows",

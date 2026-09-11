@@ -73,6 +73,7 @@ def test_sync_page_renders_all_nine_forms(client: Any) -> None:
         "parse-tdoc-url-form",
         "rebuild-search-form",
         "purge-cache-form",
+        "testcase-form",
     ):
         assert f'id="{form_id}"' in text, f"missing form id: {form_id}"
 

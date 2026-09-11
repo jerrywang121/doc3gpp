@@ -128,6 +128,7 @@
         yes: readCheckbox(form, "yes"),
       });
     },
+    "testcase-form": function (form) { return JSON.stringify({force: readCheckbox(form, "force")}); },
   };
 
   function bindForm(form) {

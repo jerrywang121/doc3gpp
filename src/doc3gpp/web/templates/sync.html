@@ -186,7 +186,18 @@
     </form>
   </section>
 
-  {# --- Panel 8 — Recent sync jobs --- #}
+  {# --- Panel 8 — Testcase sync --- #}
+  <section class="card">
+    <h2>Testcase sync</h2>
+    <form id="testcase-form" class="sync-form" method="post" action="/jobs/sync/testcases">
+      <label class="inline-check"><input type="checkbox" name="force"> Force sync (re-parse latest file)</label>
+      <button type="submit" class="btn primary">Sync testcases</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
+      <div id="testcase-form-job-target"></div>
+    </form>
+  </section>
+
+  {# --- Panel 9 — Recent sync jobs --- #}
   <section class="card">
     <h2>Recent sync jobs</h2>
     <div

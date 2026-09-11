@@ -1682,3 +1682,48 @@ def test_parse_tdoc_url_mid_flight_cancel_lands_cancelled() -> None:
         f"expected cancel to land before batch completion; "
         f"processed {len(progress_calls)}/5 files: {progress_calls}"
     )
+
+
+def test_sync_testcases_enqueues() -> None:
+    from doc3gpp.models.jobs import JobKind
+
+    assert JobKind.SYNC_TESTCASES.value == "sync_testcases"
+    from doc3gpp.web.workers.handlers import JobHandlers
+
+    handler = JobHandlers.KIND_TO_HANDLER[JobKind.SYNC_TESTCASES]
+    assert handler.__name__ == "_sync_testcases"
+
+
+def test_worker_runs_testcase_sync_job() -> None:
+    """A ``SYNC_TESTCASES`` job is claimed, logs, and succeeds."""
+    from doc3gpp.models.sync import SyncOutcome
+
+    class _FakeTestcaseService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def sync(self, *, force: bool = False, on_progress=None):
+            self.calls.append({"force": force})
+            return SyncOutcome(
+                status="synced",
+                reason="Testcase sync complete: 2 testcases, 5 statuses from f.zip",
+                synced_count=2,
+            )
+
+    repo = _make_repo()
+    fake = _FakeTestcaseService()
+    state = _make_state_with_services(repo, testcase=fake)
+    job = repo.create(JobKind.SYNC_TESTCASES, {"force": True})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.result_summary == {
+        "status": "synced",
+        "reason": "Testcase sync complete: 2 testcases, 5 statuses from f.zip",
+        "synced_count": 2,
+    }
+    assert fake.calls == [{"force": True}]

@@ -159,6 +159,12 @@ def test_sync_page_forms_have_real_inputs(seeded_app: Any) -> None:
             "cache_purge",
             {"scope": "markdown"},
         ),
+        (
+            "/jobs/sync/testcases",
+            {"force": True},
+            "sync_testcases",
+            {"force": True},
+        ),
     ],
 )
 def test_each_enqueue_route_creates_correct_job(

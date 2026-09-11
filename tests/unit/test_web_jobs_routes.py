@@ -180,6 +180,31 @@ def test_post_sync_specs_requires_one_selector(client: Any) -> None:
     assert r2.status_code == 400
 
 
+def test_post_sync_testcases_creates_job(client: Any) -> None:
+    c, repo, _ = client
+    r = c.post("/jobs/sync/testcases", json={"force": True})
+    assert r.status_code == 202
+    body = r.json()
+    assert body["status"] == "queued"
+    assert body["job_id"]
+    assert body["links"]["self"] == f"/jobs/{body['job_id']}"
+    assert body["links"]["events"] == f"/jobs/{body['job_id']}/events"
+    job = repo.get(body["job_id"])
+    assert job is not None
+    assert job.kind is JobKind.SYNC_TESTCASES
+    assert job.params == {"force": True}
+
+
+def test_post_sync_testcases_defaults_force_false(client: Any) -> None:
+    c, repo, _ = client
+    r = c.post("/jobs/sync/testcases", json={})
+    assert r.status_code == 202
+    job = repo.get(r.json()["job_id"])
+    assert job is not None
+    assert job.kind is JobKind.SYNC_TESTCASES
+    assert job.params == {"force": False}
+
+
 def test_post_parse_tdocs(client: Any) -> None:
     c, repo, _ = client
     r = c.post(

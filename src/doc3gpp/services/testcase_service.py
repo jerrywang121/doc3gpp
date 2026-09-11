@@ -10,6 +10,7 @@ from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.models.testcase import (
     TestCaseDetail,
     TestCaseSource,
+    TestCaseStatus,
     TestCaseWithStatuses,
 )
 from doc3gpp.parsers.testcase_parser import extract_workbook, parse_testcase_workbook
@@ -93,7 +94,7 @@ class TestCaseService:
         cases, statuses, _notes = parse_testcase_workbook(xlsx_bytes)
 
         tc = self._repository.upsert_many(cases)
-        grouped: dict[str, list] = {}
+        grouped: dict[str, list[TestCaseStatus]] = {}
         for status in statuses:
             grouped.setdefault(status.testcase_id, []).append(status)
         for testcase_id, rows in grouped.items():

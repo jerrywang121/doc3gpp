@@ -97,8 +97,10 @@ class TestCaseService:
         grouped: dict[str, list[TestCaseStatus]] = {}
         for status in statuses:
             grouped.setdefault(status.testcase_id, []).append(status)
-        for testcase_id, rows in grouped.items():
-            self._repository.replace_statuses(testcase_id, rows)
+        for case in cases:
+            self._repository.replace_statuses(
+                case.testcase_id, grouped.get(case.testcase_id, [])
+            )
         st = len(statuses)
 
         self._repository.record_parsed(

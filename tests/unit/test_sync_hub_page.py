@@ -60,8 +60,8 @@ def test_sync_page_returns_200_and_contains_all_panels(client: Any) -> None:
         assert heading in text, f"missing heading: {heading}"
 
 
-def test_sync_page_renders_all_nine_forms(client: Any) -> None:
-    """Each of the nine enqueue panels has a unique form id."""
+def test_sync_page_renders_all_ten_forms(client: Any) -> None:
+    """Each of the ten enqueue panels has a unique form id."""
     text = client.get("/sync").text
     for form_id in (
         "sync-meetings-form",

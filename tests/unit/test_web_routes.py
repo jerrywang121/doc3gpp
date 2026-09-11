@@ -2276,16 +2276,6 @@ class FakeTestCaseService:
         return None
 
 
-def _testcase_override(app: FastAPI) -> Any:
-    """Wire ``FakeTestCaseService`` onto ``app``; returns the sentinel for pop."""
-    from doc3gpp.web.deps import get_testcase_service
-
-    app.dependency_overrides[get_testcase_service] = (
-        lambda: FakeTestCaseService()
-    )
-    return get_testcase_service
-
-
 def test_testcases_json_parity(client: TestClient) -> None:
     """``GET /testcases?format=json`` preserves the statuses dict.
 

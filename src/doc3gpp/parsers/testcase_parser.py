@@ -99,7 +99,6 @@ def parse_testcase_workbook(
     statuses: list[TestCaseStatus] = []
     notes: list[str] = []
     seen_ids: set[str] = set()
-    seen_status_keys: set[tuple[str, str]] = set()
     for sheet_name, group in SHEET_TO_GROUP.items():
         if sheet_name not in workbook.sheetnames:
             note = f"sheet {sheet_name} (group {group}) missing; skipped"
@@ -183,17 +182,6 @@ def parse_testcase_workbook(
                 ttcn = _cell(_at(row, ttcn_idx))
                 if gcf is None and ttcn is None:
                     continue
-                key = (testcase_id, _strip_mcx_prefix(path))
-                if key in seen_status_keys:
-                    logger.warning(
-                        "%s: skipping duplicate status %r for TC %r "
-                        "(already seen in an earlier sheet)",
-                        sheet_name,
-                        key[1],
-                        testcase_id,
-                    )
-                    continue
-                seen_status_keys.add(key)
                 statuses.append(
                     TestCaseStatus(
                         testcase_id=testcase_id,

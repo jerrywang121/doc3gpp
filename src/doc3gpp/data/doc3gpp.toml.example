@@ -65,6 +65,10 @@
 #   "radio_tech", "initial_release", "tsg", "rapporteurs",
 #   # "wis" — opt back in via config if you want it in spec list output
 # ]
+# testcase = [
+#   "testcase_id", "title", "spec",
+#   "group", "release", "statuses",
+# ]
 
 # ── TDoc extraction cache ───────────────────────────────────────────────────
 # Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc parse`).

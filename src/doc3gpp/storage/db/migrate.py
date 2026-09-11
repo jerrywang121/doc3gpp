@@ -13,6 +13,9 @@ from doc3gpp.storage.db.models import (
     TDocExtractOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocFileORM,  # noqa: F401 - ensures model metadata is loaded
     TDocORM,  # noqa: F401 - ensures model metadata is loaded
+    TestCaseORM,  # noqa: F401 - ensures model metadata is loaded
+    TestCaseSourceORM,  # noqa: F401 - ensures model metadata is loaded
+    TestCaseStatusORM,  # noqa: F401 - ensures model metadata is loaded
     TsgORM,  # noqa: F401 - ensures model metadata is loaded
     WiORM,  # noqa: F401 - ensures model metadata is loaded
 )

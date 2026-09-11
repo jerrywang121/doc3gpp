@@ -25,6 +25,7 @@ from doc3gpp.models.search import (
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.testcase import TestCase, TestCaseSource, TestCaseStatus
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 
@@ -410,6 +411,31 @@ class SpecRepository(Protocol):
         Rows with a ``NULL`` ``tsg`` are ignored.
         """
         ...
+
+
+class TestCaseRepository(Protocol):
+    def upsert_many(self, cases: list[TestCase]) -> int: ...
+    def replace_statuses(self, testcase_id: str, rows: list[TestCaseStatus]) -> None: ...
+    def list(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        testcase_id: str | None = None,
+        title: str | None = None,
+        ats: str | None = None,
+        feature: str | None = None,
+        release: str | None = None,
+        wis: str | None = None,
+        spec: str | None = None,
+        group: str | None = None,
+        status: str | None = None,
+        gcf_status: str | None = None,
+    ) -> list[TestCase]: ...
+    def get(self, testcase_id: str) -> TestCase | None: ...
+    def list_statuses(self, testcase_id: str) -> list[TestCaseStatus]: ...
+    def get_source(self, filename: str) -> TestCaseSource | None: ...
+    def record_download(self, source: TestCaseSource) -> None: ...
+    def record_parsed(self, filename: str, parsed_at: datetime, testcase_count: int, status_count: int) -> None: ...
 
 
 class TDocFileRepository(Protocol):

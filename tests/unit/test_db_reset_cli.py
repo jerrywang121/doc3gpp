@@ -117,9 +117,12 @@ def test_db_reset_accepts_confirmation_and_runs(sqlite_env) -> None:
 
 def test_db_reset_in_memory_sqlite_just_reinits(monkeypatch) -> None:
     """``sqlite:///:memory:`` has no file — reset skips delete, runs init."""
+    from doc3gpp.storage.db.session import get_testcase_engine
+
     monkeypatch.setenv("DOC3GPP_DATABASE_URL", "sqlite+pysqlite:///:memory:")
     get_settings.cache_clear()
     get_engine.cache_clear()
+    get_testcase_engine.cache_clear()
     try:
         runner = CliRunner()
         # The DB does not exist yet, so reset is effectively a fresh init.
@@ -130,21 +133,30 @@ def test_db_reset_in_memory_sqlite_just_reinits(monkeypatch) -> None:
         assert _count_tsgs() == 19
     finally:
         get_engine.cache_clear()
+        get_testcase_engine.cache_clear()
         get_settings.cache_clear()
 
 
 def test_db_reset_refuses_non_sqlite_url(monkeypatch) -> None:
     """A non-SQLite URL is rejected before anything is touched."""
+    from doc3gpp.storage.db.session import get_testcase_engine
+
     monkeypatch.setenv("DOC3GPP_DATABASE_URL", "oracle://user:pass@localhost/db")
+    monkeypatch.setenv(
+        "DOC3GPP_TESTCASE_DATABASE_URL", "sqlite+pysqlite:///:memory:"
+    )
     get_settings.cache_clear()
     get_engine.cache_clear()
+    get_testcase_engine.cache_clear()
     try:
         runner = CliRunner()
         result = runner.invoke(app, ["db", "reset", "--yes"])
         assert result.exit_code != 0
         assert "only supports SQLite backends" in result.output
+        assert "main" in result.output
     finally:
         get_engine.cache_clear()
+        get_testcase_engine.cache_clear()
         get_settings.cache_clear()
 
 
@@ -238,3 +250,73 @@ def _count_tsgs() -> int:
 
     with get_engine().connect() as conn:
         return int(conn.execute(text("SELECT count(*) FROM tsgs")).scalar_one())
+
+
+def test_db_reset_rejects_unknown_scope(sqlite_env) -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["db", "reset", "--scope", "nope", "--yes"])
+    assert result.exit_code != 0
+    assert "Unknown --scope" in result.output
+
+
+def test_db_reset_scope_testcase_keeps_main_rows(sqlite_env) -> None:
+    from datetime import date
+
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.models.testcase import TestCase
+    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+    from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
+
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+    SQLAlchemyMeetingRepository().upsert_many(
+        [
+            Meeting(
+                meeting_id=1, name="R5#1", title="T", location="Online",
+                start_date=date(2026, 1, 1), end_date=date(2026, 1, 2),
+            ),
+        ]
+    )
+    SQLAlchemyTestCaseRepository().upsert_many(
+        [TestCase(testcase_id="TC_1", group="5G")]
+    )
+    result = runner.invoke(app, ["db", "reset", "--scope", "testcase", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Testcase database reset complete" in result.output
+    assert _count_meetings() == 1
+    assert _count_tsgs() == 19
+
+
+def test_db_reset_scope_main_keeps_testcase_rows(sqlite_env) -> None:
+    from doc3gpp.models.testcase import TestCase
+    from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
+
+    runner = CliRunner()
+    assert runner.invoke(app, ["db", "init"]).exit_code == 0
+    SQLAlchemyTestCaseRepository().upsert_many(
+        [TestCase(testcase_id="TC_1", group="5G")]
+    )
+    result = runner.invoke(app, ["db", "reset", "--scope", "main", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Database reset complete" in result.output
+    assert SQLAlchemyTestCaseRepository().get("TC_1", "5G") is not None
+
+
+def test_db_reset_refuses_non_sqlite_testcase_url(sqlite_env, monkeypatch) -> None:
+    from doc3gpp.settings.loader import get_settings
+    from doc3gpp.storage.db.session import get_testcase_engine
+
+    monkeypatch.setenv(
+        "DOC3GPP_TESTCASE_DATABASE_URL", "oracle://user:pass@localhost/tc"
+    )
+    get_settings.cache_clear()
+    get_testcase_engine.cache_clear()
+    try:
+        runner = CliRunner()
+        result = runner.invoke(app, ["db", "reset", "--yes"])
+        assert result.exit_code != 0
+        assert "only supports SQLite backends" in result.output
+        assert "testcase" in result.output
+    finally:
+        get_testcase_engine.cache_clear()
+        get_settings.cache_clear()

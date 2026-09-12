@@ -99,7 +99,11 @@ from doc3gpp.settings.config_writer import (
     write_toml,
 )
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.db.session import (
+    get_engine,
+    get_testcase_engine,
+    resolve_testcase_database_url,
+)
 
 app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
@@ -351,6 +355,69 @@ def _resolve_cache_purge_scope(scope: str) -> str:
             f"Unknown --scope {scope!r}. Choose from: {valid}."
         )
     return normalized
+
+
+VALID_DB_SCOPES: tuple[str, ...] = ("main", "testcase", "all")
+
+
+def _resolve_db_scope(scope: str) -> str:
+    """Resolve ``--scope`` for the ``db`` commands.
+
+    Mirrors :func:`_resolve_cache_purge_scope`: normalises whitespace
+    + case and validates against :data:`VALID_DB_SCOPES`. Unknown
+    values raise :class:`typer.BadParameter`.
+    """
+    normalized = scope.strip().lower()
+    if normalized not in VALID_DB_SCOPES:
+        valid = ", ".join(VALID_DB_SCOPES)
+        raise typer.BadParameter(
+            f"Unknown --scope {scope!r}. Choose from: {valid}."
+        )
+    return normalized
+
+
+def _sqlite_file_for_scope(database_url: str, scope: str) -> Path | None:
+    """Return the sqlite file for ``database_url`` or ``None`` for ``:memory:``.
+
+    Raises :class:`typer.BadParameter` naming ``scope`` when the URL is
+    not sqlite. Call for every selected scope BEFORE deleting anything
+    so a mixed-backend ``reset`` fails without touching any file.
+    """
+    parsed = make_url(database_url)
+    if not parsed.drivername.startswith("sqlite"):
+        raise typer.BadParameter(
+            f"'db reset' only supports SQLite backends "
+            f"(scope {scope!r}: {database_url})."
+        )
+    if parsed.database and parsed.database != ":memory:":
+        return Path(parsed.database)
+    return None
+
+
+def _testcase_url_or_raise() -> str:
+    """Resolve the testcase URL, mapping derivation errors to CLI errors."""
+    try:
+        return resolve_testcase_database_url()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _delete_sqlite_file(db_file: Path | None, scope: str) -> None:
+    """Delete ``db_file`` + WAL sidecars, echoing what happened."""
+    if db_file is not None and db_file.exists():
+        logger.info("Deleting SQLite database file %s", db_file)
+        db_file.unlink()
+        # Also remove any SQLite journal sidecar files (-wal, -shm, -journal)
+        # so a half-written WAL from a previous session does not survive
+        # the reset and confuse the new schema.
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = db_file.with_name(db_file.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+                logger.debug("Removed SQLite sidecar %s", sidecar)
+        typer.echo(f"Deleted {db_file}")
+    else:
+        typer.echo(f"No existing SQLite file to delete ({scope}).")
 
 
 def _open_output(path: str | TextIO | None) -> tuple[TextIO, bool]:
@@ -612,32 +679,53 @@ def cache_purge(
 
 
 @db_app.command("check")
-def db_check() -> None:
-    """Validate database connectivity for configured backend."""
-
+def db_check(
+    scope: str = typer.Option(
+        "all",
+        "--scope",
+        help="Which database to check: 'main', 'testcase', or 'all'.",
+    ),
+) -> None:
+    """Validate database connectivity for configured backend(s)."""
+    resolved_scope = _resolve_db_scope(scope)
     logger.info("Checking database connectivity")
-    engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-
     settings = get_settings()
-    typer.echo(f"Database connection OK: {settings.database_url}")
+    if resolved_scope in ("main", "all"):
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        typer.echo(f"Database connection OK: {settings.database_url}")
+    if resolved_scope in ("testcase", "all"):
+        tc_url = _testcase_url_or_raise()
+        tc_engine = get_testcase_engine()
+        with tc_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        typer.echo(f"Testcase database connection OK: {tc_url}")
 
 
 @db_app.command("init")
-def db_init() -> None:
-    """Create schema for current backend and seed the TSG reference table.
+def db_init(
+    scope: str = typer.Option(
+        "all",
+        "--scope",
+        help="Which database to initialise: 'main', 'testcase', or 'all'.",
+    ),
+) -> None:
+    """Create schema for current backend(s) and seed the TSG reference table.
 
     Re-running this command is safe: the TSG seed is upsert-based, so existing
     rows are refreshed in place rather than duplicated.
     """
-
+    resolved_scope = _resolve_db_scope(scope)
     logger.info("Initializing database schema")
-    create_schema("all")
-    tsg_service = build_tsg_service()
-    seeded = tsg_service.seed_defaults()
-    logger.info("Seeded %s TSG reference records", seeded)
-    typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
+    create_schema(resolved_scope)
+    if resolved_scope in ("main", "all"):
+        tsg_service = build_tsg_service()
+        seeded = tsg_service.seed_defaults()
+        logger.info("Seeded %s TSG reference records", seeded)
+        typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
+    else:
+        typer.echo("Testcase database schema initialized")
 
 
 @db_app.command("reset")
@@ -648,57 +736,60 @@ def db_reset(
         "-y",
         help="Skip the confirmation prompt.",
     ),
+    scope: str = typer.Option(
+        "all",
+        "--scope",
+        help="Which database to reset: 'main', 'testcase', or 'all'.",
+    ),
 ) -> None:
-    """Delete the SQLite database file and recreate the schema.
+    """Delete the SQLite database file(s) and recreate the schema.
 
-    Destructive: all data is wiped. SQLite URLs only; non-SQLite URLs are
-    rejected. Prompts for confirmation unless ``--yes`` is passed. After
-    reset the ``tsgs`` reference table is re-seeded.
+    Destructive: all data in the selected scope is wiped. SQLite URLs
+    only — every selected scope must be sqlite or the whole reset is
+    rejected before anything is deleted. Prompts for confirmation
+    unless ``--yes`` is passed. After reset the ``tsgs`` reference
+    table is re-seeded when the main scope is selected.
     """
-
+    resolved_scope = _resolve_db_scope(scope)
     settings = get_settings()
-    parsed = make_url(settings.database_url)
+    urls: list[tuple[str, str]] = []
+    if resolved_scope in ("main", "all"):
+        urls.append(("main", settings.database_url))
+    if resolved_scope in ("testcase", "all"):
+        # NOTE: with a non-sqlite main URL and no explicit testcase URL
+        # the derivation itself fails (ValueError → BadParameter naming
+        # 'testcase_database_url'), which also aborts before any delete.
+        urls.append(("testcase", _testcase_url_or_raise()))
+    # Validate every selected scope BEFORE deleting anything: a
+    # mixed-backend reset fails without touching any file.
+    files: list[tuple[str, Path | None]] = [
+        (scope_name, _sqlite_file_for_scope(url, scope_name))
+        for scope_name, url in urls
+    ]
 
-    if not parsed.drivername.startswith("sqlite"):
-        raise typer.BadParameter(
-            f"'db reset' only supports SQLite backends "
-            f"(configured URL: {settings.database_url})."
+    targets = [str(f) for _, f in files if f is not None and f.exists()]
+    if targets and not yes:
+        typer.confirm(
+            "Delete SQLite database file(s)?\n" + "\n".join(targets),
+            abort=True,
         )
+    for scope_name, db_file in files:
+        _delete_sqlite_file(db_file, scope_name)
 
-    db_file: Path | None = None
-    if parsed.database and parsed.database != ":memory:":
-        db_file = Path(parsed.database)
-
-    if db_file is not None and db_file.exists():
-        if not yes:
-            typer.confirm(
-                f"Delete SQLite database file at {db_file}?",
-                abort=True,
-            )
-        logger.info("Deleting SQLite database file %s", db_file)
-        db_file.unlink()
-        # Also remove any SQLite journal sidecar files (-wal, -shm, -journal)
-        # so a half-written WAL from a previous session does not survive
-        # the reset and confuse the new schema.
-        for suffix in ("-wal", "-shm", "-journal"):
-            sidecar = db_file.with_name(db_file.name + suffix)
-            if sidecar.exists():
-                sidecar.unlink()
-                logger.debug("Removed SQLite sidecar %s", sidecar)
-        typer.echo(f"Deleted {db_file}")
-    else:
-        typer.echo("No existing SQLite file to delete.")
-
-    # SQLAlchemy cached the engine from the pre-delete file path; clear it
-    # so create_schema() opens a fresh connection to the (now empty) file.
+    # SQLAlchemy cached the engines from the pre-delete file paths; clear
+    # both so create_schema(resolved_scope) opens fresh connections.
     get_engine.cache_clear()
+    get_testcase_engine.cache_clear()
 
     logger.info("Recreating database schema")
-    create_schema("all")
-    tsg_service = build_tsg_service()
-    seeded = tsg_service.seed_defaults()
-    logger.info("Seeded %s TSG reference records", seeded)
-    typer.echo(f"Database reset complete; seeded {seeded} TSG records")
+    create_schema(resolved_scope)
+    if resolved_scope in ("main", "all"):
+        tsg_service = build_tsg_service()
+        seeded = tsg_service.seed_defaults()
+        logger.info("Seeded %s TSG reference records", seeded)
+        typer.echo(f"Database reset complete; seeded {seeded} TSG records")
+    else:
+        typer.echo("Testcase database reset complete")
 
 
 @meeting_app.command("sync")

@@ -95,7 +95,7 @@ Per-layer modules:
       list[TestCaseStatus], list[str])`. Constants: `SHEET_TO_GROUP`
       (6 sheets → `5G` / `LTE` / `IMS` / `UTRA` / `POS` / `MCX`),
       `PATH_RANK` (single source of truth, reused by the repo sort and
-      the CLI `k=v` rendering), `STATUS_PAIRS` (`(gcf_idx, ttcn_idx,
+       the CLI `path=gcf/ttcn` rendering), `STATUS_PAIRS` (`(gcf_idx, ttcn_idx,
       path)` per group), `FIXED_SPEC` (`5G` → `38.523-1`, `LTE` →
       `36.523-1`). `extract_workbook` picks the lexically-first
       `*.xlsx` member (zero → `TestcaseWorkbookNotFoundError`). Header
@@ -130,7 +130,7 @@ Per-layer modules:
       cache-pointer sidecar, `DirectParseResult` direct-mode outcome)
     - `models/testcase.py` — `TestCase` header, `TestCaseStatus`
       `(testcase_id, group, path)` triple, `TestCaseWithStatuses` list-view DTO
-      (`statuses: dict[str, str | None]`), `TestCaseDetail` detail-view
+      (`statuses: list[TestCaseStatus]`), `TestCaseDetail` detail-view
       DTO (`statuses: list[TestCaseStatus]`), `TestCaseSource` sync
       ledger, plus `TestcaseSourceNotFoundError` (`LookupError`) and
       `TestcaseWorkbookNotFoundError` (`ValueError`)
@@ -250,9 +250,9 @@ and the TDoc CR extraction is the deepest.
 6. `doc3gpp testcase list [filters]` reads cached headers via
    `TestCaseRepository.list(...)` (rich filter grammar on text cols;
    `group` exact upper-cased; `--status` / `--gcf-status` any-path
-   `EXISTS` on `ttcn_status` / `gcf_ptcrb`) then projects one
-   `{path: ttcn_status}` `statuses` dict per header via
-   `list_statuses`. Pagination via `--limit` (default 50) /
+   `EXISTS` on `ttcn_status` / `gcf_ptcrb`) then nests one
+   status-row list (`{path, gcf_ptcrb, ttcn_status}` objects, `null`
+   preserved) per header via `list_statuses`. Pagination via `--limit` (default 50) /
    `--offset` (default 0); columns from
    `settings.output.fields.testcase` (default `testcase_id, title,
    spec, group, release, statuses`), overridable with `--fields`
@@ -261,9 +261,10 @@ and the TDoc CR extraction is the deepest.
    id across every stored group (or one `(id, group)` row with
    `--group`) via `TestCaseService.get_all` / `get` plus scoped
    `list_statuses` (`PATH_RANK`-sorted); a miss raises
-   `typer.BadParameter(f"Testcase {id!r} not found")`. JSON always
-   emits an array of `{"testcase", "statuses"}` objects (one element
-   when a single group matches).
+    `typer.BadParameter(f"Testcase {id!r} not found")`. JSON always
+    emits an array of flat per-`(id, group)` objects with nested
+    `statuses` (one element when a single group matches); status
+    rows carry `{path, gcf_ptcrb, ttcn_status}` with no `group`.
 
 ### Meetings sync\n\n1. `doc3gpp meeting sync --tsg <short>` validates `<short>` against\n   the `tsgs` table (auto-seeded if empty).\n2. `MeetingService.sync` checks `tsgs.meeting_last_sync` against\n   `Settings.sync.meeting_sync_interval` (default `24h`) and skips\n   the upstream fetch when the last sync is still fresh. `--force`\n   bypasses this check.\n3. On a non-skipped run: `fetch_calendar` (DynaReport HTML) →\n   `parse_3gpp_calendar` (HTML → `Meeting` list). Every parsed\n   `Meeting` is then stamped with `Meeting.tsg = <short>` (canonicalised\n   to upper case) before being handed to\n   `SQLAlchemyMeetingRepository.upsert_many`. The FK constraint\n   requires the parent row to exist in `tsgs`, so the auto-seed in\n   step 1 is a hard prerequisite.\n4. `SQLAlchemyMeetingRepository.upsert_many` writes the rows; a final\n   `delete_with_end_before(cutoff)` pass trims out-of-window rows.\n5. `doc3gpp meeting list --tsg <pattern>` is a SQL ``LIKE`` lookup on\n     the indexed `meetings.tsg` column (case-insensitive on input). Rows\n     without an owning TSG are excluded.
 
@@ -869,15 +870,17 @@ Implemented command groups in `src/doc3gpp/cli.py` (ten sub-apps,
       (any-path `gcf_ptcrb` `EXISTS`), `--limit` (default 50,
       range 1..500), `--offset` (default 0), `--fields` (all 9
       list fields; default from `output.fields.testcase`).
-      JSON keeps `statuses` as a `path → ttcn_status` dict;
-      table / markdown stringify it as `k=v;…` (`PATH_RANK`-sorted,
-      `-` for `None`).
-    - `show` — `--testcase ID` (required) + optional `--group`
-      (exact: same 6 values; unknown → `BadParameter`); without
-      `--group` every stored group renders. Renders the header(s)
-      plus every `(group, path, gcf_ptcrb, ttcn_status)` row; JSON is
-      always an array of `"testcase"` / `"statuses"` objects; miss →
-      `BadParameter`.
+       JSON carries a nested `statuses` list of
+       `{path, gcf_ptcrb, ttcn_status}` objects (`null` preserved);
+       table / markdown stringify it as `path=gcf/ttcn;…`
+       (`PATH_RANK`-sorted, `-` for `None`).
+     - `show` — `--testcase ID` (required) + optional `--group`
+       (exact: same 6 values; unknown → `BadParameter`); without
+       `--group` every stored group renders. Renders the header(s)
+       plus every `(path, gcf_ptcrb, ttcn_status)` row (no `group`
+       in status rows); JSON is always an array of flat
+       per-`(id, group)` objects with nested `statuses`; miss →
+       `BadParameter`.
 - `wi`:
     - `sync` — `--tsg`
     - `list` — filters by `--tsg`, `--name`, `--acronym`, `--release`

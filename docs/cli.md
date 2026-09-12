@@ -1434,9 +1434,9 @@ same TC id may exist in several groups (e.g. IMS and UTRA) — each with
 its own `testcase_status` rows per `(testcase_id, group, path)` triple;
 single-path
 groups (`IMS`, `UTRA`, `POS`) store the literal path `'default'`
-(`path` is part of the composite PK, and the list JSON is a dict
-keyed by path, so a `NULL` path would neither deduplicate nor
-serialise cleanly).
+(`path` is part of the composite PK, so a `NULL` path would not
+deduplicate cleanly; the list/show JSON nests statuses as a list of
+`{path, gcf_ptcrb, ttcn_status}` objects with `null` preserved).
 
 `testcase sync` is the only mutating entry point. After the first
 sync `testcase list` and `testcase show` read cached rows from the
@@ -1525,12 +1525,21 @@ rich filter grammar used by the other list commands — `null` /
 `testcase_status.ttcn_status` / `testcase_status.gcf_ptcrb`
 (a testcase matches when ANY of its status rows matches).
 
-`statuses` dict projection: the JSON payload keeps `statuses` as
-a **dict** (`path → ttcn_status`) — it is not pushed through
-`_emit_records` (whose cells are strings). `table` / `markdown`
-stringify it as `k=v;…` pairs sorted by `PATH_RANK` (`-` for
-`None` values). The same dict shape is what `GET /testcases` and
+`statuses` nested list: the JSON payload keeps `statuses` as a
+nested list of `{path, gcf_ptcrb, ttcn_status}` objects
+(field-selectable via `--fields`; `None` values stay `null` in
+JSON). It is not pushed through `_emit_records` (whose cells are
+strings). `table` / `markdown` stringify it as `path=gcf/ttcn;…`
+pairs sorted by `PATH_RANK` (`-` for `None` values, so cells stay
+non-empty). The same nested shape is what `GET /testcases` and
 the MCP `list_testcases` tool emit (byte-identical).
+
+```json
+[{"testcase_id": "20.7", "title": "IPsec tunnel ...", "spec": "36.523-1",
+  "group": "LTE", "release": "Rel-18",
+  "statuses": [{"path": "FDD", "gcf_ptcrb": null,
+                "ttcn_status": "not available"}]}]
+```
 
 Examples:
 
@@ -1578,13 +1587,24 @@ Behavior:
   Without `--group`: `TestCaseService.get_all(id)` (headers via a
   `limit=500` exact-id `list` filter + per-header `list_statuses`).
 - Table/markdown: one header block + status block per group,
-  separated by blank lines, mirroring `spec show`.
-- JSON always emits an array of `{"testcase", "statuses"}`
-  objects (single-element when one group matches). Each header has
-  8 fields (`testcase_id`, `title`, `ats`, `feature`,
-  `release`, `wis`, `spec`, `group`) under a `"testcase"` key
-  and its rows (`group`, `path`, `gcf_ptcrb`, `ttcn_status`)
-  under a `"statuses"` key.
+  separated by blank lines, mirroring `spec show`. The status
+  block columns are `path, gcf_ptcrb, ttcn_status` (no `group` —
+  it is on the parent header block). Header cells render `None`
+  as `-`; JSON preserves `null`.
+- JSON always emits an array with one flat object per
+  `(testcase_id, group)`: all 8 header fields inline
+  (`testcase_id`, `title`, `ats`, `feature`, `release`, `wis`,
+  `spec`, `group`) plus a nested `statuses` list of
+  `{path, gcf_ptcrb, ttcn_status}` objects (single-element array
+  when one group matches). Status rows carry no `group`.
+
+```json
+[{"testcase_id": "20.7", "title": "IPsec tunnel ...", "ats": null,
+  "feature": "MPSoWLAN", "release": "Rel-18", "wis": "...",
+  "spec": "36.523-1", "group": "LTE",
+  "statuses": [{"path": "FDD", "gcf_ptcrb": null,
+                "ttcn_status": "not available"}]}]
+```
 - Miss raises `typer.BadParameter(f"Testcase {id!r} not found")`.
 
 Examples:

@@ -182,8 +182,8 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
-| GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (`statuses` preserved as a dict via `render.testcase_rows`). |
-| GET | `/testcases/{testcase_id}` | Testcase detail (HTML or JSON; optional `?group=` to scope to one `(id, group)` row — unknown group → 400 `invalid_filter`). Without `?group=` every stored group returns: JSON is an array of `{"testcase":{...},"statuses":[...]}` (single-element when one group matches; `group` is a column in each status row); HTML renders one section per group. Unknown id → 404 `testcase_not_found`. |
+| GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
+| GET | `/testcases/{testcase_id}` | Testcase detail (HTML or JSON; optional `?group=` to scope to one `(id, group)` row — unknown group → 400 `invalid_filter`). Without `?group=` every stored group returns: JSON is an array of flat per-`(id, group)` objects with nested `statuses` (single-element when one group matches; status rows carry `{path, gcf_ptcrb, ttcn_status}` with no `group`); HTML renders one section per group. Unknown id → 404 `testcase_not_found`. |
 | GET | `/search` | FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
@@ -227,7 +227,7 @@ version (default OFF — without it, cached rows are preserved).
 
 The sync hub (`/sync`) is a single page for enqueueing every sync-shaped job. Each panel submits a JSON body to the matching `/jobs/...` route via the shared `bindJobPolling` helper; when the job reaches a terminal state the bottom "Recent sync jobs" table is refreshed in place via HTMX (`GET /sync?format=fragment`) rather than a full page reload, so the user keeps their scroll position. The tenth form (`id="testcase-form"`) enqueues `POST /jobs/sync/testcases` with `{force}` from its Force-sync checkbox (`sync_hub.js` `"testcase-form"` body builder); the handler (`_sync_testcases`, `JobKind.SYNC_TESTCASES = "sync_testcases"`) calls `services.testcase.sync(force=force, on_progress=...)` and returns `{"status","reason","synced_count"}`.
 
-The testcase list page (`/testcases`) mirrors the spec list: an HTMX filter form (`partials/testcase_filters.html`) swaps the `#results` partial (`partials/testcase_results.html`) on `HX-Request: true`, otherwise the full `testcase_list.html` page renders. Columns are TC, Title, Spec, Group, Release, Statuses (as `k=v` chips), each row linking to its group-scoped detail page (`/testcases/{id}?group={group}` → `testcase_show.html`: one header-card + status-triples table per group, with `group` / `path` / `gcf_ptcrb` / `ttcn_status`).
+The testcase list page (`/testcases`) mirrors the spec list: an HTMX filter form (`partials/testcase_filters.html`) swaps the `#results` partial (`partials/testcase_results.html`) on `HX-Request: true`, otherwise the full `testcase_list.html` page renders. Columns are TC, Title, Spec, Group, Release, Statuses (as `path=gcf/ttcn` chips), each row linking to its group-scoped detail page (`/testcases/{id}?group={group}` → `testcase_show.html`: one header-card + status-triples table per group, with `path` / `gcf_ptcrb` / `ttcn_status`).
 
 The header nav is ordered Home, TSGs, Meetings, TDocs, Specs, Testcases, WIs, Search, Jobs, Sync.
 The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)
@@ -400,13 +400,13 @@ separate `get_job` call.
 calls `services.testcase.list_recent(...)` and returns
 `_to_json(render.testcase_rows(rows, _TESTCASE_FIELDS))` where
 `_TESTCASE_FIELDS = ["testcase_id","title","spec","group","release","statuses"]`
-(`statuses` stays a dict). `get_testcase(testcase_id, group=None)` returns
-every stored group as an array of `{"testcase", "statuses"}` objects
-(single-element with `group` set, or when one group matches): with
+(`statuses` stays a nested list of `{path, gcf_ptcrb, ttcn_status}` objects, `null` preserved). `get_testcase(testcase_id, group=None)` returns
+every stored group as an array of flat per-`(id, group)` objects with
+nested `statuses` (single-element with `group` set, or when one group matches): with
 `group` it calls `services.testcase.get(testcase_id, canonical)`; without
 it calls `services.testcase.get_all(testcase_id)`; empty → raises
 `TestcaseNotFoundError` (MCP `-32004`). Each payload's statuses go through
-render.testcase_status_rows(...)}` over `["group","path","gcf_ptcrb","ttcn_status"]`
+render.testcase_status_rows(...)}` over `["path","gcf_ptcrb","ttcn_status"]`
 (an invalid `group` value is not pre-validated here — an unknown-canonical
 group simply misses and raises `TestcaseNotFoundError`).
 `sync_testcases(force=False)` enqueues `JobKind.SYNC_TESTCASES` with

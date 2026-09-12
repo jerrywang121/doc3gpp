@@ -138,8 +138,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `group` is an exact upper-cased match; `--status` / `--gcf-status`
   are any-path `EXISTS` predicates on `ttcn_status` / `gcf_ptcrb`,
   correlated on both `(testcase_id, group)` key columns)
-  then one `{path: ttcn_status}` `statuses`-dict projection per
-  header via `list_statuses`. Pagination via `--limit` (default 50)
+  then one nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}`
+  objects per header via `list_statuses` (status rows carry no `group`;
+  JSON preserves `null`). Pagination via `--limit` (default 50)
   / `--offset` (default 0); columns from
   `settings.output.fields.testcase` (default `testcase_id, title,
   spec, group, release, statuses`), overridable with `--fields`
@@ -149,9 +150,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
   (one `(id, group)` row) → per-header `list_statuses` scoped to
   `header.group` (sorted by `PATH_RANK`). Miss raises
   `typer.BadParameter(f"Testcase {id!r} not found")`. JSON always
-  emits an array of `{"testcase", "statuses"}` objects (one element
-  when a single group matches); status rows carry
-  `(group, path, gcf_ptcrb, ttcn_status)`.
+  emits an array of flat per-`(id, group)` objects with nested
+  `statuses` (one element when a single group matches); status rows
+  carry `{path, gcf_ptcrb, ttcn_status}` with no `group`.
 - `doc3gpp meeting sync --tsg <s>` → `MeetingService.sync` → DynaReport
   HTML → `parse_3gpp_calendar` → stamp `Meeting.tsg` →
   `SQLAlchemyMeetingRepository.upsert_many`. Skips when the TSG was synced

@@ -474,7 +474,7 @@ def test_allowlisted_env_vars_override_toml(
 
     get_settings.cache_clear()
     s = get_settings()
-    assert len(ALLOWED_ENV_VARS) == 6
+    assert len(ALLOWED_ENV_VARS) == 7
     assert s.database_url == "sqlite+pysqlite:////tmp/env.db"
     assert s.db_echo is True
     assert s.log_level == "DEBUG"

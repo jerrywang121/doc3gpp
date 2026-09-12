@@ -163,12 +163,14 @@ class WebState:
     """Per-app state container attached to ``app.state.web``.
 
     Holds the resolved :class:`Settings`, the singleton SQLAlchemy
+    :class:`Engine` for the main corpus plus the sibling testcase
     :class:`Engine`, the :class:`ServiceContainer` of wired services,
     and a placeholder :class:`JobWorkerHandle` (replaced by T7).
     """
 
     settings: Settings
     engine: Engine
+    testcase_engine: Engine
     services: ServiceContainer
     jobs: JobWorkerHandle
 

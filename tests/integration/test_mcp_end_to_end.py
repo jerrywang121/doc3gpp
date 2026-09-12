@@ -762,7 +762,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     from doc3gpp.web.mcp_server import build_mcp_server
     from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
     from doc3gpp.settings.schema import Settings
-    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
     from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
     from doc3gpp.services import factory
 
@@ -800,6 +800,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     state = WebState(
         settings=settings,
         engine=get_engine(),
+        testcase_engine=get_testcase_engine(),
         services=services,
         jobs=JobWorkerHandle(),
     )
@@ -817,7 +818,9 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     assert text.startswith("[")
     assert recorded == ["scheduling"]
     get_engine.cache_clear()
+    get_testcase_engine.cache_clear()
     del state.engine
+    del state.testcase_engine
 
 
 def test_web_errors_maps_spec_unknown_on_upstream() -> None:

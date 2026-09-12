@@ -96,7 +96,7 @@ def _make_state(
         job_repo=repo,
     )
     settings = Settings()
-    return WebState(settings=settings, engine=None, services=services, jobs=_JobWorkerHandleFake())  # type: ignore[arg-type]
+    return WebState(settings=settings, engine=None, testcase_engine=None, services=services, jobs=_JobWorkerHandleFake())  # type: ignore[arg-type]
 
 
 class _JobWorkerHandleFake:
@@ -978,7 +978,7 @@ def _make_url_state(
         tdoc_file_repo=None,  # type: ignore[arg-type]
         job_repo=repo,
     )
-    return WebState(settings=settings, engine=None, services=services, jobs=_JobWorkerHandleFake())  # type: ignore[arg-type]
+    return WebState(settings=settings, engine=None, testcase_engine=None, services=services, jobs=_JobWorkerHandleFake())  # type: ignore[arg-type]
 
 
 def test_parse_tdoc_url_handler_recursive_uses_settings_depth() -> None:
@@ -1328,6 +1328,7 @@ def _make_state_with_services(repo: JobRepository, **services_kwargs) -> WebStat
     return WebState(
         settings=Settings(),
         engine=None,
+        testcase_engine=None,
         services=ServiceContainer(**defaults),  # type: ignore[arg-type]
         jobs=_JobWorkerHandleFake(),  # type: ignore[arg-type]
     )

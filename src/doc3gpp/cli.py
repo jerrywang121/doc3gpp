@@ -48,7 +48,6 @@ from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl, TDocSh
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
-from doc3gpp.parsers.testcase_parser import PATH_RANK
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.parsers.direct_extractor import (
@@ -4387,7 +4386,7 @@ TESTCASE_SHOW_HEADER_FIELDS: list[str] = [
     "group",
 ]
 
-TESTCASE_SHOW_STATUS_FIELDS: list[str] = ["group", "path", "gcf_ptcrb", "ttcn_status"]
+TESTCASE_SHOW_STATUS_FIELDS: list[str] = ["path", "gcf_ptcrb", "ttcn_status"]
 
 
 def _validate_testcase_group(group: str) -> str:
@@ -4401,22 +4400,16 @@ def _validate_testcase_group(group: str) -> str:
     return canonical
 
 
-def _format_testcase_statuses(statuses: dict[str, str | None]) -> str:
-    """Render a ``{path: ttcn_status}`` map as compact ``k=v;…`` pairs.
+def _format_testcase_statuses(statuses: list[TestCaseStatus]) -> str:
+    """Render status rows as compact ``path=gcf/ttcn;…`` pairs.
 
-    Pairs are sorted by :data:`PATH_RANK` (unknown paths last,
-    alphabetical); ``None`` values render as ``-`` so the table and
-    markdown cells stay non-empty.
+    Rows arrive pre-sorted by ``PATH_RANK`` from the repository;
+    ``None`` values render as ``-`` so table/markdown cells stay
+    non-empty.
     """
-
-    def _rank(item: tuple[str, str | None]) -> tuple[int, str]:
-        path = item[0]
-        rank = PATH_RANK.index(path) if path in PATH_RANK else len(PATH_RANK)
-        return (rank, path)
-
     return ";".join(
-        f"{path}={status if status is not None else '-'}"
-        for path, status in sorted(statuses.items(), key=_rank)
+        f"{s.path}={s.gcf_ptcrb or '-'}/{s.ttcn_status or '-'}"
+        for s in statuses
     )
 
 
@@ -4527,7 +4520,7 @@ def testcase_list(
     ``not-null`` / ``!pattern`` / plain LIKE with ``%`` and ``_``
     wildcards). ``--status`` matches ``ttcn_status`` on any path and
     ``--gcf-status`` matches ``gcf_ptcrb`` on any path. Each row
-    carries a ``statuses`` projection mapping ``path → ttcn_status``.
+    carries a nested ``statuses`` list of ``{path, gcf_ptcrb, ttcn_status}`` objects.
     Output columns default to ``testcase_id``, ``title``, ``spec``,
     ``group``, ``release``, and ``statuses`` from
     ``settings.output.fields.testcase``.
@@ -4565,18 +4558,26 @@ def testcase_list(
     resolved_compact = _resolve_compact(compact)
 
     if fmt == "json":
-        # ``statuses`` stays a dict (path → ttcn_status) — it must not
-        # go through ``_emit_records`` whose cells are plain strings.
-        # Every other field is coerced exactly like the table cells so
-        # the JSON payload stays byte-consistent with the web surface.
         payload = [
             {
-                f: (
-                    item.statuses
-                    if f == "statuses"
-                    else str(getattr(item.testcase, f, None) or "-")
-                )
-                for f in out_fields
+                **{
+                    f: str(getattr(item.testcase, f, None) or "-")
+                    for f in out_fields
+                    if f != "statuses"
+                },
+                **(
+                    {
+                        "statuses": [
+                            {
+                                f: _serialise_show_value(getattr(s, f))
+                                for f in ("path", "gcf_ptcrb", "ttcn_status")
+                            }
+                            for s in item.statuses
+                        ]
+                    }
+                    if "statuses" in out_fields
+                    else {}
+                ),
             }
             for item in records
         ]
@@ -4654,12 +4655,11 @@ def testcase_show(
     Emits the header row first, a blank separator line, then one row
     per stored ``(group, path, gcf_ptcrb, ttcn_status)`` status triple.
     Without ``--group`` and several stored groups, every matching group
-    is rendered: JSON emits an array of ``{"testcase", "statuses"}``
-    objects (a single-element array when exactly one group matches);
-    table/markdown emit one header block per group separated by blank
-    lines, then that group's status rows. The JSON payload nests the
-    header under a ``"testcase"`` key and the status rows under
-    ``"statuses"``.
+    is rendered: JSON emits an array with one flat object per
+    ``(testcase_id, group)`` (a single-element array when exactly one
+    group matches); table/markdown emit one header block per group
+    separated by blank lines, then that group's status rows
+    (``path, gcf_ptcrb, ttcn_status``).
     """
     service = build_testcase_service()
     if group is not None:
@@ -4680,7 +4680,7 @@ def testcase_show(
 
     def _detail_payload(detail: TestCaseDetail) -> dict:
         return {
-            "testcase": {
+            **{
                 f: _serialise_show_value(getattr(detail.testcase, f))
                 for f in TESTCASE_SHOW_HEADER_FIELDS
             },

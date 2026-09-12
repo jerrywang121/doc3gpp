@@ -19,7 +19,7 @@ def session_factory():
     """Build an in-memory SQLite session factory matching production.
 
     Mirrors ``tests/integration/test_spec_sql.py``: in-memory SQLite,
-    ``Base.metadata.create_all``, ``sessionmaker(autoflush=False)``.
+    ``TestCaseBase.metadata.create_all``, ``sessionmaker(autoflush=False)``.
     """
     engine = create_engine("sqlite://")
     TestCaseBase.metadata.create_all(engine)
@@ -93,3 +93,20 @@ def test_sources_ledger(session_factory) -> None:
     repo.record_parsed("TTCN CR Agreement Status 2024-wk32.zip", now, 2, 5)
     src = repo.get_source("TTCN CR Agreement Status 2024-wk32.zip")
     assert (src.parsed_at, src.testcase_count, src.status_count) == (now, 2, 5)
+
+
+def test_rows_land_in_testcase_db_not_main_db(sqlite_env) -> None:
+    """Default-constructed repo reads/writes the testcase file only."""
+    from sqlalchemy import inspect
+
+    from doc3gpp.models.testcase import TestCase
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+    from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
+
+    create_schema("all")
+    repo = SQLAlchemyTestCaseRepository()
+    assert repo.upsert_many([TestCase(testcase_id="TC_DB", group="5G")]) == 1
+    assert repo.get("TC_DB", "5G") is not None
+    assert "testcases" not in set(inspect(get_engine()).get_table_names())
+    assert "testcases" in set(inspect(get_testcase_engine()).get_table_names())

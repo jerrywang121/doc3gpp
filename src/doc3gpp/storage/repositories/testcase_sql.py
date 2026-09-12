@@ -14,7 +14,7 @@ from doc3gpp.cli_filters import (
 )
 from doc3gpp.models.testcase import TestCase, TestCaseSource, TestCaseStatus
 from doc3gpp.storage.db.models import TestCaseORM, TestCaseSourceORM, TestCaseStatusORM
-from doc3gpp.storage.db.session import get_session_factory
+from doc3gpp.storage.db.session import get_testcase_session_factory
 from doc3gpp.storage.repositories.rich_filters import apply_text_filter
 
 _PATH_RANK = [
@@ -32,10 +32,15 @@ _PATH_RANK = [
 
 
 class SQLAlchemyTestCaseRepository:
-    """SQLAlchemy implementation storing rows in ``testcases`` tables."""
+    """SQLAlchemy implementation storing rows in ``testcases`` tables.
+
+    Binds to the testcase engine (:func:`get_testcase_session_factory`)
+    by default; pass an explicit ``session_factory`` to override
+    (tests bind to in-memory SQLite).
+    """
 
     def __init__(self, session_factory: sessionmaker | None = None) -> None:
-        self._session_factory = session_factory or get_session_factory()
+        self._session_factory = session_factory or get_testcase_session_factory()
 
     def upsert_many(self, cases: list[TestCase]) -> int:
         if not cases:

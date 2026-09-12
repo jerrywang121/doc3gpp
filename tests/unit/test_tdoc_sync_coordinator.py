@@ -440,13 +440,17 @@ def test_runs_when_closed_window_but_never_synced(monkeypatch) -> None:
 
 
 def test_skip_when_within_auto_sync_interval() -> None:
+    # Anchor the meeting dates to today: the meeting must be recent enough
+    # to fall outside the 90-day closed window so the "last sync" skip
+    # (not the closed-window skip) is the rule under test.
+    today = datetime.now(timezone.utc).date()
     meeting = Meeting(
         meeting_id=1,
         name="R5#1",
         title="R5 1",
         location="Online",
-        start_date=date(2026, 6, 1),
-        end_date=date(2026, 6, 5),
+        start_date=today - timedelta(days=4),
+        end_date=today - timedelta(days=1),
         ftp_url="tsg_ran/WG5_1/",
         tdoc_list_last_sync=datetime.now(timezone.utc) - timedelta(minutes=5),
     )
@@ -468,13 +472,14 @@ def test_skip_when_within_auto_sync_interval() -> None:
 
 def test_force_bypasses_all_skip_rules(monkeypatch) -> None:
     last_sync = datetime.now(timezone.utc) - timedelta(minutes=5)
+    today = datetime.now(timezone.utc).date()
     meeting = Meeting(
         meeting_id=1,
         name="R5#1",
         title="R5 1",
         location="Online",
-        start_date=date(2026, 6, 1),
-        end_date=date(2026, 6, 5),
+        start_date=today - timedelta(days=4),
+        end_date=today - timedelta(days=1),
         ftp_url="tsg_ran/WG5_1/",
         tdoc_list_last_sync=last_sync,
     )

@@ -538,7 +538,8 @@ def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
     """``GET /testcases?format=json`` returns the CLI-shaped row array.
 
     Seeds one testcase + status row over real sqlite and asserts the
-    ``statuses`` projection stays a dict (not a coerced string).
+    ``statuses`` projection stays a nested list of per-path objects
+    (not a coerced string).
     """
     from doc3gpp.models.testcase import TestCase, TestCaseStatus
     from doc3gpp.storage.db.migrate import create_schema
@@ -581,7 +582,9 @@ def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
     body = response.json()
     assert isinstance(body, list) and body
     assert body[0]["testcase_id"] == "TC_1"
-    assert body[0]["statuses"] == {"FR1": "Approved"}
+    assert body[0]["statuses"] == [
+        {"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"}
+    ]
 
     with TestClient(app) as client:
         html = client.get("/testcases")
@@ -599,8 +602,10 @@ def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
     assert show.status_code == 200
     payload = show.json()
     assert isinstance(payload, list) and payload
-    assert payload[0]["testcase"]["testcase_id"] == "TC_1"
+    assert payload[0]["testcase_id"] == "TC_1"
     assert payload[0]["statuses"][0]["path"] == "FR1"
+    assert "testcase" not in payload[0]
+    assert "group" not in payload[0]["statuses"][0]
 
     with TestClient(app) as client:
         missing = client.get("/testcases/NOPE?format=json")

@@ -109,7 +109,7 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
     monkeypatch.setattr(
         "doc3gpp.services.factory.build_search_service", lambda *a, **kw: stub,
     )
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
 
     result = runner.invoke(
         app, ["search", "query", "alpha", "--explain", "--format", "json"]
@@ -291,7 +291,7 @@ def test_search_index_status_panel_includes_vector_rows(monkeypatch) -> None:
         "doc3gpp.services.factory.build_semantic_search_service",
         lambda: sem_stub,
     )
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
 
     result = runner.invoke(app, ["search", "index"])
     assert result.exit_code == 0, result.output
@@ -323,7 +323,7 @@ def test_search_index_status_panel_omits_vector_when_service_none(monkeypatch) -
         "doc3gpp.services.factory.build_semantic_search_service",
         lambda: None,
     )
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
 
     result = runner.invoke(app, ["search", "index"])
     assert result.exit_code == 0, result.output

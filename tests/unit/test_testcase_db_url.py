@@ -90,3 +90,49 @@ def test_engines_are_distinct(sqlite_env) -> None:
     create_schema()
     assert get_engine() is not get_testcase_engine()
     assert str(get_testcase_engine().url).endswith("test_testcase.db")
+
+
+def _table_names(engine) -> set[str]:
+    from sqlalchemy import inspect
+
+    return set(inspect(engine).get_table_names())
+
+
+def test_create_schema_scope_main_only(sqlite_env) -> None:
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+
+    create_schema("main")
+    assert "meetings" in _table_names(get_engine())
+    assert "testcases" not in _table_names(get_engine())
+    assert _table_names(get_testcase_engine()) == set()
+
+
+def test_create_schema_scope_testcase_only(sqlite_env) -> None:
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+
+    create_schema("testcase")
+    assert _table_names(get_engine()) == set()
+    assert {"testcases", "testcase_status", "testcase_sources"} <= _table_names(
+        get_testcase_engine()
+    )
+
+
+def test_create_schema_scope_all_creates_both(sqlite_env) -> None:
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+
+    create_schema("all")
+    assert "meetings" in _table_names(get_engine())
+    assert {"testcases", "testcase_status", "testcase_sources"} <= _table_names(
+        get_testcase_engine()
+    )
+    assert "testcases" not in _table_names(get_engine())
+
+
+def test_create_schema_rejects_unknown_scope(sqlite_env) -> None:
+    from doc3gpp.storage.db.migrate import create_schema
+
+    with pytest.raises(ValueError, match="scope"):
+        create_schema("nope")

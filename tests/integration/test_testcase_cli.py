@@ -120,7 +120,7 @@ def test_testcase_sync_echoes_reason(monkeypatch) -> None:
         synced_count=2,
     )
     monkeypatch.setattr("doc3gpp.cli.build_testcase_service", lambda: svc)
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     result = runner.invoke(app, ["testcase", "sync"])
     assert result.exit_code == 0, result.output
     assert "Testcase sync complete" in result.output
@@ -136,7 +136,7 @@ def test_testcase_sync_force_flag_passed_through(monkeypatch) -> None:
         synced_count=1,
     )
     monkeypatch.setattr("doc3gpp.cli.build_testcase_service", lambda: svc)
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     result = runner.invoke(app, ["testcase", "sync", "--force"])
     assert result.exit_code == 0, result.output
     _, kwargs = svc.sync.call_args

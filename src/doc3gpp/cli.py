@@ -633,7 +633,7 @@ def db_init() -> None:
     """
 
     logger.info("Initializing database schema")
-    create_schema()
+    create_schema("all")
     tsg_service = build_tsg_service()
     seeded = tsg_service.seed_defaults()
     logger.info("Seeded %s TSG reference records", seeded)
@@ -694,7 +694,7 @@ def db_reset(
     get_engine.cache_clear()
 
     logger.info("Recreating database schema")
-    create_schema()
+    create_schema("all")
     tsg_service = build_tsg_service()
     seeded = tsg_service.seed_defaults()
     logger.info("Seeded %s TSG reference records", seeded)
@@ -726,7 +726,7 @@ def meeting_sync(
     When no ``--tsg`` is given, every distinct TSG 
     found in the local meetings table is synced.
     """
-    create_schema()
+    create_schema("all")
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     service = build_meeting_service()
 
@@ -3811,7 +3811,7 @@ def tsg_seed() -> None:
     duplicated. Run this if a fresh database is missing TSG reference data
     or if the canonical descriptions/URLs need refreshing.
     """
-    create_schema()
+    create_schema("all")
     service = build_tsg_service()
     seeded = service.seed_defaults()
     typer.echo(f"Seeded {seeded} TSG reference records")
@@ -3833,7 +3833,7 @@ def wi_sync(
     `S1`, `S2`, `S3`, `S4`, `S5`, `S6`
     """
     logger.info("Starting WI sync for TSG %s", tsg)
-    create_schema()
+    create_schema("all")
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     canonical_tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = build_wi_service()
@@ -3985,7 +3985,7 @@ def spec_sync(
     them. Existing stored ``pdf_url`` and ``crs`` values are preserved
     either way.
     """
-    create_schema()
+    create_schema("all")
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     service = build_spec_service()
 
@@ -4345,7 +4345,7 @@ def testcase_sync(
     parsed testcase headers and status rows. Re-running is a no-op
     until a new file appears unless ``--force`` is passed.
     """
-    create_schema()
+    create_schema("all")
     service = build_testcase_service()
 
     from tqdm import tqdm

@@ -48,7 +48,7 @@ class _StaticRepo:
 def test_meeting_sync_accepts_known_short_name(monkeypatch) -> None:
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
@@ -71,7 +71,7 @@ def test_meeting_sync_accepts_known_short_name(monkeypatch) -> None:
 def test_meeting_sync_rejects_unknown_short_name(monkeypatch) -> None:
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
@@ -87,7 +87,7 @@ def test_meeting_sync_rejects_unknown_short_name(monkeypatch) -> None:
 def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
@@ -109,7 +109,7 @@ def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:
 def test_meeting_sync_force_flag_is_forwarded(monkeypatch) -> None:
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
@@ -131,7 +131,7 @@ def test_meeting_sync_auto_seeds_when_table_empty(monkeypatch) -> None:
     """A fresh database should auto-seed and still validate successfully."""
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(0))
     )
@@ -157,7 +157,7 @@ def test_meeting_sync_without_tsg_syncs_all_stored_tsgs(monkeypatch) -> None:
     """When --tsg is omitted, sync every distinct TSG found in meetings."""
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
@@ -182,7 +182,7 @@ def test_meeting_sync_without_tsg_reports_nothing_when_no_stored_tsgs(monkeypatc
     """When --tsg is omitted and meetings is empty, report no work."""
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
@@ -206,7 +206,7 @@ def test_meeting_sync_without_tsg_skips_unknown_stored_tsgs(monkeypatch) -> None
     """Discovered TSGs that are not in the reference table are skipped."""
     runner = CliRunner()
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )

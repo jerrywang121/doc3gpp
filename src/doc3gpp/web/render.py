@@ -275,10 +275,12 @@ def testcase_rows(
 
     Each row is one flat object per ``(testcase_id, group)``: the
     selected header fields plus a nested ``statuses`` list of
-    ``{path, gcf_ptcrb, ttcn_status}`` objects. ``statuses`` must not
-    go through :func:`_coerce_cell`. Every other field is coerced
-    exactly like the CLI's ``testcase_list`` JSON cell loop (``None``
-    renders as ``"-"``).
+    ``{path, gcf_ptcrb, ttcn_status}`` objects. Nested status objects
+    preserve nulls like the CLI's ``_serialise_show_value`` (a null
+    ``gcf_ptcrb`` stays ``None``, not ``"-"``), while every other
+    header field is coerced via :func:`_coerce_cell` exactly like the
+    CLI's ``testcase_list`` JSON cell loop (``None`` renders as
+    ``"-"``).
     """
     out: list[dict[str, Any]] = []
     for item in rows:
@@ -287,7 +289,7 @@ def testcase_rows(
             if f == "statuses":
                 row[f] = [
                     {
-                        sf: _coerce_cell(getattr(s, sf, None))
+                        sf: getattr(s, sf, None)
                         for sf in ("path", "gcf_ptcrb", "ttcn_status")
                     }
                     for s in item.statuses
@@ -301,10 +303,15 @@ def testcase_rows(
 def testcase_status_rows(
     statuses: list[Any],
     fields: list[str],
-) -> list[dict[str, str]]:
-    """Build testcase status rows for a testcase."""
+) -> list[dict[str, Any]]:
+    """Build testcase status rows for a testcase.
+
+    Null-preserving (matches the CLI's ``testcase show`` JSON, which
+    serialises status cells via ``_serialise_show_value``): a null
+    ``gcf_ptcrb`` / ``ttcn_status`` stays ``None``, not ``"-"``.
+    """
     return [
-        {f: _coerce_cell(getattr(status, f, None)) for f in fields}
+        {f: getattr(status, f, None) for f in fields}
         for status in statuses
     ]
 

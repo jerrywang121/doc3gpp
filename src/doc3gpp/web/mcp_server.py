@@ -52,7 +52,7 @@ _SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initia
 _VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
 _TESTCASE_FIELDS = ["testcase_id", "title", "spec", "group", "release", "statuses"]
 _TESTCASE_SHOW_FIELDS = ["testcase_id", "title", "ats", "feature", "release", "wis", "spec", "group"]
-_TESTCASE_STATUS_FIELDS = ["group", "path", "gcf_ptcrb", "ttcn_status"]
+_TESTCASE_STATUS_FIELDS = ["path", "gcf_ptcrb", "ttcn_status"]
 _TESTCASE_GROUPS = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
 
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
@@ -518,7 +518,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         )
         return _to_json(render.testcase_rows(rows, _TESTCASE_FIELDS))
 
-    @server.tool(name="get_testcase", description="Get a testcase by id, including its status rows (group, path, gcf_ptcrb, ttcn_status). Without group, every stored group is returned as an array; with group, a single-element array.")
+    @server.tool(name="get_testcase", description="Get a testcase by id, including its nested status rows (path, gcf_ptcrb, ttcn_status). Without group, every stored group is returned as an array of flat objects; with group, a single-element array.")
     @_mcp_error_guard
     def get_testcase(
         testcase_id: Annotated[str, Field(description="Testcase id (e.g. 'TC_1').")],
@@ -541,7 +541,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
                 raise TestcaseNotFoundError(testcase_id)
         return _to_json([
             {
-                "testcase": {f: getattr(item.testcase, f) for f in _TESTCASE_SHOW_FIELDS},
+                **{f: getattr(item.testcase, f) for f in _TESTCASE_SHOW_FIELDS},
                 "statuses": render.testcase_status_rows(item.statuses, _TESTCASE_STATUS_FIELDS),
             }
             for item in details

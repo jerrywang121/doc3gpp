@@ -1082,7 +1082,7 @@ def test_mcp_list_testcases_parity(sqlite_env) -> None:
     import asyncio
 
     state, server = _state_and_server()
-    from doc3gpp.models.testcase import TestCase, TestCaseWithStatuses
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus, TestCaseWithStatuses
 
     rows = [
         TestCaseWithStatuses(
@@ -1092,7 +1092,15 @@ def test_mcp_list_testcases_parity(sqlite_env) -> None:
                 spec="38.523-1",
                 group="5G",
             ),
-            statuses={"FR1": "Approved"},
+            statuses=[
+                TestCaseStatus(
+                    testcase_id="TC_1",
+                    group="5G",
+                    path="FR1",
+                    gcf_ptcrb="Approved",
+                    ttcn_status="Approved",
+                )
+            ],
         )
     ]
     state.services.testcase.list_recent = lambda **k: rows  # noqa: ARG005
@@ -1102,7 +1110,7 @@ def test_mcp_list_testcases_parity(sqlite_env) -> None:
 
     result = asyncio.run(run())
     assert result.is_error is False
-    assert '"FR1":"Approved"' in result.content[0].text
+    assert '"FR1","gcf_ptcrb":"Approved"' in result.content[0].text
     del state.engine
 
 
@@ -1122,7 +1130,7 @@ def test_list_testcases_tool(sqlite_env) -> None:
     assert result.is_error is False
     payload = json.loads(result.content[0].text)
     assert payload[0]["testcase_id"] == "TC_1"
-    assert payload[0]["statuses"] == {"FR1": "Approved"}
+    assert payload[0]["statuses"] == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"}]
 
 
 def test_list_testcases_tool_rejects_unknown_group(sqlite_env) -> None:
@@ -1182,8 +1190,9 @@ def test_get_testcase_tool(sqlite_env) -> None:
     assert result.is_error is False
     payload = json.loads(result.content[0].text)
     assert isinstance(payload, list) and payload
-    assert payload[0]["testcase"]["testcase_id"] == "TC_1"
+    assert payload[0]["testcase_id"] == "TC_1"
     assert payload[0]["statuses"][0]["path"] == "FR1"
+    assert "group" not in payload[0]["statuses"][0]
 
 
 def test_get_testcase_tool_not_found(sqlite_env) -> None:

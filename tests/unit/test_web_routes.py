@@ -2515,17 +2515,21 @@ def test_testcase_rows_nests_status_objects() -> None:
             testcase=TestCase(testcase_id="TC_1", title="T", group="5G"),
             statuses=[
                 TestCaseStatus(testcase_id="TC_1", group="5G", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved"),
+                TestCaseStatus(testcase_id="TC_1", group="5G", path="FR2", gcf_ptcrb=None, ttcn_status=None),
             ],
         ),
     ]
     out = testcase_rows(rows, ["testcase_id", "title", "group", "statuses"])
-    assert out[0]["statuses"] == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"}]
+    assert out[0]["statuses"] == [
+        {"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"},
+        {"path": "FR2", "gcf_ptcrb": None, "ttcn_status": None},
+    ]
     assert out[0]["title"] == "T"
     assert out[0]["testcase_id"] == "TC_1"
 
 
-def test_testcase_status_rows_coerce_cells() -> None:
-    """``testcase_status_rows`` string-coerces plainly like ``spec_version_rows``."""
+def test_testcase_status_rows_preserves_nulls() -> None:
+    """``testcase_status_rows`` preserves nulls like the CLI's show JSON."""
     from doc3gpp.models.testcase import TestCaseStatus
     from doc3gpp.web.render import testcase_status_rows
 
@@ -2539,7 +2543,7 @@ def test_testcase_status_rows_coerce_cells() -> None:
         ),
     ]
     out = testcase_status_rows(statuses, ["path", "gcf_ptcrb", "ttcn_status"])
-    assert out == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "-"}]
+    assert out == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": None}]
 
 
 # ---------------------------------------------------------------------------

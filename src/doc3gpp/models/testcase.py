@@ -38,7 +38,7 @@ class TestCaseStatus:
 @dataclass(slots=True)
 class TestCaseWithStatuses:
     testcase: TestCase
-    statuses: dict[str, str | None]
+    statuses: list[TestCaseStatus]
 
 
 @dataclass(slots=True)

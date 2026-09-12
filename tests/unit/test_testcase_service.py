@@ -46,3 +46,14 @@ def test_sync_zero_status_tc_gets_replace_with_empty(monkeypatch):
     out = svc.sync()
     assert out.status == "synced"
     assert repo.replaced == {("TC_EMPTY", "5G"): []}
+
+
+def test_list_recent_passes_status_rows():
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus
+    from doc3gpp.services.testcase_service import TestCaseService
+    row = TestCaseStatus(testcase_id="TC_1", group="5G", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved")
+    class Repo:
+        def list(self, **kw): return [TestCase(testcase_id="TC_1", group="5G", title="T")]
+        def list_statuses(self, tid, group=None): return [row]
+    out = TestCaseService(Repo()).list_recent()
+    assert out[0].statuses == [row]

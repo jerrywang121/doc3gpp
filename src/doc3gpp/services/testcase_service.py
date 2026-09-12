@@ -137,7 +137,7 @@ class TestCaseService:
         status: str | None = None,
         gcf_status: str | None = None,
     ) -> list[TestCaseWithStatuses]:
-        """List testcase headers with their ``{path: ttcn_status}`` map."""
+        """List testcase headers with their status rows."""
         canonical_group = group.upper() if group is not None else None
         cases = self._repository.list(
             limit=limit,
@@ -156,12 +156,7 @@ class TestCaseService:
         out: list[TestCaseWithStatuses] = []
         for case in cases:
             rows = self._repository.list_statuses(case.testcase_id, case.group)
-            out.append(
-                TestCaseWithStatuses(
-                    testcase=case,
-                    statuses={row.path: row.ttcn_status for row in rows},
-                )
-            )
+            out.append(TestCaseWithStatuses(testcase=case, statuses=list(rows)))
         return out
 
     def get(

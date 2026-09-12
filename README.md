@@ -273,10 +273,14 @@ doc3gpp testcase show --testcase TC_1 --format json -o tc_1.json
 ```
 
 `testcase list --status` / `--gcf-status` match `ttcn_status` /
-`gcf_ptcrb` on ANY path (`EXISTS`); each row carries a `statuses`
-dict (`path → ttcn_status`). Default columns
-`testcase_id,title,spec,group,release,statuses` (TOML
-`[output.fields] testcase`).
+`gcf_ptcrb` on ANY path (`EXISTS`); list JSON emits flat per-
+`(testcase_id, group)` objects with a nested `statuses` list of
+`{path, gcf_ptcrb, ttcn_status}` objects (no `testcase` envelope,
+no `group` in status rows; `None` stays `null` in JSON). Default
+columns `testcase_id,title,spec,group,release,statuses` (TOML
+`[output.fields] testcase`). `testcase show` JSON emits the same
+flat per-`(testcase_id, group)` shape with all 8 header fields
+inline plus the nested `statuses` list.
 
 ### `search` — FTS5 + BM25 full-text search
 

@@ -66,3 +66,27 @@ def test_non_sqlite_main_without_override_raises(_clean_db_env) -> None:
     s = Settings(database_url="oracle://user:pass@localhost/db")
     with pytest.raises(ValueError, match="testcase_database_url"):
         resolve_testcase_database_url(s)
+
+
+def test_testcase_tables_live_on_testcase_base_only() -> None:
+    from doc3gpp.storage.db import models as m  # noqa: F401
+    from doc3gpp.storage.db.base import Base
+    from doc3gpp.storage.db.testcase_base import TestCaseBase
+
+    assert set(TestCaseBase.metadata.tables) == {
+        "testcases",
+        "testcase_status",
+        "testcase_sources",
+    }
+    assert {"testcases", "testcase_status", "testcase_sources"}.isdisjoint(
+        Base.metadata.tables
+    )
+
+
+def test_engines_are_distinct(sqlite_env) -> None:
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+
+    create_schema()
+    assert get_engine() is not get_testcase_engine()
+    assert str(get_testcase_engine().url).endswith("test_testcase.db")

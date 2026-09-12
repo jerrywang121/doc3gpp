@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from doc3gpp.storage.db.base import Base
+from doc3gpp.storage.db.testcase_base import TestCaseBase
 
 
 class TDocORM(Base):
@@ -454,7 +455,7 @@ class SpecVersionORM(Base):
     crs: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class TestCaseORM(Base):
+class TestCaseORM(TestCaseBase):
     """Persisted RAN5 testcase header row (one per ``(testcase_id, group)``)."""
 
     __tablename__ = "testcases"
@@ -469,7 +470,7 @@ class TestCaseORM(Base):
     spec: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
-class TestCaseStatusORM(Base):
+class TestCaseStatusORM(TestCaseBase):
     """One `(testcase_id, group, path)` status triple; single-path groups use `'default'`."""
 
     __tablename__ = "testcase_status"
@@ -499,7 +500,7 @@ class TestCaseStatusORM(Base):
     )
 
 
-class TestCaseSourceORM(Base):
+class TestCaseSourceORM(TestCaseBase):
     """Sync ledger: one row per status file (filename identity is the skip key)."""
 
     __tablename__ = "testcase_sources"

@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from doc3gpp.storage.db.base import Base
+from doc3gpp.storage.db.testcase_base import TestCaseBase
 from doc3gpp.storage.db import models as m  # noqa: F401
 
 
@@ -22,7 +22,7 @@ def session_factory():
     ``Base.metadata.create_all``, ``sessionmaker(autoflush=False)``.
     """
     engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
+    TestCaseBase.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return Session
 

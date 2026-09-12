@@ -68,27 +68,49 @@ auto-sync.
 
 ## db Commands
 
+Two databases, one flag. Testcase tables (`testcases`,
+`testcase_status`, `testcase_sources`) live in a separate sqlite file
+from the main corpus: `testcase_database_url` (TOML key, or
+`DOC3GPP_TESTCASE_DATABASE_URL` env). When unset (the default) it is
+derived as a sibling of `database_url` with `_testcase` suffixed to
+the stem (`doc3gpp.db` → `doc3gpp_testcase.db`). `:memory:` main URLs
+share a memory DB; derivation from a non-sqlite main URL fails unless
+`testcase_database_url` is set explicitly.
+
+Each `db` command takes `--scope main|testcase|all` (default `all`).
+
 ### doc3gpp db check
 
 Purpose:
 
-- Validate connectivity to the configured database backend.
+- Validate connectivity to the configured database backend(s).
 
 Behavior:
 
-- Creates an engine from DOC3GPP_DATABASE_URL.
-- Executes SELECT 1.
-- Prints the active database URL when successful.
+- `--scope` selects which engine(s) to connect to AND which URL(s) to
+  print: `main` prints only the main URL, `testcase` only the
+  testcase URL, `all` (default) prints both.
+- Creates an engine from DOC3GPP_DATABASE_URL (main scope) and/or the
+  resolved testcase URL (testcase scope).
+- Executes SELECT 1 per selected engine.
+- Prints the active database URL(s) when successful.
+
+Examples:
+
+```bash
+doc3gpp db check --scope testcase   # connectivity for the testcase file only
+```
 
 ### doc3gpp db init
 
 Purpose:
 
-- Initialize schema for current backend and seed the TSG reference table.
+- Initialize schema for current backend(s) and seed the TSG reference table.
 
 Behavior:
 
-- Calls create_schema.
+- Calls `create_schema(scope)` — only the selected scope's schema is
+  created (`tsgs` is seeded when main is in scope).
 - Creates currently defined ORM tables if they do not exist.
 - Seeds the `tsgs` table with the canonical 3GPP TSG list (19 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
@@ -97,28 +119,46 @@ Behavior:
 
 Purpose:
 
-- Recover from schema drift by wiping the SQLite database file and
-  recreating it from scratch. Use this after an ORM change has left the
+- Recover from schema drift by wiping the SQLite database file(s) and
+  recreating from scratch. Use this after an ORM change has left the
   live schema out of sync — Alembic is not wired up in this project, so
   manual migrations are the norm and a mismatched schema can leave the
-  DB unusable. **Destructive: every row in every table is wiped.**
+  DB unusable. **Destructive: every row in every table of the selected
+  scope is wiped.**
 
 Options:
 
+- `--scope main|testcase|all` (default `all`): which database(s) to wipe.
 - `--yes`, `-y`: skip the interactive confirmation prompt.
 
 Behavior:
 
-- Refuses to run on non-SQLite URLs.
+- Refuses to run unless every selected scope is a SQLite URL (the
+  whole reset is rejected before anything is deleted when any
+  selected scope is non-sqlite).
 - For file-based SQLite URLs (`sqlite:///...` /
-  `sqlite+pysqlite:///...`): deletes the on-disk `.db` file plus any
-  WAL / SHM / journal sidecars, then re-runs `create_schema` +
-  `seed_defaults`.
+  `sqlite+pysqlite:///...`): deletes the selected on-disk `.db`
+  file(s) plus any WAL / SHM / journal sidecars, then re-runs
+  `create_schema(scope)` + `seed_defaults` (seed only when main is in
+  scope).
 - For in-memory SQLite (`sqlite:///:memory:`): skips the delete step
-  (there is nothing to delete) and re-runs `create_schema` +
-  `seed_defaults`.
-- Clears the cached SQLAlchemy engine so the subsequent `create_schema`
-  opens a fresh connection to the (now empty) file.
+  (there is nothing to delete) and re-runs `create_schema(scope)` +
+  `seed_defaults` (seed only when main is in scope).
+- Clears both cached SQLAlchemy engines (main + testcase) so the
+  subsequent `create_schema` opens fresh connections to the (now
+  empty) file(s).
+
+Examples:
+
+```bash
+# Wipe only the testcase corpus; main data untouched.
+doc3gpp db reset --scope testcase --yes
+```
+
+Upgrade note: pre-existing main DB files keep orphan
+`testcases`/`testcase_status`/`testcase_sources` tables after the
+split (harmless — nothing reads them). Reclaim the space with
+`db reset --scope main` (destructive!) or leave them.
 
 ## meeting Commands
 
@@ -2480,7 +2520,8 @@ doc3gpp server uninstall systemd
 ```bash
 doc3gpp db init
 doc3gpp db check
-doc3gpp db reset --yes           # destructive: wipe + recreate SQLite schema
+doc3gpp db reset --yes           # destructive: wipe + recreate SQLite schema (both scopes)
+doc3gpp db reset --scope testcase --yes   # wipe only the testcase corpus
 doc3gpp tsg list
 doc3gpp meeting sync --tsg r5
 doc3gpp meeting list --limit 20

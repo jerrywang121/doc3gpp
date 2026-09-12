@@ -24,6 +24,11 @@
 # works; allowlisted env vars override this file when both are set.
 
 # database_url = "sqlite+pysqlite:////home/you/.local/share/doc3gpp/doc3gpp.db"
+# testcase_database_url = "sqlite+pysqlite:////home/you/.local/share/doc3gpp/doc3gpp_testcase.db"
+#   # Optional: RAN5 testcase corpus lives in its own sqlite file so it can
+#   # be reset independently (`doc3gpp db reset --scope testcase`). Unset
+#   # (default) derives a sibling of database_url with `_testcase` suffixed
+#   # to the stem. Also settable via DOC3GPP_TESTCASE_DATABASE_URL.
 # db_echo = false
 # db_auto_migrate = true
 

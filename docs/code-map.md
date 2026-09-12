@@ -116,9 +116,11 @@ table below is for navigation only.
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
 | `Base` | declarative base | `storage/db/base.py` | SQLAlchemy `DeclarativeBase`. |
+| `TestCaseBase` | declarative base | `storage/db/testcase_base.py` | SQLAlchemy `DeclarativeBase` owning the three testcase ORMs (`testcases`, `testcase_status`, `testcase_sources`). |
 | ORM classes | `Mapped[]` | `storage/db/models.py` | `TDocORM`, `MeetingORM`, `TsgORM`, `WiORM`, `TDocFileORM`, slim `TDocCrDetailOrm` (cover-page only), `TDocCrTtcnDetailOrm` (TTCN sidecar), `TDocExtractOrm` (cache metadata: `cache_file` String(255), indexed), `SpecORM` (header table keyed by `spec_id`), `SpecVersionORM` (one row per `(spec_id, version)` with `ftp_url`, `pdf_url`, `crs`, etc.). |
-| `get_engine` / `get_session_factory` | functions | `storage/db/session.py` | Cached engine + session factory. |
-| `create_schema` | function | `storage/db/migrate.py` | `Base.metadata.create_all` bootstrap. |
+| `get_engine` / `get_session_factory` | functions | `storage/db/session.py` | Cached main engine + session factory. |
+| `get_testcase_engine` / `get_testcase_session_factory` / `resolve_testcase_database_url` | functions | `storage/db/session.py` | Cached testcase engine + session factory; sibling-derivation resolver for `testcase_database_url`. |
+| `create_schema` | function | `storage/db/migrate.py` | `create_schema(scope)` — `Base.metadata.create_all` for `"main"`, `TestCaseBase.metadata.create_all` for `"testcase"`, both for `"all"`. |
 | `compress_json` / `decompress_json` | functions | `storage/compression.py` | Shared gzip JSON helpers used by both `SQLAlchemyTDocCrRepository` and `SQLAlchemyTDocCrTtcnRepository` for any binary JSON detail column (currently the TTCN sidecar's `required_changes`). `decompress_json` is tolerant — `None` / empty / gzip / JSON / Unicode errors all resolve to `None` plus a warning; legacy uncompressed blobs decode transparently. |
 | `SQLAlchemyMeetingRepository` | class | `storage/repositories/meeting_sql.py` | SQL impl of `MeetingRepository`. |
 | `SQLAlchemyTDocRepository` | class | `storage/repositories/tdoc_sql.py` | SQL impl of `TDocRepository`. |

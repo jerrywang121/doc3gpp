@@ -129,6 +129,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `record_parsed`. Skips when the latest file's `testcase_sources`
   row already carries `parsed_at` unless `--force` is passed
   (file-identity skip rule; no interval, no bootstrap seed).
+  Testcase tables live in a separate sqlite file
+  (`testcase_database_url`, default sibling
+  `<main-stem>_testcase.db`); `db reset --scope testcase` wipes only
+  the corpus.
 - `doc3gpp testcase list [filters]` → `TestCaseService.list_recent`
   → `TestCaseRepository.list` (text cols via `apply_text_filter`;
   `group` is an exact upper-cased match; `--status` / `--gcf-status`

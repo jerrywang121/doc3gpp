@@ -184,10 +184,17 @@ Per-layer modules:
       (the sidecar's `required_changes` blob today; tolerant
       decoding covers future binary detail columns)
     - `storage/db/session.py` — `get_engine`, `get_session_factory`
-      (cached)
+      (cached, main DB) and `get_testcase_engine`,
+      `get_testcase_session_factory`,
+      `resolve_testcase_database_url` (cached, testcase DB)
     - `storage/db/base.py` — declarative `Base`
-    - `storage/db/migrate.py` — `create_schema` (calls
-      `Base.metadata.create_all`)
+    - `storage/db/testcase_base.py` — declarative `TestCaseBase`
+      (owns the three testcase ORMs: `testcases`, `testcase_status`,
+      `testcase_sources`)
+    - `storage/db/migrate.py` — `create_schema(scope)` (calls
+      `Base.metadata.create_all` for `"main"`,
+      `TestCaseBase.metadata.create_all` for `"testcase"`, both for
+      `"all"`)
     - `storage/db/migrations/` — placeholder for future Alembic
     - `storage/backends/sqlite.py` — engine kwargs
     - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
@@ -199,7 +206,14 @@ Per-layer modules:
       `testcase_status` + `testcase_sources`; text cols via
       `apply_text_filter`, `group` exact upper-cased, `status` /
       `gcf_status` via any-path `EXISTS`, `list_statuses` Python-sorted
-      by `PATH_RANK`)
+      by `PATH_RANK`). Bound to the testcase session factory
+      (`get_testcase_session_factory()`), not the main one.
+
+Data flow by database: testcase traffic →
+`SQLAlchemyTestCaseRepository` → testcase factory
+(`get_testcase_session_factory()` → `get_testcase_engine()` →
+`testcase_database_url`); everything else → main factory
+(`get_session_factory()` → `get_engine()` → `database_url`).
 
 | `services/search_service.py` | orchestration; injected with a `SearchIndexRepository` impl + `EmbeddingReranker` via `services/factory.build_search_service` |
 | `storage/db/fts5_query.py` | `normalize_query` index-time pre-processor (T3); applies TDoc-ID base+full duplication + spec-id `dot→underscore` rejoin |
@@ -788,11 +802,15 @@ Implemented command groups in `src/doc3gpp/cli.py` (ten sub-apps,
 (6 commands):
 
 - `db`:
-    - `check`
-    - `init` — creates the schema and seeds the `tsgs` reference table
-    - `reset` — SQLite-only destructive reset; deletes the DB file and
-      sidecars, clears the engine cache, recreates the schema, and re-seeds
-      `tsgs`
+    - `check` — `--scope main|testcase|all` (default `all`); connects
+      per scope and prints the selected URL(s)
+    - `init` — `--scope main|testcase|all` (default `all`); creates the
+      selected schema(s) via `create_schema(scope)` and seeds the
+      `tsgs` reference table when main is in scope
+    - `reset` — `--scope main|testcase|all` (default `all`);
+      SQLite-only destructive reset; deletes the selected DB file(s)
+      and sidecars, clears both engine caches, recreates the selected
+      schema(s), and re-seeds `tsgs` when main is in scope
 - `meeting`:
     - `sync` — validates `--tsg` against the reference table
     - `list` — filters by `--tsg`, `--name`, `--location`, `--year`,
@@ -924,7 +942,9 @@ factory wires:
 - `get_settings()` (cached; `cache_clear()` in tests that mutate
   allowlisted `DOC3GPP_*` env vars)
 - `get_engine()` / `get_session_factory()` (cached; same clear
-  contract)
+  contract) for the main DB, and `get_testcase_engine()` /
+  `get_testcase_session_factory()` (cached; same clear contract)
+  for the testcase DB
 - `ScraperClient()` — single instance per CLI invocation
 
 `_build_cache` in the CLI constructs `TDocCache(settings.cache.dir,
@@ -999,10 +1019,11 @@ readers:
   signature on any repo, update both the Protocol and the impl.
 - **CLI depends on `services/factory.py` only** — never instantiate a
   concrete `SQLAlchemy*Repository` from `cli.py`.
-- **Settings caching** — `get_settings` and `get_engine` are
-  `@lru_cache(maxsize=1)`; any test that mutates an allowlisted
-  `DOC3GPP_*` env var must call `cache_clear()` on both in teardown
-  (the `sqlite_env` fixture is the canonical pattern).
+- **Settings caching** — `get_settings`, `get_engine`, and
+  `get_testcase_engine` are `@lru_cache(maxsize=1)`; any test that
+  mutates an allowlisted `DOC3GPP_*` env var must call `cache_clear()`
+  on all three in teardown (the `sqlite_env` fixture is the canonical
+  pattern — it pins both database URLs and clears all three caches).
 
 ## Out of scope (today)
 

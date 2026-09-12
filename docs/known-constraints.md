@@ -22,6 +22,13 @@ change set so the docs stay honest.
   a one-shot idempotent rename that bridges legacy `tdoc_cr_details`
   callers to the current `tdoc_cr_cover_page` table; nothing else
   in the bootstrap is allowed to mutate an existing table in place.
+- **Orphan testcase tables on upgrade.** After the testcase-DB split,
+  pre-existing main DB files keep `testcases` / `testcase_status` /
+  `testcase_sources` tables as orphans (harmless — nothing reads
+  them; `Base.metadata.create_all` will not drop them). Reclaim the
+  space with `doc3gpp db reset --scope main` (destructive!) or leave
+  them. The testcase corpus re-syncs from scratch via
+  `testcase sync` into the new file.
 - **`meeting sync`, `wi sync`, and `tsg seed` call `create_schema()`**
   for fresh-database ergonomics. Idempotent but blurs the `db init`
   boundary; `tdoc sync` and `tdoc parse` already dropped the call.

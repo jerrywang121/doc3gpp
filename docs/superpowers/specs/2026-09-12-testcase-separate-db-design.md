@@ -61,8 +61,8 @@ Separate declarative base + second engine:
   - Derivation helper lives next to the session module and is
     unit-testable without an engine.
 
-- `db check` prints both URLs (main + resolved testcase) regardless
-  of scope; `--scope` selects which engine(s) to actually connect to.
+- `db check --scope=X` connects to the selected engine(s) and prints
+  the corresponding URL(s) (per-scope printing).
 
 ## CLI (`db` sub-app)
 

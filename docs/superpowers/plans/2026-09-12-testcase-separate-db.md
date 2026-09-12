@@ -593,7 +593,7 @@ git commit -m "feat(testcase): bind testcase repository to the testcase engine"
 
 **Interfaces:**
 - Consumes: `create_schema(scope)`, `resolve_testcase_database_url`, `get_testcase_engine` (Tasks 1-3).
-- Produces: `db init|reset|check --scope main|testcase|all` (default `"all"`). `db check` always prints both URLs but only connects to selected engines. `db reset` validates ALL selected scopes are sqlite BEFORE deleting anything, then deletes per-scope files + sidecars, clears both engine caches, recreates selected schemas, re-seeds `tsgs` when main is in scope.
+- Produces: `db init|reset|check --scope main|testcase|all` (default `"all"`). `db check` connects to the selected engine(s) and prints the corresponding URL(s) (per-scope printing). `db reset` validates ALL selected scopes are sqlite BEFORE deleting anything, then deletes per-scope files + sidecars, clears both engine caches, recreates selected schemas, re-seeds `tsgs` when main is in scope.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -980,7 +980,7 @@ Then run `python -m pytest tests/unit/test_settings_config_file.py tests/unit/te
 
 1. In the `db init` / `db check` / `db reset` section, document `--scope main|testcase|all` (default `all`), with examples:
    - `doc3gpp db reset --scope testcase --yes` — wipes only the testcase corpus, main data untouched.
-   - `doc3gpp db check --scope testcase` — connectivity for the testcase file only (both URLs are always printed... no — per spec, `db check` prints both URLs regardless of scope but only connects to selected engines. Write exactly that).
+   - `doc3gpp db check --scope testcase` — connectivity for the testcase file only (`--scope` selects both which engine(s) to connect to and which URL(s) to print).
 2. Document `testcase_database_url` (TOML key + `DOC3GPP_TESTCASE_DATABASE_URL` env) and the sibling-derivation default.
 3. Note the upgrade behavior: pre-existing main DB files keep orphan `testcases`/`testcase_status`/`testcase_sources` tables (harmless, unread); reclaim with `db reset --scope main` (destructive!) or leave them.
 
@@ -1024,7 +1024,7 @@ git commit -m "docs(testcase): document the separate testcase database"
 - `sqlite_env` pins + clears both → Task 2 Step 5. ✅
 - Derivation/scope/FK/independent-reset/non-sqlite tests → Tasks 1/3/4/5. ✅ (FK containment: composite FK unchanged inside the testcase DB; covered implicitly by scoped replace tests — no new FK test needed since the constraint SQL is untouched.)
 - Docs list (AGENTS, cli, architecture, code-map, toml.example; web-server only if visible — it isn't, skipped deliberately) → Task 7. ✅
-- `db check` prints both URLs regardless of scope, connects per scope → Task 5 Step 4. ✅ (Spec contradiction already fixed in `5219f57`.)
+- `db check` connects per scope and prints the corresponding URL(s) → Task 5 Step 4. ✅ (Ruling 2026-09-12: per-scope printing governs; spec + plan prose aligned.)
 
 **2. Placeholder scan:** every step has exact file paths, exact code blocks, exact commands, exact expected outputs. No TBD/TODO/"similar to". The two "find the actual filename" asides (config-CLI test file, `rg` sweeps) are bounded discovery steps with explicit fallback handling, not placeholders.
 

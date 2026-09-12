@@ -40,7 +40,7 @@ _TESTCASE_SHOW_FIELDS = [
     "spec",
     "group",
 ]
-_TESTCASE_STATUS_FIELDS = ["group", "path", "gcf_ptcrb", "ttcn_status"]
+_TESTCASE_STATUS_FIELDS = ["path", "gcf_ptcrb", "ttcn_status"]
 
 _VALID_GROUPS = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
 
@@ -83,7 +83,7 @@ async def list_testcases(
     ``?format=json`` returns the same payload as
     ``doc3gpp testcase list --format json``: a bare array of
     field-selected rows (``settings.output.fields.testcase`` by default)
-    with ``statuses`` preserved as a dict via
+    with ``statuses`` as a nested list via
     :func:`doc3gpp.web.render.testcase_rows`.
 
     The numeric query params (``limit``, ``offset``) are declared as
@@ -160,8 +160,9 @@ async def show_testcase(
     """Render ``testcase_show.html`` or a JSON payload with header + statuses.
 
     Without ``?group=`` every stored group for the id is returned: JSON
-    emits an array of ``{"testcase", "statuses"}`` objects (one element
-    when a single group matches) and HTML renders one section per group.
+    emits an array with one flat object per ``(testcase_id, group)``
+    (one element when a single group matches) and HTML renders one
+    section per group.
     """
     canonical_group = _validate_group(parse_text_query(group))
     if canonical_group is not None:
@@ -178,7 +179,7 @@ async def show_testcase(
         return JSONResponse(
             content=[
                 {
-                    "testcase": {
+                    **{
                         f: getattr(item.testcase, f, None)
                         for f in _TESTCASE_SHOW_FIELDS
                     },

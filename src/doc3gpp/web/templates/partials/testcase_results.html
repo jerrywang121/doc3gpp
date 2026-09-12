@@ -22,8 +22,8 @@
             <td>{{ row.testcase.release or '-' }}</td>
             <td>
               {% if row.statuses %}
-                {% for path, status in row.statuses.items() %}
-                  <code>{{ path }}={{ status or '-' }}</code>{% if not loop.last %} {% endif %}
+                {% for s in row.statuses %}
+                  <code>{{ s.path }}={{ s.gcf_ptcrb or '-' }}/{{ s.ttcn_status or '-' }}</code>{% if not loop.last %} {% endif %}
                 {% endfor %}
               {% else %}
                 -

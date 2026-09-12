@@ -273,18 +273,25 @@ def testcase_rows(
 ) -> list[dict[str, Any]]:
     """Build ``testcase list --format json``-shaped rows.
 
-    Like :func:`spec_rows` BUT preserves ``statuses`` as a dict
-    (``path → ttcn_status``) — it must not go through
-    :func:`_coerce_cell`. Every other field is coerced exactly like
-    the CLI's ``testcase_list`` JSON cell loop (``None`` renders as
-    ``"-"``).
+    Each row is one flat object per ``(testcase_id, group)``: the
+    selected header fields plus a nested ``statuses`` list of
+    ``{path, gcf_ptcrb, ttcn_status}`` objects. ``statuses`` must not
+    go through :func:`_coerce_cell`. Every other field is coerced
+    exactly like the CLI's ``testcase_list`` JSON cell loop (``None``
+    renders as ``"-"``).
     """
     out: list[dict[str, Any]] = []
     for item in rows:
         row: dict[str, Any] = {}
         for f in fields:
             if f == "statuses":
-                row[f] = item.statuses
+                row[f] = [
+                    {
+                        sf: _coerce_cell(getattr(s, sf, None))
+                        for sf in ("path", "gcf_ptcrb", "ttcn_status")
+                    }
+                    for s in item.statuses
+                ]
             else:
                 row[f] = _coerce_cell(getattr(item.testcase, f, None))
         out.append(row)

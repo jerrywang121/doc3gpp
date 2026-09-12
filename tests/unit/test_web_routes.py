@@ -2249,7 +2249,15 @@ class FakeTestCaseService:
                     spec="38.523-1",
                     group="5G",
                 ),
-                statuses={"FR1": "Approved"},
+                statuses=[
+                    TestCaseStatus(
+                        testcase_id="TC_1",
+                        group="5G",
+                        path="FR1",
+                        gcf_ptcrb="Approved",
+                        ttcn_status="Approved",
+                    ),
+                ],
             ),
         ]
         self._statuses = [
@@ -2290,10 +2298,10 @@ class FakeTestCaseService:
 
 
 def test_testcases_json_parity(client: TestClient) -> None:
-    """``GET /testcases?format=json`` preserves the statuses dict.
+    """``GET /testcases?format=json`` preserves the statuses list.
 
     Lock: ``render.testcase_rows`` must not string-coerce ``statuses``
-    (the CLI's ``testcase list --format json`` emits it as a dict).
+    (the CLI emits it as a list of per-path objects).
     """
     from doc3gpp.web.deps import get_testcase_service
 
@@ -2305,7 +2313,9 @@ def test_testcases_json_parity(client: TestClient) -> None:
     finally:
         client.app.dependency_overrides.pop(get_testcase_service, None)
     assert response.status_code == 200
-    assert response.json()[0]["statuses"] == {"FR1": "Approved"}
+    assert response.json()[0]["statuses"] == [
+        {"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"}
+    ]
 
 
 def test_testcases_json_matches_render_rows(client: TestClient) -> None:
@@ -2458,8 +2468,9 @@ def test_testcase_show_json(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list) and body
-    assert body[0]["testcase"]["testcase_id"] == "TC_1"
+    assert body[0]["testcase_id"] == "TC_1"
     assert body[0]["statuses"][0]["path"] == "FR1"
+    assert "group" not in body[0]["statuses"][0]
 
 
 def test_testcase_show_group_scoped_json(client: TestClient) -> None:
@@ -2476,7 +2487,7 @@ def test_testcase_show_group_scoped_json(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list) and len(body) == 1
-    assert body[0]["testcase"]["group"] == "5G"
+    assert body[0]["group"] == "5G"
 
 
 def test_testcase_show_404(client: TestClient) -> None:
@@ -2494,19 +2505,21 @@ def test_testcase_show_404(client: TestClient) -> None:
     assert response.json()["error"] == "testcase_not_found"
 
 
-def test_testcase_rows_preserves_statuses_dict() -> None:
-    """``testcase_rows`` keeps ``statuses`` a dict; other fields coerce."""
-    from doc3gpp.models.testcase import TestCase, TestCaseWithStatuses
+def test_testcase_rows_nests_status_objects() -> None:
+    """``testcase_rows`` nests ``statuses`` as objects; other fields coerce."""
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus, TestCaseWithStatuses
     from doc3gpp.web.render import testcase_rows
 
     rows = [
         TestCaseWithStatuses(
             testcase=TestCase(testcase_id="TC_1", title="T", group="5G"),
-            statuses={"FR1": "Approved"},
+            statuses=[
+                TestCaseStatus(testcase_id="TC_1", group="5G", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved"),
+            ],
         ),
     ]
     out = testcase_rows(rows, ["testcase_id", "title", "group", "statuses"])
-    assert out[0]["statuses"] == {"FR1": "Approved"}
+    assert out[0]["statuses"] == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"}]
     assert out[0]["title"] == "T"
     assert out[0]["testcase_id"] == "TC_1"
 
@@ -2525,8 +2538,8 @@ def test_testcase_status_rows_coerce_cells() -> None:
             ttcn_status=None,
         ),
     ]
-    out = testcase_status_rows(statuses, ["group", "path", "gcf_ptcrb", "ttcn_status"])
-    assert out == [{"group": "5G", "path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "-"}]
+    out = testcase_status_rows(statuses, ["path", "gcf_ptcrb", "ttcn_status"])
+    assert out == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "-"}]
 
 
 # ---------------------------------------------------------------------------

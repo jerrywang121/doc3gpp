@@ -20,7 +20,6 @@
     <table class="grid">
       <thead>
         <tr>
-          <th>Group</th>
           <th>Path</th>
           <th>GCF/PTCRB</th>
           <th>TTCN status</th>
@@ -29,7 +28,6 @@
       <tbody>
         {% for s in item.statuses %}
           <tr>
-            <td><code>{{ s.group }}</code></td>
             <td><code>{{ s.path }}</code></td>
             <td>{{ s.gcf_ptcrb or '-' }}</td>
             <td>{{ s.ttcn_status or '-' }}</td>

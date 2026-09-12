@@ -60,7 +60,9 @@ Separate declarative base + second engine:
     main URL behaves for non-sqlite backends).
   - Derivation helper lives next to the session module and is
     unit-testable without an engine.
-- `db check` prints both URLs (main + resolved testcase).
+
+- `db check` prints both URLs (main + resolved testcase) regardless
+  of scope; `--scope` selects which engine(s) to actually connect to.
 
 ## CLI (`db` sub-app)
 

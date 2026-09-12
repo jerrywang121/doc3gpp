@@ -103,7 +103,11 @@ def test_parse_workbook_mcx_prefix_stripped():
 
 
 def test_parse_workbook_skips_duplicate_tc_across_sheets():
-    """A TC id repeated in a later sheet keeps the first sheet's row only."""
+    """A TC id repeated in a later sheet keeps both group rows.
+
+    Identity is ``(testcase_id, group)``: the same TC id in IMS and
+    UTRA yields two headers, each with its own group-scoped status.
+    """
     from doc3gpp.parsers.testcase_parser import parse_testcase_workbook
     wb = Workbook()
     ws = wb.active
@@ -123,7 +127,13 @@ def test_parse_workbook_skips_duplicate_tc_across_sheets():
     wb.save(buf)
     cases, statuses, _notes = parse_testcase_workbook(buf.getvalue())
     dupes = [c for c in cases if c.testcase_id == "TC_D"]
-    assert len(dupes) == 1
-    assert dupes[0].title == "ImsTitle"
-    assert dupes[0].spec == "34.229-1"
-    assert len([s for s in statuses if s.testcase_id == "TC_D"]) == 1
+    assert len(dupes) == 2
+    by_group = {c.group: c for c in dupes}
+    assert by_group["IMS"].title == "ImsTitle"
+    assert by_group["IMS"].spec == "34.229-1"
+    assert by_group["UTRA"].title == "UtraTitle"
+    assert len([s for s in statuses if s.testcase_id == "TC_D"]) == 2
+    assert {(s.group, s.ttcn_status) for s in statuses if s.testcase_id == "TC_D"} == {
+        ("IMS", "t"),
+        ("UTRA", "t2"),
+    }

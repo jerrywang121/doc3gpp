@@ -39,13 +39,34 @@ def test_upsert_get_list_status_round_trip(session_factory) -> None:
     from doc3gpp.models.testcase import TestCase, TestCaseStatus
     from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
     repo = SQLAlchemyTestCaseRepository(session_factory)
-    assert repo.upsert_many([TestCase(testcase_id="TC_A", title="T", group="5G", spec="38.523-1")]) == 1
-    repo.replace_statuses("TC_A", [TestCaseStatus(testcase_id="TC_A", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved")])
-    got = repo.get("TC_A")
+    assert repo.upsert_many([TestCase(testcase_id="TC_A", group="5G", title="T", spec="38.523-1")]) == 1
+    repo.replace_statuses("TC_A", "5G", [TestCaseStatus(testcase_id="TC_A", group="5G", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved")])
+    got = repo.get("TC_A", "5G")
     assert got is not None and got.group == "5G"
-    assert [(s.path, s.ttcn_status) for s in repo.list_statuses("TC_A")] == [("FR1", "Approved")]
+    assert [(s.path, s.ttcn_status) for s in repo.list_statuses("TC_A", "5G")] == [("FR1", "Approved")]
     assert [c.testcase_id for c in repo.list(status="Approved")] == ["TC_A"]
     assert repo.list(status="null") == []
+
+
+def test_same_id_across_groups(session_factory) -> None:
+    """The same TC id coexists in several groups with isolated statuses."""
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus
+    from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
+    repo = SQLAlchemyTestCaseRepository(session_factory)
+    assert repo.upsert_many([
+        TestCase(testcase_id="TC_X", group="IMS", title="ImsTitle"),
+        TestCase(testcase_id="TC_X", group="UTRA", title="UtraTitle"),
+    ]) == 2
+    repo.replace_statuses("TC_X", "IMS", [TestCaseStatus(testcase_id="TC_X", group="IMS", path="default", ttcn_status="Approved")])
+    repo.replace_statuses("TC_X", "UTRA", [TestCaseStatus(testcase_id="TC_X", group="UTRA", path="default", ttcn_status="Rejected")])
+    assert repo.get("TC_X", "IMS").title == "ImsTitle"
+    assert repo.get("TC_X", "UTRA").title == "UtraTitle"
+    assert [s.ttcn_status for s in repo.list_statuses("TC_X", "IMS")] == ["Approved"]
+    assert [s.ttcn_status for s in repo.list_statuses("TC_X", "UTRA")] == ["Rejected"]
+    # Scoped replace in one group leaves the other group's rows untouched.
+    repo.replace_statuses("TC_X", "IMS", [])
+    assert repo.list_statuses("TC_X", "IMS") == []
+    assert [s.ttcn_status for s in repo.list_statuses("TC_X", "UTRA")] == ["Rejected"]
 
 
 def test_replace_statuses_cleans_stale_paths(session_factory) -> None:
@@ -53,12 +74,12 @@ def test_replace_statuses_cleans_stale_paths(session_factory) -> None:
     from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
     repo = SQLAlchemyTestCaseRepository(session_factory)
     repo.upsert_many([TestCase(testcase_id="TC_B", group="5G")])
-    repo.replace_statuses("TC_B", [
-        TestCaseStatus(testcase_id="TC_B", path="FR1", ttcn_status="Approved"),
-        TestCaseStatus(testcase_id="TC_B", path="FR2", ttcn_status="Not approved"),
+    repo.replace_statuses("TC_B", "5G", [
+        TestCaseStatus(testcase_id="TC_B", group="5G", path="FR1", ttcn_status="Approved"),
+        TestCaseStatus(testcase_id="TC_B", group="5G", path="FR2", ttcn_status="Not approved"),
     ])
-    repo.replace_statuses("TC_B", [TestCaseStatus(testcase_id="TC_B", path="FR1", ttcn_status="Approved")])
-    assert [s.path for s in repo.list_statuses("TC_B")] == ["FR1"]
+    repo.replace_statuses("TC_B", "5G", [TestCaseStatus(testcase_id="TC_B", group="5G", path="FR1", ttcn_status="Approved")])
+    assert [s.path for s in repo.list_statuses("TC_B", "5G")] == ["FR1"]
 
 
 def test_sources_ledger(session_factory) -> None:

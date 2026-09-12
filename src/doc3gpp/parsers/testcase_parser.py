@@ -98,7 +98,7 @@ def parse_testcase_workbook(
     cases: list[TestCase] = []
     statuses: list[TestCaseStatus] = []
     notes: list[str] = []
-    seen_ids: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
     for sheet_name, group in SHEET_TO_GROUP.items():
         if sheet_name not in workbook.sheetnames:
             note = f"sheet {sheet_name} (group {group}) missing; skipped"
@@ -157,24 +157,26 @@ def parse_testcase_workbook(
                 spec = FIXED_SPEC[group]
             else:
                 spec = _col(row, "part of")
-            if testcase_id in seen_ids:
+            if (testcase_id, group) in seen_keys:
                 logger.warning(
-                    "%s: skipping duplicate TC %r (already seen in an earlier sheet)",
+                    "%s: skipping duplicate TC %r in group %r "
+                    "(already seen in an earlier sheet)",
                     sheet_name,
                     testcase_id,
+                    group,
                 )
                 continue
-            seen_ids.add(testcase_id)
+            seen_keys.add((testcase_id, group))
             cases.append(
                 TestCase(
                     testcase_id=testcase_id,
+                    group=group,
                     title=_col(row, "title"),
                     ats=_col(row, "ats"),
                     feature=_col(row, "feature"),
                     release=_col(row, "release"),
                     wis=_col(row, "ran wic"),
                     spec=spec,
-                    group=group,
                 )
             )
             for gcf_idx, ttcn_idx, path in valid_pairs:
@@ -185,6 +187,7 @@ def parse_testcase_workbook(
                 statuses.append(
                     TestCaseStatus(
                         testcase_id=testcase_id,
+                        group=group,
                         path=_strip_mcx_prefix(path),
                         gcf_ptcrb=gcf,
                         ttcn_status=ttcn,

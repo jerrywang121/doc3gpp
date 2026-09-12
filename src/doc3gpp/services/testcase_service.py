@@ -94,12 +94,16 @@ class TestCaseService:
         cases, statuses, _notes = parse_testcase_workbook(xlsx_bytes)
 
         tc = self._repository.upsert_many(cases)
-        grouped: dict[str, list[TestCaseStatus]] = {}
+        grouped: dict[tuple[str, str], list[TestCaseStatus]] = {}
         for status in statuses:
-            grouped.setdefault(status.testcase_id, []).append(status)
+            grouped.setdefault(
+                (status.testcase_id, status.group), []
+            ).append(status)
         for case in cases:
             self._repository.replace_statuses(
-                case.testcase_id, grouped.get(case.testcase_id, [])
+                case.testcase_id,
+                case.group,
+                grouped.get((case.testcase_id, case.group), []),
             )
         st = len(statuses)
 
@@ -151,7 +155,7 @@ class TestCaseService:
         )
         out: list[TestCaseWithStatuses] = []
         for case in cases:
-            rows = self._repository.list_statuses(case.testcase_id)
+            rows = self._repository.list_statuses(case.testcase_id, case.group)
             out.append(
                 TestCaseWithStatuses(
                     testcase=case,
@@ -160,10 +164,22 @@ class TestCaseService:
             )
         return out
 
-    def get(self, testcase_id: str) -> TestCaseDetail | None:
-        """Return the header plus statuses for ``testcase_id`` or ``None``."""
-        header = self._repository.get(testcase_id)
+    def get(
+        self, testcase_id: str, group: str | None = None
+    ) -> TestCaseDetail | None:
+        """Return the header plus statuses for ``(testcase_id, group)`` or ``None``."""
+        header = self._repository.get(testcase_id, group)
         if header is None:
             return None
-        rows = self._repository.list_statuses(testcase_id)
+        rows = self._repository.list_statuses(testcase_id, header.group)
         return TestCaseDetail(testcase=header, statuses=rows)
+
+    def get_all(self, testcase_id: str) -> list[TestCaseDetail]:
+        """Return every ``(testcase_id, group)`` row for ``testcase_id``."""
+        cases = self._repository.list(testcase_id=testcase_id, limit=500)
+        cases = [c for c in cases if c.testcase_id == testcase_id]
+        out: list[TestCaseDetail] = []
+        for case in cases:
+            rows = self._repository.list_statuses(case.testcase_id, case.group)
+            out.append(TestCaseDetail(testcase=case, statuses=rows))
+        return out

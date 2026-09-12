@@ -10,7 +10,7 @@ def test_skip_matrix(monkeypatch):
         def record_parsed(self, fn, at, tc, st):
             s = self.sources[fn]; s.parsed_at = at; s.testcase_count = tc; s.status_count = st
         def upsert_many(self, cases): self.cases = cases; return len(cases)
-        def replace_statuses(self, tid, rows): pass
+        def replace_statuses(self, tid, group, rows): pass
     svc = TestCaseService(Repo())
     import doc3gpp.services.testcase_service as m
     monkeypatch.setattr(m, "list_history_files", lambda client=None: ["TTCN CR Agreement Status 2024-wk32.zip"])
@@ -34,7 +34,7 @@ def test_sync_zero_status_tc_gets_replace_with_empty(monkeypatch):
         def record_download(self, src): pass
         def record_parsed(self, fn, at, tc, st): pass
         def upsert_many(self, cases): return len(cases)
-        def replace_statuses(self, tid, rows): self.replaced[tid] = list(rows)
+        def replace_statuses(self, tid, group, rows): self.replaced[(tid, group)] = list(rows)
     repo = Repo()
     svc = TestCaseService(repo)
     import doc3gpp.services.testcase_service as m
@@ -45,4 +45,4 @@ def test_sync_zero_status_tc_gets_replace_with_empty(monkeypatch):
     monkeypatch.setattr(m, "parse_testcase_workbook", lambda b: ([header], [], []))
     out = svc.sync()
     assert out.status == "synced"
-    assert repo.replaced == {"TC_EMPTY": []}
+    assert repo.replaced == {("TC_EMPTY", "5G"): []}

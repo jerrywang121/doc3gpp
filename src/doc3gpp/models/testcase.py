@@ -17,18 +17,19 @@ class TestcaseWorkbookNotFoundError(ValueError):
 @dataclass(slots=True)
 class TestCase:
     testcase_id: str
+    group: str
     title: str | None = None
     ats: str | None = None
     feature: str | None = None
     release: str | None = None
     wis: str | None = None
     spec: str | None = None
-    group: str | None = None
 
 
 @dataclass(slots=True)
 class TestCaseStatus:
     testcase_id: str
+    group: str
     path: str
     gcf_ptcrb: str | None = None
     ttcn_status: str | None = None

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -454,28 +455,33 @@ class SpecVersionORM(Base):
 
 
 class TestCaseORM(Base):
-    """Persisted RAN5 testcase header row (one per TC)."""
+    """Persisted RAN5 testcase header row (one per ``(testcase_id, group)``)."""
 
     __tablename__ = "testcases"
 
     testcase_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    group: Mapped[str] = mapped_column(String(8), primary_key=True, index=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     ats: Mapped[str | None] = mapped_column(String(128), nullable=True)
     feature: Mapped[str | None] = mapped_column(String(256), nullable=True)
     release: Mapped[str | None] = mapped_column(String(32), nullable=True)
     wis: Mapped[str | None] = mapped_column(String(512), nullable=True)
     spec: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    group: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
 
 
 class TestCaseStatusORM(Base):
-    """One `(testcase_id, path)` status pair; single-path groups use `'default'`."""
+    """One `(testcase_id, group, path)` status triple; single-path groups use `'default'`."""
 
     __tablename__ = "testcase_status"
 
     testcase_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey("testcases.testcase_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+        index=True,
+    )
+    group: Mapped[str] = mapped_column(
+        String(8),
         primary_key=True,
         nullable=False,
         index=True,
@@ -483,6 +489,14 @@ class TestCaseStatusORM(Base):
     path: Mapped[str] = mapped_column(String(16), primary_key=True, nullable=False)
     gcf_ptcrb: Mapped[str | None] = mapped_column(Text, nullable=True)
     ttcn_status: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["testcase_id", "group"],
+            ["testcases.testcase_id", "testcases.group"],
+            ondelete="CASCADE",
+        ),
+    )
 
 
 class TestCaseSourceORM(Base):

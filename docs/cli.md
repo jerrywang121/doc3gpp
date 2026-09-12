@@ -1389,8 +1389,10 @@ doc3gpp tdoc parse --from-url \
 ## testcase Commands
 
 The `testcase` sub-app exposes RAN5 conformance testcase status
-snapshots. Each testcase (e.g. `TC_1`) carries a header row and one
-`testcase_status` row per `(testcase_id, path)` pair; single-path
+snapshots. Each header row is keyed by `(testcase_id, group)`, so the
+same TC id may exist in several groups (e.g. IMS and UTRA) — each with
+its own `testcase_status` rows per `(testcase_id, group, path)` triple;
+single-path
 groups (`IMS`, `UTRA`, `POS`) store the literal path `'default'`
 (`path` is part of the composite PK, and the list JSON is a dict
 keyed by path, so a `NULL` path would neither deduplicate nor
@@ -1510,12 +1512,18 @@ doc3gpp testcase list --group 5G --spec '38.523-1' --format json -o testcases.js
 
 Purpose:
 
-- Render one testcase with every stored status row.
+- Render one testcase id with every stored status row. Without
+  `--group` every stored group is rendered; with `--group` only
+  that `(testcase_id, group)` row is rendered.
 
 Options (verified against `doc3gpp testcase show --help`):
 
 - `--testcase TEXT` (required): testcase id to render (e.g.
   `TC_1`).
+- `--group TEXT`: exact group match: `5G`, `LTE`, `IMS`, `UTRA`,
+  `POS`, or `MCX`. Unknown values raise `typer.BadParameter`
+  listing the valid groups. When omitted and the id exists in
+  several groups, every matching group is rendered.
 - `--format TEXT`: output format: table (default, tab-separated),
   json, or markdown.
 - `--output, -o TEXT`: write results to FILE instead of stdout.
@@ -1525,21 +1533,28 @@ Options (verified against `doc3gpp testcase show --help`):
 
 Behavior:
 
-- Header via `TestCaseRepository.get` + status rows via
-  `list_statuses` (sorted by `PATH_RANK`).
-- Table: two `_emit_records` blocks (header, then statuses)
-  separated by a blank line, mirroring `spec show`.
-- JSON nests the header (8 fields: `testcase_id`, `title`,
-  `ats`, `feature`, `release`, `wis`, `spec`, `group`) under a
-  `"testcase"` key and the rows (`path`, `gcf_ptcrb`,
-  `ttcn_status`) under a `"statuses"` key.
+- With `--group`: header via `TestCaseRepository.get(id, group)` +
+  status rows via `list_statuses(id, group)` (sorted by `PATH_RANK`).
+  Without `--group`: `TestCaseService.get_all(id)` (headers via a
+  `limit=500` exact-id `list` filter + per-header `list_statuses`).
+- Table/markdown: one header block + status block per group,
+  separated by blank lines, mirroring `spec show`.
+- JSON always emits an array of `{"testcase", "statuses"}`
+  objects (single-element when one group matches). Each header has
+  8 fields (`testcase_id`, `title`, `ats`, `feature`,
+  `release`, `wis`, `spec`, `group`) under a `"testcase"` key
+  and its rows (`group`, `path`, `gcf_ptcrb`, `ttcn_status`)
+  under a `"statuses"` key.
 - Miss raises `typer.BadParameter(f"Testcase {id!r} not found")`.
 
 Examples:
 
 ```bash
-# Quick console view of one testcase.
+# Quick console view of one testcase (all stored groups).
 doc3gpp testcase show --testcase TC_1
+
+# One group only.
+doc3gpp testcase show --testcase TC_1 --group 5G
 
 # JSON export for downstream tooling.
 doc3gpp testcase show --testcase TC_1 --format json -o tc_1.json

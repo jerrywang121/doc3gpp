@@ -52,7 +52,8 @@ _SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initia
 _VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
 _TESTCASE_FIELDS = ["testcase_id", "title", "spec", "group", "release", "statuses"]
 _TESTCASE_SHOW_FIELDS = ["testcase_id", "title", "ats", "feature", "release", "wis", "spec", "group"]
-_TESTCASE_STATUS_FIELDS = ["path", "gcf_ptcrb", "ttcn_status"]
+_TESTCASE_STATUS_FIELDS = ["group", "path", "gcf_ptcrb", "ttcn_status"]
+_TESTCASE_GROUPS = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
 
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
 
@@ -496,6 +497,11 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         limit: Annotated[int, Field(description="Maximum number of testcases to return.")] = 50,
         offset: Annotated[int, Field(description="Number of testcases to skip for pagination.")] = 0,
     ) -> str:
+        if group is not None and group.upper() not in _TESTCASE_GROUPS:
+            raise InvalidFilterError(
+                f"Unknown testcase group '{group}'. "
+                f"Valid groups: {', '.join(_TESTCASE_GROUPS)}."
+            )
         rows = services.testcase.list_recent(
             limit=limit,
             offset=offset,
@@ -512,18 +518,34 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         )
         return _to_json(render.testcase_rows(rows, _TESTCASE_FIELDS))
 
-    @server.tool(name="get_testcase", description="Get a single testcase by id, including its status rows (path, gcf_ptcrb, ttcn_status).")
+    @server.tool(name="get_testcase", description="Get a testcase by id, including its status rows (group, path, gcf_ptcrb, ttcn_status). Without group, every stored group is returned as an array; with group, a single-element array.")
     @_mcp_error_guard
     def get_testcase(
         testcase_id: Annotated[str, Field(description="Testcase id (e.g. 'TC_1').")],
+        group: Annotated[str | None, Field(description="Exact group match: 5G, LTE, IMS, UTRA, POS, or MCX. When omitted, every stored group is returned.")] = None,
     ) -> str:
-        detail = services.testcase.get(testcase_id)
-        if detail is None:
-            raise TestcaseNotFoundError(testcase_id)
-        return _to_json({
-            "testcase": {f: getattr(detail.testcase, f) for f in _TESTCASE_SHOW_FIELDS},
-            "statuses": render.testcase_status_rows(detail.statuses, _TESTCASE_STATUS_FIELDS),
-        })
+        canonical = group.upper() if group is not None else None
+        if canonical is not None and canonical not in _TESTCASE_GROUPS:
+            raise InvalidFilterError(
+                f"Unknown testcase group '{group}'. "
+                f"Valid groups: {', '.join(_TESTCASE_GROUPS)}."
+            )
+        if canonical is not None:
+            detail = services.testcase.get(testcase_id, canonical)
+            if detail is None:
+                raise TestcaseNotFoundError(testcase_id)
+            details = [detail]
+        else:
+            details = services.testcase.get_all(testcase_id)
+            if not details:
+                raise TestcaseNotFoundError(testcase_id)
+        return _to_json([
+            {
+                "testcase": {f: getattr(item.testcase, f) for f in _TESTCASE_SHOW_FIELDS},
+                "statuses": render.testcase_status_rows(item.statuses, _TESTCASE_STATUS_FIELDS),
+            }
+            for item in details
+        ])
 
     # ---- Search ---------------------------------------------------
     @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")

@@ -42,7 +42,9 @@ class SQLAlchemyTestCaseRepository:
             return 0
         with self._session_factory() as session:
             for case in cases:
-                existing = session.get(TestCaseORM, case.testcase_id)
+                existing = session.get(
+                    TestCaseORM, (case.testcase_id, case.group)
+                )
                 if existing is not None:
                     existing.title = case.title
                     existing.ats = case.ats
@@ -50,34 +52,37 @@ class SQLAlchemyTestCaseRepository:
                     existing.release = case.release
                     existing.wis = case.wis
                     existing.spec = case.spec
-                    existing.group = case.group
                 else:
                     session.add(
                         TestCaseORM(
                             testcase_id=case.testcase_id,
+                            group=case.group,
                             title=case.title,
                             ats=case.ats,
                             feature=case.feature,
                             release=case.release,
                             wis=case.wis,
                             spec=case.spec,
-                            group=case.group,
                         )
                     )
             session.commit()
         return len(cases)
 
-    def replace_statuses(self, testcase_id: str, rows: list[TestCaseStatus]) -> None:
+    def replace_statuses(
+        self, testcase_id: str, group: str, rows: list[TestCaseStatus]
+    ) -> None:
         with self._session_factory() as session:
             session.execute(
                 delete(TestCaseStatusORM).where(
-                    TestCaseStatusORM.testcase_id == testcase_id
+                    (TestCaseStatusORM.testcase_id == testcase_id)
+                    & (TestCaseStatusORM.group == group)
                 )
             )
             for row in rows:
                 session.add(
                     TestCaseStatusORM(
                         testcase_id=row.testcase_id,
+                        group=row.group,
                         path=row.path,
                         gcf_ptcrb=row.gcf_ptcrb,
                         ttcn_status=row.ttcn_status,
@@ -130,16 +135,31 @@ class SQLAlchemyTestCaseRepository:
             rows = session.scalars(stmt).all()
         return [_orm_to_case(r) for r in rows]
 
-    def get(self, testcase_id: str) -> TestCase | None:
+    def get(
+        self, testcase_id: str, group: str | None = None
+    ) -> TestCase | None:
         with self._session_factory() as session:
-            row = session.get(TestCaseORM, testcase_id)
+            if group is not None:
+                row = session.get(TestCaseORM, (testcase_id, group))
+            else:
+                stmt = (
+                    select(TestCaseORM)
+                    .where(TestCaseORM.testcase_id == testcase_id)
+                    .order_by(TestCaseORM.group)
+                    .limit(1)
+                )
+                row = session.scalars(stmt).first()
         return _orm_to_case(row) if row is not None else None
 
-    def list_statuses(self, testcase_id: str) -> list[TestCaseStatus]:
+    def list_statuses(
+        self, testcase_id: str, group: str | None = None
+    ) -> list[TestCaseStatus]:
         with self._session_factory() as session:
             stmt = select(TestCaseStatusORM).where(
                 TestCaseStatusORM.testcase_id == testcase_id
             )
+            if group is not None:
+                stmt = stmt.where(TestCaseStatusORM.group == group)
             rows = session.scalars(stmt).all()
         statuses = [_orm_to_status(r) for r in rows]
         statuses.sort(key=_path_rank_key)
@@ -210,9 +230,10 @@ def _apply_status_exists(stmt, column, value: str):
     """Filter ``stmt`` to testcases having a status row matching ``value``.
 
     Builds ``EXISTS (SELECT 1 FROM testcase_status s WHERE
-    s.testcase_id == testcases.testcase_id AND <rich predicate>)`` where
-    the rich predicate is ``null`` → ``IS NULL``, ``not-null`` →
-    ``IS NOT NULL``, ``!p`` → ``NOT LIKE``, else ``LIKE``.
+    s.testcase_id == testcases.testcase_id AND s.group == testcases.group
+    AND <rich predicate>)`` where the rich predicate is ``null`` →
+    ``IS NULL``, ``not-null`` → ``IS NOT NULL``, ``!p`` → ``NOT LIKE``,
+    else ``LIKE``.
     """
     if is_null_token(value):
         predicate = column.is_(None)
@@ -224,6 +245,7 @@ def _apply_status_exists(stmt, column, value: str):
     sub = (
         select(TestCaseStatusORM.testcase_id)
         .where(TestCaseStatusORM.testcase_id == TestCaseORM.testcase_id)
+        .where(TestCaseStatusORM.group == TestCaseORM.group)
         .where(predicate)
         .exists()
     )
@@ -241,19 +263,20 @@ def _path_rank_key(status: TestCaseStatus) -> int:
 def _orm_to_case(row: TestCaseORM) -> TestCase:
     return TestCase(
         testcase_id=row.testcase_id,
+        group=row.group,
         title=row.title,
         ats=row.ats,
         feature=row.feature,
         release=row.release,
         wis=row.wis,
         spec=row.spec,
-        group=row.group,
     )
 
 
 def _orm_to_status(row: TestCaseStatusORM) -> TestCaseStatus:
     return TestCaseStatus(
         testcase_id=row.testcase_id,
+        group=row.group,
         path=row.path,
         gcf_ptcrb=row.gcf_ptcrb,
         ttcn_status=row.ttcn_status,

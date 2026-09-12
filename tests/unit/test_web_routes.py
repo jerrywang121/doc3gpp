@@ -2255,6 +2255,7 @@ class FakeTestCaseService:
         self._statuses = [
             TestCaseStatus(
                 testcase_id="TC_1",
+                group="5G",
                 path="FR1",
                 gcf_ptcrb="Approved",
                 ttcn_status="Approved",
@@ -2264,16 +2265,28 @@ class FakeTestCaseService:
     def list_recent(self, **_kwargs: Any) -> list[Any]:
         return list(self._rows)
 
-    def get(self, testcase_id: str) -> Any | None:
+    def get(self, testcase_id: str, group: str | None = None) -> Any | None:
         for row in self._rows:
-            if row.testcase.testcase_id == testcase_id:
-                from doc3gpp.models.testcase import TestCaseDetail
+            if row.testcase.testcase_id != testcase_id:
+                continue
+            if group is not None and row.testcase.group != group:
+                continue
+            from doc3gpp.models.testcase import TestCaseDetail
 
-                return TestCaseDetail(
-                    testcase=row.testcase,
-                    statuses=list(self._statuses),
-                )
+            return TestCaseDetail(
+                testcase=row.testcase,
+                statuses=list(self._statuses),
+            )
         return None
+
+    def get_all(self, testcase_id: str) -> list[Any]:
+        from doc3gpp.models.testcase import TestCaseDetail
+
+        return [
+            TestCaseDetail(testcase=row.testcase, statuses=list(self._statuses))
+            for row in self._rows
+            if row.testcase.testcase_id == testcase_id
+        ]
 
 
 def test_testcases_json_parity(client: TestClient) -> None:
@@ -2444,8 +2457,26 @@ def test_testcase_show_json(client: TestClient) -> None:
         client.app.dependency_overrides.pop(get_testcase_service, None)
     assert response.status_code == 200
     body = response.json()
-    assert body["testcase"]["testcase_id"] == "TC_1"
-    assert body["statuses"][0]["path"] == "FR1"
+    assert isinstance(body, list) and body
+    assert body[0]["testcase"]["testcase_id"] == "TC_1"
+    assert body[0]["statuses"][0]["path"] == "FR1"
+
+
+def test_testcase_show_group_scoped_json(client: TestClient) -> None:
+    """``GET /testcases/{id}?group=..&format=json`` scopes to one group."""
+    from doc3gpp.web.deps import get_testcase_service
+
+    client.app.dependency_overrides[get_testcase_service] = (
+        lambda: FakeTestCaseService()
+    )
+    try:
+        response = client.get("/testcases/TC_1?group=5G&format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_testcase_service, None)
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list) and len(body) == 1
+    assert body[0]["testcase"]["group"] == "5G"
 
 
 def test_testcase_show_404(client: TestClient) -> None:
@@ -2488,13 +2519,14 @@ def test_testcase_status_rows_coerce_cells() -> None:
     statuses = [
         TestCaseStatus(
             testcase_id="TC_1",
+            group="5G",
             path="FR1",
             gcf_ptcrb="Approved",
             ttcn_status=None,
         ),
     ]
-    out = testcase_status_rows(statuses, ["path", "gcf_ptcrb", "ttcn_status"])
-    assert out == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "-"}]
+    out = testcase_status_rows(statuses, ["group", "path", "gcf_ptcrb", "ttcn_status"])
+    assert out == [{"group": "5G", "path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "-"}]
 
 
 # ---------------------------------------------------------------------------

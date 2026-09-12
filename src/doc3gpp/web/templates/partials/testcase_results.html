@@ -29,7 +29,7 @@
                 -
               {% endif %}
             </td>
-            <td><a href="/testcases/{{ row.testcase.testcase_id }}">show</a></td>
+            <td><a href="/testcases/{{ row.testcase.testcase_id }}?group={{ row.testcase.group }}">show</a></td>
           </tr>
         {% endfor %}
       </tbody>

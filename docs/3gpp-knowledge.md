@@ -530,11 +530,10 @@ with zero emitted pairs still yields its `TestCase` header).
   `'default'` (never `NULL`): `path` is part of the composite PK
   and the list JSON is a dict keyed by path.
 - The live workbook contains cross-sheet duplicate TC ids (e.g.
-  the same id on both the IMS and UTRA sheets). The parser keeps
-  the first sheet's header row and drops later duplicates
-  (first-sheet-wins, sheet order 5G → LTE → IMS → UTRA → POS →
-  MCX), each skip logged with a warning; duplicate
-  `(testcase_id, path)` status pairs are likewise first-wins.
+  the same id on both the IMS and UTRA sheets). Identity is
+  `(testcase_id, group)`, so each sheet keeps its own header row
+  and its own group-scoped status rows — both groups coexist, and
+  `show`/`get` without a group return every matching group.
 
 ## Meeting FTP directory structure
 
@@ -724,7 +723,7 @@ upsert. Existing installs gain the table lazily: the
 - `src/doc3gpp/parsers/testcase_parser.py`
   - `SHEET_TO_GROUP` / `PATH_RANK` / `STATUS_PAIRS` /
     `FIXED_SPEC` + `extract_workbook` / `parse_testcase_workbook`
-    (header-validated parse with first-wins cross-sheet dedup).
+    (header-validated parse with per-`(testcase_id, group)` identity).
 
 - `src/doc3gpp/services/testcase_service.py`
   - Orchestrates testcase sync (fetch + parse + upsert with the
@@ -733,7 +732,8 @@ upsert. Existing installs gain the table lazily: the
 
 - `src/doc3gpp/storage/repositories/testcase_sql.py`
   - SQLAlchemy implementation that upserts into `testcases` keyed by
-    `testcase_id`, replaces `testcase_status` rows per id, and keeps
+    `(testcase_id, group)`, replaces `testcase_status` rows per
+    `(testcase_id, group)` pair, and keeps
     the `testcase_sources` sync ledger.
 
 - `src/doc3gpp/models/tdoc_cr.py`
@@ -811,7 +811,8 @@ upsert. Existing installs gain the table lazily: the
 
 ### Testcases
 
-- `testcase_id`
+- `(testcase_id, group)` composite identity (one header row per
+  group, so the same id may exist in several groups)
 - `title`
 - `ats`
 - `feature`
@@ -819,7 +820,8 @@ upsert. Existing installs gain the table lazily: the
 - `wis`
 - `spec`
 - `group`
-- per-path `testcase_status` rows (`path`, `gcf_ptcrb`, `ttcn_status`)
+- per-`(group, path)` `testcase_status` rows (`group`, `path`,
+  `gcf_ptcrb`, `ttcn_status`)
 
 ## Notes
 

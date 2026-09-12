@@ -563,9 +563,11 @@ def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
     )
     repo.replace_statuses(
         "TC_1",
+        "5G",
         [
             TestCaseStatus(
                 testcase_id="TC_1",
+                group="5G",
                 path="FR1",
                 gcf_ptcrb="Approved",
                 ttcn_status="Approved",
@@ -596,8 +598,9 @@ def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
         show = client.get("/testcases/TC_1?format=json")
     assert show.status_code == 200
     payload = show.json()
-    assert payload["testcase"]["testcase_id"] == "TC_1"
-    assert payload["statuses"][0]["path"] == "FR1"
+    assert isinstance(payload, list) and payload
+    assert payload[0]["testcase"]["testcase_id"] == "TC_1"
+    assert payload[0]["statuses"][0]["path"] == "FR1"
 
     with TestClient(app) as client:
         missing = client.get("/testcases/NOPE?format=json")

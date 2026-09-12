@@ -1061,9 +1061,11 @@ def _seed_testcase_corpus() -> None:
     )
     repo.replace_statuses(
         "TC_1",
+        "5G",
         [
             TestCaseStatus(
                 testcase_id="TC_1",
+                group="5G",
                 path="FR1",
                 gcf_ptcrb="Approved",
                 ttcn_status="Approved",
@@ -1120,6 +1122,47 @@ def test_list_testcases_tool(sqlite_env) -> None:
     assert payload[0]["statuses"] == {"FR1": "Approved"}
 
 
+def test_list_testcases_tool_rejects_unknown_group(sqlite_env) -> None:
+    """``list_testcases`` with an unknown group is an invalid-params error."""
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    _state_and_server()  # runs create_schema()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_testcases", {"group": "NOPE"})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+
+
+def test_get_testcase_tool_rejects_unknown_group(sqlite_env) -> None:
+    """``get_testcase`` with an unknown group is an invalid-params error."""
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    _state_and_server()  # runs create_schema()
+    _seed_testcase_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool(
+            "get_testcase", {"testcase_id": "TC_1", "group": "NOPE"}
+        )
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+
+
 def test_get_testcase_tool(sqlite_env) -> None:
     """``get_testcase`` MCP tool returns header + status rows for a seed."""
     import asyncio
@@ -1135,8 +1178,9 @@ def test_get_testcase_tool(sqlite_env) -> None:
     result = asyncio.run(run())
     assert result.is_error is False
     payload = json.loads(result.content[0].text)
-    assert payload["testcase"]["testcase_id"] == "TC_1"
-    assert payload["statuses"][0]["path"] == "FR1"
+    assert isinstance(payload, list) and payload
+    assert payload[0]["testcase"]["testcase_id"] == "TC_1"
+    assert payload[0]["statuses"][0]["path"] == "FR1"
 
 
 def test_get_testcase_tool_not_found(sqlite_env) -> None:

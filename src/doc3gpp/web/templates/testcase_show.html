@@ -1,32 +1,35 @@
 {% extends "base.html" %}
 {% block title %}doc3gpp · testcase {{ testcase.testcase_id }}{% endblock %}
 {% block content %}
-  <h1>{{ testcase.testcase_id }} : {{ testcase.title or '' }}</h1>
+  {% for item in details %}
+  <h1>{{ item.testcase.testcase_id }} : {{ item.testcase.title or '' }}</h1>
   <p class="meta">
-    {% if testcase.group %}Group {{ testcase.group }}{% endif %}
+    {% if item.testcase.group %}Group {{ item.testcase.group }}{% endif %}
   </p>
 
   <dl class="kv">
-    {% if testcase.ats %}<dt>ATS</dt><dd>{{ testcase.ats }}</dd>{% endif %}
-    {% if testcase.feature %}<dt>Feature</dt><dd>{{ testcase.feature }}</dd>{% endif %}
-    {% if testcase.release %}<dt>Release</dt><dd>{{ testcase.release }}</dd>{% endif %}
-    {% if testcase.wis %}<dt>WIs</dt><dd class="wrap-csv">{{ testcase.wis | wrap_csv(150) }}</dd>{% endif %}
-    {% if testcase.spec %}<dt>Spec</dt><dd>{{ testcase.spec }}</dd>{% endif %}
+    {% if item.testcase.ats %}<dt>ATS</dt><dd>{{ item.testcase.ats }}</dd>{% endif %}
+    {% if item.testcase.feature %}<dt>Feature</dt><dd>{{ item.testcase.feature }}</dd>{% endif %}
+    {% if item.testcase.release %}<dt>Release</dt><dd>{{ item.testcase.release }}</dd>{% endif %}
+    {% if item.testcase.wis %}<dt>WIs</dt><dd class="wrap-csv">{{ item.testcase.wis | wrap_csv(150) }}</dd>{% endif %}
+    {% if item.testcase.spec %}<dt>Spec</dt><dd>{{ item.testcase.spec }}</dd>{% endif %}
   </dl>
 
   <h2>Statuses</h2>
-  {% if statuses %}
+  {% if item.statuses %}
     <table class="grid">
       <thead>
         <tr>
+          <th>Group</th>
           <th>Path</th>
           <th>GCF/PTCRB</th>
           <th>TTCN status</th>
         </tr>
       </thead>
       <tbody>
-        {% for s in statuses %}
+        {% for s in item.statuses %}
           <tr>
+            <td><code>{{ s.group }}</code></td>
             <td><code>{{ s.path }}</code></td>
             <td>{{ s.gcf_ptcrb or '-' }}</td>
             <td>{{ s.ttcn_status or '-' }}</td>
@@ -37,4 +40,5 @@
   {% else %}
     <p class="empty">No statuses stored for this testcase.</p>
   {% endif %}
+  {% endfor %}
 {% endblock %}

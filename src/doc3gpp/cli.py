@@ -2338,7 +2338,7 @@ def _build_show_payload(
 
 
 def _dump_show_json(
-    payload: dict[str, object],
+    payload: dict[str, object] | list[object],
     output: str | TextIO | None,
     *,
     compact: bool,
@@ -4296,7 +4296,7 @@ TESTCASE_SHOW_HEADER_FIELDS: list[str] = [
     "group",
 ]
 
-TESTCASE_SHOW_STATUS_FIELDS: list[str] = ["path", "gcf_ptcrb", "ttcn_status"]
+TESTCASE_SHOW_STATUS_FIELDS: list[str] = ["group", "path", "gcf_ptcrb", "ttcn_status"]
 
 
 def _validate_testcase_group(group: str) -> str:
@@ -4529,6 +4529,13 @@ def testcase_show(
         "--testcase",
         help="Testcase id to render (e.g. TC_1).",
     ),
+    group: str | None = typer.Option(
+        None,
+        "--group",
+        help="Exact group match: 5G, LTE, IMS, UTRA, POS, or MCX. "
+        "When omitted and the id exists in several groups, every "
+        "matching group is rendered.",
+    ),
     fmt: str | None = typer.Option(
         None,
         "--format",
@@ -4554,22 +4561,34 @@ def testcase_show(
     """Render one testcase with every stored status row.
 
     Emits the header row first, a blank separator line, then one row
-    per stored ``(path, gcf_ptcrb, ttcn_status)`` status pair. The
-    JSON payload nests the header under a ``"testcase"`` key and the
-    status rows under ``"statuses"``.
+    per stored ``(group, path, gcf_ptcrb, ttcn_status)`` status triple.
+    Without ``--group`` and several stored groups, every matching group
+    is rendered: JSON emits an array of ``{"testcase", "statuses"}``
+    objects (a single-element array when exactly one group matches);
+    table/markdown emit one header block per group separated by blank
+    lines, then that group's status rows. The JSON payload nests the
+    header under a ``"testcase"`` key and the status rows under
+    ``"statuses"``.
     """
     service = build_testcase_service()
-    detail = service.get(testcase)
-    if detail is None:
-        raise typer.BadParameter(f"Testcase {testcase!r} not found")
-    assert isinstance(detail, TestCaseDetail)
+    if group is not None:
+        group = _validate_testcase_group(group)
+        detail = service.get(testcase, group)
+        if detail is None:
+            raise typer.BadParameter(f"Testcase {testcase!r} not found")
+        details = [detail]
+    else:
+        details = service.get_all(testcase)
+        if not details:
+            raise typer.BadParameter(f"Testcase {testcase!r} not found")
+    assert all(isinstance(detail, TestCaseDetail) for detail in details)
 
     settings = get_settings()
     fmt = _resolve_format(fmt, default=settings.output.format)
     resolved_compact = _resolve_compact(compact)
 
-    if fmt == "json":
-        payload = {
+    def _detail_payload(detail: TestCaseDetail) -> dict:
+        return {
             "testcase": {
                 f: _serialise_show_value(getattr(detail.testcase, f))
                 for f in TESTCASE_SHOW_HEADER_FIELDS
@@ -4582,36 +4601,45 @@ def testcase_show(
                 for status_row in detail.statuses
             ],
         }
-        _dump_show_json(payload, output, compact=resolved_compact)
+
+    if fmt == "json":
+        _dump_show_json(
+            [_detail_payload(detail) for detail in details],
+            output,
+            compact=resolved_compact,
+        )
         return
 
-    header_row = [
-        [str(getattr(detail.testcase, f) or "-") for f in TESTCASE_SHOW_HEADER_FIELDS]
-    ]
-    status_rows: list[list[str]] = []
-    for status_row in detail.statuses:
-        assert isinstance(status_row, TestCaseStatus)
-        status_rows.append(
-            [str(getattr(status_row, f) or "-") for f in TESTCASE_SHOW_STATUS_FIELDS]
-        )
+    for index, detail in enumerate(details):
+        if index:
+            typer.echo("")
+        header_row = [
+            [str(getattr(detail.testcase, f) or "-") for f in TESTCASE_SHOW_HEADER_FIELDS]
+        ]
+        status_rows: list[list[str]] = []
+        for status_row in detail.statuses:
+            assert isinstance(status_row, TestCaseStatus)
+            status_rows.append(
+                [str(getattr(status_row, f) or "-") for f in TESTCASE_SHOW_STATUS_FIELDS]
+            )
 
-    _emit_records(
-        rows=header_row,
-        fields=TESTCASE_SHOW_HEADER_FIELDS,
-        fmt=fmt,
-        output=output,
-        no_records_msg=f"No testcase {testcase}",
-        compact=resolved_compact,
-    )
-    typer.echo("")
-    _emit_records(
-        rows=status_rows,
-        fields=TESTCASE_SHOW_STATUS_FIELDS,
-        fmt=fmt,
-        output=output,
-        no_records_msg=f"No statuses stored for {testcase}",
-        compact=resolved_compact,
-    )
+        _emit_records(
+            rows=header_row,
+            fields=TESTCASE_SHOW_HEADER_FIELDS,
+            fmt=fmt,
+            output=output,
+            no_records_msg=f"No testcase {testcase}",
+            compact=resolved_compact,
+        )
+        typer.echo("")
+        _emit_records(
+            rows=status_rows,
+            fields=TESTCASE_SHOW_STATUS_FIELDS,
+            fmt=fmt,
+            output=output,
+            no_records_msg=f"No statuses stored for {testcase}",
+            compact=resolved_compact,
+        )
 
 
 @config_app.command("init")

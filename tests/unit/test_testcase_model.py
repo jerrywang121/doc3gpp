@@ -5,9 +5,9 @@ from doc3gpp.models.testcase import (
 )
 
 def test_dataclass_shapes():
-    tc = TestCase(testcase_id="TC_1", title="T", group="5G", spec="38.523-1")
+    tc = TestCase(testcase_id="TC_1", group="5G", title="T", spec="38.523-1")
     assert tc.title == "T"
-    st = TestCaseStatus(testcase_id="TC_1", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved")
+    st = TestCaseStatus(testcase_id="TC_1", group="5G", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved")
     assert st.path == "FR1"
     assert TestCaseWithStatuses(testcase=tc, statuses={"FR1": "Approved"}).statuses == {"FR1": "Approved"}
     assert isinstance(TestCaseDetail(testcase=tc, statuses=[st]).statuses, list)

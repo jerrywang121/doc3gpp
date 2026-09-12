@@ -40,7 +40,7 @@ _TESTCASE_SHOW_FIELDS = [
     "spec",
     "group",
 ]
-_TESTCASE_STATUS_FIELDS = ["path", "gcf_ptcrb", "ttcn_status"]
+_TESTCASE_STATUS_FIELDS = ["group", "path", "gcf_ptcrb", "ttcn_status"]
 
 _VALID_GROUPS = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
 
@@ -152,26 +152,42 @@ async def list_testcases(
 async def show_testcase(
     request: Request,
     testcase_id: str,
+    group: str | None = Query(default=None),
     format: str | None = Query(default=None, alias="format"),
     service: TestCaseService = Depends(get_testcase_service),
     pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
-    """Render ``testcase_show.html`` or a JSON payload with header + statuses."""
-    detail = service.get(testcase_id)
-    if detail is None:
-        raise TestcaseNotFoundError(f"Testcase {testcase_id!r} not found")
+    """Render ``testcase_show.html`` or a JSON payload with header + statuses.
+
+    Without ``?group=`` every stored group for the id is returned: JSON
+    emits an array of ``{"testcase", "statuses"}`` objects (one element
+    when a single group matches) and HTML renders one section per group.
+    """
+    canonical_group = _validate_group(parse_text_query(group))
+    if canonical_group is not None:
+        detail = service.get(testcase_id, canonical_group)
+        if detail is None:
+            raise TestcaseNotFoundError(f"Testcase {testcase_id!r} not found")
+        details = [detail]
+    else:
+        details = service.get_all(testcase_id)
+        if not details:
+            raise TestcaseNotFoundError(f"Testcase {testcase_id!r} not found")
 
     if format == "json":
         return JSONResponse(
-            content={
-                "testcase": {
-                    f: getattr(detail.testcase, f, None)
-                    for f in _TESTCASE_SHOW_FIELDS
-                },
-                "statuses": testcase_status_rows(
-                    detail.statuses, _TESTCASE_STATUS_FIELDS
-                ),
-            },
+            content=[
+                {
+                    "testcase": {
+                        f: getattr(item.testcase, f, None)
+                        for f in _TESTCASE_SHOW_FIELDS
+                    },
+                    "statuses": testcase_status_rows(
+                        item.statuses, _TESTCASE_STATUS_FIELDS
+                    ),
+                }
+                for item in details
+            ]
         )
 
     return templates.TemplateResponse(
@@ -179,9 +195,10 @@ async def show_testcase(
         name="testcase_show.html",
         context={
             "active_nav": "testcases",
-            "testcase": detail.testcase,
-            "statuses": detail.statuses,
-            "total": len(detail.statuses),
+            "details": details,
+            "testcase": details[0].testcase,
+            "statuses": details[0].statuses,
+            "total": sum(len(item.statuses) for item in details),
             "pending_jobs": pending_jobs,
         },
     )

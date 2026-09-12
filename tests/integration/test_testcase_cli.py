@@ -40,6 +40,64 @@ def test_testcase_list_json_shape(monkeypatch) -> None:
     assert payload[0]["statuses"] == {"FR1": "Approved"}
 
 
+def test_testcase_show_multi_group_json(monkeypatch) -> None:
+    """``testcase show`` without ``--group`` emits one entry per group."""
+    from doc3gpp.models.testcase import TestCase, TestCaseDetail, TestCaseStatus
+
+    svc = MagicMock()
+    svc.get_all.return_value = [
+        TestCaseDetail(
+            testcase=TestCase(testcase_id="TC_D", group="IMS", title="I"),
+            statuses=[
+                TestCaseStatus(
+                    testcase_id="TC_D", group="IMS", path="default",
+                    ttcn_status="Approved",
+                )
+            ],
+        ),
+        TestCaseDetail(
+            testcase=TestCase(testcase_id="TC_D", group="UTRA", title="U"),
+            statuses=[
+                TestCaseStatus(
+                    testcase_id="TC_D", group="UTRA", path="default",
+                    ttcn_status="Rejected",
+                )
+            ],
+        ),
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_testcase_service", lambda: svc)
+    result = runner.invoke(
+        app, ["testcase", "show", "--testcase", "TC_D", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, list) and len(payload) == 2
+    assert [entry["testcase"]["group"] for entry in payload] == ["IMS", "UTRA"]
+
+
+def test_testcase_show_group_scoped(monkeypatch) -> None:
+    """``testcase show --group`` scopes to a single ``(id, group)`` row."""
+    from doc3gpp.models.testcase import TestCase, TestCaseDetail
+
+    svc = MagicMock()
+    svc.get.return_value = TestCaseDetail(
+        testcase=TestCase(testcase_id="TC_D", group="UTRA", title="U"),
+        statuses=[],
+    )
+    monkeypatch.setattr("doc3gpp.cli.build_testcase_service", lambda: svc)
+    result = runner.invoke(
+        app,
+        ["testcase", "show", "--testcase", "TC_D", "--group", "UTRA",
+         "--format", "json"],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, list) and len(payload) == 1
+    assert payload[0]["testcase"]["group"] == "UTRA"
+    _, kwargs = svc.get.call_args
+    assert kwargs.get("group") == "UTRA" or svc.get.call_args.args[1:] == ("UTRA",)
+
+
 def test_testcase_group_validation(monkeypatch) -> None:
     _ = monkeypatch
     result = runner.invoke(app, ["testcase", "list", "--group", "NOPE"])
@@ -88,7 +146,7 @@ def test_testcase_sync_force_flag_passed_through(monkeypatch) -> None:
 def test_testcase_show_missing(monkeypatch) -> None:
     """``testcase show --testcase NOPE`` exits non-zero with 'not found'."""
     svc = MagicMock()
-    svc.get.return_value = None
+    svc.get_all.return_value = []
     monkeypatch.setattr("doc3gpp.cli.build_testcase_service", lambda: svc)
     result = runner.invoke(app, ["testcase", "show", "--testcase", "NOPE"])
     assert result.exit_code != 0

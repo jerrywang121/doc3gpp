@@ -1,5 +1,7 @@
 """Registry tests for the resource `schema` surfaces."""
 
+import pytest
+
 from doc3gpp.models.schema_info import (
     RESOURCE_SCHEMAS,
     SCHEMA_FIELDS,
@@ -144,6 +146,11 @@ def test_type_vocabulary() -> None:
         for table in tables:
             for field in table.fields:
                 assert field.type in FIELD_TYPES, (table.table, field.name)
+
+
+def test_schema_payload_unknown_resource() -> None:
+    with pytest.raises(ValueError):
+        schema_payload("bogus")
 
 
 def test_cli_schema_json_all_resources() -> None:

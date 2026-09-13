@@ -299,7 +299,12 @@ def schema_payload(resource: str) -> list[dict[str, object]]:
     Key order is fixed so CLI ``--compact``, REST ``?format=json``,
     and MCP payloads serialise byte-identically.
     """
-    tables = RESOURCE_SCHEMAS[resource]
+    try:
+        tables = RESOURCE_SCHEMAS[resource]
+    except KeyError:
+        raise ValueError(
+            f"Unknown schema resource {resource!r}; expected one of {sorted(RESOURCE_SCHEMAS)}"
+        ) from None
     payload: list[dict[str, object]] = []
     for table in tables:
         for field in table.fields:

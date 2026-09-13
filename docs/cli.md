@@ -1714,10 +1714,10 @@ Behavior:
   `nullable`, `description`, `values`.
 - `nullable` renders `yes`/`no` in table/markdown and stays a JSON
   bool in `json`.
-    - `values` is a comma-joined string of the fixed set (`group`
-      `5G,LTE,IMS,UTRA,POS,MCX`; `path` with the 10 ranked paths —
-      the literal `'default'` covers single-path groups); `"-"` when
-      the field is free-form.
+- `values` is a comma-joined string of the fixed set (`group`
+  `5G,LTE,IMS,UTRA,POS,MCX`; `path` with the 10 ranked paths —
+  the literal `'default'` covers single-path groups); `"-"` when
+  the field is free-form.
 
 Examples:
 

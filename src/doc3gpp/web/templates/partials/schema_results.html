@@ -1,0 +1,27 @@
+<div id="results">
+  {% for table in tables %}
+    <h2><code>{{ table.table }}</code></h2>
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Nullable</th>
+          <th>Description</th>
+          <th>Possible values</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for field in table.fields %}
+          <tr>
+            <td><code>{{ field.name }}</code></td>
+            <td><code>{{ field.type }}</code></td>
+            <td>{{ 'yes' if field.nullable else 'no' }}</td>
+            <td>{{ field.description }}</td>
+            <td>{% if field.values %}<code>{{ field.values | join(',') }}</code>{% else %}-{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
+</div>

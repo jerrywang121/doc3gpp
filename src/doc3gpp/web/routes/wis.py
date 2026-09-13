@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
+from doc3gpp.models.schema_info import RESOURCE_SCHEMAS, schema_payload
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.web.deps import get_pending_jobs, get_wi_service
 from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
@@ -86,6 +87,38 @@ async def list_wis(
                 "release": release or "",
                 "limit": parsed_limit,
             },
+        },
+    )
+
+
+@router.get("/schema", include_in_schema=False)
+async def wi_schema(
+    request: Request,
+    format: str | None = Query(default=None, alias="format"),
+    pending_jobs: int = Depends(get_pending_jobs),
+) -> Any:
+    """Render ``schema.html`` or the CLI-identical JSON field descriptors.
+
+    ``?format=json`` returns the same payload as
+    ``doc3gpp wi schema --format json``: a bare array of
+    ``{table, field, type, nullable, description, values}`` rows from
+    :func:`doc3gpp.models.schema_info.schema_payload`. No DB access.
+    """
+    if format == "json":
+        return JSONResponse(content=schema_payload("wi"))
+    tables = RESOURCE_SCHEMAS["wi"]
+    template_name = (
+        "partials/schema_results.html" if is_htmx_request(request) else "schema.html"
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name=template_name,
+        context={
+            "active_nav": "wis",
+            "resource": "wi",
+            "tables": tables,
+            "total": sum(len(t.fields) for t in tables),
+            "pending_jobs": pending_jobs,
         },
     )
 

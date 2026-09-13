@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
+from doc3gpp.models.schema_info import RESOURCE_SCHEMAS, schema_payload
 from doc3gpp.services.spec_service import SpecService
 from doc3gpp.web.deps import get_pending_jobs, get_spec_service
 from doc3gpp.web.errors import SpecNotFoundError
@@ -109,6 +110,38 @@ async def list_specs(
                 "rapporteurs": rapporteurs or "",
                 "limit": parsed_limit,
             },
+        },
+    )
+
+
+@router.get("/schema", include_in_schema=False)
+async def spec_schema(
+    request: Request,
+    format: str | None = Query(default=None, alias="format"),
+    pending_jobs: int = Depends(get_pending_jobs),
+) -> Any:
+    """Render ``schema.html`` or the CLI-identical JSON field descriptors.
+
+    ``?format=json`` returns the same payload as
+    ``doc3gpp spec schema --format json``: a bare array of
+    ``{table, field, type, nullable, description, values}`` rows from
+    :func:`doc3gpp.models.schema_info.schema_payload`. No DB access.
+    """
+    if format == "json":
+        return JSONResponse(content=schema_payload("spec"))
+    tables = RESOURCE_SCHEMAS["spec"]
+    template_name = (
+        "partials/schema_results.html" if is_htmx_request(request) else "schema.html"
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name=template_name,
+        context={
+            "active_nav": "specs",
+            "resource": "spec",
+            "tables": tables,
+            "total": sum(len(t.fields) for t in tables),
+            "pending_jobs": pending_jobs,
         },
     )
 

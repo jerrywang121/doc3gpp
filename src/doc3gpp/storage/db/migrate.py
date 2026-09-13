@@ -13,10 +13,14 @@ from doc3gpp.storage.db.models import (
     TDocExtractOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocFileORM,  # noqa: F401 - ensures model metadata is loaded
     TDocORM,  # noqa: F401 - ensures model metadata is loaded
+    TestCaseORM,  # noqa: F401 - ensures model metadata is loaded
+    TestCaseSourceORM,  # noqa: F401 - ensures model metadata is loaded
+    TestCaseStatusORM,  # noqa: F401 - ensures model metadata is loaded
     TsgORM,  # noqa: F401 - ensures model metadata is loaded
     WiORM,  # noqa: F401 - ensures model metadata is loaded
 )
-from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+from doc3gpp.storage.db.testcase_base import TestCaseBase
 
 
 def _migrate_rename_tdoc_cr_details() -> None:
@@ -335,16 +339,31 @@ def _create_vector_schema() -> None:
         )
 
 
-def create_schema() -> None:
-    """Create database tables for configured backend."""
+def create_schema(scope: str = "all") -> None:
+    """Create database tables for configured backend(s).
 
-    engine = get_engine()
-    _migrate_rename_tdoc_cr_details()
-    _migrate_drop_tsg_spec_last_sync()
-    _migrate_spec_rapporteurs()
-    _migrate_tdoc_cr_cover_page_summary_of_change()
-    _migrate_tdocs_xlsx_metadata()
-    _migrate_spec_versions_drop_comment()
-    Base.metadata.create_all(bind=engine)
-    _create_search_schema()
-    _create_vector_schema()
+    Args:
+        scope: ``"main"`` creates the main schema (one-shot
+            migrations + ``Base`` tables + FTS5/vector sidecars) on
+            the main engine; ``"testcase"`` creates exactly the three
+            testcase tables on the testcase engine; ``"all"``
+            (default) does both. Anything else raises
+            :class:`ValueError`.
+    """
+    if scope not in ("main", "testcase", "all"):
+        raise ValueError(
+            f"unknown schema scope {scope!r}; choose from: main, testcase, all."
+        )
+    if scope in ("main", "all"):
+        engine = get_engine()
+        _migrate_rename_tdoc_cr_details()
+        _migrate_drop_tsg_spec_last_sync()
+        _migrate_spec_rapporteurs()
+        _migrate_tdoc_cr_cover_page_summary_of_change()
+        _migrate_tdocs_xlsx_metadata()
+        _migrate_spec_versions_drop_comment()
+        Base.metadata.create_all(bind=engine)
+        _create_search_schema()
+        _create_vector_schema()
+    if scope in ("testcase", "all"):
+        TestCaseBase.metadata.create_all(bind=get_testcase_engine())

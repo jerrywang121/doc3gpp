@@ -58,6 +58,7 @@ _HUMAN_DELTA_RE = re.compile(r"^(?P<value>[+-]?\d+(?:\.\d+)?)(?P<unit>[smhd])$",
 ALLOWED_ENV_VARS: frozenset[str] = frozenset(
     {
         "DOC3GPP_DATABASE_URL",
+        "DOC3GPP_TESTCASE_DATABASE_URL",
         "DOC3GPP_DB_ECHO",
         "DOC3GPP_LOG_LEVEL",
         "DOC3GPP_HTTP_VERIFY",
@@ -210,6 +211,16 @@ class OutputFieldsSettings(BaseModel):
             "initial_release",
             "tsg",
             "rapporteurs",
+        ]
+    )
+    testcase: list[str] = Field(
+        default_factory=lambda: [
+            "testcase_id",
+            "title",
+            "spec",
+            "group",
+            "release",
+            "statuses",
         ]
     )
 
@@ -731,7 +742,8 @@ class MCPSettings(BaseModel):
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
-    The flat fields at the root (``database_url``, ``db_echo``,
+    The flat fields at the root (``database_url``, ``testcase_database_url``,
+    ``db_echo``,
     ``log_level``, ``http_verify``) are populated from the
     :data:`ALLOWED_ENV_VARS` subset of ``DOC3GPP_*`` env vars.
     Nested sub-models (``output``, ``cache``, ``tdoc_parse``,
@@ -745,6 +757,10 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default_factory=lambda: f"sqlite+pysqlite:///{Path.home()}/.local/share/doc3gpp/doc3gpp.db",
         validation_alias="DOC3GPP_DATABASE_URL",
+    )
+    testcase_database_url: str | None = Field(
+        default=None,
+        validation_alias="DOC3GPP_TESTCASE_DATABASE_URL",
     )
     db_echo: bool = Field(default=False, validation_alias="DOC3GPP_DB_ECHO")
     db_auto_migrate: bool = Field(default=True)
@@ -769,6 +785,7 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     @classmethod

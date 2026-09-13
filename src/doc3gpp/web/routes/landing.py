@@ -45,6 +45,11 @@ _SECTIONS: list[dict[str, str]] = [
         "description": "3GPP specifications (TSs / TRs) with their versions.",
     },
     {
+        "label": "Testcases",
+        "href": "/testcases",
+        "description": "RAN5 conformance testcases with per-path statuses.",
+    },
+    {
         "label": "WIs",
         "href": "/wis",
         "description": "Work Items indexed per TSG.",

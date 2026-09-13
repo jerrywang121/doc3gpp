@@ -72,6 +72,8 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "list_wis",
         "list_specs",
         "get_spec",
+        "list_testcases",
+        "get_testcase",
         "search_tdocs",
         "semantic_search_tdocs",
         "sync_meetings",
@@ -79,6 +81,7 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "sync_tdocs_by_meeting",
         "sync_all_tdocs",
         "sync_specs",
+        "sync_testcases",
         "parse_tdocs",
         "parse_tdoc_url",
         "rebuild_search_index",
@@ -759,7 +762,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     from doc3gpp.web.mcp_server import build_mcp_server
     from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
     from doc3gpp.settings.schema import Settings
-    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
     from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
     from doc3gpp.services import factory
 
@@ -781,6 +784,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
         tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
         spec=factory.build_spec_service(),
+        testcase=factory.build_testcase_service(),
         search=SearchService(
             repo=SQLAlchemySearchIndexRepository(),
             reranker=SemanticReranker(
@@ -796,6 +800,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     state = WebState(
         settings=settings,
         engine=get_engine(),
+        testcase_engine=get_testcase_engine(),
         services=services,
         jobs=JobWorkerHandle(),
     )
@@ -813,7 +818,9 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     assert text.startswith("[")
     assert recorded == ["scheduling"]
     get_engine.cache_clear()
+    get_testcase_engine.cache_clear()
     del state.engine
+    del state.testcase_engine
 
 
 def test_web_errors_maps_spec_unknown_on_upstream() -> None:
@@ -1032,5 +1039,249 @@ def test_mcp_get_tdoc_by_url_matches_http_route(sqlite_env) -> None:
         mcp_payload = json.loads(asyncio.run(call("get_tdoc", {"ftp_url": url})))
 
     assert mcp_payload == http_payload
+    get_engine.cache_clear()
+    del state.engine
+
+
+def _seed_testcase_corpus() -> None:
+    """Seed one testcase + one status row so the testcase tools return rows."""
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus
+    from doc3gpp.storage.repositories.testcase_sql import (
+        SQLAlchemyTestCaseRepository,
+    )
+
+    repo = SQLAlchemyTestCaseRepository()
+    repo.upsert_many(
+        [
+            TestCase(
+                testcase_id="TC_1",
+                title="5G FR1 test",
+                spec="38.523-1",
+                group="5G",
+                release="Rel-17",
+            ),
+        ]
+    )
+    repo.replace_statuses(
+        "TC_1",
+        "5G",
+        [
+            TestCaseStatus(
+                testcase_id="TC_1",
+                group="5G",
+                path="FR1",
+                gcf_ptcrb="Approved",
+                ttcn_status="Approved",
+            ),
+        ],
+    )
+
+
+def test_mcp_list_testcases_parity(sqlite_env) -> None:
+    """``list_testcases`` MCP tool returns seeded rows (compact byte parity)."""
+    import asyncio
+
+    state, server = _state_and_server()
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus, TestCaseWithStatuses
+
+    rows = [
+        TestCaseWithStatuses(
+            testcase=TestCase(
+                testcase_id="TC_1",
+                title="T",
+                spec="38.523-1",
+                group="5G",
+            ),
+            statuses=[
+                TestCaseStatus(
+                    testcase_id="TC_1",
+                    group="5G",
+                    path="FR1",
+                    gcf_ptcrb="Approved",
+                    ttcn_status="Approved",
+                )
+            ],
+        )
+    ]
+    state.services.testcase.list_recent = lambda **k: rows  # noqa: ARG005
+
+    async def run():
+        return await server.call_tool("list_testcases", {})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    assert '"FR1","gcf_ptcrb":"Approved"' in result.content[0].text
+    del state.engine
+
+
+def test_list_testcases_tool(sqlite_env) -> None:
+    """``list_testcases`` MCP tool returns seeded testcase rows over sqlite."""
+    import asyncio
+    import json
+
+    _state_and_server()  # runs create_schema()
+    _seed_testcase_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_testcases", {})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert payload[0]["testcase_id"] == "TC_1"
+    assert payload[0]["statuses"] == [{"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"}]
+
+
+def test_list_testcases_tool_rejects_unknown_group(sqlite_env) -> None:
+    """``list_testcases`` with an unknown group is an invalid-params error."""
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    _state_and_server()  # runs create_schema()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("list_testcases", {"group": "NOPE"})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+
+
+def test_get_testcase_tool_rejects_unknown_group(sqlite_env) -> None:
+    """``get_testcase`` with an unknown group is an invalid-params error."""
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    _state_and_server()  # runs create_schema()
+    _seed_testcase_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool(
+            "get_testcase", {"testcase_id": "TC_1", "group": "NOPE"}
+        )
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+
+
+def test_get_testcase_tool(sqlite_env) -> None:
+    """``get_testcase`` MCP tool returns header + status rows for a seed."""
+    import asyncio
+    import json
+
+    _state_and_server()  # runs create_schema()
+    _seed_testcase_corpus()
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("get_testcase", {"testcase_id": "TC_1"})
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert isinstance(payload, list) and payload
+    assert payload[0]["testcase_id"] == "TC_1"
+    assert payload[0]["statuses"][0]["path"] == "FR1"
+    assert "group" not in payload[0]["statuses"][0]
+
+
+def test_get_testcase_tool_not_found(sqlite_env) -> None:
+    """Unknown testcase id surfaces as a JSON-RPC -32004 protocol error."""
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_NOT_FOUND
+
+    _, server = _state_and_server()
+
+    async def run():
+        return await server.call_tool("get_testcase", {"testcase_id": "NOPE"})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_NOT_FOUND
+
+
+def test_sync_testcases_tool_enqueues(sqlite_env) -> None:
+    """``sync_testcases`` MCP tool returns the queued envelope."""
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool("sync_testcases", {"force": True})
+        envelope = json.loads(created.content[0].text)
+        assert envelope["status"] == "queued"
+        assert "links" in envelope and envelope["links"]["self"].startswith("/jobs/")
+        job_id = envelope["job_id"]
+        detail = await server.call_tool("get_job", {"job_id": job_id})
+        return created, detail
+
+    created, detail = asyncio.run(run())
+    assert created.is_error is False
+    assert detail.is_error is False
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["kind"] == "sync_testcases"
+    assert detail_payload["params"] == {"force": True}
+    del state.engine
+
+
+def test_testcase_tools_parity_with_http_json(sqlite_env) -> None:
+    """Testcase MCP tools' JSON bytes match the HTTP ``?format=json`` routes."""
+    import asyncio
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.settings.schema import (
+        CacheSettings,
+        MCPSettings,
+        ServerSettings,
+        Settings,
+    )
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    _state_and_server()  # runs create_schema()
+    _seed_testcase_corpus()
+    state, server = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+
+        async def call(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        mcp_bytes = asyncio.run(call("list_testcases", {}))
+        http_resp = client.get("/testcases?format=json")
+        assert http_resp.status_code == 200, http_resp.text
+        http_bytes = http_resp.content.decode("utf-8")
+        assert mcp_bytes == http_bytes, (
+            f"list_testcases parity broke: MCP={mcp_bytes!r} HTTP={http_bytes!r}"
+        )
+
+        mcp_case = asyncio.run(call("get_testcase", {"testcase_id": "TC_1"}))
+        http_case = client.get("/testcases/TC_1?format=json").content.decode("utf-8")
+        assert json.loads(mcp_case) == json.loads(http_case)
+
     get_engine.cache_clear()
     del state.engine

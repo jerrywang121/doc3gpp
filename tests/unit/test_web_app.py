@@ -66,3 +66,14 @@ def test_build_state_shares_one_embedder(sqlite_env) -> None:
     assert state.services.search._reranker._embedder is fake_embedder
     assert state.services.semantic_search._embedder is fake_embedder
     assert state.services.tdoc_cr._semantic_service._embedder is fake_embedder
+
+
+def test_build_state_wires_testcase_engine(sqlite_env) -> None:
+    """``build_state`` carries the shared testcase engine on ``WebState``."""
+    from doc3gpp.storage.db.session import get_testcase_engine
+    from doc3gpp.web.app import build_state
+    from doc3gpp.settings.schema import Settings
+
+    state = build_state(Settings())
+    assert state.testcase_engine is get_testcase_engine()
+    assert state.testcase_engine is not state.engine

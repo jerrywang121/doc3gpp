@@ -528,3 +528,87 @@ def test_get_tdoc_by_url_byte_parity_with_cli(sqlite_env, app_with_deps) -> None
         )
     assert response.status_code == 200
     assert response.json() == expected_json
+
+    from doc3gpp.storage.db.session import get_engine as _get_engine
+
+    _get_engine.cache_clear()
+
+
+def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
+    """``GET /testcases?format=json`` returns the CLI-shaped row array.
+
+    Seeds one testcase + status row over real sqlite and asserts the
+    ``statuses`` projection stays a nested list of per-path objects
+    (not a coerced string).
+    """
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.testcase_sql import (
+        SQLAlchemyTestCaseRepository,
+    )
+
+    app, _ = app_with_deps
+    create_schema()
+    repo = SQLAlchemyTestCaseRepository()
+    repo.upsert_many(
+        [
+            TestCase(
+                testcase_id="TC_1",
+                title="5G FR1 test",
+                spec="38.523-1",
+                group="5G",
+                release="Rel-17",
+            ),
+        ]
+    )
+    repo.replace_statuses(
+        "TC_1",
+        "5G",
+        [
+            TestCaseStatus(
+                testcase_id="TC_1",
+                group="5G",
+                path="FR1",
+                gcf_ptcrb="Approved",
+                ttcn_status="Approved",
+            ),
+        ],
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/testcases?format=json")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list) and body
+    assert body[0]["testcase_id"] == "TC_1"
+    assert body[0]["statuses"] == [
+        {"path": "FR1", "gcf_ptcrb": "Approved", "ttcn_status": "Approved"}
+    ]
+
+    with TestClient(app) as client:
+        html = client.get("/testcases")
+    assert html.status_code == 200
+    assert "TC_1" in html.text
+
+    with TestClient(app) as client:
+        partial = client.get("/testcases", headers={"HX-Request": "true"})
+    assert partial.status_code == 200
+    assert 'id="results"' in partial.text
+    assert "<!DOCTYPE" not in partial.text
+
+    with TestClient(app) as client:
+        show = client.get("/testcases/TC_1?format=json")
+    assert show.status_code == 200
+    payload = show.json()
+    assert isinstance(payload, list) and payload
+    assert payload[0]["testcase_id"] == "TC_1"
+    assert payload[0]["statuses"][0]["path"] == "FR1"
+    assert "testcase" not in payload[0]
+    assert "group" not in payload[0]["statuses"][0]
+
+    with TestClient(app) as client:
+        missing = client.get("/testcases/NOPE?format=json")
+    assert missing.status_code == 404
+    assert missing.json()["error"] == "testcase_not_found"
+    get_engine.cache_clear()

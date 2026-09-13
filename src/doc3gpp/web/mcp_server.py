@@ -33,6 +33,7 @@ from doc3gpp.web.errors import (
     SpecNotFoundError,
     TDocNotFoundError,
     TDocUrlNotFoundError,
+    TestcaseNotFoundError,
     TSGNotFoundError,
     map_mcp_error,
 )
@@ -49,6 +50,10 @@ _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
 _SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs"]
 _SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
 _VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
+_TESTCASE_FIELDS = ["testcase_id", "title", "spec", "group", "release", "statuses"]
+_TESTCASE_SHOW_FIELDS = ["testcase_id", "title", "ats", "feature", "release", "wis", "spec", "group"]
+_TESTCASE_STATUS_FIELDS = ["path", "gcf_ptcrb", "ttcn_status"]
+_TESTCASE_GROUPS = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
 
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
 
@@ -475,6 +480,73 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             "versions": render.spec_version_rows(versions, version_fields),
         })
 
+    # ---- Testcases ------------------------------------------------
+    @server.tool(name="list_testcases", description="List RAN5 testcases, optionally filtered by any testcase field. The testcase, title, ats, feature, release, wis, spec, status and gcf_status filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly. The group filter is an exact match: 5G, LTE, IMS, UTRA, POS, or MCX.")
+    @_mcp_error_guard
+    def list_testcases(
+        testcase: Annotated[str | None, Field(description="Rich filter on the testcase id (e.g. 'TC_1').")] = None,
+        title: Annotated[str | None, Field(description="Rich filter on the title.")] = None,
+        ats: Annotated[str | None, Field(description="Rich filter on the ATS.")] = None,
+        feature: Annotated[str | None, Field(description="Rich filter on the feature.")] = None,
+        release: Annotated[str | None, Field(description="Rich filter on the release (e.g. 'Rel-17').")] = None,
+        wis: Annotated[str | None, Field(description="Rich filter on related WIs (comma-joined).")] = None,
+        spec: Annotated[str | None, Field(description="Rich filter on the spec (e.g. '38.523-1').")] = None,
+        group: Annotated[str | None, Field(description="Exact group match: 5G, LTE, IMS, UTRA, POS, or MCX.")] = None,
+        status: Annotated[str | None, Field(description="Rich filter on ttcn_status (matches any path).")] = None,
+        gcf_status: Annotated[str | None, Field(description="Rich filter on gcf_ptcrb (matches any path).")] = None,
+        limit: Annotated[int, Field(description="Maximum number of testcases to return.")] = 50,
+        offset: Annotated[int, Field(description="Number of testcases to skip for pagination.")] = 0,
+    ) -> str:
+        if group is not None and group.upper() not in _TESTCASE_GROUPS:
+            raise InvalidFilterError(
+                f"Unknown testcase group '{group}'. "
+                f"Valid groups: {', '.join(_TESTCASE_GROUPS)}."
+            )
+        rows = services.testcase.list_recent(
+            limit=limit,
+            offset=offset,
+            testcase_id=testcase,
+            title=title,
+            ats=ats,
+            feature=feature,
+            release=release,
+            wis=wis,
+            spec=spec,
+            group=group,
+            status=status,
+            gcf_status=gcf_status,
+        )
+        return _to_json(render.testcase_rows(rows, _TESTCASE_FIELDS))
+
+    @server.tool(name="get_testcase", description="Get a testcase by id, including its nested status rows (path, gcf_ptcrb, ttcn_status). Without group, every stored group is returned as an array of flat objects; with group, a single-element array.")
+    @_mcp_error_guard
+    def get_testcase(
+        testcase_id: Annotated[str, Field(description="Testcase id (e.g. 'TC_1').")],
+        group: Annotated[str | None, Field(description="Exact group match: 5G, LTE, IMS, UTRA, POS, or MCX. When omitted, every stored group is returned.")] = None,
+    ) -> str:
+        canonical = group.upper() if group is not None else None
+        if canonical is not None and canonical not in _TESTCASE_GROUPS:
+            raise InvalidFilterError(
+                f"Unknown testcase group '{group}'. "
+                f"Valid groups: {', '.join(_TESTCASE_GROUPS)}."
+            )
+        if canonical is not None:
+            detail = services.testcase.get(testcase_id, canonical)
+            if detail is None:
+                raise TestcaseNotFoundError(testcase_id)
+            details = [detail]
+        else:
+            details = services.testcase.get_all(testcase_id)
+            if not details:
+                raise TestcaseNotFoundError(testcase_id)
+        return _to_json([
+            {
+                **{f: getattr(item.testcase, f) for f in _TESTCASE_SHOW_FIELDS},
+                "statuses": render.testcase_status_rows(item.statuses, _TESTCASE_STATUS_FIELDS),
+            }
+            for item in details
+        ])
+
     # ---- Search ---------------------------------------------------
     @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
@@ -650,6 +722,13 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             params,
             f"queued parse_tdoc_url for {url}",
         )
+
+    @server.tool(name="sync_testcases", description="Enqueue a testcase sync (latest RAN5 TTCN status file).")
+    @_mcp_error_guard
+    def sync_testcases(
+        force: Annotated[bool, Field(description="Re-download and re-parse the latest status file even when already recorded.")] = False,
+    ) -> str:
+        return _enqueue(state, JobKind.SYNC_TESTCASES, {"force": force}, "queued sync_testcases")
 
     @server.tool(name="rebuild_search_index", description="Enqueue an FTS5 search-index rebuild.")
     @_mcp_error_guard

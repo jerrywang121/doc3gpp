@@ -107,6 +107,10 @@ class _SyncSpecsBody(BaseModel):
     per_version_details: bool = False
 
 
+class _SyncTestcasesBody(BaseModel):
+    force: bool = False
+
+
 class _ParseTDocsBody(BaseModel):
     filter: dict[str, Any] = {}
     force: bool = False
@@ -194,6 +198,15 @@ async def post_sync_specs(
     else:
         params["spec_id"] = body.spec_id
     job = job_repo.create(JobKind.SYNC_SPECS, params)
+    return JSONResponse(status_code=202, content=_envelope(job, queued=True))
+
+
+@router.post("/sync/testcases", status_code=202)
+async def post_sync_testcases(
+    body: _SyncTestcasesBody,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> JSONResponse:
+    job = job_repo.create(JobKind.SYNC_TESTCASES, {"force": body.force})
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

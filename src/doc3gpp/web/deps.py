@@ -18,6 +18,7 @@ from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.services.spec_service import SpecService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_service import TDocService
+from doc3gpp.services.testcase_service import TestCaseService
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.schema import Settings
@@ -63,6 +64,10 @@ def get_wi_service(request: Request) -> WiService:
 
 def get_spec_service(request: Request) -> SpecService:
     return get_services(request).spec
+
+
+def get_testcase_service(request: Request) -> TestCaseService:
+    return get_services(request).testcase
 
 
 def get_tsg_service(request: Request) -> TsgService:
@@ -144,6 +149,7 @@ __all__ = [
     "get_tdoc_cr_service",
     "get_tdoc_file_repo",
     "get_tdoc_service",
+    "get_testcase_service",
     "get_tsg_service",
     "get_wi_service",
 ]

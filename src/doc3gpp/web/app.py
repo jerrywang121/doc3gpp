@@ -29,7 +29,7 @@ from fastapi import FastAPI
 from doc3gpp.config import get_settings
 from doc3gpp.services import factory
 from doc3gpp.settings.schema import Settings
-from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.db.session import get_engine, get_testcase_engine
 from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
 from doc3gpp.web.errors import register_error_handlers
 from doc3gpp.web.routes import all_routers
@@ -60,6 +60,7 @@ def build_state(settings: Settings) -> WebState:
         tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
         spec=factory.build_spec_service(),
+        testcase=factory.build_testcase_service(),
         search=factory.build_search_service(embedder=embedder),
         semantic_search=factory.build_semantic_search_service(embedder=embedder),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
@@ -68,6 +69,7 @@ def build_state(settings: Settings) -> WebState:
     return WebState(
         settings=settings,
         engine=engine,
+        testcase_engine=get_testcase_engine(),
         services=services,
         jobs=JobWorkerHandle(),
     )
@@ -155,6 +157,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await handle.shutdown()
             state.engine.dispose()
+            state.testcase_engine.dispose()
 
     app = FastAPI(title="doc3gpp", lifespan=lifespan)
     register_error_handlers(app)

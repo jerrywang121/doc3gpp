@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -17,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from doc3gpp.storage.db.base import Base
+from doc3gpp.storage.db.testcase_base import TestCaseBase
 
 
 class TDocORM(Base):
@@ -451,3 +453,63 @@ class SpecVersionORM(Base):
     version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pdf_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     crs: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TestCaseORM(TestCaseBase):
+    """Persisted RAN5 testcase header row (one per ``(testcase_id, group)``)."""
+
+    __tablename__ = "testcases"
+
+    testcase_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    group: Mapped[str] = mapped_column(String(8), primary_key=True, index=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ats: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    feature: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    release: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    wis: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    spec: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class TestCaseStatusORM(TestCaseBase):
+    """One `(testcase_id, group, path)` status triple; single-path groups use `'default'`."""
+
+    __tablename__ = "testcase_status"
+
+    testcase_id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+        nullable=False,
+        index=True,
+    )
+    group: Mapped[str] = mapped_column(
+        String(8),
+        primary_key=True,
+        nullable=False,
+        index=True,
+    )
+    path: Mapped[str] = mapped_column(String(16), primary_key=True, nullable=False)
+    gcf_ptcrb: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ttcn_status: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["testcase_id", "group"],
+            ["testcases.testcase_id", "testcases.group"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class TestCaseSourceORM(TestCaseBase):
+    """Sync ledger: one row per status file (filename identity is the skip key)."""
+
+    __tablename__ = "testcase_sources"
+
+    filename: Mapped[str] = mapped_column(String(256), primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    testcase_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

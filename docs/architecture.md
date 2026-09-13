@@ -17,6 +17,9 @@ Current scope:
 - TDoc CR extraction pipeline (download zip → on-disk cache → python-docx
   render → markdown cache → cover-page parser → persist).
 - Calendar / TDoc / WI / TDoc-CR persistence in SQLAlchemy.
+- RAN5 testcase status snapshots (History zip → workbook → `testcases` /
+  `testcase_status` / `testcase_sources` rows; `testcase sync` / `list`
+  / `show`).
 
 ## Layers
 
@@ -73,6 +76,10 @@ Per-layer modules:
     - `scraping/ftp_source.py` — FTP-directory listings for auxiliary TDoc files
     - `scraping/portal_source.py` — `GenerateDocumentList.aspx` TDoc-list XLSX
     - `scraping/wi_source.py` — DynaReport WI list HTML per TSG
+    - `scraping/testcase_source.py` — RAN5 TTCN status History listing
+      (`HISTORY_URL`) + status-zip download (network only; filename
+      grammar parsed by `parse_status_filename`, latest picked by
+      `select_latest` on `(year, week, revision)`)
     - `scraping/tdoc_zip_source.py` — TDoc zip URL builder + downloader
       (`R5s` TTCN + `R5w` Workshop branches)
     - `scraping/cache.py` — `TDocCache` (two-subtree on-disk cache for
@@ -83,6 +90,24 @@ Per-layer modules:
     - `parsers/tdoc_parser.py`, `parsers/tdoc_file_parser.py` — TDoc
       list XLSX → `TDoc` / `TDocFile`
     - `parsers/wi_parser.py` — DynaReport HTML → `Wi`
+    - `parsers/testcase_parser.py` — status workbook (`*.xlsx`,
+      `read_only=True, data_only=True`) → `(list[TestCase],
+      list[TestCaseStatus], list[str])`. Constants: `SHEET_TO_GROUP`
+      (6 sheets → `5G` / `LTE` / `IMS` / `UTRA` / `POS` / `MCX`),
+      `PATH_RANK` (single source of truth, reused by the repo sort and
+       the CLI `path=gcf/ttcn` rendering), `STATUS_PAIRS` (`(gcf_idx, ttcn_idx,
+      path)` per group), `FIXED_SPEC` (`5G` → `38.523-1`, `LTE` →
+      `36.523-1`). `extract_workbook` picks the lexically-first
+      `*.xlsx` member (zero → `TestcaseWorkbookNotFoundError`). Header
+      row is row 1; each status pair's headers are validated
+      (`_is_gcf_header` / `_is_ttcn_header`), invalid pairs are
+       skipped with a warning. Rows with an empty TC are skipped; a TC
+       with zero emitted pairs still yields its header. Identity is
+       `(testcase_id, group)`, so the same TC id on several sheets
+       yields one header row per group (each with its own group-scoped
+       status rows) — the live workbook contains such duplicates, so
+       the docs describe what the code does today (see
+       `docs/3gpp-knowledge.md`).
     - `parsers/docx_converter.py` — `.docx` → markdown via the
       optional `python-docx` extra (raises
       `PythonDocxNotInstalledError` when missing). The legacy `.doc`
@@ -103,6 +128,12 @@ Per-layer modules:
       (`TDocCRDetails` slim cover-page dataclass, `TDocCRTTCNDetails`
       sidecar, `TDocCRParseResult` parser bundle, `TDocExtractMeta`
       cache-pointer sidecar, `DirectParseResult` direct-mode outcome)
+    - `models/testcase.py` — `TestCase` header, `TestCaseStatus`
+      `(testcase_id, group, path)` triple, `TestCaseWithStatuses` list-view DTO
+      (`statuses: list[TestCaseStatus]`), `TestCaseDetail` detail-view
+      DTO (`statuses: list[TestCaseStatus]`), `TestCaseSource` sync
+      ledger, plus `TestcaseSourceNotFoundError` (`LookupError`) and
+      `TestcaseWorkbookNotFoundError` (`ValueError`)
 - `repository/` — abstract `Protocol` contracts used by services.
     - `repository/protocols.py` — `MeetingRepository`,
       `TDocRepository` (+ `get_by_id`), `TsgRepository`,
@@ -110,7 +141,12 @@ Per-layer modules:
       `TDocCrDetailRepository` (slim cover-page repo + the
       `tdoc_extracts` sidecar, written through a separate
       `upsert_extract_meta` method),
-      `TDocCrTTCNDetailRepository` (TTCN sidecar)
+      `TDocCrTTCNDetailRepository` (TTCN sidecar),
+      `TestCaseRepository` (`upsert_many` / `replace_statuses` (delete
+      + insert per id) / `list` with text filters + any-path
+      `status`/`gcf_status` `EXISTS` / `get` / `list_statuses`
+      (`PATH_RANK`-sorted) / `get_source` / `record_download` /
+      `record_parsed`)
 - `services/` — orchestration. Constructed via `services/factory.py`
   (`build_*` helpers); the CLI never imports a concrete SQL repository
   directly.
@@ -126,9 +162,17 @@ Per-layer modules:
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
       `build_tdoc_sync_coordinator`, `build_tdoc_cr_service`,
-      `build_tsg_service`, `build_wi_service`,
+      `build_tsg_service`, `build_wi_service`, `build_testcase_service`
+      (`TestCaseService(SQLAlchemyTestCaseRepository())`),
       `build_tdoc_repository`, `build_tdoc_cr_repository`,
       `build_tdoc_cr_ttcn_repository`
+    - `services/testcase_service.py` — `TestCaseService.sync(*,
+      force=False, on_progress=None)` (latest-History-zip →
+      `upsert_many` + per-`(id, group)` `replace_statuses`, with the
+      file-identity skip rule on `testcase_sources.parsed_at`),
+      `list_recent` (headers + `{path: ttcn_status}` dicts),
+      `get` (`TestCaseDetail | None`, optional group) + `get_all`
+      (every stored group for an id)
 - `storage/` — SQLAlchemy ORM models, engine / session factory,
   backend-specific options, concrete Protocol implementations.
     - `storage/db/models.py` — ORM classes (including
@@ -140,16 +184,36 @@ Per-layer modules:
       (the sidecar's `required_changes` blob today; tolerant
       decoding covers future binary detail columns)
     - `storage/db/session.py` — `get_engine`, `get_session_factory`
-      (cached)
+      (cached, main DB) and `get_testcase_engine`,
+      `get_testcase_session_factory`,
+      `resolve_testcase_database_url` (cached, testcase DB)
     - `storage/db/base.py` — declarative `Base`
-    - `storage/db/migrate.py` — `create_schema` (calls
-      `Base.metadata.create_all`)
+    - `storage/db/testcase_base.py` — declarative `TestCaseBase`
+      (owns the three testcase ORMs: `testcases`, `testcase_status`,
+      `testcase_sources`)
+    - `storage/db/migrate.py` — `create_schema(scope)` (calls
+      `Base.metadata.create_all` for `"main"`,
+      `TestCaseBase.metadata.create_all` for `"testcase"`, both for
+      `"all"`)
     - `storage/db/migrations/` — placeholder for future Alembic
     - `storage/backends/sqlite.py` — engine kwargs
     - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
       and `storage/repositories/tdoc_cr_ttcn_sql.py` — concrete
       `SQLAlchemy*Repository` classes (the cover-page repo also
       owns `tdoc_extracts` writes via `upsert_extract_meta`)
+    - `storage/repositories/testcase_sql.py` —
+      `SQLAlchemyTestCaseRepository` (owns `testcases` +
+      `testcase_status` + `testcase_sources`; text cols via
+      `apply_text_filter`, `group` exact upper-cased, `status` /
+      `gcf_status` via any-path `EXISTS`, `list_statuses` Python-sorted
+      by `PATH_RANK`). Bound to the testcase session factory
+      (`get_testcase_session_factory()`), not the main one.
+
+Data flow by database: testcase traffic →
+`SQLAlchemyTestCaseRepository` → testcase factory
+(`get_testcase_session_factory()` → `get_testcase_engine()` →
+`testcase_database_url`); everything else → main factory
+(`get_session_factory()` → `get_engine()` → `database_url`).
 
 | `services/search_service.py` | orchestration; injected with a `SearchIndexRepository` impl + `EmbeddingReranker` via `services/factory.build_search_service` |
 | `storage/db/fts5_query.py` | `normalize_query` index-time pre-processor (T3); applies TDoc-ID base+full duplication + spec-id `dot→underscore` rejoin |
@@ -159,9 +223,48 @@ Per-layer modules:
 
 The CLI composes a service via the factory, the service drives the
 scrapers + parsers + repos through the Protocols, and the repos own the
-SQLAlchemy session. There are four primary end-to-end flows; the
+SQLAlchemy session. There are five primary end-to-end flows; the
 "meeting-based TDoc sync" flow is itself composed of two sub-flows,
 and the TDoc CR extraction is the deepest.
+
+### Testcase sync
+
+1. `doc3gpp testcase sync [--force]` calls
+   `TestCaseService.sync(force=force, on_progress=...)`.
+2. `list_history_files()` fetches the upstream `History/` folder HTML
+   and returns every anchor whose URL-decoded basename matches the
+   status-file grammar; `select_latest` picks the max `(year, week,
+   revision)` tuple.
+3. The service reads `TestCaseRepository.get_source(filename)`. When
+   the row exists and already carries `parsed_at` (and `--force` is
+   absent) the run returns `skipped` — file-identity skip rule, no
+   interval, no bootstrap seed, no network beyond the listing.
+4. Otherwise `fetch_testcase_zip` downloads the zip once,
+   `record_download` writes the `testcase_sources` row BEFORE parsing,
+   `extract_workbook` pulls the lexically-first `*.xlsx` member, and
+    `parse_testcase_workbook` returns `(cases, statuses, notes)`.
+5. `upsert_many(cases)` writes the headers, each `(id, group)` pair's
+   statuses are replaced via `replace_statuses` (delete-then-insert
+   scoped to the pair, so stale paths disappear), and
+   `record_parsed` stamps `parsed_at` + counts.
+6. `doc3gpp testcase list [filters]` reads cached headers via
+   `TestCaseRepository.list(...)` (rich filter grammar on text cols;
+   `group` exact upper-cased; `--status` / `--gcf-status` any-path
+   `EXISTS` on `ttcn_status` / `gcf_ptcrb`) then nests one
+   status-row list (`{path, gcf_ptcrb, ttcn_status}` objects, `null`
+   preserved) per header via `list_statuses`. Pagination via `--limit` (default 50) /
+   `--offset` (default 0); columns from
+   `settings.output.fields.testcase` (default `testcase_id, title,
+   spec, group, release, statuses`), overridable with `--fields`
+   (`all` = all 9 list fields).
+7. `doc3gpp testcase show --testcase <id> [--group <g>]` renders one
+   id across every stored group (or one `(id, group)` row with
+   `--group`) via `TestCaseService.get_all` / `get` plus scoped
+   `list_statuses` (`PATH_RANK`-sorted); a miss raises
+    `typer.BadParameter(f"Testcase {id!r} not found")`. JSON always
+    emits an array of flat per-`(id, group)` objects with nested
+    `statuses` (one element when a single group matches); status
+    rows carry `{path, gcf_ptcrb, ttcn_status}` with no `group`.
 
 ### Meetings sync\n\n1. `doc3gpp meeting sync --tsg <short>` validates `<short>` against\n   the `tsgs` table (auto-seeded if empty).\n2. `MeetingService.sync` checks `tsgs.meeting_last_sync` against\n   `Settings.sync.meeting_sync_interval` (default `24h`) and skips\n   the upstream fetch when the last sync is still fresh. `--force`\n   bypasses this check.\n3. On a non-skipped run: `fetch_calendar` (DynaReport HTML) →\n   `parse_3gpp_calendar` (HTML → `Meeting` list). Every parsed\n   `Meeting` is then stamped with `Meeting.tsg = <short>` (canonicalised\n   to upper case) before being handed to\n   `SQLAlchemyMeetingRepository.upsert_many`. The FK constraint\n   requires the parent row to exist in `tsgs`, so the auto-seed in\n   step 1 is a hard prerequisite.\n4. `SQLAlchemyMeetingRepository.upsert_many` writes the rows; a final\n   `delete_with_end_before(cutoff)` pass trims out-of-window rows.\n5. `doc3gpp meeting list --tsg <pattern>` is a SQL ``LIKE`` lookup on\n     the indexed `meetings.tsg` column (case-insensitive on input). Rows\n     without an owning TSG are excluded.
 
@@ -618,6 +721,36 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       table so the schema stays flat), `rapporteurs` (nullable text —
       comma-joined company names from the detail page rapporteurs
       grid), `last_synced_at`. One row per dotted spec id.
+- `testcases`:
+    - `(testcase_id, group)` composite PK (`String(64)` /
+      `String(8)`, indexed, upper-cased: `5G` / `LTE` / `IMS` /
+      `UTRA` / `POS` / `MCX`), `title`, `ats`
+      (`String(128)`), `feature` (`String(256)`), `release`
+      (`String(32)`), `wis` (`String(512)`, comma-joined),
+      `spec` (`String(32)`).
+      One row per `(testcase_id, group)` — the same TC id on
+      several workbook sheets yields one header row per group (see
+      the parser note in the per-layer modules above).
+- `testcase_status`:
+    - `(testcase_id, group, path)` composite PK; `(testcase_id,
+      group)` FK → `testcases(testcase_id, group)`
+      (`ondelete="CASCADE"`), `path`
+      (`String(16)` — `FR1` / `FR2` / `FR1+FR2` / `FDD` / `TDD` /
+      `IPCAN-4G` / `EUTRA` / `IPCAN-5G` / `NR5GC` / `default`;
+      single-path groups store the literal `'default'`),
+      `gcf_ptcrb` (nullable text), `ttcn_status` (nullable text,
+      indexed). One row per `(testcase_id, group, path)`;
+      `replace_statuses` deletes + re-inserts per `(id, group)` on
+      every sync.
+- `testcase_sources`:
+    - `filename` (PK, `String(256)` — upstream basename, e.g.
+      `TTCN CR Agreement Status 2024-wk32.zip`), `year`, `week`,
+      `revision` (all `Integer`, parsed from the filename),
+      `downloaded_at` / `parsed_at` (tz-aware `DateTime`, nullable),
+      `testcase_count` / `status_count` (`Integer`, default 0).
+      Sync ledger: `parsed_at` is the file-identity skip key
+      (`record_download` writes before parsing; `record_parsed`
+      stamps after upserts).
 - `spec_versions`:
     - `(spec_id, version)` composite PK, `release`, `ftp_url`, `pdf_url`,
       `meeting_id` (nullable), `meeting_name`, `upload_date`, `crs`
@@ -665,15 +798,20 @@ files; `db reset` removes stale sidecars before recreating the schema.
 
 ## CLI Surface
 
-Implemented command groups in `src/doc3gpp/cli.py` (seven groups,
-twenty commands):
+Implemented command groups in `src/doc3gpp/cli.py` (ten sub-apps,
+29 commands) plus the `server` group in `cli_server.py`
+(6 commands):
 
 - `db`:
-    - `check`
-    - `init` — creates the schema and seeds the `tsgs` reference table
-    - `reset` — SQLite-only destructive reset; deletes the DB file and
-      sidecars, clears the engine cache, recreates the schema, and re-seeds
-      `tsgs`
+    - `check` — `--scope main|testcase|all` (default `all`); connects
+      per scope and prints the selected URL(s)
+    - `init` — `--scope main|testcase|all` (default `all`); creates the
+      selected schema(s) via `create_schema(scope)` and seeds the
+      `tsgs` reference table when main is in scope
+    - `reset` — `--scope main|testcase|all` (default `all`);
+      SQLite-only destructive reset; deletes the selected DB file(s)
+      and sidecars, clears both engine caches, recreates the selected
+      schema(s), and re-seeds `tsgs` when main is in scope
 - `meeting`:
     - `sync` — validates `--tsg` against the reference table
     - `list` — filters by `--tsg`, `--name`, `--location`, `--year`,
@@ -720,6 +858,29 @@ twenty commands):
       anchor.
 - `tsg`:
     - `list`, `show`, `seed`
+- `testcase`:
+    - `sync` — `[--force]`; resolves the latest `TTCN CR Agreement
+      Status` History zip, downloads once, upserts headers +
+      statuses; file-identity skip on `testcase_sources.parsed_at`
+      (no interval).
+    - `list` — filters by `--testcase`, `--title`, `--ats`,
+      `--feature`, `--release`, `--wis`, `--spec`, `--group`
+      (exact: `5G` / `LTE` / `IMS` / `UTRA` / `POS` / `MCX`),
+      `--status` (any-path `ttcn_status` `EXISTS`), `--gcf-status`
+      (any-path `gcf_ptcrb` `EXISTS`), `--limit` (default 50,
+      range 1..500), `--offset` (default 0), `--fields` (all 9
+      list fields; default from `output.fields.testcase`).
+       JSON carries a nested `statuses` list of
+       `{path, gcf_ptcrb, ttcn_status}` objects (`null` preserved);
+       table / markdown stringify it as `path=gcf/ttcn;…`
+       (`PATH_RANK`-sorted, `-` for `None`).
+     - `show` — `--testcase ID` (required) + optional `--group`
+       (exact: same 6 values; unknown → `BadParameter`); without
+       `--group` every stored group renders. Renders the header(s)
+       plus every `(path, gcf_ptcrb, ttcn_status)` row (no `group`
+       in status rows); JSON is always an array of flat
+       per-`(id, group)` objects with nested `statuses`; miss →
+       `BadParameter`.
 - `wi`:
     - `sync` — `--tsg`
     - `list` — filters by `--tsg`, `--name`, `--acronym`, `--release`
@@ -753,9 +914,11 @@ twenty commands):
     - Every subcommand requires `[server] enabled = true`.
 
 Every `* list` command also accepts `--format table|json|markdown`
-and `-o/--output PATH`. `meeting list`, `tdoc list`, and `tsg list` also
-accept `--fields`; `wi list` uses the configured `output.fields.wi` list
-without a per-command `--fields` override. `tdoc show` additionally
+and `-o/--output PATH`. `meeting list`, `tdoc list`, `tsg list`, and
+`testcase list` also
+accept `--fields`; `wi list` and `spec list` use their configured
+`output.fields.wi` / `output.fields.spec` lists without a per-command
+`--fields` override. `tdoc show` additionally
 accepts `--format {table,json,markdown,raw}` (the `raw` mode reads the
 converted `.docx` markdown body straight from the cache, bypassing the
 DB-row render — `--format raw` on the `--ftp-url` path is a
@@ -782,7 +945,9 @@ factory wires:
 - `get_settings()` (cached; `cache_clear()` in tests that mutate
   allowlisted `DOC3GPP_*` env vars)
 - `get_engine()` / `get_session_factory()` (cached; same clear
-  contract)
+  contract) for the main DB, and `get_testcase_engine()` /
+  `get_testcase_session_factory()` (cached; same clear contract)
+  for the testcase DB
 - `ScraperClient()` — single instance per CLI invocation
 
 `_build_cache` in the CLI constructs `TDocCache(settings.cache.dir,
@@ -857,10 +1022,11 @@ readers:
   signature on any repo, update both the Protocol and the impl.
 - **CLI depends on `services/factory.py` only** — never instantiate a
   concrete `SQLAlchemy*Repository` from `cli.py`.
-- **Settings caching** — `get_settings` and `get_engine` are
-  `@lru_cache(maxsize=1)`; any test that mutates an allowlisted
-  `DOC3GPP_*` env var must call `cache_clear()` on both in teardown
-  (the `sqlite_env` fixture is the canonical pattern).
+- **Settings caching** — `get_settings`, `get_engine`, and
+  `get_testcase_engine` are `@lru_cache(maxsize=1)`; any test that
+  mutates an allowlisted `DOC3GPP_*` env var must call `cache_clear()`
+  on all three in teardown (the `sqlite_env` fixture is the canonical
+  pattern — it pins both database URLs and clears all three caches).
 
 ## Out of scope (today)
 

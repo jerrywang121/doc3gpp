@@ -182,6 +182,8 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/wis` | List WIs. |
+| GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
+| GET | `/testcases/{testcase_id}` | Testcase detail (HTML or JSON; optional `?group=` to scope to one `(id, group)` row — unknown group → 400 `invalid_filter`). Without `?group=` every stored group returns: JSON is an array of flat per-`(id, group)` objects with nested `statuses` (single-element when one group matches; status rows carry `{path, gcf_ptcrb, ttcn_status}` with no `group`); HTML renders one section per group. Unknown id → 404 `testcase_not_found`. |
 | GET | `/search` | FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
@@ -189,13 +191,14 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/sync/tdocs` | Enqueue `sync_tdocs` (by meeting id or name). |
 | POST | `/jobs/sync/tdocs/all` | Enqueue `sync_all_tdocs`. |
 | POST | `/jobs/sync/specs` | Enqueue `sync_specs` (exactly one of `tsg` / `spec_id`). A `tsg` not present in the `tsgs` reference table is rejected (the job fails fast before any network work). |
+| POST | `/jobs/sync/testcases` | Enqueue `sync_testcases` (`{"force": bool}`, default `false`) → 202 job envelope. |
 | POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. |
 | POST | `/jobs/search/rebuild` | Enqueue `rebuild_search`. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
 | POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single 3GPP FTP URL or folder; `url` must be `https://www.3gpp.org/ftp/...`, `recursive` XOR `max_depth`). |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. Accepts `?format=html` to return the refreshed job row as an `outerHTML` swap target for the list page's per-row Cancel button. JSON otherwise. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
-| GET | `/sync` | Sync hub page: nine enqueue panels (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, search-rebuild, cache-purge) + a "Recent sync jobs" table. |
+| GET | `/sync` | Sync hub page: ten enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, search-rebuild, cache-purge, testcases) + a "Recent sync jobs" table. |
 | GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
@@ -222,9 +225,11 @@ when the job completes. A "Per-version details" checkbox alongside
 worker always re-fetches the ETSI PDF + CR-list follow-ups for every
 version (default OFF — without it, cached rows are preserved).
 
-The sync hub (`/sync`) is a single page for enqueueing every sync-shaped job. Each panel submits a JSON body to the matching `/jobs/...` route via the shared `bindJobPolling` helper; when the job reaches a terminal state the bottom "Recent sync jobs" table is refreshed in place via HTMX (`GET /sync?format=fragment`) rather than a full page reload, so the user keeps their scroll position.
+The sync hub (`/sync`) is a single page for enqueueing every sync-shaped job. Each panel submits a JSON body to the matching `/jobs/...` route via the shared `bindJobPolling` helper; when the job reaches a terminal state the bottom "Recent sync jobs" table is refreshed in place via HTMX (`GET /sync?format=fragment`) rather than a full page reload, so the user keeps their scroll position. The tenth form (`id="testcase-form"`) enqueues `POST /jobs/sync/testcases` with `{force}` from its Force-sync checkbox (`sync_hub.js` `"testcase-form"` body builder); the handler (`_sync_testcases`, `JobKind.SYNC_TESTCASES = "sync_testcases"`) calls `services.testcase.sync(force=force, on_progress=...)` and returns `{"status","reason","synced_count"}`.
 
-The header nav is ordered Home, TSGs, Meetings, TDocs, WIs, Search, Jobs.
+The testcase list page (`/testcases`) mirrors the spec list: an HTMX filter form (`partials/testcase_filters.html`) swaps the `#results` partial (`partials/testcase_results.html`) on `HX-Request: true`, otherwise the full `testcase_list.html` page renders. Columns are TC, Title, Spec, Group, Release, Statuses (as `path=gcf/ttcn` chips), each row linking to its group-scoped detail page (`/testcases/{id}?group={group}` → `testcase_show.html`: one header-card + status-triples table per group, with `path` / `gcf_ptcrb` / `ttcn_status`).
+
+The header nav is ordered Home, TSGs, Meetings, TDocs, Specs, Testcases, WIs, Search, Jobs, Sync.
 The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)
 when any are pending. The TSG list links each TSG name to the TSG's own URL
 and its `show` link jumps to the meetings list pre-filtered to that TSG
@@ -370,10 +375,10 @@ log for an `Invalid Origin header` warning before touching the transport.
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 24 tools:
+It exposes 27 tools:
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
-`get_spec`, `search_tdocs`, `semantic_search_tdocs`.
+`get_spec`, `list_testcases`, `get_testcase`, `search_tdocs`, `semantic_search_tdocs`.
 
 `get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
 `ftp_url` (a 3GPP FTP URL or relative path); when both are supplied
@@ -385,11 +390,28 @@ is never triggered (no parent TDoc / meeting to anchor on). A
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,
-`rebuild_search_index`, `purge_cache`, `get_job`, `cancel_job`, `list_jobs`.
+`sync_testcases`, `rebuild_search_index`, `purge_cache`, `get_job`, `cancel_job`, `list_jobs`.
 `cancel_job` is idempotent on terminal jobs: cancelling a job that has
 already reached SUCCEEDED / FAILED / CANCELLED returns the envelope
 instead of erroring, so callers can inspect the result without a
 separate `get_job` call.
+
+`list_testcases(testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit=50,offset=0)`
+calls `services.testcase.list_recent(...)` and returns
+`_to_json(render.testcase_rows(rows, _TESTCASE_FIELDS))` where
+`_TESTCASE_FIELDS = ["testcase_id","title","spec","group","release","statuses"]`
+(`statuses` stays a nested list of `{path, gcf_ptcrb, ttcn_status}` objects, `null` preserved). `get_testcase(testcase_id, group=None)` returns
+every stored group as an array of flat per-`(id, group)` objects with
+nested `statuses` (single-element with `group` set, or when one group matches): with
+`group` it calls `services.testcase.get(testcase_id, canonical)`; without
+it calls `services.testcase.get_all(testcase_id)`; empty → raises
+`TestcaseNotFoundError` (MCP `-32004`). Each payload's statuses go through
+render.testcase_status_rows(...)}` over `["path","gcf_ptcrb","ttcn_status"]`
+(an invalid `group` value is not pre-validated here — an unknown-canonical
+group simply misses and raises `TestcaseNotFoundError`).
+`sync_testcases(force=False)` enqueues `JobKind.SYNC_TESTCASES` with
+`{"force": force}` and returns the `{job_id,status,message,links{self,events}}`
+envelope.
 
 Every read tool returns exactly the bytes of the equivalent
 `?format=json` HTTP route. `search_tdocs` normalises the query into a

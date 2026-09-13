@@ -39,6 +39,7 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
+from doc3gpp.models.testcase import TestCaseDetail, TestCaseStatus, TestCaseWithStatuses
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     TDocCRDetails,
@@ -66,6 +67,7 @@ from doc3gpp.services.factory import (
     build_tdoc_repository,
     build_tdoc_service,
     build_tdoc_sync_coordinator,
+    build_testcase_service,
     build_tsg_service,
     build_wi_service,
 )
@@ -96,7 +98,11 @@ from doc3gpp.settings.config_writer import (
     write_toml,
 )
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.db.session import (
+    get_engine,
+    get_testcase_engine,
+    resolve_testcase_database_url,
+)
 
 app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
@@ -105,6 +111,7 @@ tdoc_app = typer.Typer(help="tdoc commands")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
 spec_app = typer.Typer(help="spec commands")
+testcase_app = typer.Typer(help="testcase commands")
 config_app = typer.Typer(help="inspect the resolved configuration")
 cache_app = typer.Typer(help="TDoc extraction cache commands")
 app.add_typer(db_app, name="db")
@@ -113,6 +120,7 @@ app.add_typer(tdoc_app, name="tdoc")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
 app.add_typer(spec_app, name="spec")
+app.add_typer(testcase_app, name="testcase")
 app.add_typer(config_app, name="config")
 app.add_typer(cache_app, name="cache")
 search_app = typer.Typer(help="full-text search over TDocs, CRs, meetings, and WIs")
@@ -346,6 +354,69 @@ def _resolve_cache_purge_scope(scope: str) -> str:
             f"Unknown --scope {scope!r}. Choose from: {valid}."
         )
     return normalized
+
+
+VALID_DB_SCOPES: tuple[str, ...] = ("main", "testcase", "all")
+
+
+def _resolve_db_scope(scope: str) -> str:
+    """Resolve ``--scope`` for the ``db`` commands.
+
+    Mirrors :func:`_resolve_cache_purge_scope`: normalises whitespace
+    + case and validates against :data:`VALID_DB_SCOPES`. Unknown
+    values raise :class:`typer.BadParameter`.
+    """
+    normalized = scope.strip().lower()
+    if normalized not in VALID_DB_SCOPES:
+        valid = ", ".join(VALID_DB_SCOPES)
+        raise typer.BadParameter(
+            f"Unknown --scope {scope!r}. Choose from: {valid}."
+        )
+    return normalized
+
+
+def _sqlite_file_for_scope(database_url: str, scope: str) -> Path | None:
+    """Return the sqlite file for ``database_url`` or ``None`` for ``:memory:``.
+
+    Raises :class:`typer.BadParameter` naming ``scope`` when the URL is
+    not sqlite. Call for every selected scope BEFORE deleting anything
+    so a mixed-backend ``reset`` fails without touching any file.
+    """
+    parsed = make_url(database_url)
+    if not parsed.drivername.startswith("sqlite"):
+        raise typer.BadParameter(
+            f"'db reset' only supports SQLite backends "
+            f"(scope {scope!r}: {database_url})."
+        )
+    if parsed.database and parsed.database != ":memory:":
+        return Path(parsed.database)
+    return None
+
+
+def _testcase_url_or_raise() -> str:
+    """Resolve the testcase URL, mapping derivation errors to CLI errors."""
+    try:
+        return resolve_testcase_database_url()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _delete_sqlite_file(db_file: Path | None, scope: str) -> None:
+    """Delete ``db_file`` + WAL sidecars, echoing what happened."""
+    if db_file is not None and db_file.exists():
+        logger.info("Deleting SQLite database file %s", db_file)
+        db_file.unlink()
+        # Also remove any SQLite journal sidecar files (-wal, -shm, -journal)
+        # so a half-written WAL from a previous session does not survive
+        # the reset and confuse the new schema.
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = db_file.with_name(db_file.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+                logger.debug("Removed SQLite sidecar %s", sidecar)
+        typer.echo(f"Deleted {db_file}")
+    else:
+        typer.echo(f"No existing SQLite file to delete ({scope}).")
 
 
 def _open_output(path: str | TextIO | None) -> tuple[TextIO, bool]:
@@ -607,32 +678,53 @@ def cache_purge(
 
 
 @db_app.command("check")
-def db_check() -> None:
-    """Validate database connectivity for configured backend."""
-
+def db_check(
+    scope: str = typer.Option(
+        "all",
+        "--scope",
+        help="Which database to check: 'main', 'testcase', or 'all'.",
+    ),
+) -> None:
+    """Validate database connectivity for configured backend(s)."""
+    resolved_scope = _resolve_db_scope(scope)
     logger.info("Checking database connectivity")
-    engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-
     settings = get_settings()
-    typer.echo(f"Database connection OK: {settings.database_url}")
+    if resolved_scope in ("main", "all"):
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        typer.echo(f"Database connection OK: {settings.database_url}")
+    if resolved_scope in ("testcase", "all"):
+        tc_url = _testcase_url_or_raise()
+        tc_engine = get_testcase_engine()
+        with tc_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        typer.echo(f"Testcase database connection OK: {tc_url}")
 
 
 @db_app.command("init")
-def db_init() -> None:
-    """Create schema for current backend and seed the TSG reference table.
+def db_init(
+    scope: str = typer.Option(
+        "all",
+        "--scope",
+        help="Which database to initialise: 'main', 'testcase', or 'all'.",
+    ),
+) -> None:
+    """Create schema for current backend(s) and seed the TSG reference table.
 
     Re-running this command is safe: the TSG seed is upsert-based, so existing
     rows are refreshed in place rather than duplicated.
     """
-
+    resolved_scope = _resolve_db_scope(scope)
     logger.info("Initializing database schema")
-    create_schema()
-    tsg_service = build_tsg_service()
-    seeded = tsg_service.seed_defaults()
-    logger.info("Seeded %s TSG reference records", seeded)
-    typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
+    create_schema(resolved_scope)
+    if resolved_scope in ("main", "all"):
+        tsg_service = build_tsg_service()
+        seeded = tsg_service.seed_defaults()
+        logger.info("Seeded %s TSG reference records", seeded)
+        typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
+    else:
+        typer.echo("Testcase database schema initialized")
 
 
 @db_app.command("reset")
@@ -643,57 +735,60 @@ def db_reset(
         "-y",
         help="Skip the confirmation prompt.",
     ),
+    scope: str = typer.Option(
+        "all",
+        "--scope",
+        help="Which database to reset: 'main', 'testcase', or 'all'.",
+    ),
 ) -> None:
-    """Delete the SQLite database file and recreate the schema.
+    """Delete the SQLite database file(s) and recreate the schema.
 
-    Destructive: all data is wiped. SQLite URLs only; non-SQLite URLs are
-    rejected. Prompts for confirmation unless ``--yes`` is passed. After
-    reset the ``tsgs`` reference table is re-seeded.
+    Destructive: all data in the selected scope is wiped. SQLite URLs
+    only — every selected scope must be sqlite or the whole reset is
+    rejected before anything is deleted. Prompts for confirmation
+    unless ``--yes`` is passed. After reset the ``tsgs`` reference
+    table is re-seeded when the main scope is selected.
     """
-
+    resolved_scope = _resolve_db_scope(scope)
     settings = get_settings()
-    parsed = make_url(settings.database_url)
+    urls: list[tuple[str, str]] = []
+    if resolved_scope in ("main", "all"):
+        urls.append(("main", settings.database_url))
+    if resolved_scope in ("testcase", "all"):
+        # NOTE: with a non-sqlite main URL and no explicit testcase URL
+        # the derivation itself fails (ValueError → BadParameter naming
+        # 'testcase_database_url'), which also aborts before any delete.
+        urls.append(("testcase", _testcase_url_or_raise()))
+    # Validate every selected scope BEFORE deleting anything: a
+    # mixed-backend reset fails without touching any file.
+    files: list[tuple[str, Path | None]] = [
+        (scope_name, _sqlite_file_for_scope(url, scope_name))
+        for scope_name, url in urls
+    ]
 
-    if not parsed.drivername.startswith("sqlite"):
-        raise typer.BadParameter(
-            f"'db reset' only supports SQLite backends "
-            f"(configured URL: {settings.database_url})."
+    targets = [str(f) for _, f in files if f is not None and f.exists()]
+    if targets and not yes:
+        typer.confirm(
+            "Delete SQLite database file(s)?\n" + "\n".join(targets),
+            abort=True,
         )
+    for scope_name, db_file in files:
+        _delete_sqlite_file(db_file, scope_name)
 
-    db_file: Path | None = None
-    if parsed.database and parsed.database != ":memory:":
-        db_file = Path(parsed.database)
-
-    if db_file is not None and db_file.exists():
-        if not yes:
-            typer.confirm(
-                f"Delete SQLite database file at {db_file}?",
-                abort=True,
-            )
-        logger.info("Deleting SQLite database file %s", db_file)
-        db_file.unlink()
-        # Also remove any SQLite journal sidecar files (-wal, -shm, -journal)
-        # so a half-written WAL from a previous session does not survive
-        # the reset and confuse the new schema.
-        for suffix in ("-wal", "-shm", "-journal"):
-            sidecar = db_file.with_name(db_file.name + suffix)
-            if sidecar.exists():
-                sidecar.unlink()
-                logger.debug("Removed SQLite sidecar %s", sidecar)
-        typer.echo(f"Deleted {db_file}")
-    else:
-        typer.echo("No existing SQLite file to delete.")
-
-    # SQLAlchemy cached the engine from the pre-delete file path; clear it
-    # so create_schema() opens a fresh connection to the (now empty) file.
+    # SQLAlchemy cached the engines from the pre-delete file paths; clear
+    # both so create_schema(resolved_scope) opens fresh connections.
     get_engine.cache_clear()
+    get_testcase_engine.cache_clear()
 
     logger.info("Recreating database schema")
-    create_schema()
-    tsg_service = build_tsg_service()
-    seeded = tsg_service.seed_defaults()
-    logger.info("Seeded %s TSG reference records", seeded)
-    typer.echo(f"Database reset complete; seeded {seeded} TSG records")
+    create_schema(resolved_scope)
+    if resolved_scope in ("main", "all"):
+        tsg_service = build_tsg_service()
+        seeded = tsg_service.seed_defaults()
+        logger.info("Seeded %s TSG reference records", seeded)
+        typer.echo(f"Database reset complete; seeded {seeded} TSG records")
+    else:
+        typer.echo("Testcase database reset complete")
 
 
 @meeting_app.command("sync")
@@ -721,7 +816,7 @@ def meeting_sync(
     When no ``--tsg`` is given, every distinct TSG 
     found in the local meetings table is synced.
     """
-    create_schema()
+    create_schema("all")
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     service = build_meeting_service()
 
@@ -2333,7 +2428,7 @@ def _build_show_payload(
 
 
 def _dump_show_json(
-    payload: dict[str, object],
+    payload: dict[str, object] | list[object],
     output: str | TextIO | None,
     *,
     compact: bool,
@@ -3806,7 +3901,7 @@ def tsg_seed() -> None:
     duplicated. Run this if a fresh database is missing TSG reference data
     or if the canonical descriptions/URLs need refreshing.
     """
-    create_schema()
+    create_schema("all")
     service = build_tsg_service()
     seeded = service.seed_defaults()
     typer.echo(f"Seeded {seeded} TSG reference records")
@@ -3828,7 +3923,7 @@ def wi_sync(
     `S1`, `S2`, `S3`, `S4`, `S5`, `S6`
     """
     logger.info("Starting WI sync for TSG %s", tsg)
-    create_schema()
+    create_schema("all")
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     canonical_tsg = _validate_tsg_short_name(tsg, tsg_service)
     service = build_wi_service()
@@ -3980,7 +4075,7 @@ def spec_sync(
     them. Existing stored ``pdf_url`` and ``crs`` values are preserved
     either way.
     """
-    create_schema()
+    create_schema("all")
     tsg_service = _ensure_tsg_ready(build_tsg_service())
     service = build_spec_service()
 
@@ -4264,6 +4359,378 @@ def spec_show(
         no_records_msg=f"No versions stored for {spec_id}",
         compact=resolved_compact,
     )
+
+
+VALID_TESTCASE_GROUPS: tuple[str, ...] = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
+
+TESTCASE_LIST_FIELDS: list[str] = [
+    "testcase_id",
+    "title",
+    "ats",
+    "feature",
+    "release",
+    "wis",
+    "spec",
+    "group",
+    "statuses",
+]
+
+TESTCASE_SHOW_HEADER_FIELDS: list[str] = [
+    "testcase_id",
+    "title",
+    "ats",
+    "feature",
+    "release",
+    "wis",
+    "spec",
+    "group",
+]
+
+TESTCASE_SHOW_STATUS_FIELDS: list[str] = ["path", "gcf_ptcrb", "ttcn_status"]
+
+
+def _validate_testcase_group(group: str) -> str:
+    """Return the canonical group name or raise typer.BadParameter."""
+    canonical = group.upper()
+    if canonical not in VALID_TESTCASE_GROUPS:
+        valid = ", ".join(VALID_TESTCASE_GROUPS)
+        raise typer.BadParameter(
+            f"Unknown testcase group '{group}'. Valid groups: {valid}."
+        )
+    return canonical
+
+
+def _format_testcase_statuses(statuses: list[TestCaseStatus]) -> str:
+    """Render status rows as compact ``path=gcf/ttcn;…`` pairs.
+
+    Rows arrive pre-sorted by ``PATH_RANK`` from the repository;
+    ``None`` values render as ``-`` so table/markdown cells stay
+    non-empty.
+    """
+    return ";".join(
+        f"{s.path}={s.gcf_ptcrb or '-'}/{s.ttcn_status or '-'}"
+        for s in statuses
+    )
+
+
+@testcase_app.command("sync")
+def testcase_sync(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Re-download and re-parse the latest status file even when already recorded.",
+    ),
+) -> None:
+    """Fetch the latest RAN5 TTCN status file and store its testcases.
+
+    Resolves the single latest ``TTCN CR Agreement Status`` zip in the
+    upstream ``History/`` folder, downloads it once, and upserts the
+    parsed testcase headers and status rows. Re-running is a no-op
+    until a new file appears unless ``--force`` is passed.
+    """
+    create_schema("all")
+    service = build_testcase_service()
+
+    from tqdm import tqdm
+
+    bar: tqdm | None = None
+
+    def _on_progress(event: str, data: dict) -> None:
+        nonlocal bar
+        if event == "listing":
+            bar = tqdm(total=3, desc="testcase", unit="step", dynamic_ncols=True)
+            bar.update(1)
+        elif event in ("downloaded", "parsed") and bar is not None:
+            bar.update(1)
+
+    outcome = service.sync(force=force, on_progress=_on_progress)
+    if bar is not None:
+        bar.close()
+    typer.echo(outcome.reason)
+
+
+@testcase_app.command("list")
+def testcase_list(
+    limit: int = typer.Option(50, min=1, max=500),
+    offset: int = typer.Option(
+        0, min=0, help="Number of rows to skip before applying --limit (pagination)."
+    ),
+    testcase: str | None = typer.Option(
+        None, "--testcase", help="Rich filter on testcase id."
+    ),
+    title: str | None = typer.Option(None, "--title", help="Rich filter on title."),
+    ats: str | None = typer.Option(None, "--ats", help="Rich filter on ATS."),
+    feature: str | None = typer.Option(
+        None, "--feature", help="Rich filter on feature."
+    ),
+    release: str | None = typer.Option(
+        None, "--release", help="Rich filter on release (e.g. Rel-17)."
+    ),
+    wis: str | None = typer.Option(
+        None, "--wis", help="Rich filter on related WIs (comma-joined)."
+    ),
+    spec: str | None = typer.Option(
+        None, "--spec", help="Rich filter on spec (e.g. 38.523-1)."
+    ),
+    group: str | None = typer.Option(
+        None,
+        "--group",
+        help="Exact group match: 5G, LTE, IMS, UTRA, POS, or MCX.",
+    ),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Rich filter on ttcn_status (matches any path).",
+    ),
+    gcf_status: str | None = typer.Option(
+        None,
+        "--gcf-status",
+        help="Rich filter on gcf_ptcrb (matches any path).",
+    ),
+    fields: str | None = typer.Option(
+        None,
+        help="Comma-separated list of fields to include (or 'all' for all fields).",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
+) -> None:
+    """List stored RAN5 testcases matching optional filters.
+
+    All filter flags accept the rich filter grammar (``null`` /
+    ``not-null`` / ``!pattern`` / plain LIKE with ``%`` and ``_``
+    wildcards). ``--status`` matches ``ttcn_status`` on any path and
+    ``--gcf-status`` matches ``gcf_ptcrb`` on any path. Each row
+    carries a nested ``statuses`` list of ``{path, gcf_ptcrb, ttcn_status}`` objects.
+    Output columns default to ``testcase_id``, ``title``, ``spec``,
+    ``group``, ``release``, and ``statuses`` from
+    ``settings.output.fields.testcase``.
+    """
+    if group is not None:
+        group = _validate_testcase_group(group)
+    logger.info(
+        "Listing %s testcases (offset=%s) testcase=%s group=%s spec=%s",
+        limit,
+        offset,
+        testcase,
+        group,
+        spec,
+    )
+    service = build_testcase_service()
+    records = service.list_recent(
+        limit=limit,
+        offset=offset,
+        testcase_id=testcase,
+        title=title,
+        ats=ats,
+        feature=feature,
+        release=release,
+        wis=wis,
+        spec=spec,
+        group=group,
+        status=status,
+        gcf_status=gcf_status,
+    )
+
+    settings = get_settings()
+    default_fields = settings.output.fields.testcase
+    out_fields = _parse_field_selection(fields, TESTCASE_LIST_FIELDS, default_fields)
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+
+    if fmt == "json":
+        payload = [
+            {
+                **{
+                    f: str(getattr(item.testcase, f, None) or "-")
+                    for f in out_fields
+                    if f != "statuses"
+                },
+                **(
+                    {
+                        "statuses": [
+                            {
+                                f: _serialise_show_value(getattr(s, f))
+                                for f in ("path", "gcf_ptcrb", "ttcn_status")
+                            }
+                            for s in item.statuses
+                        ]
+                    }
+                    if "statuses" in out_fields
+                    else {}
+                ),
+            }
+            for item in records
+        ]
+        stream, close_after = _open_output(output)
+        try:
+            if resolved_compact:
+                json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+            else:
+                json.dump(payload, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+        finally:
+            if close_after:
+                stream.close()
+        return
+
+    rows: list[list[str]] = []
+    for item in records:
+        assert isinstance(item, TestCaseWithStatuses)
+        cells: list[str] = []
+        for f in out_fields:
+            if f == "statuses":
+                cells.append(_format_testcase_statuses(item.statuses))
+            else:
+                cells.append(str(getattr(item.testcase, f, None) or "-"))
+        rows.append(cells)
+
+    _emit_records(
+        rows=rows,
+        fields=out_fields,
+        fmt=fmt,
+        output=output,
+        no_records_msg="No testcases found",
+        compact=resolved_compact,
+    )
+
+
+@testcase_app.command("show")
+def testcase_show(
+    testcase: str = typer.Option(
+        ...,
+        "--testcase",
+        help="Testcase id to render (e.g. TC_1).",
+    ),
+    group: str | None = typer.Option(
+        None,
+        "--group",
+        help="Exact group match: 5G, LTE, IMS, UTRA, POS, or MCX. "
+        "When omitted and the id exists in several groups, every "
+        "matching group is rendered.",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help=(
+            "Strip output formatting: JSON drops indent and operator-space; "
+            "Markdown drops GFM tables, bullets, and bold. No-op for "
+            "``table``. Defaults to ``output.compact`` in settings when "
+            "the flag is not passed."
+        ),
+    ),
+) -> None:
+    """Render one testcase with every stored status row.
+
+    Emits the header row first, a blank separator line, then one row
+    per stored ``(group, path, gcf_ptcrb, ttcn_status)`` status triple.
+    Without ``--group`` and several stored groups, every matching group
+    is rendered: JSON emits an array with one flat object per
+    ``(testcase_id, group)`` (a single-element array when exactly one
+    group matches); table/markdown emit one header block per group
+    separated by blank lines, then that group's status rows
+    (``path, gcf_ptcrb, ttcn_status``).
+    """
+    service = build_testcase_service()
+    if group is not None:
+        group = _validate_testcase_group(group)
+        detail = service.get(testcase, group)
+        if detail is None:
+            raise typer.BadParameter(f"Testcase {testcase!r} not found")
+        details = [detail]
+    else:
+        details = service.get_all(testcase)
+        if not details:
+            raise typer.BadParameter(f"Testcase {testcase!r} not found")
+    assert all(isinstance(detail, TestCaseDetail) for detail in details)
+
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+
+    def _detail_payload(detail: TestCaseDetail) -> dict:
+        return {
+            **{
+                f: _serialise_show_value(getattr(detail.testcase, f))
+                for f in TESTCASE_SHOW_HEADER_FIELDS
+            },
+            "statuses": [
+                {
+                    f: _serialise_show_value(getattr(status_row, f))
+                    for f in TESTCASE_SHOW_STATUS_FIELDS
+                }
+                for status_row in detail.statuses
+            ],
+        }
+
+    if fmt == "json":
+        _dump_show_json(
+            [_detail_payload(detail) for detail in details],
+            output,
+            compact=resolved_compact,
+        )
+        return
+
+    for index, detail in enumerate(details):
+        if index:
+            typer.echo("")
+        header_row = [
+            [str(getattr(detail.testcase, f) or "-") for f in TESTCASE_SHOW_HEADER_FIELDS]
+        ]
+        status_rows: list[list[str]] = []
+        for status_row in detail.statuses:
+            assert isinstance(status_row, TestCaseStatus)
+            status_rows.append(
+                [str(getattr(status_row, f) or "-") for f in TESTCASE_SHOW_STATUS_FIELDS]
+            )
+
+        _emit_records(
+            rows=header_row,
+            fields=TESTCASE_SHOW_HEADER_FIELDS,
+            fmt=fmt,
+            output=output,
+            no_records_msg=f"No testcase {testcase}",
+            compact=resolved_compact,
+        )
+        typer.echo("")
+        _emit_records(
+            rows=status_rows,
+            fields=TESTCASE_SHOW_STATUS_FIELDS,
+            fmt=fmt,
+            output=output,
+            no_records_msg=f"No statuses stored for {testcase}",
+            compact=resolved_compact,
+        )
 
 
 @config_app.command("init")

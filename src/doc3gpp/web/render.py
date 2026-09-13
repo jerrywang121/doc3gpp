@@ -267,6 +267,55 @@ def spec_version_rows(versions: list[Any], fields: list[str]) -> list[dict[str, 
     ]
 
 
+def testcase_rows(
+    rows: list[Any],
+    fields: list[str],
+) -> list[dict[str, Any]]:
+    """Build ``testcase list --format json``-shaped rows.
+
+    Each row is one flat object per ``(testcase_id, group)``: the
+    selected header fields plus a nested ``statuses`` list of
+    ``{path, gcf_ptcrb, ttcn_status}`` objects. Nested status objects
+    preserve nulls like the CLI's ``_serialise_show_value`` (a null
+    ``gcf_ptcrb`` stays ``None``, not ``"-"``), while every other
+    header field is coerced via :func:`_coerce_cell` exactly like the
+    CLI's ``testcase_list`` JSON cell loop (``None`` renders as
+    ``"-"``).
+    """
+    out: list[dict[str, Any]] = []
+    for item in rows:
+        row: dict[str, Any] = {}
+        for f in fields:
+            if f == "statuses":
+                row[f] = [
+                    {
+                        sf: getattr(s, sf, None)
+                        for sf in ("path", "gcf_ptcrb", "ttcn_status")
+                    }
+                    for s in item.statuses
+                ]
+            else:
+                row[f] = _coerce_cell(getattr(item.testcase, f, None))
+        out.append(row)
+    return out
+
+
+def testcase_status_rows(
+    statuses: list[Any],
+    fields: list[str],
+) -> list[dict[str, Any]]:
+    """Build testcase status rows for a testcase.
+
+    Null-preserving (matches the CLI's ``testcase show`` JSON, which
+    serialises status cells via ``_serialise_show_value``): a null
+    ``gcf_ptcrb`` / ``ttcn_status`` stays ``None``, not ``"-"``.
+    """
+    return [
+        {f: getattr(status, f, None) for f in fields}
+        for status in statuses
+    ]
+
+
 __all__ = [
     "TDOC_COLUMN_LABELS",
     "TDOC_HTML_DEFAULT_FIELDS",
@@ -274,6 +323,8 @@ __all__ = [
     "spec_rows",
     "spec_version_rows",
     "tdoc_rows",
+    "testcase_rows",
+    "testcase_status_rows",
     "to_jsonable",
     "tsg_rows",
     "wi_rows",

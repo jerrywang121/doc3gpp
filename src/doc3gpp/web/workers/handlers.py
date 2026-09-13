@@ -237,6 +237,40 @@ async def _sync_specs(
     }
 
 
+async def _sync_testcases(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    force = bool(job.params.get("force", False))
+    progress("syncing testcases")
+
+    def on_progress(event: str, data: Mapping[str, object]) -> None:
+        if event == "listing":
+            progress("fetched History listing")
+        elif event == "downloaded":
+            progress(f"downloaded {data.get('filename', '')}")
+        elif event == "parsed":
+            progress(f"parsed {data.get('testcases', 0)} testcases")
+
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    outcome = await asyncio.to_thread(
+        services.testcase.sync, force=force, on_progress=on_progress
+    )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    progress(outcome.reason, force=True)
+    return {
+        "status": outcome.status,
+        "reason": outcome.reason,
+        "synced_count": outcome.synced_count,
+    }
+
+
 async def _parse_tdocs(
     job: Job,
     services: ServiceContainer,
@@ -485,6 +519,7 @@ class JobHandlers:
         JobKind.SYNC_TDOCS: _sync_tdocs,
         JobKind.SYNC_TDOCS_ALL: _sync_tdocs_all,
         JobKind.SYNC_SPECS: _sync_specs,
+        JobKind.SYNC_TESTCASES: _sync_testcases,
         JobKind.PARSE_TDOCS: _parse_tdocs,
         JobKind.PARSE_TDOC_URL: _parse_tdoc_url,
         JobKind.REBUILD_SEARCH: _rebuild_search,

@@ -185,7 +185,7 @@ def test_tsg_seed_calls_service(monkeypatch) -> None:
             calls["upsert_many"] += len(tsgs)
             return len(tsgs)
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_FakeRepo())
     )

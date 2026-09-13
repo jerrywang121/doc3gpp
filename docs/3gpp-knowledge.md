@@ -438,6 +438,103 @@ The spec parser implementation is in
   table is the second `<table>` on the page; rows with fewer
   than 9 cells are skipped.
 
+## RAN5 TTCN status snapshots (testcases)
+
+RAN5 conformance testcase statuses are published as a single
+`*TTCN CR Agreement Status …​.zip*` per week under a `History/`
+folder. Each zip holds one `*.xlsx` workbook with one sheet per
+test group; `doc3gpp testcase sync` resolves the latest file,
+downloads it once, and upserts the headers + per-path statuses.
+
+### History URL
+
+```text
+https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/Reporting/TTCN_status/History/
+```
+
+`HISTORY_URL` is a module constant in
+`src/doc3gpp/scraping/testcase_source.py` (not a setting).
+
+### Filename grammar
+
+Weekly files look like `TTCN CR Agreement Status 2024-wk32.zip`;
+revised weeks carry a `_rev<N>` / `-r<N>` suffix (e.g.
+`TTCN CR Agreement Status 2019-wk15_rev1.zip` → revision 1).
+Ordering is the `(year, week, revision)` tuple — `select_latest`
+picks the max.
+
+Regex (`scraping/testcase_source.py`, case-insensitive):
+
+```text
+TTCN CR Agreement Status (\d{4})-wk(\d{2})(?:[_-]?(?:r|rev)(\d+))?\.zip$
+```
+
+Missing capture group 3 means revision `0`. Anchors whose decoded
+basename matches no grammar are ignored; when nothing matches,
+`select_latest` raises `TestcaseSourceNotFoundError`.
+
+### Sheet / column map
+
+The workbook holds up to six sheets (missing sheets warn + note,
+never raise):
+
+| Sheet | Group |
+| --- | --- |
+| `5G_TC_Status` | `5G` |
+| `LTE_TC_Status` | `LTE` |
+| `IMS_TC_Status` | `IMS` |
+| `UTRA_TC_Status` | `UTRA` |
+| `Positioning_TC_Status` | `POS` |
+| `MCX_TC_Status` | `MCX` |
+
+Header row is row 1. Common columns are located by normalised
+header (`tc`, `title`, `ats`, `feature`, `release`, `ran wic`,
+`part of`). Status pairs are fixed `(gcf_idx, ttcn_idx, path)`
+0-based column indices per group (`STATUS_PAIRS` in
+`parsers/testcase_parser.py`):
+
+| Group | Pairs |
+| --- | --- |
+| `5G` | `(2, 3, FR1)`, `(2, 15, FR2)`, `(2, 22, FR1+FR2)` (shared GCF col 2) |
+| `LTE` | `(2, 3, FDD)`, `(15, 16, TDD)` |
+| `IMS` / `UTRA` / `POS` | `(2, 3, default)` |
+| `MCX` | `(2, 3, IPCAN-4G)`, `(17, 18, EUTRA)`, `(26, 27, IPCAN-5G)`, `(37, 38, NR5GC)` |
+
+Each pair's row-1 headers are validated (`GCF/PTCRB`-like in the
+GCF slot, `TTCN-Status`-like in the TTCN slot); an invalid pair is
+skipped with a warning naming sheet + Excel letter + actual text.
+One `TestCaseStatus` is emitted per valid pair where at least one
+of the two cells is non-empty (both-`None` pairs are dropped; a TC
+with zero emitted pairs still yields its `TestCase` header).
+`extract_workbook` picks the lexically-first `*.xlsx` member
+(case-insensitive); zero members raise
+`TestcaseWorkbookNotFoundError`.
+
+### Fixed-spec rules
+
+- `5G` rows always store `spec = 38.523-1` (ignores `part of`).
+- `LTE` rows always store `spec = 36.523-1` (ignores `part of`).
+- Every other group stores the row's `part of` cell verbatim
+  (e.g. IMS `34.229-1`).
+
+### Path vocabulary notes
+
+- Stored MCX paths are the stripped vocab entries (`IPCAN-4G`,
+  `EUTRA`, `IPCAN-5G`, `NR5GC`) — a leading `MCX-` prefix on the
+  comparison value is stripped case-insensitively
+  (`_strip_mcx_prefix`); the raw header text is never stored.
+- The upstream request text lists the MCX paths as `IPCAN-4G,
+  EUTRA, IOCAN-5Gm, NR5GC` — `IOCAN-5Gm` is read as a typo for the
+  sheet's `MCX-IPCAN-5G` column and normalised to `IPCAN-5G`.
+- Single-path groups (`IMS`, `UTRA`, `POS`) store the literal path
+  `'default'` (never `NULL`): `path` is part of the composite PK
+  and the list JSON is a dict keyed by path.
+- The live workbook contains cross-sheet duplicate TC ids (e.g.
+  the same id on both the IMS and UTRA sheets). Identity is
+  `(testcase_id, group)`, so each sheet keeps its own header row
+  and its own group-scoped status rows — both groups coexist, and
+  `show`/`get` without a group return every matching group.
+
 ## Meeting FTP directory structure
 
 From a meeting `ftp_url`, the following directory layout is common:
@@ -613,6 +710,32 @@ upsert. Existing installs gain the table lazily: the
   - WI domain fields (`wi_id`, `acronym`, `release`, `name`,
     `tsg_short`, `updated_at`).
 
+- `src/doc3gpp/models/testcase.py`
+  - Testcase domain fields (`TestCase`, `TestCaseStatus`,
+    `TestCaseWithStatuses`, `TestCaseDetail`, `TestCaseSource`) and
+    typed errors (`TestcaseSourceNotFoundError`,
+    `TestcaseWorkbookNotFoundError`).
+
+- `src/doc3gpp/scraping/testcase_source.py`
+  - `HISTORY_URL` + `list_history_files` / `select_latest` /
+    `fetch_testcase_zip` for the RAN5 TTCN status History folder.
+
+- `src/doc3gpp/parsers/testcase_parser.py`
+  - `SHEET_TO_GROUP` / `PATH_RANK` / `STATUS_PAIRS` /
+    `FIXED_SPEC` + `extract_workbook` / `parse_testcase_workbook`
+    (header-validated parse with per-`(testcase_id, group)` identity).
+
+- `src/doc3gpp/services/testcase_service.py`
+  - Orchestrates testcase sync (fetch + parse + upsert with the
+    file-identity skip rule) and exposes the SQL-`LIKE`-filtered
+    list query used by the CLI and SDK.
+
+- `src/doc3gpp/storage/repositories/testcase_sql.py`
+  - SQLAlchemy implementation that upserts into `testcases` keyed by
+    `(testcase_id, group)`, replaces `testcase_status` rows per
+    `(testcase_id, group)` pair, and keeps
+    the `testcase_sources` sync ledger.
+
 - `src/doc3gpp/models/tdoc_cr.py`
   - Domain dataclasses for the CR extraction pipeline: slim
     `TDocCRDetails` (cover-page only), `TDocCRTTCNDetails` (TTCN
@@ -686,12 +809,27 @@ upsert. Existing installs gain the table lazily: the
 - `name`
 - `tsg_short`
 
+### Testcases
+
+- `(testcase_id, group)` composite identity (one header row per
+  group, so the same id may exist in several groups)
+- `title`
+- `ats`
+- `feature`
+- `release`
+- `wis`
+- `spec`
+- `group`
+- per-`(group, path)` `testcase_status` rows (`group`, `path`,
+  `gcf_ptcrb`, `ttcn_status`)
+
 ## Notes
 
 - The current implementation supports meeting report scraping, TDoc list sync
   from the 3GPP portal `GenerateDocumentList.aspx` endpoint, auxiliary TDoc
   file discovery on the meeting FTP folders, CR cover-page extraction for
-  synced CR TDocs, and WI DynaReport sync.
+  synced CR TDocs, WI DynaReport sync, and RAN5 testcase status snapshots
+  (`testcase sync` → latest `TTCN CR Agreement Status` History zip).
 - `doc3gpp tdoc sync` uses the stored `Meeting.meeting_id` as the portal
   `meetingId` parameter and falls back to the configured
   `sync.tdoc_list_url_template` when the default endpoint changes.

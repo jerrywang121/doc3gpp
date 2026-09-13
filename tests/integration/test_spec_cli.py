@@ -534,7 +534,7 @@ def test_spec_sync_per_version_details_flag(monkeypatch) -> None:
     ``per_version_details=True``; the default is ``False``."""
     from doc3gpp.cli import app
 
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda: None)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "doc3gpp.cli._ensure_tsg_ready",
         lambda svc: type("_T", (), {"is_known_short_name": staticmethod(lambda s: True)})(),

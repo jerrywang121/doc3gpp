@@ -68,27 +68,49 @@ auto-sync.
 
 ## db Commands
 
+Two databases, one flag. Testcase tables (`testcases`,
+`testcase_status`, `testcase_sources`) live in a separate sqlite file
+from the main corpus: `testcase_database_url` (TOML key, or
+`DOC3GPP_TESTCASE_DATABASE_URL` env). When unset (the default) it is
+derived as a sibling of `database_url` with `_testcase` suffixed to
+the stem (`doc3gpp.db` → `doc3gpp_testcase.db`). `:memory:` main URLs
+share a memory DB; derivation from a non-sqlite main URL fails unless
+`testcase_database_url` is set explicitly.
+
+Each `db` command takes `--scope main|testcase|all` (default `all`).
+
 ### doc3gpp db check
 
 Purpose:
 
-- Validate connectivity to the configured database backend.
+- Validate connectivity to the configured database backend(s).
 
 Behavior:
 
-- Creates an engine from DOC3GPP_DATABASE_URL.
-- Executes SELECT 1.
-- Prints the active database URL when successful.
+- `--scope` selects which engine(s) to connect to AND which URL(s) to
+  print: `main` prints only the main URL, `testcase` only the
+  testcase URL, `all` (default) prints both.
+- Creates an engine from DOC3GPP_DATABASE_URL (main scope) and/or the
+  resolved testcase URL (testcase scope).
+- Executes SELECT 1 per selected engine.
+- Prints the active database URL(s) when successful.
+
+Examples:
+
+```bash
+doc3gpp db check --scope testcase   # connectivity for the testcase file only
+```
 
 ### doc3gpp db init
 
 Purpose:
 
-- Initialize schema for current backend and seed the TSG reference table.
+- Initialize schema for current backend(s) and seed the TSG reference table.
 
 Behavior:
 
-- Calls create_schema.
+- Calls `create_schema(scope)` — only the selected scope's schema is
+  created (`tsgs` is seeded when main is in scope).
 - Creates currently defined ORM tables if they do not exist.
 - Seeds the `tsgs` table with the canonical 3GPP TSG list (19 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
@@ -97,28 +119,46 @@ Behavior:
 
 Purpose:
 
-- Recover from schema drift by wiping the SQLite database file and
-  recreating it from scratch. Use this after an ORM change has left the
+- Recover from schema drift by wiping the SQLite database file(s) and
+  recreating from scratch. Use this after an ORM change has left the
   live schema out of sync — Alembic is not wired up in this project, so
   manual migrations are the norm and a mismatched schema can leave the
-  DB unusable. **Destructive: every row in every table is wiped.**
+  DB unusable. **Destructive: every row in every table of the selected
+  scope is wiped.**
 
 Options:
 
+- `--scope main|testcase|all` (default `all`): which database(s) to wipe.
 - `--yes`, `-y`: skip the interactive confirmation prompt.
 
 Behavior:
 
-- Refuses to run on non-SQLite URLs.
+- Refuses to run unless every selected scope is a SQLite URL (the
+  whole reset is rejected before anything is deleted when any
+  selected scope is non-sqlite).
 - For file-based SQLite URLs (`sqlite:///...` /
-  `sqlite+pysqlite:///...`): deletes the on-disk `.db` file plus any
-  WAL / SHM / journal sidecars, then re-runs `create_schema` +
-  `seed_defaults`.
+  `sqlite+pysqlite:///...`): deletes the selected on-disk `.db`
+  file(s) plus any WAL / SHM / journal sidecars, then re-runs
+  `create_schema(scope)` + `seed_defaults` (seed only when main is in
+  scope).
 - For in-memory SQLite (`sqlite:///:memory:`): skips the delete step
-  (there is nothing to delete) and re-runs `create_schema` +
-  `seed_defaults`.
-- Clears the cached SQLAlchemy engine so the subsequent `create_schema`
-  opens a fresh connection to the (now empty) file.
+  (there is nothing to delete) and re-runs `create_schema(scope)` +
+  `seed_defaults` (seed only when main is in scope).
+- Clears both cached SQLAlchemy engines (main + testcase) so the
+  subsequent `create_schema` opens fresh connections to the (now
+  empty) file(s).
+
+Examples:
+
+```bash
+# Wipe only the testcase corpus; main data untouched.
+doc3gpp db reset --scope testcase --yes
+```
+
+Upgrade note: pre-existing main DB files keep orphan
+`testcases`/`testcase_status`/`testcase_sources` tables after the
+split (harmless — nothing reads them). Reclaim the space with
+`db reset --scope main` (destructive!) or leave them.
 
 ## meeting Commands
 
@@ -1386,6 +1426,200 @@ doc3gpp tdoc parse --from-url \
 #       doc3gpp tdoc sync --meeting-id <meeting_id_from_previous_step>
 ```
 
+## testcase Commands
+
+The `testcase` sub-app exposes RAN5 conformance testcase status
+snapshots. Each header row is keyed by `(testcase_id, group)`, so the
+same TC id may exist in several groups (e.g. IMS and UTRA) — each with
+its own `testcase_status` rows per `(testcase_id, group, path)` triple;
+single-path
+groups (`IMS`, `UTRA`, `POS`) store the literal path `'default'`
+(`path` is part of the composite PK, so a `NULL` path would not
+deduplicate cleanly; the list/show JSON nests statuses as a list of
+`{path, gcf_ptcrb, ttcn_status}` objects with `null` preserved).
+
+`testcase sync` is the only mutating entry point. After the first
+sync `testcase list` and `testcase show` read cached rows from the
+database — no network traffic.
+
+### doc3gpp testcase sync
+
+Purpose:
+
+- Resolve the single latest `TTCN CR Agreement Status` zip in the
+  upstream `History/` folder, download it once, and upsert the
+  parsed testcase headers and status rows.
+
+Options (verified against `doc3gpp testcase sync --help`):
+
+- `--force`, `-f`: re-download and re-parse the latest status file
+  even when already recorded.
+
+Behavior:
+
+- `list_history_files` → `select_latest` (max `(year, week,
+  revision)`) → `TestCaseRepository.get_source(filename)`; when the
+  row carries `parsed_at` and `--force` is absent the run is a
+  `skipped` no-op (file-identity skip rule; no interval, no
+  bootstrap seed).
+- Otherwise `fetch_testcase_zip` → `record_download` (BEFORE
+  parsing) → `extract_workbook` → `parse_testcase_workbook` →
+  `upsert_many` → per-TC `replace_statuses` → `record_parsed`.
+- Progress events mirror `spec sync` via tqdm (`listing →
+  downloaded → parsed`, 3 steps) and the CLI echoes
+  `outcome.reason`.
+
+Examples:
+
+```bash
+# Sync the latest status file (no-op when already parsed).
+doc3gpp testcase sync
+
+# Re-download and re-parse even when already recorded.
+doc3gpp testcase sync --force
+```
+
+### doc3gpp testcase list
+
+Purpose:
+
+- List stored RAN5 testcases matching optional filters.
+
+Options (verified against `doc3gpp testcase list --help`):
+
+- `--limit INTEGER RANGE [1<=x<=500]`: maximum rows to return.
+  default: 50.
+- `--offset INTEGER RANGE [x>=0]`: rows to skip before applying
+  `--limit` (pagination). default: 0.
+- `--testcase TEXT`: rich filter on testcase id.
+- `--title TEXT`: rich filter on title.
+- `--ats TEXT`: rich filter on ATS.
+- `--feature TEXT`: rich filter on feature.
+- `--release TEXT`: rich filter on release (e.g. `Rel-17`).
+- `--wis TEXT`: rich filter on related WIs (comma-joined).
+- `--spec TEXT`: rich filter on spec (e.g. `38.523-1`).
+- `--group TEXT`: exact group match: `5G`, `LTE`, `IMS`, `UTRA`,
+  `POS`, or `MCX`. Unknown values raise `typer.BadParameter`
+  listing the valid groups.
+- `--status TEXT`: rich filter on `ttcn_status` (matches any path).
+- `--gcf-status TEXT`: rich filter on `gcf_ptcrb` (matches any path).
+- `--fields TEXT`: comma-separated list of fields to include (or
+  `all` for all fields). Selectable from all 9 list fields via
+  `_parse_field_selection`.
+- `--format TEXT`: output format: table (default, tab-separated),
+  json, or markdown.
+- `--output, -o TEXT`: write results to FILE instead of stdout.
+  Pass `-` for stdout.
+- `--compact`: strip output formatting (see `Compact output`
+  below). No-op for `table`.
+
+Default output fields (configurable via
+`[output] fields.testcase` in `doc3gpp.toml`):
+
+- `testcase_id`, `title`, `spec`, `group`, `release`, `statuses`
+
+Filter grammar: every filter flag except `--group` accepts the
+rich filter grammar used by the other list commands — `null` /
+`not-null` / `!pattern` / plain LIKE with `%` and `_` wildcards.
+`--status` / `--gcf-status` are any-path `EXISTS` predicates on
+`testcase_status.ttcn_status` / `testcase_status.gcf_ptcrb`
+(a testcase matches when ANY of its status rows matches).
+
+`statuses` nested list: the JSON payload keeps `statuses` as a
+nested list of `{path, gcf_ptcrb, ttcn_status}` objects
+(field-selectable via `--fields`; `None` values stay `null` in
+JSON). It is not pushed through `_emit_records` (whose cells are
+strings). `table` / `markdown` stringify it as `path=gcf/ttcn;…`
+pairs sorted by `PATH_RANK` (`-` for `None` values, so cells stay
+non-empty). The same nested shape is what `GET /testcases` and
+the MCP `list_testcases` tool emit (byte-identical).
+
+```json
+[{"testcase_id": "20.7", "title": "IPsec tunnel ...", "spec": "36.523-1",
+  "group": "LTE", "release": "Rel-18",
+  "statuses": [{"path": "FDD", "gcf_ptcrb": null,
+                "ttcn_status": "not available"}]}]
+```
+
+Examples:
+
+```bash
+# Default listing (testcase_id, title, spec, group, release, statuses).
+doc3gpp testcase list
+
+# Just the 5G testcases.
+doc3gpp testcase list --group 5G
+
+# Testcases whose ttcn_status is Approved on any path.
+doc3gpp testcase list --status Approved
+
+# Dump every R5-group testcase to JSON for a downstream report.
+doc3gpp testcase list --group 5G --spec '38.523-1' --format json -o testcases.json
+```
+
+### doc3gpp testcase show
+
+Purpose:
+
+- Render one testcase id with every stored status row. Without
+  `--group` every stored group is rendered; with `--group` only
+  that `(testcase_id, group)` row is rendered.
+
+Options (verified against `doc3gpp testcase show --help`):
+
+- `--testcase TEXT` (required): testcase id to render (e.g.
+  `TC_1`).
+- `--group TEXT`: exact group match: `5G`, `LTE`, `IMS`, `UTRA`,
+  `POS`, or `MCX`. Unknown values raise `typer.BadParameter`
+  listing the valid groups. When omitted and the id exists in
+  several groups, every matching group is rendered.
+- `--format TEXT`: output format: table (default, tab-separated),
+  json, or markdown.
+- `--output, -o TEXT`: write results to FILE instead of stdout.
+  Pass `-` for stdout.
+- `--compact`: strip output formatting (see `Compact output`
+  below). No-op for `table`.
+
+Behavior:
+
+- With `--group`: header via `TestCaseRepository.get(id, group)` +
+  status rows via `list_statuses(id, group)` (sorted by `PATH_RANK`).
+  Without `--group`: `TestCaseService.get_all(id)` (headers via a
+  `limit=500` exact-id `list` filter + per-header `list_statuses`).
+- Table/markdown: one header block + status block per group,
+  separated by blank lines, mirroring `spec show`. The status
+  block columns are `path, gcf_ptcrb, ttcn_status` (no `group` —
+  it is on the parent header block). Header cells render `None`
+  as `-`; JSON preserves `null`.
+- JSON always emits an array with one flat object per
+  `(testcase_id, group)`: all 8 header fields inline
+  (`testcase_id`, `title`, `ats`, `feature`, `release`, `wis`,
+  `spec`, `group`) plus a nested `statuses` list of
+  `{path, gcf_ptcrb, ttcn_status}` objects (single-element array
+  when one group matches). Status rows carry no `group`.
+
+```json
+[{"testcase_id": "20.7", "title": "IPsec tunnel ...", "ats": null,
+  "feature": "MPSoWLAN", "release": "Rel-18", "wis": "...",
+  "spec": "36.523-1", "group": "LTE",
+  "statuses": [{"path": "FDD", "gcf_ptcrb": null,
+                "ttcn_status": "not available"}]}]
+```
+- Miss raises `typer.BadParameter(f"Testcase {id!r} not found")`.
+
+Examples:
+
+```bash
+# Quick console view of one testcase (all stored groups).
+doc3gpp testcase show --testcase TC_1
+
+# One group only.
+doc3gpp testcase show --testcase TC_1 --group 5G
+
+# JSON export for downstream tooling.
+doc3gpp testcase show --testcase TC_1 --format json -o tc_1.json
+```
+
 ## cache Commands
 
 The `cache` sub-app exposes the on-disk cache that backs the TDoc
@@ -1995,7 +2229,7 @@ doc3gpp spec show 36.579-5 --format json --output 36_579-5.json
 
 ## Common list output options
 
-The `meeting list`, `tdoc list`, `tsg list`, and `wi list` commands all
+The `meeting list`, `tdoc list`, `tsg list`, `testcase list`, and `wi list` commands all
 accept the same two output-routing flags in addition to their
 command-specific filters:
 
@@ -2306,7 +2540,8 @@ doc3gpp server uninstall systemd
 ```bash
 doc3gpp db init
 doc3gpp db check
-doc3gpp db reset --yes           # destructive: wipe + recreate SQLite schema
+doc3gpp db reset --yes           # destructive: wipe + recreate SQLite schema (both scopes)
+doc3gpp db reset --scope testcase --yes   # wipe only the testcase corpus
 doc3gpp tsg list
 doc3gpp meeting sync --tsg r5
 doc3gpp meeting list --limit 20

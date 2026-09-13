@@ -170,6 +170,7 @@ doc3gpp db reset --yes         # destructive: wipe + recreate SQLite schema
 doc3gpp tsg list               # show the canonical 3GPP TSG list
 doc3gpp tsg show --tsg r5      # show a single TSG record
 doc3gpp tsg seed               # re-seed the reference table
+doc3gpp tsg schema --format json  # describe every tsgs column (meaning, format, values)
 ```
 
 ### `meeting` — 3GPP meeting calendar
@@ -178,6 +179,7 @@ doc3gpp tsg seed               # re-seed the reference table
 doc3gpp meeting sync --tsg r5              # scrape DynaReport; --tsg validated against tsgs
 doc3gpp meeting list --limit 20
 doc3gpp meeting list --tdoc R5-260013      # find the meeting whose start_doc/end_doc brackets a TDoc
+doc3gpp meeting schema --format json       # describe every meetings column
 ```
 
 ### `tdoc` — list, parse, show
@@ -214,6 +216,9 @@ doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
 doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # converted .docx markdown
 doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
+
+# schema — describe every column of the six tdoc tables (70 rows, no filters)
+doc3gpp tdoc schema --format json
 ```
 
 ### `wi` — Work items
@@ -222,6 +227,7 @@ doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format 
 doc3gpp wi sync --tsg r5                       # scrape the WI DynaReport page for R5
 doc3gpp wi list --limit 10                     # default fields: wi_id, acronym, release, name
 doc3gpp wi list --tsg R5 --release "Rel-19" --limit 100
+doc3gpp wi schema --format json                # describe every wis column
 ```
 
 ### `spec` — 3GPP specifications (TS / TR)
@@ -243,6 +249,9 @@ doc3gpp spec list --tsg R5 --format json -o r5_specs.json
 # show — dotted spec id; renders header + version rows
 doc3gpp spec show 36.579-5
 doc3gpp spec show 36.579-5 --format json -o 36_579-5.json
+
+# schema — describe every column of specs + spec_versions (20 rows, no filters)
+doc3gpp spec schema --format json
 ```
 
 `spec sync` honours `sync.spec_sync_interval` (default `24h`) on a
@@ -270,6 +279,9 @@ doc3gpp testcase list --status Approved --format json -o testcases.json
 # show — one testcase id; renders header + per-path status rows
 doc3gpp testcase show --testcase TC_1
 doc3gpp testcase show --testcase TC_1 --format json -o tc_1.json
+
+# schema — describe every column of the three testcase tables (21 rows, no filters)
+doc3gpp testcase schema --format json
 ```
 
 `testcase list --status` / `--gcf-status` match `ttcn_status` /
@@ -443,8 +455,10 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
 - **HTML UI** — browse meetings, TDocs, TSGs, WIs, and search results.
 - **JSON API** — every read route accepts `?format=json`, byte-for-byte
   identical to the MCP tools.
-- **MCP** — `http://127.0.0.1:8765/mcp` exposes 27 tools covering the
-  same reads plus job lifecycle. The transport is set under `[mcp]` in the
+- **MCP** — `http://127.0.0.1:8765/mcp` exposes 33 tools covering the
+  same reads (including the six `get_*_schema` field-descriptor tools,
+  byte-identical to the `GET /<resources>/schema?format=json` routes)
+  plus job lifecycle. The transport is set under `[mcp]` in the
   TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
   (legacy two-endpoint `GET /mcp/sse` + `POST /mcp/messages/`). Browser
   clients must have their origin in `[mcp] allowed_origins` (defaults to

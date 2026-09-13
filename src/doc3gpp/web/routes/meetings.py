@@ -22,6 +22,7 @@ from fastapi import Query, Request
 from fastapi.responses import JSONResponse
 
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.models.schema_info import RESOURCE_SCHEMAS, schema_payload
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.deps import get_meeting_service, get_pending_jobs
@@ -127,6 +128,38 @@ async def list_meetings(
                 "tdoc": tdoc or "",
                 "limit": parsed_limit,
             },
+        },
+    )
+
+
+@router.get("/schema", include_in_schema=False)
+async def meeting_schema(
+    request: Request,
+    format: str | None = Query(default=None, alias="format"),
+    pending_jobs: int = Depends(get_pending_jobs),
+) -> Any:
+    """Render ``schema.html`` or the CLI-identical JSON field descriptors.
+
+    ``?format=json`` returns the same payload as
+    ``doc3gpp meeting schema --format json``: a bare array of
+    ``{table, field, type, nullable, description, values}`` rows from
+    :func:`doc3gpp.models.schema_info.schema_payload`. No DB access.
+    """
+    if format == "json":
+        return JSONResponse(content=schema_payload("meeting"))
+    tables = RESOURCE_SCHEMAS["meeting"]
+    template_name = (
+        "partials/schema_results.html" if is_htmx_request(request) else "schema.html"
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name=template_name,
+        context={
+            "active_nav": "meetings",
+            "resource": "meeting",
+            "tables": tables,
+            "total": sum(len(t.fields) for t in tables),
+            "pending_jobs": pending_jobs,
         },
     )
 

@@ -180,7 +180,13 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tdocs/{id}/download` | Download the cached source zip (404 `cache_miss` with a hint when unparsed). |
 | GET | `/tdocs/by-url` | URL-anchored TDoc show (`?ftp_url=<url>`; HTML or JSON). 404 when the URL matches no row in any of the six URL-keyed tables. |
 | GET | `/tsgs` | List TSGs. |
+| GET | `/tsgs/schema` | TSG field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp tsg schema --format json` payload verbatim). No DB access. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
+| GET | `/meetings/schema` | Meeting field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp meeting schema --format json` payload verbatim). No DB access. |
+| GET | `/tdocs/schema` | TDoc field descriptors across the six `tdoc` tables (HTML grouped by table; `?format=json` is the `doc3gpp tdoc schema --format json` payload verbatim). No DB access. |
+| GET | `/wis/schema` | WI field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp wi schema --format json` payload verbatim). No DB access. |
+| GET | `/specs/schema` | Spec field descriptors across `specs` + `spec_versions` (HTML grouped by table; `?format=json` is the `doc3gpp spec schema --format json` payload verbatim). No DB access. |
+| GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
 | GET | `/wis` | List WIs. |
 | GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
 | GET | `/testcases/{testcase_id}` | Testcase detail (HTML or JSON; optional `?group=` to scope to one `(id, group)` row — unknown group → 400 `invalid_filter`). Without `?group=` every stored group returns: JSON is an array of flat per-`(id, group)` objects with nested `statuses` (single-element when one group matches; status rows carry `{path, gcf_ptcrb, ttcn_status}` with no `group`); HTML renders one section per group. Unknown id → 404 `testcase_not_found`. |
@@ -203,6 +209,13 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.
+
+The six `/<resources>/schema` routes render the shared `schema.html`
+template by default (one section per DB table: field, type,
+nullable as `yes`/`no`, description, possible values) and return the
+CLI JSON payload verbatim at `?format=json`; an HTMX request swaps
+only the `partials/schema_results.html` fragment (`#results`). No DB
+access on any schema route.
 
 The meeting list shows a `↻` sync symbol per meeting coloured by TDoc-list
 sync freshness — green (`≤ 24h` ago), orange (`> 24h` ago), grey (never
@@ -375,10 +388,12 @@ log for an `Invalid Origin header` warning before touching the transport.
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 27 tools:
+It exposes 33 tools:
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
-`get_spec`, `list_testcases`, `get_testcase`, `search_tdocs`, `semantic_search_tdocs`.
+`get_spec`, `list_testcases`, `get_testcase`, `get_tsg_schema`,
+`get_meeting_schema`, `get_tdoc_schema`, `get_wi_schema`,
+`get_spec_schema`, `get_testcase_schema`, `search_tdocs`, `semantic_search_tdocs`.
 
 `get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
 `ftp_url` (a 3GPP FTP URL or relative path); when both are supplied
@@ -412,6 +427,16 @@ group simply misses and raises `TestcaseNotFoundError`).
 `sync_testcases(force=False)` enqueues `JobKind.SYNC_TESTCASES` with
 `{"force": force}` and returns the `{job_id,status,message,links{self,events}}`
 envelope.
+
+The six schema tools — `get_tsg_schema`, `get_meeting_schema`,
+`get_tdoc_schema`, `get_wi_schema`, `get_spec_schema`,
+`get_testcase_schema` — take no params and return
+`_to_json(schema_payload(...))` for their resource: a bare array of
+`{table, field, type, nullable, description, values}` rows
+(`nullable` a JSON bool, `values` comma-joined or `"-"`),
+byte-identical to the matching `GET /<resources>/schema?format=json`
+route and the matching `doc3gpp <resource> schema --format json`
+output.
 
 Every read tool returns exactly the bytes of the equivalent
 `?format=json` HTTP route. `search_tdocs` normalises the query into a

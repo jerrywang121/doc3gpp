@@ -547,6 +547,49 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             for item in details
         ])
 
+    # ---- Schema ---------------------------------------------------
+    @server.tool(name="get_tsg_schema", description="Describe every column of the tsgs table: meaning, format, and possible values for categorical fields.")
+    @_mcp_error_guard
+    def get_tsg_schema() -> str:
+        from doc3gpp.models.schema_info import schema_payload
+
+        return _to_json(schema_payload("tsg"))
+
+    @server.tool(name="get_meeting_schema", description="Describe every column of the meetings table: meaning, format, and possible values for categorical fields.")
+    @_mcp_error_guard
+    def get_meeting_schema() -> str:
+        from doc3gpp.models.schema_info import schema_payload
+
+        return _to_json(schema_payload("meeting"))
+
+    @server.tool(name="get_tdoc_schema", description="Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files and tdoc_extracts tables.")
+    @_mcp_error_guard
+    def get_tdoc_schema() -> str:
+        from doc3gpp.models.schema_info import schema_payload
+
+        return _to_json(schema_payload("tdoc"))
+
+    @server.tool(name="get_wi_schema", description="Describe every column of the wis table: meaning, format, and possible values for categorical fields.")
+    @_mcp_error_guard
+    def get_wi_schema() -> str:
+        from doc3gpp.models.schema_info import schema_payload
+
+        return _to_json(schema_payload("wi"))
+
+    @server.tool(name="get_spec_schema", description="Describe every column of the specs and spec_versions tables.")
+    @_mcp_error_guard
+    def get_spec_schema() -> str:
+        from doc3gpp.models.schema_info import schema_payload
+
+        return _to_json(schema_payload("spec"))
+
+    @server.tool(name="get_testcase_schema", description="Describe every column of the testcases, testcase_status and testcase_sources tables (separate testcase sqlite file).")
+    @_mcp_error_guard
+    def get_testcase_schema() -> str:
+        from doc3gpp.models.schema_info import schema_payload
+
+        return _to_json(schema_payload("testcase"))
+
     # ---- Search ---------------------------------------------------
     @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard

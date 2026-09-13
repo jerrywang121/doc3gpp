@@ -307,6 +307,39 @@ doc3gpp meeting list --fields all
 doc3gpp meeting list --tdoc R5-260013
 ```
 
+### doc3gpp meeting schema
+
+Purpose:
+
+- Describe every field of the `meetings` table (11 rows): meaning,
+  format, and possible values for categorical dimensions.
+
+Options:
+
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o: write results to FILE instead of stdout. Pass `-`
+  for stdout.
+- --compact: strip output formatting (see `Compact output` below).
+  No-op for `table`.
+
+Behavior:
+
+- No filters, no DB reads — the whole descriptor fits in one
+  response and is deterministic on an empty database.
+- Flat row shape shared by all formats: `table`, `field`, `type`,
+  `nullable`, `description`, `values`.
+- `nullable` renders `yes`/`no` in table/markdown and stays a JSON
+  bool in `json`.
+- `values` is a comma-joined string of the fixed set (e.g. the 19
+  TSG short names on `meetings.tsg`); `"-"` when the field is
+  free-form.
+
+Examples:
+
+```bash
+doc3gpp meeting schema --format json
+```
+
 ## tdoc Commands
 
 ### doc3gpp tdoc sync
@@ -508,6 +541,42 @@ doc3gpp tdoc list --meeting-id 85434
 
 ```bash
 doc3gpp tdoc list --fields tdoc_id,title,status
+```
+
+### doc3gpp tdoc schema
+
+Purpose:
+
+- Describe every field of the six `tdoc` tables (70 rows):
+  `tdocs` (24), `tdoc_cr_cover_page` (20),
+  `tdoc_cr_ttcn_details` (10), `tdoc_cr_change_details` (4),
+  `tdoc_files` (6), `tdoc_extracts` (6).
+
+Options:
+
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o: write results to FILE instead of stdout. Pass `-`
+  for stdout.
+- --compact: strip output formatting (see `Compact output` below).
+  No-op for `table`.
+
+Behavior:
+
+- No filters, no DB reads — the whole descriptor fits in one
+  response and is deterministic on an empty database.
+- Flat row shape shared by all formats: `table`, `field`, `type`,
+  `nullable`, `description`, `values`.
+- `nullable` renders `yes`/`no` in table/markdown and stays a JSON
+  bool in `json`.
+- `values` is a comma-joined string of the fixed set (`cr_cat`
+  `F,B,A,C,D` on the cover page; `tdoc_files.type`
+  `revision,review,support`); `"-"` when the field is free-form
+  (e.g. `tdocs.status`, `tdocs.type`).
+
+Examples:
+
+```bash
+doc3gpp tdoc schema --format json
 ```
 
 ### doc3gpp tdoc show
@@ -1620,6 +1689,42 @@ doc3gpp testcase show --testcase TC_1 --group 5G
 doc3gpp testcase show --testcase TC_1 --format json -o tc_1.json
 ```
 
+### doc3gpp testcase schema
+
+Purpose:
+
+- Describe every field of the three `testcase` tables (21 rows):
+  `testcases` (8), `testcase_status` (5), `testcase_sources` (8).
+  The tables live in the separate testcase sqlite file
+  (`<main-stem>_testcase.db`).
+
+Options:
+
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o: write results to FILE instead of stdout. Pass `-`
+  for stdout.
+- --compact: strip output formatting (see `Compact output`
+  below). No-op for `table`.
+
+Behavior:
+
+- No filters, no DB reads — the whole descriptor fits in one
+  response and is deterministic on an empty database.
+- Flat row shape shared by all formats: `table`, `field`, `type`,
+  `nullable`, `description`, `values`.
+- `nullable` renders `yes`/`no` in table/markdown and stays a JSON
+  bool in `json`.
+    - `values` is a comma-joined string of the fixed set (`group`
+      `5G,LTE,IMS,UTRA,POS,MCX`; `path` with the 10 ranked paths —
+      the literal `'default'` covers single-path groups); `"-"` when
+      the field is free-form.
+
+Examples:
+
+```bash
+doc3gpp testcase schema --format json
+```
+
 ## cache Commands
 
 The `cache` sub-app exposes the on-disk cache that backs the TDoc
@@ -1964,6 +2069,40 @@ Examples:
 doc3gpp tsg seed
 ```
 
+### doc3gpp tsg schema
+
+Purpose:
+
+- Describe every field of the `tsgs` table (5 rows): meaning,
+  format, and possible values for categorical dimensions.
+
+Options:
+
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o: write results to FILE instead of stdout. Pass `-`
+  for stdout.
+- --compact: strip output formatting (see `Compact output` below).
+  No-op for `table`.
+
+Behavior:
+
+- No filters, no DB reads — the whole descriptor fits in one
+  response and is deterministic on an empty database.
+- Flat row shape shared by all formats: `table`, `field`, `type`,
+  `nullable`, `description`, `values`.
+- `nullable` renders `yes`/`no` in table/markdown and stays a JSON
+  bool in `json`.
+- `values` is a comma-joined string of the fixed set (`short_name`
+  carries all 19 canonical codes
+  `RP,R1,R2,R3,R4,R5,RT,SP,S1,S2,S3,S4,S5,S6,CP,C1,C3,C4,C6`);
+  `"-"` when the field is free-form.
+
+Examples:
+
+```bash
+doc3gpp tsg schema --format json
+```
+
 ## wi Commands
 
 The `wi` sub-app exposes the 3GPP Work Item (WI) reference table. WI rows
@@ -2047,6 +2186,39 @@ doc3gpp wi list --acronym "%UEConTest%" --limit 50
 
 # Markdown export of all RAN WG5 WIs.
 doc3gpp wi list --tsg R5 --format markdown -o r5_wis.md
+```
+
+### doc3gpp wi schema
+
+Purpose:
+
+- Describe every field of the `wis` table (5 rows): meaning,
+  format, and possible values for categorical dimensions.
+
+Options:
+
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o: write results to FILE instead of stdout. Pass `-`
+  for stdout.
+- --compact: strip output formatting (see `Compact output` below).
+  No-op for `table`.
+
+Behavior:
+
+- No filters, no DB reads — the whole descriptor fits in one
+  response and is deterministic on an empty database.
+- Flat row shape shared by all formats: `table`, `field`, `type`,
+  `nullable`, `description`, `values`.
+- `nullable` renders `yes`/`no` in table/markdown and stays a JSON
+  bool in `json`.
+- `values` is a comma-joined string of the fixed set (`tsg_short`
+  carries the 19 TSG short names); `"-"` when the field is
+  free-form (e.g. `release`, scraped verbatim).
+
+Examples:
+
+```bash
+doc3gpp wi schema --format json
 ```
 
 ## spec Commands
@@ -2225,6 +2397,41 @@ doc3gpp spec show 36.579-5
 
 # JSON export of every version row for downstream tooling.
 doc3gpp spec show 36.579-5 --format json --output 36_579-5.json
+```
+
+### doc3gpp spec schema
+
+Purpose:
+
+- Describe every field of the two `spec` tables (20 rows):
+  `specs` (10) and `spec_versions` (10).
+
+Options:
+
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o: write results to FILE instead of stdout. Pass `-`
+  for stdout.
+- --compact: strip output formatting (see `Compact output` below).
+  No-op for `table`.
+
+Behavior:
+
+- No filters, no DB reads — the whole descriptor fits in one
+  response and is deterministic on an empty database.
+- Flat row shape shared by all formats: `table`, `field`, `type`,
+  `nullable`, `description`, `values`.
+- `nullable` renders `yes`/`no` in table/markdown and stays a JSON
+  bool in `json`.
+- `values` is a comma-joined string of the fixed set (`specs.type`
+  `TS,TR`; `tsg` carries the 19 TSG short names); `"-"` when the
+  field is free-form (e.g. `status`, scraped verbatim). The
+  transient parser field `SpecVersion.wki_id` is not persisted and
+  has no descriptor row.
+
+Examples:
+
+```bash
+doc3gpp spec schema --format json
 ```
 
 ## Common list output options

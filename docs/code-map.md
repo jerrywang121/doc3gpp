@@ -25,6 +25,11 @@ table below is for navigation only.
 | `BulkSyncOutcome` | dataclass | `models/sync.py` | Result of `tdoc sync` bulk mode: per-meeting outcomes plus typed failures. |
 | `BulkSyncFailure` | dataclass | `models/sync.py` | Per-meeting failure captured during `tdoc sync` bulk mode (meeting_id, error class, reason). |
 | `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records. |
+| `FieldInfo` | dataclass | `models/schema_info.py` | One DB column descriptor (`name`, `type`, `nullable`, `description`, `values`). |
+| `TableSchema` | dataclass | `models/schema_info.py` | All columns of one DB table (`table`, `fields`). |
+| `RESOURCE_SCHEMAS` | dict | `models/schema_info.py` | Static field registry keyed `tsg \| meeting \| tdoc \| wi \| spec \| testcase` (14 tables, 132 fields); single source of truth for the CLI `schema` commands, the `GET /<resources>/schema` routes, and the `get_*_schema` MCP tools. |
+| `SCHEMA_FIELDS` | list | `models/schema_info.py` | Flat row key order (`table`, `field`, `type`, `nullable`, `description`, `values`). |
+| `schema_payload` | function | `models/schema_info.py` | Flat JSON-ready rows for a resource (`nullable` bool, `values` comma-joined / `"-"`). |
 | `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to `tsg_short`). |
 | `Spec` | dataclass | `models/spec.py` | Domain model for 3GPP specifications (TS/TR). One row per dotted spec id (e.g. `36.579-5`) keyed by `spec_id`. |
 | `SpecVersion` | dataclass | `models/spec.py` | Domain model for one published version of a spec; `spec_id` FK plus `version`, `ftp_url`, `pdf_url`, `crs`, etc. |
@@ -214,7 +219,7 @@ table below is for navigation only.
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 
-Eleven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list`), `tdoc` (`sync` / `list` / `parse` / `show`), `tsg` (`list` / `show` / `seed`), `wi` (`sync` / `list`), `spec` (`sync` / `list` / `show`), `testcase` (`sync` / `list` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), `search` (`query` / `index` / `sem`), plus the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
+Eleven Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list` / `schema`), `tdoc` (`sync` / `list` / `schema` / `parse` / `show`), `tsg` (`list` / `schema` / `show` / `seed`), `wi` (`sync` / `list` / `schema`), `spec` (`sync` / `list` / `schema` / `show`), `testcase` (`sync` / `list` / `schema` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), `search` (`query` / `index` / `sem`), plus the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
@@ -236,9 +241,9 @@ The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API +
 | `get_state`/`get_settings`/`get_engine`/`get_services` | dependency | `web/deps.py` | FastAPI `Depends` helpers reading `request.app.state.web` |
 | `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_wi_service`/`get_tsg_service`/`get_search_service`/`get_semantic_search_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service `Depends` helpers |
 | `get_job_repo` / `get_job_worker` | dependency | `web/deps.py` | Job repository + worker-handle deps (overridden in tests) |
-| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 27 tools (14 read + 13 job). Read tools include `list_testcases` / `get_testcase` (same `render.testcase_rows` / `render.testcase_status_rows` payloads as `GET /testcases`); job tools include `sync_testcases` (enqueues `JobKind.SYNC_TESTCASES`). |
+| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 33 tools (20 read + 13 job). Read tools include `list_testcases` / `get_testcase` (same `render.testcase_rows` / `render.testcase_status_rows` payloads as `GET /testcases`) and the six `get_*_schema` tools (`_to_json(schema_payload(...))`, byte-identical to the `GET /<resources>/schema?format=json` routes); job tools include `sync_testcases` (enqueues `JobKind.SYNC_TESTCASES`). |
 | `testcase_rows` / `testcase_status_rows` | functions | `web/render.py` | List/detail rows matching CLI `testcase --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects; every other field coerced like the CLI cells). |
-| `routes/testcases.py` | APIRouter | `web/routes/testcases.py` | `/testcases` — list (filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; `_LIMIT_CAP=200`, default limit 50; unknown `group` → `InvalidFilterError`) + `/{testcase_id}` detail (optional `?group=`; without it every stored group returns; HTML renders one section per group or `?format=json` → array of flat per-`(id, group)` objects with nested `statuses` (no `group` in status rows); unknown → 404 `testcase_not_found`). |
+| `routes/testcases.py` | APIRouter | `web/routes/testcases.py` | `/testcases` — list (filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; `_LIMIT_CAP=200`, default limit 50; unknown `group` → `InvalidFilterError`) + `/{testcase_id}` detail (optional `?group=`; without it every stored group returns; HTML renders one section per group or `?format=json` → array of flat per-`(id, group)` objects with nested `statuses` (no `group` in status rows); unknown → 404 `testcase_not_found`) + `/schema` descriptors (shared `schema.html` / `partials/schema_results.html`). |
 | `TestcaseNotFoundError` | exception | `web/errors.py` | Lookup miss on a testcase id → HTTP 404 `testcase_not_found` / MCP `-32004`. |
 | `JobKind.SYNC_TESTCASES` | enum member | `models/jobs.py` | `"sync_testcases"`; handled by `_sync_testcases` (`services.testcase.sync`) and enqueued via `POST /jobs/sync/testcases` (tenth sync-hub panel `id="testcase-form"`). |
 | `_to_json` | function | `web/mcp_server.py` | `json.dumps(value, separators=(",", ":"), ensure_ascii=False)` — byte-matches Starlette `JSONResponse` |

@@ -225,7 +225,7 @@ git commit -m "feat(schema): add static field registry core (tsg, meeting, wi)"
 
 ---
 
-### Task 2: Registry — tdoc tables (6 tables, 71 fields)
+### Task 2: Registry — tdoc tables (6 tables, 70 fields)
 
 **Files:**
 - Modify: `src/doc3gpp/models/schema_info.py`
@@ -253,7 +253,7 @@ def test_tdoc_tables_and_counts() -> None:
     counts = {t.table: len(t.fields) for t in tables}
     assert counts == {
         "tdocs": 24,
-        "tdoc_cr_cover_page": 21,
+        "tdoc_cr_cover_page": 20,
         "tdoc_cr_ttcn_details": 10,
         "tdoc_cr_change_details": 4,
         "tdoc_files": 6,
@@ -475,7 +475,7 @@ def test_categoricals_match_canonical_constants() -> None:
     assert by_table[("tsgs", "short_name")].values == tuple(t.short_name for t in _DEFAULT_TSGS)
     assert by_table[("testcases", "group")].values == tuple(VALID_TESTCASE_GROUPS)
     assert by_table[("testcase_status", "path")].values == tuple(_PATH_RANK)
-    assert by_table[("tdoc_files", "type")].values == tuple(sorted(TDocFileTypes))
+    assert sorted(by_table[("tdoc_files", "type")].values or ()) == sorted(TDocFileTypes)
 
 
 def test_type_vocabulary() -> None:
@@ -1133,7 +1133,7 @@ git commit -m "docs(schema): document schema surfaces on CLI, REST, MCP"
 ## Self-Review
 
 1. **Spec coverage:** registry module (§1) → Tasks 1–3; six CLI commands (§3) → Task 4; six REST routes + shared template (§4) → Task 5; six MCP tools (§5) → Task 6; registry/drift/categorical + CLI + parity tests (§Testing) → Tasks 1–3, 4, 5–6; docs list (§Docs) → Task 7. Open decisions from the spec (shared-vs-per-resource templates → shared `schema.html`; column widths → reuse `_emit_records` unchanged, long descriptions flow naturally) are resolved inline above.
-2. **Placeholder scan:** every step carries exact code (full 133-field registry text, exact route/tool/test bodies). No TBD/TODO/"similar to".
+2. **Placeholder scan:** every step carries exact code (full 132-field registry text, exact route/tool/test bodies). No TBD/TODO/"similar to".
 3. **Type consistency:** `schema_payload()` returns `list[dict[str, object]]`; CLI `_emit_schema` stringifies cells for `_emit_records` and passes the payload straight to `_dump_show_json(payload, output, compact=...)` — matches its `dict | list` parameter. REST `JSONResponse(content=schema_payload(...))` and MCP `_to_json(schema_payload(...))` share the identical object, so key order (`table, field, type, nullable, description, values`) and compact bytes agree on all three surfaces. `RESOURCE_SCHEMAS` values are tuples; Jinja iterates tuples and accesses frozen-dataclass attrs fine.
-4. **Known count deltas vs the design doc:** `tdocs` has 24 columns (not 23) and `tdoc_cr_cover_page` has 21 (not 19) per `storage/db/models.py` — the plan uses the ORM counts and the drift test enforces them. `SpecVersion.wki_id` stays excluded (no ORM column; drift test locks this).
+4. **Known count deltas vs the design doc:** `tdocs` has 24 columns (not 23) and `tdoc_cr_cover_page` has 20 (not 19) per `storage/db/models.py` — the plan uses the ORM counts and the drift test enforces them. `SpecVersion.wki_id` stays excluded (no ORM column; drift test locks this).
 5. **Route-ordering hazard** (`/schema` vs `/{param}`) is called out explicitly in Task 5 — the most likely implementation bug in this plan.

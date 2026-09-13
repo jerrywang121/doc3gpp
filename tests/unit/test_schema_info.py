@@ -144,3 +144,33 @@ def test_type_vocabulary() -> None:
         for table in tables:
             for field in table.fields:
                 assert field.type in FIELD_TYPES, (table.table, field.name)
+
+
+def test_cli_schema_json_all_resources() -> None:
+    import json
+
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+    from doc3gpp.models.schema_info import schema_payload
+
+    runner = CliRunner()
+    for resource in ("tsg", "meeting", "tdoc", "wi", "spec", "testcase"):
+        result = runner.invoke(app, [resource, "schema", "--format", "json"])
+        assert result.exit_code == 0, (resource, result.output)
+        assert json.loads(result.output) == schema_payload(resource), resource
+
+
+def test_cli_schema_table_nullable_yes_no() -> None:
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app
+
+    result = CliRunner().invoke(app, ["tsg", "schema"])
+    assert result.exit_code == 0, result.output
+    rows = [line.split("\t") for line in result.output.splitlines()]
+    by_field = {cells[1]: cells for cells in rows}
+    assert by_field["short_name"][3] == "no"
+    assert by_field["url"][3] == "yes"
+    assert by_field["short_name"][5].startswith("RP,R1")
+    assert by_field["description"][5] == "-"

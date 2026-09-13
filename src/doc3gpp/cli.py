@@ -36,6 +36,7 @@ from doc3gpp.cli_url_helpers import (
     is_3gpp_ftp_url,
 )
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.models.schema_info import SCHEMA_FIELDS, schema_payload
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
@@ -609,6 +610,46 @@ def _emit_records(
             stream.close()
 
 
+def _emit_schema(
+    resource: str,
+    fmt: str,
+    output: str | None,
+    *,
+    compact: bool = False,
+) -> None:
+    """Emit the static field registry for ``resource`` in the chosen format.
+
+    JSON goes through :func:`_dump_show_json` so ``nullable`` stays a
+    real bool (matching REST ``?format=json`` and the MCP tools
+    byte-for-byte). Table/markdown go through :func:`_emit_records`
+    with ``nullable`` rendered as ``yes``/``no``. No DB access, no
+    filters — the whole descriptor fits in one response.
+    """
+    payload = schema_payload(resource)
+    if fmt == "json":
+        _dump_show_json(payload, output, compact=compact)
+        return
+    rows = [
+        [
+            str(row["table"]),
+            str(row["field"]),
+            str(row["type"]),
+            "yes" if row["nullable"] else "no",
+            str(row["description"]),
+            str(row["values"]),
+        ]
+        for row in payload
+    ]
+    _emit_records(
+        rows=rows,
+        fields=SCHEMA_FIELDS,
+        fmt=fmt,
+        output=output,
+        no_records_msg=f"No schema for {resource}",
+        compact=compact,
+    )
+
+
 @cache_app.command("status")
 def cache_status() -> None:
     """Print cache size, file count, limit, and per-subdir breakdown.
@@ -985,6 +1026,33 @@ def meeting_list(
     )
 
 
+@meeting_app.command("schema")
+def meeting_schema(
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Describe every column of the meetings table (meaning, format, possible values)."""
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    logger.info("Describing meeting schema")
+    _emit_schema("meeting", fmt, output, compact=resolved_compact)
+
+
 def _echo_bulk_sync_outcome(outcome: BulkSyncOutcome) -> None:
     """Render a bulk TDoc sync result and exit non-zero if every meeting failed."""
     if outcome.total == 0:
@@ -1338,6 +1406,33 @@ def tdoc_list(
         no_records_msg="No TDocs found",
         compact=resolved_compact,
     )
+
+
+@tdoc_app.command("schema")
+def tdoc_schema(
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files and tdoc_extracts tables (meaning, format, possible values)."""
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    logger.info("Describing tdoc schema")
+    _emit_schema("tdoc", fmt, output, compact=resolved_compact)
 
 
 def _extract_failure_hints() -> str:
@@ -3868,6 +3963,33 @@ def tsg_list(
     )
 
 
+@tsg_app.command("schema")
+def tsg_schema(
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Describe every column of the tsgs table (meaning, format, possible values)."""
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    logger.info("Describing tsg schema")
+    _emit_schema("tsg", fmt, output, compact=resolved_compact)
+
+
 @tsg_app.command("show")
 def tsg_show(
     tsg: str = typer.Option(
@@ -4016,6 +4138,33 @@ def wi_list(
         no_records_msg="No WIs found",
         compact=resolved_compact,
     )
+
+
+@wi_app.command("schema")
+def wi_schema(
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Describe every column of the wis table (meaning, format, possible values)."""
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    logger.info("Describing wi schema")
+    _emit_schema("wi", fmt, output, compact=resolved_compact)
 
 
 @spec_app.command("sync")
@@ -4250,6 +4399,33 @@ def spec_list(
         no_records_msg="No specs found",
         compact=resolved_compact,
     )
+
+
+@spec_app.command("schema")
+def spec_schema(
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Describe every column of the specs and spec_versions tables (meaning, format, possible values)."""
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    logger.info("Describing spec schema")
+    _emit_schema("spec", fmt, output, compact=resolved_compact)
 
 
 @spec_app.command("show")
@@ -4612,6 +4788,33 @@ def testcase_list(
         no_records_msg="No testcases found",
         compact=resolved_compact,
     )
+
+
+@testcase_app.command("schema")
+def testcase_schema(
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Describe every column of the testcases, testcase_status and testcase_sources tables (separate testcase sqlite file) (meaning, format, possible values)."""
+    settings = get_settings()
+    fmt = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    logger.info("Describing testcase schema")
+    _emit_schema("testcase", fmt, output, compact=resolved_compact)
 
 
 @testcase_app.command("show")

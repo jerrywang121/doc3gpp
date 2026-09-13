@@ -9,10 +9,7 @@ from doc3gpp.models.schema_info import (
 
 def test_schema_field_order_and_keys() -> None:
     assert SCHEMA_FIELDS == ["table", "field", "type", "nullable", "description", "values"]
-    # Task 2 scope: tsg/meeting/tdoc/wi. Task 3 extends the key list to
-    # ["meeting", "spec", "tdoc", "testcase", "tsg", "wi"] as each
-    # resource entry lands (brief Step 1 shows the end-state assertion).
-    assert sorted(RESOURCE_SCHEMAS) == ["meeting", "tdoc", "tsg", "wi"]
+    assert sorted(RESOURCE_SCHEMAS) == ["meeting", "spec", "tdoc", "testcase", "tsg", "wi"]
 
 
 def test_tsg_payload_shape() -> None:
@@ -65,3 +62,85 @@ def test_tdoc_categoricals() -> None:
     assert by_table_field[("tdoc_files", "type")]["values"] == "revision,review,support"
     assert by_table_field[("tdocs", "status")]["values"] == "-"
     assert by_table_field[("tdoc_cr_ttcn_details", "required_changes")]["type"] == "gzip-json"
+
+
+def test_registry_matches_orm_columns() -> None:
+    """Every ORM column is described exactly once; no extras; nullability matches."""
+    from doc3gpp.models.schema_info import RESOURCE_SCHEMAS
+    from doc3gpp.storage.db.models import (
+        MeetingORM,
+        SpecORM,
+        SpecVersionORM,
+        TDocCrChangeDetailOrm,
+        TDocCrDetailOrm,
+        TDocCrTtcnDetailOrm,
+        TDocExtractOrm,
+        TDocFileORM,
+        TDocORM,
+        TestCaseORM,
+        TestCaseSourceORM,
+        TestCaseStatusORM,
+        TsgORM,
+        WiORM,
+    )
+
+    expected = {
+        "tsgs": TsgORM,
+        "meetings": MeetingORM,
+        "tdocs": TDocORM,
+        "tdoc_cr_cover_page": TDocCrDetailOrm,
+        "tdoc_cr_ttcn_details": TDocCrTtcnDetailOrm,
+        "tdoc_cr_change_details": TDocCrChangeDetailOrm,
+        "tdoc_files": TDocFileORM,
+        "tdoc_extracts": TDocExtractOrm,
+        "wis": WiORM,
+        "specs": SpecORM,
+        "spec_versions": SpecVersionORM,
+        "testcases": TestCaseORM,
+        "testcase_status": TestCaseStatusORM,
+        "testcase_sources": TestCaseSourceORM,
+    }
+    by_table = {}
+    for tables in RESOURCE_SCHEMAS.values():
+        for table in tables:
+            by_table[table.table] = table
+    assert sorted(by_table) == sorted(expected)
+    for table_name, orm_cls in expected.items():
+        columns = orm_cls.__table__.columns
+        registry = {f.name: f for f in by_table[table_name].fields}
+        assert sorted(registry) == sorted(columns.keys()), table_name
+        for col_name, column in columns.items():
+            assert registry[col_name].nullable == column.nullable, (table_name, col_name)
+
+
+def test_categoricals_match_canonical_constants() -> None:
+    from doc3gpp.cli import VALID_TESTCASE_GROUPS
+    from doc3gpp.models.schema_info import RESOURCE_SCHEMAS
+    from doc3gpp.models.tdoc_file import TDocFileTypes
+    from doc3gpp.services.tsg_service import _DEFAULT_TSGS
+    from doc3gpp.storage.repositories.testcase_sql import _PATH_RANK
+
+    by_table = {}
+    for tables in RESOURCE_SCHEMAS.values():
+        for table in tables:
+            for field in table.fields:
+                by_table[(table.table, field.name)] = field
+    assert by_table[("tsgs", "short_name")].values == tuple(t.short_name for t in _DEFAULT_TSGS)
+    assert by_table[("testcases", "group")].values == tuple(VALID_TESTCASE_GROUPS)
+    assert by_table[("testcase_status", "path")].values == tuple(_PATH_RANK)
+    # Brief verbatim was `...values == tuple(sorted(TDocFileTypes))`, but
+    # sorted(TDocFileTypes) is ("review", "revision", "support") ("review" <
+    # "revision": 'e' < 's' at index 4) while the registry (and Task 2's
+    # locked "revision,review,support" payload) uses logical order
+    # ("revision", "review", "support"). Compare sorted-vs-sorted so the
+    # test still locks set equality without forcing alphabetical output.
+    assert sorted(by_table[("tdoc_files", "type")].values or ()) == sorted(TDocFileTypes)
+
+
+def test_type_vocabulary() -> None:
+    from doc3gpp.models.schema_info import FIELD_TYPES, RESOURCE_SCHEMAS
+
+    for tables in RESOURCE_SCHEMAS.values():
+        for table in tables:
+            for field in table.fields:
+                assert field.type in FIELD_TYPES, (table.table, field.name)

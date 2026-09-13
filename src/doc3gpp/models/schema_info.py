@@ -32,6 +32,26 @@ TSG_SHORT_NAMES: tuple[str, ...] = (
     "CP", "C1", "C3", "C4", "C6",
 )
 
+# Duplicates ``cli.py::VALID_TESTCASE_GROUPS`` (models/ cannot import
+# the CLI layer); equality locked by ``test_schema_info.py``.
+TESTCASE_GROUPS: tuple[str, ...] = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
+
+# Duplicates ``storage/repositories/testcase_sql.py::_PATH_RANK``;
+# single-path groups store the literal ``'default'``.
+TESTCASE_PATHS: tuple[str, ...] = (
+    "FR1", "FR2", "FR1+FR2", "FDD", "TDD",
+    "IPCAN-4G", "EUTRA", "IPCAN-5G", "NR5GC", "default",
+)
+
+# Duplicates ``models/tdoc_file.py::TDocFileTypes``.
+TDOC_FILE_TYPES: tuple[str, ...] = ("revision", "review", "support")
+
+# CR category letters from the cover page (see ``models/tdoc_cr.py``).
+CR_CATEGORIES: tuple[str, ...] = ("F", "B", "A", "C", "D")
+
+# Spec types from the DynaReport detail page (see ``parsers/spec_parser.py``).
+SPEC_TYPES: tuple[str, ...] = ("TS", "TR")
+
 
 @dataclass(slots=True, frozen=True)
 class FieldInfo:
@@ -127,7 +147,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("tsg", "str", True, "Contents of 'Source to TSG:'."),
                 FieldInfo("related_wis", "str", True, "Contents of 'Work item code:'."),
                 FieldInfo("date", "date", True, "Cover-page date, YYYY-MM-DD."),
-                FieldInfo("cr_cat", "str", True, "Single-letter category: F correction, B addition of feature, A correction in earlier release, C functional modification, D editorial.", ("F", "B", "A", "C", "D")),
+                FieldInfo("cr_cat", "str", True, "Single-letter category: F correction, B addition of feature, A correction in earlier release, C functional modification, D editorial.", CR_CATEGORIES),
                 FieldInfo("release", "str", True, "Release label, e.g. Rel-18."),
                 FieldInfo("reason_for_change", "text", True, "Reason-for-change cell text."),
                 FieldInfo("consequences_if_not_approved", "text", True, "Consequences cell text."),
@@ -167,7 +187,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
             fields=(
                 FieldInfo("id", "int", False, "Database-assigned primary key."),
                 FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id."),
-                FieldInfo("type", "str", False, "Attachment kind: revision, review, or support.", ("revision", "review", "support")),
+                FieldInfo("type", "str", False, "Attachment kind: revision, review, or support.", TDOC_FILE_TYPES),
                 FieldInfo("file", "str", False, "Bare attachment filename, e.g. R5s260001_MCC160Comments.zip."),
                 FieldInfo("ftp_url", "str", False, "Relative download URL; unique upsert key."),
                 FieldInfo("uploaded_date", "date", True, "Upload date from the FTP 'Last Modified' column."),
@@ -194,6 +214,76 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("release", "str", False, "Free-form release marker, e.g. Rel-19."),
                 FieldInfo("name", "text", False, "Full human-readable WI title."),
                 FieldInfo("tsg_short", "str", False, "Owning TSG; FK into tsgs.short_name and second half of the composite PK.", TSG_SHORT_NAMES),
+            ),
+        ),
+    ),
+    "spec": (
+        TableSchema(
+            table="specs",
+            fields=(
+                FieldInfo("spec_id", "str", False, "Full dotted spec identity, e.g. 36.579-5; primary key."),
+                FieldInfo("type", "str", True, "TS or TR.", SPEC_TYPES),
+                FieldInfo("title", "text", True, "Full spec title from the list page."),
+                FieldInfo("status", "str", True, "Free-form status, e.g. Under change control."),
+                FieldInfo("radio_tech", "str", True, "Comma-joined ticked radio technologies, e.g. LTE,NR."),
+                FieldInfo("initial_release", "str", True, "Normalised release marker, e.g. Rel-20, R99."),
+                FieldInfo("tsg", "str", True, "Owning TSG; FK into tsgs.short_name.", TSG_SHORT_NAMES),
+                FieldInfo("wis", "str", True, "Comma-joined related-WI acronyms; point-in-time snapshot."),
+                FieldInfo("rapporteurs", "str", True, "Comma-joined company names, e.g. Ericsson LM."),
+                FieldInfo("last_synced_at", "datetime", True, "UTC timestamp of the last successful detail sync, else null."),
+            ),
+        ),
+        TableSchema(
+            table="spec_versions",
+            fields=(
+                FieldInfo("spec_id", "str", False, "FK into specs.spec_id; first half of the composite PK."),
+                FieldInfo("version", "str", False, "Version string, e.g. 18.3.0; second half of the composite PK."),
+                FieldInfo("ftp_url", "str", False, "Absolute 3GPP FTP URL of the version zip."),
+                FieldInfo("release", "str", True, "Canonical release marker: draft, pre-release, or Rel-N."),
+                FieldInfo("meeting_id", "int", True, "Numeric 3GPP meeting id."),
+                FieldInfo("meeting_name", "str", True, "Meeting name, e.g. RAN#108."),
+                FieldInfo("upload_date", "date", True, "Upload date from the version row, ISO-8601."),
+                FieldInfo("version_id", "int", True, "?versionId= key used to build the CR list URL."),
+                FieldInfo("pdf_url", "str", True, "ETSI 'download as PDF' link."),
+                FieldInfo("crs", "text", True, "Comma-joined tdoc_ids from the CR list page."),
+            ),
+        ),
+    ),
+    "testcase": (
+        TableSchema(
+            table="testcases",
+            fields=(
+                FieldInfo("testcase_id", "str", False, "Testcase id; first half of the composite PK."),
+                FieldInfo("group", "str", False, "Testcase group; second half of the composite PK.", TESTCASE_GROUPS),
+                FieldInfo("title", "text", True, "Testcase title."),
+                FieldInfo("ats", "str", True, "Abstract test suite identifier."),
+                FieldInfo("feature", "str", True, "Feature name."),
+                FieldInfo("release", "str", True, "Release marker, e.g. Rel-17."),
+                FieldInfo("wis", "str", True, "Comma-joined related WIs."),
+                FieldInfo("spec", "str", True, "Spec number; fixed 38.523-1 for 5G and 36.523-1 for LTE, else the row 'part of' value verbatim."),
+            ),
+        ),
+        TableSchema(
+            table="testcase_status",
+            fields=(
+                FieldInfo("testcase_id", "str", False, "FK half of the composite PK."),
+                FieldInfo("group", "str", False, "FK half of the composite PK.", TESTCASE_GROUPS),
+                FieldInfo("path", "str", False, "Radio path; third third of the composite PK. Single-path groups store the literal 'default'.", TESTCASE_PATHS),
+                FieldInfo("gcf_ptcrb", "text", True, "GCF/PTCRB status, e.g. Approved."),
+                FieldInfo("ttcn_status", "text", True, "TTCN status, e.g. Approved."),
+            ),
+        ),
+        TableSchema(
+            table="testcase_sources",
+            fields=(
+                FieldInfo("filename", "str", False, "Status-file name, e.g. TTCN CR Agreement Status 2024-wk32.zip; primary key and sync skip key."),
+                FieldInfo("year", "int", False, "Status-file year."),
+                FieldInfo("week", "int", False, "Status-file week number."),
+                FieldInfo("revision", "int", False, "Status-file revision."),
+                FieldInfo("downloaded_at", "datetime", True, "UTC download timestamp, else null."),
+                FieldInfo("parsed_at", "datetime", True, "UTC parse timestamp, else null."),
+                FieldInfo("testcase_count", "int", False, "Number of testcase headers parsed from the file."),
+                FieldInfo("status_count", "int", False, "Number of status rows parsed from the file."),
             ),
         ),
     ),

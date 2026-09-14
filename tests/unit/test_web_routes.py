@@ -125,7 +125,7 @@ class FakeTDocService(TDocService):
                     tdoc_id="R5-260001",
                     title="CR on NR measurement",
                     meeting_id=1,
-                    ftp_url="R5/26.001/R5-260001.zip",
+                    ftp_url="r5/26.001/r5-260001.zip",
                     spec="38.523-3",
                     release="Rel-18",
                     type="CR",
@@ -139,7 +139,7 @@ class FakeTDocService(TDocService):
                     tdoc_id="R5-260002",
                     title="Another CR",
                     meeting_id=1,
-                    ftp_url="R5/26.002/R5-260002.zip",
+                    ftp_url="r5/26.002/r5-260002.zip",
                     spec="38.523-3",
                     release="Rel-18",
                     type="CR",
@@ -204,7 +204,7 @@ class FakeSearchService(SearchService):
                 meeting="RAN5#99-e",
                 tsg="R5",
                 uploaded_date="2026-05-02",
-                ftp_url="R5/26.001/R5-260001.zip",
+                ftp_url="r5/26.001/r5-260001.zip",
                 wis=None,
             ),
         ]
@@ -644,7 +644,7 @@ def test_tdoc_show_renders_html(client: TestClient, sqlite_env: Any) -> None:
         TDoc(
             tdoc_id="R5-260001",
             title="CR on NR measurement",
-            ftp_url="R5/26.001/R5-260001.zip",
+            ftp_url="r5/26.001/r5-260001.zip",
         ),
     )
     response = client.get("/tdocs/R5-260001")
@@ -671,7 +671,7 @@ def test_tdoc_show_ftp_url_links_to_3gpp_ftp_when_not_cached(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260001", ftp_url=url),
     )
@@ -691,7 +691,7 @@ def test_tdoc_show_ftp_url_links_to_cached_zip_download(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260001", ftp_url=url),
     )
@@ -716,7 +716,7 @@ def test_tdoc_download_serves_cached_zip(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260001", ftp_url=url),
     )
@@ -742,7 +742,7 @@ def test_tdoc_download_cache_miss_404(
 
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260001", ftp_url="R5/missing.zip"),
+        TDoc(tdoc_id="R5-260001", ftp_url="r5/missing.zip"),
     )
     new_app = _build_app_with_fakes(cache_dir=tmp_path)
     with TestClient(new_app) as new_client:
@@ -765,7 +765,7 @@ def test_tdoc_show_ttcn_changed_functions(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260001", ftp_url=url),
     )
@@ -796,7 +796,7 @@ def test_tdoc_show_related_wis_in_tdoc_section(
         TDoc(
             tdoc_id="R5-260001",
             title="CR on NR measurement",
-            ftp_url="R5/26.001/R5-260001.zip",
+            ftp_url="r5/26.001/r5-260001.zip",
             related_wis="890001, 890002",
         ),
     )
@@ -815,7 +815,7 @@ def test_tdoc_show_related_wis_dash_when_absent(
 
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+        TDoc(tdoc_id="R5-260001", ftp_url="r5/26.001/r5-260001.zip"),
     )
     response = client.get("/tdocs/R5-260001")
     assert response.status_code == 200
@@ -834,7 +834,7 @@ def test_tdoc_show_auxiliary_files_link_to_ftp(
     from doc3gpp.web.deps import get_tdoc_file_repo
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260001", ftp_url=url),
     )
@@ -844,7 +844,7 @@ def test_tdoc_show_auxiliary_files_link_to_ftp(
                 tdoc_id="R5-260001",
                 type="revision",
                 file="R5-260001r1.zip",
-                ftp_url="R5/26.001/R5-260001r1.zip",
+                ftp_url="r5/26.001/r5-260001r1.zip",
             ),
         ],
     )
@@ -858,8 +858,8 @@ def test_tdoc_show_auxiliary_files_link_to_ftp(
         app.dependency_overrides.pop(get_tdoc_file_repo, None)
     assert response.status_code == 200
     assert (
-        '<a href="https://www.3gpp.org/ftp/R5/26.001/R5-260001r1.zip">'
-        "<code>R5/26.001/R5-260001r1.zip</code></a> (revision)"
+        '<a href="https://www.3gpp.org/ftp/r5/26.001/r5-260001r1.zip">'
+        "<code>r5/26.001/r5-260001r1.zip</code></a> (revision)"
     ) in response.text
 
 
@@ -872,7 +872,7 @@ def test_tdoc_content_markdown_cache_hit(
     from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260001", ftp_url=url),
     )
@@ -905,7 +905,7 @@ def test_tdoc_content_uses_stored_cache_file_when_divergent(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260001", ftp_url=url),
     )
@@ -945,7 +945,7 @@ def test_tdoc_content_markdown_cache_miss_404(
 
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260001", ftp_url="R5/missing.zip"),
+        TDoc(tdoc_id="R5-260001", ftp_url="r5/missing.zip"),
     )
     new_app = _build_app_with_fakes(cache_dir=tmp_path)
     with TestClient(new_app) as new_client:
@@ -1207,7 +1207,7 @@ def test_tdoc_content_html(client: TestClient, sqlite_env: Any, tmp_path: Any) -
     from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260001", ftp_url=url))
     cache_file = derive_cache_file(url)
     markdown_path = tmp_path / "markdown" / cache_file
@@ -1243,7 +1243,7 @@ def test_tdoc_content_markdown_zip_wrapped_cache(
     from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
-    url = "TSG_RAN/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260231.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260231.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260231", ftp_url=url),
     )
@@ -1280,7 +1280,7 @@ def test_tdoc_content_html_zip_wrapped_cache(
     from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
-    url = "TSG_RAN/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260231.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260231.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260231", ftp_url=url),
     )
@@ -1914,7 +1914,7 @@ def test_tdoc_show_parse_card_rendered_when_ftp_url(
 
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+        TDoc(tdoc_id="R5-260001", ftp_url="r5/26.001/r5-260001.zip"),
     )
     html = client.get("/tdocs/R5-260001").text
     assert "Parse this TDoc" in html
@@ -2916,7 +2916,7 @@ def test_tdoc_show_required_changes_card_for_ttcn(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260001", ftp_url=url),
     )
@@ -2984,7 +2984,7 @@ def test_tdoc_show_extracted_changes_card_for_non_ttcn(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5-260001.zip"
+    url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260001", ftp_url=url),
     )
@@ -3039,7 +3039,7 @@ def test_tdoc_show_no_extracted_changes_cards_when_no_sidecars(
 
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260001", ftp_url="R5/26.001/R5-260001.zip"),
+        TDoc(tdoc_id="R5-260001", ftp_url="r5/26.001/r5-260001.zip"),
     )
     response = client.get("/tdocs/R5-260001")
     assert response.status_code == 200
@@ -3066,7 +3066,7 @@ def test_tdoc_show_ttcn_without_required_changes_omits_card(
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     create_schema()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260001", ftp_url=url),
     )
@@ -3104,7 +3104,7 @@ def test_show_tdoc_cover_card_includes_summary_of_change(
     from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260001", ftp_url=url),
     )
@@ -3146,7 +3146,7 @@ def test_show_tdoc_json_includes_cover_summary_of_change(
     from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260001", ftp_url=url),
     )
@@ -3192,11 +3192,11 @@ def test_show_tdoc_by_url_returns_404_when_no_rows(
     from doc3gpp.storage.db.migrate import create_schema
 
     create_schema()
-    response = client.get("/tdocs/by-url", params={"ftp_url": "TSG_RAN/missing.zip"})
+    response = client.get("/tdocs/by-url", params={"ftp_url": "tsg_ran/missing.zip"})
     assert response.status_code == 404
     body = response.json()
     assert body["error"] == "tdoc_url_not_found"
-    assert "TSG_RAN/missing.zip" in body["detail"]
+    assert "tsg_ran/missing.zip" in body["detail"]
 
 
 def test_show_tdoc_by_url_returns_400_when_param_missing(
@@ -3235,7 +3235,7 @@ def test_show_tdoc_by_url_full_url_matches_bare_path(
     from doc3gpp.models.tdoc import TDoc
 
     create_schema()
-    bare = "R5/26.001/R5s260001.zip"
+    bare = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=bare))
 
     response = client.get(
@@ -3273,14 +3273,14 @@ def test_show_tdoc_by_url_json_byte_matches_cli(
     from doc3gpp.web.render import to_jsonable
 
     create_schema()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
     file_repo = SQLAlchemyTDocFileRepository()
     tdoc_repo.upsert(TDoc(tdoc_id="R5s260001", ftp_url=url, title="Foo"))
     cr_repo.upsert(TDocCRDetails(tdoc_id="R5s260001", ftp_url=url, cr_num="0001"))
     file_repo.upsert_many(
-        [TDocFile(ftp_url="R5/26.001/R5s260001_rev1.zip", tdoc_id="R5s260001", type="revision", file="R5s260001_rev1.zip")]
+        [TDocFile(ftp_url="r5/26.001/r5s260001_rev1.zip", tdoc_id="R5s260001", type="revision", file="R5s260001_rev1.zip")]
     )
 
     repos = TDocShowRepos(
@@ -3320,9 +3320,9 @@ def test_show_tdoc_by_url_no_parent_tdoc_renders_placeholder(
     from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
-    url = "R5/26.001/R5s260002.zip"
+    url = "r5/26.001/r5s260002.zip"
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="orphan", ftp_url="R5/unrelated/parent.zip")
+        TDoc(tdoc_id="orphan", ftp_url="r5/unrelated/parent.zip")
     )
     SQLAlchemyTDocCrRepository().upsert(
         TDocCRDetails(tdoc_id="orphan", ftp_url=url, cr_num="0002")
@@ -3347,9 +3347,9 @@ def test_show_tdoc_by_url_parse_card_omitted_in_url_mode(
     from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
-    url = "R5/26.001/R5s260003.zip"
+    url = "r5/26.001/r5s260003.zip"
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="orphan", ftp_url="R5/unrelated/parent.zip")
+        TDoc(tdoc_id="orphan", ftp_url="r5/unrelated/parent.zip")
     )
     SQLAlchemyTDocCrRepository().upsert(
         TDocCRDetails(tdoc_id="orphan", ftp_url=url, cr_num="0003")
@@ -3379,9 +3379,9 @@ def test_show_tdoc_by_url_lone_extracted_at_renders(
     from doc3gpp.models.tdoc_cr import TDocExtractMeta
 
     create_schema()
-    url = "R5/26.001/R5s260004.zip"
+    url = "r5/26.001/r5s260004.zip"
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="orphan", ftp_url="R5/unrelated/parent.zip")
+        TDoc(tdoc_id="orphan", ftp_url="r5/unrelated/parent.zip")
     )
     SQLAlchemyTDocCrRepository().upsert_extract_meta(
         TDocExtractMeta(
@@ -3416,9 +3416,9 @@ def test_show_tdoc_by_url_cover_placeholder_uses_from_url_hint(
     from doc3gpp.web.deps import get_tdoc_file_repo
 
     create_schema()
-    url = "R5/26.001/R5s260005.zip"
+    url = "r5/26.001/r5s260005.zip"
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5s260005", ftp_url="R5/unrelated/parent.zip")
+        TDoc(tdoc_id="R5s260005", ftp_url="r5/unrelated/parent.zip")
     )
     SQLAlchemyTDocFileRepository().upsert_many(
         [

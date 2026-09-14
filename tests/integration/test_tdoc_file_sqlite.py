@@ -62,17 +62,17 @@ def test_upsert_and_list_roundtrip(sqlite_env) -> None:
             TDocFile(
                 tdoc_id="R5s260001", type="revision",
                 file="R5s260001r1.zip",
-                ftp_url="x/R5s260001r1.zip",
+                ftp_url="x/r5s260001r1.zip",
             ),
             TDocFile(
                 tdoc_id="R5s260001", type="review",
                 file="R5s260001_MCC160Comments.zip",
-                ftp_url="x/R5s260001_MCC160Comments.zip",
+                ftp_url="x/r5s260001_mcc160comments.zip",
             ),
             TDocFile(
                 tdoc_id="R5s260002", type="support",
                 file="R5s260002_draft.zip",
-                ftp_url="x/R5s260002_draft.zip",
+                ftp_url="x/r5s260002_draft.zip",
             ),
         ]
     )
@@ -80,10 +80,10 @@ def test_upsert_and_list_roundtrip(sqlite_env) -> None:
     rows = repo.list(limit=10)
     by_id = {row.ftp_url: row for row in rows}
     assert len(rows) == 3
-    assert by_id["x/R5s260001r1.zip"].type == "revision"
-    assert by_id["x/R5s260001r1.zip"].tdoc_id == "R5s260001"
-    assert by_id["x/R5s260001_MCC160Comments.zip"].type == "review"
-    assert by_id["x/R5s260002_draft.zip"].type == "support"
+    assert by_id["x/r5s260001r1.zip"].type == "revision"
+    assert by_id["x/r5s260001r1.zip"].tdoc_id == "R5s260001"
+    assert by_id["x/r5s260001_mcc160comments.zip"].type == "review"
+    assert by_id["x/r5s260002_draft.zip"].type == "support"
 
 
 def test_upsert_is_idempotent_on_url(sqlite_env) -> None:
@@ -440,7 +440,7 @@ def test_tdoc_show_cli_surfaces_tdoc_files_rows(sqlite_env) -> None:
 
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5s260030", type="CR", ftp_url="x/R5s260030.zip")
+        TDoc(tdoc_id="R5s260030", type="CR", ftp_url="x/r5s260030.zip")
     )
     SQLAlchemyTDocFileRepository().upsert_many(
         [
@@ -448,7 +448,7 @@ def test_tdoc_show_cli_surfaces_tdoc_files_rows(sqlite_env) -> None:
                 tdoc_id="R5s260030",
                 type="revision",
                 file="R5s260030r1.zip",
-                ftp_url="tsg_ran/WG5/TSGR5_128/Inbox/R5s260030r1.zip",
+                ftp_url="tsg_ran/wg5/tsgr5_128/inbox/r5s260030r1.zip",
                 uploaded_date=date(2026, 7, 4),
             ),
             TDocFile(
@@ -456,8 +456,8 @@ def test_tdoc_show_cli_surfaces_tdoc_files_rows(sqlite_env) -> None:
                 type="review",
                 file="R5s260030_MCC160Comments.zip",
                 ftp_url=(
-                    "tsg_ran/WG5/TSGR5_128/Review/"
-                    "R5s260030_MCC160Comments.zip"
+                    "tsg_ran/wg5/tsgr5_128/review/"
+                    "r5s260030_mcc160comments.zip"
                 ),
                 uploaded_date=date(2026, 7, 3),
             ),
@@ -493,9 +493,9 @@ def test_tdoc_show_by_ftp_url_cli_surfaces_tdoc_files_rows(sqlite_env) -> None:
     from doc3gpp.cli import app
 
     create_schema()
-    revision_url = "tsg_ran/WG5/TSGR5_128/Inbox/R5s260040r1.zip"
+    revision_url = "tsg_ran/wg5/tsgr5_128/inbox/r5s260040r1.zip"
     review_url = (
-        "tsg_ran/WG5/TSGR5_128/Review/R5s260040_MCC160Comments.zip"
+        "tsg_ran/wg5/tsgr5_128/review/r5s260040_mcc160comments.zip"
     )
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260040", type="CR", ftp_url=revision_url)

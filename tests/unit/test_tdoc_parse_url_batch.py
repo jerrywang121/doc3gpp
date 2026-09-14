@@ -203,7 +203,7 @@ def test_batch_writes_output_mirroring_ftp_structure(
         ],
     )
     assert result.exit_code == 0, result.output
-    expected = output_dir / "tsg_ran" / "WG5" / "Docs" / "R5s260001.json"
+    expected = output_dir / "tsg_ran" / "wg5" / "docs" / "r5s260001.json"
     assert expected.exists()
     payload = json.loads(expected.read_text())
     assert payload["tdoc_id"] == "R5s260001"

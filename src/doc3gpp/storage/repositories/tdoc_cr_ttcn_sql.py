@@ -97,7 +97,7 @@ class SQLAlchemyTDocCrTtcnRepository:
                 "TDocCRTTCNDetails requires a non-empty tdoc_id for URL-keyed upsert"
             )
 
-        ftp_url = details.ftp_url
+        ftp_url = details.ftp_url.lower()
         with self._session_factory() as session:
             row = session.get(TDocCrTtcnDetailOrm, ftp_url)
             if row is None:
@@ -109,10 +109,13 @@ class SQLAlchemyTDocCrTtcnRepository:
             session.commit()
 
     def get_by_url(self, url: str) -> TDocCRTTCNDetails | None:
-        """Return the TTCN detail row for an immutable ``url``, or ``None``."""
+        """Return the TTCN detail row for ``url``, or ``None``.
+
+        Stored URLs are lowercase, so the key is lowercased first.
+        """
         self._ensure_table_exists()
         with self._session_factory() as session:
-            row = session.get(TDocCrTtcnDetailOrm, url)
+            row = session.get(TDocCrTtcnDetailOrm, url.lower())
         if row is None:
             return None
         return _orm_to_details(row)

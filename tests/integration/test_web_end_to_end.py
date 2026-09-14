@@ -492,7 +492,7 @@ def test_get_tdoc_by_url_byte_parity_with_cli(sqlite_env, app_with_deps) -> None
 
     app, _ = app_with_deps
     create_schema()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
     file_repo = SQLAlchemyTDocFileRepository()

@@ -151,7 +151,7 @@ def test_extract_writes_change_details_when_present(tmp_path: Path) -> None:
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="tsg_wg1/CR_R5s260009.zip",
+        ftp_url="tsg_wg1/cr_r5s260009.zip",
     )
 
     service.extract("R5s260009")
@@ -159,7 +159,7 @@ def test_extract_writes_change_details_when_present(tmp_path: Path) -> None:
     assert cr_change_details_repo.upsert.call_count == 1
     written = cr_change_details_repo.upsert.call_args.args[0]
     assert isinstance(written, TDocCRChangeDetails)
-    assert written.ftp_url == "tsg_wg1/CR_R5s260009.zip"
+    assert written.ftp_url == "tsg_wg1/cr_r5s260009.zip"
     assert written.tdoc_id == "R5s260009"
     assert written.clauses == ("5.2.3",)
     assert written.changes == ({"clauses": ["5.2.3"], "text": "line A\n<ins>X</ins>"},)
@@ -206,7 +206,7 @@ def test_extract_skips_change_details_upsert_when_changes_none(
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="tsg_wg1/CR_R5s260009.zip",
+        ftp_url="tsg_wg1/cr_r5s260009.zip",
     )
 
     service.extract("R5s260009")

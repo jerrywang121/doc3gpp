@@ -94,7 +94,7 @@ def test_ttcn_round_trips_through_orm(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
 
-    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     details = TDocCRTTCNDetails(
         tdoc_id="R5s260009",
         ftp_url=url,
@@ -132,7 +132,7 @@ def test_ttcn_required_changes_is_gzipped_json(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
 
-    url = "stored/R5s260009.zip"
+    url = "stored/r5s260009.zip"
     changes = _sample_corrections()
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
@@ -187,12 +187,12 @@ def test_ttcn_repository_lazy_creates_table(sqlite_env) -> None:
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
-            ftp_url="stored/R5s260009.zip",
+            ftp_url="stored/r5s260009.zip",
             testcase="7.1.3.5.3",
         ),
     )
 
-    loaded = cr_ttcn_repo.get_by_url("stored/R5s260009.zip")
+    loaded = cr_ttcn_repo.get_by_url("stored/r5s260009.zip")
     assert loaded is not None
     assert loaded.testcase == "7.1.3.5.3"
 
@@ -224,7 +224,7 @@ def test_ttcn_changed_functions_round_trips_through_orm(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
 
-    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     corrections = _sample_corrections()
     details = TDocCRTTCNDetails(
         tdoc_id="R5s260009",
@@ -254,7 +254,7 @@ def test_ttcn_changed_functions_is_newline_delimited_text(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
 
-    url = "stored/R5s260009.zip"
+    url = "stored/r5s260009.zip"
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
@@ -289,7 +289,7 @@ def test_ttcn_changed_functions_searchable_by_like(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
 
-    url = "stored/R5s260009.zip"
+    url = "stored/r5s260009.zip"
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
@@ -351,7 +351,7 @@ def test_ttcn_lazy_alter_adds_changed_functions_column(sqlite_env) -> None:
     # Reset the ensured flag so the next public call re-probes the schema.
     cr_ttcn_repo._ensured = False  # type: ignore[attr-defined]
 
-    url = "stored/R5s260009.zip"
+    url = "stored/r5s260009.zip"
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
@@ -384,7 +384,7 @@ def test_ttcn_legacy_row_with_null_changed_functions_reads_as_empty_list(
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
 
-    url = "stored/R5s260009_legacy.zip"
+    url = "stored/r5s260009_legacy.zip"
     factory = get_session_factory()
     with factory() as session:
         # Insert a minimal row directly via SQL with the new column NULL.
@@ -421,7 +421,7 @@ def test_non_ttcn_tdoc_id_still_writes(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260013", type="CR"))
 
-    url = "stored/R5-260013.zip"
+    url = "stored/r5-260013.zip"
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5-260013",
@@ -457,7 +457,7 @@ def test_ttcn_repository_fk_guard(sqlite_env) -> None:
         cr_ttcn_repo.upsert(
             TDocCRTTCNDetails(
                 tdoc_id="R5s999999",
-                ftp_url="stored/R5s999999.zip",
+                ftp_url="stored/r5s999999.zip",
                 testcase="orphan",
             ),
         )
@@ -479,7 +479,7 @@ def test_tdoc_show_record_joins_cover_ttcn_and_metadata(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
 
     tdoc_id = "R5s260009"
-    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
 
     cover = TDocCRDetails(
@@ -562,7 +562,7 @@ def test_is_ttcn_tdoc_gate_skips_ttcn_repo_for_non_ttcn_ids(sqlite_env) -> None:
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
 
     tdoc_id = "R5-260020"
-    url = "stored/R5-260020.zip"
+    url = "stored/r5-260020.zip"
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
 
     # Persist a non-TTCN cover row + a TTCN sidecar row at the same URL.
@@ -630,7 +630,7 @@ def test_ttcn_details_with_empty_required_changes_round_trips(sqlite_env) -> Non
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
 
-    url = "stored/R5s260009_legacy.zip"
+    url = "stored/r5s260009_legacy.zip"
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
@@ -664,21 +664,21 @@ def test_ttcn_repository_list_all(sqlite_env) -> None:
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
-            ftp_url="stored/R5s260009.zip",
+            ftp_url="stored/r5s260009.zip",
             testcase="7.1.3.5.3",
         ),
     )
     cr_ttcn_repo.upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260010",
-            ftp_url="stored/R5s260010.zip",
+            ftp_url="stored/r5s260010.zip",
             testcase="8.2.1",
         ),
     )
     rows = cr_ttcn_repo.list_all()
     assert len(rows) == 2
     urls = sorted(r.ftp_url or "" for r in rows)
-    assert urls == ["stored/R5s260009.zip", "stored/R5s260010.zip"]
+    assert urls == ["stored/r5s260009.zip", "stored/r5s260010.zip"]
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +704,7 @@ def test_tdoc_show_json_payload_includes_cover_ttcn_and_extracted_at(
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
 
     tdoc_id = "R5s260009"
-    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
 
     cr_repo.upsert(
@@ -770,7 +770,7 @@ def test_tdoc_show_by_ftp_url_json_payload_includes_cover_ttcn_and_extracted_at(
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
 
     tdoc_id = "R5s260110"
-    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260110.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260110.zip"
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
 
     cr_repo.upsert(
@@ -841,7 +841,7 @@ def test_tdoc_show_format_json_compact_round_trips(
     cr_ttcn_repo = SQLAlchemyTDocCrTtcnRepository()
 
     tdoc_id = "R5s260011"
-    url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260011.zip"
+    url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260011.zip"
     tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
 
     cr_repo.upsert(

@@ -30,7 +30,7 @@ def test_upsert_and_get_round_trip(sqlite_env) -> None:
     create_schema()
     repo = SQLAlchemyTDocCrChangeDetailsRepository()
     details = TDocCRChangeDetails(
-        ftp_url="tsg_wg1/CR123.zip",
+        ftp_url="tsg_wg1/cr123.zip",
         tdoc_id="R5-999999",
         clauses=("5.2.3", "Table 5.2.3-1"),
         changes=(
@@ -44,12 +44,12 @@ def test_upsert_and_get_round_trip(sqlite_env) -> None:
     from doc3gpp.storage.db.models import TDocORM
     sf = get_session_factory()
     with sf() as s:
-        s.add(TDocORM(tdoc_id="R5-999999", ftp_url="tsg_wg1/CR123.zip",
+        s.add(TDocORM(tdoc_id="R5-999999", ftp_url="tsg_wg1/cr123.zip",
                       meeting_id=None))
         s.commit()
     repo.upsert(details)
 
-    fetched = repo.get_by_url("tsg_wg1/CR123.zip")
+    fetched = repo.get_by_url("tsg_wg1/cr123.zip")
     assert fetched is not None
     assert fetched.tdoc_id == "R5-999999"
     assert fetched.clauses == ("5.2.3", "Table 5.2.3-1")
@@ -60,7 +60,7 @@ def test_upsert_and_get_round_trip(sqlite_env) -> None:
 
     by_id = repo.get_for_tdoc_id("R5-999999")
     assert len(by_id) == 1
-    assert by_id[0].ftp_url == "tsg_wg1/CR123.zip"
+    assert by_id[0].ftp_url == "tsg_wg1/cr123.zip"
 
 
 def test_get_by_url_returns_none_on_miss(sqlite_env) -> None:

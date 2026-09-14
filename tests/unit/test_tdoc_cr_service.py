@@ -275,7 +275,7 @@ def test_extract_from_url_db_cache_hit_populates_markdown_for_raw(
     tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
 
     url = "https://www.3gpp.org/ftp/.../R5s260009.zip"
-    stored_ftp_url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    stored_ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     expected_markdown = "# Raw cache hit markdown\nCached body paragraph."
 
     cache_file = "R5s260009-abcdef0123456789.zip"
@@ -378,7 +378,7 @@ def test_extract_calls_three_upserts_for_ttcn_tdoc(tmp_path: Path) -> None:
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="stored/R5s260009.zip",
+        ftp_url="stored/r5s260009.zip",
     )
 
     result = service.extract("R5s260009")
@@ -390,23 +390,23 @@ def test_extract_calls_three_upserts_for_ttcn_tdoc(tmp_path: Path) -> None:
     cover_arg = cr_repo.upsert.call_args.args[0]
     assert isinstance(cover_arg, TDocCRDetails)
     assert cover_arg.tdoc_id == "R5s260009"
-    assert cover_arg.ftp_url == "stored/R5s260009.zip"
+    assert cover_arg.ftp_url == "stored/r5s260009.zip"
 
     ttcn_arg = cr_ttcn_repo.upsert.call_args.args[0]
     assert isinstance(ttcn_arg, TDocCRTTCNDetails)
     assert ttcn_arg.tdoc_id == "R5s260009"
-    assert ttcn_arg.ftp_url == "stored/R5s260009.zip"
+    assert ttcn_arg.ftp_url == "stored/r5s260009.zip"
     assert ttcn_arg.testcase == "7.1.3.5.3"
 
     meta_arg = cr_repo.upsert_extract_meta.call_args.args[0]
     assert isinstance(meta_arg, TDocExtractMeta)
-    assert meta_arg.ftp_url == "stored/R5s260009.zip"
+    assert meta_arg.ftp_url == "stored/r5s260009.zip"
     assert meta_arg.tdoc_id == "R5s260009"
     assert meta_arg.doc_filename.lower().endswith(".docx")
 
     assert result.details.tdoc_id == "R5s260009"
     assert result.details.cr_num == "3790"
-    assert result.extract_meta.ftp_url == "stored/R5s260009.zip"
+    assert result.extract_meta.ftp_url == "stored/r5s260009.zip"
     assert result.from_cache is False
 
 
@@ -437,7 +437,7 @@ def test_extract_skips_ttcn_upsert_for_non_ttcn_tdoc(tmp_path: Path) -> None:
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="stored/R5s260009.zip",
+        ftp_url="stored/r5s260009.zip",
     )
 
     result = service.extract("R5s260009")
@@ -472,7 +472,7 @@ def test_extract_three_upsert_order_preserved(tmp_path: Path) -> None:
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="stored/R5s260009.zip",
+        ftp_url="stored/r5s260009.zip",
     )
 
     service.extract("R5s260009")
@@ -507,7 +507,7 @@ def test_extract_three_upserts_use_matching_ftp_url(tmp_path: Path) -> None:
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="stored/R5s260009.zip",
+        ftp_url="stored/r5s260009.zip",
     )
 
     service.extract("R5s260009")
@@ -515,7 +515,7 @@ def test_extract_three_upserts_use_matching_ftp_url(tmp_path: Path) -> None:
     cover_ftp = cr_repo.upsert.call_args.args[0].ftp_url
     ttcn_ftp = cr_ttcn_repo.upsert.call_args.args[0].ftp_url
     meta_ftp = cr_repo.upsert_extract_meta.call_args.args[0].ftp_url
-    assert cover_ftp == ttcn_ftp == meta_ftp == "stored/R5s260009.zip"
+    assert cover_ftp == ttcn_ftp == meta_ftp == "stored/r5s260009.zip"
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +548,7 @@ def test_extract_forwards_full_true_to_parser(tmp_path: Path) -> None:
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="stored/R5s260009.zip",
+        ftp_url="stored/r5s260009.zip",
     )
 
     service.extract("R5s260009", full=True)
@@ -573,7 +573,7 @@ def test_extract_full_defaults_to_false(tmp_path: Path) -> None:
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009",
         type="CR",
-        ftp_url="stored/R5s260009.zip",
+        ftp_url="stored/r5s260009.zip",
     )
 
     service.extract("R5s260009")

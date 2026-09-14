@@ -17,6 +17,17 @@ class SQLAlchemyTDocRepository:
     """SQLAlchemy-backed implementation of TDocRepository.
 
     This repository stores TDoc metadata observed in meeting FTP directories.
+
+    ``ftp_url`` is canonicalised to the same lowercase form
+    :func:`doc3gpp.parsers.normalizers.normalize_ftp_path` produces at
+    every persistence boundary: the 3GPP FTP server is case-insensitive
+    across the whole path, but the DB joins sidecars to ``tdocs`` on
+    exact ``ftp_url`` equality, so the normaliser must run before the
+    row is written — not just at upstream-ingestion services. The
+    repository layer owns this invariant because the last fix attempt
+    proved normalising only at the services layer leaves direct
+    ``upsert`` callers (tests, MCP, future writers) writing mixed-case
+    rows that later URL-keyed reads miss.
     """
 
     def __init__(self) -> None:
@@ -66,7 +77,9 @@ class SQLAlchemyTDocRepository:
         """Copy dataclass fields onto an ORM instance (existing or new)."""
         target.title = tdoc.title
         target.meeting_id = tdoc.meeting_id
-        target.ftp_url = tdoc.ftp_url
+        target.ftp_url = (
+            tdoc.ftp_url.lower() if tdoc.ftp_url is not None else None
+        )
         target.source = tdoc.source
         target.type = tdoc.type
         target.status = tdoc.status
@@ -237,12 +250,15 @@ class SQLAlchemyTDocRepository:
         See :meth:`doc3gpp.repository.protocols.TDocRepository.get_by_ftp_url`
         for the 1:1 invariant rationale. ``ORDER BY tdoc_id ASC LIMIT 1``
         guarantees a deterministic tie-breaker if the invariant is ever
-        violated by a re-upload / re-sync batch.
+        violated by a re-upload / re-sync batch. Stored URLs are
+        lowercase (see :func:`normalize_ftp_path`), so the lookup key is
+        lowercased first — a mixed-case caller spelling resolves to the
+        same row.
         """
         with self._session_factory() as session:
             row = session.scalars(
                 select(TDocORM)
-                .where(TDocORM.ftp_url == ftp_url)
+                .where(TDocORM.ftp_url == ftp_url.lower())
                 .order_by(TDocORM.tdoc_id.asc())
                 .limit(1)
             ).first()

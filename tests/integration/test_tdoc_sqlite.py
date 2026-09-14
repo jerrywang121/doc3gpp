@@ -226,10 +226,10 @@ def test_tdoc_sync_stores_per_tdoc_zip_url_not_xlsx_url(monkeypatch, sqlite_env)
     # Spot-check: both rows have column-A hyperlinks pointing at their zips.
     # ``ftp_url`` is stored as a path relative to the 3GPP FTP root.
     assert by_id["R5-261700"].ftp_url == (
-        "tsg_ran/WG5_Test_ex-T1/TSGR5__111_Dalian/Docs/R5-261700.zip"
+        "tsg_ran/wg5_test_ex-t1/tsgr5__111_dalian/docs/r5-261700.zip"
     )
     assert by_id["R5-261701"].ftp_url == (
-        "tsg_ran/WG5_Test_ex-T1/TSGR5__111_Dalian/Docs/R5-261701.zip"
+        "tsg_ran/wg5_test_ex-t1/tsgr5__111_dalian/docs/r5-261701.zip"
     )
     # Guard against regression: the XLSX list URL must never appear here.
     for row in rows:

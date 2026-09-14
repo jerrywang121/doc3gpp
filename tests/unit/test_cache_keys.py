@@ -16,15 +16,17 @@ import pytest
 from doc3gpp.scraping.cache import _KEY_PATTERN
 from doc3gpp.scraping.cache_keys import derive_cache_file
 
-# Locked spec examples (MD5 reconciled 2026-07-22 — see plan §T1).
+# Locked spec examples: canonical (lowercase) ``ftp_url`` form —
+# ``normalize_ftp_path`` lowercases the whole relative path before
+# anything reaches ``derive_cache_file``.
 _SPEC_EXAMPLES: list[tuple[str, str]] = [
     (
-        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260162.zip",
-        "R5s260162-5186a7d62c6ae3ab3a0c02fa128e41da.zip",
+        "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260162.zip",
+        "r5s260162-0004e1fa60134d966150b74812f8d983.zip",
     ),
     (
-        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Review/R5s260034_MCC160Comments.zip",
-        "R5s260034_MCC160Comments-5415a41d39774d1e74e27420153f65cc.zip",
+        "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/review/r5s260034_mcc160comments.zip",
+        "r5s260034_mcc160comments-7648344d6114eaf191db0d2915a5c37f.zip",
     ),
 ]
 
@@ -35,7 +37,7 @@ def test_derive_cache_file_examples_match_spec(ftp_url: str, expected: str) -> N
 
 
 def test_derive_cache_file_stable_across_calls() -> None:
-    ftp_url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260162.zip"
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260162.zip"
     first = derive_cache_file(ftp_url)
     for _ in range(10):
         assert derive_cache_file(ftp_url) == first

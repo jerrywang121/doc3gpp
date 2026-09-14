@@ -170,19 +170,28 @@ def _build_tdoc_zip_url(canonical_tdoc: str) -> str | None:
     The input MUST be in the canonical ``Ts260009`` form (TSG short name
     upper-cased, subtype separator lowercase). Use ``tsg_meeting_year_for``
     to derive the components; this helper is the pure template builder.
+
+    The template emits the same lowercase form
+    :func:`doc3gpp.parsers.normalizers.normalize_ftp_path` stores: the
+    3GPP FTP server is case-insensitive across the whole path, but the
+    DB joins sidecars to ``tdocs`` on exact ``ftp_url`` equality, and
+    :func:`resolve_download_url` dedups the stored primary URL against
+    this template by exact string — a mixed-case template would never
+    dedup against the lowercase stored primary and every extract would
+    pay for a second (identical) download attempt.
     """
     tsg = canonical_tdoc[:2]
     sub = canonical_tdoc[2:3]
     year = "20" + canonical_tdoc[3:5]
     if tsg == "R5" and sub == "s":
         return (
-            f"https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
-            f"{year}/Docs/{canonical_tdoc}.zip"
+            f"https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/"
+            f"{year}/docs/{canonical_tdoc.lower()}.zip"
         )
     if tsg == "R5" and sub == "w":
         return (
-            f"https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/Workshop/"
-            f"TSGR5_Workshop_{year}/Docs/{canonical_tdoc}.zip"
+            f"https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/workshop/"
+            f"tsgr5_workshop_{year}/docs/{canonical_tdoc.lower()}.zip"
         )
     # R5- and C6- templates deferred to Phase 8 per the plan.
     return None

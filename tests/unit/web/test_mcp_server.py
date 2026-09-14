@@ -187,7 +187,7 @@ def test_mcp_get_tdoc_prefers_url_when_both_supplied(sqlite_env) -> None:
     import json
 
     _, server = _server()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5s260001", ftp_url=url)
     )
@@ -225,7 +225,7 @@ def test_mcp_get_tdoc_by_url_404_on_no_rows(sqlite_env) -> None:
         return await _call(
             server,
             "get_tdoc",
-            {"ftp_url": "TSG_RAN/missing.zip"},
+            {"ftp_url": "tsg_ran/missing.zip"},
         )
 
     with pytest.raises(MCPError) as exc_info:
@@ -241,7 +241,7 @@ def test_mcp_get_tdoc_url_normalisation(sqlite_env) -> None:
     import json
 
     _, server = _server()
-    bare = "R5/26.001/R5s260001.zip"
+    bare = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=bare))
 
     async def run(url):
@@ -263,7 +263,7 @@ def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
     import json
 
     _, server = _server()
-    url = "R5/26.001/R5s260001.zip"
+    url = "r5/26.001/r5s260001.zip"
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=url))
     SQLAlchemyTDocCrRepository().upsert(
         TDocCRDetails(tdoc_id="R5s260001", ftp_url=url, cr_num="0001")
@@ -271,7 +271,7 @@ def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
     SQLAlchemyTDocFileRepository().upsert_many(
         [
             TDocFile(
-                ftp_url="R5/26.001/R5s260001.zip",
+                ftp_url="r5/26.001/r5s260001.zip",
                 tdoc_id="R5s260001",
                 type="revision",
                 file="R5s260001.zip",

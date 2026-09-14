@@ -154,32 +154,32 @@ def test_tsg_meeting_year_for_matrix(tdoc: str, expected: tuple[str, int | None]
 @pytest.mark.parametrize(
     ("tdoc", "expected_url"),
     [
-        # Known-good R5s shapes — TTCN email CRs.
+        # Known-good R5s shapes — TTCN email CRs (lowercase canonical form).
         (
             "R5s260009",
-            "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip",
+            "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip",
         ),
         (
             "R5s260051",
-            "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260051.zip",
+            "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260051.zip",
         ),
         (
             "R5s260135",
-            "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260135.zip",
+            "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260135.zip",
         ),
         (
             "R5s260176",
-            "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260176.zip",
+            "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260176.zip",
         ),
         # R5w workshop shape — same TSG, different template.
         (
             "R5w260009",
-            "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/Docs/R5w260009.zip",
+            "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/workshop/tsgr5_workshop_2026/docs/r5w260009.zip",
         ),
         # Lower-case input must resolve to the same URL as the upper-case form.
         (
             "r5s260009",
-            "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip",
+            "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip",
         ),
         # R5- / C6- shapes deferred to Phase 8 — return None, do not raise.
         ("R5-227476", None),

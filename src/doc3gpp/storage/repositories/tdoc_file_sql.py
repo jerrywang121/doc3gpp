@@ -47,20 +47,21 @@ class SQLAlchemyTDocFileRepository:
             return 0
 
         with self._session_factory() as session:
-            urls = [item.ftp_url for item in files]
+            urls = [item.ftp_url.lower() for item in files]
             existing_rows = session.scalars(
                 select(TDocFileORM).where(TDocFileORM.ftp_url.in_(urls))
             ).all()
             existing_by_url = {row.ftp_url: row for row in existing_rows}
 
             for item in files:
-                target = existing_by_url.get(item.ftp_url)
+                ftp_url = item.ftp_url.lower()
+                target = existing_by_url.get(ftp_url)
                 if target is None:
                     target = TDocFileORM(
                         tdoc_id=item.tdoc_id,
                         type=item.type,
                         file=item.file,
-                        ftp_url=item.ftp_url,
+                        ftp_url=ftp_url,
                         uploaded_date=item.uploaded_date,
                     )
                     session.add(target)
@@ -134,12 +135,13 @@ class SQLAlchemyTDocFileRepository:
         :mod:`doc3gpp.storage.db.models`) makes this an index-served
         lookup; in practice the list has length <=1. Ordered by
         ``(type, ftp_url) ASC`` for consistency with
-        :meth:`get_for_tdoc_id`.
+        :meth:`get_for_tdoc_id`. Stored URLs are lowercase, so the key
+        is lowercased first.
         """
         with self._session_factory() as session:
             stmt = (
                 select(TDocFileORM)
-                .where(TDocFileORM.ftp_url == ftp_url)
+                .where(TDocFileORM.ftp_url == ftp_url.lower())
                 .order_by(TDocFileORM.type.asc(), TDocFileORM.ftp_url.asc())
             )
             rows = session.scalars(stmt).all()

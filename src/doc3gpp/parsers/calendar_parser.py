@@ -184,7 +184,14 @@ def _extract_ftp_path(href: str | None) -> str | None:
         return None
     path = match.group(1).replace("\\", "/")
     path = re.sub(r"/{2,}", "/", path)
-    return path
+    # Canonicalise to the same lowercase form
+    # :func:`doc3gpp.parsers.normalizers.normalize_ftp_path` stores:
+    # the 3GPP FTP server is case-insensitive across the whole path,
+    # but the DB joins sidecars to ``tdocs`` on exact ``ftp_url``
+    # equality. (The parsers layer must not import network-adjacent
+    # helpers, so the ``.lower()`` is inlined here rather than
+    # delegating.)
+    return path.lower()
 
 
 def _parse_date(text: str) -> date | None:

@@ -93,10 +93,11 @@ class SQLAlchemyTDocCrRepository:
         ``url`` is the relative ``ftp_url`` (the PK); callers that
         hold a full upstream URL must normalise via
         :func:`doc3gpp.scraping.ftp_source.normalize_ftp_path` first.
+        Stored URLs are lowercase, so the key is lowercased first.
         """
         self._ensure_table_exists()
         with self._session_factory() as session:
-            row = session.get(TDocCrDetailOrm, url)
+            row = session.get(TDocCrDetailOrm, url.lower())
         if row is None:
             return None
         return _orm_to_details(row)
@@ -109,7 +110,7 @@ class SQLAlchemyTDocCrRepository:
                 "TDocCRDetails requires a non-empty ftp_url for URL-keyed upsert"
             )
 
-        ftp_url = details.ftp_url
+        ftp_url = details.ftp_url.lower()
         with self._session_factory() as session:
             detail_row = session.get(TDocCrDetailOrm, ftp_url)
             if detail_row is None:
@@ -137,7 +138,7 @@ class SQLAlchemyTDocCrRepository:
                 "TDocExtractMeta requires a non-empty tdoc_id for URL-keyed upsert"
             )
 
-        ftp_url = meta.ftp_url
+        ftp_url = meta.ftp_url.lower()
         with self._session_factory() as session:
             extract_row = session.get(TDocExtractOrm, ftp_url)
             if extract_row is None:
@@ -168,11 +169,12 @@ class SQLAlchemyTDocCrRepository:
     def get_extract_meta_by_url(self, url: str) -> TDocExtractMeta | None:
         """Return the extract-metadata row whose URL matches.
 
-        ``url`` is the relative ``ftp_url`` (the PK).
+        ``url`` is the relative ``ftp_url`` (the PK). Stored URLs are
+        lowercase, so the key is lowercased first.
         """
         self._ensure_table_exists()
         with self._session_factory() as session:
-            row = session.get(TDocExtractOrm, url)
+            row = session.get(TDocExtractOrm, url.lower())
         if row is None:
             return None
         return _orm_to_meta(row)

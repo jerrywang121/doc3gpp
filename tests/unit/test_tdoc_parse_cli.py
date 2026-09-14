@@ -617,7 +617,7 @@ def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
         ),
         (
             lambda: TDocZipDownloadError(
-                "https://www.3gpp.org/ftp/R5s260010.zip",
+                "https://www.3gpp.org/ftp/r5s260010.zip",
                 RuntimeError("404 Not Found"),
             ),
             "TDocZipDownloadError",
@@ -2098,7 +2098,7 @@ def test_tdoc_show_no_ftp_url_skips_cover_and_ttcn(sqlite_env) -> None:
         tdoc_id="R5s260011",
         spec="38.523-3",
         cr_num="3790",
-        ftp_url="stored/R5s260011_someremote.zip",
+        ftp_url="stored/r5s260011_someremote.zip",
     ))
 
     runner = CliRunner()
@@ -2148,14 +2148,14 @@ def test_tdoc_show_table_includes_auxiliary_files_block(sqlite_env) -> None:
                 tdoc_id="R5s260020",
                 type="revision",
                 file="R5s260020r1.zip",
-                ftp_url="tsg_ran/WG5/TSGR5_128/Inbox/R5s260020r1.zip",
+                ftp_url="tsg_ran/wg5/tsgr5_128/inbox/r5s260020r1.zip",
                 uploaded_date=date(2026, 7, 4),
             ),
             TDocFile(
                 tdoc_id="R5s260020",
                 type="review",
                 file="R5s260020_MCC160Comments.zip",
-                ftp_url="tsg_ran/WG5/TSGR5_128/Review/R5s260020_MCC160Comments.zip",
+                ftp_url="tsg_ran/wg5/tsgr5_128/review/r5s260020_mcc160comments.zip",
                 uploaded_date=date(2026, 7, 3),
             ),
         ],
@@ -2167,7 +2167,7 @@ def test_tdoc_show_table_includes_auxiliary_files_block(sqlite_env) -> None:
     assert "[Auxiliary Files]" in result.output
     assert "type: revision" in result.output
     assert "file: R5s260020r1.zip" in result.output
-    assert "ftp_url: tsg_ran/WG5/TSGR5_128/Inbox/R5s260020r1.zip" in result.output
+    assert "ftp_url: tsg_ran/wg5/tsgr5_128/inbox/r5s260020r1.zip" in result.output
     assert "uploaded_date: 2026-07-04" in result.output
     assert "type: review" in result.output
     assert "file: R5s260020_MCC160Comments.zip" in result.output
@@ -2203,14 +2203,14 @@ def test_tdoc_show_json_payload_includes_files_array(sqlite_env) -> None:
                 tdoc_id="R5s260022",
                 type="revision",
                 file="R5s260022r1.zip",
-                ftp_url="x/R5s260022r1.zip",
+                ftp_url="x/r5s260022r1.zip",
                 uploaded_date=date(2026, 7, 4),
             ),
             TDocFile(
                 tdoc_id="R5s260022",
                 type="review",
                 file="R5s260022_MCC.zip",
-                ftp_url="x/R5s260022_MCC.zip",
+                ftp_url="x/r5s260022_mcc.zip",
             ),
         ],
     )
@@ -2262,7 +2262,7 @@ def test_tdoc_show_markdown_includes_auxiliary_files_section(
                 tdoc_id="R5s260024",
                 type="revision",
                 file="R5s260024r1.zip",
-                ftp_url="x/R5s260024r1.zip",
+                ftp_url="x/r5s260024r1.zip",
                 uploaded_date=date(2026, 7, 4),
             ),
         ],
@@ -2276,7 +2276,7 @@ def test_tdoc_show_markdown_includes_auxiliary_files_section(
     assert "## Auxiliary Files" in result.output
     assert "- **type**: revision" in result.output
     assert "- **file**: R5s260024r1.zip" in result.output
-    assert "- **ftp_url**: x/R5s260024r1.zip" in result.output
+    assert "- **ftp_url**: x/r5s260024r1.zip" in result.output
     assert "- **uploaded_date**: 2026-07-04" in result.output
 
 
@@ -2386,17 +2386,17 @@ def test_tdoc_show_renders_distinct_revisions(sqlite_env) -> None:
     _seed_full_crdetail_row("R5s260009")
     _seed_full_crdetail_row(
         "R5s260009",
-        url="stored/R5s260009_rev2.zip",
+        url="stored/r5s260009_rev2.zip",
     )
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/R5s260009.zip"),
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"),
     )
 
     runner = CliRunner()
     result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260009"])
     assert result.exit_code == 0, result.output
-    assert "R5s260009.zip" in result.output
-    assert "R5s260009_rev2.zip" not in result.output
+    assert "r5s260009.zip" in result.output
+    assert "r5s260009_rev2.zip" not in result.output
     assert result.output.count("[Extracted Details]") == 1
 
 
@@ -2435,7 +2435,7 @@ def test_tdoc_show_format_json_omits_ttcn_for_non_ttcn_tdoc(sqlite_env) -> None:
     """A non-TTCN TDoc (e.g. ``R5-260020``) never emits a ``ttcn`` block even when rows exist for the same id."""
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260020", type="LS", ftp_url="stored/R5-260020.zip"),
+        TDoc(tdoc_id="R5-260020", type="LS", ftp_url="stored/r5-260020.zip"),
     )
 
     runner = CliRunner()
@@ -2453,7 +2453,7 @@ def test_tdoc_show_format_json_includes_ttcn_block(sqlite_env) -> None:
     """A TTCN TDoc (e.g. ``R5s260009``) emits a ``ttcn`` block when a sidecar row exists."""
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/R5s260009.zip"),
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"),
     )
     from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
         SQLAlchemyTDocCrTtcnRepository,
@@ -2462,7 +2462,7 @@ def test_tdoc_show_format_json_includes_ttcn_block(sqlite_env) -> None:
     SQLAlchemyTDocCrTtcnRepository().upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
-            ftp_url="stored/R5s260009.zip",
+            ftp_url="stored/r5s260009.zip",
             testcase="7.1.3.5.3",
             ue="UE1",
             ss="SS_NR5G",
@@ -2476,7 +2476,7 @@ def test_tdoc_show_format_json_includes_ttcn_block(sqlite_env) -> None:
     # in the JSON payload (sourced from the ``tdoc_extracts`` row).
     SQLAlchemyTDocCrRepository().upsert_extract_meta(
         TDocExtractMeta(
-            ftp_url="stored/R5s260009.zip",
+            ftp_url="stored/r5s260009.zip",
             tdoc_id="R5s260009",
             cache_file="R5s260009.zip",
             doc_filename="R5s260009.docx",
@@ -2503,7 +2503,7 @@ def test_tdoc_show_format_json_skips_ttcn_for_non_ttcn_id(sqlite_env) -> None:
     """The TTCN gate is structural: ``R5-260020`` never reads the TTCN sidecar even when rows exist."""
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260020", type="CR", ftp_url="stored/R5-260020.zip"),
+        TDoc(tdoc_id="R5-260020", type="CR", ftp_url="stored/r5-260020.zip"),
     )
     from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
         SQLAlchemyTDocCrTtcnRepository,
@@ -2514,7 +2514,7 @@ def test_tdoc_show_format_json_skips_ttcn_for_non_ttcn_id(sqlite_env) -> None:
     SQLAlchemyTDocCrTtcnRepository().upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5-260020",
-            ftp_url="stored/R5-260020.zip",
+            ftp_url="stored/r5-260020.zip",
             testcase="placeholder",
         ),
     )
@@ -2549,7 +2549,7 @@ def test_tdoc_show_format_markdown_includes_ttcn_section_for_ttcn_tdoc(sqlite_en
     """A TTCN TDoc with a sidecar row gets a ``## TTCN Details`` markdown section."""
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/R5s260009.zip"),
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"),
     )
     from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
         SQLAlchemyTDocCrTtcnRepository,
@@ -2558,7 +2558,7 @@ def test_tdoc_show_format_markdown_includes_ttcn_section_for_ttcn_tdoc(sqlite_en
     SQLAlchemyTDocCrTtcnRepository().upsert(
         TDocCRTTCNDetails(
             tdoc_id="R5s260009",
-            ftp_url="stored/R5s260009.zip",
+            ftp_url="stored/r5s260009.zip",
             testcase="7.1.3.5.3",
             ue="UE1",
             required_changes=[{"function_name": "fl_TC_7_1_3_5_3_Body"}],
@@ -2805,8 +2805,8 @@ def test_tdoc_show_format_invalid_raises_bad_parameter(sqlite_env) -> None:
 # ---------------------------------------------------------------------------
 
 
-_FTP_URL = "stored/R5s260100.zip"
-_FTP_URL_ALT_FORM = "https://www.3gpp.org/ftp/stored/R5s260100.zip"
+_FTP_URL = "stored/r5s260100.zip"
+_FTP_URL_ALT_FORM = "https://www.3gpp.org/ftp/stored/r5s260100.zip"
 
 
 def _seed_ftp_url_target(
@@ -3286,13 +3286,13 @@ def test_tdoc_parse_from_url_3gpp_file_triggers_auto_sync_with_candidates(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["tdoc", "parse", "--from-url", "https://www.3gpp.org/ftp/R5s260009.zip"],
+        ["tdoc", "parse", "--from-url", "https://www.3gpp.org/ftp/r5s260009.zip"],
     )
 
     assert result.exit_code == 0, result.output
     candidates_mock.assert_called_once()
     call_args, call_kwargs = candidates_mock.call_args
-    assert call_args == ("https://www.3gpp.org/ftp/R5s260009.zip",)
+    assert call_args == ("https://www.3gpp.org/ftp/r5s260009.zip",)
     assert call_kwargs["tdoc_service"] is service
     assert call_kwargs["max_depth"] >= 0
 

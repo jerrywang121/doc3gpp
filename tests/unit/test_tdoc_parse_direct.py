@@ -304,8 +304,8 @@ def test_download_tdoc_zip_without_ftp_url_uses_template_url() -> None:
     assert result.path.exists() is False or True  # path object, file may not exist
     # Template URL was used as the upstream fetch target.
     expected_url = (
-        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
-        "2026/Docs/R5s260008.zip"
+        "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/"
+        "2026/docs/r5s260008.zip"
     )
     client.get_bytes.assert_called_once_with(expected_url)
     assert len(cache.put_calls) == 1

@@ -64,7 +64,7 @@ class SQLAlchemyTDocCrChangeDetailsRepository:
             raise ValueError(
                 "TDocCRChangeDetails requires a non-empty tdoc_id for URL-keyed upsert"
             )
-        ftp_url = details.ftp_url
+        ftp_url = details.ftp_url.lower()
         with self._session_factory() as session:
             row = session.get(TDocCrChangeDetailOrm, ftp_url)
             if row is None:
@@ -78,10 +78,13 @@ class SQLAlchemyTDocCrChangeDetailsRepository:
             session.commit()
 
     def get_by_url(self, url: str) -> TDocCRChangeDetails | None:
-        """Return the body-change row for an immutable ``url``, or ``None``."""
+        """Return the body-change row for ``url``, or ``None``.
+
+        Stored URLs are lowercase, so the key is lowercased first.
+        """
         self._ensure_table_exists()
         with self._session_factory() as session:
-            row = session.get(TDocCrChangeDetailOrm, url)
+            row = session.get(TDocCrChangeDetailOrm, url.lower())
         if row is None:
             return None
         return _orm_to_details(row)

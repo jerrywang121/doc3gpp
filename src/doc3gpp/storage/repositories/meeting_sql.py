@@ -239,13 +239,14 @@ def _persist(session: Session, meetings: list[Meeting]) -> None:
 
     for item in meetings:
         existing = existing_by_id.get(item.meeting_id)
+        ftp_url = item.ftp_url.lower() if item.ftp_url is not None else None
         if existing is not None:
             existing.name = item.name
             existing.title = item.title
             existing.location = item.location
             existing.start_date = item.start_date
             existing.end_date = item.end_date
-            existing.ftp_url = item.ftp_url
+            existing.ftp_url = ftp_url
             existing.start_doc = item.start_doc
             existing.end_doc = item.end_doc
             existing.tsg = item.tsg
@@ -258,7 +259,7 @@ def _persist(session: Session, meetings: list[Meeting]) -> None:
                     location=item.location,
                     start_date=item.start_date,
                     end_date=item.end_date,
-                    ftp_url=item.ftp_url,
+                    ftp_url=ftp_url,
                     start_doc=item.start_doc,
                     end_doc=item.end_doc,
                     tsg=item.tsg,

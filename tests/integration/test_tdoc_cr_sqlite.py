@@ -138,7 +138,7 @@ def _seed_cr_tdoc(
     hash against (legacy helper callers did not need it).
     """
     resolved = ftp_url or (
-        f"tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/{tdoc_id}.zip"
+        f"tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/{tdoc_id}.zip"
     )
     tdoc_repo.upsert_many([TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=resolved)])
 
@@ -628,7 +628,7 @@ def test_extract_end_to_end_via_cli_runner(sqlite_env, monkeypatch, tmp_path) ->
         TDoc(
             tdoc_id="R5s260009",
             type="CR",
-            ftp_url="tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip",
+            ftp_url="tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip",
         ),
     )
 
@@ -701,11 +701,11 @@ def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None
 
     # ``ftp_url`` is stored as a path relative to the 3GPP FTP root;
     # ``build_ftp_url`` reconstructs the absolute URL the scraper sees.
-    primary_ftp_url = "stored/R5s260009.zip"
+    primary_ftp_url = "stored/r5s260009.zip"
     primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
     template_url = (
-        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
-        "2026/Docs/R5s260009.zip"
+        "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/"
+        "2026/docs/r5s260009.zip"
     )
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
@@ -759,11 +759,11 @@ def test_extract_falls_back_to_template_when_primary_url_fails(
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    primary_ftp_url = "stored/R5s260009.zip"
+    primary_ftp_url = "stored/r5s260009.zip"
     primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
     template_url = (
-        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
-        "2026/Docs/R5s260009.zip"
+        "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/"
+        "2026/docs/r5s260009.zip"
     )
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
@@ -813,8 +813,8 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
     assert fixture.exists(), f"fixture missing: {fixture}"
 
     template_url = (
-        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
-        "2026/Docs/R5s260009.zip"
+        "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/"
+        "2026/docs/r5s260009.zip"
     )
     stored_ftp_url = normalize_ftp_path(template_url)
 
@@ -875,7 +875,7 @@ def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> No
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    primary_ftp_url = "stored/R5s260009.zip"
+    primary_ftp_url = "stored/r5s260009.zip"
     primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
@@ -925,14 +925,14 @@ def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> N
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    primary_ftp_url = "stored/R5s260009.zip"
+    primary_ftp_url = "stored/r5s260009.zip"
     primary_url = "https://www.3gpp.org/ftp/" + primary_ftp_url
     template_url = (
-        "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/"
-        "2026/Docs/R5s260009.zip"
+        "https://www.3gpp.org/ftp/tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/"
+        "2026/docs/r5s260009.zip"
     )
     template_ftp_url = (
-        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+        "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     )
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
@@ -986,7 +986,7 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
     tdoc_repo = SQLAlchemyTDocRepository()
     tdoc_repo.upsert_many([TDoc(tdoc_id="R5s260009", type="CR")])
 
-    url = "stored/R5s260009.zip"
+    url = "stored/r5s260009.zip"
     meta = TDocExtractMeta(
         ftp_url=url,
         tdoc_id="R5s260009",
@@ -1019,7 +1019,7 @@ def test_extract_url_field_round_trips_through_orm(sqlite_env) -> None:
     assert rows[0].cr_num == "3791"
 
     # A different URL creates a second revision row.
-    url_b = "stored/R5s260009_rev2.zip"
+    url_b = "stored/r5s260009_rev2.zip"
     cr_repo.upsert(
         TDocCRDetails(
             tdoc_id="R5s260009",
@@ -1098,7 +1098,7 @@ def test_extract_upsert_extract_meta_round_trips(sqlite_env) -> None:
         [TDoc(tdoc_id="R5s260009", type="CR")]
     )
 
-    url = "stored/R5s260009.zip"
+    url = "stored/r5s260009.zip"
     meta = TDocExtractMeta(
         ftp_url=url,
         tdoc_id="R5s260009",
@@ -1189,7 +1189,7 @@ def test_parse_with_combined_filters_against_sqlite(
             meeting_id=meeting_id,
             cr_cat="F",
             ftp_url=(
-                f"tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/"
+                f"tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/"
                 f"R5s2600{i:02d}.zip"
             ),
         )
@@ -1206,12 +1206,12 @@ def test_parse_with_combined_filters_against_sqlite(
             tdoc_id="R5s260001",
             spec="38.523-3",
             cr_num="3790",
-            ftp_url="stored/R5s260001.zip",
+            ftp_url="stored/r5s260001.zip",
         ),
     )
     cr_repo.upsert_extract_meta(
         TDocExtractMeta(
-            ftp_url="stored/R5s260001.zip",
+            ftp_url="stored/r5s260001.zip",
             tdoc_id="R5s260001",
             cache_file="R5s260001.zip",
             doc_filename="R5s260001.docx",
@@ -1395,7 +1395,7 @@ def test_extract_writes_cache_file_and_resolves_path(sqlite_env, tmp_path) -> No
     fixture = FIXTURES_DIR / "R5s260009.zip"
     assert fixture.exists(), f"fixture missing: {fixture}"
 
-    ftp_url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     expected_cache_file = derive_cache_file(ftp_url)
 
     service, scraper_mock, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
@@ -1446,7 +1446,7 @@ def test_extract_meta_orm_round_trips_cache_file(sqlite_env) -> None:
         [TDoc(tdoc_id="R5s260009", type="CR")],
     )
 
-    ftp_url = "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     meta_in = TDocExtractMeta(
         ftp_url=ftp_url,
         tdoc_id="R5s260009",

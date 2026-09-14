@@ -229,7 +229,7 @@ def test_parse_preserves_filename_text_over_href_basename() -> None:
 
     files = parse_tdoc_files_from_listing(html, base, ["R5s260001"])
     assert files[0].file == "R5s260001r1.zip"
-    assert files[0].ftp_url == "Docs/encoded%20name.zip"
+    assert files[0].ftp_url == "docs/encoded%20name.zip"
     assert files[0].uploaded_date is None
 
 

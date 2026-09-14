@@ -40,7 +40,9 @@ def test_parse_3gpp_calendar_sample() -> None:
     assert workshop.start_date == date(2026, 7, 2)
     assert workshop.end_date == date(2026, 7, 2)
     # Real-world 3GPP docs href ends with ``\docs`` (no trailing slash).
-    assert workshop.ftp_url == "tsg_ran/WG5_Test_ex-T1/Workshop/TSGR5_Workshop_2026/docs"
+    # Stored lowercase: the FTP server is case-insensitive but DB joins
+    # on exact ftp_url equality.
+    assert workshop.ftp_url == "tsg_ran/wg5_test_ex-t1/workshop/tsgr5_workshop_2026/docs"
     assert workshop.start_doc == "R5w260200"
     assert workshop.end_doc == "R5w260201"
 
@@ -69,7 +71,7 @@ def test_parse_3gpp_calendar_sample() -> None:
     assert r5_95e.location == "Online"
     assert r5_95e.start_date == date(2022, 5, 9)
     assert r5_95e.end_date == date(2022, 5, 20)
-    assert r5_95e.ftp_url == "TSG_RAN/WG5_Test_ex-T1/TSGR5_95_Electronic/docs"
+    assert r5_95e.ftp_url == "tsg_ran/wg5_test_ex-t1/tsgr5_95_electronic/docs"
     assert r5_95e.start_doc == "R5-222050"
     assert r5_95e.end_doc == "R5-223886"
 
@@ -77,7 +79,7 @@ def test_parse_3gpp_calendar_sample() -> None:
     r5_79 = by_id[18788]
     assert r5_79.location == "Busan"
     assert r5_79.start_date == date(2018, 5, 21)
-    assert r5_79.ftp_url == "TSG_RAN/WG5_Test_ex-T1/TSGR5_79_Busan/docs"
+    assert r5_79.ftp_url == "tsg_ran/wg5_test_ex-t1/tsgr5_79_busan/docs"
 
     # The long-running e-mail meeting: FTP path extracted from the Files cell
     # (cell 8) because cell 5 contains only a ``-`` placeholder.
@@ -86,6 +88,6 @@ def test_parse_3gpp_calendar_sample() -> None:
     assert email_meeting.location == "Electronic Meeting"
     assert email_meeting.start_date == date(2005, 3, 1)
     assert email_meeting.end_date == date(2005, 12, 31)
-    assert email_meeting.ftp_url == "TSG_RAN/WG5_Test_ex-T1/TTCN_CRs"
+    assert email_meeting.ftp_url == "tsg_ran/wg5_test_ex-t1/ttcn_crs"
     assert email_meeting.start_doc is None
     assert email_meeting.end_doc is None

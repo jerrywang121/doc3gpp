@@ -226,6 +226,40 @@ def test_rebuild_batch_resumes_from_after_id(sqlite_env):
     )
 
 
+def test_model_mismatch_raises_even_when_dim_matches(sqlite_env):
+    import numpy as np
+    from doc3gpp.models.semantic_search import VectorIndexUnavailableError
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
+    from sqlalchemy import text
+    from doc3gpp.storage.db.session import get_engine
+
+    create_schema()
+    eng = get_engine()
+    with eng.begin() as conn:
+        conn.execute(text("UPDATE vec_meta SET value='old-model' WHERE key='embedding_model'"))
+    repo = SQLAlchemyVectorIndexRepository(expected_model="new-model")
+    with pytest.raises(VectorIndexUnavailableError, match="rebuild-embeddings"):
+        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+
+
+def test_legacy_db_missing_model_treated_as_mismatch(sqlite_env):
+    import numpy as np
+    from doc3gpp.models.semantic_search import VectorIndexUnavailableError
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
+    from sqlalchemy import text
+    from doc3gpp.storage.db.session import get_engine
+
+    create_schema()
+    eng = get_engine()
+    with eng.begin() as conn:
+        conn.execute(text("DELETE FROM vec_meta WHERE key='embedding_model'"))
+    repo = SQLAlchemyVectorIndexRepository(expected_model="nomic-embed-text")
+    with pytest.raises(VectorIndexUnavailableError, match="rebuild-embeddings"):
+        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+
+
 def test_count_tdocs_to_index_respects_after_id(sqlite_env):
     """Regression: count_tdocs_to_index must honor the resume cursor.
 
@@ -276,3 +310,123 @@ def test_count_tdocs_to_index_respects_after_id(sqlite_env):
     assert repo.count_tdocs_to_index(stale_only=False, after_id="R5-000003") == 4
     # With after_id at the last row: zero
     assert repo.count_tdocs_to_index(stale_only=False, after_id="R5-000007") == 0
+
+
+def test_rebuild_embeddings_stamps_dim_and_model(sqlite_env):
+    """rebuild_embeddings stamps live dim+model, not the old rows.
+
+    Regression: ``create_schema()`` seeds no ``embedding_model``
+    row; the non-resume rebuild must overwrite the ``vec0`` table +
+    both ``vec_meta`` keys from the live embedder so a subsequent
+    same-model reader sees a compatible index.
+    """
+    import numpy as np
+    from unittest.mock import MagicMock
+    from sqlalchemy import text
+
+    from doc3gpp.services.semantic_search_service import SemanticSearchService
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+
+    create_schema()
+    embedder = MagicMock()
+    embedder.dim = 384
+    embedder.model_name = "nomic-embed-text"
+    embedder.encode.return_value = np.zeros((1, 384), dtype=np.float32)
+    settings = MagicMock()
+    settings.semantic_search.chunk_size = 200
+    settings.semantic_search.chunk_overlap = 20
+    settings.semantic_search.max_chunks_per_tdoc = 8
+    svc = SemanticSearchService(
+        MagicMock(), embedder,
+        SQLAlchemyVectorIndexRepository(), settings,
+    )
+    list(
+        svc.rebuild_embeddings(
+            batch_size=10, stale_only=False, quiet=True, resume=False,
+        ),
+    )
+    eng = get_engine()
+    with eng.begin() as conn:
+        assert conn.execute(
+            text("SELECT value FROM vec_meta WHERE key='embedding_model'")
+        ).scalar() == "nomic-embed-text"
+        assert conn.execute(
+            text("SELECT value FROM vec_meta WHERE key='embedding_dim'")
+        ).scalar() == "384"
+
+
+def test_rebuild_embeddings_resume_mismatch_raises(sqlite_env):
+    """Resume must fail fast when the live model changed mid-rebuild.
+
+    A resumed rebuild against a re-created index (or a swapped model)
+    must not silently mix rows from two models into one ``vec0``
+    table — it raises the mismatch error with the rebuild hint.
+    """
+    import numpy as np
+    from unittest.mock import MagicMock
+
+    from doc3gpp.models.semantic_search import VectorIndexUnavailableError
+    from doc3gpp.services.semantic_search_service import SemanticSearchService
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+    from sqlalchemy import text
+
+    create_schema()
+    eng = get_engine()
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO vec_meta (key, value) VALUES ('embedding_model', 'old-model') "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            ),
+        )
+    embedder = MagicMock()
+    embedder.dim = 384
+    embedder.model_name = "new-model"
+    embedder.encode.return_value = np.zeros((1, 384), dtype=np.float32)
+    settings = MagicMock()
+    settings.semantic_search.chunk_size = 200
+    settings.semantic_search.chunk_overlap = 20
+    settings.semantic_search.max_chunks_per_tdoc = 8
+    svc = SemanticSearchService(
+        MagicMock(), embedder,
+        SQLAlchemyVectorIndexRepository(expected_model="new-model"), settings,
+    )
+    with __import__("pytest").raises(
+        VectorIndexUnavailableError, match="rebuild-embeddings",
+    ):
+        list(
+            svc.rebuild_embeddings(
+                batch_size=10, stale_only=False, quiet=True, resume=True,
+            ),
+        )
+
+
+def test_expected_dim_mismatch_raises_on_upsert(sqlite_env):
+    """A live dim that no longer matches the stored dim fails fast.
+
+    Covers the ``expected_dim`` half of the constructor contract:
+    probing the remote API after a model swap that changed dims must
+    raise with the rebuild hint before any row is written.
+    """
+    import numpy as np
+
+    from doc3gpp.models.semantic_search import VectorIndexUnavailableError
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+
+    create_schema()
+    repo = SQLAlchemyVectorIndexRepository(expected_dim=128)
+    with __import__("pytest").raises(
+        VectorIndexUnavailableError, match="rebuild-embeddings",
+    ):
+        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])

@@ -287,7 +287,7 @@ def _create_search_schema() -> None:
         )
 
 
-def _create_vector_schema() -> None:
+def _create_vector_schema(dim: int | None = None) -> None:
     """Create the sqlite-vec virtual table + meta sidecar.
 
     Gated on the runtime availability of the sqlite-vec extension —
@@ -300,7 +300,10 @@ def _create_vector_schema() -> None:
     The DDL matches ``docs/superpowers/specs/2026-07-31-embedding-search-design.md``
     §"Vector schema". The virtual table stores one row per chunk and the
     dimension is pinned at table-creation time to the default embedding
-    dimension (384 for ``all-MiniLM-L6-v2``).
+    dimension (384 for the remote default model); callers may pass an
+    explicit ``dim`` (e.g. a rebuild at a live embedder dim) which is
+    then stamped into ``vec_meta.embedding_dim`` via ``INSERT OR
+    IGNORE`` so a pre-existing row is never clobbered.
 
     Idempotent: ``IF NOT EXISTS`` makes a second ``create_schema`` call
     a no-op.
@@ -315,16 +318,15 @@ def _create_vector_schema() -> None:
             sqlite_vec.load(conn.connection.driver_connection)
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
+        width = int(dim) if dim is not None else 384
         conn.execute(
             text(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS vec_tdoc_embeddings USING vec0(
-                    chunk_id TEXT PRIMARY KEY,
-                    tdoc_id TEXT,
-                    chunk_index INTEGER,
-                    embedding FLOAT[384] distance_metric=cosine
-                )
-                """
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_tdoc_embeddings USING vec0(\n"
+                "    chunk_id TEXT PRIMARY KEY,\n"
+                "    tdoc_id TEXT,\n"
+                "    chunk_index INTEGER,\n"
+                f"    embedding FLOAT[{width}] distance_metric=cosine\n"
+                ")"
             )
         )
         conn.execute(
@@ -337,6 +339,14 @@ def _create_vector_schema() -> None:
                 """
             )
         )
+        if dim is not None:
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO vec_meta (key, value) "
+                    "VALUES ('embedding_dim', :d)"
+                ),
+                {"d": str(width)},
+            )
 
 
 def create_schema(scope: str = "all") -> None:

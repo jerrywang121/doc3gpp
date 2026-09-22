@@ -296,7 +296,16 @@ def build_semantic_search_service(
             if embedder is None:
                 return None
         if vector_repo is None:
-            vector_repo = SQLAlchemyVectorIndexRepository()
+            try:
+                live_dim = getattr(embedder, "dim", None)
+            except EmbedderUnavailableError:
+                return None
+            if live_dim is None:
+                return None
+            vector_repo = SQLAlchemyVectorIndexRepository(
+                expected_model=getattr(embedder, "model_name", None),
+                expected_dim=live_dim,
+            )
         return SemanticSearchService(
             fts5_service=fts5_service, embedder=embedder,
             vector_repo=vector_repo, settings=settings,
@@ -370,11 +379,21 @@ def build_search_service(
                     if embedder is None:
                         reranker = PassthroughReranker()
                     else:
-                        vector_repo = SQLAlchemyVectorIndexRepository()
-                        reranker = SemanticReranker(
-                            embedder=embedder, vector_repo=vector_repo,
-                            settings=settings,
-                        )
+                        try:
+                            live_dim = getattr(embedder, "dim", None)
+                        except EmbedderUnavailableError:
+                            live_dim = None
+                        if live_dim is None:
+                            reranker = PassthroughReranker()
+                        else:
+                            vector_repo = SQLAlchemyVectorIndexRepository(
+                                expected_model=getattr(embedder, "model_name", None),
+                                expected_dim=live_dim,
+                            )
+                            reranker = SemanticReranker(
+                                embedder=embedder, vector_repo=vector_repo,
+                                settings=settings,
+                            )
                 except (
                     VectorIndexUnavailableError,
                     EmbedderUnavailableError,

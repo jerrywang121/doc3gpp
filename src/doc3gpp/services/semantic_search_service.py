@@ -260,12 +260,28 @@ class SemanticSearchService:
         ``resume=True`` picks up from the persisted cursor;
         ``resume=False`` (default) clears the cursor first so a
         fresh start processes every TDoc from the very first one.
+        The non-resume path drops + recreates the ``vec0`` table at
+        the embedder's live dim and stamps ``embedding_dim`` +
+        ``embedding_model`` in ``vec_meta`` first — the vec0 dim is a
+        schema-level property fixed at ``CREATE VIRTUAL TABLE`` time,
+        so a dim change needs a fresh table rather than in-place
+        row writes. The resume path instead fails fast when the
+        live embedder's dim/model no longer matches the stored
+        values (no silent cross-model mixing). Duck-typed embedders
+        without a ``model_name`` attribute (e.g. test doubles) stamp
+        / check dim only.
         """
+        model = getattr(self._embedder, "model_name", None)
+        live_dim = getattr(self._embedder, "dim", None)
         if resume:
+            if hasattr(self._vec, "verify_compatible") and live_dim is not None:
+                self._vec.verify_compatible(live_dim, model)
             after_id = self._vec.get_resume_cursor()
         else:
             # Force a fresh start regardless of any stale cursor.
             self._vec.clear_resume_cursor()
+            if hasattr(self._vec, "reset_for_rebuild") and live_dim is not None:
+                self._vec.reset_for_rebuild(live_dim, model)
             after_id = None
         total = self._vec.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,

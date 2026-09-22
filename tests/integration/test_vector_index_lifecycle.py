@@ -399,7 +399,7 @@ def test_rebuild_embeddings_resume_mismatch_raises(sqlite_env):
         MagicMock(), embedder,
         SQLAlchemyVectorIndexRepository(expected_model="new-model"), settings,
     )
-    with __import__("pytest").raises(
+    with pytest.raises(
         VectorIndexUnavailableError, match="rebuild-embeddings",
     ):
         list(
@@ -426,7 +426,7 @@ def test_expected_dim_mismatch_raises_on_upsert(sqlite_env):
 
     create_schema()
     repo = SQLAlchemyVectorIndexRepository(expected_dim=128)
-    with __import__("pytest").raises(
+    with pytest.raises(
         VectorIndexUnavailableError, match="rebuild-embeddings",
     ):
         repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])

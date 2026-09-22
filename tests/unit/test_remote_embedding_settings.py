@@ -31,3 +31,35 @@ def test_embedding_api_key_env_is_allowlisted():
     assert env_var_for_dotted_key("semantic_search.embedding_api_key") == (
         "DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY"
     )
+
+
+def test_embedding_api_key_env_populates_settings(monkeypatch):
+    from doc3gpp.settings.loader import get_settings
+
+    monkeypatch.setenv("DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY", "env-sekret")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.semantic_search.embedding_api_key == "env-sekret"
+    finally:
+        get_settings.cache_clear()
+        monkeypatch.delenv("DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY", raising=False)
+
+
+def test_embedding_api_key_env_beats_toml(tmp_path, monkeypatch):
+    from doc3gpp.settings.loader import get_settings
+
+    cfg = tmp_path / "doc3gpp.toml"
+    cfg.write_text(
+        '[semantic_search]\nembedding_base_url = "http://localhost:11434/v1"\n'
+        'embedding_api_key = "toml-sekret"\n'
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
+    monkeypatch.setenv("DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY", "env-sekret")
+    get_settings.cache_clear()
+    try:
+        assert get_settings().semantic_search.embedding_api_key == "env-sekret"
+    finally:
+        get_settings.cache_clear()
+        monkeypatch.delenv("DOC3GPP_CONFIG", raising=False)
+        monkeypatch.delenv("DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY", raising=False)

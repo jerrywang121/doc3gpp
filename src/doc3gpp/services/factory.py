@@ -240,6 +240,12 @@ def build_tdoc_cr_service(
     settings = get_settings()
     if max_tdoc_size_bytes is None:
         max_tdoc_size_bytes = settings.tdoc_parse.max_tdoc_size_kb * 1024
+    # Build the embedder once and share it: build_search_service and
+    # build_semantic_search_service each build+probe their own when
+    # passed None, which would cost two HTTP probe round-trips per
+    # parse. The web app already shares one instance per process.
+    if embedder is None:
+        embedder = build_embedder(settings)
     return TDocCrService(
         cache=TDocCache(
             root=settings.cache.dir,

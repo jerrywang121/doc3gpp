@@ -89,3 +89,21 @@ def test_http_error_maps_to_embedder_unavailable(monkeypatch):
     emb = OpenAICompatibleEmbedder(base_url="http://x/v1", model="m", api_key="wrong")
     with pytest.raises(EmbedderUnavailableError, match="401"):
         emb.encode(["a"])
+
+
+def test_ragged_dimensions_map_to_embedder_unavailable(monkeypatch):
+    import httpx
+    from doc3gpp.models.semantic_search import EmbedderUnavailableError
+    from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
+    import pytest
+
+    def fake_post(self, url, json=None, headers=None):
+        return _fake_response({"data": [
+            {"embedding": [0.1, 0.2]},
+            {"embedding": [0.3]},  # ragged: shorter than the first row
+        ]})
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    emb = OpenAICompatibleEmbedder(base_url="http://x/v1", model="m")
+    with pytest.raises(EmbedderUnavailableError, match="malformed"):
+        emb.encode(["a", "b"])

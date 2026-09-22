@@ -7,15 +7,12 @@ other OpenAI-compatible server: ``POST {base_url}/embeddings`` with
 
 from __future__ import annotations
 
-import logging
 import threading
 
 import httpx
 import numpy as np
 
 from doc3gpp.models.semantic_search import EmbedderUnavailableError
-
-logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleEmbedder:
@@ -78,7 +75,15 @@ class OpenAICompatibleEmbedder:
                 f"embedding API returned {len(rows)} vectors for {len(texts)} inputs "
                 f"(model {self._model_name!r})"
             )
-        return np.asarray(rows, dtype=np.float32)
+        try:
+            return np.asarray(rows, dtype=np.float32)
+        except (ValueError, TypeError) as exc:
+            # Ragged / non-numeric rows: the remote server is untrusted
+            # input, so funnel every malformed shape into the disabled
+            # path instead of crashing the caller with a raw ValueError.
+            raise EmbedderUnavailableError(
+                f"malformed embedding API response for model {self._model_name!r}: {exc}"
+            ) from exc
 
     @property
     def dim(self) -> int:

@@ -783,7 +783,7 @@ class Embedder(Protocol):
 
     @property
     def dim(self) -> int:
-        """The model's embedding dimension (e.g. 384 for all-MiniLM-L6-v2)."""
+        """The model's embedding dimension (e.g. 768 for nomic-embed-text)."""
         ...
 
 

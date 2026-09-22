@@ -760,10 +760,11 @@ class Settings(BaseSettings):
     :data:`ALLOWED_ENV_VARS` subset of ``DOC3GPP_*`` env vars.
     Nested sub-models (``output``, ``cache``, ``tdoc_parse``,
     ``sync``) come exclusively from the TOML config file via
-    :func:`doc3gpp.settings.loader.get_settings`; the only nested
-    env-override is ``DOC3GPP_CACHE__DIR`` (allowed) and
-    ``DOC3GPP_SYNC__AUTO_SYNC`` (allowed). All other nested fields
-    are TOML-only.
+    :func:`doc3gpp.settings.loader.get_settings`; the nested
+    env-overrides are ``DOC3GPP_CACHE__DIR``,
+    ``DOC3GPP_SYNC__AUTO_SYNC``, and
+    ``DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY`` (all allowed). All
+    other nested fields are TOML-only.
     """
 
     database_url: str = Field(

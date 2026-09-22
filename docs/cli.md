@@ -1903,9 +1903,10 @@ directly with the user's `--limit`.
 (`pip install "doc3gpp[semantic]"`), a populated
 `vec_tdoc_embeddings` table, and a configured
 `[semantic_search].embedding_base_url` (the query string is
-embedded via the remote API). On a build without the extra, the
-CLI prints `search sem rerank unavailable; run \`pip install
-doc3gpp[semantic]\`` to stderr and exits 1. The empty-vector
+embedded via the remote API). When the semantic stack is
+unavailable (extra missing, URL unset, API down), the command
+exits 1 with a `search sem unavailable; ...` one-liner to stderr
+pointing at the missing piece. The empty-vector
 fallback applies to TDoc rows that have no vector chunks indexed
 yet: `SemanticReranker` assigns them a sentinel
 `MISSING_FLOOR` distance so they sort to the bottom of the rerank

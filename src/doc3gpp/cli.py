@@ -5034,7 +5034,11 @@ def config_show() -> None:
     path, _data = load_config_data()
     settings = get_settings()
     typer.echo(f"# config source: {path if path is not None else '(no config file)'}")
-    typer.echo(json.dumps(settings.model_dump(mode="json"), indent=2, sort_keys=True))
+    dumped = settings.model_dump(mode="json")
+    sem = dumped.get("semantic_search")
+    if isinstance(sem, dict) and sem.get("embedding_api_key"):
+        sem["embedding_api_key"] = "***"
+    typer.echo(json.dumps(dumped, indent=2, sort_keys=True))
 
 
 def _env_var_for_key(key: str) -> str | None:

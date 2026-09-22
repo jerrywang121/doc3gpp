@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from humanfriendly import parse_timespan
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     EnvSettingsSource,
@@ -64,6 +64,7 @@ ALLOWED_ENV_VARS: frozenset[str] = frozenset(
         "DOC3GPP_HTTP_VERIFY",
         "DOC3GPP_CACHE__DIR",
         "DOC3GPP_SYNC__AUTO_SYNC",
+        "DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY",
     }
 )
 
@@ -500,17 +501,17 @@ class SearchSettings(BaseModel):
 class SemanticSearchSettings(BaseModel):
     """Configuration for the semantic (embedding + vector) search subsystem.
 
-    TOML-only (no env overrides). The presence of the sqlite-vec
-    extension is gated by the ``[semantic]`` pyproject extra; on
-    builds without it the runtime probe raises
-    :class:`VectorIndexUnavailableError` which the factory catches
-    once at startup.
+    The semantic stack talks to an OpenAI-compatible ``/embeddings`` HTTP
+    API configured by :attr:`embedding_base_url`. When the base URL is
+    unset the semantic stack is disabled and the FTS5 path is used alone.
 
     As of the 2026-08-01 design revision, spaCy is no longer
     used; the FTS5 path runs the explicit ``--fts5-query`` string
     through :class:`doc3gpp.cli_filters.SearchQueryBuilder` without
     any stopword stripping.
     """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     enabled: bool = Field(default=True, description="Master switch.")
     auto_embed_on_parse: bool = Field(
@@ -519,9 +520,20 @@ class SemanticSearchSettings(BaseModel):
         "SemanticSearchService.index_for_tdoc(tdoc_id).",
     )
     embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        description="HuggingFace sentence-transformers repo id.",
+        default="nomic-embed-text",
+        description="Remote embedding model name sent in the OpenAI-compatible /embeddings payload.",
     )
+    embedding_base_url: str | None = Field(
+        default=None,
+        description="Base URL of the OpenAI-compatible embeddings API (e.g. http://localhost:11434/v1). Unset disables the semantic stack.",
+    )
+    embedding_api_key: str | None = Field(
+        default=None,
+        validation_alias="DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY",
+        description="Bearer token for the embeddings API. Optional; local servers need none. Never logged.",
+    )
+    embedding_timeout_s: float = Field(default=30.0, ge=1.0, le=300.0, description="Per-request HTTP timeout in seconds.")
+    embedding_batch_size: int = Field(default=32, ge=1, le=512, description="Max input texts per /embeddings request.")
     chunk_size: int = Field(default=200, ge=1, description="Whitespace tokens per chunk.")
     chunk_overlap: int = Field(
         default=20, ge=0,

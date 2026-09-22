@@ -19,8 +19,8 @@ is L2-normalised. Two texts that share the NB-IoT triplet
 (``nb-iot``, ``power``, ``saving``) produce vectors that are
 near-identical (cosine similarity ≈ 1) along those dimensions, while
 unrelated texts sit near orthogonal positions. This gives
-``search sem`` a deterministic NB-IoT winner without loading a
-sentence-transformers model.
+``search sem`` a deterministic NB-IoT winner without calling a
+remote embeddings API.
 """
 
 from __future__ import annotations

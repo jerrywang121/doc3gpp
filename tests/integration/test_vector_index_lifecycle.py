@@ -2,7 +2,7 @@
 
 Uses sqlite-vec on a real sqlite engine (``sqlite_env`` fixture) and
 pre-computed embedding arrays so the vector index path is exercised
-without loading a sentence-transformers model.
+without calling a remote embeddings API.
 """
 
 from __future__ import annotations

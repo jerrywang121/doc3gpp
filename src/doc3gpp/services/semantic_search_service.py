@@ -232,8 +232,8 @@ class SemanticSearchService:
             self._vec.remove_for_tdoc(tdoc_id)
             return
         # Batch all chunks for one TDoc into a single embedder call.
-        # sentence-transformers has ~1s per-call overhead, so calling
-        # encode() per chunk would be O(chunks) wall-time per TDoc.
+        # The remote embeddings API charges per request, so calling
+        # encode() per chunk would be O(chunks) HTTP round-trips per TDoc.
         embeddings_array = self._embedder.encode(chunks)
         embeddings = [embeddings_array[i] for i in range(len(chunks))]
         self._vec.upsert_chunks(tdoc_id, embeddings)

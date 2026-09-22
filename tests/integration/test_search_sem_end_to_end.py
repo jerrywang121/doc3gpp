@@ -5,8 +5,8 @@ real sqlite + real ``tdocs`` corpus rows + pre-computed embedding
 vectors. The embedder is replaced by a deterministic mock whose
 ``encode()`` consults :data:`tests.fixtures.semantic_search_corpus.ENCODE_TABLE`
 for known inputs and falls back to a content-derived vector for
-anything else, so the assertions stay deterministic without loading a
-sentence-transformers model.
+anything else, so the assertions stay deterministic without calling
+a remote embeddings API.
 
 The service no longer pre-processes queries through a stripper; the
 natural-language positional ``QUERY`` flows only into the embedder,

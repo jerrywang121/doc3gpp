@@ -172,13 +172,14 @@ bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 search_fanout_factor = 4
 
 # ── Semantic search (hybrid FTS5 + vector) ──────────────────────────────────
-# Hybrid search subsystem: sentence-transformers embeddings + sqlite-vec
-# KNN, fused with Reciprocal Rank Fusion (RRF) over the FTS5 + vector
-# fan-out. Requires the `[semantic]` pyproject extra
-# (`pip install "doc3gpp[semantic]"`) for the embedding model + the
-# sqlite-vec extension. Schema is gated on the sqlite + sqlite-vec
-# support matrix; when sqlite-vec is
-# unavailable, only the FTS5 path is active and the vector path is a
+# Hybrid search subsystem: remote OpenAI-compatible embeddings API +
+# sqlite-vec KNN, fused with Reciprocal Rank Fusion (RRF) over the
+# FTS5 + vector fan-out. Requires the `[semantic]` pyproject extra
+# (`pip install "doc3gpp[semantic]"`) for the sqlite-vec extension.
+# The embedding backend is remote-only: set
+# `[semantic_search].embedding_base_url`
+# (e.g. `http://localhost:11434/v1`) to enable the semantic stack;
+# when unset, only the FTS5 path is active and the vector path is a
 # no-op.
 #
 # As of 2026-08-01 spaCy is no longer used: `search sem` embeds the
@@ -196,11 +197,18 @@ search_fanout_factor = 4
 # `[search].auto_index_on_parse`.
 # auto_embed_on_parse = true
 
-# Hugging Face model id used for embeddings. Must produce a vector
-# dimension that matches the `vec_tdoc_embeddings` schema at creation
-# time; changing this on a populated index requires
+# Remote embedding model name sent in the OpenAI-compatible
+# `/embeddings` payload. Must produce a vector dimension that
+# matches the `vec_tdoc_embeddings` schema at creation time;
+# changing this on a populated index requires
 # `search index --rebuild-embeddings`.
-# embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+# embedding_model = "nomic-embed-text"
+
+# Base URL of the OpenAI-compatible embeddings API
+# (e.g. `http://localhost:11434/v1`). Unset disables the semantic
+# stack. Optional bearer token via `embedding_api_key`, per-request
+# HTTP timeout via `embedding_timeout_s` (1..300s), and max inputs
+# per `/embeddings` request via `embedding_batch_size` (1..512).
 
 # Approximate chunk size in whitespace tokens passed to the text
 # chunker. Each TDoc is split into windows of `chunk_size` whitespace

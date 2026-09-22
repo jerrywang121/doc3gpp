@@ -291,8 +291,8 @@ def test_index_for_tdoc_calls_upsert_chunks(monkeypatch):
 def test_index_for_tdoc_encodes_all_chunks_in_one_call(monkeypatch):
     """Regression: chunks for one TDoc must be batched into a single
     ``embedder.encode([...])`` call, not one call per chunk. The
-    sentence-transformers model has ~1s per-call overhead, so
-    looping kills the rebuild (1 tdoc/sec instead of hundreds).
+    remote embeddings API charges per request, so
+    looping costs O(chunks) HTTP round-trips per TDoc.
     """
     import numpy as np
 

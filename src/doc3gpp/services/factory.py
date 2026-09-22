@@ -15,7 +15,7 @@ from doc3gpp.repository.protocols import (
 from doc3gpp.models.search import SearchUnavailableError
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
-from doc3gpp.services.embedding.embedder import SentenceTransformerEmbedder
+from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -158,18 +158,27 @@ def build_tdoc_sync_coordinator() -> TDocSyncCoordinator:
     )
 
 
-def build_embedder(settings: Settings | None = None) -> SentenceTransformerEmbedder:
-    """Construct the shared :class:`SentenceTransformerEmbedder`.
+def build_embedder(settings: Settings | None = None) -> OpenAICompatibleEmbedder | None:
+    """Construct the shared remote embedder, or ``None`` when unconfigured.
 
-    Lazy: the model is only loaded on the first ``encode()`` call.
-    The web app builds ONE instance and injects it into every
-    service that embeds (search reranker, semantic search, parse
-    auto-embed) so a single server process loads the model at most
-    once.
+    ``None`` (``embedding_base_url`` unset/empty) disables the semantic
+    stack via the existing ``None``-service paths. The web app builds ONE
+    instance and injects it into every service that embeds so a single
+    server process shares one httpx client.
     """
     if settings is None:
         settings = get_settings()
-    return SentenceTransformerEmbedder(settings.semantic_search.embedding_model)
+    sem = settings.semantic_search
+    base_url = (sem.embedding_base_url or "").strip()
+    if not base_url:
+        return None
+    return OpenAICompatibleEmbedder(
+        base_url=base_url,
+        model=sem.embedding_model,
+        api_key=sem.embedding_api_key,
+        timeout_s=sem.embedding_timeout_s,
+        batch_size=sem.embedding_batch_size,
+    )
 
 
 def build_tdoc_cr_service(
@@ -283,9 +292,9 @@ def build_semantic_search_service(
         if fts5_service is None:
             return None
         if embedder is None:
-            embedder = SentenceTransformerEmbedder(
-                settings.semantic_search.embedding_model,
-            )
+            embedder = build_embedder(settings)
+            if embedder is None:
+                return None
         if vector_repo is None:
             vector_repo = SQLAlchemyVectorIndexRepository()
         return SemanticSearchService(
@@ -330,10 +339,11 @@ def build_search_service(
             ``logger.warning`` is suppressed under ``--quiet``.
             Default ``False`` preserves every existing caller.
         embedder: Optional shared embedder. When ``None`` (default),
-            the factory constructs a fresh
-            :class:`SentenceTransformerEmbedder`. The web app passes
-            the single shared instance so the model loads once per
-            process.
+            the factory builds one via :func:`build_embedder` (which
+            returns ``None`` when ``embedding_base_url`` is unset —
+            the reranker then stays a passthrough). The web app passes
+            the single shared instance so one httpx client is shared
+            per process.
     """
     if settings is None:
         settings = get_settings()
@@ -356,14 +366,15 @@ def build_search_service(
             ):
                 try:
                     if embedder is None:
-                        embedder = SentenceTransformerEmbedder(
-                            settings.semantic_search.embedding_model,
+                        embedder = build_embedder(settings)
+                    if embedder is None:
+                        reranker = PassthroughReranker()
+                    else:
+                        vector_repo = SQLAlchemyVectorIndexRepository()
+                        reranker = SemanticReranker(
+                            embedder=embedder, vector_repo=vector_repo,
+                            settings=settings,
                         )
-                    vector_repo = SQLAlchemyVectorIndexRepository()
-                    reranker = SemanticReranker(
-                        embedder=embedder, vector_repo=vector_repo,
-                        settings=settings,
-                    )
                 except (
                     VectorIndexUnavailableError,
                     EmbedderUnavailableError,

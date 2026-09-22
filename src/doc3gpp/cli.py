@@ -5368,7 +5368,9 @@ def index_command(
         if sem_svc is None:
             typer.echo(
                 "semantic search unavailable; "
-                "run `pip install doc3gpp[semantic]`",
+                "set [semantic_search].embedding_base_url "
+                "(e.g. http://localhost:11434/v1); "
+                "run `pip install doc3gpp[semantic]` for sqlite-vec",
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -5483,7 +5485,10 @@ def sem_command(
     svc = build_semantic_search_service()
     if svc is None:
         typer.echo(
-            "search sem unavailable; run `pip install doc3gpp[semantic]`",
+            "search sem unavailable; "
+            "set [semantic_search].embedding_base_url "
+            "(e.g. http://localhost:11434/v1); "
+            "run `pip install doc3gpp[semantic]` for sqlite-vec",
             err=True,
         )
         raise typer.Exit(code=1)

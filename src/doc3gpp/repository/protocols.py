@@ -770,10 +770,11 @@ class EmbeddingReranker(Protocol):
 class Embedder(Protocol):
     """Embedding backend for the semantic search subsystem.
 
-    The v1 default :class:`~doc3gpp.services.embedding.embedder.SentenceTransformerEmbedder`
-    loads a HuggingFace sentence-transformers model lazily on first
-    ``.encode()`` call. A future hosted-API impl plugs in here
-    without any change to :class:`SemanticSearchService` or the CLI.
+    The default :class:`~doc3gpp.services.embedding.remote_embedder.OpenAICompatibleEmbedder`
+    posts to an OpenAI-compatible ``/embeddings`` HTTP API (OpenAI,
+    Ollama's ``/v1`` endpoint, vLLM, TEI, or any other compatible
+    server). Any other backend plugs in here without any change to
+    :class:`SemanticSearchService` or the CLI.
     """
 
     def encode(self, texts: list[str]) -> "np.ndarray":

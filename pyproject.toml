@@ -66,7 +66,6 @@ cli = ["typer>=0.12.3", "tqdm>=4.66.0"]
 extract = ["python-docx>=0.8.11"]
 search = []
 semantic = [
-  "sentence-transformers>=2.7.0",
   "sqlite-vec>=0.1.0",
 ]
 web = [
@@ -108,7 +107,7 @@ testpaths = ["tests"]
 addopts = ["-m", "not online"]
 markers = [
   "online: tests that access live internet endpoints (for example 3gpp.org)",
-  "semantic: tests that require the [semantic] extra (sentence-transformers, sqlite-vec)",
+  "semantic: tests that require the [semantic] extra (sqlite-vec)",
 ]
 
 [tool.ruff]

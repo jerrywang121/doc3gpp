@@ -531,10 +531,17 @@ and syncs each through the `--tsg` path below.
   is omitted. `search query` (FTS5-only) is unchanged.
 - `doc3gpp search index --rebuild-embeddings [--stale-only] [--batch N]
   [--resume] [--quiet]` → `SemanticSearchService.rebuild_embeddings`
-  → drops + recreates `vec_tdoc_embeddings`; iterates every `tdocs`
-  row, calls `index_for_tdoc` per id (build embed text → chunk →
-  embed → upsert); updates `vec_meta` for resume + staleness.
-  `--rebuild-all` runs both FTS5 and vector rebuilds in sequence.
+  → on a fresh (non-resume) run drops + recreates `vec_tdoc_embeddings`
+  at the live embedder dim and stamps `embedding_dim` + `embedding_model`
+  in `vec_meta`; iterates every `tdocs` row, calls `index_for_tdoc` per
+  id (build embed text → chunk → embed → upsert); updates `vec_meta`
+  for resume + staleness. A resume run fails fast when the live
+  dim/model no longer matches the stored values (no silent cross-model
+  mixing). `--rebuild-all` runs both FTS5 and vector rebuilds in sequence.
+  Requires `[semantic_search].embedding_base_url`; without it the command
+  reports unavailable. A model/dim mismatch against a populated index
+  fails fast with the same rebuild hint (swapping models forces a rebuild
+  even when dims collide).
 
 ### Web layer + MCP + Jobs
 
@@ -659,8 +666,8 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `tdoc_extracts`.
 - `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).
 - `tdoc_search_meta`: Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
-- `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`; one row per embedding chunk produced by the semantic-search subsystem. Schema is gated on the sqlite + sqlite-vec support matrix (created by `_create_vector_schema` in `storage/db/migrate.py`; silently skipped when the sqlite-vec extension is unavailable). Dimensions match the active `SemanticSearchSettings.embedding_model`.
-- `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
+- `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`; one row per embedding chunk produced by the remote OpenAI-compatible embeddings API. Schema is gated on the sqlite + sqlite-vec support matrix (created by `_create_vector_schema` in `storage/db/migrate.py`; silently skipped when the sqlite-vec extension is unavailable). Dimensions match the live embedder dim at rebuild time; `vec_meta` tracks `embedding_dim` + `embedding_model` (a missing model row on a legacy DB counts as a mismatch — rebuild is the upgrade path).
+- `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`) plus the `embedding_dim` / `embedding_model` identity rows stamped on every non-resume rebuild.
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity
       convention as `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details`)

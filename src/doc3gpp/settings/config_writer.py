@@ -195,7 +195,13 @@ def validate_against_settings(data: dict[str, Any]) -> Settings:
 
 
 def resolve_echo_subtree(settings: Settings, key: str) -> dict[str, Any]:
-    """Dump ``settings`` and return the minimal containing dict for ``key``."""
+    """Dump ``settings`` and return the minimal containing dict for ``key``.
+
+    The ``semantic_search.embedding_api_key`` bearer token is redacted
+    to ``"***"`` when set (mirrors the ``config show`` redaction in
+    ``cli.py``) so neither ``config set --dry-run`` nor the
+    post-write echo leaks the secret to the terminal.
+    """
     parts = parse_dotted_key(key)
     full = settings.model_dump(mode="json")
     cursor: Any = full
@@ -206,12 +212,18 @@ def resolve_echo_subtree(settings: Settings, key: str) -> dict[str, Any]:
             return full
         cursor = cursor[segment]
     # Re-wrap in the segment path so the caller sees the containing shape.
+    # Redact AFTER re-wrapping: ``cursor`` above aliases into ``full``,
+    # so redacting ``full`` first would still leak the raw value through
+    # the ``out`` copy built below.
     out: dict[str, Any] = {}
     nested: dict[str, Any] = out
     for segment in parts[:-1]:
         nested[segment] = {}
         nested = nested[segment]
     nested[parts[-1]] = cursor
+    sem = out.get("semantic_search")
+    if isinstance(sem, dict) and sem.get("embedding_api_key"):
+        sem["embedding_api_key"] = "***"
     return out
 
 

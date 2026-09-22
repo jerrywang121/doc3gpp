@@ -141,6 +141,11 @@ class SearchIndexStatus:
     (i.e. there are newer TDoc uploads that have not been re-indexed).
     The CLI prints a "run ``search index --rebuild``" hint when this
     is true, gated behind ``--quiet`` and a per-invocation latch.
+
+    The vector-backed ``status()`` populates ``embedding_dim`` /
+    ``embedding_model`` from ``vec_meta`` so the status panel can show
+    stored-vs-configured values; the FTS5-backed ``status()`` leaves
+    them ``None``.
     """
 
     enabled: bool
@@ -149,6 +154,8 @@ class SearchIndexStatus:
     last_indexed_uploaded_date: datetime | None
     latest_tdocs_uploaded_date: datetime | None
     is_stale: bool
+    embedding_dim: int | None = None
+    embedding_model: str | None = None
 
 
 __all__ = [

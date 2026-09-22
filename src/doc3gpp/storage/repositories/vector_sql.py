@@ -393,6 +393,12 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             latest = conn.execute(
                 text("SELECT MAX(uploaded_date) FROM tdocs")
             ).scalar()
+            stored_dim = conn.execute(
+                text("SELECT value FROM vec_meta WHERE key='embedding_dim'")
+            ).scalar()
+            stored_model = conn.execute(
+                text("SELECT value FROM vec_meta WHERE key='embedding_model'")
+            ).scalar()
         from datetime import datetime as _dt
         return SearchIndexStatus(
             enabled=True,
@@ -401,6 +407,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             last_indexed_uploaded_date=_dt.fromisoformat(last_indexed) if last_indexed else None,
             latest_tdocs_uploaded_date=_dt.fromisoformat(str(latest)) if latest else None,
             is_stale=bool(latest and (not last_indexed or str(latest) > last_indexed)),
+            embedding_dim=int(stored_dim) if stored_dim is not None else None,
+            embedding_model=stored_model,
         )
 
     def get_tdocs_metadata(

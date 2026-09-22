@@ -98,7 +98,7 @@ The `[dev]` extra includes `[cli]`, `pytest`, `pytest-cov`, and `ruff`.
 ```bash
 pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
 pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
-pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sentence-transformers, sqlite-vec)
+pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sqlite-vec; remote embeddings API)
 pip install "doc3gpp[web]"        # Web server + MCP (FastAPI, uvicorn, Jinja2 + HTMX, markdown-it-py)
 pip install "doc3gpp[all]"        # every runtime extra: CLI, extraction, search, semantic, web
 ```
@@ -365,12 +365,17 @@ The legacy `--rerank` flag was removed; callers should switch to
 
 ### `search sem` — hybrid FTS5 + embedding vector search
 
-Requires the `doc3gpp[semantic]` extra (`sentence-transformers`,
-`sqlite-vec`); sqlite-only. The `sentence-transformers` model is
-pulled automatically by `pip install`, so the single install command
-sets up the library and the model together. On
-builds without sqlite-vec the command reports unavailable with a
-one-liner; `search query` (FTS5-only) still works.
+Requires the `doc3gpp[semantic]` extra (sqlite-vec) **plus** a remote
+OpenAI-compatible embeddings API — e.g. Ollama locally
+(`http://localhost:11434/v1`) or OpenAI (`https://api.openai.com/v1`).
+Set `[semantic_search].embedding_base_url` (and optionally
+`embedding_api_key`); when unset the whole semantic stack is disabled
+and only the FTS5 path runs. Builds need sqlite-only; on builds
+without sqlite-vec the command reports unavailable with a one-liner;
+`search query` (FTS5-only) still works. A dim/model mismatch against a
+previously built index fails fast with a
+`search index --rebuild-embeddings` hint (swapping models forces a
+rebuild even when dims collide).
 
 ```bash
 # sem — vector-only by default; opt into FTS5 via --fts5-query
@@ -600,12 +605,14 @@ bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 # when `--sem-query` is supplied. Default 4. Range 1..64.
 search_fanout_factor = 4
 
-# Hybrid search — only loaded when the `[semantic]` extra is installed.
-# sqlite-only; on builds without sqlite-vec the vector path is a no-op.
+# Hybrid search — needs the `[semantic]` extra (sqlite-vec) plus a
+# remote embeddings API (see [semantic_search].embedding_base_url).
+# sqlite-only; when the URL is unset the vector path is a no-op.
 [semantic_search]
 enabled = true                       # master switch for `search sem` + auto-embed
 auto_embed_on_parse = true           # upsert embeddings after every successful parse
-embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # 384-dim
+embedding_base_url = "http://localhost:11434/v1"  # unset disables the semantic stack
+embedding_model = "nomic-embed-text" # remote model name sent in the /embeddings payload
 chunk_size = 200                     # whitespace tokens per chunk
 chunk_overlap = 20                   # trailing tokens repeated at next chunk start
 rrf_k = 60                           # RRF k constant

@@ -302,10 +302,18 @@ def build_semantic_search_service(
                 return None
             if live_dim is None:
                 return None
-            vector_repo = SQLAlchemyVectorIndexRepository(
-                expected_model=getattr(embedder, "model_name", None),
-                expected_dim=live_dim,
-            )
+            try:
+                vector_repo = SQLAlchemyVectorIndexRepository(
+                    expected_model=getattr(embedder, "model_name", None),
+                    expected_dim=live_dim,
+                )
+            except VectorIndexUnavailableError:
+                # Construction failures (missing schema, no sqlite-vec)
+                # degrade to None via the outer handler. A model/dim
+                # mismatch ALSO lands here — the status panel reads
+                # vec_meta directly in that case (see cli.index_command)
+                # so the pending mismatch stays visible.
+                return None
         return SemanticSearchService(
             fts5_service=fts5_service, embedder=embedder,
             vector_repo=vector_repo, settings=settings,

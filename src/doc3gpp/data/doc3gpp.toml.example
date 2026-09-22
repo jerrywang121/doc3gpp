@@ -204,11 +204,18 @@ search_fanout_factor = 4
 # `search index --rebuild-embeddings`.
 # embedding_model = "nomic-embed-text"
 
-# Base URL of the OpenAI-compatible embeddings API
-# (e.g. `http://localhost:11434/v1`). Unset disables the semantic
-# stack. Optional bearer token via `embedding_api_key`, per-request
-# HTTP timeout via `embedding_timeout_s` (1..300s), and max inputs
-# per `/embeddings` request via `embedding_batch_size` (1..512).
+# Base URL of the OpenAI-compatible embeddings API. Unset disables the
+# semantic stack. Examples:
+#   Ollama (local, no key needed):  embedding_base_url = "http://localhost:11434/v1"
+#   OpenAI:                         embedding_base_url = "https://api.openai.com/v1"
+# Optional bearer token via `embedding_api_key` (or the
+# `DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY` env var — env wins),
+# per-request HTTP timeout via `embedding_timeout_s` (1..300s), and max
+# inputs per `/embeddings` request via `embedding_batch_size` (1..512).
+# embedding_base_url = "http://localhost:11434/v1"
+# embedding_api_key = null
+# embedding_timeout_s = 30.0
+# embedding_batch_size = 32
 
 # Approximate chunk size in whitespace tokens passed to the text
 # chunker. Each TDoc is split into windows of `chunk_size` whitespace

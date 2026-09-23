@@ -520,7 +520,7 @@ class SemanticSearchSettings(BaseModel):
         "SemanticSearchService.index_for_tdoc(tdoc_id).",
     )
     embedding_model: str = Field(
-        default="nomic-embed-text",
+        default="embeddinggemma:300m",
         description="Remote embedding model name sent in the OpenAI-compatible /embeddings payload.",
     )
     embedding_base_url: str | None = Field(
@@ -534,9 +534,9 @@ class SemanticSearchSettings(BaseModel):
     )
     embedding_timeout_s: float = Field(default=30.0, ge=1.0, le=300.0, description="Per-request HTTP timeout in seconds.")
     embedding_batch_size: int = Field(default=32, ge=1, le=512, description="Max input texts per /embeddings request.")
-    chunk_size: int = Field(default=200, ge=1, description="Whitespace tokens per chunk.")
+    chunk_size: int = Field(default=512, ge=1, description="Whitespace tokens per chunk.")
     chunk_overlap: int = Field(
-        default=20, ge=0,
+        default=24, ge=0,
         description="Trailing tokens repeated at next chunk start. Must be < chunk_size.",
     )
     rrf_k: int = Field(default=60, ge=1, description="RRF k constant.")
@@ -566,7 +566,7 @@ class SemanticSearchSettings(BaseModel):
     @field_validator("chunk_overlap")
     @classmethod
     def _overlap_less_than_size(cls, v, info):
-        size = info.data.get("chunk_size", 200)
+        size = info.data.get("chunk_size", 512)
         if v >= size:
             raise ValueError(f"chunk_overlap ({v}) must be < chunk_size ({size})")
         return v

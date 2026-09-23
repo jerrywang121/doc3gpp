@@ -11,8 +11,8 @@ further subdivide each chunk.
 
 from __future__ import annotations
 
-CHUNK_SIZE_DEFAULT = 200
-CHUNK_OVERLAP_DEFAULT = 20
+CHUNK_SIZE_DEFAULT = 512
+CHUNK_OVERLAP_DEFAULT = 24
 
 
 def _chunks(text: str, size: int, overlap: int) -> list[str]:

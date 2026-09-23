@@ -4,7 +4,7 @@ from __future__ import annotations
 def test_remote_embedding_settings_defaults():
     from doc3gpp.settings.schema import SemanticSearchSettings
     s = SemanticSearchSettings()
-    assert s.embedding_model == "nomic-embed-text"
+    assert s.embedding_model == "embeddinggemma:300m"
     assert s.embedding_base_url is None
     assert s.embedding_api_key is None
     assert s.embedding_timeout_s == 30.0

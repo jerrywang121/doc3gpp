@@ -6,13 +6,19 @@ letting callers depend only on the Protocol-typed service interface.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from doc3gpp.repository.protocols import (
     EmbeddingReranker,
+    Embedder,
     SearchIndexRepository,
+    SpecDocSearchRepository,
+    SpecDocVectorRepository,
     TDocCrChangeDetailsRepository,
     TDocCrTTCNDetailRepository,
 )
 from doc3gpp.models.search import SearchUnavailableError
+from doc3gpp.models.semantic_search import VectorIndexUnavailableError
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
@@ -29,8 +35,17 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import Settings
+
+if TYPE_CHECKING:
+    from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
+from doc3gpp.storage.repositories.spec_doc_search_sql import (
+    SQLAlchemySpecDocSearchRepository,
+)
+from doc3gpp.storage.repositories.spec_doc_vector_sql import (
+    SQLAlchemySpecDocVectorRepository,
+)
 from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
@@ -132,6 +147,128 @@ def build_spec_service() -> SpecService:
     return SpecService(
         SQLAlchemySpecRepository(),
         sync_interval=settings.sync.spec_sync_interval,
+    )
+
+
+def build_spec_doc_search_service(
+    settings: Settings | None = None,
+    repo: SpecDocSearchRepository | None = None,
+) -> object | None:
+    """Build a spec-doc FTS5 search hook or return ``None`` if unavailable.
+
+    Best-effort: any :class:`SearchUnavailableError` raised by the
+    repo (missing FTS5, missing extra) is caught here once at startup
+    and returned as ``None``. The CLI and the
+    :class:`SpecDocService` hook both treat ``None`` as "search is
+    not available" and skip. Disabled via
+    ``Settings.spec_doc.auto_index_on_parse`` being ``False`` only
+    at the hook site — the builder still returns the live repo so
+    CLI ``search`` commands keep working until the flag is read.
+    """
+    if settings is None:
+        settings = get_settings()
+    if not settings.search.enabled:
+        return None
+    try:
+        if repo is None:
+            repo = SQLAlchemySpecDocSearchRepository()
+        from doc3gpp.services.spec_doc_search_service import SpecDocSearchService
+
+        return SpecDocSearchService(repo=repo)
+    except SearchUnavailableError:
+        return None
+
+
+def build_spec_doc_semantic_service(
+    settings: Settings | None = None,
+    vector_repo: SpecDocVectorRepository | None = None,
+    embedder: Embedder | None = None,
+) -> object | None:
+    """Build a spec-doc hybrid semantic hook or return ``None`` if unavailable.
+
+    Mirrors :func:`build_semantic_search_service` against the
+    specdata vector repo: disabled when
+    ``settings.semantic_search.enabled`` is ``False``, when FTS5 is
+    unavailable (the foundation), or when no embedder is configured
+    (``embedding_base_url`` unset). Best-effort: vector probing /
+    construction failures degrade to ``None``.
+    """
+    from doc3gpp.models.semantic_search import EmbedderUnavailableError
+
+    from sqlalchemy.exc import OperationalError as SAOperationalError
+
+    if settings is None:
+        settings = get_settings()
+    if not settings.semantic_search.enabled:
+        return None
+    try:
+        fts5_service = build_spec_doc_search_service(settings)
+        if fts5_service is None:
+            return None
+        if embedder is None:
+            embedder = build_embedder(settings)
+            if embedder is None:
+                return None
+        if vector_repo is None:
+            try:
+                live_dim = getattr(embedder, "dim", None)
+            except EmbedderUnavailableError:
+                return None
+            if live_dim is None:
+                return None
+            try:
+                vector_repo = SQLAlchemySpecDocVectorRepository(
+                    expected_model=getattr(embedder, "model_name", None),
+                    expected_dim=live_dim,
+                )
+            except VectorIndexUnavailableError:
+                return None
+        from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
+
+        return SpecDocSemanticService(
+            fts5_service=fts5_service,
+            embedder=embedder,
+            vector_repo=vector_repo,
+            settings=settings,
+        )
+    except (
+        VectorIndexUnavailableError,
+        EmbedderUnavailableError,
+        SAOperationalError,
+    ):
+        return None
+
+
+def build_spec_doc_service(
+    embedder: Embedder | None = None,
+    *,
+    settings: Settings | None = None,
+) -> "SpecDocService":
+    """Construct a :class:`SpecDocService` for the ``spec doc`` commands.
+
+    Wires the main-DB :class:`SQLAlchemySpecRepository` (version
+    resolution), the specdata :class:`SQLAlchemySpecDocRepository`,
+    the FTS5 search hook (:func:`build_spec_doc_search_service`),
+    and the vector hook
+    (:func:`build_spec_doc_semantic_service`). Both hooks are
+    best-effort — ``None`` when the subsystem is disabled or its
+    extra is not installed; the service skips the hook in that
+    case. A single shared embedder (built once here when the caller
+    does not inject one) feeds the semantic hook so one httpx
+    client is shared per process.
+    """
+    from doc3gpp.services.spec_doc_service import SpecDocService
+
+    if settings is None:
+        settings = get_settings()
+    if embedder is None:
+        embedder = build_embedder(settings)
+    return SpecDocService(
+        spec_repo=SQLAlchemySpecRepository(),
+        settings=settings,
+        search_service=build_spec_doc_search_service(settings),
+        semantic_service=build_spec_doc_semantic_service(settings, embedder=embedder),
+        embedder=embedder,
     )
 
 

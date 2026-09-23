@@ -139,15 +139,19 @@ def test_db_reset_in_memory_sqlite_just_reinits(monkeypatch) -> None:
 
 def test_db_reset_refuses_non_sqlite_url(monkeypatch) -> None:
     """A non-SQLite URL is rejected before anything is touched."""
-    from doc3gpp.storage.db.session import get_testcase_engine
+    from doc3gpp.storage.db.session import get_specdata_engine, get_testcase_engine
 
     monkeypatch.setenv("DOC3GPP_DATABASE_URL", "oracle://user:pass@localhost/db")
     monkeypatch.setenv(
         "DOC3GPP_TESTCASE_DATABASE_URL", "sqlite+pysqlite:///:memory:"
     )
+    monkeypatch.setenv(
+        "DOC3GPP_SPECDATA_DATABASE_URL", "sqlite+pysqlite:///:memory:"
+    )
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_testcase_engine.cache_clear()
+    get_specdata_engine.cache_clear()
     try:
         runner = CliRunner()
         result = runner.invoke(app, ["db", "reset", "--yes"])
@@ -157,6 +161,7 @@ def test_db_reset_refuses_non_sqlite_url(monkeypatch) -> None:
     finally:
         get_engine.cache_clear()
         get_testcase_engine.cache_clear()
+        get_specdata_engine.cache_clear()
         get_settings.cache_clear()
 
 
@@ -304,13 +309,14 @@ def test_db_reset_scope_main_keeps_testcase_rows(sqlite_env) -> None:
 
 def test_db_reset_refuses_non_sqlite_testcase_url(sqlite_env, monkeypatch) -> None:
     from doc3gpp.settings.loader import get_settings
-    from doc3gpp.storage.db.session import get_testcase_engine
+    from doc3gpp.storage.db.session import get_specdata_engine, get_testcase_engine
 
     monkeypatch.setenv(
         "DOC3GPP_TESTCASE_DATABASE_URL", "oracle://user:pass@localhost/tc"
     )
     get_settings.cache_clear()
     get_testcase_engine.cache_clear()
+    get_specdata_engine.cache_clear()
     try:
         runner = CliRunner()
         result = runner.invoke(app, ["db", "reset", "--yes"])
@@ -319,4 +325,5 @@ def test_db_reset_refuses_non_sqlite_testcase_url(sqlite_env, monkeypatch) -> No
         assert "testcase" in result.output
     finally:
         get_testcase_engine.cache_clear()
+        get_specdata_engine.cache_clear()
         get_settings.cache_clear()

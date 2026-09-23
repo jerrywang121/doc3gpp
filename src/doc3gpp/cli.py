@@ -37,6 +37,7 @@ from doc3gpp.cli_url_helpers import (
 )
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.schema_info import SCHEMA_FIELDS, schema_payload
+from doc3gpp.models.spec_doc import SpecDocError, SpecDocSearchFilters
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
@@ -59,6 +60,9 @@ from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
+    build_spec_doc_search_service,
+    build_spec_doc_semantic_service,
+    build_spec_doc_service,
     build_spec_service,
     build_tdoc_cr_change_details_repository,
     build_tdoc_cr_repository,
@@ -101,7 +105,9 @@ from doc3gpp.settings.config_writer import (
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import (
     get_engine,
+    get_specdata_engine,
     get_testcase_engine,
+    resolve_specdata_database_url,
     resolve_testcase_database_url,
 )
 
@@ -357,7 +363,7 @@ def _resolve_cache_purge_scope(scope: str) -> str:
     return normalized
 
 
-VALID_DB_SCOPES: tuple[str, ...] = ("main", "testcase", "all")
+VALID_DB_SCOPES: tuple[str, ...] = ("main", "testcase", "specdata", "all")
 
 
 def _resolve_db_scope(scope: str) -> str:
@@ -398,6 +404,14 @@ def _testcase_url_or_raise() -> str:
     """Resolve the testcase URL, mapping derivation errors to CLI errors."""
     try:
         return resolve_testcase_database_url()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _specdata_url_or_raise() -> str:
+    """Resolve the specdata URL, mapping derivation errors to CLI errors."""
+    try:
+        return resolve_specdata_database_url()
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -723,7 +737,7 @@ def db_check(
     scope: str = typer.Option(
         "all",
         "--scope",
-        help="Which database to check: 'main', 'testcase', or 'all'.",
+        help="Which database to check: 'main', 'testcase', 'specdata', or 'all'.",
     ),
 ) -> None:
     """Validate database connectivity for configured backend(s)."""
@@ -741,6 +755,12 @@ def db_check(
         with tc_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         typer.echo(f"Testcase database connection OK: {tc_url}")
+    if resolved_scope in ("specdata", "all"):
+        sd_url = _specdata_url_or_raise()
+        sd_engine = get_specdata_engine()
+        with sd_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        typer.echo(f"Specdata database connection OK: {sd_url}")
 
 
 @db_app.command("init")
@@ -748,8 +768,7 @@ def db_init(
     scope: str = typer.Option(
         "all",
         "--scope",
-        help="Which database to initialise: 'main', 'testcase', or 'all'.",
-    ),
+        help="Which database to initialise: 'main', 'testcase', 'specdata', or 'all'.",    ),
 ) -> None:
     """Create schema for current backend(s) and seed the TSG reference table.
 
@@ -764,8 +783,10 @@ def db_init(
         seeded = tsg_service.seed_defaults()
         logger.info("Seeded %s TSG reference records", seeded)
         typer.echo(f"Database schema initialized; seeded {seeded} TSG records")
-    else:
+    elif resolved_scope == "testcase":
         typer.echo("Testcase database schema initialized")
+    else:
+        typer.echo("Specdata database schema initialized")
 
 
 @db_app.command("reset")
@@ -779,7 +800,7 @@ def db_reset(
     scope: str = typer.Option(
         "all",
         "--scope",
-        help="Which database to reset: 'main', 'testcase', or 'all'.",
+        help="Which database to reset: 'main', 'testcase', 'specdata', or 'all'.",
     ),
 ) -> None:
     """Delete the SQLite database file(s) and recreate the schema.
@@ -800,6 +821,9 @@ def db_reset(
         # the derivation itself fails (ValueError → BadParameter naming
         # 'testcase_database_url'), which also aborts before any delete.
         urls.append(("testcase", _testcase_url_or_raise()))
+    if resolved_scope in ("specdata", "all"):
+        # Same derivation-abort guarantee as the testcase branch above.
+        urls.append(("specdata", _specdata_url_or_raise()))
     # Validate every selected scope BEFORE deleting anything: a
     # mixed-backend reset fails without touching any file.
     files: list[tuple[str, Path | None]] = [
@@ -817,9 +841,10 @@ def db_reset(
         _delete_sqlite_file(db_file, scope_name)
 
     # SQLAlchemy cached the engines from the pre-delete file paths; clear
-    # both so create_schema(resolved_scope) opens fresh connections.
+    # all three so create_schema(resolved_scope) opens fresh connections.
     get_engine.cache_clear()
     get_testcase_engine.cache_clear()
+    get_specdata_engine.cache_clear()
 
     logger.info("Recreating database schema")
     create_schema(resolved_scope)
@@ -828,8 +853,10 @@ def db_reset(
         seeded = tsg_service.seed_defaults()
         logger.info("Seeded %s TSG reference records", seeded)
         typer.echo(f"Database reset complete; seeded {seeded} TSG records")
-    else:
+    elif resolved_scope == "testcase":
         typer.echo("Testcase database reset complete")
+    else:
+        typer.echo("Specdata database reset complete")
 
 
 @meeting_app.command("sync")
@@ -4426,6 +4453,546 @@ def spec_schema(
     resolved_compact = _resolve_compact(compact)
     logger.info("Describing spec schema")
     _emit_schema("spec", fmt, output, compact=resolved_compact)
+
+
+SPEC_DOC_LIST_FIELDS: list[str] = [
+    "spec_id",
+    "version",
+    "release",
+    "section_no",
+    "section_title",
+    "table_no",
+    "table_title",
+    "chunk_index",
+    "text",
+]
+
+SPEC_DOC_TOC_FIELDS: list[str] = [
+    "section_no",
+    "title",
+    "level",
+    "source_file",
+]
+
+spec_doc_app = typer.Typer(help="spec document corpus: fetch, parse, TOC, search")
+spec_app.add_typer(spec_doc_app, name="doc")
+spec_doc_toc_app = typer.Typer(help="spec document TOC commands")
+spec_doc_app.add_typer(spec_doc_toc_app, name="toc")
+spec_doc_search_app = typer.Typer(help="search over the spec document corpus")
+spec_doc_app.add_typer(spec_doc_search_app, name="search")
+
+
+def _spec_doc_source_to_row(src: object) -> dict[str, object]:
+    """Serialise a :class:`SpecDocSource` for the fetch/parse JSON payload."""
+    return {
+        "spec_id": getattr(src, "spec_id"),
+        "version": getattr(src, "version"),
+        "release": _serialise_show_value(getattr(src, "release", None)),
+        "ftp_url": getattr(src, "ftp_url", ""),
+        "downloaded_at": _serialise_show_value(getattr(src, "downloaded_at", None)),
+        "parsed_at": _serialise_show_value(getattr(src, "parsed_at", None)),
+        "chunk_count": getattr(src, "chunk_count", 0),
+        "docx_count": getattr(src, "docx_count", 0),
+    }
+
+
+def _spec_doc_hit_to_dict(hit: object) -> dict[str, object]:
+    """Serialise a :class:`SpecDocHit` for the query JSON payload."""
+    return {
+        "chunk_id": getattr(hit, "chunk_id"),
+        "spec_id": getattr(hit, "spec_id"),
+        "version": getattr(hit, "version"),
+        "release": _serialise_show_value(getattr(hit, "release", None)),
+        "section_no": _serialise_show_value(getattr(hit, "section_no", None)),
+        "section_title": _serialise_show_value(getattr(hit, "section_title", None)),
+        "table_no": _serialise_show_value(getattr(hit, "table_no", None)),
+        "table_title": _serialise_show_value(getattr(hit, "table_title", None)),
+        "chunk_index": getattr(hit, "chunk_index", 0),
+        "text": getattr(hit, "text", ""),
+        "score": getattr(hit, "score", 0.0),
+        "previews": dict(getattr(hit, "previews", {}) or {}),
+    }
+
+
+def _spec_doc_chunk_to_row(hit: object, fields: list[str]) -> list[str]:
+    """Render one :class:`SpecDocHit` as a table/markdown row over ``fields``."""
+    return [str(getattr(hit, f, None) if getattr(hit, f, None) is not None else "-") for f in fields]
+
+
+def _spec_doc_toc_entry_to_row(entry: object, fields: list[str]) -> list[str]:
+    """Render one :class:`SpecDocTocEntry` as a table/markdown row over ``fields``."""
+    return [str(getattr(entry, f, None) if getattr(entry, f, None) is not None else "-") for f in fields]
+
+
+def _spec_doc_semantic_hit_to_dict(hit: object) -> dict[str, object]:
+    """Serialise a :class:`SpecDocSemanticHit` for the sem JSON payload."""
+    inner = getattr(hit, "hit", None)
+    return {
+        "chunk_id": getattr(hit, "chunk_id"),
+        "rrf_score": getattr(hit, "rrf_score"),
+        "rank_fts5": getattr(hit, "rank_fts5", None),
+        "rank_vec": getattr(hit, "rank_vec", None),
+        "min_chunk_distance": getattr(hit, "min_chunk_distance", None),
+        "hit": _spec_doc_hit_to_dict(inner) if inner is not None else None,
+    }
+
+
+def _render_spec_doc_hits(hits: list, *, fmt: str, compact: bool, fields: list[str]) -> None:
+    """Render query hits in the chosen format.
+
+    JSON emits one dict per hit (Task 11 contract); markdown emits one
+    bold-headed block per hit with previews as quotes; table emits one
+    row per hit over ``fields``.
+    """
+    if fmt == "json":
+        payload = [_spec_doc_hit_to_dict(h) for h in hits]
+        if compact:
+            typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        else:
+            typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if fmt == "markdown":
+        for h in hits:
+            typer.echo(f"**{h.chunk_id}** — {h.spec_id}@{h.version}")
+            if getattr(h, "section_title", None):
+                typer.echo(f"section: {h.section_no or '-'} {h.section_title}")
+            if getattr(h, "table_title", None):
+                typer.echo(f"table: {h.table_title}")
+            for col, snippet in (getattr(h, "previews", {}) or {}).items():
+                typer.echo(f"> {col}: {snippet}")
+            typer.echo("")
+        return
+    if not hits:
+        typer.echo("No spec document chunks found")
+        return
+    rows = [_spec_doc_chunk_to_row(h, fields) for h in hits]
+    _emit_table(rows, sys.stdout)
+
+
+def _render_spec_doc_semantic_hits(hits: list, *, fmt: str, compact: bool) -> None:
+    """Render :class:`SpecDocSemanticHit` list in table / json / markdown.
+
+    Mirrors :func:`_render_semantic_hits` but chunk-level: the ``hit``
+    sub-record is the spec-doc query dict (or ``None`` for
+    vector-only chunks).
+    """
+    if fmt == "json":
+        payload = [_spec_doc_semantic_hit_to_dict(h) for h in hits]
+        if compact:
+            typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        else:
+            typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if fmt == "markdown":
+        for i, h in enumerate(hits, 1):
+            typer.echo(f"{i}. **{h.chunk_id}** — rrf={h.rrf_score:.4f}")
+            if h.min_chunk_distance is not None:
+                typer.echo(f"   dist: {h.min_chunk_distance:.4f}")
+            inner = getattr(h, "hit", None)
+            if inner is not None and getattr(inner, "section_title", None):
+                typer.echo(f"   section: {inner.section_title}")
+            typer.echo("")
+        return
+    typer.echo(f"{'rank':>4} {'chunk_id':<28} {'rrf':>8} {'fts':>4} {'vec':>4} {'dist':>8}")
+    for i, h in enumerate(hits, 1):
+        fts = str(h.rank_fts5) if h.rank_fts5 is not None else "-"
+        vec = str(h.rank_vec) if h.rank_vec is not None else "-"
+        dist = f"{h.min_chunk_distance:.4f}" if h.min_chunk_distance is not None else "-"
+        typer.echo(f"{i:>4} {h.chunk_id:<28} {h.rrf_score:>8.4f} {fts:>4} {vec:>4} {dist:>8}")
+
+
+@spec_doc_app.command("fetch")
+def spec_doc_fetch(
+    spec: str = typer.Option(
+        ...,
+        "--spec",
+        help="Dotted spec id to fetch (e.g. 38.331).",
+    ),
+    release: str | None = typer.Option(
+        None, "--release", help="Release marker, e.g. Rel-18.",
+    ),
+    version: str | None = typer.Option(
+        None, "--version", help="Exact version, e.g. 18.5.0.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Re-download even when the zip cache exists.",
+    ),
+) -> None:
+    """Download a spec version zip into the cache and record it."""
+    from doc3gpp.models.spec_doc import SpecDocUnknownSpecError, SpecDocUnknownVersionError
+
+    create_schema("all")
+    svc = build_spec_doc_service()
+    try:
+        src = svc.fetch(spec, release=release, version=version, force=force)
+    except SpecDocUnknownSpecError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except SpecDocUnknownVersionError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except SpecDocError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"fetched {src.spec_id}@{src.version} ({src.docx_count} docx)")
+
+
+@spec_doc_app.command("parse")
+def spec_doc_parse(
+    spec: list[str] = typer.Option(
+        [],
+        "--spec",
+        help="Spec id to parse; repeat per spec (at least one required).",
+    ),
+    release: str | None = typer.Option(
+        None, "--release", help="Release marker, e.g. Rel-18.",
+    ),
+    version: str | None = typer.Option(
+        None, "--version", help="Exact version, e.g. 18.5.0.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Re-parse already-parsed pairs.",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Batch form: --spec may repeat; success/skip/failure buckets printed."""
+    create_schema("all")
+    if not spec:
+        raise typer.BadParameter("pass at least one --spec <id>")
+    svc = build_spec_doc_service()
+    result = svc.parse_many(list(spec), release=release, version=version, force=force)
+    for sid in result.successes:
+        typer.echo(f"ok {sid}")
+    for sid, why in result.skipped.items():
+        typer.echo(f"skipped {sid}: {why}")
+    for sid, why in result.failures.items():
+        typer.echo(f"failed {sid}: {why}", err=True)
+
+
+@spec_doc_toc_app.command("show")
+def spec_doc_toc_show(
+    spec: str = typer.Option(
+        ...,
+        "--spec",
+        help="Dotted spec id (e.g. 38.331).",
+    ),
+    version: str = typer.Option(
+        ...,
+        "--version",
+        help="Exact version, e.g. 18.5.0.",
+    ),
+    release: str | None = typer.Option(
+        None, "--release", help="Release marker, e.g. Rel-18.",
+    ),
+    fields: str | None = typer.Option(
+        None,
+        help="Comma-separated list of fields to include (or 'all' for all fields).",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Render the parsed TOC for one ``(spec_id, version)`` pair."""
+    from doc3gpp.models.spec_doc import SpecDocUnknownVersionError
+
+    create_schema("all")
+    svc = build_spec_doc_service()
+    try:
+        toc = svc.get_toc(spec, version, release=release)
+    except SpecDocUnknownVersionError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    settings = get_settings()
+    default_fields = settings.output.fields.spec_doc_toc
+    out_fields = _parse_field_selection(fields, SPEC_DOC_TOC_FIELDS, default_fields)
+    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    if fmt_resolved == "json":
+        payload = {
+            "spec_id": toc.spec_id,
+            "version": toc.version,
+            "release": _serialise_show_value(toc.release),
+            "docx_count": toc.docx_count,
+            "entries": [
+                {f: _serialise_show_value(getattr(e, f)) for f in out_fields}
+                for e in toc.entries
+            ],
+            "files": [
+                {
+                    "source_file": f.source_file,
+                    "file_order": f.file_order,
+                    "first_section": _serialise_show_value(f.first_section),
+                }
+                for f in toc.files
+            ],
+        }
+        _dump_show_json(payload, output, compact=resolved_compact)
+        return
+    rows = [_spec_doc_toc_entry_to_row(e, out_fields) for e in toc.entries]
+    _emit_records(
+        rows=rows,
+        fields=out_fields,
+        fmt=fmt_resolved,
+        output=output,
+        no_records_msg=f"No TOC entries stored for {spec}@{version}",
+        compact=resolved_compact,
+    )
+
+
+@spec_doc_search_app.command("query")
+def spec_doc_search_query(
+    query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),
+    spec: list[str] = typer.Option(
+        [],
+        "--spec",
+        help="Only search chunks for the given spec id(s); repeatable.",
+    ),
+    release: list[str] = typer.Option(
+        [],
+        "--release",
+        help="Rich filter over release; repeatable, AND-combined.",
+    ),
+    version: list[str] = typer.Option(
+        [],
+        "--version",
+        help="Rich filter over version; repeatable, AND-combined.",
+    ),
+    section: list[str] = typer.Option(
+        [],
+        "--section",
+        help="Rich filter over section no/title; repeatable, AND-combined.",
+    ),
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    offset: int = typer.Option(0, "--offset", min=0, help="Number of rows to skip before applying --limit."),
+    fields: str | None = typer.Option(
+        None,
+        help="Comma-separated list of fields to include (or 'all' for all fields).",
+    ),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip JSON / markdown decorators.",
+    ),
+) -> None:
+    """Run a full-text search over the spec-document FTS5 index."""
+    from doc3gpp.models.search import SearchError, SearchQueryError
+
+    create_schema("all")
+    svc = build_spec_doc_search_service()
+    if svc is None:
+        typer.echo("search disabled in settings", err=True)
+        raise typer.Exit(code=0)
+    settings = get_settings()
+    default_fields = settings.output.fields.spec_doc
+    out_fields = _parse_field_selection(fields, SPEC_DOC_LIST_FIELDS, default_fields)
+    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    spec_filter = spec[0] if len(spec) == 1 else None
+    release_filter = release[0] if len(release) == 1 else None
+    version_filter = version[0] if len(version) == 1 else None
+    section_filter = section[0] if len(section) == 1 else None
+    filters = SpecDocSearchFilters(
+        spec_id=spec_filter,
+        release=release_filter,
+        version=version_filter,
+        section=section_filter,
+        limit=limit,
+        offset=offset,
+    )
+    try:
+        hits = svc.search(query, filters)
+    except SearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SearchError:
+        typer.echo("search index corrupt; run `doc3gpp spec doc search index --rebuild`", err=True)
+        raise typer.Exit(code=3)
+    if fmt_resolved == "json":
+        _render_spec_doc_hits(hits, fmt="json", compact=resolved_compact, fields=out_fields)
+        return
+    if fmt_resolved != "table":
+        _render_spec_doc_hits(hits, fmt=fmt_resolved, compact=resolved_compact, fields=out_fields)
+        return
+    rows = [_spec_doc_chunk_to_row(h, out_fields) for h in hits]
+    _emit_records(
+        rows=rows,
+        fields=out_fields,
+        fmt=fmt_resolved,
+        output=None,
+        no_records_msg="No spec document chunks found",
+        compact=resolved_compact,
+    )
+
+
+@spec_doc_search_app.command("sem")
+def spec_doc_search_sem(
+    query: str = typer.Argument(..., help="Natural-language query (embedded only; not used for FTS5)."),
+    fts5_query: str | None = typer.Option(
+        None,
+        "--fts5-query",
+        help=(
+            "Optional FTS5 MATCH expression. When omitted, the FTS5 "
+            "path is skipped (only embedding-KNN runs; no RRF)."
+        ),
+    ),
+    fts5_weight: float = typer.Option(
+        0.5,
+        "--fts5-weight",
+        min=0.0,
+        max=1.0,
+        help=(
+            "Blend weight for FTS5 rank in RRF (0.0..1.0). "
+            "The vector weight is 1 - fts5_weight. "
+            "Ignored when --fts5-query is omitted."
+        ),
+    ),
+    spec: list[str] = typer.Option(
+        [],
+        "--spec",
+        help="Only search chunks for the given spec id(s); repeatable.",
+    ),
+    release: list[str] = typer.Option(
+        [],
+        "--release",
+        help="Filter over release.",
+    ),
+    version: list[str] = typer.Option(
+        [],
+        "--version",
+        help="Filter over version.",
+    ),
+    section: list[str] = typer.Option(
+        [],
+        "--section",
+        help="Filter over section no/title.",
+    ),
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip decorators.",
+    ),
+) -> None:
+    """Run a semantic (embedding + optional FTS5) search over spec-doc chunks."""
+    from doc3gpp.models.search import SearchError
+    from doc3gpp.models.semantic_search import (
+        EmbedderUnavailableError,
+        SemanticSearchQueryError,
+        SemanticSearchUnavailableError,
+        VectorIndexUnavailableError,
+    )
+
+    create_schema("all")
+    svc = build_spec_doc_semantic_service()
+    if svc is None:
+        typer.echo(
+            "search sem unavailable; "
+            "set [semantic_search].embedding_base_url "
+            "(e.g. http://localhost:11434/v1); "
+            "run `pip install doc3gpp[semantic]` for sqlite-vec",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    settings = get_settings()
+    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    spec_filter = spec[0] if len(spec) == 1 else None
+    release_filter = release[0] if len(release) == 1 else None
+    version_filter = version[0] if len(version) == 1 else None
+    section_filter = section[0] if len(section) == 1 else None
+    filters = SpecDocSearchFilters(
+        spec_id=spec_filter,
+        release=release_filter,
+        version=version_filter,
+        section=section_filter,
+        limit=limit,
+        offset=0,
+    )
+    try:
+        hits = svc.search(
+            query,
+            fts5_query=fts5_query,
+            filters=filters,
+            limit=limit,
+            fts5_weight=fts5_weight,
+        )
+    except SearchError as exc:
+        typer.echo(f"bad fts5 query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SemanticSearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except EmbedderUnavailableError as exc:
+        typer.echo(f"embedding model load failed: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except VectorIndexUnavailableError as exc:
+        typer.echo(f"vector index unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except SemanticSearchUnavailableError as exc:
+        typer.echo(f"search sem unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    _render_spec_doc_semantic_hits(hits, fmt=fmt_resolved, compact=resolved_compact)
+
+
+@spec_doc_app.command("schema")
+def spec_doc_schema(
+    fmt: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: table (default, tab-separated), json, or markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
+    ),
+) -> None:
+    """Describe every column of the spec_doc_sources, spec_doc_tocs and spec_doc_chunks tables (separate specdata sqlite file) (meaning, format, possible values)."""
+    settings = get_settings()
+    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    logger.info("Describing spec_doc schema")
+    _emit_schema("spec_doc", fmt_resolved, output, compact=resolved_compact)
 
 
 @spec_app.command("show")

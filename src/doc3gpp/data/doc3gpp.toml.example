@@ -29,6 +29,11 @@
 #   # be reset independently (`doc3gpp db reset --scope testcase`). Unset
 #   # (default) derives a sibling of database_url with `_testcase` suffixed
 #   # to the stem. Also settable via DOC3GPP_TESTCASE_DATABASE_URL.
+# specdata_database_url = "sqlite+pysqlite:////home/you/.local/share/doc3gpp/doc3gpp_specdata.db"
+#   # Optional: spec-document corpus lives in its own sqlite file so it can
+#   # be reset independently (`doc3gpp db reset --scope specdata`). Unset
+#   # (default) derives a sibling of database_url with `_specdata` suffixed
+#   # to the stem. Also settable via DOC3GPP_SPECDATA_DATABASE_URL.
 # db_echo = false
 # db_auto_migrate = true
 
@@ -170,6 +175,44 @@ bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 # reranker more to work with at the cost of more vector lookups
 # per query. Only honored when --sem-query is supplied.
 search_fanout_factor = 4
+
+# ── Spec-document corpus (`doc3gpp spec doc ...`) ────────────────────────────
+# Knobs for the spec-document parse/chunk/search subsystem. The corpus
+# lives in its own sqlite file (`specdata_database_url`, default sibling
+# `<main-stem>_specdata.db`) so it can be reset independently
+# (`doc3gpp db reset --scope specdata`).
+
+# [spec_doc]
+# Per-zip cap in KB for spec-document downloads. Zips larger than this
+# land in the parse skip bucket. 0 disables the limit (spec zips are
+# legitimately multi-MB, so unlimited is the default).
+# max_zip_size_kb = 0
+
+# Hard char ceiling per chunk, applied alongside
+# `semantic_search.chunk_size` tokens (whichever budget hits first).
+# max_chunk_chars = 1500
+
+# Trailing-token overlap between consecutive chunks. Null reuses
+# `semantic_search.chunk_overlap`; an explicit value wins.
+# chunk_overlap = null
+
+# When true, every successful spec-doc parse upserts the new chunks
+# into the FTS5 `spec_doc_search` index so search sees the latest rows.
+# auto_index_on_parse = true
+
+# When true, every successful spec-doc parse embeds the new chunks into
+# the `vec_spec_doc_embeddings` vector index. Mirrors
+# `[semantic_search].auto_embed_on_parse`.
+# auto_embed_on_parse = true
+
+# Per-column BM25 weights passed to FTS5's bm25() ranking function
+# and snippet() selection. Order MUST match the 6 indexed columns of
+# the spec_doc_search virtual table: (text, section_title, table_title,
+# spec_id, version, release). A column with weight 0 is excluded from
+# both ranking and previews; a column with weight > 0 gets its own
+# highlighted snippet in query results (one per column, only when the
+# snippet actually contains a match).
+# bm25_weights = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
 
 # ── Semantic search (hybrid FTS5 + vector) ──────────────────────────────────
 # Hybrid search subsystem: remote OpenAI-compatible embeddings API +

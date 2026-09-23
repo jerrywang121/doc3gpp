@@ -25,6 +25,12 @@ from doc3gpp.models.search import (
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.spec_doc import (
+    ChunkDraft,
+    SpecDocChunk,
+    SpecDocSource,
+    SpecDocToc,
+)
 from doc3gpp.models.testcase import TestCase, TestCaseSource, TestCaseStatus
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -411,6 +417,50 @@ class SpecRepository(Protocol):
         Rows with a ``NULL`` ``tsg`` are ignored.
         """
         ...
+
+
+class SpecDocRepository(Protocol):
+    """Storage operations for the spec-document corpus (specdata sqlite file)."""
+
+    def get_source(self, spec_id: str, version: str) -> SpecDocSource | None: ...
+
+    def record_download(
+        self,
+        spec_id: str,
+        version: str,
+        *,
+        release: str | None,
+        ftp_url: str,
+        docx_count: int,
+    ) -> None: ...
+
+    def record_parsed(
+        self, spec_id: str, version: str, *, chunk_count: int
+    ) -> None: ...
+
+    def get_toc(self, spec_id: str, version: str) -> SpecDocToc | None: ...
+
+    def upsert_toc(self, toc: SpecDocToc) -> None: ...
+
+    def replace_chunks(
+        self,
+        spec_id: str,
+        version: str,
+        *,
+        release: str | None,
+        drafts: list[ChunkDraft],
+    ) -> list[SpecDocChunk]: ...
+
+    def list_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str | None = None,
+        release: str | None = None,
+        section: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[SpecDocChunk]: ...
 
 
 class TestCaseRepository(Protocol):

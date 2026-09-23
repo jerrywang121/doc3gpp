@@ -4766,25 +4766,25 @@ def spec_doc_toc_show(
 @spec_doc_search_app.command("query")
 def spec_doc_search_query(
     query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),
-    spec: list[str] = typer.Option(
-        [],
+    spec: str | None = typer.Option(
+        None,
         "--spec",
-        help="Only search chunks for the given spec id(s); repeatable.",
+        help="Only search chunks for the given spec id.",
     ),
-    release: list[str] = typer.Option(
-        [],
+    release: str | None = typer.Option(
+        None,
         "--release",
-        help="Rich filter over release; repeatable, AND-combined.",
+        help="Rich filter over release.",
     ),
-    version: list[str] = typer.Option(
-        [],
+    version: str | None = typer.Option(
+        None,
         "--version",
-        help="Rich filter over version; repeatable, AND-combined.",
+        help="Rich filter over version.",
     ),
-    section: list[str] = typer.Option(
-        [],
+    section: str | None = typer.Option(
+        None,
         "--section",
-        help="Rich filter over section no/title; repeatable, AND-combined.",
+        help="Rich filter over section no/title.",
     ),
     limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
     offset: int = typer.Option(0, "--offset", min=0, help="Number of rows to skip before applying --limit."),
@@ -4816,15 +4816,11 @@ def spec_doc_search_query(
     out_fields = _parse_field_selection(fields, SPEC_DOC_LIST_FIELDS, default_fields)
     fmt_resolved = _resolve_format(fmt, default=settings.output.format)
     resolved_compact = _resolve_compact(compact)
-    spec_filter = spec[0] if len(spec) == 1 else None
-    release_filter = release[0] if len(release) == 1 else None
-    version_filter = version[0] if len(version) == 1 else None
-    section_filter = section[0] if len(section) == 1 else None
     filters = SpecDocSearchFilters(
-        spec_id=spec_filter,
-        release=release_filter,
-        version=version_filter,
-        section=section_filter,
+        spec_id=spec,
+        release=release,
+        version=version,
+        section=section,
         limit=limit,
         offset=offset,
     )
@@ -4875,23 +4871,23 @@ def spec_doc_search_sem(
             "Ignored when --fts5-query is omitted."
         ),
     ),
-    spec: list[str] = typer.Option(
-        [],
+    spec: str | None = typer.Option(
+        None,
         "--spec",
-        help="Only search chunks for the given spec id(s); repeatable.",
+        help="Only search chunks for the given spec id.",
     ),
-    release: list[str] = typer.Option(
-        [],
+    release: str | None = typer.Option(
+        None,
         "--release",
         help="Filter over release.",
     ),
-    version: list[str] = typer.Option(
-        [],
+    version: str | None = typer.Option(
+        None,
         "--version",
         help="Filter over version.",
     ),
-    section: list[str] = typer.Option(
-        [],
+    section: str | None = typer.Option(
+        None,
         "--section",
         help="Filter over section no/title.",
     ),
@@ -4930,15 +4926,11 @@ def spec_doc_search_sem(
     settings = get_settings()
     fmt_resolved = _resolve_format(fmt, default=settings.output.format)
     resolved_compact = _resolve_compact(compact)
-    spec_filter = spec[0] if len(spec) == 1 else None
-    release_filter = release[0] if len(release) == 1 else None
-    version_filter = version[0] if len(version) == 1 else None
-    section_filter = section[0] if len(section) == 1 else None
     filters = SpecDocSearchFilters(
-        spec_id=spec_filter,
-        release=release_filter,
-        version=version_filter,
-        section=section_filter,
+        spec_id=spec,
+        release=release,
+        version=version,
+        section=section,
         limit=limit,
         offset=0,
     )

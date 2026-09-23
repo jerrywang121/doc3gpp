@@ -313,16 +313,20 @@ def test_factory_chooses_semantic_reranker_when_both_enabled(monkeypatch):
 
         class semantic_search:
             enabled = True
+            embedding_base_url = "http://localhost:11434/v1"
             embedding_model = "fake-model"
+            embedding_api_key = None
+            embedding_timeout_s = 30.0
+            embedding_batch_size = 32
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
     fake_embedder = MagicMock()
     fake_vector_repo = MagicMock()
     monkeypatch.setattr(
-        f, "SentenceTransformerEmbedder", lambda _model: fake_embedder,
+        f, "build_embedder", lambda settings: fake_embedder,
     )
     monkeypatch.setattr(
-        f, "SQLAlchemyVectorIndexRepository", lambda: fake_vector_repo,
+        f, "SQLAlchemyVectorIndexRepository", lambda *a, **kw: fake_vector_repo,
     )
     monkeypatch.setattr(
         f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
@@ -369,37 +373,85 @@ def test_factory_falls_back_to_passthrough_when_embedder_unavailable(monkeypatch
 
         class semantic_search:
             enabled = True
+            embedding_base_url = "http://localhost:11434/v1"
             embedding_model = "fake-model"
+            embedding_api_key = None
+            embedding_timeout_s = 30.0
+            embedding_batch_size = 32
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
     monkeypatch.setattr(
         f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
     )
 
-    def _raise(_model):
+    def _raise(settings):
         raise EmbedderUnavailableError("nope")
 
-    monkeypatch.setattr(f, "SentenceTransformerEmbedder", _raise)
+    monkeypatch.setattr(f, "build_embedder", _raise)
 
     svc = f.build_search_service(FakeSettings())
     assert isinstance(svc, SearchService)
     assert isinstance(svc._reranker, PassthroughReranker)
 
 
-def test_factory_build_embedder_returns_lazy_embedder(monkeypatch) -> None:
+def test_factory_falls_back_to_passthrough_when_url_unset(monkeypatch) -> None:
     from unittest.mock import MagicMock
 
     from doc3gpp.services import factory as f
+    from doc3gpp.services.search_service import PassthroughReranker, SearchService
+
+    class FakeSettings:
+        class search:
+            enabled = True
+
+        class semantic_search:
+            enabled = True
+            embedding_base_url = None
+            embedding_model = "fake-model"
+            embedding_api_key = None
+            embedding_timeout_s = 30.0
+            embedding_batch_size = 32
+
+    monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
+    monkeypatch.setattr(
+        f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
+    )
+    fake_vector_repo = MagicMock()
+    monkeypatch.setattr(
+        f, "SQLAlchemyVectorIndexRepository", lambda *a, **kw: fake_vector_repo,
+    )
+
+    svc = f.build_search_service(FakeSettings())
+    assert isinstance(svc, SearchService)
+    assert isinstance(svc._reranker, PassthroughReranker)
+
+
+def test_factory_build_embedder_returns_remote_or_none() -> None:
+    from doc3gpp.services import factory as f
+    from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
 
     class FakeSettings:
         class semantic_search:
+            embedding_base_url = "http://localhost:11434/v1"
             embedding_model = "fake-model"
+            embedding_api_key = None
+            embedding_timeout_s = 30.0
+            embedding_batch_size = 32
 
-    fake_embedder = MagicMock()
-    monkeypatch.setattr(
-        f, "SentenceTransformerEmbedder", lambda model: fake_embedder,
-    )
-    assert f.build_embedder(FakeSettings()) is fake_embedder
+    emb = f.build_embedder(FakeSettings())
+    assert isinstance(emb, OpenAICompatibleEmbedder)
+    assert emb.model_name == "fake-model"
+    emb.close()
+
+    class UnsetSettings:
+        class semantic_search:
+            embedding_base_url = None
+            embedding_model = "fake-model"
+            embedding_api_key = None
+            embedding_timeout_s = 30.0
+            embedding_batch_size = 32
+
+    assert f.build_embedder(UnsetSettings()) is None
 
 
 def test_factory_search_service_uses_injected_embedder(monkeypatch) -> None:
@@ -415,13 +467,17 @@ def test_factory_search_service_uses_injected_embedder(monkeypatch) -> None:
 
         class semantic_search:
             enabled = True
+            embedding_base_url = "http://localhost:11434/v1"
             embedding_model = "fake-model"
+            embedding_api_key = None
+            embedding_timeout_s = 30.0
+            embedding_batch_size = 32
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
     fake_embedder = MagicMock()
     fake_vector_repo = MagicMock()
     monkeypatch.setattr(
-        f, "SQLAlchemyVectorIndexRepository", lambda: fake_vector_repo,
+        f, "SQLAlchemyVectorIndexRepository", lambda *a, **kw: fake_vector_repo,
     )
     monkeypatch.setattr(
         f, "SQLAlchemySearchIndexRepository", lambda: MagicMock(),
@@ -451,7 +507,11 @@ def test_factory_tdoc_cr_service_forwards_embedder(monkeypatch) -> None:
 
         class semantic_search:
             enabled = True
+            embedding_base_url = "http://localhost:11434/v1"
             embedding_model = "fake-model"
+            embedding_api_key = None
+            embedding_timeout_s = 30.0
+            embedding_batch_size = 32
 
     monkeypatch.setattr(f, "get_settings", lambda: FakeSettings())
     fake_embedder = MagicMock()

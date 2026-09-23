@@ -213,7 +213,7 @@ table below is for navigation only.
 | `doc3gpp.models.semantic_search.SemanticSearchError` (+ subclasses) | exception hierarchy | `models/semantic_search.py` | Errors raised by the semantic-search subsystem (incl. dim mismatch) |
 | `doc3gpp.services.semantic_search_service.SemanticSearchService` | service | `services/semantic_search_service.py` | Hybrid RRF orchestration: `search`, `index_for_tdoc`, `rebuild_embeddings`, `status` |
 | `doc3gpp.services.embedding.chunker.chunk_text` | function | `services/embedding/chunker.py` | Pure `_chunks(text, size, overlap)` window splitter |
-| `doc3gpp.services.embedding.embedder.SentenceTransformerEmbedder` | class | `services/embedding/embedder.py` | Concrete `Embedder` impl using sentence-transformers (lazy model load) |
+| `doc3gpp.services.embedding.remote_embedder.OpenAICompatibleEmbedder` | class | `services/embedding/remote_embedder.py` | Remote-only `Embedder` impl: `POST {base_url}/embeddings` via httpx (OpenAI / Ollama `/v1` / vLLM / TEI); `None` when `embedding_base_url` unset |
 | `doc3gpp.services.embedding.stopwords.strip_stopwords` | function | `services/embedding/stopwords.py` | spaCy + custom-stopword strip; respects `user_defined_stop_words` and `keep_negation_words` |
 | `doc3gpp.storage.repositories.vector_sql.SQLAlchemyVectorIndexRepository` | repository | `storage/repositories/vector_sql.py` | Concrete `VectorIndexRepository` impl backed by sqlite-vec (`vec_tdoc_embeddings` + `vec_meta`) |
 

@@ -6,8 +6,8 @@ Exercises the full CLI flow — :class:`typer.testing.CliRunner` →
 :class:`doc3gpp.services.semantic_reranker.SemanticReranker` (vector
 rerank) → CLI table renderer.
 
-The :class:`SentenceTransformerEmbedder` is patched so the test does
-not depend on a real sentence-transformers model. The corpus uses
+The factory's :func:`build_embedder` is patched so the test does
+not depend on a remote embeddings API. The corpus uses
 the production DDL (via :func:`doc3gpp.storage.db.migrate.create_schema`)
 but with ``vec_meta.embedding_dim`` pinned to 4 so the test vectors
 stay short and the cosine-distance arithmetic is obvious.
@@ -40,7 +40,7 @@ from sqlalchemy import text
 from typer.testing import CliRunner
 
 from doc3gpp.cli import search_app
-from doc3gpp.services.embedding.embedder import SentenceTransformerEmbedder
+from doc3gpp.services import factory
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
@@ -214,21 +214,18 @@ class _FakeEmbedder:
 
 
 def _patch_embedder(embedder: _FakeEmbedder):
-    """Patch :class:`SentenceTransformerEmbedder` for the duration of a test.
+    """Patch :func:`factory.build_embedder` for the duration of a test.
 
     The factory's :func:`build_search_service` constructs the
-    embedder via ``SentenceTransformerEmbedder(settings.semantic_search.embedding_model)``
-    inside the reranker branch — so the ``__init__`` patch is
-    required to skip the lazy model load. The ``encode`` patch
-    routes the call to the test's :class:`_FakeEmbedder` instance.
+    embedder via ``build_embedder(settings)`` inside the reranker
+    branch — patching it avoids any HTTP call to the remote
+    embeddings API and routes ``encode`` to the test's
+    :class:`_FakeEmbedder` instance.
     """
     return (
         patch.object(
-            SentenceTransformerEmbedder, "__init__",
-            lambda self, model: None,
-        ),
-        patch.object(
-            SentenceTransformerEmbedder, "encode", embedder.encode,
+            factory, "build_embedder",
+            lambda settings: embedder,
         ),
     )
 
@@ -240,8 +237,8 @@ def test_sem_query_uses_4x_fanout_then_truncates_to_limit(seeded_engine):
         "R5-3": [[0.0, 0.0, 1.0, 0.0]],
     })
     embedder = _FakeEmbedder([1.0, 0.0, 0.0, 0.0])
-    init_patch, encode_patch = _patch_embedder(embedder)
-    with init_patch, encode_patch:
+    (embedder_patch,) = _patch_embedder(embedder)
+    with embedder_patch:
         result = CliRunner().invoke(
             search_app,
             [
@@ -270,8 +267,8 @@ def test_sem_query_empty_vector_index_falls_back_to_fts5_order(
 ):
     _seed_vectors({})
     embedder = _FakeEmbedder([0.0, 0.0, 0.0, 0.0])
-    init_patch, encode_patch = _patch_embedder(embedder)
-    with init_patch, encode_patch, caplog.at_level(logging.WARNING):
+    (embedder_patch,) = _patch_embedder(embedder)
+    with embedder_patch, caplog.at_level(logging.WARNING):
         result = CliRunner().invoke(
             search_app, ["query", "R5*", "--sem-query", "anything"],
         )
@@ -290,8 +287,8 @@ def test_sem_query_empty_string_is_no_op(seeded_engine):
         "R5-3": [[0.0, 0.0, 1.0, 0.0]],
     })
     embedder = _FakeEmbedder([0.0, 0.0, 0.0, 0.0])
-    init_patch, encode_patch = _patch_embedder(embedder)
-    with init_patch, encode_patch:
+    (embedder_patch,) = _patch_embedder(embedder)
+    with embedder_patch:
         result = CliRunner().invoke(
             search_app, ["query", "R5*", "--sem-query", ""],
         )
@@ -308,8 +305,8 @@ def test_sem_query_fts5_zero_results_does_not_encode(seeded_engine):
         "R5-3": [[0.0, 0.0, 1.0, 0.0]],
     })
     embedder = _FakeEmbedder([0.0, 0.0, 0.0, 0.0])
-    init_patch, encode_patch = _patch_embedder(embedder)
-    with init_patch, encode_patch:
+    (embedder_patch,) = _patch_embedder(embedder)
+    with embedder_patch:
         result = CliRunner().invoke(
             search_app, ["query", "nothing", "--sem-query", "anything"],
         )
@@ -338,8 +335,8 @@ def test_sem_query_quiet_suppresses_warning(seeded_engine, caplog):
     """
     _seed_vectors({})
     embedder = _FakeEmbedder([0.0, 0.0, 0.0, 0.0])
-    init_patch, encode_patch = _patch_embedder(embedder)
-    with init_patch, encode_patch, caplog.at_level(
+    (embedder_patch,) = _patch_embedder(embedder)
+    with embedder_patch, caplog.at_level(
         logging.WARNING, logger="doc3gpp.services.semantic_reranker",
     ):
         result = CliRunner().invoke(

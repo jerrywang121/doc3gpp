@@ -9,9 +9,9 @@ def test_defaults():
     s = SemanticSearchSettings()
     assert s.enabled is True
     assert s.auto_embed_on_parse is True
-    assert s.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
-    assert s.chunk_size == 200
-    assert s.chunk_overlap == 20
+    assert s.embedding_model == "embeddinggemma:300m"
+    assert s.chunk_size == 512
+    assert s.chunk_overlap == 24
     assert s.rrf_k == 60
     assert s.fts5_weight == 0.5
     assert s.fanout_multiplier == 4

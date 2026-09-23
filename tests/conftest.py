@@ -55,8 +55,7 @@ def semantic_search_corpus(sqlite_env):
     Mirrors :func:`search_corpus` but in addition to FTS5 indexing
     inserts pre-computed embedding vectors through
     :class:`SQLAlchemyVectorIndexRepository` so KNN lookups return
-    deterministic results without loading a sentence-transformers
-    model.
+    deterministic results without calling a remote embeddings API.
 
     Yields the sqlite engine so callers can layer more assertions on
     top.

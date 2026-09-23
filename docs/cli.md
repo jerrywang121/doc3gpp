@@ -1900,10 +1900,13 @@ sharpen the FTS5 dominance. The knob is only consulted when
 directly with the user's `--limit`.
 
 `--sem-query` requires the `[semantic]` pyproject extra
-(`pip install "doc3gpp[semantic]"`) and a populated
-`vec_tdoc_embeddings` table. On a build without the extra, the
-CLI prints `search sem rerank unavailable; run \`pip install
-doc3gpp[semantic]\`` to stderr and exits 1. The empty-vector
+(`pip install "doc3gpp[semantic]"`), a populated
+`vec_tdoc_embeddings` table, and a configured
+`[semantic_search].embedding_base_url` (the query string is
+embedded via the remote API). When the semantic stack is
+unavailable (extra missing, URL unset, API down), the command
+exits 1 with a `search sem unavailable; ...` one-liner to stderr
+pointing at the missing piece. The empty-vector
 fallback applies to TDoc rows that have no vector chunks indexed
 yet: `SemanticReranker` assigns them a sentinel
 `MISSING_FLOOR` distance so they sort to the bottom of the rerank
@@ -1938,14 +1941,25 @@ the index by walking every `tdocs` row.
 
 Run a hybrid (FTS5 + vector) search that merges lexical and semantic
 matches with Reciprocal Rank Fusion (RRF). The positional `QUERY`
-is always embedded by the vector path (the same model used at index
-time); when `--fts5-query` is supplied, it is preprocessed by
+is always embedded by the vector path (the remote model named by
+`[semantic_search].embedding_model`, via `embedding_base_url`);
+when `--fts5-query` is supplied, it is preprocessed by
 `SearchQueryBuilder` (same semantics as `search query`, including
 single-quote → double-quote phrase rewriting) and feeds
 the FTS5 fan-out. Both paths fan out to `2N` candidates, are merged
 via `rrf_merge`, and truncated to `--limit`. When `--fts5-query` is
 omitted, FTS5 + RRF are skipped — only vector KNN results return.
 `search query` (FTS5-only) is unchanged.
+
+Prerequisites: the `[semantic]` extra (sqlite-vec) **plus**
+`[semantic_search].embedding_base_url` pointing at an OpenAI-compatible
+embeddings API (e.g. Ollama `http://localhost:11434/v1`, OpenAI
+`https://api.openai.com/v1`). When the URL is unset the command exits 1
+with the base-url hint. A dim/model mismatch against a previously built
+index fails fast with a `search index --rebuild-embeddings` hint —
+swapping models forces a rebuild even when dims collide; `search index`
+(no flags) shows the stored vs configured model/dim so the mismatch is
+visible up front.
 
 | Flag | Effect |
 | --- | --- |
@@ -1963,7 +1977,7 @@ omitted, FTS5 + RRF are skipped — only vector KNN results return.
 | `--fts5-weight FLOAT` | FTS5 weight in the RRF blend (default `0.5`); the vector weight is `1 - fts5_weight`. `0.0` = vector-only, `1.0` = FTS5-only. Ignored when `--fts5-query` is omitted. |
 | `--format table\|json\|markdown` | output format (default `table`). |
 | `--compact` | strip JSON / markdown decorators. |
-| `--explain` | Print the resolved FTS5 MATCH expression (when applicable), snippet column, BM25 weight vector, and the RRF config (`fts5_weight`, `1 - fts5_weight`, `rrf_k`, `fanout_multiplier`) to stderr. |
+| `--explain` | Print the configured `embedding_model` + `embedding_host` (host only — the key is never printed), the stored `vec_meta` model/dim, and the RRF config (`fts5_weight`, `1 - fts5_weight`, `rrf_k`, `fanout_multiplier`) to stderr. |
 | `--quiet` | suppress the stale-index hint. |
 
 The merge is `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) * (1 - fts5_weight)`
@@ -1976,9 +1990,11 @@ The hybrid search degrades gracefully across three layers:
 1. FTS5 path: when `Settings.search.enabled = false`, the FTS5 fan-out
    returns an empty list and only the vector rank contributes to the
    RRF score. `--explain` surfaces the missing FTS5 side.
-2. Vector path: when `Settings.semantic_search.enabled = false` or
+2. Vector path: when `Settings.semantic_search.enabled = false`,
+   `[semantic_search].embedding_base_url` is unset, or
    the sqlite-vec extension is unavailable, the vector fan-out returns
-   an empty list and the FTS5 rank drives the result.
+   an empty list and the FTS5 rank drives the result. `search sem`
+   without a URL exits 1 with the base-url hint instead.
 3. Auto-embed hook: when `Settings.semantic_search.auto_embed_on_parse = false`,
    newly-parsed TDocs are not embedded automatically; the vector path
    reflects only what was indexed up to the last manual rebuild.

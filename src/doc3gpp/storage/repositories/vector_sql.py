@@ -67,40 +67,147 @@ def _check_sqlite_vec(engine: Engine) -> None:
 
 
 class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        expected_model: str | None = None,
+        expected_dim: int | None = None,
+    ) -> None:
         self._engine = get_engine()
         _check_sqlite_vec(self._engine)
-        self._dim = self._read_or_init_dim()
+        self._dim, self._stored_model = self._read_or_init_dim_and_model()
+        self._expected_model = expected_model
+        self._expected_dim = expected_dim
 
-    def _read_or_init_dim(self) -> int:
+    def _read_or_init_dim_and_model(self) -> tuple[int, str | None]:
         with self._engine.begin() as conn:
             try:
-                row = conn.execute(
+                dim_row = conn.execute(
                     text("SELECT value FROM vec_meta WHERE key = 'embedding_dim'")
                 ).scalar()
-                if row is None:
+                model_row = conn.execute(
+                    text("SELECT value FROM vec_meta WHERE key = 'embedding_model'")
+                ).scalar()
+                if dim_row is None:
                     conn.execute(
                         text(
                             "INSERT INTO vec_meta (key, value) VALUES ('embedding_dim', :d)"
                         ),
                         {"d": str(DEFAULT_DIM)},
                     )
-                    return DEFAULT_DIM
-                return int(row)
+                    return DEFAULT_DIM, model_row
+                return int(dim_row), model_row
             except OperationalError as exc:
                 raise VectorIndexUnavailableError(
                     "vector schema is not initialized; run `doc3gpp db init` "
                     f"or `doc3gpp db reset` first: {exc}"
                 ) from exc
 
+    def _check_compatible(self, dim: int, *, what: str) -> None:
+        if self._expected_dim is not None and self._expected_dim != self._dim:
+            raise VectorIndexUnavailableError(
+                f"vector dim mismatch: stored={self._dim} "
+                f"expected={self._expected_dim}; run "
+                f"`doc3gpp search index --rebuild-embeddings`"
+            )
+        if dim != self._dim:
+            prefix = "query" if what == "query" else "vector"
+            raise VectorIndexUnavailableError(
+                f"{prefix} dim mismatch: stored={self._dim} "
+                f"requested={dim}; run "
+                f"`doc3gpp search index --rebuild-embeddings`"
+            )
+        if self._expected_model is not None and self._stored_model != self._expected_model:
+            raise VectorIndexUnavailableError(
+                f"vector model mismatch: stored={self._stored_model!r} "
+                f"expected={self._expected_model!r}; run "
+                f"`doc3gpp search index --rebuild-embeddings`"
+            )
+
+    def verify_compatible(self, dim: int, model: str | None) -> None:
+        """Raise on live-vs-stored dim/model mismatch without writing.
+
+        Resume-path guard for
+        :meth:`SemanticSearchService.rebuild_embeddings`: a resumed
+        rebuild must not silently mix rows from two different models
+        (or dims) into one ``vec0`` table. ``model=None`` (duck-typed
+        embedders without a ``model_name``) skips the model check.
+        """
+        if dim != self._dim:
+            raise VectorIndexUnavailableError(
+                f"vector dim mismatch: stored={self._dim} "
+                f"requested={dim}; run "
+                f"`doc3gpp search index --rebuild-embeddings`"
+            )
+        if model is not None and self._stored_model != model:
+            raise VectorIndexUnavailableError(
+                f"vector model mismatch: stored={self._stored_model!r} "
+                f"expected={model!r}; run "
+                f"`doc3gpp search index --rebuild-embeddings`"
+            )
+
+    def reset_for_rebuild(self, dim: int, model: str | None) -> None:
+        """Drop + recreate ``vec0`` at ``dim`` and stamp ``vec_meta``.
+
+        Non-resume entry point for
+        :meth:`SemanticSearchService.rebuild_embeddings`: the vec0
+        dimension is a schema-level property fixed at ``CREATE
+        VIRTUAL TABLE`` time, so a dim change requires a rebuild of
+        the table itself. Stamps ``embedding_dim`` + ``embedding_model``
+        (unconditionally overwriting stale values) and refreshes the
+        cached ``_dim`` / ``_stored_model`` so subsequent upserts on
+        this instance see the new values. ``model=None`` removes the
+        model row (duck-typed embedders with no ``model_name``).
+        """
+        width = int(dim)
+        try:
+            import sqlite_vec
+        except ImportError as exc:
+            raise VectorIndexUnavailableError(
+                "sqlite-vec is not installed; run `pip install doc3gpp[semantic]`"
+            ) from exc
+        with self._engine.begin() as conn:
+            try:
+                sqlite_vec.load(conn.connection.driver_connection)
+            except Exception as exc:
+                raise VectorIndexUnavailableError(
+                    f"sqlite-vec extension load failed: {exc}"
+                ) from exc
+            conn.execute(text("DROP TABLE IF EXISTS vec_tdoc_embeddings"))
+            conn.execute(
+                text(
+                    "CREATE VIRTUAL TABLE vec_tdoc_embeddings USING vec0(\n"
+                    "    chunk_id TEXT PRIMARY KEY,\n"
+                    "    tdoc_id TEXT,\n"
+                    "    chunk_index INTEGER,\n"
+                    f"    embedding FLOAT[{width}] distance_metric=cosine\n"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO vec_meta (key, value) VALUES ('embedding_dim', :v) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                ),
+                {"v": str(width)},
+            )
+            if model is None:
+                conn.execute(
+                    text("DELETE FROM vec_meta WHERE key = 'embedding_model'"),
+                )
+            else:
+                conn.execute(
+                    text(
+                        "INSERT INTO vec_meta (key, value) VALUES ('embedding_model', :v) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                    ),
+                    {"v": model},
+                )
+        self._dim = width
+        self._stored_model = model
+
     def _check_dim(self, embeddings: list[np.ndarray]) -> None:
         for v in embeddings:
-            if v.shape[-1] != self._dim:
-                raise VectorIndexUnavailableError(
-                    f"vector dim mismatch: stored={self._dim} "
-                    f"requested={v.shape[-1]}; run "
-                    f"`doc3gpp search index --rebuild-embeddings`"
-                )
+            self._check_compatible(v.shape[-1], what="upsert")
 
     def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None:
         self._check_dim(embeddings)
@@ -136,11 +243,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         self, query_vec: np.ndarray, limit: int,
         filters: SearchFilters | None = None,
     ) -> list[tuple[str, str, int, float]]:
-        if query_vec.shape[-1] != self._dim:
-            raise VectorIndexUnavailableError(
-                f"query dim mismatch: stored={self._dim} "
-                f"requested={query_vec.shape[-1]}"
-            )
+        self._check_compatible(int(query_vec.shape[-1]), what="query")
         sql = [
             "SELECT chunk_id, vec_tdoc_embeddings.tdoc_id AS tdoc_id, "
             "chunk_index, distance",
@@ -290,6 +393,12 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             latest = conn.execute(
                 text("SELECT MAX(uploaded_date) FROM tdocs")
             ).scalar()
+            stored_dim = conn.execute(
+                text("SELECT value FROM vec_meta WHERE key='embedding_dim'")
+            ).scalar()
+            stored_model = conn.execute(
+                text("SELECT value FROM vec_meta WHERE key='embedding_model'")
+            ).scalar()
         from datetime import datetime as _dt
         return SearchIndexStatus(
             enabled=True,
@@ -298,6 +407,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             last_indexed_uploaded_date=_dt.fromisoformat(last_indexed) if last_indexed else None,
             latest_tdocs_uploaded_date=_dt.fromisoformat(str(latest)) if latest else None,
             is_stale=bool(latest and (not last_indexed or str(latest) > last_indexed)),
+            embedding_dim=int(stored_dim) if stored_dim is not None else None,
+            embedding_model=stored_model,
         )
 
     def get_tdocs_metadata(
@@ -351,11 +462,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         if not tdoc_ids:
             return {}
         q = np.asarray(query_vec, dtype=np.float32)
-        if q.shape[-1] != self._dim:
-            raise VectorIndexUnavailableError(
-                f"query dim mismatch: stored={self._dim} "
-                f"requested={q.shape[-1]}"
-            )
+        self._check_compatible(int(q.shape[-1]), what="query")
         # sqlite-vec KNN: per-row ``distance`` column, K=1 per tdoc_id.
         # We request K = number of distinct chunks for the asked tdoc_ids,
         # then group-by in Python (cheaper than a CTE, fewer sqlite-vec

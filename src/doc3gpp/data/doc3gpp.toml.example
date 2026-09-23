@@ -172,13 +172,14 @@ bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 search_fanout_factor = 4
 
 # ── Semantic search (hybrid FTS5 + vector) ──────────────────────────────────
-# Hybrid search subsystem: sentence-transformers embeddings + sqlite-vec
-# KNN, fused with Reciprocal Rank Fusion (RRF) over the FTS5 + vector
-# fan-out. Requires the `[semantic]` pyproject extra
-# (`pip install "doc3gpp[semantic]"`) for the embedding model + the
-# sqlite-vec extension. Schema is gated on the sqlite + sqlite-vec
-# support matrix; when sqlite-vec is
-# unavailable, only the FTS5 path is active and the vector path is a
+# Hybrid search subsystem: remote OpenAI-compatible embeddings API +
+# sqlite-vec KNN, fused with Reciprocal Rank Fusion (RRF) over the
+# FTS5 + vector fan-out. Requires the `[semantic]` pyproject extra
+# (`pip install "doc3gpp[semantic]"`) for the sqlite-vec extension.
+# The embedding backend is remote-only: set
+# `[semantic_search].embedding_base_url`
+# (e.g. `http://localhost:11434/v1`) to enable the semantic stack;
+# when unset, only the FTS5 path is active and the vector path is a
 # no-op.
 #
 # As of 2026-08-01 spaCy is no longer used: `search sem` embeds the
@@ -196,21 +197,35 @@ search_fanout_factor = 4
 # `[search].auto_index_on_parse`.
 # auto_embed_on_parse = true
 
-# Hugging Face model id used for embeddings. Must produce a vector
-# dimension that matches the `vec_tdoc_embeddings` schema at creation
-# time; changing this on a populated index requires
+# Remote embedding model name sent in the OpenAI-compatible
+# `/embeddings` payload. Must produce a vector dimension that
+# matches the `vec_tdoc_embeddings` schema at creation time;
+# changing this on a populated index requires
 # `search index --rebuild-embeddings`.
-# embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+# embedding_model = "embeddinggemma:300m"
+
+# Base URL of the OpenAI-compatible embeddings API. Unset disables the
+# semantic stack. Examples:
+#   Ollama (local, no key needed):  embedding_base_url = "http://localhost:11434/v1"
+#   OpenAI:                         embedding_base_url = "https://api.openai.com/v1"
+# Optional bearer token via `embedding_api_key` (or the
+# `DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY` env var — env wins),
+# per-request HTTP timeout via `embedding_timeout_s` (1..300s), and max
+# inputs per `/embeddings` request via `embedding_batch_size` (1..512).
+# embedding_base_url = "http://localhost:11434/v1"
+# embedding_api_key = null
+# embedding_timeout_s = 30.0
+# embedding_batch_size = 32
 
 # Approximate chunk size in whitespace tokens passed to the text
 # chunker. Each TDoc is split into windows of `chunk_size` whitespace
 # tokens with `chunk_overlap` tokens of overlap to preserve context
 # across boundaries. Mirrors `_chunks(text, size, overlap)` in
 # `services/embedding/chunker.py`.
-# chunk_size = 200
+# chunk_size = 512
 
 # Overlap between consecutive chunks (in whitespace tokens).
-# chunk_overlap = 20
+# chunk_overlap = 24
 
 # RRF `k` constant. The blend is
 #   rrf = 1/(k + rank_fts5) * (1 - W) + 1/(k + rank_vec) * W

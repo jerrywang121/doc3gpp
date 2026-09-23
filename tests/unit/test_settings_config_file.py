@@ -447,7 +447,7 @@ def test_non_allowlisted_env_vars_are_silently_ignored(
 def test_allowlisted_env_vars_override_toml(
     clean_settings, write_toml, monkeypatch,
 ) -> None:
-    """All six allowlisted vars take precedence over the TOML file
+    """All seven allowlisted vars take precedence over the TOML file
     when both are set."""
     from doc3gpp.settings.schema import ALLOWED_ENV_VARS
 
@@ -474,7 +474,7 @@ def test_allowlisted_env_vars_override_toml(
 
     get_settings.cache_clear()
     s = get_settings()
-    assert len(ALLOWED_ENV_VARS) == 7
+    assert len(ALLOWED_ENV_VARS) == 8
     assert s.database_url == "sqlite+pysqlite:////tmp/env.db"
     assert s.db_echo is True
     assert s.log_level == "DEBUG"

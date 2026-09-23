@@ -5034,7 +5034,11 @@ def config_show() -> None:
     path, _data = load_config_data()
     settings = get_settings()
     typer.echo(f"# config source: {path if path is not None else '(no config file)'}")
-    typer.echo(json.dumps(settings.model_dump(mode="json"), indent=2, sort_keys=True))
+    dumped = settings.model_dump(mode="json")
+    sem = dumped.get("semantic_search")
+    if isinstance(sem, dict) and sem.get("embedding_api_key"):
+        sem["embedding_api_key"] = "***"
+    typer.echo(json.dumps(dumped, indent=2, sort_keys=True))
 
 
 def _env_var_for_key(key: str) -> str | None:
@@ -5302,14 +5306,56 @@ def index_command(
         typer.echo("search disabled in settings", err=True)
         raise typer.Exit(code=0)
     if not do_fts5 and not do_vec:
+        from sqlalchemy import text as _text
+        from sqlalchemy.exc import OperationalError as _SAOperationalError
+
+        from doc3gpp.settings.loader import get_settings as _get_settings
+        from doc3gpp.storage.db.session import get_engine as _get_engine
+
         status = fts5_svc.status()
         sem_svc = build_semantic_search_service()
         # The vector row count lives on a separate
         # vec_tdoc_embeddings table; surface it alongside the FTS5
         # row count so operators don't confuse the two indexes when
-        # the panel shows only one number.
+        # the panel shows only one number. The stored model/dim are
+        # read from vec_meta directly (not via the service) so a
+        # model/dim mismatch stays visible instead of collapsing to
+        # "semantic unavailable": the factory returns None on
+        # mismatch, but the panel must still show stored-vs-configured
+        # values plus the rebuild hint. The configured model comes
+        # from settings; the live dim needs a network probe, so the
+        # panel shows "live — probed at rebuild" instead of calling
+        # the API.
         vec_status_block = ""
-        if sem_svc is not None:
+        try:
+            with _get_engine().begin() as _conn:
+                _vrows = _conn.execute(
+                    _text("SELECT COUNT(*) FROM vec_tdoc_embeddings"),
+                ).scalar()
+                _stored_dim = _conn.execute(
+                    _text("SELECT value FROM vec_meta WHERE key='embedding_dim'"),
+                ).scalar()
+                _stored_model = _conn.execute(
+                    _text("SELECT value FROM vec_meta WHERE key='embedding_model'"),
+                ).scalar()
+        except _SAOperationalError:  # no vector schema yet; omit the block
+            _vrows = None
+        if _vrows is not None:
+            sem_settings = _get_settings().semantic_search
+            configured_model = sem_settings.embedding_model
+            stored_model = _stored_model or "(unset — rebuild required)"
+            stored_dim = _stored_dim if _stored_dim is not None else "unknown"
+            vec_status_block = (
+                f"\nVector rows:    {_vrows:,}"
+                f"\nVector model:   {stored_model} (configured: {configured_model})"
+                f"\nVector dim:     {stored_dim} (configured: live — probed at rebuild)"
+            )
+            if _stored_model is not None and _stored_model != configured_model:
+                vec_status_block += (
+                    "\nVector status:  MODEL MISMATCH — run "
+                    "`doc3gpp search index --rebuild-embeddings`"
+                )
+        elif sem_svc is not None:
             vec_status = sem_svc.status()
             vec_status_block = (
                 f"\nVector rows:    {vec_status.row_count:,}"
@@ -5364,7 +5410,9 @@ def index_command(
         if sem_svc is None:
             typer.echo(
                 "semantic search unavailable; "
-                "run `pip install doc3gpp[semantic]`",
+                "set [semantic_search].embedding_base_url "
+                "(e.g. http://localhost:11434/v1); "
+                "run `pip install doc3gpp[semantic]` for sqlite-vec",
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -5478,8 +5526,34 @@ def sem_command(
 
     svc = build_semantic_search_service()
     if svc is None:
+        from doc3gpp.settings.loader import get_settings as _get_settings2
+        from doc3gpp.storage.db.session import get_engine as _get_engine
+
+        _sem = _get_settings2().semantic_search
+        _stored: str | None = None
+        try:
+            from sqlalchemy import text as _text2
+            from sqlalchemy.exc import OperationalError as _SAOpErr2
+
+            with _get_engine().begin() as _conn:
+                _stored = _conn.execute(
+                    _text2("SELECT value FROM vec_meta WHERE key='embedding_model'"),
+                ).scalar()
+        except _SAOpErr2:  # no vector schema yet; fall through to the URL hint
+            _stored = None
+        if _stored is not None and _stored != _sem.embedding_model:
+            typer.echo(
+                f"vector model mismatch: stored={_stored!r} "
+                f"expected={_sem.embedding_model!r}; run "
+                "`doc3gpp search index --rebuild-embeddings`",
+                err=True,
+            )
+            raise typer.Exit(code=1)
         typer.echo(
-            "search sem unavailable; run `pip install doc3gpp[semantic]`",
+            "search sem unavailable; "
+            "set [semantic_search].embedding_base_url "
+            "(e.g. http://localhost:11434/v1); "
+            "run `pip install doc3gpp[semantic]` for sqlite-vec",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -5508,11 +5582,34 @@ def sem_command(
         typer.echo(f"search sem unavailable: {exc}", err=True)
         raise typer.Exit(code=1)
     if explain:
+        from urllib.parse import urlsplit
+
+        from doc3gpp.settings.loader import get_settings as _get_settings
+
         typer.echo("# semantic search config", err=True)
         typer.echo(f"fts5_query:      {fts5_query!r}", err=True)
         typer.echo(f"fts5_weight:     {fts5_weight}", err=True)
         typer.echo(f"vector_weight:   {1.0 - fts5_weight:.4f}", err=True)
         typer.echo(f"limit:           {limit}", err=True)
+        sem_settings = _get_settings().semantic_search
+        typer.echo(
+            f"embedding_model: {sem_settings.embedding_model}", err=True,
+        )
+        parts = urlsplit(sem_settings.embedding_base_url or "")
+        host = parts.hostname or "(unset)"
+        if parts.port is not None:
+            host = f"{host}:{parts.port}"
+        typer.echo(f"embedding_host:  {host}", err=True)
+        stored_model = getattr(svc._vec, "_stored_model", None)  # noqa: SLF001
+        stored_dim = getattr(svc._vec, "_dim", None)  # noqa: SLF001
+        typer.echo(
+            f"stored_model:    {stored_model if stored_model is not None else '(unset)'}",
+            err=True,
+        )
+        typer.echo(
+            f"stored_dim:      {stored_dim if stored_dim is not None else 'unknown'}",
+            err=True,
+        )
         typer.echo(
             f"rrf_k:           {svc._settings.semantic_search.rrf_k}",
             err=True,

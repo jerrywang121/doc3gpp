@@ -774,11 +774,10 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
             return np.zeros((len(texts), 384), dtype=np.float32)
 
     settings = Settings()
-    embedder = factory.build_embedder(settings)
     services = ServiceContainer(
         meeting=factory.build_meeting_service(),
         tdoc=factory.build_tdoc_service(),
-        tdoc_cr=factory.build_tdoc_cr_service(embedder=embedder),
+        tdoc_cr=factory.build_tdoc_cr_service(embedder=RecordingEmbedder()),
         tdoc_sync=factory.build_tdoc_sync_coordinator(),
         tdoc_repo=factory.build_tdoc_repository(),
         tsg=factory.build_tsg_service(),
@@ -793,7 +792,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
                 settings=settings,
             ),
         ),
-        semantic_search=factory.build_semantic_search_service(embedder=embedder),
+        semantic_search=factory.build_semantic_search_service(embedder=RecordingEmbedder()),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
     )

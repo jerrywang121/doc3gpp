@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · spec docs TOC{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <h1>Spec TOC — <code>{{ spec_id }}@{{ version }}</code></h1>
+  </div>
+  <p class="meta">Release {{ release or '-' }}.</p>
+
+  {% include "partials/spec_doc_toc_results.html" %}
+{% endblock %}

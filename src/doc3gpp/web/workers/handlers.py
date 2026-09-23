@@ -444,6 +444,62 @@ async def _parse_tdoc_url(
     }
 
 
+async def _parse_spec_docs(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    spec_ids = job.params.get("spec_ids")
+    if not isinstance(spec_ids, list) or not spec_ids or not all(
+        isinstance(s, str) for s in spec_ids
+    ):
+        raise ValueError(
+            "parse_spec_docs job requires a non-empty 'spec_ids' list parameter"
+        )
+    release = job.params.get("release")
+    version = job.params.get("version")
+    force = bool(job.params.get("force", False))
+    release = release if isinstance(release, str) else None
+    version = version if isinstance(version, str) else None
+
+    service = getattr(services, "spec_doc", None)
+    if service is None:
+        raise RuntimeError("spec-doc parse is not available in this build")
+
+    progress(f"parsing {len(spec_ids)} spec doc(s)")
+
+    def on_progress(event: str, data: Mapping[str, object]) -> None:
+        if event == "spec_done":
+            progress(f"spec {data.get('spec_id', '')}@{data.get('version', '')} done")
+
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    result = await asyncio.to_thread(
+        service.parse_many,
+        list(spec_ids),
+        release=release,
+        version=version,
+        force=force,
+        on_progress=on_progress,
+    )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    progress(
+        f"done: {len(result.successes)} ok, "
+        f"{len(result.skipped)} skipped, {len(result.failures)} failed",
+        force=True,
+    )
+    return {
+        "requested": len(spec_ids),
+        "successes": len(result.successes),
+        "skipped": len(result.skipped),
+        "failures": len(result.failures),
+    }
+
+
 async def _rebuild_search(
     job: Job,
     services: ServiceContainer,
@@ -522,6 +578,7 @@ class JobHandlers:
         JobKind.SYNC_TESTCASES: _sync_testcases,
         JobKind.PARSE_TDOCS: _parse_tdocs,
         JobKind.PARSE_TDOC_URL: _parse_tdoc_url,
+        JobKind.PARSE_SPEC_DOCS: _parse_spec_docs,
         JobKind.REBUILD_SEARCH: _rebuild_search,
         JobKind.CACHE_PURGE: _cache_purge,
     }

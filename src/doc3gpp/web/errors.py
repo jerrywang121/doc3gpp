@@ -31,6 +31,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from doc3gpp.models.search import SearchQueryError
+from doc3gpp.models.spec_doc import (
+    SpecDocNoDocxError as SpecDocNoDocxError,
+    SpecDocTooLargeError as SpecDocTooLargeError,
+    SpecDocUnknownSpecError as SpecDocUnknownSpecError,
+    SpecDocUnknownVersionError as SpecDocUnknownVersionError,
+)
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
 )
@@ -106,6 +112,10 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     SpecNotFoundError: ("spec", MCP_CODE_NOT_FOUND),
     TestcaseNotFoundError: ("testcase", MCP_CODE_NOT_FOUND),
     SpecUnknownOnUpstreamError: ("spec", MCP_CODE_NOT_FOUND),
+    SpecDocUnknownSpecError: ("spec_doc", MCP_CODE_NOT_FOUND),
+    SpecDocUnknownVersionError: ("spec_doc", MCP_CODE_NOT_FOUND),
+    SpecDocTooLargeError: ("spec_doc", MCP_CODE_TOO_LARGE),
+    SpecDocNoDocxError: ("spec_doc", MCP_CODE_INVALID_PARAMS),
     JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
     CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
     InvalidFilterError: ("filter", MCP_CODE_INVALID_PARAMS),
@@ -145,6 +155,10 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     SpecNotFoundError: "spec_not_found",
     TestcaseNotFoundError: "testcase_not_found",
     SpecUnknownOnUpstreamError: "spec_unknown_on_upstream",
+    SpecDocUnknownSpecError: "spec_doc_unknown_spec",
+    SpecDocUnknownVersionError: "spec_doc_unknown_version",
+    SpecDocTooLargeError: "spec_doc_too_large",
+    SpecDocNoDocxError: "spec_doc_no_docx",
     InvalidFilterError: "invalid_filter",
     SearchQueryError: "invalid_query",
     JobNotFoundError: "job_not_found",
@@ -162,6 +176,10 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     SpecNotFoundError: 404,
     TestcaseNotFoundError: 404,
     SpecUnknownOnUpstreamError: 404,
+    SpecDocUnknownSpecError: 404,
+    SpecDocUnknownVersionError: 404,
+    SpecDocTooLargeError: 422,
+    SpecDocNoDocxError: 422,
     InvalidFilterError: 400,
     SearchQueryError: 400,
     JobNotFoundError: 404,
@@ -236,6 +254,10 @@ __all__ = [
     "TestcaseNotFoundError",
     "InvalidFilterError",
     "SearchQueryError",
+    "SpecDocNoDocxError",
+    "SpecDocTooLargeError",
+    "SpecDocUnknownSpecError",
+    "SpecDocUnknownVersionError",
     "JobNotFoundError",
     "SettingsDisabledError",
     "MCP_CODE_NOT_FOUND",

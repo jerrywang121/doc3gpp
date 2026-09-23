@@ -29,7 +29,7 @@ from fastapi import FastAPI
 from doc3gpp.config import get_settings
 from doc3gpp.services import factory
 from doc3gpp.settings.schema import Settings
-from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+from doc3gpp.storage.db.session import get_engine, get_specdata_engine, get_testcase_engine
 from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
 from doc3gpp.web.errors import register_error_handlers
 from doc3gpp.web.routes import all_routers
@@ -63,6 +63,11 @@ def build_state(settings: Settings) -> WebState:
         testcase=factory.build_testcase_service(),
         search=factory.build_search_service(embedder=embedder),
         semantic_search=factory.build_semantic_search_service(embedder=embedder),
+        spec_doc=factory.build_spec_doc_service(embedder=embedder),
+        spec_doc_search=factory.build_spec_doc_search_service(),
+        spec_doc_semantic=factory.build_spec_doc_semantic_service(
+            embedder=embedder
+        ),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
     )
@@ -72,6 +77,7 @@ def build_state(settings: Settings) -> WebState:
         testcase_engine=get_testcase_engine(),
         services=services,
         jobs=JobWorkerHandle(),
+        specdata_engine=get_specdata_engine(),
     )
 
 
@@ -158,6 +164,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             await handle.shutdown()
             state.engine.dispose()
             state.testcase_engine.dispose()
+            if state.specdata_engine is not None:
+                state.specdata_engine.dispose()
 
     app = FastAPI(title="doc3gpp", lifespan=lifespan)
     register_error_handlers(app)

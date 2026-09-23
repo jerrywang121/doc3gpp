@@ -1,0 +1,41 @@
+<div id="results" hx-target="this" hx-swap="outerHTML">
+  {% if toc %}
+    <p class="meta">
+      TOC <code>{{ toc.spec_id }}@{{ toc.version }}</code> ·
+      {{ total }} entr{{ 'y' if total == 1 else 'ies' }} ·
+      {{ toc.docx_count }} docx file{{ '' if toc.docx_count == 1 else 's' }}
+    </p>
+    {% if entries %}
+      <table class="grid" id="spec-doc-toc-table">
+        <thead>
+          <tr>
+            <th>Section</th>
+            <th>Title</th>
+            <th>Level</th>
+            <th>Source file</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in entries %}
+            <tr>
+              <td><code>{{ e.section_no or '-' }}</code></td>
+              <td>{{ e.title }}</td>
+              <td>{{ e.level }}</td>
+              <td><code>{{ e.source_file }}</code></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No TOC entries stored for {{ toc.spec_id }}@{{ toc.version }}.</p>
+    {% endif %}
+    {% if files %}
+      <h2>Source files</h2>
+      <ul>
+        {% for f in files %}
+          <li><code>{{ f.source_file }}</code> (order {{ f.file_order }}{% if f.first_section %}, first section {{ f.first_section }}{% endif %})</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  {% endif %}
+</div>

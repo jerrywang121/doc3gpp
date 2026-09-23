@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from doc3gpp.storage.db.base import Base
+from doc3gpp.storage.db.specdata_base import SpecDataBase
 from doc3gpp.storage.db.testcase_base import TestCaseBase
 
 
@@ -513,3 +514,62 @@ class TestCaseSourceORM(TestCaseBase):
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     testcase_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class SpecDocSourceORM(SpecDataBase):
+    """Sync ledger: one row per parsed ``(spec_id, version)`` pair.
+
+    Lives in the specdata sqlite file (see
+    :func:`doc3gpp.storage.db.session.get_specdata_engine`), so it hangs
+    off :class:`SpecDataBase` instead of the main ``Base``.
+    """
+
+    __tablename__ = "spec_doc_sources"
+
+    spec_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    version: Mapped[str] = mapped_column(String(16), primary_key=True)
+    release: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    ftp_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    downloaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    parsed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    docx_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class SpecDocTocORM(SpecDataBase):
+    """TOC snapshot: one row per ``(spec_id, version)``."""
+
+    __tablename__ = "spec_doc_tocs"
+
+    spec_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    version: Mapped[str] = mapped_column(String(16), primary_key=True)
+    release: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    toc_json_gzip: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    file_order_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    docx_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class SpecDocChunkORM(SpecDataBase):
+    """One chunk row; PK is ``{spec_id}@{version}#{chunk_index}``."""
+
+    __tablename__ = "spec_doc_chunks"
+
+    chunk_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    spec_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    version: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    release: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    file_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_file: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    section_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    section_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    table_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    table_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")

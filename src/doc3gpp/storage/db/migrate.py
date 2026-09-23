@@ -5,6 +5,9 @@ from sqlalchemy import text
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
+    SpecDocChunkORM,  # noqa: F401 - registers specdata tables on SpecDataBase
+    SpecDocSourceORM,  # noqa: F401 - registers specdata tables on SpecDataBase
+    SpecDocTocORM,  # noqa: F401 - registers specdata tables on SpecDataBase
     SpecORM,  # noqa: F401 - ensures model metadata is loaded
     SpecVersionORM,  # noqa: F401 - ensures model metadata is loaded
     TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
@@ -19,7 +22,12 @@ from doc3gpp.storage.db.models import (
     TsgORM,  # noqa: F401 - ensures model metadata is loaded
     WiORM,  # noqa: F401 - ensures model metadata is loaded
 )
-from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+from doc3gpp.storage.db.session import (
+    get_engine,
+    get_specdata_engine,
+    get_testcase_engine,
+)
+from doc3gpp.storage.db.specdata_base import SpecDataBase
 from doc3gpp.storage.db.testcase_base import TestCaseBase
 
 
@@ -349,6 +357,112 @@ def _create_vector_schema(dim: int | None = None) -> None:
             )
 
 
+def _create_specdata_orm_tables() -> None:
+    """Create the three ``spec_doc_*`` relational tables on the specdata engine.
+
+    The ORM classes hang off
+    :class:`~doc3gpp.storage.db.specdata_base.SpecDataBase` and are
+    registered on its metadata by the ``models`` import above, so this
+    ``create_all`` creates exactly those three tables. Idempotent.
+    """
+    SpecDataBase.metadata.create_all(bind=get_specdata_engine())
+
+
+def _create_specdata_search_schema() -> None:
+    """Create the specdata FTS5 virtual table + meta sidecar.
+
+    Mirrors :func:`_create_search_schema` but targets the specdata
+    engine with the 6-column ``spec_doc_search`` table from the
+    spec-doc design (``chunk_id UNINDEXED, text, section_title,
+    table_title, spec_id, version, release``). Gated on FTS5
+    availability; idempotent via ``IF NOT EXISTS``.
+    """
+    engine = get_specdata_engine()
+    with engine.begin() as conn:
+        try:
+            opts = conn.execute(text("PRAGMA compile_options")).all()
+        except Exception:  # noqa: BLE001 - best-effort schema creation
+            return
+        fts5_available = any(row[0] == "ENABLE_FTS5" for row in opts)
+        if not fts5_available:
+            return
+        conn.execute(
+            text(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS spec_doc_search USING fts5(
+                    chunk_id UNINDEXED,
+                    text,
+                    section_title,
+                    table_title,
+                    spec_id,
+                    version,
+                    release
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS spec_doc_search_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+        )
+
+
+def _create_specdata_vector_schema(dim: int | None = None) -> None:
+    """Create the specdata sqlite-vec virtual table + meta sidecar.
+
+    Mirrors :func:`_create_vector_schema` but targets the specdata
+    engine with the ``vec_spec_doc_embeddings`` / ``vec_spec_doc_meta``
+    tables from the spec-doc design. Gated on sqlite-vec; idempotent
+    via ``IF NOT EXISTS``.
+    """
+    engine = get_specdata_engine()
+    try:
+        import sqlite_vec
+    except ImportError:
+        return
+    with engine.begin() as conn:
+        try:
+            sqlite_vec.load(conn.connection.driver_connection)
+        except Exception:  # noqa: BLE001 - best-effort schema creation
+            return
+        width = int(dim) if dim is not None else 384
+        conn.execute(
+            text(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_spec_doc_embeddings USING vec0(\n"
+                "    chunk_id TEXT PRIMARY KEY,\n"
+                "    spec_id TEXT,\n"
+                "    version TEXT,\n"
+                "    chunk_index INTEGER,\n"
+                f"    embedding FLOAT[{width}] distance_metric=cosine\n"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS vec_spec_doc_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+        )
+        if dim is not None:
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO vec_spec_doc_meta (key, value) "
+                    "VALUES ('embedding_dim', :d)"
+                ),
+                {"d": str(width)},
+            )
+
+
 def create_schema(scope: str = "all") -> None:
     """Create database tables for configured backend(s).
 
@@ -356,13 +470,16 @@ def create_schema(scope: str = "all") -> None:
         scope: ``"main"`` creates the main schema (one-shot
             migrations + ``Base`` tables + FTS5/vector sidecars) on
             the main engine; ``"testcase"`` creates exactly the three
-            testcase tables on the testcase engine; ``"all"``
-            (default) does both. Anything else raises
+            testcase tables on the testcase engine; ``"specdata"``
+            creates exactly the three spec-doc tables plus the
+            specdata FTS5/vector sidecars on the specdata engine;
+            ``"all"`` (default) does all three. Anything else raises
             :class:`ValueError`.
     """
-    if scope not in ("main", "testcase", "all"):
+    if scope not in ("main", "testcase", "specdata", "all"):
         raise ValueError(
-            f"unknown schema scope {scope!r}; choose from: main, testcase, all."
+            "unknown schema scope "
+            f"{scope!r}; choose from: main, testcase, specdata, all."
         )
     if scope in ("main", "all"):
         engine = get_engine()
@@ -377,3 +494,7 @@ def create_schema(scope: str = "all") -> None:
         _create_vector_schema()
     if scope in ("testcase", "all"):
         TestCaseBase.metadata.create_all(bind=get_testcase_engine())
+    if scope in ("specdata", "all"):
+        _create_specdata_orm_tables()
+        _create_specdata_search_schema()
+        _create_specdata_vector_schema()

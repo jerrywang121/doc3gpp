@@ -14,6 +14,7 @@ from pathlib import Path
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
     SpecDocBatchResult,
+    SpecDocChunk,
     SpecDocNoDocxError,
     SpecDocSource,
     SpecDocToc,
@@ -349,6 +350,28 @@ class SpecDocService:
                 except Exception as exc:  # noqa: BLE001 - progress observers must not fail a parse
                     logger.warning("spec-doc on_progress failed for %s: %s", sid, exc)
         return out
+
+    def get_source(self, spec_id: str, version: str) -> SpecDocSource | None:
+        return self._doc_repo.get_source(spec_id, version)
+
+    def list_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str,
+        release: str | None = None,
+        section: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[SpecDocChunk]:
+        return self._doc_repo.list_chunks(
+            spec_id,
+            version=version,
+            release=release,
+            section=section,
+            limit=limit,
+            offset=offset,
+        )
 
     def get_toc(
         self, spec_id: str, version: str, *, release: str | None = None

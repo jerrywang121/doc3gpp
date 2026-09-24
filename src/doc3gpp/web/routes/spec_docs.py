@@ -303,6 +303,7 @@ async def spec_doc_search_query(
 
     shared = {
         "mode": "fts5",
+        "search_resource": "spec_doc",
         "query": q,
         "hits": hits,
         "total": len(hits),
@@ -411,6 +412,7 @@ async def spec_doc_search_semantic(
 
     shared = {
         "mode": "sem",
+        "search_resource": "spec_doc",
         "query": q,
         "fts5_query": fts5_query,
         "fts5_weight": fts5_weight,

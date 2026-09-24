@@ -25,6 +25,7 @@ from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.search import SearchHit
 from doc3gpp.models.spec_doc import (
     SpecDocChunk,
+    SpecDocHit,
     SpecDocSource,
     SpecDocToc,
     SpecDocTocEntry,
@@ -48,6 +49,7 @@ from doc3gpp.web.deps import (
     get_search_service,
     get_semantic_search_service,
     get_settings,
+    get_spec_doc_search_service,
     get_spec_doc_service,
     get_spec_service,
     get_tdoc_file_repo,
@@ -257,6 +259,29 @@ class FakeSemanticSearchService(SemanticSearchService):
         return list(self._hits)
 
 
+class FakeSpecDocSearchService:
+    def __init__(self) -> None:  # noqa: D401 - intentional override
+        self._hits = [
+            SpecDocHit(
+                chunk_id="38.331@18.5.0#0",
+                spec_id="38.331",
+                version="18.5.0",
+                release="Rel-18",
+                section_no="1",
+                section_title="Handover",
+                table_no=None,
+                table_title=None,
+                chunk_index=0,
+                text="handover",
+                score=-1.0,
+                previews={},
+            ),
+        ]
+
+    def search(self, *_args: Any, **_kwargs: Any) -> list[SpecDocHit]:
+        return list(self._hits)
+
+
 class _EmptyJobRepo:
     """No-op :class:`JobRepository` for the fake-wired app fixture.
 
@@ -302,6 +327,9 @@ def _build_app_with_fakes(
     app.dependency_overrides[get_search_service] = lambda: FakeSearchService()
     app.dependency_overrides[get_semantic_search_service] = (
         lambda: FakeSemanticSearchService()
+    )
+    app.dependency_overrides[get_spec_doc_search_service] = (
+        lambda: FakeSpecDocSearchService()
     )
     app.dependency_overrides[get_tdoc_file_repo] = lambda: MagicMock()
     # ``get_pending_jobs`` is routed through ``Depends(get_job_repo)`` so the
@@ -1551,6 +1579,23 @@ def test_search_query_renders_html(client: TestClient) -> None:
     response = client.get("/tdocs/search?q=foo")
     assert response.status_code == 200
     assert "R5-260001" in response.text
+
+
+def test_tdoc_search_resource_tabs(client: TestClient) -> None:
+    body = client.get("/tdocs/search?q=foo").text
+    assert ">TDoc Search<" in body
+    assert 'href="/spec-docs/search"' in body
+
+
+def test_spec_doc_search_resource_tabs(client: TestClient) -> None:
+    body = client.get("/spec-docs/search?q=handover").text
+    assert ">Spec Docs Search<" in body
+    assert 'href="/tdocs/search"' in body
+
+
+def test_spec_doc_search_hit_links_to_document_page(client: TestClient) -> None:
+    body = client.get("/spec-docs/search?q=handover").text
+    assert "/specs/38.331/docs?version=18.5.0#chunk-0" in body
 
 
 def test_search_results_single_details_per_hit(client: TestClient) -> None:

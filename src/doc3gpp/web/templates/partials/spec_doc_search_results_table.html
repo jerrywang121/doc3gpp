@@ -14,7 +14,15 @@
         {% set inner = hit.hit if mode == 'sem' and hit.hit is not none else hit %}
         <tr>
           <td><code>{{ hit.chunk_id }}</code></td>
-          <td><code>{{ inner.spec_id if inner.spec_id is defined else '-' }}</code></td>
+          <td>
+            {% if inner.spec_id is defined and inner.version is defined %}
+              <a href="/specs/{{ inner.spec_id | urlencode }}/docs?version={{ inner.version | urlencode }}#chunk-{{ inner.chunk_index }}">
+                <code>{{ inner.spec_id }}</code>
+              </a>
+            {% else %}
+              <code>-</code>
+            {% endif %}
+          </td>
           <td>{{ inner.version if inner.version is defined else '-' }}</td>
           <td>{{ (inner.section_no ~ ' ' ~ inner.section_title) if inner.section_title else (inner.section_no or '-') }}</td>
           {% if mode == 'sem' %}

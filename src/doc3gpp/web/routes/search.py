@@ -162,6 +162,7 @@ async def search_query(
         name=template_name,
         context={
             "active_nav": "search",
+            "search_resource": "tdoc",
             "mode": "fts5",
             "query": q,
             "hits": hits,
@@ -249,6 +250,7 @@ async def search_semantic(
         name=template_name,
         context={
             "active_nav": "search",
+            "search_resource": "tdoc",
             "mode": "sem",
             "query": q,
             "fts5_query": fts5_query,

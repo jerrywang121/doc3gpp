@@ -156,3 +156,100 @@ skipped it.
   subsequent retry replaces those intermediates before recording success.
 - The full suite retains the existing 108 warnings; no new warning category
   was introduced by this round.
+
+## Fix Round 3
+
+### Finding Addressed
+
+The round-2 placement was still too late for a forced network failure:
+`SpecDocService.fetch(force=True)` called `_fetcher()` before
+`record_download()`, so a failed download left an already parsed source's old
+`parsed_at` marker intact. The final fix invalidates parse state before the
+forced fetch, without recording a download that did not succeed.
+
+### TDD Failing-Test Evidence
+
+Added `test_failed_force_download_invalidates_old_marker_for_retry` to
+`tests/integration/test_spec_doc_service.py`. The first focused run was:
+
+```text
+rtk pytest tests/integration/test_spec_doc_service.py -k failed_force_download_invalidates_old_marker_for_retry -q
+Pytest: 0 passed, 1 failed
+AssertionError: source.parsed_at is None
+```
+
+The failure reproduced the confirmed root cause: the source remained parsed
+after the forced `_fetcher()` raised `OSError("upstream unavailable")`.
+
+### Files Changed
+
+- `src/doc3gpp/repository/protocols.py`
+  - Added the clearly named `SpecDocRepository.invalidate_parse_state()`
+    operation.
+- `src/doc3gpp/storage/repositories/spec_doc_sql.py`
+  - Implemented `invalidate_parse_state()` as a committed update of only
+    `parsed_at` and `chunk_count` for an existing source row.
+  - Kept `record_download()` responsible for successful-download metadata;
+    it no longer doubles as parse-state invalidation.
+- `src/doc3gpp/services/spec_doc_service.py`
+  - On `force=True`, resolves the existing source and invalidates its parse
+    state before invoking `_fetcher()`.
+  - Does nothing for a missing source, preserving the first-download path.
+- `tests/integration/test_spec_doc_service.py`
+  - Added the required already-parsed, forced-network-failure, then
+    non-force-retry regression.
+- `tests/integration/test_spec_doc_repo.py`
+  - Verifies explicit invalidation clears only parse state while preserving
+    release, FTP URL, download timestamp, and DOCX count.
+- `.superpowers/sdd/2026-09-24-spec-doc-web-portal/final-fix-report.md`
+  - Appended this round-3 record. The approved untracked plan remains
+    untouched and unstaged.
+
+### Tests And Commands
+
+- `rtk pytest tests/integration/test_spec_doc_service.py -k failed_force_download_invalidates_old_marker_for_retry -q`
+  - Initial TDD red run: `0 passed, 1 failed`, with the expected stale
+    `parsed_at` assertion failure.
+- `rtk pytest tests/integration/test_spec_doc_service.py -k 'failed_force_download_invalidates_old_marker_for_retry or failed_force_reparse_invalidates_old_marker_for_retry or post_chunk_cache_failure or force_reparses' -q`
+  - `4 passed` after the fix.
+- `rtk pytest tests/integration/test_spec_doc_repo.py -q`
+  - `2 passed`.
+- `rtk pytest tests/integration/test_spec_doc_service.py tests/integration/test_spec_doc_repo.py tests/integration/test_spec_doc_search_repo.py tests/integration/test_spec_doc_search_service.py tests/integration/test_spec_doc_web.py tests/unit/test_spec_doc_service_reads.py tests/unit/test_web_routes.py tests/unit/web/test_landing_version.py -q`
+  - `221 passed`.
+- `rtk ./scripts/test_sqlite.sh`
+  - `2358 passed, 1 skipped, 108 warnings`.
+- `rtk ruff check .`
+  - Clean.
+- `rtk git diff --check`
+  - Clean.
+
+### Self-Review
+
+- A forced re-parse with an existing source clears the success marker before
+  any network, ZIP-size, cache-write, or parse operation can fail.
+- The invalidation operation preserves truthful download metadata and does not
+  create a source row or claim that a forced download succeeded.
+- Successful force re-parse still runs `record_download()` after bytes arrive,
+  then `record_parsed()` after all required parse/cache work completes.
+- A non-force immutable skip does not call the invalidation operation because
+  it returns through the existing cache/parsed check without entering the
+  forced path.
+- First-parse failures and the prior post-chunk/cache failure regression remain
+  covered and retryable.
+- The round-2 reset inside `record_download()` was removed; round 3 replaces
+  that late invalidation with the explicit pre-fetch operation requested by the
+  review.
+- No web portal behavior, schema, job payload, CLI contract, or public service
+  signature changed.
+
+### Concerns
+
+- Parse-state invalidation and the later network/cache/parse work remain
+  separate transactions under the existing repository architecture. After a
+  forced network failure, prior download metadata and cached bytes remain, but
+  `parsed_at` is intentionally null so the source is not treated as a
+  successful parse and the next non-force run retries.
+- A failure after TOC/chunk replacement can still leave intermediate data; the
+  existing retry path replaces it before `record_parsed()` marks success.
+- The full suite retains the existing 108 warnings; no new warning category
+  was introduced by this round.

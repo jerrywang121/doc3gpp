@@ -63,8 +63,6 @@ class SQLAlchemySpecDocRepository:
                 existing.ftp_url = ftp_url
                 existing.docx_count = docx_count
                 existing.downloaded_at = now
-                existing.parsed_at = None
-                existing.chunk_count = 0
             else:
                 session.add(
                     SpecDocSourceORM(
@@ -78,6 +76,14 @@ class SQLAlchemySpecDocRepository:
                         docx_count=docx_count,
                     )
                 )
+            session.commit()
+
+    def invalidate_parse_state(self, spec_id: str, version: str) -> None:
+        with self._session_factory() as session:
+            existing = session.get(SpecDocSourceORM, (spec_id, version))
+            if existing is not None:
+                existing.parsed_at = None
+                existing.chunk_count = 0
             session.commit()
 
     def record_parsed(

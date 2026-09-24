@@ -215,6 +215,8 @@ class SpecDocService:
         """Download the resolved version zip (or hit the zip cache) and record it."""
         rows = self._versions(spec_id)
         ver = resolve_spec_doc_version(rows, release, version)
+        if force and self._doc_repo.get_source(spec_id, ver.version) is not None:
+            self._doc_repo.invalidate_parse_state(spec_id, ver.version)
         # Immutable skip: a cached zip means fetch is done (no network).
         # A purged cache re-downloads — that is correct, not a skip violation.
         if not force and self._zip_cache_exists(spec_id, ver.version):

@@ -1,4 +1,4 @@
-"""End-to-end test for ``search query --sem-query`` over sqlite + sqlite-vec.
+"""End-to-end test for ``tdoc search query --sem-query`` over sqlite + sqlite-vec.
 
 Exercises the full CLI flow — :class:`typer.testing.CliRunner` →
 :func:`doc3gpp.services.factory.build_search_service` →
@@ -39,7 +39,7 @@ import pytest
 from sqlalchemy import text
 from typer.testing import CliRunner
 
-from doc3gpp.cli import search_app
+from doc3gpp.cli import tdoc_search_app
 from doc3gpp.services import factory
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
@@ -240,7 +240,7 @@ def test_sem_query_uses_4x_fanout_then_truncates_to_limit(seeded_engine):
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch:
         result = CliRunner().invoke(
-            search_app,
+            tdoc_search_app,
             [
                 "query", "R5*", "--sem-query", "anything",
                 "--limit", "2",
@@ -270,7 +270,7 @@ def test_sem_query_empty_vector_index_falls_back_to_fts5_order(
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch, caplog.at_level(logging.WARNING):
         result = CliRunner().invoke(
-            search_app, ["query", "R5*", "--sem-query", "anything"],
+            tdoc_search_app, ["query", "R5*", "--sem-query", "anything"],
         )
     assert result.exit_code == 0, result.output
     # Every candidate maps to MISSING_FLOOR → one-shot warning.
@@ -290,7 +290,7 @@ def test_sem_query_empty_string_is_no_op(seeded_engine):
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch:
         result = CliRunner().invoke(
-            search_app, ["query", "R5*", "--sem-query", ""],
+            tdoc_search_app, ["query", "R5*", "--sem-query", ""],
         )
     assert result.exit_code == 0, result.output
     # The CLI's `if sem_query:` guard treats the empty string as
@@ -308,7 +308,7 @@ def test_sem_query_fts5_zero_results_does_not_encode(seeded_engine):
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch:
         result = CliRunner().invoke(
-            search_app, ["query", "nothing", "--sem-query", "anything"],
+            tdoc_search_app, ["query", "nothing", "--sem-query", "anything"],
         )
     assert result.exit_code == 0, result.output
     # SemanticReranker.rerank short-circuits on `if not hits: return []`
@@ -340,7 +340,7 @@ def test_sem_query_quiet_suppresses_warning(seeded_engine, caplog):
         logging.WARNING, logger="doc3gpp.services.semantic_reranker",
     ):
         result = CliRunner().invoke(
-            search_app,
+            tdoc_search_app,
             ["query", "R5*", "--sem-query", "anything", "--quiet"],
         )
     assert result.exit_code == 0, result.output

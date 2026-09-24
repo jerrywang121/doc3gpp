@@ -360,7 +360,10 @@ Block = HeadingBlock | ParagraphBlock | TableBlock
 
 
 _SECTION_RE = re.compile(r"^(\d[A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*)\s+(.*)$", re.DOTALL)
-_TABLE_IDENTIFIER = r"\d[A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*(?:-\d+)?"
+_TABLE_IDENTIFIER = (
+    r"\d[A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*"
+    r"(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?"
+)
 _CAPTION_RE = re.compile(
     rf"^Table\s+(?P<table_no>{_TABLE_IDENTIFIER})"
     r"(?:\s*:\s*|\s*-\s*|\s+)(?P<title>.+)$",

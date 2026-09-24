@@ -39,6 +39,8 @@ def test_fts5_search(sqlite_env):
     fts.upsert_for_version("38.331", "18.5.0")
     hits = fts.search("handover", SpecDocSearchFilters(spec_id="38.331"))
     assert len(hits) == 1 and hits[0].chunk_id == "38.331@18.5.0#0"
+    assert hits[0].sections == "5.1 Handover"
+    assert hits[0].tables == "Table 1 Values"
     assert "text" in hits[0].previews
 
 
@@ -57,6 +59,30 @@ def test_sections_filter_hits_combined_column(sqlite_env):
     fts.upsert_for_version("38.331", "18.5.0")
     hits = fts.search("handover", SpecDocSearchFilters(sections="%5.1%"))
     assert len(hits) == 1 and hits[0].chunk_id == "38.331@18.5.0#0"
+
+
+def test_fts_search_returns_and_filters_combined_table_metadata(sqlite_env):
+    create_schema("all")
+    repo = SQLAlchemySpecDocRepository()
+    repo.record_download(
+        "38.331", "19.0.0", release="Rel-19", ftp_url="https://x", docx_count=1
+    )
+    repo.replace_chunks(
+        "38.331",
+        "19.0.0",
+        release="Rel-19",
+        drafts=[
+            ChunkDraft(0, "a.docx", "5 Scope", "Table 1 UE values", "handover UE"),
+            ChunkDraft(0, "a.docx", "6 Other", "Table 2 Timers", "handover timers"),
+        ],
+    )
+    fts = SQLAlchemySpecDocSearchRepository()
+    fts.upsert_for_version("38.331", "19.0.0")
+    hits = fts.search(
+        "handover", SpecDocSearchFilters(tables="%UE values%", limit=20)
+    )
+    assert [hit.tables for hit in hits] == ["Table 1 UE values"]
+    assert hits[0].sections == "5 Scope"
 
 
 def test_remove_for_version(sqlite_env):
@@ -127,3 +153,51 @@ def test_vector_upsert_knn_and_remove(sqlite_env):
     assert all(isinstance(cid, str) and isinstance(d, float) for cid, d in hits)
     vec.remove_for_version("38.331", "18.5.0")
     assert vec.knn(q, limit=10) == []
+
+
+def test_vector_knn_filters_by_combined_table_metadata(sqlite_env):
+    import numpy as np
+
+    create_schema("all")
+    repo = SQLAlchemySpecDocRepository()
+    repo.record_download(
+        "38.331", "18.5.0", release="Rel-18", ftp_url="https://x", docx_count=1
+    )
+    repo.replace_chunks(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=[
+            ChunkDraft(
+                file_order=0,
+                source_file="a.docx",
+                sections="5 Scope",
+                tables="Table 1 UE values",
+                text="hello",
+            ),
+            ChunkDraft(
+                file_order=0,
+                source_file="a.docx",
+                sections="6 Other",
+                tables="Table 2 Timers",
+                text="world",
+            ),
+        ],
+    )
+    vec = _vec_repo(sqlite_env)
+    dim = vec._dim
+    a = np.zeros(dim, dtype=np.float32)
+    a[0] = 1.0
+    b = np.zeros(dim, dtype=np.float32)
+    b[1] = 1.0
+    vec.upsert_for_version("38.331", "18.5.0", [a, b])
+
+    hits = vec.knn(
+        a,
+        limit=10,
+        filters=SpecDocSearchFilters(tables="%UE values%"),
+    )
+
+    assert [chunk_id for chunk_id, _distance in hits] == [
+        "38.331@18.5.0#0"
+    ]

@@ -77,13 +77,12 @@ class SpecDocSemanticService:
     without it only vector KNN returns, dressed as
     :class:`SpecDocSemanticHit` with ``rank_fts5=None``.
 
-    Filter limitation (Task 8 parked note): the vector KNN side uses
-    exact ``=`` for ``spec_id`` / ``version`` and plain ``LIKE`` for
-    ``release`` / ``section`` — no rich grammar (``null`` /
-    ``not-null`` / ``!`` negation). Rich tokens are matched
-    literally on the vector side while the FTS5 side interprets
-    them. Callers needing exact agreement should pass plain
-    ``spec`` / ``version`` / ``release`` / ``section`` strings.
+    The vector KNN side uses exact ``=`` for ``spec_id`` / ``version``
+    and the repository's rich text semantics for ``sections`` /
+    ``tables``. Release matching remains exact, as in the vector
+    repository. Callers needing exact agreement should pass plain
+    ``spec_id`` / ``version`` / ``release`` strings and rich-filter
+    patterns for ``sections`` / ``tables``.
     """
 
     def __init__(self, *, fts5_service, embedder, vector_repo, settings) -> None:
@@ -129,7 +128,8 @@ class SpecDocSemanticService:
             spec_id=filters.spec_id,
             release=filters.release,
             version=filters.version,
-            section=filters.section,
+            sections=filters.sections,
+            tables=filters.tables,
             limit=n,
             offset=0,
         )
@@ -158,7 +158,7 @@ class SpecDocSemanticService:
             spec_id, version=version, limit=100000
         )
         texts = [
-            f"{c.section_no or ''} {c.section_title or ''}\n{c.text}".strip()
+            f"{c.sections or ''}\n{c.tables or ''}\n{c.text}".strip()
             for c in chunks
         ]
         if not texts:

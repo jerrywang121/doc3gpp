@@ -2,6 +2,7 @@
 """Integration tests for the spec-doc search services (Task 10)."""
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
@@ -52,8 +53,7 @@ def _seed():
             ChunkDraft(
                 file_order=0,
                 source_file="a.docx",
-                section_no="5.1",
-                section_title="Handover",
+                sections="5.1 Handover",
                 text="handover procedure signalling",
             )
         ],
@@ -73,15 +73,15 @@ def _seed_two():
             ChunkDraft(
                 file_order=0,
                 source_file="a.docx",
-                section_no="5.1",
-                section_title="Handover",
+                sections="5.1 Handover",
+                tables="Table 1 UE values",
                 text="handover procedure signalling",
             ),
             ChunkDraft(
                 file_order=0,
                 source_file="a.docx",
-                section_no="5.2",
-                section_title="Measurements",
+                sections="5.2 Measurements",
+                tables="Table 2 Timers",
                 text="measurement configuration report",
             ),
         ],
@@ -105,10 +105,8 @@ def _hit(chunk_id: str) -> SpecDocHit:
         spec_id="38.331",
         version="18.5.0",
         release="Rel-18",
-        section_no=None,
-        section_title=None,
-        table_no=None,
-        table_title=None,
+        sections=None,
+        tables=None,
         chunk_index=0,
         text="t",
         score=-1.0,
@@ -205,6 +203,50 @@ def test_semantic_hybrid_search(sqlite_env):
     assert hits and hits[0].chunk_id == "38.331@18.5.0#0"
     assert hits[0].hit is not None
     assert hits[0].rank_fts5 == 0 and hits[0].rank_vec == 0
+
+
+class RecordingFTSService:
+    def __init__(self) -> None:
+        self.filters = None
+
+    def search(self, _query, filters):
+        self.filters = filters
+        return []
+
+
+class RecordingVectorRepository:
+    def __init__(self) -> None:
+        self.filters = None
+
+    def knn(self, _query_vec, *, limit, filters):
+        self.filters = filters
+        return [("38.331@19.0.0#0", 0.1)][:limit]
+
+
+def test_semantic_hybrid_copies_sections_and_tables_filters():
+    fts = RecordingFTSService()
+    vector = RecordingVectorRepository()
+    service = SpecDocSemanticService(
+        fts5_service=fts,
+        embedder=FakeEmbedder(),
+        vector_repo=vector,
+        settings=SimpleNamespace(
+            semantic_search=SimpleNamespace(fanout_multiplier=2, rrf_k=60)
+        ),
+    )
+
+    service.search(
+        "handover",
+        fts5_query="handover",
+        filters=SpecDocSearchFilters(sections="%5 Scope%", tables="%UE%"),
+        limit=4,
+        fts5_weight=0.5,
+    )
+
+    assert fts.filters.sections == "%5 Scope%"
+    assert fts.filters.tables == "%UE%"
+    assert vector.filters.sections == "%5 Scope%"
+    assert vector.filters.tables == "%UE%"
 
 
 def test_semantic_index_empty_version_removes(sqlite_env):

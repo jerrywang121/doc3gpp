@@ -29,6 +29,7 @@ from sqlalchemy.engine import Engine
 from doc3gpp.models.semantic_search import VectorIndexUnavailableError
 from doc3gpp.repository.protocols import SpecDocVectorRepository
 from doc3gpp.storage.db.session import get_specdata_engine
+from doc3gpp.storage.repositories.rich_filters import build_text_filter_sql
 
 if TYPE_CHECKING:
     from doc3gpp.models.spec_doc import SpecDocSearchFilters
@@ -302,7 +303,8 @@ class SQLAlchemySpecDocVectorRepository(SpecDocVectorRepository):
         The chunk index is recoverable from the ``chunk_id`` suffix
         (``{spec_id}@{version}#{index}``). Optional ``filters`` narrow
         by ``spec_id`` / ``version`` on the vec table and by
-        ``release`` / ``section`` via a JOIN to ``spec_doc_chunks``.
+        ``release`` / ``sections`` / ``tables`` via a JOIN to
+        ``spec_doc_chunks``.
         """
         q = np.asarray(query_vec, dtype=np.float32)
         self._check_compatible(int(q.shape[-1]), what="query")
@@ -316,7 +318,11 @@ class SQLAlchemySpecDocVectorRepository(SpecDocVectorRepository):
         }
         join_chunks = bool(
             filters is not None
-            and (filters.release is not None or filters.section is not None)
+            and (
+                filters.release is not None
+                or filters.sections is not None
+                or filters.tables is not None
+            )
         )
         if join_chunks:
             sql.append(
@@ -333,12 +339,17 @@ class SQLAlchemySpecDocVectorRepository(SpecDocVectorRepository):
             if filters.release is not None:
                 clauses.append("c.release = :release")
                 params["release"] = filters.release
-            if filters.section is not None:
-                clauses.append(
-                    "(c.section_no LIKE :section"
-                    " OR c.section_title LIKE :section)"
-                )
-                params["section"] = filters.section
+            for value, column, param in (
+                (filters.sections, "c.sections", "sections"),
+                (filters.tables, "c.tables", "tables"),
+            ):
+                result = build_text_filter_sql(column, value, param=param)
+                if result is None:
+                    continue
+                clause, bound = result
+                clauses.append(clause)
+                if bound is not None:
+                    params[param] = bound
         where_tail = " AND ".join(["embedding MATCH :q", "k = :k", *clauses])
         sql.append(f" WHERE {where_tail}")
         sql.append("  ORDER BY distance IS NULL, distance ASC, v.chunk_id ASC")

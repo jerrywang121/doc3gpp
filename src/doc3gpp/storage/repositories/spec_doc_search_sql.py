@@ -9,7 +9,7 @@ construction time it probes for FTS5 availability — raising
 Mirrors :mod:`doc3gpp.storage.repositories.search_sql` minus the
 ``tdocs`` / ``meetings`` JOINs: the FTS5 row is a projection of one
 ``spec_doc_chunks`` row, re-joined at query time for the
-``section_no`` / ``table_no`` / ``chunk_index`` / original-text fields
+``sections`` / ``tables`` / ``chunk_index`` / original-text fields
 that have no FTS5 column. The repo takes the raw user query and builds
 the ``MATCH`` expression internally via
 :class:`doc3gpp.cli_filters.SearchQueryBuilder` (the same path
@@ -152,9 +152,9 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
         :meth:`SQLAlchemySpecDocRepository.list_chunks` (paged, so no
         chunk is silently dropped past the page limit), DELETEs the
         pair's existing FTS5 rows, then INSERTs one row per chunk.
-        ``section_title`` stores ``section_no + " " + title`` so the
-        ``section`` filter and the snippet both work on one column
-        (the FTS5 table has no ``section_no`` column).
+        ``sections`` and ``tables`` store the normalized combined metadata
+        fields so their filters and snippets use the same FTS5 columns as
+        the chunk contract.
         """
         chunk_repo = SQLAlchemySpecDocRepository()
         chunks: list[SpecDocChunk] = []
@@ -184,19 +184,14 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                 {"s": norm_spec, "v": norm_version},
             )
             for chunk in chunks:
-                section_combined = " ".join(
-                    part
-                    for part in (chunk.section_no, chunk.section_title)
-                    if part
-                )
                 conn.execute(
                     text(
                         """
                         INSERT INTO spec_doc_search (
-                            chunk_id, text, section_title, table_title,
+                            chunk_id, text, sections, tables,
                             spec_id, version, release
                         ) VALUES (
-                            :chunk_id, :text, :section_title, :table_title,
+                            :chunk_id, :text, :sections, :tables,
                             :spec_id, :version, :release
                         )
                         """
@@ -204,8 +199,8 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                     {
                         "chunk_id": chunk.chunk_id,
                         "text": normalize_query(chunk.text or ""),
-                        "section_title": normalize_query(section_combined),
-                        "table_title": normalize_query(chunk.table_title or ""),
+                        "sections": normalize_query(chunk.sections or ""),
+                        "tables": normalize_query(chunk.tables or ""),
                         "spec_id": normalize_query(chunk.spec_id),
                         "version": normalize_query(chunk.version),
                         "release": (
@@ -296,8 +291,7 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
             params[param] = col_idx
         sql.extend([
             "       c.spec_id, c.version, c.release,",
-            "       c.section_no, c.section_title,",
-            "       c.table_no, c.table_title,",
+            "       c.sections, c.tables,",
             "       c.chunk_index, c.text",
             "  FROM spec_doc_search",
             "  JOIN spec_doc_chunks c"
@@ -308,7 +302,8 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
             (filters.spec_id, "spec_doc_search.spec_id", "spec_id"),
             (filters.version, "spec_doc_search.version", "version"),
             (filters.release, "spec_doc_search.release", "release"),
-            (filters.section, "spec_doc_search.section_title", "section"),
+            (filters.sections, "spec_doc_search.sections", "sections"),
+            (filters.tables, "spec_doc_search.tables", "tables"),
         ):
             result = _fts5_text_filter(column, attr, param)
             if result is None:
@@ -342,12 +337,10 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                     spec_id=row[base],
                     version=row[base + 1],
                     release=row[base + 2],
-                    section_no=row[base + 3],
-                    section_title=row[base + 4],
-                    table_no=row[base + 5],
-                    table_title=row[base + 6],
-                    chunk_index=int(row[base + 7]),
-                    text=row[base + 8],
+                    sections=row[base + 3],
+                    tables=row[base + 4],
+                    chunk_index=int(row[base + 5]),
+                    text=row[base + 6],
                     score=row[1],
                     previews=previews,
                 )

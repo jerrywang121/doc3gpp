@@ -90,7 +90,7 @@ def test_index_status_panel_shows_vector_model_and_dim(sqlite_env):
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
             ),
         )
-    result = CliRunner().invoke(app, ["search", "index"])
+    result = CliRunner().invoke(app, ["tdoc", "search", "index"])
     assert result.exit_code == 0, result.output
     assert "Vector model:" in result.output
     assert "old-model" in result.output
@@ -118,7 +118,7 @@ def test_sem_explain_prints_embedding_and_stored_model(monkeypatch):
     monkeypatch.setattr(
         factory, "build_semantic_search_service", lambda *a, **kw: svc,
     )
-    result = CliRunner().invoke(app, ["search", "sem", "q", "--explain"])
+    result = CliRunner().invoke(app, ["tdoc", "search", "sem", "q", "--explain"])
     assert result.exit_code == 0, result.output
     assert "embedding_model:" in result.output
     assert "embedding_host:" in result.output
@@ -156,7 +156,9 @@ def test_sem_explain_strips_url_userinfo(monkeypatch):
         "doc3gpp.settings.loader.get_settings", lambda: settings,
     )
     try:
-        result = CliRunner().invoke(app, ["search", "sem", "q", "--explain"])
+        result = CliRunner().invoke(
+            app, ["tdoc", "search", "sem", "q", "--explain"]
+        )
         assert result.exit_code == 0, result.output
         assert "sekret" not in result.output
         assert "emb.example.com" in result.output
@@ -185,7 +187,7 @@ def test_search_sem_surfaces_rebuild_hint_on_model_mismatch(sqlite_env):
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
             ),
         )
-    result = CliRunner().invoke(app, ["search", "sem", "q"])
+    result = CliRunner().invoke(app, ["tdoc", "search", "sem", "q"])
     assert result.exit_code == 1, result.output
     assert "model mismatch" in result.output.lower()
     assert "rebuild-embeddings" in result.output

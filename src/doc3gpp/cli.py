@@ -115,6 +115,7 @@ app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
 meeting_app = typer.Typer(help="meeting commands")
 tdoc_app = typer.Typer(help="tdoc commands")
+tdoc_search_app = typer.Typer(help="search over stored TDocs and TDoc sidecars")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
 spec_app = typer.Typer(help="spec commands")
@@ -124,14 +125,13 @@ cache_app = typer.Typer(help="TDoc extraction cache commands")
 app.add_typer(db_app, name="db")
 app.add_typer(meeting_app, name="meeting")
 app.add_typer(tdoc_app, name="tdoc")
+tdoc_app.add_typer(tdoc_search_app, name="search")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
 app.add_typer(spec_app, name="spec")
 app.add_typer(testcase_app, name="testcase")
 app.add_typer(config_app, name="config")
 app.add_typer(cache_app, name="cache")
-search_app = typer.Typer(help="full-text search over TDocs, CRs, meetings, and WIs")
-app.add_typer(search_app, name="search")
 app.add_typer(server_app, name="server")
 
 logger = logging.getLogger(__name__)
@@ -5693,7 +5693,7 @@ def config_set(
     typer.echo("  Run 'doc3gpp config show' to verify the active value.")
 
 
-@search_app.command("query")
+@tdoc_search_app.command("query")
 def search_command(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),
@@ -5811,13 +5811,16 @@ def search_command(
         typer.echo(f"bad query: {exc}", err=True)
         raise typer.Exit(code=2)
     except SearchError:
-        typer.echo("search index corrupt; run `doc3gpp search index --rebuild`", err=True)
+        typer.echo(
+            "search index corrupt; run `doc3gpp tdoc search index --rebuild`",
+            err=True,
+        )
         raise typer.Exit(code=3)
     _render_search_hits(hits, format=format, compact=compact)
     _emit_search_status(svc, quiet=quiet)
 
 
-@search_app.command("index")
+@tdoc_search_app.command("index")
 def index_command(
     ctx: typer.Context,
     rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the FTS5 table."),
@@ -5912,7 +5915,7 @@ def index_command(
             if _stored_model is not None and _stored_model != configured_model:
                 vec_status_block += (
                     "\nVector status:  MODEL MISMATCH — run "
-                    "`doc3gpp search index --rebuild-embeddings`"
+                    "`doc3gpp tdoc search index --rebuild-embeddings`"
                 )
         elif sem_svc is not None:
             vec_status = sem_svc.status()
@@ -6016,7 +6019,7 @@ def index_command(
         typer.echo("search index embedding rebuild complete")
 
 
-@search_app.command("sem")
+@tdoc_search_app.command("sem")
 def sem_command(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Natural-language query (embedded only; not used for FTS5)."),
@@ -6104,7 +6107,7 @@ def sem_command(
             typer.echo(
                 f"vector model mismatch: stored={_stored!r} "
                 f"expected={_sem.embedding_model!r}; run "
-                "`doc3gpp search index --rebuild-embeddings`",
+                "`doc3gpp tdoc search index --rebuild-embeddings`",
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -6318,7 +6321,7 @@ def _emit_search_status(svc: object, *, quiet: bool) -> None:
     status = svc.status()  # type: ignore[attr-defined]
     if status.is_stale:
         typer.echo(
-            "search index is stale; run `doc3gpp search index --rebuild` "
+            "search index is stale; run `doc3gpp tdoc search index --rebuild` "
             "to refresh",
             err=True,
         )

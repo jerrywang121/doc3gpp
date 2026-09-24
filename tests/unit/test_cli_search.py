@@ -12,9 +12,22 @@ from typer.testing import CliRunner
 from doc3gpp.cli import app
 
 
-def test_search_help_lists_filters() -> None:
+def test_top_level_search_command_is_removed() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "search" not in result.output
+
+
+def test_top_level_search_invocation_is_rejected() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["search", "query", "--help"])
+    assert result.exit_code != 0
+
+
+def test_search_help_lists_filters() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "search", "query", "--help"])
     assert result.exit_code == 0
     for flag in (
         "--tsg", "--meeting", "--meeting-id", "--tdoc-id",
@@ -32,7 +45,7 @@ def test_search_help_lists_filters() -> None:
 
 def test_index_help_lists_rebuild_flags() -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["search", "index", "--help"])
+    result = runner.invoke(app, ["tdoc", "search", "index", "--help"])
     assert result.exit_code == 0
     for flag in ("--rebuild", "--batch", "--resume", "--stale-only", "--quiet"):
         assert flag in result.output, f"missing flag {flag} in index help"
@@ -112,7 +125,8 @@ def test_explain_prints_match_and_weights(monkeypatch) -> None:
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
 
     result = runner.invoke(
-        app, ["search", "query", "alpha", "--explain", "--format", "json"]
+        app,
+        ["tdoc", "search", "query", "alpha", "--explain", "--format", "json"],
     )
     assert result.exit_code == 0, result.output
 
@@ -211,7 +225,7 @@ def test_snippet_tokens_overrides_setting(
             result = CliRunner().invoke(
                 app,
                 [
-                    "search", "query", "alpha",
+                    "tdoc", "search", "query", "alpha",
                     "--snippet-tokens", "4",
                     "--format", "json",
                 ],
@@ -243,7 +257,7 @@ def test_snippet_tokens_overrides_setting(
 
 
 # ----------------------------------------------------------------------
-# Status panel: `doc3gpp search index` (no args) must surface the
+# Status panel: `doc3gpp tdoc search index` (no args) must surface the
 # vector row count when the semantic service is available, and
 # must clearly label the existing FTS5 row count.
 # ----------------------------------------------------------------------
@@ -293,7 +307,7 @@ def test_search_index_status_panel_includes_vector_rows(monkeypatch) -> None:
     )
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
 
-    result = runner.invoke(app, ["search", "index"])
+    result = runner.invoke(app, ["tdoc", "search", "index"])
     assert result.exit_code == 0, result.output
     assert "FTS5 rows:" in result.output, (
         f"missing FTS5 row label in panel; output was:\n{result.output}"
@@ -325,7 +339,7 @@ def test_search_index_status_panel_omits_vector_when_service_none(monkeypatch) -
     )
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
 
-    result = runner.invoke(app, ["search", "index"])
+    result = runner.invoke(app, ["tdoc", "search", "index"])
     assert result.exit_code == 0, result.output
     assert "FTS5 rows:" in result.output
     assert "100" in result.output
@@ -339,7 +353,7 @@ def test_search_index_status_panel_omits_vector_when_service_none(monkeypatch) -
 
 def test_search_query_no_sem_query_does_not_invoke_reranker(monkeypatch) -> None:
     """Without ``--sem-query`` the CLI bypasses the reranker (today's behaviour)."""
-    from doc3gpp.cli import search_app
+    from doc3gpp.cli import tdoc_search_app
 
     runner = CliRunner()
     fake_svc = MagicMock()
@@ -349,14 +363,14 @@ def test_search_query_no_sem_query_does_not_invoke_reranker(monkeypatch) -> None
         "doc3gpp.services.factory.build_search_service",
         lambda *a, **kw: fake_svc,
     )
-    result = runner.invoke(search_app, ["query", "anything"])
+    result = runner.invoke(tdoc_search_app, ["query", "anything"])
     assert result.exit_code == 0, result.output
     fake_svc._reranker.rerank.assert_not_called()  # type: ignore[attr-defined]
 
 
 def test_search_query_sem_query_invokes_reranker_with_fanout(monkeypatch) -> None:
     """``--sem-query`` triggers fanout filters and a rerank call."""
-    from doc3gpp.cli import search_app
+    from doc3gpp.cli import tdoc_search_app
     from doc3gpp.models.search import SearchFilters
 
     class _FakeSvc:
@@ -397,7 +411,7 @@ def test_search_query_sem_query_invokes_reranker_with_fanout(monkeypatch) -> Non
 
     runner = CliRunner()
     result = runner.invoke(
-        search_app, ["query", "R5-1", "--sem-query", "TTCN handover"],
+        tdoc_search_app, ["query", "R5-1", "--sem-query", "TTCN handover"],
     )
     assert result.exit_code == 0, result.output
     assert captured["semantic_query"] == "TTCN handover"
@@ -420,7 +434,7 @@ def test_search_query_quiet_flag_reaches_reranker(monkeypatch) -> None:
     the default is ``False``; with ``--quiet`` the reranker sees
     ``quiet=True`` and skips the one-shot WARNING.
     """
-    from doc3gpp.cli import search_app
+    from doc3gpp.cli import tdoc_search_app
 
     class _FakeSvc:
         """Bare-bones service double with real ``_quiet`` attribute.
@@ -466,7 +480,7 @@ def test_search_query_quiet_flag_reaches_reranker(monkeypatch) -> None:
     )
 
     result = CliRunner().invoke(
-        search_app,
+        tdoc_search_app,
         ["query", "R5-1", "--sem-query", "TTCN", "--quiet"],
     )
     assert result.exit_code == 0, result.output
@@ -476,7 +490,7 @@ def test_search_query_quiet_flag_reaches_reranker(monkeypatch) -> None:
     # callers see no behaviour change.
     captured.clear()
     result_default = CliRunner().invoke(
-        search_app, ["query", "R5-1", "--sem-query", "TTCN"],
+        tdoc_search_app, ["query", "R5-1", "--sem-query", "TTCN"],
     )
     assert result_default.exit_code == 0, result_default.output
     assert captured["quiet"] is False
@@ -484,7 +498,7 @@ def test_search_query_quiet_flag_reaches_reranker(monkeypatch) -> None:
 
 def test_search_query_sem_query_empty_string_treated_as_none(monkeypatch) -> None:
     """``--sem-query ''`` is a no-op (no rerank, no embedder call)."""
-    from doc3gpp.cli import search_app
+    from doc3gpp.cli import tdoc_search_app
 
     fake_svc = MagicMock()
     fake_svc._repo.search.return_value = []  # type: ignore[attr-defined]
@@ -494,16 +508,16 @@ def test_search_query_sem_query_empty_string_treated_as_none(monkeypatch) -> Non
         lambda *a, **kw: fake_svc,
     )
     runner = CliRunner()
-    result = runner.invoke(search_app, ["query", "R5-1", "--sem-query", ""])
+    result = runner.invoke(tdoc_search_app, ["query", "R5-1", "--sem-query", ""])
     assert result.exit_code == 0, result.output
     fake_svc._reranker.rerank.assert_not_called()  # type: ignore[attr-defined]
 
 
 def test_search_query_rerank_flag_raises_bad_parameter() -> None:
     """The removed ``--rerank`` flag must raise a clear migration error."""
-    from doc3gpp.cli import search_app
+    from doc3gpp.cli import tdoc_search_app
 
     runner = CliRunner()
-    result = runner.invoke(search_app, ["query", "R5-1", "--rerank"])
+    result = runner.invoke(tdoc_search_app, ["query", "R5-1", "--rerank"])
     assert result.exit_code != 0
     assert "--rerank" in (result.output + (result.stderr or ""))

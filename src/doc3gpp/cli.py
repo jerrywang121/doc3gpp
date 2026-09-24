@@ -37,7 +37,7 @@ from doc3gpp.cli_url_helpers import (
 )
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.schema_info import SCHEMA_FIELDS, schema_payload
-from doc3gpp.models.spec_doc import SpecDocError, SpecDocSearchFilters
+from doc3gpp.models.spec_doc import SpecDocSearchFilters
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
@@ -4474,7 +4474,7 @@ SPEC_DOC_TOC_FIELDS: list[str] = [
     "source_file",
 ]
 
-spec_doc_app = typer.Typer(help="spec document corpus: fetch, parse, TOC, search")
+spec_doc_app = typer.Typer(help="spec document corpus: parse, TOC, search")
 spec_app.add_typer(spec_doc_app, name="doc")
 spec_doc_toc_app = typer.Typer(help="spec document TOC commands")
 spec_doc_app.add_typer(spec_doc_toc_app, name="toc")
@@ -4601,39 +4601,6 @@ def _render_spec_doc_semantic_hits(hits: list, *, fmt: str, compact: bool) -> No
         typer.echo(f"{i:>4} {h.chunk_id:<28} {h.rrf_score:>8.4f} {fts:>4} {vec:>4} {dist:>8}")
 
 
-@spec_doc_app.command("fetch")
-def spec_doc_fetch(
-    spec: str = typer.Option(
-        ...,
-        "--spec",
-        help="Dotted spec id to fetch (e.g. 38.331).",
-    ),
-    release: str | None = typer.Option(
-        None, "--release", help="Release marker, e.g. Rel-18.",
-    ),
-    version: str | None = typer.Option(
-        None, "--version", help="Exact version, e.g. 18.5.0.",
-    ),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Re-download even when the zip cache exists.",
-    ),
-) -> None:
-    """Download a spec version zip into the cache and record it."""
-    from doc3gpp.models.spec_doc import SpecDocUnknownSpecError, SpecDocUnknownVersionError
-
-    create_schema("all")
-    svc = build_spec_doc_service()
-    try:
-        src = svc.fetch(spec, release=release, version=version, force=force)
-    except SpecDocUnknownSpecError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    except SpecDocUnknownVersionError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    except SpecDocError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    typer.echo(f"fetched {src.spec_id}@{src.version} ({src.docx_count} docx)")
-
-
 @spec_doc_app.command("parse")
 def spec_doc_parse(
     spec: list[str] = typer.Option(
@@ -4648,7 +4615,7 @@ def spec_doc_parse(
         None, "--version", help="Exact version, e.g. 18.5.0.",
     ),
     force: bool = typer.Option(
-        False, "--force", "-f", help="Re-parse already-parsed pairs.",
+        False, "--force", "-f", help="Re-download and re-parse already-parsed pairs.",
     ),
     fmt: str | None = typer.Option(
         None,

@@ -17,3 +17,20 @@ def test_spec_doc_toc_miss(sqlite_env):
         app, ["spec", "doc", "toc", "show", "--spec", "38.331", "--version", "18.5.0"]
     )
     assert r.exit_code != 0 and "spec doc parse" in r.output
+
+
+def test_spec_doc_fetch_command_is_removed(sqlite_env):
+    create_schema("all")
+    runner = CliRunner()
+
+    help_result = runner.invoke(app, ["spec", "doc", "--help"])
+    assert help_result.exit_code == 0, help_result.output
+    assert "fetch" not in help_result.output
+
+    fetch_result = runner.invoke(
+        app,
+        ["spec", "doc", "fetch", "--spec", "38.331"],
+    )
+    assert fetch_result.exit_code != 0
+    assert "No such command" in fetch_result.output
+    assert "fetch" in fetch_result.output

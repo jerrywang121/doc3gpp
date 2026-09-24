@@ -84,6 +84,7 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "sync_testcases",
         "parse_tdocs",
         "parse_tdoc_url",
+        "parse_spec_docs",
         "rebuild_tdoc_search_index",
         "purge_cache",
         "get_job",
@@ -94,6 +95,8 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
     assert "search_tdocs" not in names
     assert "semantic_search_tdocs" not in names
     assert "rebuild_search_index" not in names
+    assert "parse_spec_docs" in names
+    assert not any(name.startswith("fetch_spec") for name in names)
 
 
 def test_call_list_meetings_empty(sqlite_env) -> None:

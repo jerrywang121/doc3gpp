@@ -45,6 +45,11 @@ _SECTIONS: list[dict[str, str]] = [
         "description": "3GPP specifications (TSs / TRs) with their versions.",
     },
     {
+        "label": "Spec Docs",
+        "href": "/spec-docs/search",
+        "description": "Search parsed specification document chunks and browse version TOCs.",
+    },
+    {
         "label": "Testcases",
         "href": "/testcases",
         "description": "RAN5 conformance testcases with per-path statuses.",

@@ -189,6 +189,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
 | GET | `/wis` | List WIs. |
 | GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
+| GET | `/specs/{spec_id}/docs` | Human-facing version-first spec-document page (`?version=` required; optional `release`, `section`, `limit`, `offset`) with source state, parse/re-parse form, TOC, and paginated chunks (`spec_doc_show.html`; HTMX fragment `partials/spec_doc_show_results.html`). |
 | GET | `/specs/{spec_id}/docs/toc` | Spec-doc TOC for one `(spec_id, version)` pair (`?version=` required, `?release=` informational; `?format=json` is the `doc3gpp spec doc toc show --format json` envelope verbatim: `{spec_id, version, release, docx_count, entries, files}`; full page `spec_doc_toc.html`, HTMX fragment `partials/spec_doc_toc_results.html`). Miss → 404. |
 | GET | `/spec-docs/search` | Spec-doc FTS5 search (`?q=`, filters `spec,release,version,section,limit,offset`; `?format=json` is the `doc3gpp spec doc search query --format json` hit array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Corrupt index → 500 with a rebuild hint. |
 | GET | `/spec-docs/search/sem` | Spec-doc hybrid search (`?q=`, `?fts5_query=` blank → `None` = pure vector, `?fts5_weight=` 0.0..1.0; `?format=json` is the `doc3gpp spec doc search sem --format json` semantic-hit array verbatim; same templates as `/spec-docs/search`). |
@@ -243,11 +244,36 @@ when the job completes. A "Per-version details" checkbox alongside
 worker always re-fetches the ETSI PDF + CR-list follow-ups for every
 version (default OFF — without it, cached rows are preserved).
 
+### Spec-document portal
+
+The human-facing spec-document flow is version-first. The `/specs/{spec_id}`
+page has a `Docs` column with a `show` link for every stored version. Each
+link opens `/specs/{spec_id}/docs?version={version}`; the page also accepts
+`release`, `section`, `limit`, and `offset` query parameters for the displayed
+document data.
+
+The version page's source card exposes three states: a version with no
+specdata source row has not been downloaded or parsed; a downloaded source is
+waiting for parsing; and a parsed source shows its parse timestamp, DOCX and
+chunk counts. The only document action is `Parse document` (or `Force
+re-parse`). It enqueues the existing `POST /jobs/parse/spec-docs` job with
+`spec_ids`, the selected `version`, optional `release`, and `force`, then
+polls the normal job status. The parser downloads a missing ZIP internally;
+there is intentionally no standalone spec-document fetch route or fetch
+control.
+
+Parsed versions render the stored table of contents followed by chunk cards.
+Chunk display is paginated through `limit` / `offset`, with `release` and
+`section` retained in the previous/next links. The `TDoc Search` and
+`Spec Docs Search` tabs are shared by both search families, and Spec Docs
+results link to the matching version page and chunk anchor
+(`/specs/{spec_id}/docs?version={version}#chunk-{chunk_index}`).
+
 The sync hub (`/sync`) is a single page for enqueueing every sync-shaped job. Each panel submits a JSON body to the matching `/jobs/...` route via the shared `bindJobPolling` helper; when the job reaches a terminal state the bottom "Recent sync jobs" table is refreshed in place via HTMX (`GET /sync?format=fragment`) rather than a full page reload, so the user keeps their scroll position. The tenth form (`id="testcase-form"`) enqueues `POST /jobs/sync/testcases` with `{force}` from its Force-sync checkbox (`sync_hub.js` `"testcase-form"` body builder); the handler (`_sync_testcases`, `JobKind.SYNC_TESTCASES = "sync_testcases"`) calls `services.testcase.sync(force=force, on_progress=...)` and returns `{"status","reason","synced_count"}`.
 
 The testcase list page (`/testcases`) mirrors the spec list: an HTMX filter form (`partials/testcase_filters.html`) swaps the `#results` partial (`partials/testcase_results.html`) on `HX-Request: true`, otherwise the full `testcase_list.html` page renders. Columns are TC, Title, Spec, Group, Release, Statuses (as `path=gcf/ttcn` chips), each row linking to its group-scoped detail page (`/testcases/{id}?group={group}` → `testcase_show.html`: one header-card + status-triples table per group, with `path` / `gcf_ptcrb` / `ttcn_status`).
 
-The header nav is ordered Home, TSGs, Meetings, TDocs, Specs, Testcases, WIs, Search, Jobs, Sync.
+The header nav is ordered Home, TSGs, Meetings, TDocs, Specs, Testcases, WIs, Search, Jobs, Sync. Spec Docs is discoverable from the landing page and the shared search tabs rather than as a second top-level nav item.
 The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)
 when any are pending. The TSG list links each TSG name to the TSG's own URL
 and its `show` link jumps to the meetings list pre-filtered to that TSG

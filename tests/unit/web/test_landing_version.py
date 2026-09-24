@@ -40,3 +40,16 @@ def test_landing_json_shape_unchanged(client: TestClient) -> None:
     body = response.json()
     assert "version" not in body
     assert "sections" in body
+
+
+def test_landing_exposes_spec_docs_section(client: TestClient) -> None:
+    html = client.get("/").text
+    assert "/spec-docs/search" in html
+    assert "Spec Docs" in html
+
+    sections = client.get("/?format=json").json()["sections"]
+    assert {
+        "label": "Spec Docs",
+        "href": "/spec-docs/search",
+        "description": "Search parsed specification document chunks and browse version TOCs.",
+    } in sections

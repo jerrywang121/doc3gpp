@@ -770,6 +770,15 @@ TDoc tool aliases were removed. Spec-document search remains under
 `/spec-docs/search`, `/spec-docs/search/sem`, `search_spec_docs`, and
 `semantic_search_spec_docs`.
 
+The human-facing spec-document portal is version-first: `GET
+/specs/{spec_id}/docs?version=...` composes the parent spec/version metadata
+with the specdata source state, stored TOC, and paginated chunks. The
+`spec_show.html` version rows link to this page. Its parse/re-parse form
+enqueues the existing `POST /jobs/parse/spec-docs` job; a missing ZIP is
+downloaded by that parse path, and no standalone fetch route exists. Shared
+TDoc Search / Spec Docs Search tabs expose both search families, and Spec Docs
+hits link to the matching version page and chunk anchor.
+
 
 ## Database Schema
 

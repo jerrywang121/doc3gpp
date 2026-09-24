@@ -245,7 +245,7 @@ table below is for navigation only.
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 
-Twelve Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list` / `schema`), `tdoc` (`sync` / `list` / `schema` / `parse` / `show` / nested `search query` / `search index` / `search sem`), `tsg` (`list` / `schema` / `show` / `seed`), `wi` (`sync` / `list` / `schema`), `spec` (`sync` / `list` / `schema` / `show` / nested `doc`), `testcase` (`sync` / `list` / `schema` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), plus the nested `spec doc` commands (`fetch` / `parse` / `toc show` / `search query` / `search sem` / `schema`) and the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
+Twelve Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list` / `schema`), `tdoc` (`sync` / `list` / `schema` / `parse` / `show` / nested `search query` / `search index` / `search sem`), `tsg` (`list` / `schema` / `show` / `seed`), `wi` (`sync` / `list` / `schema`), `spec` (`sync` / `list` / `schema` / `show` / nested `doc`), `testcase` (`sync` / `list` / `schema` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), plus the nested `spec doc` commands (`parse` / `toc show` / `search query` / `search sem` / `schema`) and the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |

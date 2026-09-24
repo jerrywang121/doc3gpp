@@ -1015,7 +1015,7 @@ files; `db reset` removes stale sidecars before recreating the schema.
 ## CLI Surface
 
 Implemented command groups in `src/doc3gpp/cli.py` (12 sub-apps incl.
-the `spec doc` / `toc` / `search` triplet, 41 commands) plus the `server` group in `cli_server.py`
+the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group in `cli_server.py`
 (6 commands):
 
 - `db`:

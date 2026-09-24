@@ -34,3 +34,28 @@ def test_spec_doc_fetch_command_is_removed(sqlite_env):
     assert fetch_result.exit_code != 0
     assert "No such command" in fetch_result.output
     assert "fetch" in fetch_result.output
+
+
+def test_spec_doc_parse_forwards_force(monkeypatch):
+    calls = []
+
+    class FakeResult:
+        successes = {}
+        skipped = {}
+        failures = {}
+
+    class FakeService:
+        def parse_many(self, spec_ids, *, release, version, force):
+            calls.append((spec_ids, release, version, force))
+            return FakeResult()
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda: FakeService())
+
+    result = CliRunner().invoke(
+        app,
+        ["spec", "doc", "parse", "--spec", "38.331", "--force"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(["38.331"], None, None, True)]

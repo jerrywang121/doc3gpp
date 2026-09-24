@@ -1,6 +1,7 @@
-"""HTTP routes for the spec-document corpus (TOC + search + schema).
+"""HTTP routes for the spec-document corpus (read page + TOC + search + schema).
 
-``GET /specs/{spec_id}/docs/toc`` renders the stored TOC for one
+``GET /specs/{spec_id}/docs`` renders one version's stored source, TOC,
+and chunks; ``GET /specs/{spec_id}/docs/toc`` renders the stored TOC for one
 ``(spec_id, version)`` pair; ``GET /spec-docs/search`` runs the FTS5
 ``SpecDocSearchService.search(query, filters)`` read path and
 ``GET /spec-docs/search/sem`` runs the hybrid FTS5 + vector read via
@@ -35,17 +36,25 @@ from doc3gpp.models.semantic_search import (
 from doc3gpp.models.spec_doc import (
     SpecDocSearchFilters,
     SpecDocTooLargeError,
+    SpecDocUnknownVersionError,
 )
+from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.services.spec_doc_search_service import SpecDocSearchService
 from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
 from doc3gpp.services.spec_doc_service import SpecDocService
+from doc3gpp.services.spec_service import SpecService
 from doc3gpp.web.deps import (
     get_pending_jobs,
     get_spec_doc_search_service,
     get_spec_doc_semantic_service,
     get_spec_doc_service,
+    get_spec_service,
 )
-from doc3gpp.web.errors import InvalidFilterError, SettingsDisabledError
+from doc3gpp.web.errors import (
+    InvalidFilterError,
+    SettingsDisabledError,
+    SpecNotFoundError,
+)
 from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
 from doc3gpp.web.render import (
     spec_doc_hit_to_json,
@@ -59,11 +68,106 @@ router = APIRouter(tags=["spec-docs"])
 
 
 _LIMIT_CAP = 200
+_DOC_CHUNK_LIMIT_DEFAULT = 20
+_DOC_CHUNK_LIMIT_CAP = 100
 
 # Mirrors ``settings.output.fields.spec_doc_toc`` — what
 # ``doc3gpp spec doc toc show --format json`` projects its ``entries``
 # through by default.
 _SPEC_DOC_TOC_FIELDS = ["section_no", "title", "level", "source_file"]
+
+
+@router.get("/specs/{spec_id}/docs", include_in_schema=False)
+async def spec_doc_show(
+    request: Request,
+    spec_id: str,
+    version: str | None = Query(default=None),
+    release: str | None = Query(default=None),
+    section: str | None = Query(default=None),
+    limit: str | None = Query(default="20"),
+    offset: str | None = Query(default="0"),
+    spec_service: SpecService = Depends(get_spec_service),
+    doc_service: SpecDocService | None = Depends(get_spec_doc_service),
+    pending_jobs: int = Depends(get_pending_jobs),
+) -> Any:
+    """Render one stored spec-document version and its readable chunks."""
+    spec: Spec | None = spec_service.get(spec_id)
+    if spec is None:
+        raise SpecNotFoundError(f"Spec {spec_id!r} not found")
+    if not version:
+        raise InvalidFilterError("version query param is required")
+
+    versions: list[SpecVersion] = spec_service.list_versions(
+        spec_id, limit=500, version=version
+    )
+    version_row = next((row for row in versions if row.version == version), None)
+    if version_row is None:
+        available_rows = spec_service.list_versions(spec_id, limit=500)
+        available = [row.version for row in available_rows]
+        available_text = ", ".join(available) if available else "none"
+        raise SpecDocUnknownVersionError(
+            f"Unknown version {version!r} for spec {spec_id!r}; "
+            f"available versions: {available_text}",
+            available=available,
+        )
+
+    parsed_limit = parse_int_query(
+        limit, min=1, max=_DOC_CHUNK_LIMIT_CAP
+    ) or _DOC_CHUNK_LIMIT_DEFAULT
+    parsed_offset = parse_int_query(offset, min=0) or 0
+    parsed_release = parse_text_query(release)
+    parsed_section = parse_text_query(section)
+
+    if doc_service is None:
+        raise SettingsDisabledError("spec-doc parse is not available in this build")
+
+    source = doc_service.get_source(spec_id, version)
+    toc = None
+    chunks: list[Any] = []
+    if source is not None and source.parsed_at is not None:
+        try:
+            toc = doc_service.get_toc(spec_id, version, release=parsed_release)
+        except SpecDocUnknownVersionError:
+            # A parsed source without a TOC is still useful: keep its chunks visible.
+            toc = None
+        chunks = doc_service.list_chunks(
+            spec_id,
+            version=version,
+            release=parsed_release,
+            section=parsed_section,
+            limit=parsed_limit + 1,
+            offset=parsed_offset,
+        )
+
+    display_chunks = chunks[:parsed_limit]
+    next_offset = (
+        parsed_offset + parsed_limit if len(chunks) > parsed_limit else None
+    )
+    context = {
+        "active_nav": "specs",
+        "spec": spec,
+        "version_row": version_row,
+        "source": source,
+        "toc": toc,
+        "chunks": chunks,
+        "display_chunks": display_chunks,
+        "limit": parsed_limit,
+        "offset": parsed_offset,
+        "next_offset": next_offset,
+        "section": parsed_section or "",
+        "release": parsed_release or "",
+        "pending_jobs": pending_jobs,
+    }
+    template_name = (
+        "partials/spec_doc_show_results.html"
+        if is_htmx_request(request)
+        else "spec_doc_show.html"
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name=template_name,
+        context=context,
+    )
 
 
 @router.get("/specs/{spec_id}/docs/toc", include_in_schema=False)

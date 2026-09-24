@@ -23,6 +23,13 @@ from fastapi.testclient import TestClient
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.search import SearchHit
+from doc3gpp.models.spec_doc import (
+    SpecDocChunk,
+    SpecDocSource,
+    SpecDocToc,
+    SpecDocTocEntry,
+    SpecDocUnknownVersionError,
+)
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -41,6 +48,8 @@ from doc3gpp.web.deps import (
     get_search_service,
     get_semantic_search_service,
     get_settings,
+    get_spec_doc_service,
+    get_spec_service,
     get_tdoc_file_repo,
     get_tdoc_service,
     get_tsg_service,
@@ -2618,6 +2627,215 @@ class FakeSpecService:
 
     def list_versions(self, spec_id: str, limit: int = 200, offset: int = 0, version: str | None = None, **kwargs: Any) -> list[Any]:
         return [v for v in self._versions if v.spec_id == spec_id][offset : offset + limit]
+
+
+class FakeSpecDocService:
+    """Stub the public spec-document reads used by the version page."""
+
+    def __init__(
+        self,
+        source: SpecDocSource | None = None,
+        toc: SpecDocToc | None = None,
+        chunks: list[SpecDocChunk] | None = None,
+    ) -> None:
+        self.source = source
+        self.toc = toc
+        self.chunks = list(chunks or [])
+        self.calls: list[tuple[Any, ...]] = []
+
+    def get_source(self, spec_id: str, version: str) -> SpecDocSource | None:
+        self.calls.append(("source", spec_id, version))
+        return self.source
+
+    def get_toc(
+        self, spec_id: str, version: str, *, release: str | None = None
+    ) -> SpecDocToc:
+        self.calls.append(("toc", spec_id, version, release))
+        if self.toc is None:
+            raise SpecDocUnknownVersionError("no parsed TOC")
+        return self.toc
+
+    def list_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str,
+        release: str | None = None,
+        section: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[SpecDocChunk]:
+        self.calls.append(
+            ("chunks", spec_id, version, release, section, limit, offset)
+        )
+        return self.chunks[offset : offset + limit]
+
+
+def _spec_doc_source(*, parsed: bool) -> SpecDocSource:
+    return SpecDocSource(
+        spec_id="36.579-5",
+        version="18.0.0",
+        release="Rel-18",
+        ftp_url="https://www.3gpp.org/ftp/spec-doc.zip",
+        downloaded_at=datetime(2026, 5, 2, tzinfo=timezone.utc),
+        parsed_at=(
+            datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc) if parsed else None
+        ),
+        chunk_count=2 if parsed else 0,
+        docx_count=1 if parsed else 0,
+    )
+
+
+def _spec_doc_toc() -> SpecDocToc:
+    return SpecDocToc(
+        spec_id="36.579-5",
+        version="18.0.0",
+        release="Rel-18",
+        entries=[
+            SpecDocTocEntry(
+                level=1,
+                section_no="1",
+                title="Scope",
+                source_file="36.579-5.docx",
+                file_order=0,
+            )
+        ],
+        docx_count=1,
+    )
+
+
+def _spec_doc_chunks(count: int = 3) -> list[SpecDocChunk]:
+    return [
+        SpecDocChunk(
+            file_order=0,
+            source_file="36.579-5.docx",
+            section_no=str(index + 1),
+            section_title=f"Section {index + 1}",
+            text=f"Chunk text {index}",
+            chunk_id=f"36.579-5@18.0.0#{index}",
+            spec_id="36.579-5",
+            version="18.0.0",
+            release="Rel-18",
+            chunk_index=index,
+        )
+        for index in range(count)
+    ]
+
+
+def _override_spec_doc_services(
+    client: TestClient, service: FakeSpecDocService
+) -> None:
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    client.app.dependency_overrides[get_spec_doc_service] = lambda: service
+
+
+def _clear_spec_doc_services(client: TestClient) -> None:
+    client.app.dependency_overrides.pop(get_spec_service, None)
+    client.app.dependency_overrides.pop(get_spec_doc_service, None)
+
+
+def test_spec_doc_show_unparsed_state(client: TestClient) -> None:
+    service = FakeSpecDocService(source=_spec_doc_source(parsed=False))
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "18.0.0" in response.text
+    assert "Parse document" in response.text
+    assert "Scope" not in response.text
+    assert not any(call[0] in {"toc", "chunks"} for call in service.calls)
+
+
+def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(2),
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Scope" in response.text
+    assert "Chunk text 0" in response.text
+    assert "36.579-5.docx" in response.text
+    assert "18.0.0" in response.text
+    assert "2 chunk" in response.text
+    assert any(call[0] == "toc" for call in service.calls)
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, 21, 0
+    )
+
+
+def test_spec_doc_show_pagination_forwards_filters_and_uses_probe(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(5),
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&section=%255.1%25&limit=2&offset=2"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Chunk text 2" in response.text
+    assert "Chunk text 3" in response.text
+    assert "Chunk text 4" not in response.text
+    assert "offset=4" in response.text
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, "%5.1%", 3, 2
+    )
+
+
+def test_spec_doc_show_htmx_returns_results_fragment(client: TestClient) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(1),
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "<!DOCTYPE" not in response.text
+    assert "<html" not in response.text
+    assert '<div id="results"' in response.text
+
+
+def test_spec_doc_show_unknown_version_returns_404(client: TestClient) -> None:
+    service = FakeSpecDocService(source=_spec_doc_source(parsed=False))
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=99.0.0",
+            headers={"accept": "application/json"},
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "spec_doc_unknown_version"
+    assert "18.0.0" in response.json()["detail"]
 
 
 def test_get_specs_renders_list(client: TestClient) -> None:

@@ -1,0 +1,67 @@
+<div id="results" hx-target="this" hx-swap="outerHTML">
+  <section class="card spec-doc-source-card">
+    <h2>Document source</h2>
+    {% if source is none %}
+      <p class="meta">This version has not been downloaded or parsed.</p>
+      <p class="empty">Parse document to download and convert this version.</p>
+    {% else %}
+      <dl class="kv">
+        <dt>Download</dt>
+        <dd>
+          {% if source.downloaded_at %}
+            {{ source.downloaded_at | dt_short }} <span class="muted">UTC</span>
+          {% else %}-{% endif %}
+        </dd>
+        {% if source.parsed_at %}
+          <dt>Parsed</dt>
+          <dd>{{ source.parsed_at | dt_short }} <span class="muted">UTC</span></dd>
+          <dt>DOCX files</dt><dd>{{ source.docx_count }}</dd>
+          <dt>Chunks</dt><dd>{{ source.chunk_count }}</dd>
+        {% else %}
+          <dt>State</dt><dd>Downloaded, awaiting parsing</dd>
+          <dt>Parsed content</dt>
+          <dd class="empty">Parse document to convert the downloaded source.</dd>
+        {% endif %}
+      </dl>
+    {% endif %}
+  </section>
+
+  {% if source and source.parsed_at %}
+    {% if toc %}
+      <section class="card spec-doc-toc-card">
+        <h2>Table of contents</h2>
+        {% if toc.entries %}
+          <table class="grid" id="spec-doc-toc-table">
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th>Title</th>
+                <th>Level</th>
+                <th>Source file</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in toc.entries %}
+                <tr>
+                  <td><code>{{ entry.section_no or '-' }}</code></td>
+                  <td>{{ entry.title }}</td>
+                  <td>{{ entry.level }}</td>
+                  <td><code>{{ entry.source_file }}</code></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="empty">No table-of-contents entries stored.</p>
+        {% endif %}
+      </section>
+    {% else %}
+      <section class="card placeholder">
+        <h2>Table of contents</h2>
+        <p>Document content is parsed, but no table of contents is available.</p>
+      </section>
+    {% endif %}
+
+    {% include "partials/spec_doc_chunks.html" %}
+  {% endif %}
+</div>

@@ -1,0 +1,46 @@
+<section class="spec-doc-chunks">
+  <div class="page-header">
+    <h2>Chunks</h2>
+    {% if source %}<span class="meta">{{ source.chunk_count }} chunk{{ '' if source.chunk_count == 1 else 's' }} total</span>{% endif %}
+  </div>
+
+  {% if display_chunks %}
+    {% for chunk in display_chunks %}
+      <article class="card spec-doc-chunk" id="chunk-{{ chunk.chunk_index }}">
+        <div class="spec-doc-chunk-header">
+          <strong><code>{{ chunk.chunk_id }}</code></strong>
+          <span class="meta">{{ chunk.source_file }}</span>
+        </div>
+        {% if chunk.section_no or chunk.section_title %}
+          <p class="meta">
+            Section{% if chunk.section_no %} <code>{{ chunk.section_no }}</code>{% endif %}
+            {% if chunk.section_title %} · {{ chunk.section_title }}{% endif %}
+          </p>
+        {% endif %}
+        {% if chunk.table_no or chunk.table_title %}
+          <p class="meta">
+            Table{% if chunk.table_no %} <code>{{ chunk.table_no }}</code>{% endif %}
+            {% if chunk.table_title %} · {{ chunk.table_title }}{% endif %}
+          </p>
+        {% endif %}
+        <pre>{{ chunk.text }}</pre>
+      </article>
+    {% endfor %}
+  {% else %}
+    <p class="empty">No document chunks match these filters.</p>
+  {% endif %}
+
+  {% if next_offset is not none or offset > 0 %}
+    <nav class="pagination">
+      {% if offset > 0 %}
+        <a href="{{ request.url.include_query_params(version=version_row.version, release=release, section=section, limit=limit, offset=(offset - limit if offset >= limit else 0)) }}">‹ prev</a>
+      {% endif %}
+      {% if display_chunks %}
+        <span>Showing {{ offset + 1 }}–{{ offset + display_chunks|length }}</span>
+      {% endif %}
+      {% if next_offset is not none %}
+        <a href="{{ request.url.include_query_params(version=version_row.version, release=release, section=section, limit=limit, offset=next_offset) }}">next ›</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+</section>

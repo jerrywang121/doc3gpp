@@ -233,7 +233,7 @@ async def post_parse_tdocs(
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 
-@router.post("/search/rebuild", status_code=202)
+@router.post("/tdocs/search/rebuild", status_code=202)
 async def post_search_rebuild(
     body: _SearchRebuildBody,
     job_repo: JobRepository = Depends(get_job_repo),

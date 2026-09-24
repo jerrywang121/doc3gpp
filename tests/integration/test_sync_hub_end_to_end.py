@@ -147,7 +147,7 @@ def test_sync_page_forms_have_real_inputs(seeded_app: Any) -> None:
             },
         ),
         (
-            "/jobs/search/rebuild",
+            "/jobs/tdocs/search/rebuild",
             {"stale_only": True, "resume": False},
             "rebuild_search",
             {"stale_only": True, "resume": False},

@@ -1,9 +1,9 @@
 """HTTP routes for search.
 
-``GET /search`` runs the FTS5 ``SearchService.search(query, filters)``
-read path; ``GET /search/sem`` runs the hybrid FTS5 + vector read via
+``GET /tdocs/search`` runs the FTS5 ``SearchService.search(query, filters)``
+read path; ``GET /tdocs/search/sem`` runs the hybrid FTS5 + vector read via
 ``SemanticSearchService.search``. The ``?fts5_query=`` opt-in FTS5
-path on ``/search/sem`` honours the spec: without it the route is
+path on ``/tdocs/search/sem`` honours the spec: without it the route is
 pure-vector.
 
 Both routes share ``search_results.html``. The semantic variant
@@ -11,7 +11,8 @@ swaps the search form partial to surface ``fts5_query``,
 ``fts5_weight``, and a RRF-aware column layout.
 
 ``?format=json`` returns the same payload shape as
-``doc3gpp search query --format json`` / ``search sem --format json``:
+``doc3gpp tdoc search query --format json`` /
+``tdoc search sem --format json``:
 a bare array of hit objects. FTS5 hits carry ``tdoc_id / score /
 previews / title / meeting / tsg / uploaded_date / ftp_url / wis``;
 semantic hits carry the RRF fields with the metadata sub-record nested
@@ -34,7 +35,7 @@ from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_que
 from doc3gpp.web.templates_setup import templates
 
 
-router = APIRouter(prefix="/search", tags=["search"])
+router = APIRouter(prefix="/tdocs/search", tags=["search"])
 
 
 _LIMIT_CAP = 200
@@ -214,7 +215,7 @@ async def search_semantic(
     # arrives as ``""``. The service treats any non-``None`` value as an
     # opt-in FTS5 path, so an empty string would run FTS5 with an empty
     # query and return zero hits. Normalise blank to ``None`` so the
-    # default is pure-vector, matching ``doc3gpp search sem``.
+    # default is pure-vector, matching ``doc3gpp tdoc search sem``.
     if fts5_query is not None and not fts5_query.strip():
         fts5_query = None
 

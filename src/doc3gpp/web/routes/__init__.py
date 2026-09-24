@@ -30,13 +30,13 @@ def all_routers() -> list[APIRouter]:
     return [
         landing_router,
         meetings_router,
+        search_router,
         tdocs_router,
         tsgs_router,
         wis_router,
         specs_router,
         spec_docs_router,
         testcases_router,
-        search_router,
         jobs_router,
         sync_router,
     ]

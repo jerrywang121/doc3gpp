@@ -56,7 +56,7 @@ _SECTIONS: list[dict[str, str]] = [
     },
     {
         "label": "Search",
-        "href": "/search",
+        "href": "/tdocs/search",
         "description": "Full-text search across stored TDocs (FTS5).",
     },
     {

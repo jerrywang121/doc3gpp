@@ -246,7 +246,7 @@ def test_post_parse_tdocs_single_tdoc_payload(client: Any) -> None:
 
 def test_post_search_rebuild(client: Any) -> None:
     c, repo, _ = client
-    r = c.post("/jobs/search/rebuild", json={"stale_only": True, "resume": False})
+    r = c.post("/jobs/tdocs/search/rebuild", json={"stale_only": True, "resume": False})
     assert r.status_code == 202
     job = repo.get(r.json()["job_id"])
     assert job is not None

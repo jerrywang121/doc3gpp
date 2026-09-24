@@ -341,7 +341,7 @@ def test_nav_order_home_tsgs_meetings_tdocs_specs_wis_search_jobs(
     hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
     assert hrefs == [
         "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/testcases", "/wis",
-        "/search", "/jobs", "/sync",
+        "/tdocs/search", "/jobs", "/sync",
     ]
 
 
@@ -1049,8 +1049,8 @@ def test_wi_list_invalid_numeric_filter_returns_400(client: TestClient) -> None:
 
 
 def test_search_query_empty_numeric_filter_returns_200(client: TestClient) -> None:
-    """``GET /search?q=foo&limit=`` is 200, not 422."""
-    response = client.get("/search?q=foo&limit=")
+    """``GET /tdocs/search?q=foo&limit=`` is 200, not 422."""
+    response = client.get("/tdocs/search?q=foo&limit=")
     assert response.status_code == 200
 
 
@@ -1181,22 +1181,22 @@ def test_tdoc_list_empty_text_filter_returns_all_rows(client: TestClient) -> Non
 
 
 def test_search_query_empty_date_filter_returns_200(client: TestClient) -> None:
-    """``GET /search?since=&until=`` is 200, not 400."""
-    response = client.get("/search?q=foo&since=&until=")
+    """``GET /tdocs/search?since=&until=`` is 200, not 400."""
+    response = client.get("/tdocs/search?q=foo&since=&until=")
     assert response.status_code == 200
 
 
 def test_search_query_invalid_date_filter_returns_400(client: TestClient) -> None:
-    """``GET /search?since=bogus`` is 400 with invalid_filter envelope."""
-    response = client.get("/search?since=bogus")
+    """``GET /tdocs/search?since=bogus`` is 400 with invalid_filter envelope."""
+    response = client.get("/tdocs/search?since=bogus")
     assert response.status_code == 400
     body = response.json()
     assert body["error"] == "invalid_filter"
 
 
 def test_search_sem_empty_numeric_filter_returns_200(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&limit=`` is 200, not 422."""
-    response = client.get("/search/sem?q=foo&limit=")
+    """``GET /tdocs/search/sem?q=foo&limit=`` is 200, not 422."""
+    response = client.get("/tdocs/search/sem?q=foo&limit=")
     assert response.status_code == 200
 
 
@@ -1538,15 +1538,15 @@ def test_wi_list_uses_acronym_not_id(client: TestClient) -> None:
 
 
 def test_search_query_renders_html(client: TestClient) -> None:
-    """``GET /search?q=foo`` returns 200 with the search template."""
-    response = client.get("/search?q=foo")
+    """``GET /tdocs/search?q=foo`` returns 200 with the search template."""
+    response = client.get("/tdocs/search?q=foo")
     assert response.status_code == 200
     assert "R5-260001" in response.text
 
 
 def test_search_results_single_details_per_hit(client: TestClient) -> None:
     """One details.hit-details block per hit (single folding), not per column."""
-    response = client.get("/search?q=foo")
+    response = client.get("/tdocs/search?q=foo")
     assert response.status_code == 200
     body = response.text
     assert body.count('<details class="hit-details">') == 1
@@ -1555,32 +1555,32 @@ def test_search_results_single_details_per_hit(client: TestClient) -> None:
 
 def test_search_results_has_master_toggle(client: TestClient) -> None:
     """The results fragment carries the fold/unfold-all toggle."""
-    response = client.get("/search?q=foo", headers={"HX-Request": "true"})
+    response = client.get("/tdocs/search?q=foo", headers={"HX-Request": "true"})
     assert response.status_code == 200
     assert 'id="fold-toggle"' in response.text
 
 
 def test_search_results_toggle_absent_without_hits(client: TestClient) -> None:
     """No hits -> no toggle and no details."""
-    response = client.get("/search")
+    response = client.get("/tdocs/search")
     assert response.status_code == 200
     assert 'id="fold-toggle"' not in response.text
 
 
 def test_search_full_page_loads_search_js(client: TestClient) -> None:
     """The full search page includes the fold-toggle script."""
-    html = client.get("/search?q=foo").text
+    html = client.get("/tdocs/search?q=foo").text
     assert 'src="/static/js/search.js"' in html
 
 
 def test_search_query_htmx_returns_partial(client: TestClient) -> None:
-    """``GET /search`` with ``HX-Request: true`` returns the results partial.
+    """``GET /tdocs/search`` with ``HX-Request: true`` returns the results partial.
 
     The Search button uses HTMX with ``hx-swap=\"outerHTML\" hx-target=\"#results\"``,
     so the response must be the ``partials/search_results.html`` fragment
     — a single ``<div id=\"results\">`` block — not a full HTML document.
     """
-    response = client.get("/search?q=foo", headers={"HX-Request": "true"})
+    response = client.get("/tdocs/search?q=foo", headers={"HX-Request": "true"})
     assert response.status_code == 200
     body = response.text
     assert "<!DOCTYPE" not in body
@@ -1589,8 +1589,8 @@ def test_search_query_htmx_returns_partial(client: TestClient) -> None:
 
 
 def test_search_sem_htmx_returns_partial(client: TestClient) -> None:
-    """``GET /search/sem`` with ``HX-Request: true`` returns the results partial."""
-    response = client.get("/search/sem?q=foo", headers={"HX-Request": "true"})
+    """``GET /tdocs/search/sem`` with ``HX-Request: true`` returns the results partial."""
+    response = client.get("/tdocs/search/sem?q=foo", headers={"HX-Request": "true"})
     assert response.status_code == 200
     body = response.text
     assert "<!DOCTYPE" not in body
@@ -1599,13 +1599,13 @@ def test_search_sem_htmx_returns_partial(client: TestClient) -> None:
 
 
 def test_search_query_json(client: TestClient) -> None:
-    """``GET /search?q=foo&format=json`` returns the CLI-shaped hit array.
+    """``GET /tdocs/search?q=foo&format=json`` returns the CLI-shaped hit array.
 
     Ruling B: the payload must be a bare array of hit objects matching
-    ``doc3gpp search query --format json`` (tdoc_id / score / previews
+    ``doc3gpp tdoc search query --format json`` (tdoc_id / score / previews
     / title / meeting / tsg / uploaded_date / ftp_url / wis).
     """
-    response = client.get("/search?q=foo&format=json")
+    response = client.get("/tdocs/search?q=foo&format=json")
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
@@ -1618,16 +1618,16 @@ def test_search_query_json(client: TestClient) -> None:
 
 
 def test_search_query_bad_date_filter_400(client: TestClient) -> None:
-    """``GET /search?since=<bad>`` returns 400 with the invalid_filter envelope."""
-    response = client.get("/search?q=foo&since=not-a-date")
+    """``GET /tdocs/search?since=<bad>`` returns 400 with the invalid_filter envelope."""
+    response = client.get("/tdocs/search?q=foo&since=not-a-date")
     assert response.status_code == 400
     body = response.json()
     assert body["error"] == "invalid_filter"
 
 
 def test_search_sem_renders_html(client: TestClient) -> None:
-    """``GET /search/sem?q=foo`` returns 200 with the search template."""
-    response = client.get("/search/sem?q=foo")
+    """``GET /tdocs/search/sem?q=foo`` returns 200 with the search template."""
+    response = client.get("/tdocs/search/sem?q=foo")
     assert response.status_code == 200
 
 
@@ -1640,7 +1640,7 @@ def test_search_sem_table_renders_nested_metadata(client: TestClient) -> None:
     ranks (top-level fields) worked. The template must unwrap the
     nested bag in ``sem`` mode.
     """
-    html = client.get("/search/sem?q=foo").text
+    html = client.get("/tdocs/search/sem?q=foo").text
     assert "CR on NR measurement" in html
     assert "RAN5#99-e" in html
     assert ">R5<" in html
@@ -1650,13 +1650,13 @@ def test_search_sem_table_renders_nested_metadata(client: TestClient) -> None:
 
 
 def test_search_sem_json(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
+    """``GET /tdocs/search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
 
-    Ruling B: semantic hits mirror ``doc3gpp search sem --format json``
+    Ruling B: semantic hits mirror ``doc3gpp tdoc search sem --format json``
     — RRF fields at the top level and the metadata bag nested under
     ``hit``.
     """
-    response = client.get("/search/sem?q=foo&format=json")
+    response = client.get("/tdocs/search/sem?q=foo&format=json")
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
@@ -1670,13 +1670,13 @@ def test_search_sem_json(client: TestClient) -> None:
 
 
 def test_search_query_tdoc_id_filter_forwarded(client: TestClient) -> None:
-    """``GET /search?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    """``GET /tdocs/search?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&tdoc-id=R5-260001")
+        response = client.get("/tdocs/search?q=foo&tdoc-id=R5-260001")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1685,13 +1685,13 @@ def test_search_query_tdoc_id_filter_forwarded(client: TestClient) -> None:
 
 
 def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
-    """``GET /search?q=foo&tdoc-id=`` is 200 and tdoc_id stays None."""
+    """``GET /tdocs/search?q=foo&tdoc-id=`` is 200 and tdoc_id stays None."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&tdoc-id=")
+        response = client.get("/tdocs/search?q=foo&tdoc-id=")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1700,13 +1700,13 @@ def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
 
 
 def test_search_query_sem_param_forwarded(client: TestClient) -> None:
-    """``GET /search?sem=<text>`` forwards sem_query into the service."""
+    """``GET /tdocs/search?sem=<text>`` forwards sem_query into the service."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&sem=hybrid+rerank")
+        response = client.get("/tdocs/search?q=foo&sem=hybrid+rerank")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1714,13 +1714,13 @@ def test_search_query_sem_param_forwarded(client: TestClient) -> None:
 
 
 def test_search_query_sem_empty_is_none(client: TestClient) -> None:
-    """``GET /search?sem=`` leaves sem_query None (no rerank)."""
+    """``GET /tdocs/search?sem=`` leaves sem_query None (no rerank)."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&sem=")
+        response = client.get("/tdocs/search?q=foo&sem=")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1728,13 +1728,13 @@ def test_search_query_sem_empty_is_none(client: TestClient) -> None:
 
 
 def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
-    """``GET /search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    """``GET /tdocs/search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
     from doc3gpp.web.deps import get_semantic_search_service
 
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
-        response = client.get("/search/sem?q=foo&tdoc-id=R5-260001")
+        response = client.get("/tdocs/search/sem?q=foo&tdoc-id=R5-260001")
     finally:
         client.app.dependency_overrides.pop(get_semantic_search_service, None)
     assert response.status_code == 200
@@ -1744,7 +1744,7 @@ def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
 
 
 def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&fts5_query=`` passes fts5_query=None.
+    """``GET /tdocs/search/sem?q=foo&fts5_query=`` passes fts5_query=None.
 
     Regression: the sem form always submits an ``fts5_query`` field, so
     a blank value arrived as ``""``. The service treats any non-``None``
@@ -1757,7 +1757,7 @@ def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
-        response = client.get("/search/sem?q=foo&fts5_query=")
+        response = client.get("/tdocs/search/sem?q=foo&fts5_query=")
     finally:
         client.app.dependency_overrides.pop(get_semantic_search_service, None)
     assert response.status_code == 200
@@ -1765,13 +1765,13 @@ def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
 
 
 def test_search_sem_whitespace_fts5_query_is_none(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&fts5_query=%20%20`` passes fts5_query=None."""
+    """``GET /tdocs/search/sem?q=foo&fts5_query=%20%20`` passes fts5_query=None."""
     from doc3gpp.web.deps import get_semantic_search_service
 
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
-        response = client.get("/search/sem?q=foo&fts5_query=%20%20")
+        response = client.get("/tdocs/search/sem?q=foo&fts5_query=%20%20")
     finally:
         client.app.dependency_overrides.pop(get_semantic_search_service, None)
     assert response.status_code == 200
@@ -1779,14 +1779,14 @@ def test_search_sem_whitespace_fts5_query_is_none(client: TestClient) -> None:
 
 
 def test_search_sem_full_filters_forwarded(client: TestClient) -> None:
-    """``GET /search/sem`` forwards tsg/meeting/release/spec/since/until."""
+    """``GET /tdocs/search/sem`` forwards tsg/meeting/release/spec/since/until."""
     from doc3gpp.web.deps import get_semantic_search_service
 
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
         response = client.get(
-            "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e"
+            "/tdocs/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e"
             "&release=18&spec=38.300"
             "&since=%3E%3D%20%272026-01-01%27"
             "&until=%3C%3D%20%272026-06-01%27"
@@ -1805,29 +1805,29 @@ def test_search_sem_full_filters_forwarded(client: TestClient) -> None:
 
 
 def test_search_sem_bad_date_filter_400(client: TestClient) -> None:
-    """``GET /search/sem?since=<bad>`` returns 400 invalid_filter."""
-    response = client.get("/search/sem?q=foo&since=not-a-date")
+    """``GET /tdocs/search/sem?since=<bad>`` returns 400 invalid_filter."""
+    response = client.get("/tdocs/search/sem?q=foo&since=not-a-date")
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_filter"
 
 
 def test_search_form_renders_tdoc_input_fts5(client: TestClient) -> None:
     """The FTS5 search form carries a tdoc-id input with the round-tripped value."""
-    html = client.get("/search?q=foo&tdoc-id=R5-260001").text
+    html = client.get("/tdocs/search?q=foo&tdoc-id=R5-260001").text
     assert 'name="tdoc-id"' in html
     assert 'value="R5-260001"' in html
 
 
 def test_search_form_renders_tdoc_input_sem(client: TestClient) -> None:
     """The semantic search form carries a tdoc-id input with the round-tripped value."""
-    html = client.get("/search/sem?q=foo&tdoc-id=R5-260001").text
+    html = client.get("/tdocs/search/sem?q=foo&tdoc-id=R5-260001").text
     assert 'name="tdoc-id"' in html
     assert 'value="R5-260001"' in html
 
 
 def test_search_form_fts5_has_semantic_input(client: TestClient) -> None:
     """The FTS5 form carries a Semantic input with the round-tripped value."""
-    html = client.get("/search?q=foo&sem=rerank+me").text
+    html = client.get("/tdocs/search?q=foo&sem=rerank+me").text
     assert 'name="sem"' in html
     assert 'value="rerank me"' in html
 
@@ -1835,7 +1835,7 @@ def test_search_form_fts5_has_semantic_input(client: TestClient) -> None:
 def test_search_form_sem_has_full_filters(client: TestClient) -> None:
     """The semantic form carries TSG/Meeting/Release/Spec/Since/Until inputs."""
     html = client.get(
-        "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e&release=18"
+        "/tdocs/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e&release=18"
         "&spec=38.300"
         "&since=%3E%3D%20%272026-01-01%27"
         "&until=%3C%3D%20%272026-06-01%27"
@@ -1850,23 +1850,39 @@ def test_search_form_sem_has_full_filters(client: TestClient) -> None:
 
 def test_search_form_sem_keeps_fts5_weight_and_limit(client: TestClient) -> None:
     """The semantic form keeps the FTS5 weight + Limit controls."""
-    html = client.get("/search/sem?q=foo").text
+    html = client.get("/tdocs/search/sem?q=foo").text
     assert 'name="fts5_weight"' in html
     assert 'name="limit"' in html
 
 
 def test_search_page_links_to_hybrid(client: TestClient) -> None:
-    """The FTS5 search page links to /search/sem at top right."""
-    html = client.get("/search?q=foo").text
-    assert 'href="/search/sem"' in html
+    """The FTS5 search page links to /tdocs/search/sem at top right."""
+    html = client.get("/tdocs/search?q=foo").text
+    assert 'href="/tdocs/search/sem"' in html
     assert "Hybrid search" in html
 
 
 def test_search_sem_page_links_to_fts5(client: TestClient) -> None:
-    """The semantic search page links to /search at top right."""
-    html = client.get("/search/sem?q=foo").text
-    assert 'href="/search"' in html
+    """The semantic search page links to /tdocs/search at top right."""
+    html = client.get("/tdocs/search/sem?q=foo").text
+    assert 'href="/tdocs/search"' in html
     assert "FTS5 search" in html
+
+
+def test_search_legacy_paths_are_absent(client: TestClient) -> None:
+    """The old search and rebuild paths are no longer registered."""
+    assert client.get("/search").status_code == 404
+    assert client.get("/search/sem").status_code == 404
+    assert client.post("/jobs/search/rebuild", json={}).status_code == 404
+
+
+def test_tdoc_search_route_wins_over_tdoc_detail(client: TestClient) -> None:
+    """The exact TDoc search route takes precedence over ``/tdocs/{tdoc_id}``."""
+    response = client.get("/tdocs/search?format=json")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert all("tdoc" not in hit for hit in body)
 
 
 # ---------------------------------------------------------------------------

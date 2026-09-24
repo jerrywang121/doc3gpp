@@ -269,13 +269,9 @@ to fetch them. The default preserves any previously-cached `pdf_url` /
 ### `spec doc` — specification document corpus
 
 ```bash
-# fetch only; defaults to the numerically newest stored version
-doc3gpp spec doc fetch --spec 38.331
-doc3gpp spec doc fetch --spec 38.523-1 --release Rel-18
-
 # fetch-if-missing, convert every .docx, chunk, and auto-index
 doc3gpp spec doc parse --spec 38.331 --spec 38.523-1
-doc3gpp spec doc parse --spec 38.331 --force       # immutable parsed rows: force is the override
+doc3gpp spec doc parse --spec 38.331 --force  # re-download and re-parse
 
 # inspect the stored TOC and search chunk text/metadata
 doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
@@ -287,9 +283,10 @@ doc3gpp spec doc schema --format json
 Spec-document rows live in a separate sibling database, normally
 `<main-stem>_specdata.db`, and are cached below `cache.dir/specs/`. Version
 selection is numeric rather than lexical; parsed `(spec_id, version)` rows
-are immutable and skip on later parses unless `--force` is supplied. The
-`parse` command reports `ok`, `skipped`, and `failed` buckets per requested
-spec. See [`docs/cli.md`](docs/cli.md) for all filters and defaults.
+are immutable and skip on later parses unless `--force` is supplied, which
+re-downloads and re-parses. The `parse` command fetches the ZIP when it is
+missing and reports `ok`, `skipped`, and `failed` buckets per requested spec.
+See [`docs/cli.md`](docs/cli.md) for all filters and defaults.
 
 ### `testcase` — RAN5 conformance testcases
 

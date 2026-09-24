@@ -20,7 +20,7 @@ Current scope:
 - RAN5 testcase status snapshots (History zip → workbook → `testcases` /
   `testcase_status` / `testcase_sources` rows; `testcase sync` / `list`
   / `show`).
-- Spec-document corpus (`spec doc fetch` / `parse` / `toc show` /
+- Spec-document corpus (`spec doc parse` / `toc show` /
   `search query` / `search sem`): version-zip download → `.docx` →
   blocks → ordered files → per-version TOC + chunk rows in the
   separate specdata sqlite file, searchable via FTS5 + hybrid vector
@@ -596,21 +596,21 @@ and syncs each through the `--tsg` path below.
    `{"spec": {...}, "versions": [{...}]}` so downstream consumers
    don't need to scan a flat list.
 
-### Spec-document corpus (fetch → parse → TOC → search)
+### Spec-document corpus (parse → TOC → search)
 
-1. `doc3gpp spec doc fetch --spec <id> [--release R] [--version V]
-   [--force]` calls `SpecDocService.fetch`. The version resolves via
+1. `doc3gpp spec doc parse --spec <id>... [--release R] [--version V]
+   [--force]` calls `SpecDocService.parse_many`. The version resolves via
    `resolve_spec_doc_version` — numeric sort on `SpecVersion.version`
    (segment-wise ints, non-numeric → 0), optional `release` / `version`
    pins, newest wins; a miss raises `SpecDocUnknownSpecError` (no
    `spec_versions` rows — run `spec sync --spec-id` first) or
-   `SpecDocUnknownVersionError`. Fetch-skip = zip-cache existence at
-   `{cache.dir}/specs/zips/<spec_id>/<version>.zip` (`--force`
-   re-downloads); the `spec_doc_sources` row is backfilled from the
-   cache when missing. The zip size is checked against
-   `[spec_doc] max_zip_size_kb` (default `0` = unlimited).
-2. `doc3gpp spec doc parse --spec <id>... [--release R] [--version V]
-   [--force]` calls `SpecDocService.parse_many`. Each spec short-circuits
+   `SpecDocUnknownVersionError`. `parse_many` calls `parse`, which fetches
+   the ZIP when absent via internal `fetch_spec_doc_zip` or uses the cache at
+   `{cache.dir}/specs/zips/<spec_id>/<version>.zip`, records the download,
+   and checks the zip size against `[spec_doc] max_zip_size_kb` (default `0`
+   = unlimited). `--force` makes the internal fetch re-download before
+   parsing, including when the source row already has `parsed_at`.
+   Each spec short-circuits
    into the `skipped` bucket when its `(spec_id, version)` source row
    already carries `parsed_at` (immutable ledger; `--force` re-parses);
    `parse` itself short-circuits the same way. `parse` =
@@ -628,10 +628,10 @@ and syncs each through the `--tsg` path below.
    `ok` / `skipped <reason>` / `failed <reason>` (stderr) bucket lines
    only — its `--format/--output/--compact` flags are accepted but
    ignored.
-3. `doc3gpp spec doc toc show --spec <id> --version <v>` calls
+2. `doc3gpp spec doc toc show --spec <id> --version <v>` calls
    `SpecDocService.get_toc` (stored rows only, no network; miss →
    `SpecDocUnknownVersionError` rendered as `BadParameter`).
-4. `doc3gpp spec doc search query "QUERY" [filters]` calls
+3. `doc3gpp spec doc search query "QUERY" [filters]` calls
    `SpecDocSearchService.search(query, filters)` → repo builds the
    `MATCH` internally via `SearchQueryBuilder` + pushes the rich
    filters down + ranks with `bm25(spec_doc_search, weights)` over
@@ -645,7 +645,7 @@ and syncs each through the `--tsg` path below.
    `spec doc search index` CLI today — auto-index on parse is the only
    writer path from the CLI (the search-corrupt hint names the index
    command aspirationally).
-5. `doc3gpp spec doc search sem QUERY [--fts5-query Q]
+4. `doc3gpp spec doc search sem QUERY [--fts5-query Q]
    [--fts5-weight 0.5] [filters]` calls
    `SpecDocSemanticService.search` → the positional `QUERY` is always
    embedded (vector path); the opt-in FTS5 side feeds `fts5_query`

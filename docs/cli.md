@@ -2452,50 +2452,15 @@ doc3gpp spec schema --format json
 
 ## spec doc Commands
 
-The `spec doc` sub-app (`spec doc fetch/parse/toc show/search query/search sem/schema`
+The `spec doc` sub-app (`spec doc parse/toc show/search query/search sem/schema`
 under `spec`) exposes the spec-document corpus: downloaded spec version zips parsed
 into chunk rows + a per-version TOC, searchable via FTS5 or hybrid vector search.
 Each parsed pair is one `(spec_id, version)` row in the specdata sqlite file
 (`specdata_database_url`, default sibling `<main-stem>_specdata.db`).
 
-Versions resolve at runtime — `fetch`/`parse` pick the numeric-newest stored
+Versions resolve at runtime — `parse` picks the numeric-newest stored
 `SpecVersion.version` (no pins) unless `--release`/`--version` pins one. Run
 `doc3gpp spec sync --spec-id <id>` first so the `spec_versions` rows exist.
-
-### doc3gpp spec doc fetch
-
-Purpose:
-
-- Download a spec version zip into the cache (`{cache.dir}/specs/zips/<spec_id>/<version>.zip`)
-  and record it in `spec_doc_sources` (`record_download`).
-
-Options:
-
-- --spec: dotted spec id (e.g. `38.331`). Required.
-- --release: release marker, e.g. `Rel-18`. Optional pin.
-- --version: exact version, e.g. `18.5.0`. Optional pin.
-- --force, -f: re-download even when the zip cache exists. Default `false`.
-
-Behavior:
-
-- Resolves the version via `resolve_spec_doc_version` (numeric sort on
-  `SpecVersion.version`); unknown spec/version raises `BadParameter`.
-- Fetch-skip = zip-cache existence (no network when the cached zip is present);
-  the source row is backfilled from the cache when missing. A purged cache
-  re-downloads — that is correct, not a skip violation.
-- Oversize zips (`[spec_doc] max_zip_size_kb`, default `0` = unlimited) raise
-  `SpecDocTooLargeError`.
-- Prints `fetched <spec_id>@<version> (<docx_count> docx)`.
-
-Examples:
-
-```bash
-# Newest version of 38.331 into the cache.
-doc3gpp spec doc fetch --spec 38.331
-
-# Pin one version, bypassing the cache.
-doc3gpp spec doc fetch --spec 38.331 --version 18.5.0 --force
-```
 
 ### doc3gpp spec doc parse
 
@@ -2509,13 +2474,18 @@ Options:
 - --spec: spec id to parse; repeat per spec (at least one required).
 - --release: release marker, e.g. `Rel-18`. Optional pin.
 - --version: exact version, e.g. `18.5.0`. Optional pin.
-- --force, -f: re-parse already-parsed pairs. Default `false`.
+- --force, -f: re-download and re-parse the resolved version, including
+  already-parsed pairs. Default `false`.
 - --format: accepted but currently ignored (output is always the bucket lines).
 - --output, -o: accepted but currently ignored.
 - --compact: accepted but currently ignored.
 
 Behavior:
 
+- Resolves the version via `resolve_spec_doc_version`; parse fetches the ZIP when
+  it is missing and records `spec_doc_sources.downloaded_at` before conversion.
+- `--force` re-downloads the resolved ZIP and then re-parses it, including when
+  the `(spec_id, version)` pair already has `parsed_at`.
 - Per spec: immutable-skip when the `(spec_id, version)` source row already
   carries `parsed_at` (unless `--force`); oversized zips land in the `skipped`
   bucket; unknown spec/version, empty (no-`.docx`) zips, and every other error

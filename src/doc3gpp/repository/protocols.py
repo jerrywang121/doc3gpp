@@ -461,7 +461,8 @@ class SpecDocRepository(Protocol):
         *,
         version: str | None = None,
         release: str | None = None,
-        section: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[SpecDocChunk]: ...
@@ -1166,5 +1167,4 @@ class SpecDocVectorRepository(Protocol):
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec_spec_doc_embeddings`` at ``dim``."""
         ...
-
 

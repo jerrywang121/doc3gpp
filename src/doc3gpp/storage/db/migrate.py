@@ -372,9 +372,9 @@ def _create_specdata_search_schema() -> None:
     """Create the specdata FTS5 virtual table + meta sidecar.
 
     Mirrors :func:`_create_search_schema` but targets the specdata
-    engine with the 6-column ``spec_doc_search`` table from the
-    spec-doc design (``chunk_id UNINDEXED, text, section_title,
-    table_title, spec_id, version, release``). Gated on FTS5
+    engine with the six-indexed-column ``spec_doc_search`` table from the
+    spec-doc design (``chunk_id UNINDEXED, text, sections, tables,
+    spec_id, version, release``). Gated on FTS5
     availability; idempotent via ``IF NOT EXISTS``.
     """
     engine = get_specdata_engine()
@@ -392,8 +392,8 @@ def _create_specdata_search_schema() -> None:
                 CREATE VIRTUAL TABLE IF NOT EXISTS spec_doc_search USING fts5(
                     chunk_id UNINDEXED,
                     text,
-                    section_title,
-                    table_title,
+                    sections,
+                    tables,
                     spec_id,
                     version,
                     release

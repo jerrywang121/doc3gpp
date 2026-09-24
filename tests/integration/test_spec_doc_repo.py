@@ -50,6 +50,47 @@ def test_roundtrip(sqlite_env):
     assert src4.docx_count == 1
 
 
+def test_spec_doc_chunk_schema_has_only_combined_metadata(sqlite_env):
+    from sqlalchemy import inspect
+
+    from doc3gpp.storage.db.session import get_specdata_engine
+
+    create_schema("specdata")
+    columns = {
+        column["name"]
+        for column in inspect(get_specdata_engine()).get_columns("spec_doc_chunks")
+    }
+    assert {"sections", "tables"}.issubset(columns)
+    assert not {"section_no", "section_title", "table_no", "table_title"} & columns
+
+
+def test_replace_and_list_chunks_round_trip_metadata(sqlite_env):
+    create_schema("specdata")
+    repo = SQLAlchemySpecDocRepository()
+    repo.replace_chunks(
+        "38.331",
+        "19.0.0",
+        release="Rel-19",
+        drafts=[
+            ChunkDraft(
+                0,
+                "part.docx",
+                "5 Scope\n6 Details",
+                "Table 1 Values",
+                "body",
+            )
+        ],
+    )
+    rows = repo.list_chunks(
+        "38.331",
+        version="19.0.0",
+        sections="%Details%",
+        tables="%Values%",
+    )
+    assert rows[0].sections == "5 Scope\n6 Details"
+    assert rows[0].tables == "Table 1 Values"
+
+
 def test_replace_chunks_without_source_keeps_unparsed_source_row(sqlite_env):
     create_schema("all")
     repo = SQLAlchemySpecDocRepository()

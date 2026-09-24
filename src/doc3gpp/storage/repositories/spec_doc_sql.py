@@ -5,14 +5,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
-from doc3gpp.cli_filters import (
-    is_not_null_token,
-    is_null_token,
-    split_not_like_prefix,
-)
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
     SpecDocChunk,
@@ -28,6 +23,7 @@ from doc3gpp.storage.db.models import (
     SpecDocTocORM,
 )
 from doc3gpp.storage.db.session import get_specdata_session_factory
+from doc3gpp.storage.repositories.rich_filters import apply_text_filter
 
 
 class SQLAlchemySpecDocRepository:
@@ -188,10 +184,8 @@ class SQLAlchemySpecDocRepository:
                         file_order=draft.file_order,
                         source_file=draft.source_file,
                         chunk_index=index,
-                        section_no=draft.section_no,
-                        section_title=draft.section_title,
-                        table_no=draft.table_no,
-                        table_title=draft.table_title,
+                        sections=draft.sections,
+                        tables=draft.tables,
                         text=draft.text,
                     )
                 )
@@ -217,10 +211,8 @@ class SQLAlchemySpecDocRepository:
             SpecDocChunk(
                 file_order=draft.file_order,
                 source_file=draft.source_file,
-                section_no=draft.section_no,
-                section_title=draft.section_title,
-                table_no=draft.table_no,
-                table_title=draft.table_title,
+                sections=draft.sections,
+                tables=draft.tables,
                 text=draft.text,
                 chunk_id=f"{spec_id}@{version}#{index}",
                 spec_id=spec_id,
@@ -237,7 +229,8 @@ class SQLAlchemySpecDocRepository:
         *,
         version: str | None = None,
         release: str | None = None,
-        section: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[SpecDocChunk]:
@@ -249,8 +242,8 @@ class SQLAlchemySpecDocRepository:
                 stmt = stmt.where(SpecDocChunkORM.version == version)
             if release is not None:
                 stmt = stmt.where(SpecDocChunkORM.release == release)
-            if section is not None:
-                stmt = _apply_section_filter(stmt, section)
+            stmt = apply_text_filter(stmt, SpecDocChunkORM.sections, sections)
+            stmt = apply_text_filter(stmt, SpecDocChunkORM.tables, tables)
             stmt = (
                 stmt.order_by(SpecDocChunkORM.version, SpecDocChunkORM.chunk_index)
                 .offset(offset)
@@ -258,25 +251,6 @@ class SQLAlchemySpecDocRepository:
             )
             rows = session.scalars(stmt).all()
         return [_orm_to_chunk(r) for r in rows]
-
-
-def _apply_section_filter(stmt, value: str):
-    """Filter ``stmt`` by the rich grammar against section no/title as a group.
-
-    Mirrors :func:`build_text_filter_or_params` semantics: a plain pattern
-    matches when *either* column matches (``OR``); a negated ``!`` pattern
-    keeps the row only when *neither* column matches. ``null`` /
-    ``not-null`` match when either column is (not) null.
-    """
-    title = SpecDocChunkORM.section_title
-    number = SpecDocChunkORM.section_no
-    if is_null_token(value):
-        return stmt.where(or_(title.is_(None), number.is_(None)))
-    if is_not_null_token(value):
-        return stmt.where(or_(title.is_not(None), number.is_not(None)))
-    negated, pattern = split_not_like_prefix(value)
-    clause = or_(title.like(pattern), number.like(pattern))
-    return stmt.where(~clause) if negated else stmt.where(clause)
 
 
 def _orm_to_source(row: SpecDocSourceORM) -> SpecDocSource:
@@ -334,10 +308,8 @@ def _orm_to_chunk(row: SpecDocChunkORM) -> SpecDocChunk:
     return SpecDocChunk(
         file_order=row.file_order,
         source_file=row.source_file,
-        section_no=row.section_no,
-        section_title=row.section_title,
-        table_no=row.table_no,
-        table_title=row.table_title,
+        sections=row.sections,
+        tables=row.tables,
         text=row.text,
         chunk_id=row.chunk_id,
         spec_id=row.spec_id,

@@ -23,8 +23,8 @@ def _seed(repo):
             ChunkDraft(
                 file_order=0,
                 source_file="a.docx",
-                section_no="5.1",
-                section_title="Handover",
+                sections="5.1 Handover",
+                tables="Table 1 Values",
                 text="handover procedure signalling",
             )
         ],
@@ -49,13 +49,13 @@ def test_stopwords_only_raises(sqlite_env):
         fts.search("the and of", SpecDocSearchFilters())
 
 
-def test_section_filter_hits_combined_column(sqlite_env):
+def test_sections_filter_hits_combined_column(sqlite_env):
     create_schema("all")
     repo = SQLAlchemySpecDocRepository()
     _seed(repo)
     fts = SQLAlchemySpecDocSearchRepository()
     fts.upsert_for_version("38.331", "18.5.0")
-    hits = fts.search("handover", SpecDocSearchFilters(section="%5.1%"))
+    hits = fts.search("handover", SpecDocSearchFilters(sections="%5.1%"))
     assert len(hits) == 1 and hits[0].chunk_id == "38.331@18.5.0#0"
 
 

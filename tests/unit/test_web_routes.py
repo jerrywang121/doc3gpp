@@ -29,6 +29,7 @@ from doc3gpp.models.spec_doc import (
     SpecDocSource,
     SpecDocToc,
     SpecDocTocEntry,
+    SpecDocTocFile,
     SpecDocUnknownVersionError,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
@@ -2745,6 +2746,13 @@ def _spec_doc_toc() -> SpecDocToc:
                 file_order=0,
             )
         ],
+        files=[
+            SpecDocTocFile(
+                source_file="36.579-5.docx",
+                file_order=0,
+                first_section="1",
+            )
+        ],
         docx_count=1,
     )
 
@@ -2791,6 +2799,8 @@ def test_spec_doc_show_unparsed_state(client: TestClient) -> None:
     assert "18.0.0" in response.text
     assert "Parse document" in response.text
     assert "Scope" not in response.text
+    assert "Force re-parse" not in response.text
+    assert 'data-source-parsed="false"' in response.text
     assert not any(call[0] in {"toc", "chunks"} for call in service.calls)
 
 
@@ -2812,6 +2822,10 @@ def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
     assert "Scope" in response.text
     assert "Chunk text 0" in response.text
     assert "36.579-5.docx" in response.text
+    assert "Source files" in response.text
+    assert "first section 1" in response.text
+    assert "Force re-parse" in response.text
+    assert 'data-source-parsed="true"' in response.text
     assert "18.0.0" in response.text
     assert "2 chunk" in response.text
     assert any(call[0] == "toc" for call in service.calls)
@@ -2844,6 +2858,23 @@ def test_spec_doc_show_pagination_forwards_filters_and_uses_probe(
     assert service.calls[-1] == (
         "chunks", "36.579-5", "18.0.0", None, "%5.1%", 3, 2
     )
+
+
+def test_spec_doc_show_zero_chunk_source_has_incomplete_message(
+    client: TestClient,
+) -> None:
+    source = _spec_doc_source(parsed=True)
+    source.chunk_count = 0
+    service = FakeSpecDocService(source=source, toc=_spec_doc_toc())
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Parsed source contains zero chunks" in response.text
+    assert "No document chunks match these filters" not in response.text
 
 
 def test_spec_doc_show_htmx_returns_results_fragment(client: TestClient) -> None:
@@ -2915,7 +2946,8 @@ def test_spec_doc_show_renders_parse_form(client: TestClient) -> None:
     assert 'action="/jobs/parse/spec-docs"' in response.text
     assert 'data-spec-id="36.579-5"' in response.text
     assert 'data-version="18.0.0"' in response.text
-    assert 'name="force"' in response.text
+    assert 'data-source-parsed="false"' in response.text
+    assert 'name="force"' not in response.text
     assert 'id="spec-doc-parse-job-target"' in response.text
     assert 'src="/static/js/job_poller.js"' in response.text
     assert 'src="/static/js/spec_doc_parse.js"' in response.text
@@ -3505,6 +3537,7 @@ def test_spec_doc_parse_js_posts_version_scoped_json() -> None:
     assert '"spec_ids"' in body
     assert '"version"' in body
     assert '"force"' in body
+    assert "sourceParsed &&" in body
     assert "spec-doc-parse-form" in body
 
 

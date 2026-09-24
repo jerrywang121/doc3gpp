@@ -4,7 +4,9 @@
     {% if source %}<span class="meta">{{ source.chunk_count }} chunk{{ '' if source.chunk_count == 1 else 's' }} total</span>{% endif %}
   </div>
 
-  {% if display_chunks %}
+  {% if source and source.chunk_count == 0 %}
+    <p class="empty">Parsed source contains zero chunks; the parse may be incomplete or corrupt.</p>
+  {% elif display_chunks %}
     {% for chunk in display_chunks %}
       <article class="card spec-doc-chunk" id="chunk-{{ chunk.chunk_index }}">
         <div class="spec-doc-chunk-header">

@@ -54,6 +54,17 @@
         {% else %}
           <p class="empty">No table-of-contents entries stored.</p>
         {% endif %}
+        {% if toc.files %}
+          <h3>Source files</h3>
+          <ul>
+            {% for file in toc.files %}
+              <li>
+                <code>{{ file.source_file }}</code>
+                (order {{ file.file_order }}{% if file.first_section %}, first section {{ file.first_section }}{% endif %})
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
       </section>
     {% else %}
       <section class="card placeholder">

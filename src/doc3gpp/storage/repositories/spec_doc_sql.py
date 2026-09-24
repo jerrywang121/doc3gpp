@@ -163,7 +163,6 @@ class SQLAlchemySpecDocRepository:
         release: str | None,
         drafts: list[ChunkDraft],
     ) -> list[SpecDocChunk]:
-        now = datetime.now(timezone.utc)
         with self._session_factory() as session:
             session.execute(
                 delete(SpecDocChunkORM).where(
@@ -192,8 +191,6 @@ class SQLAlchemySpecDocRepository:
             if existing is not None:
                 if release is not None:
                     existing.release = release
-                existing.parsed_at = now
-                existing.chunk_count = len(drafts)
             else:
                 session.add(
                     SpecDocSourceORM(
@@ -202,8 +199,8 @@ class SQLAlchemySpecDocRepository:
                         release=release,
                         ftp_url="",
                         downloaded_at=None,
-                        parsed_at=now,
-                        chunk_count=len(drafts),
+                        parsed_at=None,
+                        chunk_count=0,
                         docx_count=0,
                     )
                 )

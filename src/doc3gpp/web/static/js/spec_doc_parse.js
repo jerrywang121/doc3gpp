@@ -6,6 +6,7 @@
     if (!form || !window.bindJobPolling) return;
     var specId = form.getAttribute("data-spec-id");
     var version = form.getAttribute("data-version");
+    var sourceParsed = form.getAttribute("data-source-parsed") === "true";
     var queued = form.querySelector(".spec-doc-parse-queued");
     if (queued) queued.dataset.label = queued.textContent;
     window.bindJobPolling(form, {
@@ -17,7 +18,7 @@
         return JSON.stringify({
           "spec_ids": [specId],
           "version": version,
-          "force": !!forceEl && forceEl.checked,
+          "force": sourceParsed && !!forceEl && forceEl.checked,
         });
       },
     });

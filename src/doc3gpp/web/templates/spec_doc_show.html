@@ -33,10 +33,13 @@
     action="/jobs/parse/spec-docs"
     data-spec-id="{{ spec.spec_id }}"
     data-version="{{ version_row.version }}"
+    data-source-parsed="{{ 'true' if source and source.parsed_at else 'false' }}"
   >
-    <label class="inline-check">
-      <input type="checkbox" name="force"> Force re-parse
-    </label>
+    {% if source and source.parsed_at %}
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force re-parse
+      </label>
+    {% endif %}
     <button type="submit" class="btn primary">Parse document</button>
     <span class="spec-doc-parse-queued" style="display:none">Parse job queued</span>
   </form>

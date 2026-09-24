@@ -256,8 +256,9 @@ The version page's source card exposes three states: a version with no
 specdata source row has not been downloaded or parsed; a downloaded source is
 waiting for parsing; and a parsed source shows its parse timestamp, DOCX and
 chunk counts. The only document action is `Parse document` (or `Force
-re-parse`). It enqueues the existing `POST /jobs/parse/spec-docs` job with
-`spec_ids`, the selected `version`, optional `release`, and `force`, then
+re-parse`, available only for a parsed source. It enqueues the existing
+`POST /jobs/parse/spec-docs` job with `spec_ids`, the selected exact `version`,
+and `force`, then
 polls the normal job status. The parser downloads a missing ZIP internally;
 there is intentionally no standalone spec-document fetch route or fetch
 control.

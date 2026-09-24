@@ -36,4 +36,24 @@ def test_roundtrip(sqlite_env):
     chunks = repo.list_chunks("38.331", version="18.5.0")
     assert len(chunks) == 1 and chunks[0].chunk_id == "38.331@18.5.0#0"
     src2 = repo.get_source("38.331", "18.5.0")
-    assert src2.chunk_count == 1 and src2.parsed_at is not None
+    assert src2.chunk_count == 0 and src2.parsed_at is None
+    repo.record_parsed("38.331", "18.5.0", chunk_count=len(chunks))
+    src3 = repo.get_source("38.331", "18.5.0")
+    assert src3.chunk_count == 1 and src3.parsed_at is not None
+
+
+def test_replace_chunks_without_source_keeps_unparsed_source_row(sqlite_env):
+    create_schema("all")
+    repo = SQLAlchemySpecDocRepository()
+
+    repo.replace_chunks(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=[ChunkDraft(file_order=0, source_file="a.docx", text="hello")],
+    )
+
+    source = repo.get_source("38.331", "18.5.0")
+    assert source is not None
+    assert source.parsed_at is None
+    assert source.chunk_count == 0

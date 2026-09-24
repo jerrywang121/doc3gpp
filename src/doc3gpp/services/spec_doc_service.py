@@ -85,8 +85,8 @@ class SpecDocService:
         embedder: Remote embedder, used only for the vector-repo fallback.
         settings: Defaults to :func:`get_settings` (respects env + TOML).
         fetcher: ``url -> zip bytes``; defaults to :func:`fetch_spec_doc_zip`.
-        cache_dir: Cache root holding ``specs/zips`` + ``specs/markdown``;
-            defaults to ``settings.cache.dir``.
+        cache_dir: Spec-document cache root holding ``zips`` + ``markdown``;
+            defaults to ``settings.spec_doc.cache_dir``.
         search/semantic: Aliases for ``search_service``/``semantic_service``.
     """
 
@@ -113,25 +113,24 @@ class SpecDocService:
         self._semantic = semantic_service if semantic_service is not None else semantic
         self._embedder = embedder
         self._fetcher = fetcher if fetcher is not None else (lambda url: fetch_spec_doc_zip(url))
-        root = cache_dir if cache_dir is not None else self._settings.cache.dir
+        root = cache_dir if cache_dir is not None else self._settings.spec_doc.cache_dir
         self._cache_dir = Path(root)
 
     # ------------------------------------------------------------------
-    # Cache layout: {cache_dir}/specs/zips/<spec_id>/<version>.zip and
-    # {cache_dir}/specs/markdown/<spec_id>/<version>/<file_order>-<stem>.md
+    # Cache layout: {cache_dir}/zips/<spec_id>/<version>.zip and
+    # {cache_dir}/markdown/<spec_id>/<version>/<file_order>-<stem>.md
     # ------------------------------------------------------------------
 
     def _zip_path(self, spec_id: str, version: str) -> Path:
         return (
             self._cache_dir
-            / "specs"
             / "zips"
             / _safe_part(spec_id)
             / f"{_safe_part(version)}.zip"
         )
 
     def _markdown_dir(self, spec_id: str, version: str) -> Path:
-        return self._cache_dir / "specs" / "markdown" / _safe_part(spec_id) / _safe_part(version)
+        return self._cache_dir / "markdown" / _safe_part(spec_id) / _safe_part(version)
 
     def _zip_cache_exists(self, spec_id: str, version: str) -> bool:
         return self._zip_path(spec_id, version).is_file()
@@ -192,7 +191,7 @@ class SpecDocService:
             upsert_fn = getattr(self._semantic, "upsert_for_version", None)
             if callable(upsert_fn) and self._embedder is not None:
                 texts = [
-                    f"{d.section_no or ''} {d.section_title or ''}\n{d.text}".strip()
+                    "\n".join(part for part in (d.sections, d.tables, d.text) if part)
                     for d in drafts
                 ]
                 embeddings = self._embedder.encode(texts)
@@ -362,7 +361,8 @@ class SpecDocService:
         *,
         version: str,
         release: str | None = None,
-        section: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[SpecDocChunk]:
@@ -370,7 +370,8 @@ class SpecDocService:
             spec_id,
             version=version,
             release=release,
-            section=section,
+            sections=sections,
+            tables=tables,
             limit=limit,
             offset=offset,
         )

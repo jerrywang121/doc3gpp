@@ -74,8 +74,8 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "get_spec",
         "list_testcases",
         "get_testcase",
-        "search_tdocs",
-        "semantic_search_tdocs",
+        "search_tdoc",
+        "semantic_search_tdoc",
         "sync_meetings",
         "sync_tdocs",
         "sync_tdocs_by_meeting",
@@ -84,13 +84,16 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "sync_testcases",
         "parse_tdocs",
         "parse_tdoc_url",
-        "rebuild_search_index",
+        "rebuild_tdoc_search_index",
         "purge_cache",
         "get_job",
         "cancel_job",
         "list_jobs",
     }
     assert expected <= names
+    assert "search_tdocs" not in names
+    assert "semantic_search_tdocs" not in names
+    assert "rebuild_search_index" not in names
 
 
 def test_call_list_meetings_empty(sqlite_env) -> None:
@@ -162,6 +165,34 @@ def test_job_tools_enqueue_and_poll(sqlite_env) -> None:
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_meetings"
     assert detail_payload["params"] == {"tsg": "SA2"}
+    del state.engine
+
+
+def test_rebuild_tdoc_search_index_enqueues(sqlite_env) -> None:
+    """The TDoc search-index MCP tool preserves its job payload and kind."""
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool(
+            "rebuild_tdoc_search_index",
+            {"stale_only": True, "resume": True},
+        )
+        envelope = json.loads(created.content[0].text)
+        detail = await server.call_tool(
+            "get_job", {"job_id": envelope["job_id"]}
+        )
+        return envelope, detail
+
+    envelope, detail = asyncio.run(run())
+    assert envelope["status"] == "queued"
+    assert envelope["message"] == "queued rebuild_tdoc_search_index"
+    assert detail.is_error is False
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["kind"] == "rebuild_search"
+    assert detail_payload["params"] == {"stale_only": True, "resume": True}
     del state.engine
 
 
@@ -700,7 +731,7 @@ def _state_and_search_server(search_corpus):
     return state, server
 
 
-def test_search_tdocs_normalises_jargon_queries(search_corpus) -> None:
+def test_search_tdoc_normalises_jargon_queries(search_corpus) -> None:
     """``nb-iot`` in an operator query must not crash FTS5.
 
     Regression for the ``no such column: iot`` error that previously
@@ -716,7 +747,7 @@ def test_search_tdocs_normalises_jargon_queries(search_corpus) -> None:
 
     async def run():
         return await server.call_tool(
-            "search_tdocs", {"query": "nb-iot AND scheduling", "limit": 20}
+            "search_tdoc", {"query": "nb-iot AND scheduling", "limit": 20}
         )
 
     result = asyncio.run(run())
@@ -728,7 +759,7 @@ def test_search_tdocs_normalises_jargon_queries(search_corpus) -> None:
     del state.engine
 
 
-def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> None:
+def test_search_tdoc_stopwords_only_raises_invalid_params(search_corpus) -> None:
     """A stopwords-only query is a client error (invalid params), not a 500."""
     import asyncio
 
@@ -740,7 +771,7 @@ def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> Non
     state, server = _state_and_search_server(search_corpus)
 
     async def run():
-        return await server.call_tool("search_tdocs", {"query": "the"})
+        return await server.call_tool("search_tdoc", {"query": "the"})
 
     with pytest.raises(MCPError) as exc_info:
         asyncio.run(run())
@@ -749,8 +780,8 @@ def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> Non
     del state.engine
 
 
-def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
-    """search_tdocs forwards sem_query to the search service."""
+def test_search_tdoc_accepts_sem_query(sqlite_env, search_corpus) -> None:
+    """search_tdoc forwards sem_query to the search service."""
     import asyncio
 
     import numpy as np
@@ -807,7 +838,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
 
     async def run():
         return await server.call_tool(
-            "search_tdocs",
+            "search_tdoc",
             {"query": "scheduling", "limit": 5, "sem_query": "scheduling"},
         )
 

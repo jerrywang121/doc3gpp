@@ -687,9 +687,9 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(schema_payload("spec_doc"))
 
     # ---- Search ---------------------------------------------------
-    @server.tool(name="search_tdocs", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="search_tdoc", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
-    def search_tdocs(
+    def search_tdoc(
         query: Annotated[str, Field(description='Full-text query with FTS5 MATCH expression over tdoc text, phrases shall be wrapped with double quotes, support AND, OR and NOT (e.g. \'handover AND beamforming NOT "CSI report"\').')],
         tsg: Annotated[str | None, Field(description="Exact TSG short name filter (e.g. 'R5').")] = None,
         meeting: Annotated[str | None, Field(description="Rich filter on the meeting name or title")] = None,
@@ -708,9 +708,9 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         hits = services.search.search(query, filters, sem_query=sem_query)
         return _to_json([_fts5_hit_to_json(h) for h in hits])
 
-    @server.tool(name="semantic_search_tdocs", description="Semantic (embedding) search over tdoc text with natural-language query, optionally blended with an FTS5 query via reciprocal-rank fusion (RRF). Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="semantic_search_tdoc", description="Semantic (embedding) search over tdoc text with natural-language query, optionally blended with an FTS5 query via reciprocal-rank fusion (RRF). Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
-    def semantic_search_tdocs(
+    def semantic_search_tdoc(
         query: Annotated[str, Field(description="Natural-language semantic query over tdoc text (e.g. 'handover signalling procedures').")],
         fts5_query: Annotated[str | None, Field(description="Optional FTS5 MATCH expression, support AND, OR and NOT (e.g. 'handover AND beamforming NOT \"CSI report\"'). When omitted, only embedding-KNN runs (no RRF). When supplied, results are merged with the vector ranking via RRF.")] = None,
         tsg: Annotated[str | None, Field(description="Exact TSG short name filter (e.g. 'R5').")] = None,
@@ -892,13 +892,13 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             f"queued parse_spec_docs for {len(spec_ids)} spec(s)",
         )
 
-    @server.tool(name="rebuild_search_index", description="Enqueue an FTS5 search-index rebuild.")
+    @server.tool(name="rebuild_tdoc_search_index", description="Enqueue an FTS5 search-index rebuild.")
     @_mcp_error_guard
-    def rebuild_search_index(
+    def rebuild_tdoc_search_index(
         stale_only: Annotated[bool, Field(description="Only re-index tdocs uploaded since the last index.")] = False,
         resume: Annotated[bool, Field(description="Resume from the last indexed tdoc instead of starting fresh.")] = False,
     ) -> str:
-        return _enqueue(state, JobKind.REBUILD_SEARCH, {"stale_only": stale_only, "resume": resume}, "queued rebuild_search_index")
+        return _enqueue(state, JobKind.REBUILD_SEARCH, {"stale_only": stale_only, "resume": resume}, "queued rebuild_tdoc_search_index")
 
     @server.tool(name="purge_cache", description="Enqueue a cache purge (scope: markdown, zips or all).")
     @_mcp_error_guard

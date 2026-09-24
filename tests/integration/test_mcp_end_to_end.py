@@ -853,6 +853,147 @@ def test_search_tdoc_accepts_sem_query(sqlite_env, search_corpus) -> None:
     del state.testcase_engine
 
 
+def test_semantic_search_tdoc_forwards_args_and_preserves_contract(sqlite_env) -> None:
+    """The renamed MCP semantic tool preserves forwarding, output, and errors."""
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.models.search import SearchFilters, SearchHit
+    from doc3gpp.models.semantic_search import SemanticSearchHit
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    class RecordingSemanticSearchService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def search(
+            self,
+            query: str,
+            *,
+            fts5_query: str | None,
+            filters: SearchFilters,
+            limit: int,
+            fts5_weight: float,
+        ) -> list[SemanticSearchHit]:
+            self.calls.append(
+                {
+                    "query": query,
+                    "fts5_query": fts5_query,
+                    "filters": filters,
+                    "limit": limit,
+                    "fts5_weight": fts5_weight,
+                }
+            )
+            return [
+                SemanticSearchHit(
+                    tdoc_id="R5-260001",
+                    rrf_score=0.42,
+                    hit=SearchHit(
+                        tdoc_id="R5-260001",
+                        score=-1.2,
+                        previews={},
+                        title="Handover signalling",
+                        meeting="RAN5#108",
+                        tsg="R5",
+                        uploaded_date="2026-01-02",
+                        ftp_url="r5/26.001/r5-260001.zip",
+                        wis="FS_HANDOVER",
+                    ),
+                    rank_fts5=1,
+                    rank_vec=0,
+                    min_chunk_distance=0.125,
+                    best_chunk_id="R5-260001#0",
+                ),
+            ]
+
+    state, server = _state_and_server()
+    fake = RecordingSemanticSearchService()
+    state.services.semantic_search = fake
+
+    async def run():
+        return await server.call_tool(
+            "semantic_search_tdoc",
+            {
+                "query": "handover signalling",
+                "fts5_query": '"handover" AND signalling',
+                "tsg": "R5",
+                "meeting": "%RAN%",
+                "meeting_id": 108,
+                "tdoc_id": "R5-260001",
+                "release": "Rel-18",
+                "spec": "38.300",
+                "since": "2026-01-01",
+                "until": "2026-12-31",
+                "limit": 7,
+                "fts5_weight": 0.75,
+            },
+        )
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    assert fake.calls == [
+        {
+            "query": "handover signalling",
+            "fts5_query": '"handover" AND signalling',
+            "filters": SearchFilters(
+                tsg="R5",
+                meeting="%RAN%",
+                meeting_id=108,
+                tdoc_id="R5-260001",
+                release="Rel-18",
+                spec="38.300",
+                since="2026-01-01",
+                until="2026-12-31",
+                limit=7,
+            ),
+            "limit": 7,
+            "fts5_weight": 0.75,
+        },
+    ]
+    assert json.loads(result.content[0].text) == [
+        {
+            "tdoc_id": "R5-260001",
+            "rrf_score": 0.42,
+            "rank_fts5": 1,
+            "rank_vec": 0,
+            "min_chunk_distance": 0.125,
+            "best_chunk_id": "R5-260001#0",
+            "hit": {
+                "tdoc_id": "R5-260001",
+                "title": "Handover signalling",
+                "ftp_url": "r5/26.001/r5-260001.zip",
+                "wis": "FS_HANDOVER",
+            },
+        },
+    ]
+
+    async def run_invalid_weight():
+        return await server.call_tool(
+            "semantic_search_tdoc",
+            {"query": "handover", "fts5_weight": 1.1},
+        )
+
+    with pytest.raises(MCPError) as invalid_exc:
+        asyncio.run(run_invalid_weight())
+    assert invalid_exc.value.code == MCP_CODE_INVALID_PARAMS
+    assert invalid_exc.value.data["error"] == "invalid_filter"
+
+    async def run_removed_name():
+        return await server.call_tool(
+            "semantic_search_tdocs", {"query": "handover"}
+        )
+
+    with pytest.raises(ToolError, match="Unknown tool: semantic_search_tdocs") as old_exc:
+        asyncio.run(run_removed_name())
+    assert str(old_exc.value) == "Unknown tool: semantic_search_tdocs"
+
+    get_engine.cache_clear()
+    del state.engine
+
+
 def test_web_errors_maps_spec_unknown_on_upstream() -> None:
     """``map_domain_error`` / ``map_mcp_error`` cover ``SpecUnknownOnUpstreamError``."""
     resp_unknown = map_domain_error(

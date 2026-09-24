@@ -189,7 +189,10 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
 | GET | `/wis` | List WIs. |
 | GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
-| GET | `/testcases/{testcase_id}` | Testcase detail (HTML or JSON; optional `?group=` to scope to one `(id, group)` row — unknown group → 400 `invalid_filter`). Without `?group=` every stored group returns: JSON is an array of flat per-`(id, group)` objects with nested `statuses` (single-element when one group matches; status rows carry `{path, gcf_ptcrb, ttcn_status}` with no `group`); HTML renders one section per group. Unknown id → 404 `testcase_not_found`. |
+| GET | `/specs/{spec_id}/docs/toc` | Spec-doc TOC for one `(spec_id, version)` pair (`?version=` required, `?release=` informational; `?format=json` is the `doc3gpp spec doc toc show --format json` envelope verbatim: `{spec_id, version, release, docx_count, entries, files}`; full page `spec_doc_toc.html`, HTMX fragment `partials/spec_doc_toc_results.html`). Miss → 404. |
+| GET | `/spec-docs/search` | Spec-doc FTS5 search (`?q=`, filters `spec,release,version,section,limit,offset`; `?format=json` is the `doc3gpp spec doc search query --format json` hit array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Corrupt index → 500 with a rebuild hint. |
+| GET | `/spec-docs/search/sem` | Spec-doc hybrid search (`?q=`, `?fts5_query=` blank → `None` = pure vector, `?fts5_weight=` 0.0..1.0; `?format=json` is the `doc3gpp spec doc search sem --format json` semantic-hit array verbatim; same templates as `/spec-docs/search`). |
+| GET | `/spec-docs/schema` | Spec-doc field descriptors across the three spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
 | GET | `/search` | FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
@@ -202,6 +205,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/search/rebuild` | Enqueue `rebuild_search`. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
 | POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single 3GPP FTP URL or folder; `url` must be `https://www.3gpp.org/ftp/...`, `recursive` XOR `max_depth`). |
+| POST | `/jobs/parse/spec-docs` | Enqueue `parse_spec_docs` for one or more spec ids (`spec_ids`, optional `release`, `version`, and `force`); progress is streamed through the normal job SSE endpoint. This job is intentionally not a panel on the ten-form `/sync` hub. |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. Accepts `?format=html` to return the refreshed job row as an `outerHTML` swap target for the list page's per-row Cancel button. JSON otherwise. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
 | GET | `/sync` | Sync hub page: ten enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, search-rebuild, cache-purge, testcases) + a "Recent sync jobs" table. |
@@ -210,7 +214,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.
 
-The six `/<resources>/schema` routes render the shared `schema.html`
+The seven `/<resources>/schema` routes render the shared `schema.html`
 template by default (one section per DB table: field, type,
 nullable as `yes`/`no`, description, possible values) and return the
 CLI JSON payload verbatim at `?format=json`; an HTMX request swaps
@@ -345,8 +349,8 @@ HTML column selection.
 
 ## Jobs
 
-Long-running operations (meeting sync, TDoc sync, parse, search rebuild,
-cache purge) run as background jobs. A job is a row in the SQLite `jobs`
+Long-running operations (meeting sync, TDoc sync, spec-document parse, search
+rebuild, and cache purge) run as background jobs. A job is a row in the SQLite `jobs`
 table, claimed by a single asyncio worker (one job at a time by default).
 
 A job has a lifecycle: `queued → running → succeeded | failed | cancelled`.
@@ -388,12 +392,14 @@ log for an `Invalid Origin header` warning before touching the transport.
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 33 tools:
+It exposes 38 tools:
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
 `get_spec`, `list_testcases`, `get_testcase`, `get_tsg_schema`,
 `get_meeting_schema`, `get_tdoc_schema`, `get_wi_schema`,
-`get_spec_schema`, `get_testcase_schema`, `search_tdocs`, `semantic_search_tdocs`.
+`get_spec_schema`, `get_testcase_schema`, `search_tdocs`,
+`semantic_search_tdocs`, `get_spec_toc`, `search_spec_docs`,
+`semantic_search_spec_docs`, and `get_spec_doc_schema`.
 
 `get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
 `ftp_url` (a 3GPP FTP URL or relative path); when both are supplied
@@ -405,7 +411,8 @@ is never triggered (no parent TDoc / meeting to anchor on). A
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,
-`sync_testcases`, `rebuild_search_index`, `purge_cache`, `get_job`, `cancel_job`, `list_jobs`.
+`parse_spec_docs`, `sync_testcases`, `rebuild_search_index`, `purge_cache`,
+`get_job`, `cancel_job`, `list_jobs`.
 `cancel_job` is idempotent on terminal jobs: cancelling a job that has
 already reached SUCCEEDED / FAILED / CANCELLED returns the envelope
 instead of erroring, so callers can inspect the result without a
@@ -428,9 +435,9 @@ group simply misses and raises `TestcaseNotFoundError`).
 `{"force": force}` and returns the `{job_id,status,message,links{self,events}}`
 envelope.
 
-The six schema tools — `get_tsg_schema`, `get_meeting_schema`,
+The seven schema tools — `get_tsg_schema`, `get_meeting_schema`,
 `get_tdoc_schema`, `get_wi_schema`, `get_spec_schema`,
-`get_testcase_schema` — take no params and return
+`get_testcase_schema`, and `get_spec_doc_schema` — take no params and return
 `_to_json(schema_payload(...))` for their resource: a bare array of
 `{table, field, type, nullable, description, values}` rows
 (`nullable` a JSON bool, `values` comma-joined or `"-"`),
@@ -448,6 +455,13 @@ text, mirroring the `/search?sem=` route and the CLI's
 `search query --sem-query`. The job tools enqueue the same work as the
 HTTP `POST /jobs/...` routes, but the enqueue envelope adds a `message`
 key (the only parity exception).
+
+The spec-document tools use the separate specdata database. `get_spec_toc`
+reads one parsed `(spec_id, version)` TOC, `search_spec_docs` searches the
+chunk-level FTS5 index, and `semantic_search_spec_docs` performs pure-vector
+or optional FTS5/vector hybrid search. `parse_spec_docs` enqueues the same
+`PARSE_SPEC_DOCS` job as `POST /jobs/parse/spec-docs`; it accepts
+`spec_ids`, optional `release`/`version`, and `force`.
 
 The MCP `serverInfo` block returned on every `initialize` handshake carries `name` ("doc3gpp"), `version` (from `importlib.metadata.version("doc3gpp")`, falling back to `doc3gpp.__version__`), `title`, `description`, and `website_url`. Clients do not need a tool call to read the version.
 

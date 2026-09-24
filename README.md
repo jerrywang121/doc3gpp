@@ -142,6 +142,7 @@ doc3gpp spec sync --tsg r5                 # scrape spec list + parallel detail 
 doc3gpp spec sync --spec-id 36.579-5       # sync a single stored spec
 doc3gpp spec list --type TS --limit 20
 doc3gpp spec show 36.579-5                 # header + version rows
+doc3gpp spec doc parse --spec 38.331         # fetch, convert, chunk, and index a spec zip
 doc3gpp testcase sync                      # latest TTCN status History zip → testcases
 doc3gpp testcase list --group 5G --limit 20
 doc3gpp testcase show --testcase TC_1      # header + per-path status rows
@@ -149,11 +150,12 @@ doc3gpp testcase show --testcase TC_1      # header + per-path status rows
 
 ## CLI Usage
 
-The CLI ships ten sub-apps. The most common
+The CLI ships twelve sub-apps. The most common
 entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
 (TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR cover
 pages), `tdoc show --format raw` (render the converted `.docx`
-markdown), `spec sync` (3GPP specification records with versions), and
+markdown), `spec sync` (3GPP specification records with versions),
+`spec doc parse` (specification document conversion and chunking), and
 `search query` (FTS5 + BM25 full-text search).
 
 ### `db` — database lifecycle
@@ -263,6 +265,31 @@ re-syncs the rest; `--force` bypasses the check. Each spec's
 (ETSI PDF + CR list) are skipped by default; pass `--per-version-details`
 to fetch them. The default preserves any previously-cached `pdf_url` /
 `crs` values on existing rows.
+
+### `spec doc` — specification document corpus
+
+```bash
+# fetch only; defaults to the numerically newest stored version
+doc3gpp spec doc fetch --spec 38.331
+doc3gpp spec doc fetch --spec 38.523-1 --release Rel-18
+
+# fetch-if-missing, convert every .docx, chunk, and auto-index
+doc3gpp spec doc parse --spec 38.331 --spec 38.523-1
+doc3gpp spec doc parse --spec 38.331 --force       # immutable parsed rows: force is the override
+
+# inspect the stored TOC and search chunk text/metadata
+doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
+doc3gpp spec doc search query "handover" --spec 38.331 --limit 20
+doc3gpp spec doc search sem "handover" --fts5-query "handover" --fts5-weight 0.5
+doc3gpp spec doc schema --format json
+```
+
+Spec-document rows live in a separate sibling database, normally
+`<main-stem>_specdata.db`, and are cached below `cache.dir/specs/`. Version
+selection is numeric rather than lexical; parsed `(spec_id, version)` rows
+are immutable and skip on later parses unless `--force` is supplied. The
+`parse` command reports `ok`, `skipped`, and `failed` buckets per requested
+spec. See [`docs/cli.md`](docs/cli.md) for all filters and defaults.
 
 ### `testcase` — RAN5 conformance testcases
 
@@ -457,11 +484,12 @@ doc3gpp server install systemd --no-start     # or `launchd` on macOS
 doc3gpp server start                          # opens http://127.0.0.1:8765/
 ```
 
-- **HTML UI** — browse meetings, TDocs, TSGs, WIs, and search results.
+- **HTML UI** — browse meetings, TDocs, TSGs, WIs, specs, spec-document TOCs,
+  and FTS5/semantic search results.
 - **JSON API** — every read route accepts `?format=json`, byte-for-byte
   identical to the MCP tools.
-- **MCP** — `http://127.0.0.1:8765/mcp` exposes 33 tools covering the
-  same reads (including the six `get_*_schema` field-descriptor tools,
+- **MCP** — `http://127.0.0.1:8765/mcp` exposes 38 tools covering the
+  same reads (including the schema and spec-document TOC/search tools,
   byte-identical to the `GET /<resources>/schema?format=json` routes)
   plus job lifecycle. The transport is set under `[mcp]` in the
   TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
@@ -473,8 +501,9 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
   the resulting 403 as the misleading "Legacy MCP SSE endpoints are not
   supported" error (check the server log for an `Invalid Origin header`
   warning before touching the transport).
-- **Jobs** — sync, parse, search rebuild, and cache purge run on a shared
-  asyncio worker; watch live progress over SSE at `/jobs/{id}/events`.
+- **Jobs** — sync, TDoc/spec-document parse, search rebuild, and cache purge
+  run on a shared asyncio worker; watch live progress over SSE at
+  `/jobs/{id}/events`.
 
 Point an MCP client at the endpoint. For example, in Claude Desktop's
 `claude_desktop_config.json` (or any client that supports a
@@ -523,6 +552,7 @@ honoured), and the TOML config file (everything else).
 | Variable | Purpose |
 | --- | --- |
 | `DOC3GPP_DATABASE_URL` | SQLAlchemy URL (omit for default SQLite) |
+| `DOC3GPP_SPECDATA_DATABASE_URL` | Optional separate spec-document SQLite URL (omit to use the sibling `<main-stem>_specdata.db`) |
 | `DOC3GPP_DB_ECHO` | Echo SQL to stdout |
 | `DOC3GPP_LOG_LEVEL` | Library log level |
 | `DOC3GPP_HTTP_VERIFY` | TLS verification toggle |

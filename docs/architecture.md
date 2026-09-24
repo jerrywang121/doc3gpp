@@ -1103,13 +1103,13 @@ the `spec doc` / `toc` / `search` triplet, 41 commands) plus the `server` group 
 - `wi`:
     - `sync` — `--tsg`
     - `list` — filters by `--tsg`, `--name`, `--acronym`, `--release`
-- `spec doc` (nested under `spec` as `spec doc ...`):
-    - `fetch` — `--spec` (required), `--release`, `--version`,
-      `--force/-f`; prints `fetched <spec_id>@<version> (<docx_count> docx)`.
-    - `parse` — repeatable `--spec` (at least one required), `--release`,
-      `--version`, `--force/-f` (+ accepted-but-ignored
-      `--format/--output/--compact`); prints `ok` / `skipped <reason>` /
-      `failed <reason>` (stderr) bucket lines.
+ - `spec doc` (nested under `spec` as `spec doc ...`):
+     - `parse` — repeatable `--spec` (at least one required), `--release`,
+       `--version`, `--force/-f`; resolves the numeric-newest or pinned
+       version, fetches the ZIP when missing, and records the download;
+       `--force` re-downloads and re-parses, including already-parsed pairs.
+       Also accepts `--format/--output/--compact` (currently ignored); prints
+       `ok` / `skipped <reason>` / `failed <reason>` (stderr) bucket lines.
     - `toc show` — `--spec` + `--version` (both required), `--release`,
       `--fields`, `--format/--output/--compact`.
     - `search query QUERY` — `--spec/--release/--version/--section`,

@@ -2838,6 +2838,44 @@ def test_spec_doc_show_unknown_version_returns_404(client: TestClient) -> None:
     assert "18.0.0" in response.json()["detail"]
 
 
+def test_get_spec_show_version_row_links_to_document_page(client: TestClient) -> None:
+    """Each spec version row links to its version-specific document page."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Docs</th>" in response.text
+    assert (
+        'href="/specs/36.579-5/docs?version=18.0.0">show</a>'
+        in response.text
+    )
+
+
+def test_spec_doc_show_renders_parse_form(client: TestClient) -> None:
+    """The version page exposes the JSON spec-document parse job form."""
+    service = FakeSpecDocService(source=_spec_doc_source(parsed=False))
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert 'id="spec-doc-parse-form"' in response.text
+    assert 'action="/jobs/parse/spec-docs"' in response.text
+    assert 'data-spec-id="36.579-5"' in response.text
+    assert 'data-version="18.0.0"' in response.text
+    assert 'name="force"' in response.text
+    assert 'id="spec-doc-parse-job-target"' in response.text
+    assert 'src="/static/js/job_poller.js"' in response.text
+    assert 'src="/static/js/spec_doc_parse.js"' in response.text
+
+
 def test_get_specs_renders_list(client: TestClient) -> None:
     """``GET /specs`` returns 200 with the spec list template."""
     from doc3gpp.web.deps import get_spec_service
@@ -3412,6 +3450,17 @@ def test_spec_sync_js_wires_on_terminal_reload() -> None:
     text = (_JS_DIR / "spec_sync.js").read_text(encoding="utf-8")
     assert "onTerminal" in text
     assert "window.location.reload" in text
+
+
+def test_spec_doc_parse_js_posts_version_scoped_json() -> None:
+    """The spec-doc parse wrapper binds the shared JSON job poller contract."""
+    body = (_JS_DIR / "spec_doc_parse.js").read_text(encoding="utf-8")
+    assert "bindJobPolling" in body
+    assert 'contentType: "application/json"' in body
+    assert '"spec_ids"' in body
+    assert '"version"' in body
+    assert '"force"' in body
+    assert "spec-doc-parse-form" in body
 
 
 # ---------------------------------------------------------------------------

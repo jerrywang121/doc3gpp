@@ -26,5 +26,23 @@
     </dd>
   </dl>
 
+  <form
+    id="spec-doc-parse-form"
+    class="spec-doc-parse-form"
+    method="post"
+    action="/jobs/parse/spec-docs"
+    data-spec-id="{{ spec.spec_id }}"
+    data-version="{{ version_row.version }}"
+  >
+    <label class="inline-check">
+      <input type="checkbox" name="force"> Force re-parse
+    </label>
+    <button type="submit" class="btn primary">Parse document</button>
+    <span class="spec-doc-parse-queued" style="display:none">Parse job queued</span>
+  </form>
+  <div id="spec-doc-parse-job-target"></div>
+
   {% include "partials/spec_doc_show_results.html" %}
+  <script src="/static/js/job_poller.js" defer></script>
+  <script src="/static/js/spec_doc_parse.js" defer></script>
 {% endblock %}

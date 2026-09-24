@@ -12,7 +12,7 @@ swaps the search form partial to surface ``fts5_query``,
 
 ``?format=json`` returns the same payload shape as
 ``doc3gpp tdoc search query --format json`` /
-``tdoc search sem --format json``:
+``doc3gpp tdoc search sem --format json``:
 a bare array of hit objects. FTS5 hits carry ``tdoc_id / score /
 previews / title / meeting / tsg / uploaded_date / ftp_url / wis``;
 semantic hits carry the RRF fields with the metadata sub-record nested

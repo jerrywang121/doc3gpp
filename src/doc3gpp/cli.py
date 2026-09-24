@@ -6028,7 +6028,7 @@ def sem_command(
         help=(
             "Optional FTS5 MATCH expression. When omitted, the FTS5 "
             "path is skipped (only embedding-KNN runs; no RRF). When "
-            "supplied, it is processed exactly like `search query` "
+            "supplied, it is processed exactly like `doc3gpp tdoc search query` "
             "(SearchQueryBuilder; no stopword stripping)."
         ),
     ),

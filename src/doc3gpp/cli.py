@@ -4459,10 +4459,8 @@ SPEC_DOC_LIST_FIELDS: list[str] = [
     "spec_id",
     "version",
     "release",
-    "section_no",
-    "section_title",
-    "table_no",
-    "table_title",
+    "sections",
+    "tables",
     "chunk_index",
     "text",
 ]

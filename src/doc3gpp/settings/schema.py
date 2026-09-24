@@ -220,10 +220,8 @@ class OutputFieldsSettings(BaseModel):
             "spec_id",
             "version",
             "release",
-            "section_no",
-            "section_title",
-            "table_no",
-            "table_title",
+            "sections",
+            "tables",
             "chunk_index",
             "text",
         ]
@@ -434,8 +432,8 @@ _SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
 #: table). Keep in sync with the DDL in ``storage/db/migrate.py``.
 _SPEC_DOC_SNIPPET_COLUMNS: tuple[str, ...] = (
     "text",
-    "section_title",
-    "table_title",
+    "sections",
+    "tables",
     "spec_id",
     "version",
     "release",
@@ -455,6 +453,11 @@ class SpecDocSettings(BaseModel):
     TOML-only (no ``DOC3GPP_SPEC_DOC__*`` env vars on the
     :data:`ALLOWED_ENV_VARS` allowlist, matching the sibling knobs).
     """
+
+    cache_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".cache" / "doc3gpp" / "specs",
+        description="Root directory for spec-document ZIP and Markdown caches.",
+    )
 
     max_zip_size_kb: int = Field(
         default=0,

@@ -69,10 +69,8 @@ class SpecDocToc:
 class ChunkDraft:
     file_order: int
     source_file: str
-    section_no: str | None = None
-    section_title: str | None = None
-    table_no: str | None = None
-    table_title: str | None = None
+    sections: str | None = None
+    tables: str | None = None
     text: str = ""
 
 
@@ -90,7 +88,8 @@ class SpecDocSearchFilters:
     spec_id: str | None = None
     release: str | None = None
     version: str | None = None
-    section: str | None = None
+    sections: str | None = None
+    tables: str | None = None
     limit: int = 20
     offset: int = 0
 
@@ -101,10 +100,8 @@ class SpecDocHit:
     spec_id: str
     version: str
     release: str | None
-    section_no: str | None
-    section_title: str | None
-    table_no: str | None
-    table_title: str | None
+    sections: str | None
+    tables: str | None
     chunk_index: int
     text: str
     score: float

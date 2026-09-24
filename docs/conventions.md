@@ -242,14 +242,19 @@ The same grammar also applies to:
   patterns on `--tsg` are upper-cased to match the canonical stored
   value; `null` / `not-null` / `!pattern` pass through unchanged).
 - `wi list` — `--name`, `--acronym`, `--release`.
-- `search query` / `search sem` — `--meeting` (over `name` **or**
+- `tdoc search query` / `tdoc search sem` — `--meeting` (over `name` **or**
   `title`), `--release`, `--spec`. For the compound `--meeting`
   filter, a negated `!pattern` wraps the whole `name OR title` group
   (`NOT (name LIKE OR title LIKE)`), so a row is kept only when
   neither column matches.
 - The MCP tools `list_meetings`, `list_tdocs`, `list_wis`,
-  `search_tdocs`, `semantic_search_tdocs`, and the `parse_tdocs`
+  `search_tdoc`, `semantic_search_tdoc`, and the `parse_tdocs`
   filter dict — the same grammar, documented per-parameter.
+
+TDoc search is exposed under the `tdoc search` CLI namespace and the
+`/tdocs/search` HTTP routes. Spec-document search remains under
+`doc3gpp spec doc search ...` and the `search_spec_docs` /
+`semantic_search_spec_docs` MCP tools.
 
 ## tdoc parse workflow
 

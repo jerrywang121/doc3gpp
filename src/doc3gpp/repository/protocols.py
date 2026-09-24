@@ -738,7 +738,7 @@ class SearchIndexRepository(Protocol):
     def get_resume_cursor(self) -> str | None:
         """Return the last ``tdoc_id`` written to ``tdoc_search_meta``.
 
-        ``None`` means no cursor has been recorded; ``search index
+        ``None`` means no cursor has been recorded; ``tdoc search index
         --rebuild --resume`` starts at the first id > cursor.
         """
         ...
@@ -754,7 +754,7 @@ class SearchIndexRepository(Protocol):
         """Remove the resume cursor so the next rebuild starts at
         the first TDoc.
 
-        ``search index --rebuild`` (no ``--resume``) calls this at
+        ``tdoc search index --rebuild`` (no ``--resume``) calls this at
         the start of a rebuild to force a truly fresh start; the
         first successful batch upsert then writes a new cursor via
         :meth:`set_resume_cursor`.
@@ -762,7 +762,7 @@ class SearchIndexRepository(Protocol):
         ...
 
     def status(self) -> SearchIndexStatus:
-        """Return a :class:`SearchIndexStatus` snapshot for ``search index``.
+        """Return a :class:`SearchIndexStatus` snapshot for ``tdoc search index``.
 
         Reads ``tdoc_search_meta`` + ``COUNT(*)`` from the FTS5 table
         + ``MAX(uploaded_date)`` from ``tdocs`` to compute
@@ -803,7 +803,7 @@ class EmbeddingReranker(Protocol):
         ``final_limit``.
 
         ``final_limit`` is the user-visible output count (e.g. the
-        ``--limit`` value from ``search query --sem-query``).
+        ``--limit`` value from ``tdoc search query --sem-query``).
         The caller (CLI) is responsible for asking the upstream
         FTS5 repo for a *wider* candidate bag, then letting the
         reranker trim back to ``final_limit``.

@@ -524,7 +524,7 @@ class SearchSettings(BaseModel):
     ``auto_index_on_parse`` both default to True so the index
     stays in sync with every successful ``tdoc parse`` until the
     operator opts out. ``rebuild_batch_size`` keeps the default
-    CLI ``search index --rebuild`` manageable on huge DBs;
+    CLI ``tdoc search index --rebuild`` manageable on huge DBs;
     ``snippet_tokens`` caps the FTS5 ``snippet(...)`` length.
 
     TOML-only (the ``DOC3GPP_SEARCH__*`` env vars are outside the
@@ -558,7 +558,7 @@ class SearchSettings(BaseModel):
         default=100,
         ge=1,
         description=(
-            "TDocs per batch during `search index --rebuild`. "
+            "TDocs per batch during `tdoc search index --rebuild`. "
             "Smaller values reduce peak memory and crash-recovery "
             "loss (cursor advances per batch); larger values "
             "finish faster."
@@ -600,7 +600,7 @@ class SearchSettings(BaseModel):
     search_fanout_factor: int = Field(
         default=4, ge=1, le=64,
         description=(
-            "When `search query --sem-query` is used, the FTS5 path "
+            "When `tdoc search query --sem-query` is used, the FTS5 path "
             "fetches limit * search_fanout_factor candidates before "
             "the semantic reranker truncates back to limit. Higher "
             "values give the reranker more to work with at the cost "
@@ -663,11 +663,11 @@ class SemanticSearchSettings(BaseModel):
     fanout_multiplier: int = Field(
         default=4, ge=1,
         description=(
-            "Internal fan-out factor for the hybrid `search sem` path. "
+            "Internal fan-out factor for the hybrid `tdoc search sem` path. "
             "When --fts5-query is supplied, each side fetches "
             "limit * fanout_multiplier candidates before RRF merge; "
             "ignored on the pure-vector path. Mirrors "
-            "search.search_fanout_factor for `search query --sem-query`."
+            "search.search_fanout_factor for `tdoc search query --sem-query`."
         ),
     )
     max_chunks_per_tdoc: int = Field(

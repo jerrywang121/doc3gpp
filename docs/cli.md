@@ -1815,9 +1815,9 @@ doc3gpp cache purge --scope zips --yes
 doc3gpp cache purge --scope all --yes
 ```
 
-## `doc3gpp search query QUERY [filters]`
+## `doc3gpp tdoc search query QUERY [filters]`
 
-Run a full-text search over the FTS5 index. The QUERY is either
+Run a full-text search over the TDoc FTS5 index. The QUERY is either
 plain text (which the CLI wraps in FTS5 quotes after escaping
 special characters) or an FTS5 expression with `AND`, `OR`, `NOT`,
 `NEAR`, `*`, or quoted phrases passed through unchanged. Single-quoted
@@ -1887,7 +1887,7 @@ editing it in `doc3gpp.toml`.
 
 ### Semantic rerank
 
-When `--sem-query STR` is supplied, `search query` reorders the FTS5
+When `--sem-query STR` is supplied, `tdoc search query` reorders the FTS5
 hits by cosine similarity to the embedded form of `STR`. The FTS5
 path first fetches `limit * search_fanout_factor` candidates
 (`Settings.search.search_fanout_factor`, default `4`, range `1..64`),
@@ -1921,9 +1921,9 @@ new semantic rerank. Old callers passing `--rerank` now see
 `typer.BadParameter` pointing at `--sem-query` for the migration
 path.
 
-## `doc3gpp search index [flags]`
+## `doc3gpp tdoc search index [flags]`
 
-Manage the FTS5 index. With no flags, prints the
+Manage the TDoc FTS5 index. With no flags, prints the
 `SearchIndexStatus` snapshot. With `--rebuild`, drops and rebuilds
 the index by walking every `tdocs` row.
 
@@ -1937,34 +1937,34 @@ the index by walking every `tdocs` row.
 | `--rebuild-embeddings` | Drop and rebuild the vector (`vec_tdoc_embeddings`) index. Walks every `tdocs` row and re-embeds each one. Use `--stale-only` for incremental refresh, `--resume` to continue from the last `tdoc_id` in `vec_meta`, `--batch N` to override `Settings.search.rebuild_batch_size`, `--quiet` to suppress the tqdm bar. Gated on the sqlite + sqlite-vec support matrix. |
 | `--rebuild-all` | Run both the FTS5 rebuild and the vector rebuild in sequence. Implies `--rebuild` and `--rebuild-embeddings`. |
 
-## `doc3gpp search sem QUERY [filters]`
+## `doc3gpp tdoc search sem QUERY [filters]`
 
-Run a hybrid (FTS5 + vector) search that merges lexical and semantic
+Run a TDoc hybrid (FTS5 + vector) search that merges lexical and semantic
 matches with Reciprocal Rank Fusion (RRF). The positional `QUERY`
 is always embedded by the vector path (the remote model named by
 `[semantic_search].embedding_model`, via `embedding_base_url`);
 when `--fts5-query` is supplied, it is preprocessed by
-`SearchQueryBuilder` (same semantics as `search query`, including
+`SearchQueryBuilder` (same semantics as `tdoc search query`, including
 single-quote → double-quote phrase rewriting) and feeds
 the FTS5 fan-out. Both paths fan out to `2N` candidates, are merged
 via `rrf_merge`, and truncated to `--limit`. When `--fts5-query` is
 omitted, FTS5 + RRF are skipped — only vector KNN results return.
-`search query` (FTS5-only) is unchanged.
+`tdoc search query` (FTS5-only) is unchanged.
 
 Prerequisites: the `[semantic]` extra (sqlite-vec) **plus**
 `[semantic_search].embedding_base_url` pointing at an OpenAI-compatible
 embeddings API (e.g. Ollama `http://localhost:11434/v1`, OpenAI
 `https://api.openai.com/v1`). When the URL is unset the command exits 1
 with the base-url hint. A dim/model mismatch against a previously built
-index fails fast with a `search index --rebuild-embeddings` hint —
-swapping models forces a rebuild even when dims collide; `search index`
+index fails fast with a `tdoc search index --rebuild-embeddings` hint —
+swapping models forces a rebuild even when dims collide; `tdoc search index`
 (no flags) shows the stored vs configured model/dim so the mismatch is
 visible up front.
 
 | Flag | Effect |
 | --- | --- |
 | `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). Always embedded. |
-| `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
+| `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `tdoc search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
 | `--tsg TEXT` | `meetings.tsg` filter (any case; matched against the stored upper-case value). |
 | `--meeting TEXT` | Rich filter over `meetings.name` **or** `meetings.title` (`%` wildcards, `!` NOT LIKE, `null`/`not-null`). |
 | `--meeting-id INT` | `meetings.meeting_id` filter. |
@@ -1993,7 +1993,7 @@ The hybrid search degrades gracefully across three layers:
 2. Vector path: when `Settings.semantic_search.enabled = false`,
    `[semantic_search].embedding_base_url` is unset, or
    the sqlite-vec extension is unavailable, the vector fan-out returns
-   an empty list and the FTS5 rank drives the result. `search sem`
+    an empty list and the FTS5 rank drives the result. `tdoc search sem`
    without a URL exits 1 with the base-url hint instead.
 3. Auto-embed hook: when `Settings.semantic_search.auto_embed_on_parse = false`,
    newly-parsed TDocs are not embedded automatically; the vector path

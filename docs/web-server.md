@@ -193,7 +193,8 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/spec-docs/search` | Spec-doc FTS5 search (`?q=`, filters `spec,release,version,section,limit,offset`; `?format=json` is the `doc3gpp spec doc search query --format json` hit array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Corrupt index → 500 with a rebuild hint. |
 | GET | `/spec-docs/search/sem` | Spec-doc hybrid search (`?q=`, `?fts5_query=` blank → `None` = pure vector, `?fts5_weight=` 0.0..1.0; `?format=json` is the `doc3gpp spec doc search sem --format json` semantic-hit array verbatim; same templates as `/spec-docs/search`). |
 | GET | `/spec-docs/schema` | Spec-doc field descriptors across the three spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
-| GET | `/search` | FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
+| GET | `/tdocs/search` | TDoc FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
+| GET | `/tdocs/search/sem` | TDoc hybrid search (`?format=json`). The natural-language query is embedded; `fts5_query` opts into the FTS5 side and RRF merge. |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. A `tsg` not present in the `tsgs` reference table is rejected (the job fails fast before any network work). |
@@ -202,13 +203,13 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/sync/specs` | Enqueue `sync_specs` (exactly one of `tsg` / `spec_id`). A `tsg` not present in the `tsgs` reference table is rejected (the job fails fast before any network work). |
 | POST | `/jobs/sync/testcases` | Enqueue `sync_testcases` (`{"force": bool}`, default `false`) → 202 job envelope. |
 | POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. |
-| POST | `/jobs/search/rebuild` | Enqueue `rebuild_search`. |
+| POST | `/jobs/tdocs/search/rebuild` | Enqueue `rebuild_search`. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
 | POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single 3GPP FTP URL or folder; `url` must be `https://www.3gpp.org/ftp/...`, `recursive` XOR `max_depth`). |
 | POST | `/jobs/parse/spec-docs` | Enqueue `parse_spec_docs` for one or more spec ids (`spec_ids`, optional `release`, `version`, and `force`); progress is streamed through the normal job SSE endpoint. This job is intentionally not a panel on the ten-form `/sync` hub. |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. Accepts `?format=html` to return the refreshed job row as an `outerHTML` swap target for the list page's per-row Cancel button. JSON otherwise. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
-| GET | `/sync` | Sync hub page: ten enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, search-rebuild, cache-purge, testcases) + a "Recent sync jobs" table. |
+| GET | `/sync` | Sync hub page: ten enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, TDoc-search-rebuild, cache-purge, testcases) + a "Recent sync jobs" table. |
 | GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
@@ -293,22 +294,22 @@ The filter form (submitted via HTMX to `GET /meetings`, swapping the
 `end_doc` range brackets it. An empty value is ignored; a malformed value
 returns a 400 `invalid_filter` response.
 
-Both search modes (`GET /search` and `GET /search/sem`) accept a
+Both TDoc search modes (`GET /tdocs/search` and `GET /tdocs/search/sem`) accept a
 `tdoc-id` query param — an exact-match tdoc filter identical in
-semantics to the CLI's `search query --tdoc-id`. The search form
+semantics to the CLI's `tdoc search query --tdoc-id`. The search form
 carries a TDoc text input in both the FTS5 and the semantic branch
 (empty input → no filter).
 
-The search form uses a 5-column grid: on `/search` the Query box spans
+The search form uses a 5-column grid: on `/tdocs/search` the Query box spans
 2 columns and an optional Semantic box (the `sem` param) spans the
-remaining 3; on `/search/sem` the Query box spans 3 columns and the
+remaining 3; on `/tdocs/search/sem` the Query box spans 3 columns and the
 FTS5 query box spans 2. Both forms share the full filter set (TSG,
-Meeting, TDoc, Release, Spec, Since, Until, Limit; `/search/sem` also
+Meeting, TDoc, Release, Spec, Since, Until, Limit; `/tdocs/search/sem` also
 keeps FTS5 weight). Each page links to the other at the top right
-(`/search` → "Hybrid search", `/search/sem` → "FTS5 search").
-The `/search/sem` form always submits an `fts5_query` field; a blank or
+(`/tdocs/search` → "Hybrid search", `/tdocs/search/sem` → "FTS5 search").
+The `/tdocs/search/sem` form always submits an `fts5_query` field; a blank or
 whitespace-only value is normalised to `None` server-side so the default
-is pure-vector (matching `doc3gpp search sem`), rather than running FTS5
+is pure-vector (matching `doc3gpp tdoc search sem`), rather than running FTS5
 with an empty query and returning zero hits.
 
 Search results render one collapsible "Matching fields" block per hit
@@ -349,8 +350,8 @@ HTML column selection.
 
 ## Jobs
 
-Long-running operations (meeting sync, TDoc sync, spec-document parse, search
-rebuild, and cache purge) run as background jobs. A job is a row in the SQLite `jobs`
+Long-running operations (meeting sync, TDoc sync, spec-document parse, TDoc search
+index rebuild, and cache purge) run as background jobs. A job is a row in the SQLite `jobs`
 table, claimed by a single asyncio worker (one job at a time by default).
 
 A job has a lifecycle: `queued → running → succeeded | failed | cancelled`.
@@ -392,13 +393,15 @@ log for an `Invalid Origin header` warning before touching the transport.
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 38 tools:
+It exposes 38 tools. Legacy unscoped HTTP routes and plural TDoc search
+tool aliases were removed without redirects. Spec-document search keeps
+its existing HTTP and MCP names.
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
 `get_spec`, `list_testcases`, `get_testcase`, `get_tsg_schema`,
 `get_meeting_schema`, `get_tdoc_schema`, `get_wi_schema`,
-`get_spec_schema`, `get_testcase_schema`, `search_tdocs`,
-`semantic_search_tdocs`, `get_spec_toc`, `search_spec_docs`,
+`get_spec_schema`, `get_testcase_schema`, `search_tdoc`,
+`semantic_search_tdoc`, `get_spec_toc`, `search_spec_docs`,
 `semantic_search_spec_docs`, and `get_spec_doc_schema`.
 
 `get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
@@ -411,7 +414,7 @@ is never triggered (no parent TDoc / meeting to anchor on). A
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,
-`parse_spec_docs`, `sync_testcases`, `rebuild_search_index`, `purge_cache`,
+`parse_spec_docs`, `sync_testcases`, `rebuild_tdoc_search_index`, `purge_cache`,
 `get_job`, `cancel_job`, `list_jobs`.
 `cancel_job` is idempotent on terminal jobs: cancelling a job that has
 already reached SUCCEEDED / FAILED / CANCELLED returns the envelope
@@ -446,13 +449,13 @@ route and the matching `doc3gpp <resource> schema --format json`
 output.
 
 Every read tool returns exactly the bytes of the equivalent
-`?format=json` HTTP route. `search_tdocs` normalises the query into a
-valid FTS5 `MATCH` expression exactly like the CLI and the `/search`
-route (a stopwords-only or empty query raises an MCP invalid-params
-error, `-32602`). `search_tdocs` also accepts an optional `sem_query` argument — when
+`?format=json` HTTP route. `search_tdoc` normalises the query into a
+valid FTS5 `MATCH` expression exactly like the CLI and the
+`/tdocs/search` route (a stopwords-only or empty query raises an MCP
+invalid-params error, `-32602`). `search_tdoc` also accepts an optional `sem_query` argument — when
 provided, the FTS5 hits are reordered by cosine similarity to that
-text, mirroring the `/search?sem=` route and the CLI's
-`search query --sem-query`. The job tools enqueue the same work as the
+text, mirroring the `/tdocs/search?sem=` route and the CLI's
+`tdoc search query --sem-query`. The job tools enqueue the same work as the
 HTTP `POST /jobs/...` routes, but the enqueue envelope adds a `message`
 key (the only parity exception).
 

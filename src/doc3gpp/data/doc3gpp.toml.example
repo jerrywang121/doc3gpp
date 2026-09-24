@@ -148,7 +148,7 @@ enabled = true
 # SearchService.upsert_for_tdoc(tdoc_id) so the index stays in sync.
 auto_index_on_parse = true
 
-# TDocs per SQL page during `search index --rebuild`. Smaller
+# TDocs per SQL page during `tdoc search index --rebuild`. Smaller
 # values reduce the worst-case duplicate work on Ctrl-C
 # (the cursor only advances per page); larger values save SQL
 # round-trips. Progress is reported per TDoc via a tqdm bar
@@ -166,10 +166,10 @@ snippet_tokens = 8
 # column with weight 0 is excluded from both ranking and previews; a
 # column with weight > 0 gets its own highlighted snippet in query
 # results (one per column, only when the snippet actually contains
-# a match). Tune interactively via `doc3gpp search --explain`.
+# a match). Tune interactively via `doc3gpp tdoc search query --explain`.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 
-# When `search query --sem-query` is used, the FTS5 path fetches
+# When `tdoc search query --sem-query` is used, the FTS5 path fetches
 # limit * search_fanout_factor candidates before the semantic
 # reranker truncates back to limit. Higher values give the
 # reranker more to work with at the cost of more vector lookups
@@ -225,13 +225,13 @@ search_fanout_factor = 4
 # when unset, only the FTS5 path is active and the vector path is a
 # no-op.
 #
-# As of 2026-08-01 spaCy is no longer used: `search sem` embeds the
+# As of 2026-08-01 spaCy is no longer used: `tdoc search sem` embeds the
 # natural-language positional QUERY only; supplying an FTS5 keyword
 # query is opt-in via `--fts5-query`.
 
 # [semantic_search]
 # Master switch for the semantic search subsystem. False disables the
-# `search sem` command, the auto-embed hook, and the
+# `tdoc search sem` command, the auto-embed hook, and the
 # `vec_tdoc_embeddings` DDL creation.
 # enabled = true
 
@@ -244,7 +244,7 @@ search_fanout_factor = 4
 # `/embeddings` payload. Must produce a vector dimension that
 # matches the `vec_tdoc_embeddings` schema at creation time;
 # changing this on a populated index requires
-# `search index --rebuild-embeddings`.
+# `tdoc search index --rebuild-embeddings`.
 # embedding_model = "embeddinggemma:300m"
 
 # Base URL of the OpenAI-compatible embeddings API. Unset disables the
@@ -276,17 +276,17 @@ search_fanout_factor = 4
 # low-ranked candidates; smaller `k` sharpens the top.
 # rrf_k = 60
 
-# Default `--fts5-weight` for `search sem`. Range 0.0..1.0;
+# Default `--fts5-weight` for `tdoc search sem`. Range 0.0..1.0;
 # the vector weight is `1 - fts5_weight`. 0.0 is pure vector;
 # 1.0 is pure FTS5. Ignored when `--fts5-query` is omitted.
 # fts5_weight = 0.5
 
 # Fan-out multiplier for the hybrid FTS5 + vector paths of
-# `search sem`. When `--fts5-query` is supplied, each side
+# `tdoc search sem`. When `--fts5-query` is supplied, each side
 # retrieves `fanout_multiplier * --limit` candidates before RRF
 # merge and truncation. Ignored when `--fts5-query` is omitted
 # (pure-vector path). Mirrors `search.search_fanout_factor` for
-# `search query --sem-query`.
+# `tdoc search query --sem-query`.
 # fanout_multiplier = 4
 
 # Hard cap on the number of chunks indexed per TDoc. Prevents

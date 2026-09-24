@@ -37,7 +37,7 @@ or `pipx install "doc3gpp[cli]"` adds the `doc3gpp` CLI command.
 ```
 doc3gpp/
 ├── src/doc3gpp/          # package root
- │   ├── cli.py            # Typer commands (12 sub-apps incl. spec doc/toc/search, 41 commands) + cli_server.py (server sub-app, 6 commands)
+ │   ├── cli.py            # Typer commands (12 sub-apps incl. nested TDoc/spec-doc search, 41 commands) + cli_server.py (server sub-app, 6 commands)
 │   ├── models/           # domain dataclasses — never leak ORM attrs out
 │   ├── repository/       # abstract repo contracts (Protocols)
 │   ├── services/         # orchestration; CLI-injected via factory
@@ -80,14 +80,14 @@ For the full symbol-to-file table, see
 | Add a spec-document (`spec doc`) source / parse / chunk / search knob | `src/doc3gpp/scraping/spec_doc_source.py` (`resolve_spec_doc_version`, `fetch_spec_doc_zip`) + `src/doc3gpp/parsers/spec_doc.py` (`list_spec_docx`, `order_spec_files`, `extract_spec_toc`) + `src/doc3gpp/parsers/docx_converter.py` (`convert_document_to_blocks`) + `src/doc3gpp/parsers/spec_doc_chunker.py` (`chunk_blocks`) + `src/doc3gpp/services/spec_doc_service.py` (`SpecDocService`) + `src/doc3gpp/services/spec_doc_search_service.py` (`SpecDocSearchService`) + `src/doc3gpp/services/spec_doc_semantic_service.py` (`SpecDocSemanticService`) + `src/doc3gpp/storage/repositories/spec_doc_sql.py` / `spec_doc_search_sql.py` / `spec_doc_vector_sql.py` + `src/doc3gpp/settings/schema.py` (`SpecDocSettings`, TOML `[spec_doc]` block) | Version resolution is numeric sort on `SpecVersion.version` (no pins); fetch-skip = zip-cache existence; parse-skip is the immutable `(spec_id, version)` ledger (`parsed_at`, `--force` re-parses); `.doc` entries warn-skip; empty zip → `SpecDocNoDocxError` failure; oversize (`max_zip_size_kb`, default `0` = unlimited) → skip bucket; batch never aborts. Chunking reuses `semantic_search.chunk_size` (default 512) / `chunk_overlap` (default 24, `None` → reuse) + `max_chunk_chars` (default 1500); rows atomic; `chunk_id = {spec_id}@{version}#{chunk_index}`. |
 | Add a spec-document CLI command | `src/doc3gpp/cli.py` (`spec_doc_app` / `spec_doc_toc_app` / `spec_doc_search_app`) | `spec doc fetch/parse/toc show/search query/search sem/schema` under `spec_app` (`spec doc`); parse prints `ok/skipped/failed` buckets only — its `--format/--output/--compact` flags are accepted but currently ignored. |
 | Add a spec-document web route / MCP tool / job | `src/doc3gpp/web/routes/spec_docs.py` (`GET /specs/{spec_id}/docs/toc`, `GET /spec-docs/search`, `GET /spec-docs/search/sem`, `GET /spec-docs/schema`) + `src/doc3gpp/web/routes/jobs.py` (`POST /jobs/parse/spec-docs`) + `src/doc3gpp/web/mcp_server.py` (`get_spec_toc`, `search_spec_docs`, `semantic_search_spec_docs`, `get_spec_doc_schema`, `parse_spec_docs`) + `src/doc3gpp/web/workers/handlers.py` (`_parse_spec_docs`, `JobKind.PARSE_SPEC_DOCS`) | No spec-doc panel on the sync hub (`/sync` stays at ten forms); `JobKind.PARSE_SPEC_DOCS = "parse_spec_docs"` takes `{spec_ids, release?, version?, force}`. |
-| Add a search command / hook | `src/doc3gpp/cli.py` (`search_app`) + `src/doc3gpp/services/search_service.py` + `src/doc3gpp/storage/repositories/search_sql.py` | FTS5 over sqlite + index-time normalize_query; rebuild resume via `tdoc_search_meta` |
-| Add a search rerank flag / knob | `src/doc3gpp/services/semantic_reranker.py` + `src/doc3gpp/services/search_service.py` (`PassthroughReranker`) + `src/doc3gpp/settings/schema.py` (`SearchSettings.search_fanout_factor`) + `src/doc3gpp/cli.py` (`search_command`) | The `EmbeddingReranker` Protocol lives in `src/doc3gpp/repository/protocols.py`. Vector lookup helper: `VectorIndexRepository.get_min_distance_for_tdocs`. |
+| Add a TDoc search command / hook | `src/doc3gpp/cli.py` (`tdoc_search_app`) + `src/doc3gpp/services/search_service.py` + `src/doc3gpp/storage/repositories/search_sql.py` | FTS5 over sqlite + index-time normalize_query; rebuild resume via `tdoc_search_meta` |
+| Add a TDoc search rerank flag / knob | `src/doc3gpp/services/semantic_reranker.py` + `src/doc3gpp/services/search_service.py` (`PassthroughReranker`) + `src/doc3gpp/settings/schema.py` (`SearchSettings.search_fanout_factor`) + `src/doc3gpp/cli.py` (`search_command`) | The `EmbeddingReranker` Protocol lives in `src/doc3gpp/repository/protocols.py`. Vector lookup helper: `VectorIndexRepository.get_min_distance_for_tdocs`. |
 | Tune the FTS5 search subsystem | `src/doc3gpp/settings/schema.py` (`SearchSettings`) | FTS5 search knobs (`enabled`, `auto_index_on_parse`, `rebuild_batch_size`, `snippet_tokens`, `bm25_weights`, `search_fanout_factor`); TOML `[search]` block. Per-column previews are driven by `bm25_weights` (weight>0 → snippet bound; match in snippet → surfaced; weight=0 → both skipped). |
 | Add a semantic search knob | `src/doc3gpp/settings/schema.py` (`SemanticSearchSettings`) | TOML `[semantic_search]` block. |
-| Add a `search sem` flag | `src/doc3gpp/cli.py` (`sem_command`) | Mirror `search_command` pattern. |
+| Add a `tdoc search sem` command | `src/doc3gpp/cli.py` (`sem_command`) | Mirror the `tdoc search query` pattern. |
 | Add an embedding model | `src/doc3gpp/services/embedding/remote_embedder.py` | `OpenAICompatibleEmbedder` over the remote `/embeddings` API; `Embedder` Protocol in `repository/protocols.py`. `embedding_base_url` unset disables the stack. |
 | Add a vector DDL change | `src/doc3gpp/storage/db/migrate.py` (`_create_vector_schema`) + `src/doc3gpp/storage/repositories/vector_sql.py` | Gated on sqlite + sqlite-vec. |
-| Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. The six `GET /<resources>/schema` routes read the static `models/schema_info.py` registry (no DB) and share `templates/schema.html` + `partials/schema_results.html` grouped by table. List routes that pair with an HTMX filter form (e.g. meetings / tdocs / wis / search) must render a `partials/<resource>_results.html` fragment when the request sets `HX-Request: true` and the full page otherwise — the `outerHTML` swap target `#results` only fits a fragment, not a full HTML document. The tdoc detail page's Parse card enqueues `POST /jobs/parse/tdocs` (single-tdoc filter) and polls `partials/job_status.html` via `static/js/tdoc_parse.js`; the search pages share a 5-column grid form with a `sem` rerank input on `/search` and full filter parity on `/search/sem`. The web app builds ONE shared `OpenAICompatibleEmbedder` in `build_state` (or `None` when `embedding_base_url` is unset) and injects it into `build_tdoc_cr_service` / `build_search_service` / `build_semantic_search_service` so a single httpx client is shared per process.
+| Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. The six `GET /<resources>/schema` routes read the static `models/schema_info.py` registry (no DB) and share `templates/schema.html` + `partials/schema_results.html` grouped by table. List routes that pair with an HTMX filter form (e.g. meetings / tdocs / wis / TDoc search) must render a `partials/<resource>_results.html` fragment when the request sets `HX-Request: true` and the full page otherwise — the `outerHTML` swap target `#results` only fits a fragment, not a full HTML document. The tdoc detail page's Parse card enqueues `POST /jobs/parse/tdocs` (single-tdoc filter) and polls `partials/job_status.html` via `static/js/tdoc_parse.js`; the TDoc search pages share a 5-column grid form with a `sem` rerank input on `/tdocs/search` and full filter parity on `/tdocs/search/sem`. The web app builds ONE shared `OpenAICompatibleEmbedder` in `build_state` (or `None` when `embedding_base_url` is unset) and injects it into `build_tdoc_cr_service` / `build_search_service` / `build_semantic_search_service` so a single httpx client is shared per process.
 - The tdoc detail page (`tdoc_show.html`) renders two extra cards when the parent TDoc has been parsed: 'Required changes' (one entry per TTCN `required_changes` dict) for TTCN CRs, and 'Extracted changes' (one entry per body-derived change block) for non-TTCN CRs. Both cards are gated on the sidecar's presence and are mutually exclusive. |
 | Add a sync hub panel / sync hub page | `src/doc3gpp/web/routes/sync.py` + `src/doc3gpp/web/templates/sync.html` + `src/doc3gpp/web/static/js/sync_hub.js` | Each new enqueue panel follows the existing ten-form pattern (one `<form id="*-form">` per MCP tool, the tenth being `id="testcase-form"` → `POST /jobs/sync/testcases`) and reuses `bindJobPolling` + `JobRepository.create`. New routes that need HTTP exposure land in `web/routes/jobs.py` next to their existing siblings (e.g. `POST /jobs/parse/tdoc-url` closed the MCP-vs-HTTP gap for the MCP `parse_tdoc_url` tool). |
 | Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). The six `get_*_schema` tools are pure `schema_payload()` reads (no params). The MCP mount supports both `streamable_http` (default) and `sse` transports, selected via `[mcp] transport` in `doc3gpp.toml`; the streamable_http mount answers each POST with a plain `application/json` body (`json_response=True` in `src/doc3gpp/web/app.py::_mount_mcp_in_lifespan`) — the legacy SSE-streamed response is rejected by TypeScript-SDK clients with "Legacy MCP SSE endpoints are not supported"; browser origins are allowed via `[mcp] allowed_origins` (defaults to `http://127.0.0.1` and `http://localhost`). |
@@ -339,7 +339,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `TDocShowRecordByUrl.from_ftp_url(ftp_url, repos)` and emit the
   byte-identical JSON envelope the CLI emits; auto-sync is never
   triggered.
-- `doc3gpp search query "QUERY" [filters]` → `SearchService.search(query,
+- `doc3gpp tdoc search query "QUERY" [filters]` → `SearchService.search(query,
   filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
   `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →
   `list[SearchHit]` → CLI formatter. The ranking stage uses
@@ -350,11 +350,11 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `weight > 0` column, and the result surfaces in the hit's
   `previews` map only when the snippet contains a match. Fires
   the stale-index hint on the side (one-shot, gated on `--quiet`).
-- `doc3gpp search index --rebuild` → `SearchService.rebuild(...)`
+- `doc3gpp tdoc search index --rebuild` → `SearchService.rebuild(...)`
   generator → `repo.rebuild_batch(...)` per batch → per-row
   `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
   Resumable via `--resume`; cheap incremental via `--stale-only`.
-- `doc3gpp search sem QUERY [filters]` →
+- `doc3gpp tdoc search sem QUERY [filters]` →
   `SemanticSearchService.search` → original `QUERY` embedding (vector
   path, always on) → opt-in FTS5 path (the explicit `--fts5-query`
   string is preprocessed by `SearchQueryBuilder` — no stopword strip)
@@ -366,8 +366,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
   (0.0..1.0, default 0.5) blends the two ranks via
   `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) *
   (1 - fts5_weight)` (`k=60`); the flag is ignored when `--fts5-query`
-  is omitted. `search query` (FTS5-only) is unchanged.
-- `doc3gpp search index --rebuild-embeddings [--stale-only] [--batch N]
+  is omitted. `tdoc search query` (FTS5-only) is unchanged.
+- `doc3gpp tdoc search index --rebuild-embeddings [--stale-only] [--batch N]
   [--resume] [--quiet]` → `SemanticSearchService.rebuild_embeddings`
   → drops + recreates `vec_tdoc_embeddings`; iterates every `tdocs`
   row, calls `index_for_tdoc` per id (build embed text → chunk →

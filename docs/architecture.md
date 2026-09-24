@@ -669,7 +669,7 @@ and syncs each through the `--tsg` path below.
   `DOC3GPP_CACHE__PURGE_CONFIRM` is outside the env-var allowlist)
   → `TDocCache.purge_subdir(scope)` for the scoped case, or
   `TDocCache.purge()` for `--scope all`.
-- `doc3gpp search query "QUERY" [filters]` → `SearchService.search(query,
+- `doc3gpp tdoc search query "QUERY" [filters]` → `SearchService.search(query,
   filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
   `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →
   `list[SearchHit]` → CLI formatter. The ranking stage uses
@@ -680,11 +680,11 @@ and syncs each through the `--tsg` path below.
   `weight > 0` column, and the result surfaces in the hit's
   `previews` map only when the snippet contains a match. Fires
   the stale-index hint on the side (one-shot, gated on `--quiet`).
-- `doc3gpp search index --rebuild` → `SearchService.rebuild(...)`
+- `doc3gpp tdoc search index --rebuild` → `SearchService.rebuild(...)`
   generator → `repo.rebuild_batch(...)` per batch → per-row
   `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
   Resumable via `--resume`; cheap incremental via `--stale-only`.
-- `doc3gpp search sem QUERY [filters]` →
+- `doc3gpp tdoc search sem QUERY [filters]` →
   `SemanticSearchService.search` → original `QUERY` embedding (vector
   path, always on) → opt-in FTS5 path (the explicit `--fts5-query`
   string is preprocessed by `SearchQueryBuilder` — no stopword strip)
@@ -696,8 +696,8 @@ and syncs each through the `--tsg` path below.
   (0.0..1.0, default 0.5) blends the two ranks via
   `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) *
   (1 - fts5_weight)` (`k=60`); the flag is ignored when `--fts5-query`
-  is omitted. `search query` (FTS5-only) is unchanged.
-- `doc3gpp search index --rebuild-embeddings [--stale-only] [--batch N]
+  is omitted. `tdoc search query` (FTS5-only) is unchanged.
+- `doc3gpp tdoc search index --rebuild-embeddings [--stale-only] [--batch N]
   [--resume] [--quiet]` → `SemanticSearchService.rebuild_embeddings`
   → on a fresh (non-resume) run drops + recreates `vec_tdoc_embeddings`
   at the live embedder dim and stamps `embedding_dim` + `embedding_model`
@@ -760,6 +760,15 @@ disabled by default (`[server] enabled = false`); every
   `RUNNING` on startup and marks them `FAILED` with
   `error="orphaned_after_restart"` so the nav badge can't get stuck on
   a job the new process never claimed.
+
+Current TDoc search HTTP surfaces are `GET /tdocs/search`,
+`GET /tdocs/search/sem`, and `POST /jobs/tdocs/search/rebuild`. The old
+unscoped search routes were removed without redirects. The corresponding MCP
+tools are `search_tdoc`,
+`semantic_search_tdoc`, and `rebuild_tdoc_search_index`; the old plural
+TDoc tool aliases were removed. Spec-document search remains under
+`/spec-docs/search`, `/spec-docs/search/sem`, `search_spec_docs`, and
+`semantic_search_spec_docs`.
 
 
 ## Database Schema
@@ -1045,6 +1054,9 @@ the `spec doc` / `toc` / `search` triplet, 41 commands) plus the `server` group 
       for the parser's `full=True` mode. End-to-end filter-driven:
       candidates are the intersection of every supplied predicate, with
       CR-type as the implicit default and a `max_batch` cap.
+    - `search query`, `search index`, and `search sem` — TDoc FTS5,
+      index-maintenance, and hybrid semantic search commands nested under
+      `tdoc search`.
     - `show` — `--tdoc` (mutually exclusive with `--ftp-url`); renders
       the matching TDoc, the slim cover-page row from
       `tdoc_cr_cover_page` (URL-keyed on `tdoc.ftp_url`), the

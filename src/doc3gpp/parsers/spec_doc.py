@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import zipfile
 from dataclasses import dataclass, field
 
@@ -55,15 +56,33 @@ def list_spec_docx(zip_bytes: bytes) -> list[tuple[str, bytes]]:
 
 
 _TOC_TITLES = {"contents", "table of contents", "content"}
+_SECTION_PART_RE = re.compile(r"[A-Za-z0-9]+")
+_SECTION_TOKEN_RE = re.compile(r"\d+|[A-Za-z]+")
 
 
-def _first_section(blocks: list[Block]) -> tuple[int, ...] | None:
+def _natural_section_key(
+    section_no: str,
+) -> tuple[tuple[tuple[int, int | str], ...], ...] | None:
+    components: list[tuple[tuple[int, int | str], ...]] = []
+    for component in section_no.split("."):
+        if not component or _SECTION_PART_RE.fullmatch(component) is None:
+            return None
+        tokens: list[tuple[int, int | str]] = []
+        for token in _SECTION_TOKEN_RE.findall(component):
+            if token.isdigit():
+                tokens.append((0, int(token)))
+            else:
+                tokens.append((1, token.casefold()))
+        components.append(tuple(tokens))
+    return tuple(components)
+
+
+def _first_section(
+    blocks: list[Block],
+) -> tuple[tuple[tuple[int, int | str], ...], ...] | None:
     for b in blocks:
         if isinstance(b, HeadingBlock) and b.section_no:
-            try:
-                return tuple(int(p) for p in b.section_no.split("."))
-            except ValueError:
-                return None
+            return _natural_section_key(b.section_no)
     return None
 
 
@@ -77,10 +96,17 @@ def _is_toc_file(blocks: list[Block]) -> bool:
 def order_spec_files(
     files: list[SpecDocFileBlocks],
 ) -> list[SpecDocFileBlocks]:
-    # A front-matter file (TOC-like headings, no numeric section) sorts before
+    # A front-matter file (TOC-like headings, no numbered section) sorts before
     # everything — it is the cover/contents. Numbered files sort by section
     # tuple even when they contain a contents heading further down.
-    def norm(f: SpecDocFileBlocks) -> tuple[int, tuple[int, ...], int, str]:
+    def norm(
+        f: SpecDocFileBlocks,
+    ) -> tuple[
+        int,
+        tuple[tuple[tuple[int, int | str], ...], ...],
+        int,
+        str,
+    ]:
         sec = _first_section(f.blocks)
         if sec is None and _is_toc_file(f.blocks):
             return (-1, (), 0, f.source_file)

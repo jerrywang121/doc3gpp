@@ -359,8 +359,13 @@ class TableBlock:
 Block = HeadingBlock | ParagraphBlock | TableBlock
 
 
-_SECTION_RE = re.compile(r"^(\d+(?:\.\d+)*)\s+(.*)$", re.DOTALL)
-_CAPTION_RE = re.compile(r"^Table\s+(\d+(?:\.\d+)*)\s*:\s*(.+)$", re.IGNORECASE)
+_SECTION_RE = re.compile(r"^(\d[A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*)\s+(.*)$", re.DOTALL)
+_TABLE_IDENTIFIER = r"\d[A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*(?:-\d+)?"
+_CAPTION_RE = re.compile(
+    rf"^Table\s+(?P<table_no>{_TABLE_IDENTIFIER})"
+    r"(?:\s*:\s*|\s*-\s*|\s+)(?P<title>.+)$",
+    re.IGNORECASE,
+)
 
 
 def _split_section(text: str) -> tuple[str | None, str]:
@@ -368,6 +373,14 @@ def _split_section(text: str) -> tuple[str | None, str]:
     if m:
         return m.group(1), m.group(2).strip()
     return None, text.strip()
+
+
+def _split_table_caption(text: str) -> tuple[str | None, str | None]:
+    normalized = " ".join(text.split())
+    match = _CAPTION_RE.fullmatch(normalized)
+    if match is None:
+        return None, None
+    return match.group("table_no"), match.group("title").strip()
 
 
 def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingBlock | ParagraphBlock | TableBlock]:
@@ -420,13 +433,13 @@ def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingB
         if kind == "t":
             no, title = None, None
             if i > 0 and raw_blocks[i - 1][0] == "p":
-                m = _CAPTION_RE.match(raw_blocks[i - 1][1].text.strip())  # type: ignore[union-attr]
-                if m:
-                    no, title = m.group(1), m.group(2).strip()
+                no, title = _split_table_caption(
+                    raw_blocks[i - 1][1].text  # type: ignore[union-attr]
+                )
             if no is None and i + 1 < len(raw_blocks) and raw_blocks[i + 1][0] == "p":
-                m = _CAPTION_RE.match(raw_blocks[i + 1][1].text.strip())  # type: ignore[union-attr]
-                if m:
-                    no, title = m.group(1), m.group(2).strip()
+                no, title = _split_table_caption(
+                    raw_blocks[i + 1][1].text  # type: ignore[union-attr]
+                )
             out.append(TableBlock(payload.gfm, no, title))  # type: ignore[union-attr]
         else:
             out.append(payload)

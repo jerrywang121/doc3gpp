@@ -61,6 +61,25 @@ def test_order_numbered_first():
     assert [f.file_order for f in ordered] == [0, 1]
 
 
+def test_order_numbered_files_handles_alphanumeric_sections():
+    files = [
+        _f("late.docx", ("7.2A.3A", "Later")),
+        _f("early.docx", ("7.2A.3", "Earlier")),
+        _f("numeric.docx", ("7.10", "Numeric")),
+    ]
+    ordered = order_spec_files(files)
+    assert [f.source_file for f in ordered] == [
+        "early.docx", "late.docx", "numeric.docx",
+    ]
+
+
+def test_toc_preserves_alphanumeric_section_number():
+    entries, _ = extract_spec_toc(
+        [_f("part.docx", ("7.2A.3A", "Extended details"))]
+    )
+    assert entries[0].section_no == "7.2A.3A"
+
+
 def test_toc_tiebreak_first():
     toc = _f("toc.docx", (None, "x"))
     toc.blocks = [HeadingBlock(1, None, "Contents", "# Contents")]

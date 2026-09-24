@@ -93,3 +93,66 @@ staged.
   next parse replaces those intermediates before recording success.
 - The full suite retains the existing 108 warnings noted above; they are not
   introduced by this fix wave.
+
+## Fix Round 2
+
+### Finding Addressed
+
+A forced re-parse of an already parsed version could leave the old non-null
+`parsed_at` marker in place when post-chunk/cache work failed. A later
+non-force parse then treated the failed re-parse as an immutable success and
+skipped it.
+
+### Files Changed
+
+- `src/doc3gpp/storage/repositories/spec_doc_sql.py`
+  - `record_download()` now clears `parsed_at` and resets `chunk_count` when
+    refreshing an existing source row. This invalidates the previous success
+    marker at the force-download boundary while preserving the existing method
+    signature and repository flow.
+- `tests/integration/test_spec_doc_service.py`
+  - Added coverage that parses a version successfully, forces a re-parse that
+    fails during markdown-cache writing, verifies the old marker is cleared,
+    and verifies a subsequent non-force parse succeeds.
+- `.superpowers/sdd/2026-09-24-spec-doc-web-portal/final-fix-report.md`
+  - Appended this fix-round record. The approved untracked plan remains
+    untouched and unstaged.
+
+### Tests And Commands
+
+- `rtk pytest tests/integration/test_spec_doc_service.py -k 'failed_force_reparse_invalidates_old_marker_for_retry or post_chunk_cache_failure or force_reparses' -q`
+  - `3 passed`.
+- `rtk pytest tests/integration/test_spec_doc_repo.py -q`
+  - `2 passed`.
+- `rtk pytest tests/integration/test_spec_doc_service.py tests/integration/test_spec_doc_repo.py tests/integration/test_spec_doc_search_repo.py tests/integration/test_spec_doc_search_service.py tests/integration/test_spec_doc_web.py tests/unit/test_spec_doc_service_reads.py tests/unit/test_web_routes.py tests/unit/web/test_landing_version.py -q`
+  - `220 passed`.
+- `rtk ./scripts/test_sqlite.sh`
+  - `2357 passed, 1 skipped, 108 warnings`.
+- `rtk ruff check .`
+  - Clean.
+- `rtk git diff --check`
+  - Clean.
+
+### Self-Review
+
+- A successful force re-parse still reaches `record_parsed()` and restores a
+  non-null marker with the new chunk count.
+- A non-force immutable skip does not call `record_download()` when the ZIP
+  cache and parsed source already exist, so existing skip behavior is
+  unchanged.
+- If a forced download or a cache-miss download replaces an existing source,
+  its previous success marker is invalidated before parse work begins; any
+  later failure therefore remains retryable.
+- `record_parsed()` remains the only operation that marks a source as
+  successfully parsed.
+- The fix changes no schema, service signature, CLI, HTTP, MCP, or job
+  contract.
+
+### Concerns
+
+- As in the first fix round, TOC/chunk/cache writes and the source ledger use
+  separate repository/filesystem transactions. A failed force re-parse may
+  leave intermediate replacement data, but the source remains unparsed and a
+  subsequent retry replaces those intermediates before recording success.
+- The full suite retains the existing 108 warnings; no new warning category
+  was introduced by this round.

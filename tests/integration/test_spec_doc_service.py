@@ -95,6 +95,40 @@ def test_post_chunk_cache_failure_does_not_mark_source_parsed(sqlite_env, monkey
     assert calls == 2
 
 
+def test_failed_force_reparse_invalidates_old_marker_for_retry(sqlite_env, monkeypatch):
+    create_schema("all")
+    svc = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        fetcher=lambda url: _make_zip_bytes(),
+        cache_dir=sqlite_env.parent / "speccache",
+    )
+    first = svc.parse_many(["38.331"])
+    assert "38.331" in first.successes
+    source = svc.get_source("38.331", "18.5.0")
+    assert source is not None and source.parsed_at is not None
+
+    original_write = svc._write_markdown_cache
+    calls = 0
+
+    def fail_once(spec_id, version, ordered):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("markdown cache unavailable")
+        return original_write(spec_id, version, ordered)
+
+    monkeypatch.setattr(svc, "_write_markdown_cache", fail_once)
+
+    forced = svc.parse_many(["38.331"], force=True)
+    assert "38.331" in forced.failures
+    source = svc.get_source("38.331", "18.5.0")
+    assert source is not None and source.parsed_at is None
+
+    retry = svc.parse_many(["38.331"])
+    assert "38.331" in retry.successes
+    assert calls == 2
+
+
 def test_fetch_skip_uses_zip_cache_without_network(sqlite_env):
     create_schema("all")
     zip_bytes = _make_zip_bytes()

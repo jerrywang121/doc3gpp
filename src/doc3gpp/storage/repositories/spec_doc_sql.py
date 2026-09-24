@@ -63,6 +63,8 @@ class SQLAlchemySpecDocRepository:
                 existing.ftp_url = ftp_url
                 existing.docx_count = docx_count
                 existing.downloaded_at = now
+                existing.parsed_at = None
+                existing.chunk_count = 0
             else:
                 session.add(
                     SpecDocSourceORM(

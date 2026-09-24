@@ -40,6 +40,16 @@ class FakeEmbedder:
         return np.stack(vecs)
 
 
+class RecordingEmbedder(FakeEmbedder):
+    def __init__(self, dim: int = 4, model_name: str = "fake-model") -> None:
+        super().__init__(dim=dim, model_name=model_name)
+        self.seen_texts: list[str] = []
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        self.seen_texts = list(texts)
+        return super().encode(texts)
+
+
 def _seed():
     repo = SQLAlchemySpecDocRepository()
     repo.record_download(
@@ -271,6 +281,48 @@ def test_semantic_index_empty_version_removes(sqlite_env):
         fts5_weight=0.5,
     )
     assert hits == []
+
+
+def test_semantic_index_joins_only_present_chunk_metadata(sqlite_env):
+    create_schema("all")
+    repo = SQLAlchemySpecDocRepository()
+    repo.record_download(
+        "38.331", "18.5.0", release="Rel-18", ftp_url="https://x", docx_count=2
+    )
+    repo.replace_chunks(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=[
+            ChunkDraft(
+                file_order=0,
+                source_file="a.docx",
+                sections="5 Scope",
+                text="scope body",
+            ),
+            ChunkDraft(
+                file_order=0,
+                source_file="a.docx",
+                tables="Table 1 Values",
+                text="table body",
+            ),
+        ],
+    )
+    embedder = RecordingEmbedder()
+    vector = SimpleNamespace(upsert_for_version=lambda *_args: None)
+    service = SpecDocSemanticService(
+        fts5_service=SpecDocSearchService(),
+        embedder=embedder,
+        vector_repo=vector,
+        settings=get_settings(),
+    )
+
+    service.index_for_version("38.331", "18.5.0")
+
+    assert embedder.seen_texts == [
+        "5 Scope\nscope body",
+        "Table 1 Values\ntable body",
+    ]
 
 
 def test_factory_builders_succeed(sqlite_env):

@@ -36,6 +36,23 @@ def test_spec_doc_service_uses_dedicated_cache_root(tmp_path) -> None:
     assert "tdocs" not in str(service._zip_path("36.508", "19.2.0"))
 
 
+def test_explicit_cache_dir_overrides_settings_cache_root(tmp_path) -> None:
+    settings_root = tmp_path / "settings-specs"
+    explicit_root = tmp_path / "explicit"
+    service = SpecDocService(
+        spec_repo=MagicMock(),
+        settings=Settings(spec_doc=SpecDocSettings(cache_dir=settings_root)),
+        cache_dir=explicit_root,
+    )
+
+    assert service._zip_path("36.508", "19.2.0") == (
+        explicit_root / "zips" / "36.508" / "19.2.0.zip"
+    )
+    assert service._markdown_dir("36.508", "19.2.0") == (
+        explicit_root / "markdown" / "36.508" / "19.2.0"
+    )
+
+
 def test_list_chunks_forwards_version_filters_and_paging() -> None:
     repo = MagicMock()
     expected = [

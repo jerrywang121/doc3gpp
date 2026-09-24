@@ -158,7 +158,7 @@ class SpecDocSemanticService:
             spec_id, version=version, limit=100000
         )
         texts = [
-            f"{c.sections or ''}\n{c.tables or ''}\n{c.text}".strip()
+            "\n".join(part for part in (c.sections, c.tables, c.text) if part)
             for c in chunks
         ]
         if not texts:

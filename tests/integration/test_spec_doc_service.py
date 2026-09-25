@@ -36,6 +36,23 @@ def _make_zip_bytes(paragraphs=("hello handover world",), name="38331-j30.docx")
     return zb.getvalue()
 
 
+def _make_chunk_context_zip_bytes():
+    doc = Document()
+    doc.add_heading("1 Scope", level=1)
+    doc.add_paragraph("Body text for the scope.")
+    doc.add_paragraph("Table 1: Values")
+    table = doc.add_table(rows=2, cols=1)
+    table.cell(0, 0).text = "A"
+    table.cell(1, 0).text = "value"
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    zb = io.BytesIO()
+    with zipfile.ZipFile(zb, "w") as z:
+        z.writestr("38331-j30.docx", buf.getvalue())
+    return zb.getvalue()
+
+
 def _versions():
     return {
         "38.331": [
@@ -64,6 +81,26 @@ def test_parse_many_buckets_and_identity_skip(sqlite_env):
     assert "38.331" in r2.skipped  # immutable: second parse skips
     toc = svc.get_toc("38.331", "18.5.0")
     assert toc.entries and toc.entries[0].section_no == "1"
+
+
+def test_parse_stores_chunk_content_and_context(sqlite_env):
+    create_schema("all")
+    svc = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        fetcher=lambda url: _make_chunk_context_zip_bytes(),
+        cache_dir=sqlite_env.parent / "speccache",
+    )
+
+    svc.parse("38.331")
+    chunks = svc.list_chunks("38.331", version="18.5.0")
+
+    assert chunks
+    chunk = chunks[0]
+    assert "# 1 Scope" in chunk.text
+    assert "Table 1: Values" in chunk.text
+    assert "| A |" in chunk.text
+    assert chunk.sections == "1 Scope"
+    assert chunk.tables == "1 Values"
 
 
 def test_post_chunk_cache_failure_does_not_mark_source_parsed(sqlite_env, monkeypatch):

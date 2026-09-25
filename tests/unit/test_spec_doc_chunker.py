@@ -139,7 +139,7 @@ def test_overlap_prefix_preserves_rendered_heading_content():
 
     assert len(chunks) == 2
     assert chunks[0].text.endswith("# Later")
-    assert chunks[1].text.startswith("# Later three four")
+    assert chunks[1].text.startswith("# Later\n\nthree four")
     assert chunks[1].sections == "Later"
 
 
@@ -155,7 +155,7 @@ def test_overlap_carries_only_metadata_from_trailing_table_tokens():
     chunks = chunk_blocks(blocks, chunk_size=18, chunk_overlap=3, max_chunk_chars=1500)
 
     assert chunks[0].tables == "1 Earlier\n2 Later"
-    assert chunks[1].text.startswith("| 2 | after table")
+    assert chunks[1].text.startswith("| 2 |\n\nafter table")
     assert chunks[1].tables == "2 Later"
 
 
@@ -172,6 +172,43 @@ def test_overlap_does_not_add_metadata_when_prefix_is_already_present():
 
     assert chunks[0].text == chunks[1].text
     assert chunks[1].tables == "2 Later"
+
+
+def test_overlap_preserves_table_row_structure_at_section_boundary():
+    transport = (
+        "| Transport channel | Minimum number | Comments |\n"
+        "| --- | --- | --- |\n"
+        "| BCH | 1 |  |\n"
+        "| PCH | 1 |  |\n"
+        "| RACH | 1 |  |\n"
+        "| DL-SCH | n <FFS> |  |\n"
+        "| UL-SCH | n <FFS> |  |"
+    )
+    physical = (
+        "| Physical channel | Minimum number | Comments |\n"
+        "| --- | --- | --- |\n"
+        "| PDCCH | 1 | Control channel |\n"
+        "| PDSCH | 1 | Shared channel |"
+    )
+    chunks = chunk_blocks(
+        [
+            ParagraphBlock("4.2.2.1.1.2    Transport channels"),
+            TableBlock(transport, "4.2.2.1.1.2-1", "Transport channels"),
+            ParagraphBlock("4.2.2.1.1.3    Physical channels"),
+            TableBlock(physical, "4.2.2.1.1.3-1", "Physical channels"),
+        ],
+        chunk_size=512,
+        chunk_overlap=8,
+        max_chunk_chars=240,
+    )
+
+    assert len(chunks) == 2
+    assert chunks[1].text.startswith(
+        "| n <FFS> |  |\n\n"
+        "4.2.2.1.1.3    Physical channels\n\n"
+        "| Physical channel | Minimum number | Comments |"
+    )
+    assert "| Physical channel | Minimum number | Comments |\n| --- | --- | --- |" in chunks[1].text
 
 
 def test_repeated_metadata_is_deduplicated_in_source_order():

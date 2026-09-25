@@ -24,8 +24,9 @@ class _SourceUnit:
     file_order: int
     source_file: str
     atomic: bool
+    join_before: str = "\n\n"
     tokens: tuple[str, ...] = field(init=False)
-    token_metadata: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = field(
+    token_metadata: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...] = field(
         init=False
     )
 
@@ -35,7 +36,10 @@ class _SourceUnit:
         object.__setattr__(
             self,
             "token_metadata",
-            tuple((self.sections, self.tables) for _ in tokens),
+            tuple(
+                (self.sections, self.tables, self.join_before if i == 0 else "")
+                for i, _ in enumerate(tokens)
+            ),
         )
 
     @property
@@ -106,8 +110,13 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                             acc.append(toks[start])
                             acc_chars = len(acc[0])  # single huge token: emit alone
                         units.append(_SourceUnit(
-                            " ".join(acc), sections, tables, cur_file_order, cur_file,
+                            " ".join(acc),
+                            sections,
+                            tables,
+                            cur_file_order,
+                            cur_file,
                             False,
+                            " " if start else "\n\n",
                         ))
                         start += len(acc)
                 else:
@@ -137,13 +146,13 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                     ))
     chunks: list[ChunkDraft] = []
     chunk_token_metadata: list[
-        list[tuple[tuple[str, ...], tuple[str, ...]]]
+        list[tuple[tuple[str, ...], tuple[str, ...], str]]
     ] = []
     cur: list[str] = []
     cur_tokens = 0
     cur_sections: list[str] = []
     cur_tables: list[str] = []
-    cur_token_metadata: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+    cur_token_metadata: list[tuple[tuple[str, ...], tuple[str, ...], str]] = []
     cur_file_order, cur_file = file_order, source_file
 
     def add_metadata(sections: tuple[str, ...], tables: tuple[str, ...]) -> None:
@@ -198,17 +207,25 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
         cur_tokens += toks
         cur_token_metadata.extend(unit.token_metadata)
     flush()
-    # overlap: prepend trailing tokens of previous chunk
+    # overlap: prepend an exact trailing substring from the previous chunk
     if chunk_overlap > 0:
         for i in range(1, len(chunks)):
-            prev_toks = chunks[i - 1].text.split()
-            if prev_toks:
-                overlap_toks = prev_toks[-chunk_overlap:]
-                prefix = " ".join(overlap_toks)
+            prev_text = chunks[i - 1].text
+            token_matches = list(re.finditer(r"\S+", prev_text))
+            if token_matches:
+                overlap_start = max(0, len(token_matches) - chunk_overlap)
+                overlap_matches = token_matches[overlap_start:]
+                overlap_toks = [match.group() for match in overlap_matches]
+                prefix = prev_text[overlap_matches[0].start():]
                 next_toks = chunks[i].text.split()
                 if next_toks[:len(overlap_toks)] != overlap_toks:
-                    chunks[i].text = prefix + " " + chunks[i].text
-                    overlap_metadata = chunk_token_metadata[i - 1][-chunk_overlap:]
+                    join_before = (
+                        chunk_token_metadata[i][0][2]
+                        if chunk_token_metadata[i]
+                        else "\n\n"
+                    )
+                    chunks[i].text = prefix + join_before + chunks[i].text
+                    overlap_metadata = chunk_token_metadata[i - 1][-len(overlap_matches):]
                     chunk_token_metadata[i] = overlap_metadata + chunk_token_metadata[i]
                     for field_index, field in enumerate(("sections", "tables")):
                         overlap_entries: list[str] = []

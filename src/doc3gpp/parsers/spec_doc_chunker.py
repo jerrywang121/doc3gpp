@@ -2,7 +2,13 @@
 from __future__ import annotations
 import re
 from doc3gpp.models.spec_doc import ChunkDraft
-from doc3gpp.parsers.docx_converter import Block, HeadingBlock, ParagraphBlock, TableBlock
+from doc3gpp.parsers.docx_converter import (
+    Block,
+    HeadingBlock,
+    ParagraphBlock,
+    TableBlock,
+    _split_table_caption,
+)
 
 _SENT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -18,17 +24,41 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
         raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
     if chunk_overlap >= chunk_size:
         raise ValueError("chunk_overlap must be < chunk_size")
-    units: list[tuple[str, tuple[str, ...], tuple[str, ...], int, str, bool]] = []
+    units: list[
+        tuple[str, tuple[str, ...], tuple[str, ...], int, str, bool, bool, int]
+    ] = []
     cur_section = None
     cur_file_order, cur_file = file_order, source_file
 
     def label(number: str | None, title: str | None) -> str:
         return f"{number + ' ' if number else ''}{title or ''}".strip()
 
-    for b in blocks:
+    for block_index, b in enumerate(blocks):
         if isinstance(b, HeadingBlock):
             cur_section = label(b.section_no, b.title)
+            sections = (cur_section,) if cur_section else ()
+            units.append((
+                b.raw,
+                sections,
+                (),
+                cur_file_order,
+                cur_file,
+                False,
+                True,
+                len(b.raw.split()) if b.section_no is None or b.level > 1 else 0,
+            ))
         elif isinstance(b, ParagraphBlock):
+            tables: tuple[str, ...] = ()
+            caption_no, caption_title = _split_table_caption(b.text)
+            if caption_no is not None:
+                for adjacent_index in (block_index - 1, block_index + 1):
+                    if 0 <= adjacent_index < len(blocks):
+                        adjacent = blocks[adjacent_index]
+                        if isinstance(adjacent, TableBlock):
+                            table_label = label(adjacent.table_no, adjacent.table_title)
+                            if table_label:
+                                tables = (table_label,)
+                            break
             for s in _sentences(b.text) or [b.text]:
                 sections = (cur_section,) if cur_section else ()
                 # A single sentence can still exceed either budget: split its tokens into
@@ -49,10 +79,12 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                         if not acc:
                             acc.append(toks[start])
                             acc_chars = len(acc[0])  # single huge token: emit alone
-                        units.append((" ".join(acc), sections, (), cur_file_order, cur_file, False))
+                        units.append((" ".join(acc), sections, tables, cur_file_order, cur_file,
+                            False, False, len(acc)))
                         start += len(acc)
                 else:
-                    units.append((s, sections, (), cur_file_order, cur_file, False))
+                    units.append((s, sections, tables, cur_file_order, cur_file,
+                        False, False, len(toks)))
         elif isinstance(b, TableBlock):
             lines = b.gfm.splitlines()
             header = "\n".join(lines[:2]) if len(lines) >= 2 else (lines[0] if lines else "")
@@ -63,13 +95,15 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
             # Fitting = fits the char ceiling: kept whole even when tokens overflow
             # chunk_size (allowed, like TDoc's whole-table preference).
             if len(whole) <= max_chunk_chars:
-                units.append((whole, sections, tables, cur_file_order, cur_file, True))
+                units.append((whole, sections, tables, cur_file_order, cur_file,
+                    True, False, len(whole.split())))
             else:
                 for r in rows:
                     if not r.strip():
                         continue
-                    units.append((header + "\n" + r if header else r, sections, tables,
-                        cur_file_order, cur_file, True))
+                    row_text = header + "\n" + r if header else r
+                    units.append((row_text, sections, tables, cur_file_order, cur_file,
+                        True, False, len(row_text.split())))
     chunks: list[ChunkDraft] = []
     chunk_token_metadata: list[
         list[tuple[tuple[str, ...], tuple[str, ...]]]
@@ -104,12 +138,11 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
         cur_sections, cur_tables = [], []
         cur_token_metadata = []
 
-    for text, sections, tables, unit_file_order, unit_file, atomic in units:
+    for text, sections, tables, unit_file_order, unit_file, atomic, is_heading, unit_tokens in units:
         toks = len(text.split())
         if atomic:
             if cur and (cur_tokens + toks > chunk_size or len("\n\n".join(cur)) + len(text) > max_chunk_chars):
                 flush()
-            add_metadata(sections, tables)
             # oversized single row: emit alone (rows are atomic, never split mid-row)
             if toks > chunk_size or len(text) > max_chunk_chars:
                 flush()
@@ -122,15 +155,18 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                 ))
                 chunk_token_metadata.append([(sections, tables)] * toks)
                 continue
+            add_metadata(sections, tables)
             cur.append(text)
             cur_tokens += toks
             cur_token_metadata.extend([(sections, tables)] * toks)
             continue
-        if cur and (cur_tokens + toks > chunk_size or len("\n\n".join(cur)) + len(text) + 2 > max_chunk_chars):
+        if is_heading and cur and cur_tokens >= chunk_size:
+            flush()
+        if cur and (cur_tokens + unit_tokens > chunk_size or len("\n\n".join(cur)) + len(text) + 2 > max_chunk_chars):
             flush()
         add_metadata(sections, tables)
         cur.append(text)
-        cur_tokens += toks
+        cur_tokens += unit_tokens
         cur_token_metadata.extend([(sections, tables)] * toks)
     flush()
     # overlap: prepend trailing tokens of previous chunk

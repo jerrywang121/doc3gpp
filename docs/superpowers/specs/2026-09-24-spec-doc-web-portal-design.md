@@ -88,7 +88,7 @@ workflow is orphaned:
 Add a human-facing route in `src/doc3gpp/web/routes/spec_docs.py`:
 
 ```text
-GET /specs/{spec_id}/docs?version=<version>&release=&section=&limit=20&offset=0
+GET /specs/{spec_id}/docs?version=<version>&release=&sections=&tables=&limit=20&offset=0
 ```
 
 The route will:

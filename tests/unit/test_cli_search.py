@@ -66,29 +66,33 @@ def test_spec_doc_cli_json_uses_combined_metadata(monkeypatch):
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
+    assert set(payload[0]) == {
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "sections",
+        "tables",
+        "chunk_index",
+        "text",
+        "score",
+        "previews",
+    }
     assert payload[0]["sections"] == "5 Scope"
     assert payload[0]["tables"] == "Table 1 Values"
-    assert "section_no" not in payload[0]
     assert service.filters.sections == "%5%"
     assert service.filters.tables == "%UE%"
 
 
-def test_spec_doc_cli_rejects_singular_section_filter(monkeypatch):
-    class FakeSearch:
-        def search(self, _query, _filters):
-            return []
-
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
-    monkeypatch.setattr(
-        "doc3gpp.cli.build_spec_doc_search_service", lambda: FakeSearch()
-    )
+def test_spec_doc_cli_help_lists_plural_metadata_filters():
     result = CliRunner().invoke(
         app,
-        ["spec", "doc", "search", "query", "handover", "--section", "5"],
+        ["spec", "doc", "search", "query", "--help"],
     )
 
-    assert result.exit_code != 0
-    assert "No such option" in result.output
+    assert result.exit_code == 0, result.output
+    assert "--sections" in result.output
+    assert "--tables" in result.output
 
 
 def test_search_help_lists_filters() -> None:

@@ -785,9 +785,20 @@ def test_spec_doc_mcp_exposes_plural_metadata_filters(sqlite_env) -> None:
     assert semantic_result.is_error is False
     assert json.loads(search_result.content[0].text)[0]["sections"] == "5 Scope"
     nested = json.loads(semantic_result.content[0].text)[0]["hit"]
+    assert set(nested) == {
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "sections",
+        "tables",
+        "chunk_index",
+        "text",
+        "score",
+        "previews",
+    }
     assert nested["sections"] == "5 Scope"
     assert nested["tables"] == "Table 1 Values"
-    assert "section_no" not in nested
     assert search_service.filters.sections == "%5%"
     assert search_service.filters.tables == "%UE%"
     assert semantic_service.kwargs["filters"].sections == "%5%"

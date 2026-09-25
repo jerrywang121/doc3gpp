@@ -2891,9 +2891,20 @@ def test_spec_doc_search_accepts_sections_and_tables(client: TestClient) -> None
 
     assert response.status_code == 200
     payload = response.json()
+    assert set(payload[0]) == {
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "sections",
+        "tables",
+        "chunk_index",
+        "text",
+        "score",
+        "previews",
+    }
     assert payload[0]["sections"] == "1 Handover"
     assert payload[0]["tables"] is None
-    assert "section_no" not in payload[0]
 
     assert service.last_filters.sections == "%5.1%"
     assert service.last_filters.tables == "%UE%"

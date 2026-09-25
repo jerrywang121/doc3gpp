@@ -60,8 +60,18 @@ def test_spec_doc_chunk_schema_has_only_combined_metadata(sqlite_env):
         column["name"]
         for column in inspect(get_specdata_engine()).get_columns("spec_doc_chunks")
     }
-    assert {"sections", "tables"}.issubset(columns)
-    assert not {"section_no", "section_title", "table_no", "table_title"} & columns
+    assert columns == {
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "file_order",
+        "source_file",
+        "chunk_index",
+        "sections",
+        "tables",
+        "text",
+    }
 
 
 def test_replace_and_list_chunks_round_trip_metadata(sqlite_env):

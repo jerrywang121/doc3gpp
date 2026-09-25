@@ -16,10 +16,21 @@ def test_schema_field_order_and_keys() -> None:
 
 def test_spec_doc_schema_lists_combined_chunk_fields() -> None:
     payload = schema_payload("spec_doc")
-    fields = {row["field"] for row in payload}
-    assert "sections" in fields
-    assert "tables" in fields
-    assert not {"section_no", "section_title", "table_no", "table_title"} & fields
+    chunk_fields = [
+        row["field"] for row in payload if row["table"] == "spec_doc_chunks"
+    ]
+    assert chunk_fields == [
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "file_order",
+        "source_file",
+        "chunk_index",
+        "sections",
+        "tables",
+        "text",
+    ]
 
 
 def test_tsg_payload_shape() -> None:

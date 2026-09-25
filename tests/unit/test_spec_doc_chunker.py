@@ -52,6 +52,18 @@ def test_heading_markdown_is_kept_in_chunk_text():
     assert "body" in chunks[0].text
 
 
+def test_numbered_level_one_heading_counts_toward_chunk_size():
+    heading = "# 1 Scope"
+    chunks = chunk_blocks(
+        [HeadingBlock(1, "1", "Scope", heading), ParagraphBlock("body")],
+        chunk_size=3,
+        chunk_overlap=0,
+        max_chunk_chars=1500,
+    )
+
+    assert [chunk.text for chunk in chunks] == [heading, "body"]
+
+
 def test_chunk_collects_multiple_tables():
     blocks = [
         TableBlock("| A |\n| --- |\n| 1 |", "7.2A.3", "First values"),
@@ -68,7 +80,7 @@ def test_overlap_carries_previous_section_metadata():
         HeadingBlock(1, "6", "Current", "# 6 Current"),
         ParagraphBlock("five six seven eight"),
     ]
-    chunks = chunk_blocks(blocks, chunk_size=4, chunk_overlap=2, max_chunk_chars=1500)
+    chunks = chunk_blocks(blocks, chunk_size=7, chunk_overlap=2, max_chunk_chars=1500)
     assert chunks[1].text.startswith("three four")
     assert "5 Previous" in (chunks[1].sections or "")
     assert "6 Current" in (chunks[1].sections or "")
@@ -83,7 +95,7 @@ def test_overlap_carries_only_metadata_from_trailing_section_tokens():
         ParagraphBlock("five six"),
     ]
 
-    chunks = chunk_blocks(blocks, chunk_size=4, chunk_overlap=2, max_chunk_chars=1500)
+    chunks = chunk_blocks(blocks, chunk_size=10, chunk_overlap=2, max_chunk_chars=1500)
 
     assert chunks[0].sections == "5 Earlier\n6 Later"
     assert chunks[1].text.startswith("three four")
@@ -144,6 +156,21 @@ def test_overlap_carries_only_metadata_from_trailing_table_tokens():
 
     assert chunks[0].tables == "1 Earlier\n2 Later"
     assert chunks[1].text.startswith("| 2 | after table")
+    assert chunks[1].tables == "2 Later"
+
+
+def test_overlap_does_not_add_metadata_when_prefix_is_already_present():
+    chunks = chunk_blocks(
+        [
+            TableBlock("| A |", "1", "Earlier"),
+            TableBlock("| A |", "2", "Later"),
+        ],
+        chunk_size=3,
+        chunk_overlap=1,
+        max_chunk_chars=1500,
+    )
+
+    assert chunks[0].text == chunks[1].text
     assert chunks[1].tables == "2 Later"
 
 

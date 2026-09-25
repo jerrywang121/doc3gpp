@@ -2638,8 +2638,8 @@ Behavior:
   (`rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) * (1 - fts5_weight)`,
   `k = 60`); without it pure vector KNN returns dressed as
   `SpecDocSemanticHit` with `rank_fts5=None` (`hit=None` for vector-only chunks).
-- Vector-side `spec_id`/`version` are exact `=` and `release`/`sections`/`tables`
-  plain `LIKE` (no rich grammar — pass plain strings for exact agreement); the
+- Vector-side `spec_id`/`version`/`release` are exact `=` and `sections`/`tables`
+  use plain `LIKE` (no rich grammar — pass plain strings for exact agreement); the
   FTS5 side interprets the rich grammar. Requires
   `[semantic_search].embedding_base_url`; without it the command exits `1`.
 

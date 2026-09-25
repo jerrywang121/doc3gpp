@@ -199,8 +199,16 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                     {
                         "chunk_id": chunk.chunk_id,
                         "text": normalize_query(chunk.text or ""),
-                        "sections": normalize_query(chunk.sections or ""),
-                        "tables": normalize_query(chunk.tables or ""),
+                        "sections": (
+                            normalize_query(chunk.sections)
+                            if chunk.sections is not None
+                            else None
+                        ),
+                        "tables": (
+                            normalize_query(chunk.tables)
+                            if chunk.tables is not None
+                            else None
+                        ),
                         "spec_id": normalize_query(chunk.spec_id),
                         "version": normalize_query(chunk.version),
                         "release": (
@@ -366,6 +374,16 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
         :meth:`upsert_for_version`.
         """
         last_id = after_id if after_id is not None else ""
+        stale_cutoff: str | None = None
+        if stale_only:
+            with self._engine.begin() as conn:
+                stale_cutoff = conn.execute(
+                    text(
+                        "SELECT value FROM spec_doc_search_meta "
+                        "WHERE key = 'last_indexed_parsed_at'"
+                    )
+                ).scalar()
+            stale_cutoff = str(stale_cutoff or "")
         while True:
             sql = [
                 "SELECT spec_id, version FROM spec_doc_sources",
@@ -373,12 +391,8 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
             ]
             params: dict[str, Any] = {"last_id": last_id, "limit": batch_size}
             if stale_only:
-                sql.append(" AND parsed_at > COALESCE((")
-                sql.append(
-                    "   SELECT value FROM spec_doc_search_meta "
-                    "   WHERE key = 'last_indexed_parsed_at'"
-                    " ), '')"
-                )
+                sql.append(" AND parsed_at > :stale_cutoff")
+                params["stale_cutoff"] = stale_cutoff
             sql.append(" ORDER BY spec_id ASC, version ASC LIMIT :limit")
             with self._engine.begin() as conn:
                 rows = conn.execute(text("\n".join(sql)), params).all()

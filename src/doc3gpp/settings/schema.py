@@ -509,6 +509,11 @@ class SpecDocSettings(BaseModel):
         ),
     )
 
+    @field_validator("cache_dir", mode="after")
+    @classmethod
+    def _expand_cache_dir(cls, value: Path) -> Path:
+        return value.expanduser()
+
     @field_validator("bm25_weights", mode="before")
     @classmethod
     def _validate_bm25_weights_length(cls, value: object) -> object:

@@ -33,6 +33,16 @@ def test_spec_doc_cache_is_not_nested_under_tdoc_cache():
     assert Settings().cache.dir != settings.cache_dir
 
 
+def test_spec_doc_configured_cache_dir_expands_user_home():
+    configured = SpecDocSettings(cache_dir="~/configured-spec-cache")
+    assert configured.cache_dir == Path.home() / "configured-spec-cache"
+
+
+def test_spec_doc_explicit_absolute_cache_dir_is_preserved(tmp_path):
+    configured = SpecDocSettings(cache_dir=tmp_path / "specs")
+    assert configured.cache_dir == tmp_path / "specs"
+
+
 def test_spec_doc_output_fields_use_combined_metadata():
     assert Settings().output.fields.spec_doc[3:5] == ["sections", "tables"]
 

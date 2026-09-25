@@ -1,3 +1,5 @@
+from dataclasses import fields
+
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
     SpecDocChunk,
@@ -5,6 +7,7 @@ from doc3gpp.models.spec_doc import (
     SpecDocSearchFilters,
     SpecDocToc,
 )
+from doc3gpp.settings.schema import _SPEC_DOC_SNIPPET_COLUMNS
 
 
 def test_chunk_contract_has_combined_metadata_only():
@@ -17,8 +20,36 @@ def test_chunk_contract_has_combined_metadata_only():
     )
     assert chunk.sections == "7.2A.3 Scope\n7.2A.3A Details"
     assert chunk.tables == "Table 1 UE values\nTable 2 Timers"
-    assert not hasattr(chunk, "section_no")
-    assert not hasattr(chunk, "table_title")
+    assert [field.name for field in fields(chunk)] == [
+        "file_order",
+        "source_file",
+        "sections",
+        "tables",
+        "text",
+    ]
+
+
+def test_spec_doc_contract_removes_all_split_metadata_fields():
+    removed = {
+        "section",
+        "section_no",
+        "section_title",
+        "table_no",
+        "table_title",
+    }
+    for dto in (ChunkDraft, SpecDocChunk, SpecDocHit, SpecDocSearchFilters):
+        assert not removed & {field.name for field in fields(dto)}
+
+
+def test_spec_doc_snippet_columns_are_in_fts_order():
+    assert _SPEC_DOC_SNIPPET_COLUMNS == (
+        "text",
+        "sections",
+        "tables",
+        "spec_id",
+        "version",
+        "release",
+    )
 
 
 def test_search_filters_use_plural_metadata_names():

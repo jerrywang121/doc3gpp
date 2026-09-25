@@ -71,10 +71,14 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                     units.append((header + "\n" + r if header else r, sections, tables,
                         cur_file_order, cur_file, True))
     chunks: list[ChunkDraft] = []
+    chunk_token_metadata: list[
+        list[tuple[tuple[str, ...], tuple[str, ...]]]
+    ] = []
     cur: list[str] = []
     cur_tokens = 0
     cur_sections: list[str] = []
     cur_tables: list[str] = []
+    cur_token_metadata: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
     cur_file_order, cur_file = file_order, source_file
 
     def add_metadata(sections: tuple[str, ...], tables: tuple[str, ...]) -> None:
@@ -86,7 +90,7 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                 cur_tables.append(table)
 
     def flush():
-        nonlocal cur, cur_tokens, cur_sections, cur_tables
+        nonlocal cur, cur_tokens, cur_sections, cur_tables, cur_token_metadata
         if cur:
             chunks.append(ChunkDraft(
                 file_order=cur_file_order,
@@ -95,8 +99,10 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                 tables="\n".join(cur_tables) or None,
                 text="\n\n".join(cur).strip(),
             ))
+            chunk_token_metadata.append(cur_token_metadata)
         cur, cur_tokens = [], 0
         cur_sections, cur_tables = [], []
+        cur_token_metadata = []
 
     for text, sections, tables, unit_file_order, unit_file, atomic in units:
         toks = len(text.split())
@@ -114,15 +120,18 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                     tables="\n".join(tables) or None,
                     text=text,
                 ))
+                chunk_token_metadata.append([(sections, tables)] * toks)
                 continue
             cur.append(text)
             cur_tokens += toks
+            cur_token_metadata.extend([(sections, tables)] * toks)
             continue
         if cur and (cur_tokens + toks > chunk_size or len("\n\n".join(cur)) + len(text) + 2 > max_chunk_chars):
             flush()
         add_metadata(sections, tables)
         cur.append(text)
         cur_tokens += toks
+        cur_token_metadata.extend([(sections, tables)] * toks)
     flush()
     # overlap: prepend trailing tokens of previous chunk
     if chunk_overlap > 0:
@@ -130,14 +139,20 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
             prev_toks = chunks[i - 1].text.split()
             if prev_toks:
                 prefix = " ".join(prev_toks[-chunk_overlap:])
+                overlap_metadata = chunk_token_metadata[i - 1][-chunk_overlap:]
                 if not chunks[i].text.startswith(prefix):
                     chunks[i].text = prefix + " " + chunks[i].text
-            for field in ("sections", "tables"):
-                previous = (getattr(chunks[i - 1], field) or "").splitlines()
-                current = (getattr(chunks[i], field) or "").splitlines()
-                merged: list[str] = []
-                for entry in previous + current:
-                    if entry and entry not in merged:
-                        merged.append(entry)
-                setattr(chunks[i], field, "\n".join(merged) or None)
+                chunk_token_metadata[i] = overlap_metadata + chunk_token_metadata[i]
+                for field_index, field in enumerate(("sections", "tables")):
+                    overlap_entries: list[str] = []
+                    for metadata in overlap_metadata:
+                        for entry in metadata[field_index]:
+                            if entry and entry not in overlap_entries:
+                                overlap_entries.append(entry)
+                    current = (getattr(chunks[i], field) or "").splitlines()
+                    merged: list[str] = []
+                    for entry in overlap_entries + current:
+                        if entry and entry not in merged:
+                            merged.append(entry)
+                    setattr(chunks[i], field, "\n".join(merged) or None)
     return [c for c in chunks if c.text.strip()]

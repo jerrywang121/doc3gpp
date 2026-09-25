@@ -316,7 +316,7 @@ Per-layer modules:
       `vec_spec_doc_embeddings` + `vec_spec_doc_meta`, gated on
       sqlite + sqlite-vec; `upsert_for_version` /
       `remove_for_version` / `knn` with exact `=` on `spec_id` /
-      `version` and plain `LIKE` on `release` / `sections` / `tables`
+      `version` / `release` and plain `LIKE` on `sections` / `tables`
       via a `spec_doc_chunks` JOIN).
 
 Data flow by database: testcase traffic →
@@ -663,9 +663,9 @@ and syncs each through the `--tsg` path below.
    and fuse via chunk-level `rrf_merge` (`k=60`, vector weight
    `1 - fts5_weight`); without it pure vector KNN returns dressed as
    `SpecDocSemanticHit` (`rank_fts5=None`, `hit=None` for vector-only
-   chunks). Vector-side `spec_id`/`version` are exact `=`,
-   `release`/`sections`/`tables` plain `LIKE` (no rich grammar — pass plain
-   values for exact agreement). Requires
+    chunks). Vector-side `spec_id`/`version`/`release` are exact `=`;
+    `sections`/`tables` use plain `LIKE` (no rich grammar — pass plain values
+    for exact agreement). Requires
    `[semantic_search].embedding_base_url`.
 
 ### Cache + CLI

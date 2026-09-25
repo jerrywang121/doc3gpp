@@ -43,6 +43,54 @@ def test_overlap_carries_previous_section_metadata():
     assert "6 Current" in (chunks[1].sections or "")
 
 
+def test_overlap_carries_only_metadata_from_trailing_section_tokens():
+    blocks = [
+        HeadingBlock(1, "5", "Earlier", "# 5 Earlier"),
+        ParagraphBlock("one two"),
+        HeadingBlock(1, "6", "Later", "# 6 Later"),
+        ParagraphBlock("three four"),
+        ParagraphBlock("five six"),
+    ]
+
+    chunks = chunk_blocks(blocks, chunk_size=4, chunk_overlap=2, max_chunk_chars=1500)
+
+    assert chunks[0].sections == "5 Earlier\n6 Later"
+    assert chunks[1].text.startswith("three four")
+    assert chunks[1].sections == "6 Later"
+
+
+def test_overlap_carries_only_metadata_from_trailing_table_tokens():
+    first = "| A |\n| --- |\n| 1 |"
+    second = "| B |\n| --- |\n| 2 |"
+    blocks = [
+        TableBlock(first, "1", "Earlier"),
+        TableBlock(second, "2", "Later"),
+        ParagraphBlock("after table"),
+    ]
+
+    chunks = chunk_blocks(blocks, chunk_size=18, chunk_overlap=3, max_chunk_chars=1500)
+
+    assert chunks[0].tables == "1 Earlier\n2 Later"
+    assert chunks[1].text.startswith("| 2 | after table")
+    assert chunks[1].tables == "2 Later"
+
+
+def test_repeated_metadata_is_deduplicated_in_source_order():
+    blocks = [
+        HeadingBlock(1, "5", "Scope", "# 5 Scope"),
+        ParagraphBlock("one two"),
+        HeadingBlock(2, "5", "Scope", "## 5 Scope"),
+        ParagraphBlock("three four"),
+        TableBlock("| A |\n| --- |\n| 1 |", "1", "Values"),
+        TableBlock("| B |\n| --- |\n| 2 |", "1", "Values"),
+    ]
+
+    chunks = chunk_blocks(blocks, chunk_size=100, chunk_overlap=0, max_chunk_chars=1500)
+
+    assert chunks[0].sections == "5 Scope"
+    assert chunks[0].tables == "1 Values"
+
+
 def test_empty_metadata_is_none():
     chunks = chunk_blocks([ParagraphBlock("plain text")], chunk_overlap=0)
     assert chunks[0].sections is None

@@ -99,7 +99,7 @@ def test_table_metadata_and_caption_text_are_scoped_to_chunk():
             TableBlock(first, "1", "First values"),
             TableBlock(second, "2", "Second values"),
         ],
-        chunk_size=8,
+        chunk_size=16,
         chunk_overlap=0,
         max_chunk_chars=1500,
     )
@@ -112,12 +112,11 @@ def test_table_metadata_and_caption_text_are_scoped_to_chunk():
     assert second in chunks[1].text
 
 
-def test_overlap_carries_only_metadata_for_copied_tokens():
+def test_overlap_prefix_preserves_rendered_heading_content():
     chunks = chunk_blocks(
         [
-            HeadingBlock(1, "5", "Earlier", "# 5 Earlier"),
             ParagraphBlock("one two"),
-            HeadingBlock(1, "6", "Later", "# 6 Later"),
+            HeadingBlock(1, None, "Later", "# Later"),
             ParagraphBlock("three four"),
             ParagraphBlock("five six"),
         ],
@@ -126,8 +125,10 @@ def test_overlap_carries_only_metadata_for_copied_tokens():
         max_chunk_chars=1500,
     )
 
-    assert chunks[1].text.startswith("three four")
-    assert chunks[1].sections == "6 Later"
+    assert len(chunks) == 2
+    assert chunks[0].text.endswith("# Later")
+    assert chunks[1].text.startswith("# Later three four")
+    assert chunks[1].sections == "Later"
 
 
 def test_overlap_carries_only_metadata_from_trailing_table_tokens():

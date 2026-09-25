@@ -30,3 +30,14 @@ def test_spec_doc_parse_job_exists_without_fetch_route(sqlite_env):
     assert parse_response.status_code == 400
     assert "parse/spec-docs" in parse_response.json()["detail"]
     assert fetch_response.status_code == 404
+
+
+def test_spec_doc_search_form_uses_full_width_query_and_plural_metadata(sqlite_env):
+    create_schema("all")
+    with TestClient(build_app(get_settings())) as client:
+        response = client.get("/spec-docs/search")
+
+    assert response.status_code == 200
+    assert 'label class="span-5">Query' in response.text
+    assert 'name="sections"' in response.text
+    assert 'name="tables"' in response.text

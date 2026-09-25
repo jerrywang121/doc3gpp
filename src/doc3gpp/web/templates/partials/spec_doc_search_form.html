@@ -7,19 +7,17 @@
   class="filters"
 >
   <div class="search-grid-5">
-    {% if mode == 'sem' %}
-      <label class="span-3">Query
-        <input type="text" name="q" value="{{ query or '' }}" autofocus>
-      </label>
-      <label class="span-2">FTS5 query
+    <label class="span-5">Query
+      <input type="text" name="q" value="{{ query or '' }}" autofocus>
+    </label>
+  </div>
+  {% if mode == 'sem' %}
+    <div class="search-grid-5">
+      <label class="span-5">FTS5 query
         <input type="text" name="fts5_query" value="{{ fts5_query or '' }}">
       </label>
-    {% else %}
-      <label class="span-5">Query
-        <input type="text" name="q" value="{{ query or '' }}" autofocus>
-      </label>
-    {% endif %}
-  </div>
+    </div>
+  {% endif %}
   <label>Spec
     <input type="text" name="spec" value="{{ filters.spec or '' }}">
   </label>
@@ -29,8 +27,11 @@
   <label>Version
     <input type="text" name="version" value="{{ filters.version or '' }}">
   </label>
-  <label>Section
-    <input type="text" name="section" value="{{ filters.section or '' }}">
+  <label>Sections
+    <input type="text" name="sections" value="{{ filters.sections or '' }}">
+  </label>
+  <label>Tables
+    <input type="text" name="tables" value="{{ filters.tables or '' }}">
   </label>
   {% if mode == 'sem' %}
     <label>FTS5 weight

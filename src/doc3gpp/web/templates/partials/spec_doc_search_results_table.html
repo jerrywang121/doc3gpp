@@ -5,7 +5,8 @@
         <th>Chunk</th>
         <th>Spec</th>
         <th>Version</th>
-        <th>Section</th>
+        <th>Sections</th>
+        <th>Tables</th>
         {% if mode == 'sem' %}<th>RRF</th><th>FTS5 rank</th><th>vec rank</th>{% else %}<th>Score</th>{% endif %}
       </tr>
     </thead>
@@ -15,7 +16,7 @@
         <tr>
           <td><code>{{ hit.chunk_id }}</code></td>
           <td>
-            {% if inner.spec_id is defined and inner.version is defined %}
+            {% if inner is not none and inner.spec_id is defined and inner.version is defined %}
               <a href="/specs/{{ inner.spec_id | urlencode }}/docs?version={{ inner.version | urlencode }}#chunk-{{ inner.chunk_index }}">
                 <code>{{ inner.spec_id }}</code>
               </a>
@@ -23,8 +24,17 @@
               <code>-</code>
             {% endif %}
           </td>
-          <td>{{ inner.version if inner.version is defined else '-' }}</td>
-          <td>{{ (inner.section_no ~ ' ' ~ inner.section_title) if inner.section_title else (inner.section_no or '-') }}</td>
+          <td>{{ inner.version if inner is not none and inner.version is defined else '-' }}</td>
+          <td>
+            {% if inner is not none and inner.sections is defined and inner.sections %}
+              <span style="white-space: pre-line">{{ inner.sections }}</span>
+            {% else %}-{% endif %}
+          </td>
+          <td>
+            {% if inner is not none and inner.tables is defined and inner.tables %}
+              <span style="white-space: pre-line">{{ inner.tables }}</span>
+            {% else %}-{% endif %}
+          </td>
           {% if mode == 'sem' %}
             <td>{{ '%.4f' | format(hit.rrf_score) }}</td>
             <td>{{ hit.rank_fts5 if hit.rank_fts5 is not none else '-' }}</td>
@@ -33,9 +43,9 @@
             <td>{{ '%.4f' | format(hit.score) }}</td>
           {% endif %}
         </tr>
-        {% if inner.previews is defined and inner.previews %}
+        {% if inner is not none and inner.previews is defined and inner.previews %}
           <tr class="preview-row">
-            <td colspan="6">
+            <td colspan="{{ 8 if mode == 'sem' else 6 }}">
               <details class="hit-details">
                 <summary>Matching fields</summary>
                 {% for col, snippet in inner.previews.items() %}

@@ -28,8 +28,8 @@
 
   {% if source and source.parsed_at %}
     {% if toc %}
-      <section class="card spec-doc-toc-card">
-        <h2>Table of contents</h2>
+      <details class="spec-doc-toc-details card spec-doc-toc-card">
+        <summary>Table of contents</summary>
         {% if toc.entries %}
           <table class="grid" id="spec-doc-toc-table">
             <thead>
@@ -63,9 +63,9 @@
                 (order {{ file.file_order }}{% if file.first_section %}, first section {{ file.first_section }}{% endif %})
               </li>
             {% endfor %}
-          </ul>
-        {% endif %}
-      </section>
+            </ul>
+          {% endif %}
+      </details>
     {% else %}
       <section class="card placeholder">
         <h2>Table of contents</h2>

@@ -26,6 +26,7 @@ from doc3gpp.models.search import SearchHit
 from doc3gpp.models.spec_doc import (
     SpecDocChunk,
     SpecDocHit,
+    SpecDocSemanticHit,
     SpecDocSource,
     SpecDocToc,
     SpecDocTocEntry,
@@ -51,6 +52,7 @@ from doc3gpp.web.deps import (
     get_semantic_search_service,
     get_settings,
     get_spec_doc_search_service,
+    get_spec_doc_semantic_service,
     get_spec_doc_service,
     get_spec_service,
     get_tdoc_file_repo,
@@ -2808,10 +2810,13 @@ def test_spec_doc_show_unparsed_state(client: TestClient) -> None:
 def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
     client: TestClient,
 ) -> None:
+    chunks = _spec_doc_chunks(2)
+    chunks[0].sections = "5 Scope\n6 Details"
+    chunks[0].tables = "Table 1 Values\nTable 2 Timers"
     service = FakeSpecDocService(
         source=_spec_doc_source(parsed=True),
         toc=_spec_doc_toc(),
-        chunks=_spec_doc_chunks(2),
+        chunks=chunks,
     )
     _override_spec_doc_services(client, service)
     try:
@@ -2829,6 +2834,12 @@ def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
     assert 'data-source-parsed="true"' in response.text
     assert "18.0.0" in response.text
     assert "2 chunk" in response.text
+    assert '<details class="spec-doc-toc-details' in response.text
+    assert '<details class="card spec-doc-chunk" id="chunk-0">' in response.text
+    assert "<summary>" in response.text
+    assert "5 Scope\n6 Details" in response.text
+    assert "Table 1 Values\nTable 2 Timers" in response.text
+    assert 'id="chunk-0" open' not in response.text
     assert any(call[0] == "toc" for call in service.calls)
     assert service.calls[-1] == (
         "chunks", "36.579-5", "18.0.0", None, None, None, 21, 0
@@ -2879,6 +2890,89 @@ def test_spec_doc_search_accepts_sections_and_tables(client: TestClient) -> None
 
     assert service.last_filters.sections == "%5.1%"
     assert service.last_filters.tables == "%UE%"
+
+
+def test_spec_doc_search_query_spans_full_row(client: TestClient) -> None:
+    response = client.get("/spec-docs/search")
+
+    assert response.status_code == 200
+    assert 'label class="span-5">Query' in response.text
+    assert 'name="sections"' in response.text
+    assert 'name="tables"' in response.text
+
+
+def test_spec_doc_semantic_query_and_fts5_query_are_full_width(
+    client: TestClient,
+) -> None:
+    client.app.dependency_overrides[get_spec_doc_semantic_service] = lambda: object()
+    try:
+        response = client.get("/spec-docs/search/sem")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_semantic_service, None)
+
+    assert response.status_code == 200
+    assert 'label class="span-5">Query' in response.text
+    assert 'label class="span-5">FTS5 query' in response.text
+    assert 'class="span-3">Query' not in response.text
+
+
+def test_spec_doc_search_results_render_combined_multiline_metadata(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocSearchService()
+    service._hits = [
+        SpecDocHit(
+            chunk_id="38.331@18.5.0#0",
+            spec_id="38.331",
+            version="18.5.0",
+            release="Rel-18",
+            sections="5 Scope\n6 Details",
+            tables="Table 1 Values\nTable 2 Timers",
+            chunk_index=0,
+            text="handover",
+            score=-1.0,
+            previews={},
+        ),
+    ]
+    client.app.dependency_overrides[get_spec_doc_search_service] = lambda: service
+    try:
+        response = client.get("/spec-docs/search?q=handover")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_search_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Sections</th>" in response.text
+    assert "<th>Tables</th>" in response.text
+    assert "5 Scope\n6 Details" in response.text
+    assert "Table 1 Values\nTable 2 Timers" in response.text
+    assert "/specs/38.331/docs?version=18.5.0#chunk-0" in response.text
+
+
+def test_spec_doc_semantic_vector_only_result_is_safe(client: TestClient) -> None:
+    class _VectorOnlyService:
+        def search(self, *_args: Any, **_kwargs: Any) -> list[SpecDocSemanticHit]:
+            return [
+                SpecDocSemanticHit(
+                    chunk_id="38.331@18.5.0#0",
+                    rrf_score=0.01,
+                    hit=None,
+                    rank_fts5=None,
+                    rank_vec=0,
+                    min_chunk_distance=0.1,
+                )
+            ]
+
+    client.app.dependency_overrides[get_spec_doc_semantic_service] = (
+        lambda: _VectorOnlyService()
+    )
+    try:
+        response = client.get("/spec-docs/search/sem?q=handover")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_semantic_service, None)
+
+    assert response.status_code == 200
+    assert "38.331@18.5.0#0" in response.text
+    assert "<td>-</td>" in response.text
 
 
 def test_spec_doc_show_zero_chunk_source_has_incomplete_message(

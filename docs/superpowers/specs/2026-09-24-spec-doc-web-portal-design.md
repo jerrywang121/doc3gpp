@@ -105,10 +105,10 @@ The route will:
 - Read chunks only when the source is parsed, using a new public service method.
 - Fetch one extra chunk beyond the requested page size. Render only the
   requested page and use the extra row to determine `next_offset`.
-- Render the full page on ordinary requests and a dedicated results fragment
-  for `HX-Request` when chunk pagination or section filtering is enhanced with
-  HTMX. The fragment's outer element is `#results`, matching existing portal
-  conventions.
+  - Render the full page on ordinary requests and a dedicated results fragment
+    for `HX-Request` when chunk pagination or sections/tables filtering is
+    enhanced with HTMX. The fragment's outer element is `#results`, matching
+    existing portal conventions.
 
 The canonical human-facing document page is `/specs/{spec_id}/docs`; the
 existing `/specs/{spec_id}/docs/toc` route remains a TOC-specific compatibility
@@ -128,15 +128,16 @@ def list_chunks(
     *,
     version: str,
     release: str | None = None,
-    section: str | None = None,
+    sections: str | None = None,
+    tables: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[SpecDocChunk]: ...
 ```
 
 The repository already supports the required `(spec_id, version, release,
-section, limit, offset)` chunk query. No schema or repository SQL change is
-required unless implementation testing reveals a contract gap.
+sections, tables, limit, offset)` chunk query. No schema or repository SQL
+change is required unless implementation testing reveals a contract gap.
 
 ### Parse job integration
 
@@ -174,8 +175,8 @@ Tab behavior:
 - `/tdocs/search` and `/tdocs/search/sem` remain TDoc Search.
 - `/spec-docs/search` and `/spec-docs/search/sem` are Spec Docs Search.
 - Each resource keeps its existing FTS5 and semantic/hybrid submode links.
-- Spec Docs filters remain Query, Spec, Release, Version, Section, and Limit,
-  plus FTS5 query/weight in semantic mode.
+- Spec Docs filters remain Query, Spec, Release, Version, Sections, Tables, and
+  Limit, plus FTS5 query/weight in semantic mode.
 - HTMX forms continue to swap only `#results`.
 - Spec Docs results link their spec/version identity to
   `/specs/{spec_id}/docs?version={version}`. The page may accept an optional
@@ -234,15 +235,16 @@ version to view its TOC” message.
 Render chunks in repository `chunk_index` order. Each chunk card includes:
 
 - Stable `chunk_id` and human-readable chunk number.
-- Section number/title when present.
-- Table number/title when present.
+- Combined section metadata in `sections` when present.
+- Combined table metadata in `tables` when present.
 - Source file.
 - Text in a whitespace-preserving block.
 
 Chunk pagination defaults to `20` and caps at `100`. Query parameters are
-`limit`, `offset`, and optional `section`. The route fetches `limit + 1`,
-renders at most `limit`, and supplies `next_offset` only when another chunk
-exists. Pagination links preserve `version`, `section`, and `limit`.
+`limit`, `offset`, and optional `sections` and `tables`. The route fetches
+`limit + 1`, renders at most `limit`, and supplies `next_offset` only when
+another chunk exists. Pagination links preserve `version`, `sections`,
+`tables`, and `limit`.
 
 If a parsed source reports zero chunks, render a clear empty/corrupt-state
 message rather than an empty area with no explanation.
@@ -259,7 +261,7 @@ message rather than an empty area with no explanation.
 - Disabled Spec Docs FTS5 service: preserve current 503 behavior.
 - Disabled semantic service or missing embedder/vector support: preserve the
   current disabled-settings behavior.
-- Invalid `limit`, `offset`, or section filter: use the existing
+- Invalid `limit`, `offset`, `sections`, or `tables` filter: use the existing
   `InvalidFilterError` mapping and bounds.
 - No standalone fetch control or route is introduced.
 
@@ -276,7 +278,7 @@ message rather than an empty area with no explanation.
 - Unknown spec/version responses use the expected status and error envelope.
 - Chunk pagination uses the extra-row probe, renders the correct slice, and
   preserves query parameters in previous/next links.
-- Section filtering is passed to the repository.
+- Sections/tables filtering is passed to the repository.
 - `show` links appear for every version in `spec_show.html`.
 
 ### Parse form and job tests

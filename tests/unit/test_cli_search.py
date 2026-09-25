@@ -95,6 +95,16 @@ def test_spec_doc_cli_help_lists_plural_metadata_filters():
     assert "--tables" in result.output
 
 
+def test_spec_doc_cli_rejects_singular_section_filter():
+    result = CliRunner().invoke(
+        app,
+        ["spec", "doc", "search", "query", "handover", "--section", "5"],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+
+
 def test_search_help_lists_filters() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["tdoc", "search", "query", "--help"])

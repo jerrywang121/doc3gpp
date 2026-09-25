@@ -478,6 +478,17 @@ class SpecDocRepository(Protocol):
     ) -> list[SpecDocChunk]: ...
 
 
+    def count_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str | None = None,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+    ) -> int: ...
+
+
 class TestCaseRepository(Protocol):
     def upsert_many(self, cases: list[TestCase]) -> int: ...
     def replace_statuses(self, testcase_id: str, group: str, rows: list[TestCaseStatus]) -> None: ...

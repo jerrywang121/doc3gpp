@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from collections.abc import Iterable
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -279,6 +279,28 @@ class SQLAlchemySpecDocRepository:
             )
             rows = session.scalars(stmt).all()
         return [_orm_to_chunk(r) for r in rows]
+
+
+    def count_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str | None = None,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+    ) -> int:
+        with self._session_factory() as session:
+            stmt = select(func.count()).select_from(SpecDocChunkORM).where(
+                SpecDocChunkORM.spec_id == spec_id
+            )
+            if version is not None:
+                stmt = stmt.where(SpecDocChunkORM.version == version)
+            if release is not None:
+                stmt = stmt.where(SpecDocChunkORM.release == release)
+            stmt = apply_text_filter(stmt, SpecDocChunkORM.sections, sections)
+            stmt = apply_text_filter(stmt, SpecDocChunkORM.tables, tables)
+            return int(session.scalar(stmt) or 0)
 
 
 def _orm_to_source(row: SpecDocSourceORM) -> SpecDocSource:

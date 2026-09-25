@@ -85,6 +85,27 @@ def test_list_chunks_forwards_version_filters_and_paging() -> None:
     )
 
 
+def test_count_chunks_forwards_version_filters() -> None:
+    repo = MagicMock()
+    repo.count_chunks.return_value = 37
+    service = SpecDocService(spec_repo=MagicMock(), doc_repo=repo)
+
+    assert service.count_chunks(
+        "38.331",
+        version="18.5.0",
+        release="Rel-18",
+        sections="%5.1%",
+        tables="%UE%",
+    ) == 37
+    repo.count_chunks.assert_called_once_with(
+        "38.331",
+        version="18.5.0",
+        release="Rel-18",
+        sections="%5.1%",
+        tables="%UE%",
+    )
+
+
 def test_embedding_text_includes_chunk_metadata_before_body() -> None:
     semantic = MagicMock(spec=["upsert_for_version"])
     embedder = MagicMock()

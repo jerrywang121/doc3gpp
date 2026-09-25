@@ -71,6 +71,29 @@ _LIMIT_CAP = 200
 _DOC_CHUNK_LIMIT_DEFAULT = 20
 _DOC_CHUNK_LIMIT_CAP = 100
 
+
+def _spec_doc_page_items(current_page: int, total_pages: int) -> list[int | None]:
+    if total_pages <= 0:
+        return []
+    if total_pages <= 10:
+        return list(range(1, total_pages + 1))
+
+    if current_page <= 6:
+        first_page = 1
+    elif current_page >= total_pages - 4:
+        first_page = total_pages - 9
+    else:
+        first_page = current_page - 4
+
+    last_page = first_page + 9
+    items: list[int | None] = []
+    if first_page > 1:
+        items.append(None)
+    items.extend(range(first_page, last_page + 1))
+    if last_page < total_pages:
+        items.append(None)
+    return items
+
 # Mirrors ``settings.output.fields.spec_doc_toc`` — what
 # ``doc3gpp spec doc toc show --format json`` projects its ``entries``
 # through by default.
@@ -125,6 +148,9 @@ async def spec_doc_show(
 
     source = doc_service.get_source(spec_id, version)
     toc = None
+    total_chunks = 0
+    total_pages = 0
+    effective_offset = 0
     chunks: list[Any] = []
     if source is not None and source.parsed_at is not None:
         try:
@@ -132,19 +158,41 @@ async def spec_doc_show(
         except SpecDocUnknownVersionError:
             # A parsed source without a TOC is still useful: keep its chunks visible.
             toc = None
-        chunks = doc_service.list_chunks(
+        total_chunks = doc_service.count_chunks(
             spec_id,
             version=version,
             release=parsed_release,
             sections=parsed_sections,
             tables=parsed_tables,
-            limit=parsed_limit + 1,
-            offset=parsed_offset,
         )
+        total_pages = (total_chunks + parsed_limit - 1) // parsed_limit
+        if total_pages:
+            last_page_offset = (total_pages - 1) * parsed_limit
+            effective_offset = (
+                min(parsed_offset, last_page_offset) // parsed_limit
+            ) * parsed_limit
+            chunks = doc_service.list_chunks(
+                spec_id,
+                version=version,
+                release=parsed_release,
+                sections=parsed_sections,
+                tables=parsed_tables,
+                limit=parsed_limit + 1,
+                offset=effective_offset,
+            )
 
     display_chunks = chunks[:parsed_limit]
+    current_page = effective_offset // parsed_limit + 1 if total_pages else 0
+    page_items = _spec_doc_page_items(current_page, total_pages)
+    first_offset = 0 if current_page > 1 else None
+    previous_offset = effective_offset - parsed_limit if current_page > 1 else None
     next_offset = (
-        parsed_offset + parsed_limit if len(chunks) > parsed_limit else None
+        effective_offset + parsed_limit
+        if len(chunks) > parsed_limit and current_page < total_pages
+        else None
+    )
+    last_offset = (
+        (total_pages - 1) * parsed_limit if current_page < total_pages else None
     )
     context = {
         "active_nav": "specs",
@@ -154,9 +202,16 @@ async def spec_doc_show(
         "toc": toc,
         "chunks": chunks,
         "display_chunks": display_chunks,
+        "total_chunks": total_chunks,
+        "current_page": current_page,
+        "total_pages": total_pages,
+        "page_items": page_items,
+        "first_offset": first_offset,
+        "previous_offset": previous_offset,
         "limit": parsed_limit,
-        "offset": parsed_offset,
+        "offset": effective_offset,
         "next_offset": next_offset,
+        "last_offset": last_offset,
         "sections": parsed_sections or "",
         "tables": parsed_tables or "",
         "release": parsed_release or "",

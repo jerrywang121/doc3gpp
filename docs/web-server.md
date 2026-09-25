@@ -283,7 +283,12 @@ control.
 
 Parsed versions render the stored table of contents followed by individually
 collapsed chunk cards. Chunk display is paginated through `limit` / `offset`,
-with `release`, `sections`, and `tables` retained in the previous/next links.
+using the filtered matching-chunk count rather than the source ledger's
+unfiltered total. Pagination links preserve `version`, `release`, `sections`,
+`tables`, and `limit`. The footer shows the visible range, first/previous/next/
+last controls, and up to ten rolling numeric page links with ellipses. An
+out-of-range offset clamps to the last page, while zero filtered matches omit
+the pagination controls.
 The search form uses a full-width Query field and exposes the same plural
 `sections` / `tables` filters. The `TDoc Search` and `Spec Docs Search` tabs
 are shared by both search families, and Spec Docs results link to the matching

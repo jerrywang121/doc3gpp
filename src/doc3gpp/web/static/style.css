@@ -246,6 +246,7 @@ dl.kv dd {
 
 .pagination {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
   align-items: center;
   margin: 1rem 0;

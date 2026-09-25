@@ -132,6 +132,35 @@ def test_replace_and_list_chunks_round_trip_metadata(sqlite_env):
     assert rows[0].tables == "Table 1 Values"
 
 
+def test_count_chunks_applies_all_filters(sqlite_env):
+    create_schema("specdata")
+    repo = SQLAlchemySpecDocRepository()
+    repo.replace_chunks(
+        "38.331",
+        "19.0.0",
+        release="Rel-19",
+        drafts=[
+            ChunkDraft(0, "a.docx", "5 Scope", "Table 1 Values", "a"),
+            ChunkDraft(0, "a.docx", "6 Details", "Table 2 Timers", "b"),
+        ],
+    )
+    repo.replace_chunks(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=[ChunkDraft(0, "b.docx", "5 Scope", "Table 1 Values", "c")],
+    )
+
+    assert repo.count_chunks("38.331") == 3
+    assert repo.count_chunks("38.331", version="19.0.0") == 2
+    assert repo.count_chunks("38.331", release="Rel-18") == 1
+    assert repo.count_chunks("38.331", sections="%Details%") == 1
+    assert repo.count_chunks("38.331", tables="%Timers%") == 1
+    assert repo.count_chunks(
+        "38.331", version="19.0.0", sections="%Scope%", tables="%Values%"
+    ) == 1
+
+
 def test_replace_chunks_without_source_keeps_unparsed_source_row(sqlite_env):
     create_schema("all")
     repo = SQLAlchemySpecDocRepository()

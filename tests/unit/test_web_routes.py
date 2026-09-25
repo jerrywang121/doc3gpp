@@ -67,6 +67,7 @@ from doc3gpp.web.render import (
     tsg_rows,
     wi_rows,
 )
+from doc3gpp.web.routes.spec_docs import _spec_doc_page_items
 
 
 # ---------------------------------------------------------------------------
@@ -1952,6 +1953,8 @@ def test_static_css_served(client: TestClient) -> None:
     response = client.get("/static/style.css")
     assert response.status_code == 200
     assert "doc3gpp" in response.text or "color" in response.text
+    assert ".pagination" in response.text
+    assert "flex-wrap: wrap" in response.text
 
 
 def test_static_htmx_served(client: TestClient) -> None:
@@ -2703,10 +2706,12 @@ class FakeSpecDocService:
         source: SpecDocSource | None = None,
         toc: SpecDocToc | None = None,
         chunks: list[SpecDocChunk] | None = None,
+        total_chunks: int | None = None,
     ) -> None:
         self.source = source
         self.toc = toc
         self.chunks = list(chunks or [])
+        self.total_chunks = len(self.chunks) if total_chunks is None else total_chunks
         self.calls: list[tuple[Any, ...]] = []
 
     def get_source(self, spec_id: str, version: str) -> SpecDocSource | None:
@@ -2720,6 +2725,18 @@ class FakeSpecDocService:
         if self.toc is None:
             raise SpecDocUnknownVersionError("no parsed TOC")
         return self.toc
+
+    def count_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+    ) -> int:
+        self.calls.append(("count", spec_id, version, release, sections, tables))
+        return self.total_chunks
 
     def list_chunks(
         self,
@@ -2751,6 +2768,30 @@ def _spec_doc_source(*, parsed: bool) -> SpecDocSource:
         chunk_count=2 if parsed else 0,
         docx_count=1 if parsed else 0,
     )
+
+
+@pytest.mark.parametrize(
+    "current,total,expected",
+    [
+        (1, 0, []),
+        (1, 1, [1]),
+        (3, 8, list(range(1, 9))),
+        (6, 11, list(range(1, 11)) + [None]),
+        (7, 11, [None, *range(2, 12)]),
+        (6, 12, list(range(1, 11)) + [None]),
+        (7, 12, [None, *range(3, 13)]),
+        (8, 12, [None, *range(3, 13)]),
+        (1, 20, list(range(1, 11)) + [None]),
+        (6, 20, list(range(1, 11)) + [None]),
+        (7, 20, [None, *range(3, 13), None]),
+        (16, 20, [None, *range(11, 21)]),
+        (20, 20, [None, *range(11, 21)]),
+    ],
+)
+def test_spec_doc_page_items_uses_rolling_ten_page_window(
+    current: int, total: int, expected: list[int | None]
+) -> None:
+    assert _spec_doc_page_items(current, total) == expected
 
 
 def _spec_doc_toc() -> SpecDocToc:
@@ -2822,7 +2863,7 @@ def test_spec_doc_show_unparsed_state(client: TestClient) -> None:
     assert "Scope" not in response.text
     assert "Force re-parse" not in response.text
     assert 'data-source-parsed="false"' in response.text
-    assert not any(call[0] in {"toc", "chunks"} for call in service.calls)
+    assert not any(call[0] in {"count", "toc", "chunks"} for call in service.calls)
 
 
 def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
@@ -2897,6 +2938,240 @@ def test_spec_doc_show_pagination_forwards_filters_and_uses_probe(
     assert service.calls[-1] == (
         "chunks", "36.579-5", "18.0.0", None, "%5.1%", "%UE%", 3, 2
     )
+
+
+def test_spec_doc_show_middle_page_renders_filtered_pagination_metadata(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&release=Rel-18&sections=%255.1%25&tables=%25UE%25&limit=2&offset=12"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert service.calls[2] == (
+        "count", "36.579-5", "18.0.0", "Rel-18", "%5.1%", "%UE%"
+    )
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", "Rel-18", "%5.1%", "%UE%", 3, 12
+    )
+    assert "Showing 13–14" in response.text
+    assert "[7]" in response.text
+    assert "..." in response.text
+    assert "first" in response.text
+    assert "prev" in response.text
+    assert "next" in response.text
+    assert "last" in response.text
+    assert "offset=0" in response.text
+    assert "offset=10" in response.text
+    assert "version=18.0.0" in response.text
+    assert "release=Rel-18" in response.text
+    assert "sections=%255.1%25" in response.text
+    assert "tables=%25UE%25" in response.text
+
+
+@pytest.mark.parametrize(
+    "requested_offset,expected_offset,expected_range",
+    [
+        (1, 0, "Showing 1–10"),
+        (11, 10, "Showing 11–20"),
+    ],
+)
+def test_spec_doc_show_normalizes_offset_to_page_boundary(
+    client: TestClient,
+    requested_offset: int,
+    expected_offset: int,
+    expected_range: str,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            f"/specs/36.579-5/docs?version=18.0.0&limit=10&offset={requested_offset}"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert expected_range in response.text
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 11, expected_offset
+    )
+
+
+def test_spec_doc_show_first_page_renders_forward_navigation_only(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=10&offset=0"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert 'title="First page"' not in response.text
+    assert 'title="Previous page"' not in response.text
+    assert 'title="Next page"' in response.text
+    assert 'title="Last page"' in response.text
+
+
+def test_spec_doc_show_final_page_omits_forward_navigation(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(31),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=10&offset=20"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "next ›" not in response.text
+    assert "last ››" not in response.text
+    assert "prev" in response.text
+    assert service.calls[2] == (
+        "count", "36.579-5", "18.0.0", None, None, None
+    )
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 11, 20
+    )
+
+
+def test_spec_doc_show_uses_filtered_total_for_page_count(
+    client: TestClient,
+) -> None:
+    source = _spec_doc_source(parsed=True)
+    source.chunk_count = 200
+    service = FakeSpecDocService(
+        source=source,
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(3),
+        total_chunks=3,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=2&offset=999"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Chunk text 2" in response.text
+    assert "Showing 3–3" in response.text
+    assert service.calls[2] == (
+        "count", "36.579-5", "18.0.0", None, None, None
+    )
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 3, 2
+    )
+
+
+def test_spec_doc_show_clamps_stale_offset_to_final_page(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=10&offset=999"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Showing 21–25" in response.text
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 11, 20
+    )
+
+
+def test_spec_doc_show_zero_filtered_chunks_omits_pagination(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(1),
+        total_chunks=0,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&sections=%255.1%25"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "No document chunks match these filters." in response.text
+    assert "pagination" not in response.text
+    assert not any(call[0] == "chunks" for call in service.calls)
+
+
+def test_spec_doc_show_middle_page_htmx_matches_full_page_pagination(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&sections=%255.1%25&tables=%25UE%25&limit=2&offset=12",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert '<div id="results"' in response.text
+    assert "Showing 13–14" in response.text
+    assert "first" in response.text
+    assert "prev" in response.text
+    assert "next" in response.text
+    assert "last" in response.text
+    assert "sections=%255.1%25" in response.text
+    assert "tables=%25UE%25" in response.text
+    assert "<!DOCTYPE" not in response.text
+    assert "<html" not in response.text
 
 
 def test_spec_doc_search_accepts_sections_and_tables(client: TestClient) -> None:

@@ -355,6 +355,23 @@ class SpecDocService:
     def get_source(self, spec_id: str, version: str) -> SpecDocSource | None:
         return self._doc_repo.get_source(spec_id, version)
 
+    def count_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+    ) -> int:
+        return self._doc_repo.count_chunks(
+            spec_id,
+            version=version,
+            release=release,
+            sections=sections,
+            tables=tables,
+        )
+
     def list_chunks(
         self,
         spec_id: str,

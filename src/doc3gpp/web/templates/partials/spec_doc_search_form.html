@@ -7,13 +7,13 @@
   class="filters"
 >
   <div class="search-grid-5">
-    <label class="span-5">Query
+    <label class="span-5" style="grid-column: span 5">Query
       <input type="text" name="q" value="{{ query or '' }}" autofocus>
     </label>
   </div>
   {% if mode == 'sem' %}
     <div class="search-grid-5">
-      <label class="span-5">FTS5 query
+      <label class="span-5" style="grid-column: span 5">FTS5 query
         <input type="text" name="fts5_query" value="{{ fts5_query or '' }}">
       </label>
     </div>

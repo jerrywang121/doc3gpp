@@ -38,6 +38,6 @@ def test_spec_doc_search_form_uses_full_width_query_and_plural_metadata(sqlite_e
         response = client.get("/spec-docs/search")
 
     assert response.status_code == 200
-    assert 'label class="span-5">Query' in response.text
+    assert 'label class="span-5" style="grid-column: span 5">Query' in response.text
     assert 'name="sections"' in response.text
     assert 'name="tables"' in response.text

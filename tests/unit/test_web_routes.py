@@ -2835,7 +2835,14 @@ def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
     assert "18.0.0" in response.text
     assert "2 chunk" in response.text
     assert '<details class="spec-doc-toc-details' in response.text
-    assert '<details class="card spec-doc-chunk" id="chunk-0">' in response.text
+    toc_tag = response.text.split('<details class="spec-doc-toc-details', 1)[1].split(">", 1)[0]
+    assert " open" not in toc_tag
+    for index in range(len(chunks)):
+        assert (
+            f'<details class="card spec-doc-chunk" id="chunk-{index}">'
+            in response.text
+        )
+        assert f'id="chunk-{index}" open' not in response.text
     assert "<summary>" in response.text
     assert "5 Scope\n6 Details" in response.text
     assert "Table 1 Values\nTable 2 Timers" in response.text
@@ -2896,7 +2903,7 @@ def test_spec_doc_search_query_spans_full_row(client: TestClient) -> None:
     response = client.get("/spec-docs/search")
 
     assert response.status_code == 200
-    assert 'label class="span-5">Query' in response.text
+    assert 'label class="span-5" style="grid-column: span 5">Query' in response.text
     assert 'name="sections"' in response.text
     assert 'name="tables"' in response.text
 
@@ -2911,8 +2918,11 @@ def test_spec_doc_semantic_query_and_fts5_query_are_full_width(
         client.app.dependency_overrides.pop(get_spec_doc_semantic_service, None)
 
     assert response.status_code == 200
-    assert 'label class="span-5">Query' in response.text
-    assert 'label class="span-5">FTS5 query' in response.text
+    assert 'label class="span-5" style="grid-column: span 5">Query' in response.text
+    assert (
+        'label class="span-5" style="grid-column: span 5">FTS5 query'
+        in response.text
+    )
     assert 'class="span-3">Query' not in response.text
 
 

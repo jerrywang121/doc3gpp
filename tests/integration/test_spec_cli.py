@@ -470,6 +470,30 @@ def test_spec_show_json_emits_native_parsed_boolean(monkeypatch) -> None:
     assert json.loads(result.stdout)["versions"][0]["parsed"] is False
 
 
+def test_spec_show_json_uses_shared_version_field_order(monkeypatch) -> None:
+    service = MagicMock()
+    service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
+    service.list_versions.return_value = [
+        SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert list(json.loads(result.stdout)["versions"][0]) == [
+        "version",
+        "parsed",
+        "release",
+        "ftp_url",
+        "meeting_id",
+        "meeting_name",
+        "upload_date",
+        "pdf_url",
+        "crs",
+    ]
+
+
 def test_spec_show_table_emits_false_parsed(monkeypatch) -> None:
     service = MagicMock()
     service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
@@ -481,7 +505,7 @@ def test_spec_show_table_emits_false_parsed(monkeypatch) -> None:
     result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "table"])
 
     assert result.exit_code == 0, result.stdout
-    assert "\tFalse\n" in result.stdout
+    assert "19.2.0\tFalse\t" in result.stdout
 
 
 def test_spec_show_markdown_emits_false_parsed(monkeypatch) -> None:
@@ -495,7 +519,7 @@ def test_spec_show_markdown_emits_false_parsed(monkeypatch) -> None:
     result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "markdown"])
 
     assert result.exit_code == 0, result.stdout
-    assert result.stdout.splitlines()[-1].endswith("| False |")
+    assert "| 19.2.0 | False |" in result.stdout
 
 
 def test_spec_show_json_parity_keeps_wis_crs_by_default(monkeypatch) -> None:

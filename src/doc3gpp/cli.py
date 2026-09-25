@@ -5069,8 +5069,8 @@ def spec_show(
         "initial_release", "tsg", "wis", "rapporteurs",
     ]
     version_fields = [
-        "version", "release", "ftp_url", "meeting_id", "meeting_name",
-        "upload_date", "pdf_url", "crs", "parsed",
+        "version", "parsed", "release", "ftp_url", "meeting_id", "meeting_name",
+        "upload_date", "pdf_url", "crs",
     ]
 
     if no_wis_crs:

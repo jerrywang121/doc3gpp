@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from collections.abc import Iterable
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.models.spec_doc import (
@@ -50,13 +51,18 @@ class SQLAlchemySpecDocRepository:
         requested = list(spec_ids) if spec_ids is not None else None
         if requested == []:
             return {}
-        with self._session_factory() as session:
-            stmt = select(SpecDocSourceORM.spec_id, SpecDocSourceORM.version).where(
-                SpecDocSourceORM.parsed_at.is_not(None)
-            )
-            if requested is not None:
-                stmt = stmt.where(SpecDocSourceORM.spec_id.in_(requested))
-            rows = session.execute(stmt).all()
+        try:
+            with self._session_factory() as session:
+                stmt = select(SpecDocSourceORM.spec_id, SpecDocSourceORM.version).where(
+                    SpecDocSourceORM.parsed_at.is_not(None)
+                )
+                if requested is not None:
+                    stmt = stmt.where(SpecDocSourceORM.spec_id.in_(requested))
+                rows = session.execute(stmt).all()
+        except OperationalError as exc:
+            if "no such table: spec_doc_sources" not in str(exc).lower():
+                raise
+            return {}
         parsed: dict[str, list[str]] = {}
         for spec_id, version in rows:
             parsed.setdefault(spec_id, []).append(version)

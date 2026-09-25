@@ -593,14 +593,25 @@ and syncs each through the `--tsg` path below.
 6. `doc3gpp spec list [filters]` reads cached header rows via
    `SpecRepository.list(...)` (rich filter grammar via the same
    `_apply_text_filter` / `_apply_date_filter` helpers used by the
-   other list commands). No network traffic.
+   other list commands). `SpecService` transiently enriches those
+   rows from `SpecParsedStatusRepository`, whose read-only source is
+   non-null `spec_doc_sources.parsed_at` in the separate specdata
+   database. When `--parsed true|false` is supplied, the service
+   requests the unbounded main-database result, enriches and filters
+   it, then applies `offset` / `limit`; this preserves pre-pagination
+   filtering. A missing or uninitialized specdata ledger is treated as
+   an empty status source, so existing main-database reads remain
+   available with null parsed list values. No network traffic occurs.
 7. `doc3gpp spec show <spec-id>` resolves the header via
    `SpecRepository.get(spec_id)`; a miss raises `SpecNotFoundError`
    (rendered as `typer.BadParameter` pointing at
    `doc3gpp spec sync --tsg <tsg>`). On hit, the version rows come
-   from `SpecRepository.list_versions(spec_id)` and the CLI
-   renders header + versions in the requested format (table,
-   JSON, or markdown). The JSON payload splits the data into
+   from `SpecRepository.list_versions(spec_id)` and `SpecService`
+   transiently adds a native boolean from the same specdata status
+   reader, with missing rows represented as `false`. The CLI,
+   REST, and MCP adapters render header + versions in the requested
+   format (table, JSON, or markdown) using the same version field
+   order. The JSON payload splits the data into
    `{"spec": {...}, "versions": [{...}]}` so downstream consumers
    don't need to scan a flat list.
 

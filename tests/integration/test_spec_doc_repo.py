@@ -74,6 +74,13 @@ def test_list_parsed_versions_returns_only_parsed_rows_in_numeric_order(sqlite_e
     assert repo.list_parsed_versions(["99.999"]) == {}
 
 
+def test_list_parsed_versions_missing_table_is_empty(sqlite_env):
+    create_schema("main")
+    repo = SQLAlchemySpecDocRepository()
+
+    assert repo.list_parsed_versions(["36.579-5"]) == {}
+
+
 def test_spec_doc_chunk_schema_has_only_combined_metadata(sqlite_env):
     from sqlalchemy import inspect
 

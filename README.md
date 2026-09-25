@@ -242,11 +242,14 @@ doc3gpp spec sync --spec-id 36.579-5                # sync a single stored spec 
 doc3gpp spec sync --spec-id 36.579-5 --force        # bypass the skip rule for one spec
 doc3gpp spec sync --tsg r5 --per-version-details    # always re-fetch ETSI PDF + CR list per version (default OFF)
 
-# list — 9 filter flags combine freely (rich-filter grammar: %, !pattern, null, not-null)
+# list — filters combine freely (rich-filter grammar: %, !pattern, null, not-null;
+# --parsed accepts exactly true or false)
 doc3gpp spec list --limit 20
 doc3gpp spec list --tsg R5 --type TS --status "Under change control"
 doc3gpp spec list --spec-id '36.579%' --title '%conformance%'
 doc3gpp spec list --tsg R5 --format json -o r5_specs.json
+doc3gpp spec list --parsed true --format json
+doc3gpp spec list --parsed false --limit 20
 
 # show — dotted spec id; renders header + version rows
 doc3gpp spec show 36.579-5
@@ -265,6 +268,15 @@ re-syncs the rest; `--force` bypasses the check. Each spec's
 (ETSI PDF + CR list) are skipped by default; pass `--per-version-details`
 to fetch them. The default preserves any previously-cached `pdf_url` /
 `crs` values on existing rows.
+
+The default `spec list` fields end with `rapporteurs, parsed`. Parsed status
+is derived from non-null `spec_doc_sources.parsed_at` values in the separate
+specdata database; it is not a column in the main `specs` or `spec_versions`
+tables and is not part of `spec schema`. List JSON returns a comma-separated,
+numeric-newest-first parsed-version string or native `null`; table and
+Markdown output display `-`. The `--parsed true|false` filter is applied
+before pagination. `spec show --format json` returns native boolean `parsed`
+values on every version row.
 
 ### `spec doc` — specification document corpus
 

@@ -72,7 +72,7 @@ For the full symbol-to-file table, see
 | Add a body-change extraction | `src/doc3gpp/parsers/cr/body_changes.py` + `src/doc3gpp/storage/repositories/tdoc_cr_change_details_sql.py` | Pure function in parsers, sidecar repo in storage. |
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
-| Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and honours the per-spec `specs.last_synced_at` skip rule (one row per spec, no TSG-level gate) — each per-worker `_sync_one_spec` short-circuits specs whose `last_synced_at` is within `Settings.sync.spec_sync_interval` and stamps the spec's own `last_synced_at` on a successful re-sync. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. |
+| Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and honours the per-spec `specs.last_synced_at` skip rule (one row per spec, no TSG-level gate) — each per-worker `_sync_one_spec` short-circuits specs whose `last_synced_at` is within `Settings.sync.spec_sync_interval` and stamps the spec's own `last_synced_at` on a successful re-sync. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. Parsed output status is derived from non-null `spec_doc_sources.parsed_at` in the separate specdata database; it is transient output, not a column in the main `specs` / `spec_versions` tables or schema registry. |
 | Add a testcase sync / list / show source | `src/doc3gpp/cli.py` (`testcase_app`) + `src/doc3gpp/services/testcase_service.py` + `src/doc3gpp/storage/repositories/testcase_sql.py` | History listing → `select_latest` → zip → workbook → `parse_testcase_workbook` → `upsert_many` + per-TC `replace_statuses`. See the workflow one-liners below. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
 | Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. Uses `-n auto` when xdist is installed. |
@@ -219,7 +219,12 @@ Workflows in one line (full prose in `docs/architecture.md`):
   string), and slimmed with `--no-wis-crs` (drops the `wis` header field
   and per-version `crs` field). `spec list` default output fields are
   `spec_id, type, title, status, radio_tech, initial_release, tsg,
-  rapporteurs` (no `wis`).
+  rapporteurs, parsed` (no `wis`). `parsed` is derived from non-null
+  `spec_doc_sources.parsed_at` in the separate specdata database, not a main
+  table or schema field. Structured list JSON uses a comma-separated,
+  numeric-newest-first version string or native `null`; table/Markdown uses
+  `-`. `spec show` version JSON uses native boolean `parsed`, and
+  `--parsed true|false` filters before pagination.
 - `doc3gpp <resource> schema` (`tsg`, `meeting`, `tdoc`, `wi`, `spec`,
   `testcase`, `spec doc`) describes every column of the resource's table(s) from the
   static `models/schema_info.py` registry (17 tables, 157 fields; no

@@ -188,6 +188,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/specs/schema` | Spec field descriptors across `specs` + `spec_versions` (HTML grouped by table; `?format=json` is the `doc3gpp spec schema --format json` payload verbatim). No DB access. |
 | GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
 | GET | `/wis` | List WIs. |
+| GET | `/specs` | List specs (`?format=json`; filters include `tsg,type,spec_id,title,status,radio_tech,initial_release,wis,rapporteurs,parsed,limit,offset`; `parsed=true|false` filters by parsed status before pagination; default JSON fields include `parsed`). |
 | GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
 | GET | `/specs/{spec_id}/docs` | Human-facing collapsed, version-first spec-document page (`?version=` required; optional `release`, `sections`, `tables`, `limit`, `offset`) with source state, parse/re-parse form, collapsed TOC, and paginated chunks (`spec_doc_show.html`; HTMX fragment `partials/spec_doc_show_results.html`). |
 | GET | `/specs/{spec_id}/docs/toc` | Spec-doc TOC for one `(spec_id, version)` pair (`?version=` required, `?release=` informational; `?format=json` is the `doc3gpp spec doc toc show --format json` envelope verbatim: `{spec_id, version, release, docx_count, entries, files}`; full page `spec_doc_toc.html`, HTMX fragment `partials/spec_doc_toc_results.html`). Miss → 404. |
@@ -236,6 +237,21 @@ flashes a "Sync job queued" indication after enqueueing.
 
 The filter form supports TSG, name, year, location, and a TDoc id
 selector, all with the same rich-filter grammar as the CLI.
+
+The spec list form has a `Parsed` control with `Any`, `true`, and `false`
+choices. `GET /specs?parsed=true|false` uses the same case-insensitive
+boolean filter; an omitted or empty value means `Any`, while another
+non-empty value is rejected with HTTP 400. Parsed filtering happens before
+`limit` / `offset` pagination. The status is derived from a non-null
+`spec_doc_sources.parsed_at` in the separate specdata database, not from a
+column in the main `specs` or `spec_versions` tables, so `/specs/schema` does
+not add a `parsed` field.
+
+Spec-list JSON returns `parsed` as a comma-separated numeric-newest-first
+version string, or native JSON `null` when no version is parsed; the HTML
+list displays `-` for the null state. Spec-show version JSON returns native
+boolean `parsed` values for every version. These values match the CLI and MCP
+outputs.
 
 The spec detail page shows a Sync card with a Force sync checkbox that
 enqueues a single-spec sync job for that spec; the page auto-refreshes
@@ -440,6 +456,16 @@ its existing HTTP and MCP names.
 `get_spec_schema`, `get_testcase_schema`, `search_tdoc`,
 `semantic_search_tdoc`, `get_spec_toc`, `search_spec_docs`,
 `semantic_search_spec_docs`, and `get_spec_doc_schema`.
+
+`list_specs(..., parsed=None, limit=50, offset=0)` accepts an optional native
+boolean `parsed` argument. `true` keeps specs with at least one parsed
+version, `false` keeps specs with none, and `None` leaves the filter unset;
+the service applies this filter before pagination. The list payload uses the
+same native JSON `null` or comma-separated numeric-newest-first version
+semantics as `GET /specs?format=json`. `get_spec` emits native boolean
+`parsed` values on every version row. Both are derived from the separate
+specdata `spec_doc_sources.parsed_at` ledger and are not main-table/schema
+fields.
 
 `get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
 `ftp_url` (a 3GPP FTP URL or relative path); when both are supplied

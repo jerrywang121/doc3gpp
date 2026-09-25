@@ -2250,6 +2250,12 @@ the per-version CR list page.
 `spec list` and `spec show` read cached rows from the database — no
 network traffic.
 
+Parsed spec-document status is output-only and is derived from a non-null
+`spec_doc_sources.parsed_at` value in the separate specdata database. A
+missing source row or a null `parsed_at` means that version is not parsed.
+`parsed` is not a column in the main `specs` or `spec_versions` tables and
+does not appear in `spec schema` output.
+
 ### doc3gpp spec sync
 
 Purpose:
@@ -2343,6 +2349,9 @@ Options:
 - --initial-release: rich filter on initial release.
 - --wis: rich filter on related WIs (comma-joined).
 - --rapporteurs: rich filter on rapporteurs (comma-joined company names).
+- --parsed: filter by whether any stored version has parsed spec-document
+  content. Accepts exactly `true` or `false`, case-insensitively. The filter
+  is applied before `--offset` / `--limit` pagination.
 - --format: see `Common list output options` below (table | json | markdown).
 - --output, -o PATH: write results to PATH instead of stdout.
 - --compact: strip output formatting (see `Compact output` below).
@@ -2351,7 +2360,13 @@ Default output fields (configurable via `[output] fields.spec` in
 `doc3gpp.toml`):
 
 - `spec_id`, `type`, `title`, `status`, `radio_tech`, `initial_release`,
-  `tsg`, `rapporteurs`
+  `tsg`, `rapporteurs`, `parsed`
+
+In structured JSON output, `parsed` is a comma-separated list of parsed
+versions in numeric-newest-first order (for example, `19.2.0,19.1.0`), or
+native JSON `null` when no stored version is parsed. Table and Markdown output
+use `-` for that null value. Custom configured fields continue to control
+whether `parsed` is shown.
 
 Filter grammar: every filter flag accepts the rich filter grammar used
 by the other list commands — `null` / `not-null` / `!pattern` / plain
@@ -2368,6 +2383,13 @@ doc3gpp spec list --tsg R5
 
 # Dump every R5 spec to JSON for a downstream report.
 doc3gpp spec list --tsg R5 --format json --output r5_specs.json
+
+# List specs with at least one parsed version; JSON preserves parsed versions
+# as a comma-separated numeric-newest-first value or native null.
+doc3gpp spec list --parsed true --format json
+
+# List specs with no parsed version, applying the filter before pagination.
+doc3gpp spec list --parsed false --limit 20
 
 # Tr specs whose title mentions "Study".
 doc3gpp spec list --type TR --title "%Study%"
@@ -2404,6 +2426,10 @@ Behavior:
 - The JSON payload nests the header under a `"spec"` key and the
   version rows under a `"versions"` key so downstream consumers parse
   the shape without consulting multiple tables.
+- Every version row includes `parsed`. Structured JSON emits the native
+  boolean `true` or `false`; table and Markdown output use the existing text
+  formatting rules. The show header has no aggregate `parsed` field — the
+  per-version booleans are the authoritative detail output.
 
 Examples:
 

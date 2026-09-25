@@ -2368,9 +2368,10 @@ native JSON `null` when no stored version is parsed. Table and Markdown output
 use `-` for that null value. Custom configured fields continue to control
 whether `parsed` is shown.
 
-Filter grammar: every filter flag accepts the rich filter grammar used
-by the other list commands — `null` / `not-null` / `!pattern` / plain
-LIKE with `%` and `_` wildcards.
+Filter grammar: except for `--parsed`, every filter flag accepts the rich
+filter grammar used by the other list commands — `null` / `not-null` /
+`!pattern` / plain LIKE with `%` and `_` wildcards. `--parsed` is a strict
+case-insensitive boolean filter and accepts only `true` or `false`.
 
 Examples:
 

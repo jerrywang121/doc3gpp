@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from sqlalchemy import event, text
@@ -23,6 +25,70 @@ def test_top_level_search_invocation_is_rejected() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["search", "query", "--help"])
     assert result.exit_code != 0
+
+
+def test_spec_doc_cli_json_uses_combined_metadata(monkeypatch):
+    hit = SimpleNamespace(
+        chunk_id="38.331@19.0.0#0",
+        spec_id="38.331",
+        version="19.0.0",
+        release="Rel-19",
+        sections="5 Scope",
+        tables="Table 1 Values",
+        chunk_index=0,
+        text="handover",
+        score=0.1,
+        previews={},
+    )
+
+    class FakeSearch:
+        def __init__(self):
+            self.filters = None
+
+        def search(self, _query, _filters):
+            self.filters = _filters
+            return [hit]
+
+    service = FakeSearch()
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_spec_doc_search_service", lambda: service
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "spec", "doc", "search", "query", "handover",
+            "--sections", "%5%", "--tables", "%UE%",
+            "--format", "json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload[0]["sections"] == "5 Scope"
+    assert payload[0]["tables"] == "Table 1 Values"
+    assert "section_no" not in payload[0]
+    assert service.filters.sections == "%5%"
+    assert service.filters.tables == "%UE%"
+
+
+def test_spec_doc_cli_rejects_singular_section_filter(monkeypatch):
+    class FakeSearch:
+        def search(self, _query, _filters):
+            return []
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_spec_doc_search_service", lambda: FakeSearch()
+    )
+    result = CliRunner().invoke(
+        app,
+        ["spec", "doc", "search", "query", "handover", "--section", "5"],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option" in result.output
 
 
 def test_search_help_lists_filters() -> None:

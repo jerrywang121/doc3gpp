@@ -629,14 +629,15 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         toc = services.spec_doc.get_toc(spec_id, version, release=release)
         return _to_json(_spec_doc_toc_to_json(toc))
 
-    @server.tool(name="search_spec_docs", description="Full-text (FTS5) search over spec-doc chunks. The spec, release, version and section filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec='38.33%'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="search_spec_docs", description="Full-text (FTS5) search over spec-doc chunks. The spec, release, version, sections and tables filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec='38.33%'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def search_spec_docs(
         query: Annotated[str, Field(description='Full-text query with FTS5 MATCH expression over spec-doc chunk text, phrases shall be wrapped with double quotes, support AND, OR and NOT (e.g. \'handover AND beamforming NOT "CSI report"\').')],
         spec_id: Annotated[str | None, Field(description="Only search chunks for the given spec id (rich filter pattern).")] = None,
         release: Annotated[str | None, Field(description="Rich filter over release (e.g. 'Rel-18').")] = None,
         version: Annotated[str | None, Field(description="Rich filter over version (e.g. '18.5.%').")] = None,
-        section: Annotated[str | None, Field(description="Rich filter over section no/title (e.g. '%handover%').")] = None,
+        sections: Annotated[str | None, Field(description="Rich filter over combined section metadata (e.g. '%handover%').")] = None,
+        tables: Annotated[str | None, Field(description="Rich filter over combined table metadata (e.g. '%UE%').")] = None,
         limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
         offset: Annotated[int, Field(description="Number of hits to skip for pagination.")] = 0,
     ) -> str:
@@ -646,7 +647,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
         filters = SpecDocSearchFilters(
             spec_id=spec_id, release=release, version=version,
-            section=section, limit=limit, offset=offset,
+            sections=sections, tables=tables, limit=limit, offset=offset,
         )
         hits = services.spec_doc_search.search(query, filters)
         return _to_json([_spec_doc_hit_to_json(h) for h in hits])
@@ -659,7 +660,8 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         spec_id: Annotated[str | None, Field(description="Only search chunks for the given spec id.")] = None,
         release: Annotated[str | None, Field(description="Filter over release.")] = None,
         version: Annotated[str | None, Field(description="Filter over version.")] = None,
-        section: Annotated[str | None, Field(description="Filter over section no/title.")] = None,
+        sections: Annotated[str | None, Field(description="Filter over combined section metadata.")] = None,
+        tables: Annotated[str | None, Field(description="Filter over combined table metadata.")] = None,
         limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
         fts5_weight: Annotated[float, Field(description="Blend weight (0.0..1.0) for the FTS5 rank in RRF; the vector weight is 1 - fts5_weight. Ignored when fts5_query is omitted.")] = 0.5,
     ) -> str:
@@ -671,7 +673,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
         filters = SpecDocSearchFilters(
             spec_id=spec_id, release=release, version=version,
-            section=section, limit=limit, offset=0,
+            sections=sections, tables=tables, limit=limit, offset=0,
         )
         hits = services.spec_doc_semantic.search(
             query, fts5_query=fts5_query, filters=filters,

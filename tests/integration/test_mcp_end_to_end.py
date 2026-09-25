@@ -714,6 +714,91 @@ def test_spec_tools_parity_with_http_json(sqlite_env) -> None:
     del state.engine
 
 
+def test_spec_doc_mcp_exposes_plural_metadata_filters(sqlite_env) -> None:
+    import asyncio
+
+    from doc3gpp.models.spec_doc import SpecDocHit, SpecDocSemanticHit
+
+    state, server = _state_and_server()
+
+    class FakeSearch:
+        def __init__(self):
+            self.filters = None
+            self.hit = SpecDocHit(
+                chunk_id="38.331@19.0.0#0",
+                spec_id="38.331",
+                version="19.0.0",
+                release="Rel-19",
+                sections="5 Scope",
+                tables="Table 1 Values",
+                chunk_index=0,
+                text="handover",
+                score=0.1,
+                previews={},
+            )
+
+        def search(self, _query, _filters):
+            self.filters = _filters
+            return [self.hit]
+
+    search_service = FakeSearch()
+
+    class FakeSemantic:
+        def __init__(self):
+            self.kwargs = None
+
+        def search(self, _query, **_kwargs):
+            self.kwargs = _kwargs
+            return [
+                SpecDocSemanticHit(
+                    chunk_id="38.331@19.0.0#0",
+                    rrf_score=0.1,
+                    hit=search_service.hit,
+                )
+            ]
+
+    semantic_service = FakeSemantic()
+    state.services.spec_doc_search = search_service
+    state.services.spec_doc_semantic = semantic_service
+
+    async def run():
+        tools = await server.list_tools()
+        by_name = {tool.name: tool for tool in tools}
+        for name in ("search_spec_docs", "semantic_search_spec_docs"):
+            properties = by_name[name].input_schema["properties"]
+            assert "sections" in properties
+            assert "tables" in properties
+            assert "section" not in properties
+
+        search_result = await server.call_tool(
+            "search_spec_docs",
+            {"query": "handover", "sections": "%5%", "tables": "%UE%"},
+        )
+        semantic_result = await server.call_tool(
+            "semantic_search_spec_docs",
+            {"query": "handover", "sections": "%5%", "tables": "%UE%"},
+        )
+        return search_result, semantic_result
+
+    search_result, semantic_result = asyncio.run(run())
+    assert search_result.is_error is False
+    assert semantic_result.is_error is False
+    assert json.loads(search_result.content[0].text)[0]["sections"] == "5 Scope"
+    nested = json.loads(semantic_result.content[0].text)[0]["hit"]
+    assert nested["sections"] == "5 Scope"
+    assert nested["tables"] == "Table 1 Values"
+    assert "section_no" not in nested
+    assert search_service.filters.sections == "%5%"
+    assert search_service.filters.tables == "%UE%"
+    assert semantic_service.kwargs["filters"].sections == "%5%"
+    assert semantic_service.kwargs["filters"].tables == "%UE%"
+
+    from doc3gpp.storage.db.session import get_engine
+
+    get_engine.cache_clear()
+    del state.engine
+
+
 def _state_and_search_server(search_corpus):
     """Build state + MCP server with a real passthrough search service.
 

@@ -262,16 +262,15 @@ class FakeSemanticSearchService(SemanticSearchService):
 
 class FakeSpecDocSearchService:
     def __init__(self) -> None:  # noqa: D401 - intentional override
+        self.last_filters = None
         self._hits = [
             SpecDocHit(
                 chunk_id="38.331@18.5.0#0",
                 spec_id="38.331",
                 version="18.5.0",
                 release="Rel-18",
-                section_no="1",
-                section_title="Handover",
-                table_no=None,
-                table_title=None,
+                sections="1 Handover",
+                tables=None,
                 chunk_index=0,
                 text="handover",
                 score=-1.0,
@@ -279,7 +278,8 @@ class FakeSpecDocSearchService:
             ),
         ]
 
-    def search(self, *_args: Any, **_kwargs: Any) -> list[SpecDocHit]:
+    def search(self, _query: str, filters: Any) -> list[SpecDocHit]:
+        self.last_filters = filters
         return list(self._hits)
 
 
@@ -2707,12 +2707,13 @@ class FakeSpecDocService:
         *,
         version: str,
         release: str | None = None,
-        section: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[SpecDocChunk]:
         self.calls.append(
-            ("chunks", spec_id, version, release, section, limit, offset)
+            ("chunks", spec_id, version, release, sections, tables, limit, offset)
         )
         return self.chunks[offset : offset + limit]
 
@@ -2762,8 +2763,8 @@ def _spec_doc_chunks(count: int = 3) -> list[SpecDocChunk]:
         SpecDocChunk(
             file_order=0,
             source_file="36.579-5.docx",
-            section_no=str(index + 1),
-            section_title=f"Section {index + 1}",
+            sections=f"{index + 1} Section {index + 1}",
+            tables=None,
             text=f"Chunk text {index}",
             chunk_id=f"36.579-5@18.0.0#{index}",
             spec_id="36.579-5",
@@ -2830,7 +2831,7 @@ def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
     assert "2 chunk" in response.text
     assert any(call[0] == "toc" for call in service.calls)
     assert service.calls[-1] == (
-        "chunks", "36.579-5", "18.0.0", None, None, 21, 0
+        "chunks", "36.579-5", "18.0.0", None, None, None, 21, 0
     )
 
 
@@ -2845,7 +2846,7 @@ def test_spec_doc_show_pagination_forwards_filters_and_uses_probe(
     _override_spec_doc_services(client, service)
     try:
         response = client.get(
-            "/specs/36.579-5/docs?version=18.0.0&section=%255.1%25&limit=2&offset=2"
+            "/specs/36.579-5/docs?version=18.0.0&sections=%255.1%25&tables=%25UE%25&limit=2&offset=2"
         )
     finally:
         _clear_spec_doc_services(client)
@@ -2854,10 +2855,30 @@ def test_spec_doc_show_pagination_forwards_filters_and_uses_probe(
     assert "Chunk text 2" in response.text
     assert "Chunk text 3" in response.text
     assert "Chunk text 4" not in response.text
+    assert "sections=%255.1%25" in response.text
+    assert "tables=%25UE%25" in response.text
     assert "offset=4" in response.text
     assert service.calls[-1] == (
-        "chunks", "36.579-5", "18.0.0", None, "%5.1%", 3, 2
+        "chunks", "36.579-5", "18.0.0", None, "%5.1%", "%UE%", 3, 2
     )
+
+
+def test_spec_doc_search_accepts_sections_and_tables(client: TestClient) -> None:
+    service = FakeSpecDocSearchService()
+    client.app.dependency_overrides[get_spec_doc_search_service] = lambda: service
+    response = client.get(
+        "/spec-docs/search?format=json&q=handover&sections=%255.1%25&tables=%25UE%25"
+    )
+    client.app.dependency_overrides.pop(get_spec_doc_search_service, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["sections"] == "1 Handover"
+    assert payload[0]["tables"] is None
+    assert "section_no" not in payload[0]
+
+    assert service.last_filters.sections == "%5.1%"
+    assert service.last_filters.tables == "%UE%"
 
 
 def test_spec_doc_show_zero_chunk_source_has_incomplete_message(

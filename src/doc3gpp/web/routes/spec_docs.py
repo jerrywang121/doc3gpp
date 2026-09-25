@@ -83,7 +83,8 @@ async def spec_doc_show(
     spec_id: str,
     version: str | None = Query(default=None),
     release: str | None = Query(default=None),
-    section: str | None = Query(default=None),
+    sections: str | None = Query(default=None),
+    tables: str | None = Query(default=None),
     limit: str | None = Query(default="20"),
     offset: str | None = Query(default="0"),
     spec_service: SpecService = Depends(get_spec_service),
@@ -116,7 +117,8 @@ async def spec_doc_show(
     ) or _DOC_CHUNK_LIMIT_DEFAULT
     parsed_offset = parse_int_query(offset, min=0) or 0
     parsed_release = parse_text_query(release)
-    parsed_section = parse_text_query(section)
+    parsed_sections = parse_text_query(sections)
+    parsed_tables = parse_text_query(tables)
 
     if doc_service is None:
         raise SettingsDisabledError("spec-doc parse is not available in this build")
@@ -134,7 +136,8 @@ async def spec_doc_show(
             spec_id,
             version=version,
             release=parsed_release,
-            section=parsed_section,
+            sections=parsed_sections,
+            tables=parsed_tables,
             limit=parsed_limit + 1,
             offset=parsed_offset,
         )
@@ -154,7 +157,8 @@ async def spec_doc_show(
         "limit": parsed_limit,
         "offset": parsed_offset,
         "next_offset": next_offset,
-        "section": parsed_section or "",
+        "sections": parsed_sections or "",
+        "tables": parsed_tables or "",
         "release": parsed_release or "",
         "pending_jobs": pending_jobs,
     }
@@ -238,7 +242,8 @@ def _build_spec_doc_filters(
     spec: str | None,
     release: str | None,
     version: str | None,
-    section: str | None,
+    sections: str | None,
+    tables: str | None,
     limit: int,
     offset: int,
 ) -> SpecDocSearchFilters:
@@ -247,7 +252,8 @@ def _build_spec_doc_filters(
         spec_id=parse_text_query(spec),
         release=parse_text_query(release),
         version=parse_text_query(version),
-        section=parse_text_query(section),
+        sections=parse_text_query(sections),
+        tables=parse_text_query(tables),
         limit=limit,
         offset=offset,
     )
@@ -260,7 +266,8 @@ async def spec_doc_search_query(
     spec: str | None = Query(default=None),
     release: str | None = Query(default=None),
     version: str | None = Query(default=None),
-    section: str | None = Query(default=None),
+    sections: str | None = Query(default=None),
+    tables: str | None = Query(default=None),
     limit: str | None = Query(default="20"),
     offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
@@ -281,7 +288,8 @@ async def spec_doc_search_query(
     parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 20
     parsed_offset = parse_int_query(offset, min=0) or 0
     filters = _build_spec_doc_filters(
-        spec=spec, release=release, version=version, section=section,
+        spec=spec, release=release, version=version,
+        sections=sections, tables=tables,
         limit=parsed_limit, offset=parsed_offset,
     )
     hits: list[Any] = []
@@ -314,7 +322,8 @@ async def spec_doc_search_query(
             "spec": spec or "",
             "release": release or "",
             "version": version or "",
-            "section": section or "",
+            "sections": sections or "",
+            "tables": tables or "",
         },
     }
     if is_htmx_request(request):
@@ -343,7 +352,8 @@ async def spec_doc_search_semantic(
     spec: str | None = Query(default=None),
     release: str | None = Query(default=None),
     version: str | None = Query(default=None),
-    section: str | None = Query(default=None),
+    sections: str | None = Query(default=None),
+    tables: str | None = Query(default=None),
     limit: str | None = Query(default="20"),
     offset: str | None = Query(default=None),
     format: str | None = Query(default=None, alias="format"),
@@ -388,7 +398,8 @@ async def spec_doc_search_semantic(
                 q,
                 fts5_query=fts5_query,
                 filters=_build_spec_doc_filters(
-                    spec=spec, release=release, version=version, section=section,
+                    spec=spec, release=release, version=version,
+                    sections=sections, tables=tables,
                     limit=parsed_limit, offset=parsed_offset,
                 ),
                 limit=parsed_limit,
@@ -425,7 +436,8 @@ async def spec_doc_search_semantic(
             "spec": spec or "",
             "release": release or "",
             "version": version or "",
-            "section": section or "",
+            "sections": sections or "",
+            "tables": tables or "",
         },
     }
     if is_htmx_request(request):

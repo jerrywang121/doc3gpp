@@ -4501,10 +4501,8 @@ def _spec_doc_hit_to_dict(hit: object) -> dict[str, object]:
         "spec_id": getattr(hit, "spec_id"),
         "version": getattr(hit, "version"),
         "release": _serialise_show_value(getattr(hit, "release", None)),
-        "section_no": _serialise_show_value(getattr(hit, "section_no", None)),
-        "section_title": _serialise_show_value(getattr(hit, "section_title", None)),
-        "table_no": _serialise_show_value(getattr(hit, "table_no", None)),
-        "table_title": _serialise_show_value(getattr(hit, "table_title", None)),
+        "sections": _serialise_show_value(getattr(hit, "sections", None)),
+        "tables": _serialise_show_value(getattr(hit, "tables", None)),
         "chunk_index": getattr(hit, "chunk_index", 0),
         "text": getattr(hit, "text", ""),
         "score": getattr(hit, "score", 0.0),
@@ -4552,10 +4550,10 @@ def _render_spec_doc_hits(hits: list, *, fmt: str, compact: bool, fields: list[s
     if fmt == "markdown":
         for h in hits:
             typer.echo(f"**{h.chunk_id}** — {h.spec_id}@{h.version}")
-            if getattr(h, "section_title", None):
-                typer.echo(f"section: {h.section_no or '-'} {h.section_title}")
-            if getattr(h, "table_title", None):
-                typer.echo(f"table: {h.table_title}")
+            if getattr(h, "sections", None):
+                typer.echo(f"sections: {h.sections}")
+            if getattr(h, "tables", None):
+                typer.echo(f"tables: {h.tables}")
             for col, snippet in (getattr(h, "previews", {}) or {}).items():
                 typer.echo(f"> {col}: {snippet}")
             typer.echo("")
@@ -4587,8 +4585,10 @@ def _render_spec_doc_semantic_hits(hits: list, *, fmt: str, compact: bool) -> No
             if h.min_chunk_distance is not None:
                 typer.echo(f"   dist: {h.min_chunk_distance:.4f}")
             inner = getattr(h, "hit", None)
-            if inner is not None and getattr(inner, "section_title", None):
-                typer.echo(f"   section: {inner.section_title}")
+            if inner is not None and getattr(inner, "sections", None):
+                typer.echo(f"   sections: {inner.sections}")
+            if inner is not None and getattr(inner, "tables", None):
+                typer.echo(f"   tables: {inner.tables}")
             typer.echo("")
         return
     typer.echo(f"{'rank':>4} {'chunk_id':<28} {'rrf':>8} {'fts':>4} {'vec':>4} {'dist':>8}")
@@ -4746,10 +4746,15 @@ def spec_doc_search_query(
         "--version",
         help="Rich filter over version.",
     ),
-    section: str | None = typer.Option(
+    sections: str | None = typer.Option(
         None,
-        "--section",
-        help="Rich filter over section no/title.",
+        "--sections",
+        help="Rich filter over combined section metadata.",
+    ),
+    tables: str | None = typer.Option(
+        None,
+        "--tables",
+        help="Rich filter over combined table metadata.",
     ),
     limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
     offset: int = typer.Option(0, "--offset", min=0, help="Number of rows to skip before applying --limit."),
@@ -4785,7 +4790,8 @@ def spec_doc_search_query(
         spec_id=spec,
         release=release,
         version=version,
-        section=section,
+        sections=sections,
+        tables=tables,
         limit=limit,
         offset=offset,
     )
@@ -4851,10 +4857,15 @@ def spec_doc_search_sem(
         "--version",
         help="Filter over version.",
     ),
-    section: str | None = typer.Option(
+    sections: str | None = typer.Option(
         None,
-        "--section",
-        help="Filter over section no/title.",
+        "--sections",
+        help="Filter over combined section metadata.",
+    ),
+    tables: str | None = typer.Option(
+        None,
+        "--tables",
+        help="Filter over combined table metadata.",
     ),
     limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
     fmt: str | None = typer.Option(
@@ -4895,7 +4906,8 @@ def spec_doc_search_sem(
         spec_id=spec,
         release=release,
         version=version,
-        section=section,
+        sections=sections,
+        tables=tables,
         limit=limit,
         offset=0,
     )

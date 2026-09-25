@@ -213,6 +213,7 @@ class OutputFieldsSettings(BaseModel):
             "initial_release",
             "tsg",
             "rapporteurs",
+            "parsed",
         ]
     )
     spec_doc: list[str] = Field(

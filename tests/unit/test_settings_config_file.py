@@ -115,6 +115,12 @@ def test_built_in_defaults_match_previously_hardcoded_values(
     assert s.output.fields.wi == ["wi_id", "acronym", "release", "name"]
 
 
+def test_spec_default_fields_include_parsed() -> None:
+    from doc3gpp.settings.schema import Settings
+
+    assert Settings().output.fields.spec[-1] == "parsed"
+
+
 def test_tdoc_parse_defaults_and_bounds(clean_settings) -> None:
     """``tdoc_parse`` defaults and validation rules are enforced."""
     from pydantic import ValidationError

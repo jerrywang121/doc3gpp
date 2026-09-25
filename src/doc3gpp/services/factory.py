@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
+from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
 from doc3gpp.storage.repositories.spec_doc_search_sql import (
     SQLAlchemySpecDocSearchRepository,
 )
@@ -147,6 +148,7 @@ def build_spec_service() -> SpecService:
     return SpecService(
         SQLAlchemySpecRepository(),
         sync_interval=settings.sync.spec_sync_interval,
+        parsed_status_repository=SQLAlchemySpecDocRepository(),
     )
 
 

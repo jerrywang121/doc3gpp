@@ -79,6 +79,10 @@
 #   "testcase_id", "title", "spec",
 #   "group", "release", "statuses",
 # ]
+# spec_doc = [
+#   "spec_id", "version", "release", "sections", "tables",
+#   "chunk_index", "text",
+# ]
 
 # ── TDoc extraction cache ───────────────────────────────────────────────────
 # Disk cache for the TDoc extraction pipeline (`doc3gpp tdoc parse`).
@@ -183,6 +187,10 @@ search_fanout_factor = 4
 # (`doc3gpp db reset --scope specdata`).
 
 # [spec_doc]
+# Dedicated root for spec-document ZIP and Markdown caches. This remains
+# separate from the TDoc extraction cache under [cache].dir.
+# cache_dir = "~/.cache/doc3gpp/specs"
+
 # Per-zip cap in KB for spec-document downloads. Zips larger than this
 # land in the parse skip bucket. 0 disables the limit (spec zips are
 # legitimately multi-MB, so unlimited is the default).
@@ -207,12 +215,16 @@ search_fanout_factor = 4
 
 # Per-column BM25 weights passed to FTS5's bm25() ranking function
 # and snippet() selection. Order MUST match the 6 indexed columns of
-# the spec_doc_search virtual table: (text, section_title, table_title,
-# spec_id, version, release). A column with weight 0 is excluded from
+# the spec_doc_search virtual table: (text, sections, tables, spec_id,
+# version, release). A column with weight 0 is excluded from
 # both ranking and previews; a column with weight > 0 gets its own
 # highlighted snippet in query results (one per column, only when the
 # snippet actually contains a match).
 # bm25_weights = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
+
+# Search filters use --sections and --tables over the combined metadata
+# columns. Each stored value is newline-delimited: one <identifier> <title>
+# entry per line; empty metadata is stored as null.
 
 # ── Semantic search (hybrid FTS5 + vector) ──────────────────────────────────
 # Hybrid search subsystem: remote OpenAI-compatible embeddings API +

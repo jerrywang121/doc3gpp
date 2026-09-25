@@ -2456,7 +2456,10 @@ The `spec doc` sub-app (`spec doc parse/toc show/search query/search sem/schema`
 under `spec`) exposes the spec-document corpus: downloaded spec version zips parsed
 into chunk rows + a per-version TOC, searchable via FTS5 or hybrid vector search.
 Each parsed pair is one `(spec_id, version)` row in the specdata sqlite file
-(`specdata_database_url`, default sibling `<main-stem>_specdata.db`).
+(`specdata_database_url`, default sibling `<main-stem>_specdata.db`). Parsed
+ZIP and Markdown sidecars use the dedicated `spec_doc.cache_dir` root,
+defaulting to `~/.cache/doc3gpp/specs`; the TDoc cache remains
+`~/.cache/doc3gpp/tdocs`.
 
 Versions resolve at runtime — `parse` picks the numeric-newest stored
 `SpecVersion.version` (no pins) unless `--release`/`--version` pins one. Run
@@ -2495,13 +2498,17 @@ Behavior:
   `convert_document_to_blocks` + `order_spec_files` (front-matter TOC file first,
   then section-tuple sort, TOC tiebreak, unnumbered lexicographic tail) +
   `extract_spec_toc` + per-file `chunk_blocks` → `upsert_toc` + `replace_chunks`
-  + per-file markdown cache (`{cache.dir}/specs/markdown/<spec_id>/<version>/`) +
+  + per-file markdown cache (`{spec_doc.cache_dir}/markdown/<spec_id>/<version>/`) +
   `record_parsed` + best-effort auto-index (`upsert_for_version`, gated on
   `[spec_doc] auto_index_on_parse`, default `true`) / auto-embed
   (`index_for_version`, gated on `[spec_doc] auto_embed_on_parse`, default `true`).
 - Chunking reuses `semantic_search.chunk_size` (default 512) / `chunk_overlap`
   (default 24, `None` → reuse) alongside `max_chunk_chars` (default 1500);
   table rows are atomic; `chunk_id = {spec_id}@{version}#{chunk_index}`.
+  Chunk `sections` and `tables` metadata is newline-delimited, with one
+  combined `<identifier> <title>` entry per line; empty metadata is `null`.
+  Alphanumeric section identifiers such as `7.2A.3` and `7.2A.3A` are kept
+  intact in both chunk metadata and the TOC.
 
 Examples:
 
@@ -2563,7 +2570,9 @@ Options:
 - --spec: only search chunks for the given spec id. Optional.
 - --release: rich filter over release. Optional.
 - --version: rich filter over version. Optional.
-- --section: rich filter over section no/title. Optional.
+- --sections: rich filter over combined section identifier/title metadata.
+  Optional.
+- --tables: rich filter over combined table identifier/title metadata. Optional.
 - --limit: max results. Default `20`, range `>= 0`.
 - --offset: rows to skip before applying `--limit`. Default `0`, range `>= 0`.
 - --fields: comma-separated list of fields to include (or `all` for all fields).
@@ -2575,15 +2584,14 @@ Behavior:
 - `SpecDocSearchService.search(query, filters)` → repo builds the `MATCH`
   expression internally via `SearchQueryBuilder`, pushes the rich filters down,
   ranks with `bm25(spec_doc_search, weights)` over the 6 indexed columns
-  `(text, section_title, table_title, spec_id, version, release)` with
+  `(text, sections, tables, spec_id, version, release)` with
   `[spec_doc] bm25_weights` (default `(5.0, 5.0, 5.0, 1.0, 1.0, 1.0)`), and
   binds one `snippet(...)` per `weight > 0` column — a column surfaces in the
   hit's `previews` map only when its snippet contains a match. The FTS5-side
   filters are `LIKE`-normalised (`normalize_query`) so dotted filters
   (`38.331`) match their indexed form (`38_331`).
 - Default output fields (configurable via `[output.fields] spec_doc`):
-  `spec_id, version, release, section_no, section_title, table_no,
-  table_title, chunk_index, text`.
+  `spec_id, version, release, sections, tables, chunk_index, text`.
 - Bad query → exit `2`; corrupt index → exit `3` with a rebuild hint.
 - The search service also exposes `upsert_for_version` / `remove_for_version` /
   `rebuild` (batched with `--resume`/`--stale-only` resume semantics via
@@ -2617,7 +2625,8 @@ Options:
 - --spec: only search chunks for the given spec id. Optional.
 - --release: filter over release. Optional.
 - --version: filter over version. Optional.
-- --section: filter over section no/title. Optional.
+- --sections: filter over combined section identifier/title metadata. Optional.
+- --tables: filter over combined table identifier/title metadata. Optional.
 - --limit: max results. Default `20`, range `>= 0`.
 - --format: `table` (default), `json`, or `markdown`.
 - --compact: strip decorators.
@@ -2629,9 +2638,9 @@ Behavior:
   (`rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) * (1 - fts5_weight)`,
   `k = 60`); without it pure vector KNN returns dressed as
   `SpecDocSemanticHit` with `rank_fts5=None` (`hit=None` for vector-only chunks).
-- Vector-side `spec_id`/`version` are exact `=` and `release`/`section` plain
-  `LIKE` (no rich grammar — pass plain strings for exact agreement); the FTS5
-  side interprets the rich grammar. Requires
+- Vector-side `spec_id`/`version` are exact `=` and `release`/`sections`/`tables`
+  plain `LIKE` (no rich grammar — pass plain strings for exact agreement); the
+  FTS5 side interprets the rich grammar. Requires
   `[semantic_search].embedding_base_url`; without it the command exits `1`.
 
 Examples:
@@ -2645,8 +2654,10 @@ doc3gpp spec doc search sem "handover signalling" --fts5-query "handover" --fts5
 
 Purpose:
 
-- Describe every column of the three `spec_doc` tables (27 rows):
-  `spec_doc_sources` (8), `spec_doc_tocs` (7), `spec_doc_chunks` (12).
+- Describe every column of the three `spec_doc` tables (25 rows):
+  `spec_doc_sources` (8), `spec_doc_tocs` (7), `spec_doc_chunks` (10).
+  Chunk rows document the combined `sections` and `tables` columns; TOC
+  entries continue to expose their low-level `section_no` and `title` fields.
 
 Options:
 

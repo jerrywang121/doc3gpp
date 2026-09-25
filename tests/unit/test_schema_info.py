@@ -14,6 +14,14 @@ def test_schema_field_order_and_keys() -> None:
     assert sorted(RESOURCE_SCHEMAS) == ["meeting", "spec", "spec_doc", "tdoc", "testcase", "tsg", "wi"]
 
 
+def test_spec_doc_schema_lists_combined_chunk_fields() -> None:
+    payload = schema_payload("spec_doc")
+    fields = {row["field"] for row in payload}
+    assert "sections" in fields
+    assert "tables" in fields
+    assert not {"section_no", "section_title", "table_no", "table_title"} & fields
+
+
 def test_tsg_payload_shape() -> None:
     payload = schema_payload("tsg")
     assert payload[0] == {

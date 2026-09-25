@@ -670,3 +670,10 @@ def test_default_paths_are_distinct() -> None:
     assert DEFAULT_PROJECT_CONFIG != DEFAULT_USER_CONFIG
     assert DEFAULT_PROJECT_CONFIG.name == "doc3gpp.toml"
     assert DEFAULT_USER_CONFIG.name == "config.toml"
+
+
+def test_spec_doc_config_example_contains_dedicated_cache_dir() -> None:
+    text = Path("src/doc3gpp/data/doc3gpp.toml.example").read_text()
+    assert "cache_dir" in text
+    assert "sections" in text
+    assert "tables" in text

@@ -273,20 +273,30 @@ to fetch them. The default preserves any previously-cached `pdf_url` /
 doc3gpp spec doc parse --spec 38.331 --spec 38.523-1
 doc3gpp spec doc parse --spec 38.331 --force  # re-download and re-parse
 
-# inspect the stored TOC and search chunk text/metadata
+# inspect the stored TOC and search chunk text/combined metadata
 doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
-doc3gpp spec doc search query "handover" --spec 38.331 --limit 20
+doc3gpp spec doc search query "handover" --spec 38.331 --sections "%handover%" --tables "%UE%" --limit 20
 doc3gpp spec doc search sem "handover" --fts5-query "handover" --fts5-weight 0.5
 doc3gpp spec doc schema --format json
 ```
 
 Spec-document rows live in a separate sibling database, normally
-`<main-stem>_specdata.db`, and are cached below `cache.dir/specs/`. Version
-selection is numeric rather than lexical; parsed `(spec_id, version)` rows
-are immutable and skip on later parses unless `--force` is supplied, which
-re-downloads and re-parses. The `parse` command fetches the ZIP when it is
-missing and reports `ok`, `skipped`, and `failed` buckets per requested spec.
-See [`docs/cli.md`](docs/cli.md) for all filters and defaults.
+`<main-stem>_specdata.db`, and are cached below the dedicated
+`~/.cache/doc3gpp/specs` root by default. The TDoc extraction cache remains
+`~/.cache/doc3gpp/tdocs`. Chunk `sections` and `tables` values are
+newline-delimited combined identifier/title entries; TOC entries retain their
+`section_no` and `title` fields. Section identifiers may be alphanumeric, such
+as `7.2A.3` or `7.2A.3A`. Version selection is numeric rather than lexical;
+parsed `(spec_id, version)` rows are immutable and skip on later
+parses unless `--force` is supplied, which re-downloads and re-parses. The
+`parse` command fetches the ZIP when it is missing and reports `ok`, `skipped`,
+and `failed` buckets per requested spec. See [`docs/cli.md`](docs/cli.md) for
+all filters and defaults.
+
+The pre-deployment specdata corpus is repaired once from its cached ZIPs using
+an internal maintenance helper. This is not a runtime migration and there is
+no public repair command; deployments should start from the fresh schema and
+parse ledger.
 
 ### `testcase` — RAN5 conformance testcases
 
@@ -615,6 +625,16 @@ wi  = ["wi_id", "acronym", "release", "name"]
 dir = "~/.cache/doc3gpp/tdocs"
 size_limit_mb = 1024
 purge_confirm = true
+
+[spec_doc]
+cache_dir = "~/.cache/doc3gpp/specs"
+max_zip_size_kb = 0
+max_chunk_chars = 1500
+chunk_overlap = null
+auto_index_on_parse = true
+auto_embed_on_parse = true
+# Order: (text, sections, tables, spec_id, version, release)
+bm25_weights = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
 
 [tdoc_parse]
 max_batch = 100

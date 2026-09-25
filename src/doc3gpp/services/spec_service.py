@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import SyncOutcome
-from doc3gpp.repository.protocols import SpecRepository
+from doc3gpp.repository.protocols import SpecParsedStatusRepository, SpecRepository
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.services._duration import format_duration as _format_duration
 from doc3gpp.scraping.spec_source import (
@@ -74,10 +74,12 @@ class SpecService:
         repository: SpecRepository,
         sync_interval: timedelta = timedelta(hours=24),
         max_workers: int | None = None,
+        parsed_status_repository: SpecParsedStatusRepository | None = None,
     ) -> None:
         self._repository = repository
         self._sync_interval = sync_interval
         self._max_workers = max_workers
+        self._parsed_status_repository = parsed_status_repository
 
     def sync(
         self,
@@ -479,12 +481,40 @@ class SpecService:
         initial_release: str | None = None,
         wis: str | None = None,
         rapporteurs: str | None = None,
+        parsed: bool | None = None,
     ) -> list[Spec]:
-        return self._repository.list(
-            limit=limit, offset=offset, tsg=tsg, type=type, spec_id=spec_id,
-            title=title, status=status, radio_tech=radio_tech,
-            initial_release=initial_release, wis=wis, rapporteurs=rapporteurs,
+        repository_kwargs = {
+            "tsg": tsg,
+            "type": type,
+            "spec_id": spec_id,
+            "title": title,
+            "status": status,
+            "radio_tech": radio_tech,
+            "initial_release": initial_release,
+            "wis": wis,
+            "rapporteurs": rapporteurs,
+        }
+        if parsed is None:
+            specs = self._repository.list(
+                limit=limit, offset=offset, **repository_kwargs
+            )
+            self._enrich_specs(specs)
+            return specs
+
+        specs = self._repository.list(limit=None, offset=0, **repository_kwargs)
+        self._enrich_specs(specs)
+        filtered = [spec for spec in specs if (spec.parsed is not None) is parsed]
+        return filtered[offset : offset + limit]
+
+    def _enrich_specs(self, specs: list[Spec]) -> None:
+        if not specs or self._parsed_status_repository is None:
+            return
+        parsed_by_spec = self._parsed_status_repository.list_parsed_versions(
+            [spec.spec_id for spec in specs]
         )
+        for spec in specs:
+            versions = parsed_by_spec.get(spec.spec_id, [])
+            spec.parsed = ",".join(versions) if versions else None
 
     def get(self, spec_id: str) -> Spec | None:
         return self._repository.get(spec_id)
@@ -496,6 +526,15 @@ class SpecService:
         offset: int = 0,
         version: str | None = None,
     ) -> list[SpecVersion]:
-        return self._repository.list_versions(
+        versions = self._repository.list_versions(
             spec_id, limit=limit, offset=offset, version=version
         )
+        if self._parsed_status_repository is None or not versions:
+            return versions
+        parsed_versions = self._parsed_status_repository.list_parsed_versions([spec_id]).get(
+            spec_id, []
+        )
+        parsed_set = set(parsed_versions)
+        for version_row in versions:
+            version_row.parsed = version_row.version in parsed_set
+        return versions

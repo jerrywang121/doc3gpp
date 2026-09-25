@@ -301,6 +301,17 @@ def _resolve_format(fmt: str | None, default: str = "table") -> str:
     return normalized
 
 
+def _parse_bool_option(value: str | None, option_name: str) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise typer.BadParameter(f"{option_name} must be 'true' or 'false'")
+
+
 def _resolve_compact(compact: bool) -> bool:
     """Resolve ``--compact`` against :attr:`Settings.output.compact`.
 
@@ -486,6 +497,18 @@ def _emit_json(
         return
     json.dump(objs, stream, ensure_ascii=False, indent=2)
     stream.write("\n")
+
+
+def _spec_list_json_rows(records: list[Spec], fields: list[str]) -> list[dict[str, object]]:
+    return [
+        {
+            field: getattr(record, field, None)
+            if field == "parsed"
+            else str(getattr(record, field, None) or "-")
+            for field in fields
+        }
+        for record in records
+    ]
 
 
 def _emit_markdown(
@@ -2483,6 +2506,12 @@ def _serialise_show_value(value: object) -> object:
     return value
 
 
+def _display_show_value(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value)
+    return str(value or "-")
+
+
 # ``TDocShowRecord`` / ``TDocShowRecordByUrl`` are imported from
 # ``doc3gpp.models.tdoc_show`` (re-exported above for backwards
 # compatibility with code that imports them from ``doc3gpp.cli``).
@@ -4354,6 +4383,11 @@ def spec_list(
     rapporteurs: str | None = typer.Option(
         None, "--rapporteurs", help="Rich filter on rapporteurs (comma-joined company names)."
     ),
+    parsed: str | None = typer.Option(
+        None,
+        "--parsed",
+        help="Filter by whether any stored spec document is parsed: true or false.",
+    ),
     fmt: str | None = typer.Option(
         None,
         "--format",
@@ -4393,6 +4427,7 @@ def spec_list(
         type,
         spec_id,
     )
+    parsed_filter = _parse_bool_option(parsed, "--parsed")
     service = build_spec_service()
     records = service.list_recent(
         limit=limit,
@@ -4406,12 +4441,21 @@ def spec_list(
         initial_release=initial_release,
         wis=wis,
         rapporteurs=rapporteurs,
+        parsed=parsed_filter,
     )
 
     settings = get_settings()
     default_fields = settings.output.fields.spec
     fmt = _resolve_format(fmt, default=settings.output.format)
     resolved_compact = _resolve_compact(compact)
+
+    if fmt == "json":
+        _dump_show_json(
+            _spec_list_json_rows(records, default_fields),
+            output,
+            compact=resolved_compact,
+        )
+        return
 
     rows: list[list[str]] = []
     for item in records:
@@ -5026,7 +5070,7 @@ def spec_show(
     ]
     version_fields = [
         "version", "release", "ftp_url", "meeting_id", "meeting_name",
-        "upload_date", "pdf_url", "crs",
+        "upload_date", "pdf_url", "crs", "parsed",
     ]
 
     if no_wis_crs:
@@ -5048,11 +5092,11 @@ def spec_show(
         _dump_show_json(payload, output, compact=resolved_compact)
         return
 
-    header_row = [[str(getattr(spec, f) or "-") for f in header_fields]]
+    header_row = [[_display_show_value(getattr(spec, f)) for f in header_fields]]
     version_rows: list[list[str]] = []
     for v in versions:
         assert isinstance(v, SpecVersion)
-        version_rows.append([str(getattr(v, f) or "-") for f in version_fields])
+        version_rows.append([_display_show_value(getattr(v, f)) for f in version_fields])
 
     _emit_records(
         rows=header_row,

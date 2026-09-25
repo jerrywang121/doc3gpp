@@ -13,6 +13,7 @@ from datetime import date
 from unittest.mock import MagicMock
 
 import tqdm
+import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -204,6 +205,41 @@ def test_spec_list(monkeypatch) -> None:
     result = runner.invoke(app, ["spec", "list", "--format", "json"])
     assert result.exit_code == 0, result.stdout
     assert "36.579-5" in result.stdout
+
+
+def test_spec_list_json_preserves_null_parsed(monkeypatch) -> None:
+    service = MagicMock()
+    service.list_recent.return_value = [
+        Spec(spec_id="36.579-5", type="TS", title="NR", parsed=None)
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "list", "--format", "json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)[0]["parsed"] is None
+
+
+@pytest.mark.parametrize(("flag", "expected"), [("true", True), ("TRUE", True), ("false", False)])
+def test_spec_list_parsed_filter_is_forwarded(monkeypatch, flag, expected) -> None:
+    service = MagicMock()
+    service.list_recent.return_value = []
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "list", "--parsed", flag, "--format", "json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert service.list_recent.call_args.kwargs["parsed"] is expected
+
+
+def test_spec_list_rejects_invalid_parsed_filter(monkeypatch) -> None:
+    service = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "list", "--parsed", "maybe"])
+
+    assert result.exit_code != 0
+    assert "true" in result.output.lower() and "false" in result.output.lower()
 
 
 def test_spec_list_rapporteurs_filter(monkeypatch) -> None:
@@ -417,6 +453,49 @@ def test_spec_show_no_wis_crs_drops_fields(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert "wis" not in payload["spec"]
     assert "crs" not in payload["versions"][0]
+    assert payload["versions"][0]["parsed"] is False
+
+
+def test_spec_show_json_emits_native_parsed_boolean(monkeypatch) -> None:
+    service = MagicMock()
+    service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
+    service.list_versions.return_value = [
+        SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["versions"][0]["parsed"] is False
+
+
+def test_spec_show_table_emits_false_parsed(monkeypatch) -> None:
+    service = MagicMock()
+    service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
+    service.list_versions.return_value = [
+        SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "table"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "\tFalse\n" in result.stdout
+
+
+def test_spec_show_markdown_emits_false_parsed(monkeypatch) -> None:
+    service = MagicMock()
+    service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
+    service.list_versions.return_value = [
+        SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)
+    ]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "markdown"])
+
+    assert result.exit_code == 0, result.stdout
+    assert result.stdout.splitlines()[-1].endswith("| False |")
 
 
 def test_spec_show_json_parity_keeps_wis_crs_by_default(monkeypatch) -> None:

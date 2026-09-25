@@ -47,9 +47,9 @@ _MEETING_FIELDS = ["meeting_id", "name", "location", "start_date", "end_date", "
 _TDOC_FIELDS = ["tdoc_id", "meeting_name", "title", "source", "type", "status", "cr_cat", "spec", "version", "related_wis"]
 _TSG_FIELDS = ["tsg_name", "short_name", "description"]
 _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
-_SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs"]
+_SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs", "parsed"]
 _SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
-_VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
+_VERSION_FIELDS = ["version", "parsed", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
 _TESTCASE_FIELDS = ["testcase_id", "title", "spec", "group", "release", "statuses"]
 _TESTCASE_SHOW_FIELDS = ["testcase_id", "title", "ats", "feature", "release", "wis", "spec", "group"]
 _TESTCASE_STATUS_FIELDS = ["path", "gcf_ptcrb", "ttcn_status"]
@@ -462,7 +462,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         return _to_json(render.wi_rows(wis, _WI_FIELDS))
 
     # ---- Specs ----------------------------------------------------
-    @server.tool(name="list_specs", description="List 3GPP specifications, optionally filtered by TSG, type, spec id, title, status, radio technology, initial release, related WIs or rapporteurs. The spec_id, title, status, radio_tech, initial_release, wis and rapporteurs filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec_id='36.579%' matches any spec id starting with '36.579'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="list_specs", description="List 3GPP specifications, optionally filtered by TSG, type, spec id, title, status, radio technology, initial release, related WIs, rapporteurs or parsed status. The spec_id, title, status, radio_tech, initial_release, wis and rapporteurs filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec_id='36.579%' matches any spec id starting with '36.579'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
     @_mcp_error_guard
     def list_specs(
         tsg: Annotated[str | None, Field(description="TSG short name filter (e.g. 'R5').")] = None,
@@ -474,6 +474,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         initial_release: Annotated[str | None, Field(description="Rich filter pattern on the initial release (e.g. 'Rel-20').")] = None,
         wis: Annotated[str | None, Field(description="Rich filter pattern on related WIs.")] = None,
         rapporteurs: Annotated[str | None, Field(description="Rich filter pattern on rapporteurs.")] = None,
+        parsed: Annotated[bool | None, Field(description="Filter by whether any stored spec document is parsed.")] = None,
         limit: Annotated[int, Field(description="Maximum number of specs to return.")] = 50,
         offset: Annotated[int, Field(description="Number of specs to skip for pagination.")] = 0,
     ) -> str:
@@ -481,6 +482,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             limit=limit, offset=offset, tsg=tsg, type=type, spec_id=spec_id,
             title=title, status=status, radio_tech=radio_tech,
             initial_release=initial_release, wis=wis, rapporteurs=rapporteurs,
+            parsed=parsed,
         )
         return _to_json(render.spec_rows(specs, _SPEC_FIELDS))
 

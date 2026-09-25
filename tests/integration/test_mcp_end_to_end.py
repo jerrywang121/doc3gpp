@@ -564,6 +564,7 @@ def test_list_specs_tool(sqlite_env) -> None:
     payload = json.loads(result.content[0].text)
     assert "spec_id" in payload[0]
     assert payload[0]["spec_id"] == "36.579-5"
+    assert "parsed" in payload[0]
 
 
 def test_list_specs_rapporteurs_filter(sqlite_env) -> None:
@@ -659,7 +660,10 @@ def test_get_spec_tool_version_and_no_wis_crs(sqlite_env) -> None:
         assert http_resp.status_code == 200, http_resp.text
         http_bytes = http_resp.content.decode("utf-8")
         assert json.loads(mcp_bytes) == json.loads(http_bytes)
-        assert "wis" not in json.loads(mcp_bytes)["spec"]
+        mcp_payload = json.loads(mcp_bytes)
+        assert "wis" not in mcp_payload["spec"]
+        assert mcp_payload["versions"][0]["parsed"] is False
+        assert "crs" not in mcp_payload["versions"][0]
 
         asyncio.run(call(
             "get_spec",

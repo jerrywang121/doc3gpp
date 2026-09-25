@@ -30,6 +30,48 @@ async def _call(server, name: str, args: dict):
     return await server.call_tool(name, args)
 
 
+def test_list_specs_accepts_parsed_filter(sqlite_env) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.models.spec import Spec
+
+    state, server = _server()
+    spec_service = MagicMock()
+    spec_service.list_recent.return_value = [
+        Spec(spec_id="36.579-5", type="TS", title="NR", parsed=None)
+    ]
+    state.services.spec = spec_service
+
+    result = asyncio.run(_call(server, "list_specs", {"parsed": True}))
+    payload = json.loads(result.content[0].text)
+
+    assert result.is_error is False
+    assert payload[0]["parsed"] is None
+    assert spec_service.list_recent.call_args.kwargs["parsed"] is True
+
+
+def test_get_spec_emits_native_version_parsed_boolean(sqlite_env) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.models.spec import Spec, SpecVersion
+
+    state, server = _server()
+    spec_service = MagicMock()
+    spec_service.get.return_value = Spec(
+        spec_id="36.579-5", type="TS", title="NR"
+    )
+    spec_service.list_versions.return_value = [
+        SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)
+    ]
+    state.services.spec = spec_service
+
+    result = asyncio.run(_call(server, "get_spec", {"spec_id": "36.579-5"}))
+    payload = json.loads(result.content[0].text)
+
+    assert result.is_error is False
+    assert payload["versions"][0]["parsed"] is False
+
+
 def test_parse_tdoc_url_rejects_non_3gpp_url(sqlite_env) -> None:
     """Non-3GPP URLs raise ``InvalidFilterError`` (clean MCP error, no job)."""
     _, server = _server()

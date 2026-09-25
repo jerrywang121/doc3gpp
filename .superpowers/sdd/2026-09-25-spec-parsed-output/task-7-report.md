@@ -116,3 +116,59 @@ task does not modify tests or production settings by instruction.
 - The required full suite was run and has the pre-existing stale default
   assertion described above; the focused documentation/configuration test
   passed.
+
+## Reviewer Fixes
+
+The two reviewer findings were addressed in the following files:
+
+- `docs/cli.md`
+  - Explicitly exempted `--parsed` from the generic rich-filter grammar.
+  - Restated that `--parsed` accepts only case-insensitive `true` or `false`.
+- `tests/unit/test_settings.py`
+  - Updated `test_output_fields_default_spec` to assert the approved default
+    list ending with the exact `parsed` field.
+
+No production code, schema registry, ORM, or migration was changed.
+
+## Reviewer-Fix Verification
+
+Red reproduction before the test update:
+
+```text
+rtk pytest tests/unit/test_settings.py::test_output_fields_default_spec -q
+Pytest: 0 passed, 1 failed
+Failure: actual default contained one additional `parsed` item.
+```
+
+Covering settings tests after the update:
+
+```text
+rtk pytest tests/unit/test_settings.py tests/unit/test_settings_config_file.py -q
+Pytest: 44 passed
+```
+
+Documentation search and whitespace checks after the update:
+
+```text
+rtk git diff --check
+clean (no output)
+
+rtk grep 'parsed' docs/cli.md docs/web-server.md README.md AGENTS.md docs/code-map.md src/doc3gpp/data/doc3gpp.toml.example
+110 matches in 6 files
+```
+
+Full SQLite suite after the update:
+
+```text
+rtk ./scripts/test_sqlite.sh
+2442 passed, 1 skipped, 109 warnings in 127.28s
+```
+
+## Reviewer-Fix Commit
+
+- `f09c9ee` (`docs: clarify parsed filter contract`) — reviewer fixes in
+  `docs/cli.md` and `tests/unit/test_settings.py`.
+
+The pre-existing untracked
+`docs/superpowers/plans/2026-09-25-spec-parsed-output.md` remains untouched
+and unstaged.

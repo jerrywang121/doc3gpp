@@ -664,7 +664,7 @@ and syncs each through the `--tsg` path below.
    `1 - fts5_weight`); without it pure vector KNN returns dressed as
    `SpecDocSemanticHit` (`rank_fts5=None`, `hit=None` for vector-only
    chunks). Vector-side `spec_id`/`version` are exact `=`,
-   `release`/`section` plain `LIKE` (no rich grammar — pass plain
+   `release`/`sections`/`tables` plain `LIKE` (no rich grammar — pass plain
    values for exact agreement). Requires
    `[semantic_search].embedding_base_url`.
 

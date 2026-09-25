@@ -55,8 +55,8 @@ table label is associated with the caption/table content for metadata
 purposes.
 
 When a table is split row-wise, every resulting table unit retains the table
-label and the table content remains unchanged apart from the existing header
-plus-row splitting behavior.
+label. The Markdown header is emitted once at the start of each resulting
+chunk, not once before every row.
 
 ### Metadata Scope
 
@@ -78,13 +78,16 @@ copied there as overlap.
 ### Overlap
 
 When `chunk_overlap` is enabled, the chunker prepends the exact trailing
-tokens copied from the preceding chunk. It also prepends only the metadata
-associated with those copied tokens. No metadata is copied merely because it
-was present somewhere in the preceding chunk.
+non-table tokens copied from the preceding chunk. If the requested overlap
+would copy any table header or row tokens, no overlap is added at that
+boundary. This preserves row integrity and prevents a table row from being
+duplicated in the next chunk. Metadata is prepended only for copied tokens;
+no metadata is copied merely because it was present somewhere in the
+preceding chunk.
 
 The overlap metadata is calculated from per-token source-unit metadata. This
-continues to support paragraph and table overlap, while preventing unrelated
-earlier sections or tables from leaking into the following chunk.
+continues to support paragraph overlap while preventing unrelated earlier
+sections or tables from leaking into the following chunk.
 
 Metadata values remain ordered by first appearance and deduplicated within a
 chunk. Empty metadata remains `None`.

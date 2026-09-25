@@ -42,6 +42,26 @@ def test_chunk_metadata_does_not_retain_historical_sections():
     assert "3.3 Abbreviations" not in (chunks[-1].sections or "")
 
 
+def test_multiline_heading_metadata_is_one_entry():
+    chunks = chunk_blocks(
+        [
+            HeadingBlock(
+                8,
+                None,
+                "Annex A (informative):\nConnection Diagrams",
+                "######## Annex A (informative):\nConnection Diagrams",
+            ),
+            ParagraphBlock("one two three four five six"),
+        ],
+        chunk_size=4,
+        chunk_overlap=2,
+        max_chunk_chars=1500,
+    )
+
+    expected = "Annex A (informative): Connection Diagrams"
+    assert all(chunk.sections == expected for chunk in chunks)
+
+
 def test_heading_markdown_is_kept_in_chunk_text():
     chunks = chunk_blocks(
         [HeadingBlock(3, "3.3", "Abbreviations", "### 3.3 Abbreviations"), ParagraphBlock("body")],
@@ -143,7 +163,7 @@ def test_overlap_prefix_preserves_rendered_heading_content():
     assert chunks[1].sections == "Later"
 
 
-def test_overlap_carries_only_metadata_from_trailing_table_tokens():
+def test_table_rows_do_not_overlap_into_following_content():
     first = "| A |\n| --- |\n| 1 |"
     second = "| B |\n| --- |\n| 2 |"
     blocks = [
@@ -155,8 +175,8 @@ def test_overlap_carries_only_metadata_from_trailing_table_tokens():
     chunks = chunk_blocks(blocks, chunk_size=18, chunk_overlap=3, max_chunk_chars=1500)
 
     assert chunks[0].tables == "1 Earlier\n2 Later"
-    assert chunks[1].text.startswith("| 2 |\n\nafter table")
-    assert chunks[1].tables == "2 Later"
+    assert chunks[1].text == "after table"
+    assert chunks[1].tables is None
 
 
 def test_overlap_does_not_add_metadata_when_prefix_is_already_present():
@@ -174,7 +194,7 @@ def test_overlap_does_not_add_metadata_when_prefix_is_already_present():
     assert chunks[1].tables == "2 Later"
 
 
-def test_overlap_preserves_table_row_structure_at_section_boundary():
+def test_table_row_overlap_is_disabled_at_section_boundary():
     transport = (
         "| Transport channel | Minimum number | Comments |\n"
         "| --- | --- | --- |\n"
@@ -203,12 +223,8 @@ def test_overlap_preserves_table_row_structure_at_section_boundary():
     )
 
     assert len(chunks) == 2
-    assert chunks[1].text.startswith(
-        "| n <FFS> |  |\n\n"
-        "4.2.2.1.1.3    Physical channels\n\n"
-        "| Physical channel | Minimum number | Comments |"
-    )
-    assert "| Physical channel | Minimum number | Comments |\n| --- | --- | --- |" in chunks[1].text
+    assert chunks[1].text == physical
+    assert "| UL-SCH | n <FFS> |  |" not in chunks[1].text
 
 
 def test_repeated_metadata_is_deduplicated_in_source_order():
@@ -248,14 +264,47 @@ def test_fitting_table_stays_whole():
     assert len(chunks) == 1 and chunks[0].tables == "1 Cap"
 
 
-def test_oversized_table_splits_rowwise_with_repeated_meta():
+def test_oversized_table_splits_rowwise_with_repeated_metadata():
     rows = "\n".join(f"| r{i} | v{i} |" for i in range(10))
     gfm = "| A | B |\n| --- | --- |\n" + rows
     blocks = [TableBlock(gfm, "2", "Big")]
     chunks = chunk_blocks(blocks, chunk_size=100, chunk_overlap=0, max_chunk_chars=60)
     assert len(chunks) > 1
     assert all(c.tables == "2 Big" for c in chunks)
-    assert all(len(c.text) <= 600 for c in chunks)  # header repeated + rows bounded
+    assert all(len(c.text) <= 600 for c in chunks)  # one header + rows per chunk
+
+
+def test_oversized_table_header_is_emitted_once_per_chunk():
+    header = "| A | B |\n| --- | --- |"
+    rows = "\n".join(
+        f"| row{i} | {'x' * 40} |"
+        for i in range(4)
+    )
+    chunks = chunk_blocks(
+        [TableBlock(f"{header}\n{rows}", "2", "Big")],
+        chunk_size=1000,
+        chunk_overlap=0,
+        max_chunk_chars=180,
+    )
+
+    assert len(chunks) > 1
+    assert all(chunk.text.count("| A | B |\n| --- | --- |") == 1 for chunk in chunks)
+
+
+def test_oversized_table_rows_do_not_overlap_between_chunks():
+    header = "| A | B |\n| --- | --- |"
+    rows = [f"| row{i} | {'x' * 40} |" for i in range(4)]
+    chunks = chunk_blocks(
+        [TableBlock(f"{header}\n" + "\n".join(rows), "2", "Big")],
+        chunk_size=1000,
+        chunk_overlap=3,
+        max_chunk_chars=180,
+    )
+
+    assert len(chunks) > 1
+    assert all(chunk.text.startswith(header) for chunk in chunks)
+    for row in rows:
+        assert sum(row in chunk.text for chunk in chunks) == 1
 
 
 def test_char_ceiling_wins():

@@ -2533,7 +2533,9 @@ Behavior:
   (default 24, `None` → reuse) alongside `max_chunk_chars` (default 1500);
   table rows are atomic; `chunk_id = {spec_id}@{version}#{chunk_index}`.
   Chunk `sections` and `tables` metadata is newline-delimited, with one
-  combined `<identifier> <title>` entry per line; empty metadata is `null`.
+  single-line combined `<identifier> <title>` entry per line; empty metadata
+  is `null`. Oversized tables repeat the Markdown header once at the start of
+  each chunk, and table rows are not included in overlap prefixes.
   Alphanumeric section identifiers such as `7.2A.3` and `7.2A.3A` are kept
   intact in both chunk metadata and the TOC.
 

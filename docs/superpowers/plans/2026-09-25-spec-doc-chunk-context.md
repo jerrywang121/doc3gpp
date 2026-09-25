@@ -151,9 +151,12 @@ In the unit-building loop, append `HeadingBlock.raw` as a non-atomic rendered un
 
 Keep paragraph sentence/token splitting unchanged. When a paragraph is the caption associated with an adjacent `TableBlock`, retain its text as a normal source unit and attach the table label to that unit. The following table units retain the same table label. Do not remove or rewrite caption text.
 
-- [ ] **Step 3: Keep table units and row splitting behavior unchanged**
+- [ ] **Step 3: Keep table units and row splitting behavior atomic**
 
-Continue emitting fitting tables as atomic GFM units and oversized tables as header-plus-row atomic units. Preserve section metadata on table units and table metadata on every table unit.
+Continue emitting fitting tables as atomic GFM units. Emit oversized tables as
+atomic row units, adding the Markdown header once at the start of each chunk
+that contains rows from that table. Preserve section metadata on table units
+and table metadata on every table unit.
 
 - [ ] **Step 4: Reset metadata on normal flushes**
 
@@ -163,9 +166,13 @@ Keep ordered deduplication, but ensure `cur_sections` and `cur_tables` are popul
 
 For each rendered unit, append one `(sections, tables)` tuple per `text.split()` token. For oversized table rows, retain the existing repeated per-token metadata. This is the source of truth for exact overlap propagation.
 
-- [ ] **Step 6: Apply overlap only from the exact copied trailing tokens**
+- [ ] **Step 6: Apply overlap only from safe copied trailing tokens**
 
-When prepending `chunk_overlap` tokens from the previous chunk, prepend the matching trailing token metadata to the next chunk’s token metadata and merge only those entries into the next chunk’s fields. Do not merge the previous chunk’s already-serialized full metadata.
+When prepending `chunk_overlap` tokens from the previous chunk, skip the
+overlap if any copied token belongs to table content. Otherwise prepend the
+matching trailing token metadata to the next chunk’s token metadata and merge
+only those entries into the next chunk’s fields. Do not merge the previous
+chunk’s already-serialized full metadata.
 
 - [ ] **Step 7: Run focused tests and preserve existing behavior**
 

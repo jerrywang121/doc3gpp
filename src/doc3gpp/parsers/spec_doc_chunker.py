@@ -1,4 +1,4 @@
-"""Pure block->chunk splitter. Break priority paragraph -> sentence -> table-row; rows atomic."""
+"""Pure block-to-chunk splitter with atomic table-row handling."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -25,10 +25,13 @@ class _SourceUnit:
     source_file: str
     atomic: bool
     join_before: str = "\n\n"
+    table_content: bool = False
+    table_id: int | None = None
+    table_header: str | None = None
     tokens: tuple[str, ...] = field(init=False)
-    token_metadata: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...] = field(
-        init=False
-    )
+    token_metadata: tuple[
+        tuple[tuple[str, ...], tuple[str, ...], str, bool], ...
+    ] = field(init=False)
 
     def __post_init__(self) -> None:
         tokens = tuple(self.text.split())
@@ -37,7 +40,12 @@ class _SourceUnit:
             self,
             "token_metadata",
             tuple(
-                (self.sections, self.tables, self.join_before if i == 0 else "")
+                (
+                    self.sections,
+                    self.tables,
+                    self.join_before if i == 0 else "",
+                    self.table_content,
+                )
                 for i, _ in enumerate(tokens)
             ),
         )
@@ -63,7 +71,7 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
     cur_file_order, cur_file = file_order, source_file
 
     def label(number: str | None, title: str | None) -> str:
-        return f"{number + ' ' if number else ''}{title or ''}".strip()
+        return " ".join(f"{number + ' ' if number else ''}{title or ''}".split())
 
     for block_index, b in enumerate(blocks):
         if isinstance(b, HeadingBlock):
@@ -134,25 +142,40 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
             # chunk_size (allowed, like TDoc's whole-table preference).
             if len(whole) <= max_chunk_chars:
                 units.append(_SourceUnit(
-                    whole, sections, tables, cur_file_order, cur_file, True
+                    whole,
+                    sections,
+                    tables,
+                    cur_file_order,
+                    cur_file,
+                    True,
+                    table_content=True,
                 ))
             else:
+                table_id = block_index
                 for r in rows:
                     if not r.strip():
                         continue
-                    row_text = header + "\n" + r if header else r
                     units.append(_SourceUnit(
-                        row_text, sections, tables, cur_file_order, cur_file, True
+                        r,
+                        sections,
+                        tables,
+                        cur_file_order,
+                        cur_file,
+                        True,
+                        table_content=True,
+                        table_id=table_id,
+                        table_header=header or None,
                     ))
     chunks: list[ChunkDraft] = []
     chunk_token_metadata: list[
-        list[tuple[tuple[str, ...], tuple[str, ...], str]]
+        list[tuple[tuple[str, ...], tuple[str, ...], str, bool]]
     ] = []
     cur: list[str] = []
     cur_tokens = 0
     cur_sections: list[str] = []
     cur_tables: list[str] = []
-    cur_token_metadata: list[tuple[tuple[str, ...], tuple[str, ...], str]] = []
+    cur_token_metadata: list[tuple[tuple[str, ...], tuple[str, ...], str, bool]] = []
+    cur_table_ids: set[int] = set()
     cur_file_order, cur_file = file_order, source_file
 
     def add_metadata(sections: tuple[str, ...], tables: tuple[str, ...]) -> None:
@@ -165,6 +188,7 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
 
     def flush():
         nonlocal cur, cur_tokens, cur_sections, cur_tables, cur_token_metadata
+        nonlocal cur_table_ids
         if cur:
             chunks.append(ChunkDraft(
                 file_order=cur_file_order,
@@ -177,35 +201,62 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
         cur, cur_tokens = [], 0
         cur_sections, cur_tables = [], []
         cur_token_metadata = []
+        cur_table_ids = set()
+
+    def render_unit(
+        unit: _SourceUnit,
+    ) -> tuple[str, tuple[tuple[tuple[str, ...], tuple[str, ...], str, bool], ...]]:
+        if unit.table_header is None or unit.table_id in cur_table_ids:
+            return unit.text, unit.token_metadata
+        header_tokens = tuple(unit.table_header.split())
+        header_metadata = tuple(
+            (unit.sections, unit.tables, unit.join_before if i == 0 else "", True)
+            for i, _ in enumerate(header_tokens)
+        )
+        return (
+            f"{unit.table_header}\n{unit.text}",
+            header_metadata + unit.token_metadata,
+        )
 
     for unit in units:
-        toks = unit.token_count
+        rendered_text, rendered_metadata = render_unit(unit)
+        toks = len(rendered_metadata)
         if unit.atomic:
-            if cur and (cur_tokens + toks > chunk_size or len("\n\n".join(cur)) + len(unit.text) > max_chunk_chars):
+            if cur and (
+                cur_tokens + toks > chunk_size
+                or len("\n\n".join(cur)) + len(rendered_text) > max_chunk_chars
+            ):
                 flush()
+                rendered_text, rendered_metadata = render_unit(unit)
+                toks = len(rendered_metadata)
             # oversized single row: emit alone (rows are atomic, never split mid-row)
-            if toks > chunk_size or len(unit.text) > max_chunk_chars:
+            if toks > chunk_size or len(rendered_text) > max_chunk_chars:
                 flush()
                 chunks.append(ChunkDraft(
                     file_order=unit.file_order,
                     source_file=unit.source_file,
                     sections="\n".join(unit.sections) or None,
                     tables="\n".join(unit.tables) or None,
-                    text=unit.text,
+                    text=rendered_text,
                 ))
-                chunk_token_metadata.append(list(unit.token_metadata))
+                chunk_token_metadata.append(list(rendered_metadata))
                 continue
             add_metadata(unit.sections, unit.tables)
-            cur.append(unit.text)
+            cur.append(rendered_text)
             cur_tokens += toks
-            cur_token_metadata.extend(unit.token_metadata)
+            cur_token_metadata.extend(rendered_metadata)
+            if unit.table_id is not None:
+                cur_table_ids.add(unit.table_id)
             continue
-        if cur and (cur_tokens + toks > chunk_size or len("\n\n".join(cur)) + len(unit.text) + 2 > max_chunk_chars):
+        if cur and (
+            cur_tokens + toks > chunk_size
+            or len("\n\n".join(cur)) + len(rendered_text) + 2 > max_chunk_chars
+        ):
             flush()
         add_metadata(unit.sections, unit.tables)
-        cur.append(unit.text)
+        cur.append(rendered_text)
         cur_tokens += toks
-        cur_token_metadata.extend(unit.token_metadata)
+        cur_token_metadata.extend(rendered_metadata)
     flush()
     # overlap: prepend an exact trailing substring from the previous chunk
     if chunk_overlap > 0:
@@ -218,6 +269,9 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                 overlap_toks = [match.group() for match in overlap_matches]
                 prefix = prev_text[overlap_matches[0].start():]
                 next_toks = chunks[i].text.split()
+                overlap_metadata = chunk_token_metadata[i - 1][-len(overlap_matches):]
+                if any(metadata[3] for metadata in overlap_metadata):
+                    continue
                 if next_toks[:len(overlap_toks)] != overlap_toks:
                     join_before = (
                         chunk_token_metadata[i][0][2]
@@ -225,7 +279,6 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
                         else "\n\n"
                     )
                     chunks[i].text = prefix + join_before + chunks[i].text
-                    overlap_metadata = chunk_token_metadata[i - 1][-len(overlap_matches):]
                     chunk_token_metadata[i] = overlap_metadata + chunk_token_metadata[i]
                     for field_index, field in enumerate(("sections", "tables")):
                         overlap_entries: list[str] = []

@@ -680,7 +680,7 @@ auto_embed_on_parse = true           # upsert embeddings after every successful 
 embedding_base_url = "http://localhost:11434/v1"  # unset disables the semantic stack
 embedding_model = "embeddinggemma:300m" # remote model name sent in the /embeddings payload
 chunk_size = 512                     # whitespace tokens per chunk
-chunk_overlap = 24                   # trailing tokens repeated at next chunk start
+chunk_overlap = 24                   # trailing non-table tokens repeated at next chunk start
 rrf_k = 60                           # RRF k constant
 fts5_weight = 0.5                    # 0.0 = vector-only, 1.0 = FTS5-only (vector weight = 1 - fts5_weight)
 fanout_multiplier = 4                # hybrid-path fanout: limit * fanout per side

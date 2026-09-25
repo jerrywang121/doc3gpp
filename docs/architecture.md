@@ -144,8 +144,10 @@ Per-layer modules:
     - `parsers/spec_doc_chunker.py` — pure block → `ChunkDraft` splitter:
       `chunk_blocks(blocks, chunk_size=512, chunk_overlap=24,
       max_chunk_chars=1500)` (break priority paragraph → sentence →
-      table-row; table rows atomic; overlap prepends trailing tokens;
-      chunk metadata is newline-delimited combined `sections` / `tables`).
+       table-row; table rows atomic; oversized-table chunks contain one
+       Markdown header; overlap prepends trailing non-table tokens only so
+       rows are never duplicated; chunk metadata is newline-delimited
+       combined `sections` / `tables`).
     - `parsers/cr_parser.py` — thin re-export shim around
       `parsers/cr/`, exposing `parse_cr_details(markdown) ->
       TDocCRParseResult(cover, ttcn)`. The actual implementations

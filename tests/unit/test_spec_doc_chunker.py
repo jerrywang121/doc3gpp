@@ -21,6 +21,37 @@ def test_chunk_collects_sections_spanning_one_chunk():
     assert chunks[0].sections == "7.2A.3 Scope\n7.2A.3A Details"
 
 
+def test_chunk_metadata_does_not_retain_historical_sections():
+    blocks = [
+        HeadingBlock(1, None, "Foreword", "# Foreword"),
+        ParagraphBlock("foreword text"),
+        HeadingBlock(1, "3.3", "Abbreviations", "# 3.3 Abbreviations"),
+        ParagraphBlock("abbreviation text"),
+        HeadingBlock(1, "4.1", "Environmental conditions", "# 4.1 Environmental conditions"),
+        ParagraphBlock("environment text"),
+        HeadingBlock(2, "4.1.1", "Temperature", "## 4.1.1 Temperature"),
+        ParagraphBlock("temperature text"),
+        HeadingBlock(2, "4.1.2", "Voltage", "## 4.1.2 Voltage"),
+        ParagraphBlock("voltage text"),
+    ]
+
+    chunks = chunk_blocks(blocks, chunk_size=6, chunk_overlap=0, max_chunk_chars=1500)
+
+    assert chunks[-1].sections == "4.1.2 Voltage"
+    assert "Foreword" not in (chunks[-1].sections or "")
+    assert "3.3 Abbreviations" not in (chunks[-1].sections or "")
+
+
+def test_heading_markdown_is_kept_in_chunk_text():
+    chunks = chunk_blocks(
+        [HeadingBlock(3, "3.3", "Abbreviations", "### 3.3 Abbreviations"), ParagraphBlock("body")],
+        chunk_overlap=0,
+    )
+
+    assert "### 3.3 Abbreviations" in chunks[0].text
+    assert "body" in chunks[0].text
+
+
 def test_chunk_collects_multiple_tables():
     blocks = [
         TableBlock("| A |\n| --- |\n| 1 |", "7.2A.3", "First values"),
@@ -55,6 +86,46 @@ def test_overlap_carries_only_metadata_from_trailing_section_tokens():
     chunks = chunk_blocks(blocks, chunk_size=4, chunk_overlap=2, max_chunk_chars=1500)
 
     assert chunks[0].sections == "5 Earlier\n6 Later"
+    assert chunks[1].text.startswith("three four")
+    assert chunks[1].sections == "6 Later"
+
+
+def test_table_metadata_and_caption_text_are_scoped_to_chunk():
+    first = "| A |\n| --- |\n| 1 |"
+    second = "| B |\n| --- |\n| 2 |"
+    chunks = chunk_blocks(
+        [
+            ParagraphBlock("Table 1: First values"),
+            TableBlock(first, "1", "First values"),
+            TableBlock(second, "2", "Second values"),
+        ],
+        chunk_size=8,
+        chunk_overlap=0,
+        max_chunk_chars=1500,
+    )
+
+    assert chunks[0].tables == "1 First values"
+    assert "Table 1: First values" in chunks[0].text
+    assert first in chunks[0].text
+    assert chunks[1].tables == "2 Second values"
+    assert "1 First values" not in (chunks[1].tables or "")
+    assert second in chunks[1].text
+
+
+def test_overlap_carries_only_metadata_for_copied_tokens():
+    chunks = chunk_blocks(
+        [
+            HeadingBlock(1, "5", "Earlier", "# 5 Earlier"),
+            ParagraphBlock("one two"),
+            HeadingBlock(1, "6", "Later", "# 6 Later"),
+            ParagraphBlock("three four"),
+            ParagraphBlock("five six"),
+        ],
+        chunk_size=4,
+        chunk_overlap=2,
+        max_chunk_chars=1500,
+    )
+
     assert chunks[1].text.startswith("three four")
     assert chunks[1].sections == "6 Later"
 

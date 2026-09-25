@@ -32,6 +32,13 @@
   <label>Rapporteurs
     <input type="text" name="rapporteurs" value="{{ filters.rapporteurs or '' }}">
   </label>
+  <label>Parsed
+    <select name="parsed">
+      <option value="" {% if not filters.parsed %}selected{% endif %}>Any</option>
+      <option value="true" {% if filters.parsed == 'true' %}selected{% endif %}>true</option>
+      <option value="false" {% if filters.parsed == 'false' %}selected{% endif %}>false</option>
+    </select>
+  </label>
   <label>Limit
     <input type="number" name="limit" value="{{ filters.limit }}" min="1" max="200">
   </label>

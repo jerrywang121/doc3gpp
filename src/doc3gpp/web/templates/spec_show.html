@@ -40,6 +40,7 @@
       <thead>
         <tr>
           <th>Version</th>
+          <th>Parsed</th>
           <th>Docs</th>
           <th>Release</th>
           <th>Upload date</th>
@@ -54,6 +55,7 @@
           {% set cr_count = v.crs.split(',') | length if v.crs else 0 %}
           <tr>
             <td><code>{{ v.version }}</code></td>
+            <td>{{ 'true' if v.parsed else 'false' }}</td>
             <td>
               <a href="/specs/{{ spec.spec_id }}/docs?version={{ v.version | urlencode }}">show</a>
             </td>

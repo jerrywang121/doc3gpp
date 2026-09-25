@@ -2300,6 +2300,24 @@ def test_spec_rows_coerces_cells() -> None:
     }
 
 
+def test_spec_rows_preserves_parsed_null() -> None:
+    from doc3gpp.models.spec import Spec
+    from doc3gpp.web.render import spec_rows
+
+    spec = Spec(spec_id="36.579-5", type="TS", title="NR", parsed=None)
+
+    assert spec_rows([spec], ["parsed"]) == [{"parsed": None}]
+
+
+def test_spec_version_rows_preserves_parsed_boolean() -> None:
+    from doc3gpp.models.spec import SpecVersion
+    from doc3gpp.web.render import spec_version_rows
+
+    version = SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)
+
+    assert spec_version_rows([version], ["parsed"]) == [{"parsed": False}]
+
+
 class FakeTestCaseService:
     """Stub :class:`TestCaseService` for the fake-wired app fixture."""
 
@@ -3116,6 +3134,120 @@ def test_get_specs_json(client: TestClient) -> None:
     assert any(row["spec_id"] == "36.579-5" for row in body)
 
 
+def test_get_specs_json_preserves_parsed_null_and_forwards_filter(
+    client: TestClient,
+) -> None:
+    """Spec list JSON preserves null parsed state and forwards true."""
+    from doc3gpp.models.spec import Spec
+    from doc3gpp.web.deps import get_spec_service
+
+    captured: dict[str, Any] = {}
+
+    class _RecordingSpecService(FakeSpecService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            captured.update(kwargs)
+            return [Spec(spec_id="36.579-5", type="TS", title="NR", parsed=None)]
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _RecordingSpecService()
+    try:
+        response = client.get("/specs?format=json&parsed=TRUE")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert response.json()[0]["parsed"] is None
+    assert captured["parsed"] is True
+
+
+def test_get_specs_rejects_invalid_parsed_query(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs?parsed=maybe")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 400
+
+
+def test_get_specs_omitted_or_empty_parsed_is_any(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    captured: list[bool | None] = []
+
+    class _RecordingSpecService(FakeSpecService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            captured.append(kwargs["parsed"])
+            return []
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _RecordingSpecService()
+    try:
+        omitted = client.get("/specs?format=json")
+        empty = client.get("/specs?format=json&parsed=")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert omitted.status_code == 200
+    assert empty.status_code == 200
+    assert captured == [None, None]
+
+
+def test_get_specs_parsed_filter_survives_form_and_pagination(
+    client: TestClient,
+) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    class _FullPageService(FakeSpecService):
+        def list_recent(self, **_kwargs: Any) -> list[Any]:
+            return list(self._specs)
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _FullPageService()
+    try:
+        response = client.get("/specs?parsed=TRUE&offset=10&limit=2")
+        htmx_response = client.get(
+            "/specs?parsed=TRUE&offset=10&limit=2",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert 'name="parsed"' in response.text
+    assert 'value="true" selected' in response.text
+    assert htmx_response.status_code == 200
+    assert "parsed=TRUE" in htmx_response.text
+
+
+def test_get_specs_filter_form_has_any_true_false_choices(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert '<select name="parsed">' in response.text
+    assert ">Any</option>" in response.text
+    assert ">true</option>" in response.text
+    assert ">false</option>" in response.text
+
+
+def test_get_specs_renders_parsed_versions_column(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs", headers={"HX-Request": "true"})
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Parsed versions</th>" in response.text
+
+
 def test_get_specs_htmx_returns_partial(client: TestClient) -> None:
     """``GET /specs`` with ``HX-Request: true`` returns the results partial."""
     from doc3gpp.web.deps import get_spec_service
@@ -3176,6 +3308,41 @@ def test_get_spec_show_json(client: TestClient) -> None:
     assert body["spec"]["rapporteurs"] == "Ericsson LM"
     assert len(body["versions"]) == 1
     assert body["versions"][0]["version"] == "18.0.0"
+
+
+def test_get_spec_show_json_preserves_version_boolean(client: TestClient) -> None:
+    from doc3gpp.models.spec import Spec, SpecVersion
+    from doc3gpp.web.deps import get_spec_service
+
+    class _ParsedFalseSpecService(FakeSpecService):
+        def get(self, _spec_id: str) -> Any:
+            return Spec(spec_id="36.579-5", type="TS", title="NR")
+
+        def list_versions(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+            return [SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)]
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _ParsedFalseSpecService()
+    try:
+        response = client.get("/specs/36.579-5?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert response.json()["versions"][0]["parsed"] is False
+
+
+def test_get_spec_show_renders_false_parsed_value(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Parsed</th>" in response.text
+    assert "<td>false</td>" in response.text
 
 
 def test_get_specs_forwards_rapporteurs_filter(client: TestClient) -> None:

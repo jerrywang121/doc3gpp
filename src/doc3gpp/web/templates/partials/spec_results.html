@@ -11,6 +11,7 @@
           <th>Initial release</th>
           <th>TSG</th>
           <th>Rapporteurs</th>
+          <th>Parsed versions</th>
           <th></th>
         </tr>
       </thead>
@@ -31,6 +32,7 @@
                 {{ spec.rapporteurs or '-' }}
               {% endif %}
             </td>
+            <td>{{ spec.parsed or '-' }}</td>
             <td><a href="/specs/{{ spec.spec_id }}">show</a></td>
           </tr>
         {% endfor %}

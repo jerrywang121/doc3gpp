@@ -271,6 +271,13 @@ def _coerce_cell(value: Any) -> str:
     return str(value)
 
 
+def _spec_cell(field: str, value: Any) -> object:
+    """Preserve transient parsed values in spec JSON rows."""
+    if field == "parsed":
+        return value
+    return _coerce_cell(value)
+
+
 def meeting_rows(
     meetings: list[Any],
     fields: list[str],
@@ -333,18 +340,20 @@ def wi_rows(wis: list[Any], fields: list[str]) -> list[dict[str, str]]:
     ]
 
 
-def spec_rows(specs: list[Any], fields: list[str]) -> list[dict[str, str]]:
+def spec_rows(specs: list[Any], fields: list[str]) -> list[dict[str, object]]:
     """Build ``spec list --format json``-shaped rows for ``specs``."""
     return [
-        {f: _coerce_cell(getattr(spec, f, None)) for f in fields}
+        {f: _spec_cell(f, getattr(spec, f, None)) for f in fields}
         for spec in specs
     ]
 
 
-def spec_version_rows(versions: list[Any], fields: list[str]) -> list[dict[str, str]]:
+def spec_version_rows(
+    versions: list[Any], fields: list[str]
+) -> list[dict[str, object]]:
     """Build version rows for a spec."""
     return [
-        {f: _coerce_cell(getattr(v, f, None)) for f in fields}
+        {f: _spec_cell(f, getattr(v, f, None)) for f in fields}
         for v in versions
     ]
 

@@ -379,7 +379,7 @@ class SpecRepository(Protocol):
 
     def list(
         self,
-        limit: int = 50,
+        limit: int | None = 50,
         offset: int = 0,
         tsg: str | None = None,
         type: str | None = None,
@@ -418,6 +418,16 @@ class SpecRepository(Protocol):
         Results are ordered alphabetically so iteration is deterministic.
         Rows with a ``NULL`` ``tsg`` are ignored.
         """
+        ...
+
+
+class SpecParsedStatusRepository(Protocol):
+    """Read-only parsed-version status from the specdata database."""
+
+    def list_parsed_versions(
+        self, spec_ids: Iterable[str] | None = None
+    ) -> dict[str, list[str]]:
+        """Return parsed versions grouped by spec id, newest first."""
         ...
 
 
@@ -1167,4 +1177,3 @@ class SpecDocVectorRepository(Protocol):
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec_spec_doc_embeddings`` at ``dim``."""
         ...
-

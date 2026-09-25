@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from collections.abc import Iterable
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
@@ -16,6 +17,7 @@ from doc3gpp.models.spec_doc import (
     SpecDocTocEntry,
     SpecDocTocFile,
 )
+from doc3gpp.models.spec import spec_version_sort_key
 from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.models import (
     SpecDocChunkORM,
@@ -41,6 +43,26 @@ class SQLAlchemySpecDocRepository:
         with self._session_factory() as session:
             row = session.get(SpecDocSourceORM, (spec_id, version))
         return _orm_to_source(row) if row is not None else None
+
+    def list_parsed_versions(
+        self, spec_ids: Iterable[str] | None = None
+    ) -> dict[str, list[str]]:
+        requested = list(spec_ids) if spec_ids is not None else None
+        if requested == []:
+            return {}
+        with self._session_factory() as session:
+            stmt = select(SpecDocSourceORM.spec_id, SpecDocSourceORM.version).where(
+                SpecDocSourceORM.parsed_at.is_not(None)
+            )
+            if requested is not None:
+                stmt = stmt.where(SpecDocSourceORM.spec_id.in_(requested))
+            rows = session.execute(stmt).all()
+        parsed: dict[str, list[str]] = {}
+        for spec_id, version in rows:
+            parsed.setdefault(spec_id, []).append(version)
+        for versions in parsed.values():
+            versions.sort(key=spec_version_sort_key, reverse=True)
+        return parsed
 
     def record_download(
         self,

@@ -1,4 +1,13 @@
-from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.spec import Spec, SpecVersion, spec_version_sort_key
+
+
+def test_spec_version_sort_key_is_numeric() -> None:
+    versions = ["18.2.1", "19.1.0", "18.10.1"]
+    assert sorted(versions, key=spec_version_sort_key, reverse=True) == [
+        "19.1.0",
+        "18.10.1",
+        "18.2.1",
+    ]
 
 
 def test_spec_fields() -> None:
@@ -22,9 +31,11 @@ def test_spec_defaults() -> None:
     assert spec.wis is None
     assert spec.rapporteurs is None
     assert spec.last_synced_at is None
+    assert spec.parsed is None
 
 
 def test_spec_version_optional_fields() -> None:
     v = SpecVersion(spec_id="s", version="1.0.0", ftp_url="ftp://x")
     assert v.pdf_url is None
     assert v.crs is None
+    assert v.parsed is False

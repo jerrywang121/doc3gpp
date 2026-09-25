@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import distinct, select
 from sqlalchemy.orm import sessionmaker
 
-from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.spec import Spec, SpecVersion, spec_version_sort_key
 from doc3gpp.storage.db.models import SpecORM, SpecVersionORM
 from doc3gpp.storage.db.session import get_session_factory
 from doc3gpp.storage.repositories.rich_filters import apply_text_filter
@@ -98,7 +98,7 @@ class SQLAlchemySpecRepository:
 
     def list(
         self,
-        limit: int = 50,
+        limit: int | None = 50,
         offset: int = 0,
         tsg: str | None = None,
         type: str | None = None,
@@ -130,7 +130,11 @@ class SQLAlchemySpecRepository:
                 stmt = apply_text_filter(stmt, SpecORM.wis, wis)
             if rapporteurs:
                 stmt = apply_text_filter(stmt, SpecORM.rapporteurs, rapporteurs)
-            stmt = stmt.order_by(SpecORM.spec_id).offset(offset).limit(limit)
+            stmt = stmt.order_by(SpecORM.spec_id)
+            if offset:
+                stmt = stmt.offset(offset)
+            if limit is not None:
+                stmt = stmt.limit(limit)
             rows = session.scalars(stmt).all()
         return [_orm_to_spec(r) for r in rows]
 
@@ -207,13 +211,7 @@ def _version_sort_key(version: SpecVersion) -> tuple[int, ...]:
     string sort would get wrong. Non-numeric segments fall back to ``0``
     so the key is always comparable.
     """
-    parts: list[int] = []
-    for segment in version.version.split("."):
-        try:
-            parts.append(int(segment))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts)
+    return spec_version_sort_key(version.version)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

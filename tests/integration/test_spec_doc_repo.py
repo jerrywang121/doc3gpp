@@ -50,6 +50,30 @@ def test_roundtrip(sqlite_env):
     assert src4.docx_count == 1
 
 
+def test_list_parsed_versions_returns_only_parsed_rows_in_numeric_order(sqlite_env):
+    create_schema("specdata")
+    repo = SQLAlchemySpecDocRepository()
+    for version in ("18.2.1", "19.1.0", "18.10.1"):
+        repo.record_parsed("36.579-5", version, chunk_count=1)
+    repo.record_download(
+        "36.579-5",
+        "20.0.0",
+        release="Rel-20",
+        ftp_url="ftp://unparsed",
+        docx_count=1,
+    )
+    repo.record_parsed("38.331", "18.5.0", chunk_count=1)
+
+    assert repo.list_parsed_versions() == {
+        "36.579-5": ["19.1.0", "18.10.1", "18.2.1"],
+        "38.331": ["18.5.0"],
+    }
+    assert repo.list_parsed_versions(["36.579-5"]) == {
+        "36.579-5": ["19.1.0", "18.10.1", "18.2.1"]
+    }
+    assert repo.list_parsed_versions(["99.999"]) == {}
+
+
 def test_spec_doc_chunk_schema_has_only_combined_metadata(sqlite_env):
     from sqlalchemy import inspect
 

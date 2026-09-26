@@ -860,14 +860,22 @@ def db_reset(
             "Delete SQLite database file(s)?\n" + "\n".join(targets),
             abort=True,
         )
-    for scope_name, db_file in files:
-        _delete_sqlite_file(db_file, scope_name)
-
-    # SQLAlchemy cached the engines from the pre-delete file paths; clear
-    # all three so create_schema(resolved_scope) opens fresh connections.
+    # Windows will not unlink SQLite files while a cached engine still has
+    # pooled connections open. Dispose the selected engines before deleting
+    # their files, then clear the caches so schema creation gets fresh engines.
+    engines = {
+        "main": get_engine,
+        "testcase": get_testcase_engine,
+        "specdata": get_specdata_engine,
+    }
+    for scope_name, _ in files:
+        engines[scope_name]().dispose()
     get_engine.cache_clear()
     get_testcase_engine.cache_clear()
     get_specdata_engine.cache_clear()
+
+    for scope_name, db_file in files:
+        _delete_sqlite_file(db_file, scope_name)
 
     logger.info("Recreating database schema")
     create_schema(resolved_scope)

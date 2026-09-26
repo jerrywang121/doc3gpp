@@ -47,13 +47,13 @@ def _ensure_vec_loaded(dbapi_connection) -> None:
     missing or fails to load so callers degrade gracefully.
     """
     try:
-        import sqlite_vec
+        from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
+        load_sqlite_vec(dbapi_connection)
     except ImportError as exc:
         raise VectorIndexUnavailableError(
             "sqlite-vec is not installed; run `pip install doc3gpp[semantic]`"
         ) from exc
-    try:
-        sqlite_vec.load(dbapi_connection)
     except Exception as exc:
         raise VectorIndexUnavailableError(
             f"sqlite-vec extension load failed: {exc}"

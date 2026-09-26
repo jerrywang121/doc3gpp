@@ -187,6 +187,12 @@ def test_db_reset_removes_wal_sidecar_files(sqlite_env) -> None:
     runner = CliRunner()
     assert runner.invoke(app, ["db", "init"]).exit_code == 0
 
+    # Simulate a previous process: Windows keeps the shared-memory file open
+    # while the cached SQLite engine has pooled connections.
+    from doc3gpp.storage.db.session import get_engine
+
+    get_engine().dispose()
+
     # Forge WAL sidecars as if a previous session had been using WAL mode.
     wal = db_path.with_name(db_path.name + "-wal")
     shm = db_path.with_name(db_path.name + "-shm")

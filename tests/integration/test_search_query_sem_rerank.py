@@ -78,12 +78,12 @@ def _bootstrap_corpus() -> None:
     :meth:`get_min_distance_for_tdocs` lookup accepts the test's
     float32[4] query vectors.
     """
-    import sqlite_vec
-
     create_schema()
     engine = get_engine()
     with engine.begin() as conn:
-        sqlite_vec.load(conn.connection.driver_connection)
+        from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
+        load_sqlite_vec(conn.connection.driver_connection)
         conn.execute(text("DROP TABLE vec_tdoc_embeddings"))
         conn.execute(
             text(

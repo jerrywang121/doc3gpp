@@ -299,31 +299,24 @@ def _create_vector_schema(dim: int | None = None) -> None:
     """Create the sqlite-vec virtual table + meta sidecar.
 
     Gated on the runtime availability of the sqlite-vec extension —
-    when missing this is a no-op. The check tries to import
-    ``sqlite_vec`` and
-    load it into the underlying pysqlite connection, mirroring the
-    runtime probe in
-    :class:`~doc3gpp.storage.repositories.vector_sql.SQLAlchemyVectorIndexRepository`.
-
-    The DDL matches ``docs/superpowers/specs/2026-07-31-embedding-search-design.md``
-    §"Vector schema". The virtual table stores one row per chunk and the
-    dimension is pinned at table-creation time to the default embedding
-    dimension (384 for the remote default model); callers may pass an
-    explicit ``dim`` (e.g. a rebuild at a live embedder dim) which is
-    then stamped into ``vec_meta.embedding_dim`` via ``INSERT OR
-    IGNORE`` so a pre-existing row is never clobbered.
+    when missing this is a no-op. The virtual table stores one row per
+    chunk and the dimension is pinned at table-creation time to the
+    default embedding dimension (384 for the remote default model); callers
+    may pass an explicit ``dim`` which is stamped into ``vec_meta.embedding_dim``.
 
     Idempotent: ``IF NOT EXISTS`` makes a second ``create_schema`` call
     a no-op.
     """
     engine = get_engine()
     try:
-        import sqlite_vec
+        import sqlite_vec  # noqa: F401 - confirm optional extension is installed
     except ImportError:
         return
+    from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
     with engine.begin() as conn:
         try:
-            sqlite_vec.load(conn.connection.driver_connection)
+            load_sqlite_vec(conn.connection.driver_connection)
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
         width = int(dim) if dim is not None else 384
@@ -423,12 +416,14 @@ def _create_specdata_vector_schema(dim: int | None = None) -> None:
     """
     engine = get_specdata_engine()
     try:
-        import sqlite_vec
+        import sqlite_vec  # noqa: F401 - confirm optional extension is installed
     except ImportError:
         return
+    from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
     with engine.begin() as conn:
         try:
-            sqlite_vec.load(conn.connection.driver_connection)
+            load_sqlite_vec(conn.connection.driver_connection)
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
         width = int(dim) if dim is not None else 384

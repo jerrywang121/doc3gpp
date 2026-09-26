@@ -51,15 +51,17 @@ def _check_sqlite_vec(engine: Engine) -> None:
             f"{engine.dialect.name!r}"
         )
     try:
-        import sqlite_vec
+        import sqlite_vec  # noqa: F401 - confirm optional extension is installed
     except ImportError as exc:
         raise VectorIndexUnavailableError(
             "sqlite-vec is not installed; run `pip install doc3gpp[semantic]`"
         ) from exc
+
+    from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
     with engine.begin() as conn:
         try:
-            import sqlite_vec
-            sqlite_vec.load(conn.connection.driver_connection)
+            load_sqlite_vec(conn.connection.driver_connection)
         except Exception as exc:
             raise VectorIndexUnavailableError(
                 f"sqlite-vec extension load failed: {exc}"
@@ -148,26 +150,22 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec0`` at ``dim`` and stamp ``vec_meta``.
 
-        Non-resume entry point for
-        :meth:`SemanticSearchService.rebuild_embeddings`: the vec0
-        dimension is a schema-level property fixed at ``CREATE
-        VIRTUAL TABLE`` time, so a dim change requires a rebuild of
-        the table itself. Stamps ``embedding_dim`` + ``embedding_model``
-        (unconditionally overwriting stale values) and refreshes the
-        cached ``_dim`` / ``_stored_model`` so subsequent upserts on
-        this instance see the new values. ``model=None`` removes the
-        model row (duck-typed embedders with no ``model_name``).
+        A dimension change requires rebuilding the virtual table because
+        its dimension is fixed at CREATE time. Refreshes cached dimension
+        and model metadata after recreating the index.
         """
         width = int(dim)
         try:
-            import sqlite_vec
+            import sqlite_vec  # noqa: F401 - confirm optional extension is installed
         except ImportError as exc:
             raise VectorIndexUnavailableError(
                 "sqlite-vec is not installed; run `pip install doc3gpp[semantic]`"
             ) from exc
+        from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
         with self._engine.begin() as conn:
             try:
-                sqlite_vec.load(conn.connection.driver_connection)
+                load_sqlite_vec(conn.connection.driver_connection)
             except Exception as exc:
                 raise VectorIndexUnavailableError(
                     f"sqlite-vec extension load failed: {exc}"
@@ -191,9 +189,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 {"v": str(width)},
             )
             if model is None:
-                conn.execute(
-                    text("DELETE FROM vec_meta WHERE key = 'embedding_model'"),
-                )
+                conn.execute(text("DELETE FROM vec_meta WHERE key = 'embedding_model'"))
             else:
                 conn.execute(
                     text(

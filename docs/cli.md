@@ -1815,9 +1815,9 @@ doc3gpp cache purge --scope zips --yes
 doc3gpp cache purge --scope all --yes
 ```
 
-## `doc3gpp search query QUERY [filters]`
+## `doc3gpp tdoc search query QUERY [filters]`
 
-Run a full-text search over the FTS5 index. The QUERY is either
+Run a full-text search over the TDoc FTS5 index. The QUERY is either
 plain text (which the CLI wraps in FTS5 quotes after escaping
 special characters) or an FTS5 expression with `AND`, `OR`, `NOT`,
 `NEAR`, `*`, or quoted phrases passed through unchanged. Single-quoted
@@ -1887,7 +1887,7 @@ editing it in `doc3gpp.toml`.
 
 ### Semantic rerank
 
-When `--sem-query STR` is supplied, `search query` reorders the FTS5
+When `--sem-query STR` is supplied, `tdoc search query` reorders the FTS5
 hits by cosine similarity to the embedded form of `STR`. The FTS5
 path first fetches `limit * search_fanout_factor` candidates
 (`Settings.search.search_fanout_factor`, default `4`, range `1..64`),
@@ -1921,9 +1921,9 @@ new semantic rerank. Old callers passing `--rerank` now see
 `typer.BadParameter` pointing at `--sem-query` for the migration
 path.
 
-## `doc3gpp search index [flags]`
+## `doc3gpp tdoc search index [flags]`
 
-Manage the FTS5 index. With no flags, prints the
+Manage the TDoc FTS5 index. With no flags, prints the
 `SearchIndexStatus` snapshot. With `--rebuild`, drops and rebuilds
 the index by walking every `tdocs` row.
 
@@ -1937,34 +1937,34 @@ the index by walking every `tdocs` row.
 | `--rebuild-embeddings` | Drop and rebuild the vector (`vec_tdoc_embeddings`) index. Walks every `tdocs` row and re-embeds each one. Use `--stale-only` for incremental refresh, `--resume` to continue from the last `tdoc_id` in `vec_meta`, `--batch N` to override `Settings.search.rebuild_batch_size`, `--quiet` to suppress the tqdm bar. Gated on the sqlite + sqlite-vec support matrix. |
 | `--rebuild-all` | Run both the FTS5 rebuild and the vector rebuild in sequence. Implies `--rebuild` and `--rebuild-embeddings`. |
 
-## `doc3gpp search sem QUERY [filters]`
+## `doc3gpp tdoc search sem QUERY [filters]`
 
-Run a hybrid (FTS5 + vector) search that merges lexical and semantic
+Run a TDoc hybrid (FTS5 + vector) search that merges lexical and semantic
 matches with Reciprocal Rank Fusion (RRF). The positional `QUERY`
 is always embedded by the vector path (the remote model named by
 `[semantic_search].embedding_model`, via `embedding_base_url`);
 when `--fts5-query` is supplied, it is preprocessed by
-`SearchQueryBuilder` (same semantics as `search query`, including
+`SearchQueryBuilder` (same semantics as `tdoc search query`, including
 single-quote → double-quote phrase rewriting) and feeds
 the FTS5 fan-out. Both paths fan out to `2N` candidates, are merged
 via `rrf_merge`, and truncated to `--limit`. When `--fts5-query` is
 omitted, FTS5 + RRF are skipped — only vector KNN results return.
-`search query` (FTS5-only) is unchanged.
+`tdoc search query` (FTS5-only) is unchanged.
 
 Prerequisites: the `[semantic]` extra (sqlite-vec) **plus**
 `[semantic_search].embedding_base_url` pointing at an OpenAI-compatible
 embeddings API (e.g. Ollama `http://localhost:11434/v1`, OpenAI
 `https://api.openai.com/v1`). When the URL is unset the command exits 1
 with the base-url hint. A dim/model mismatch against a previously built
-index fails fast with a `search index --rebuild-embeddings` hint —
-swapping models forces a rebuild even when dims collide; `search index`
+index fails fast with a `tdoc search index --rebuild-embeddings` hint —
+swapping models forces a rebuild even when dims collide; `tdoc search index`
 (no flags) shows the stored vs configured model/dim so the mismatch is
 visible up front.
 
 | Flag | Effect |
 | --- | --- |
 | `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). Always embedded. |
-| `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
+| `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `tdoc search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
 | `--tsg TEXT` | `meetings.tsg` filter (any case; matched against the stored upper-case value). |
 | `--meeting TEXT` | Rich filter over `meetings.name` **or** `meetings.title` (`%` wildcards, `!` NOT LIKE, `null`/`not-null`). |
 | `--meeting-id INT` | `meetings.meeting_id` filter. |
@@ -1993,7 +1993,7 @@ The hybrid search degrades gracefully across three layers:
 2. Vector path: when `Settings.semantic_search.enabled = false`,
    `[semantic_search].embedding_base_url` is unset, or
    the sqlite-vec extension is unavailable, the vector fan-out returns
-   an empty list and the FTS5 rank drives the result. `search sem`
+    an empty list and the FTS5 rank drives the result. `tdoc search sem`
    without a URL exits 1 with the base-url hint instead.
 3. Auto-embed hook: when `Settings.semantic_search.auto_embed_on_parse = false`,
    newly-parsed TDocs are not embedded automatically; the vector path
@@ -2250,6 +2250,12 @@ the per-version CR list page.
 `spec list` and `spec show` read cached rows from the database — no
 network traffic.
 
+Parsed spec-document status is output-only and is derived from a non-null
+`spec_doc_sources.parsed_at` value in the separate specdata database. A
+missing source row or a null `parsed_at` means that version is not parsed.
+`parsed` is not a column in the main `specs` or `spec_versions` tables and
+does not appear in `spec schema` output.
+
 ### doc3gpp spec sync
 
 Purpose:
@@ -2343,6 +2349,9 @@ Options:
 - --initial-release: rich filter on initial release.
 - --wis: rich filter on related WIs (comma-joined).
 - --rapporteurs: rich filter on rapporteurs (comma-joined company names).
+- --parsed: filter by whether any stored version has parsed spec-document
+  content. Accepts exactly `true` or `false`, case-insensitively. The filter
+  is applied before `--offset` / `--limit` pagination.
 - --format: see `Common list output options` below (table | json | markdown).
 - --output, -o PATH: write results to PATH instead of stdout.
 - --compact: strip output formatting (see `Compact output` below).
@@ -2351,11 +2360,18 @@ Default output fields (configurable via `[output] fields.spec` in
 `doc3gpp.toml`):
 
 - `spec_id`, `type`, `title`, `status`, `radio_tech`, `initial_release`,
-  `tsg`, `rapporteurs`
+  `tsg`, `rapporteurs`, `parsed`
 
-Filter grammar: every filter flag accepts the rich filter grammar used
-by the other list commands — `null` / `not-null` / `!pattern` / plain
-LIKE with `%` and `_` wildcards.
+In structured JSON output, `parsed` is a comma-separated list of parsed
+versions in numeric-newest-first order (for example, `19.2.0,19.1.0`), or
+native JSON `null` when no stored version is parsed. Table and Markdown output
+use `-` for that null value. Custom configured fields continue to control
+whether `parsed` is shown.
+
+Filter grammar: except for `--parsed`, every filter flag accepts the rich
+filter grammar used by the other list commands — `null` / `not-null` /
+`!pattern` / plain LIKE with `%` and `_` wildcards. `--parsed` is a strict
+case-insensitive boolean filter and accepts only `true` or `false`.
 
 Examples:
 
@@ -2368,6 +2384,13 @@ doc3gpp spec list --tsg R5
 
 # Dump every R5 spec to JSON for a downstream report.
 doc3gpp spec list --tsg R5 --format json --output r5_specs.json
+
+# List specs with at least one parsed version; JSON preserves parsed versions
+# as a comma-separated numeric-newest-first value or native null.
+doc3gpp spec list --parsed true --format json
+
+# List specs with no parsed version, applying the filter before pagination.
+doc3gpp spec list --parsed false --limit 20
 
 # Tr specs whose title mentions "Study".
 doc3gpp spec list --type TR --title "%Study%"
@@ -2404,6 +2427,10 @@ Behavior:
 - The JSON payload nests the header under a `"spec"` key and the
   version rows under a `"versions"` key so downstream consumers parse
   the shape without consulting multiple tables.
+- Every version row includes `parsed`. Structured JSON emits the native
+  boolean `true` or `false`; table and Markdown output use the existing text
+  formatting rules. The show header has no aggregate `parsed` field — the
+  per-version booleans are the authoritative detail output.
 
 Examples:
 
@@ -2448,6 +2475,243 @@ Examples:
 
 ```bash
 doc3gpp spec schema --format json
+```
+
+## spec doc Commands
+
+The `spec doc` sub-app (`spec doc parse/toc show/search query/search sem/schema`
+under `spec`) exposes the spec-document corpus: downloaded spec version zips parsed
+into chunk rows + a per-version TOC, searchable via FTS5 or hybrid vector search.
+Each parsed pair is one `(spec_id, version)` row in the specdata sqlite file
+(`specdata_database_url`, default sibling `<main-stem>_specdata.db`). Parsed
+ZIP and Markdown sidecars use the dedicated `spec_doc.cache_dir` root,
+defaulting to `~/.cache/doc3gpp/specs`; the TDoc cache remains
+`~/.cache/doc3gpp/tdocs`.
+
+Versions resolve at runtime — `parse` picks the numeric-newest stored
+`SpecVersion.version` with a non-empty `.zip` download link (no pins) unless
+`--release`/`--version` pins one. A version listed without a ZIP link is treated
+as not yet published for automatic selection. An explicit `--version` remains
+strict and fails clearly if that version has no ZIP link. Run
+`doc3gpp spec sync --spec-id <id>` first so the `spec_versions` rows exist.
+
+### doc3gpp spec doc parse
+
+Purpose:
+
+- Fetch-if-missing, convert, chunk, and index one or more specs; prints one
+  `ok` / `skipped <reason>` / `failed <reason>` (stderr) line per spec.
+
+Options:
+
+- --spec: spec id to parse; repeat per spec (at least one required).
+- --release: release marker, e.g. `Rel-18`. Optional pin.
+- --version: exact version, e.g. `18.5.0`. Optional pin.
+- --force, -f: re-download and re-parse the resolved version, including
+  already-parsed pairs. Default `false`.
+- --format: accepted but currently ignored (output is always the bucket lines).
+- --output, -o: accepted but currently ignored.
+- --compact: accepted but currently ignored.
+
+Behavior:
+
+- Resolves the newest numerically ordered version with a `.zip` URL via
+  `resolve_spec_doc_version`; rows without a ZIP URL are ignored for automatic
+  selection. `--release` filters candidates before selection. An explicit
+  `--version` selects only that version and reports an unpublished ZIP clearly.
+  Parse fetches the ZIP when it is missing and records
+  `spec_doc_sources.downloaded_at` before conversion.
+- `--force` re-downloads the resolved ZIP and then re-parses it, including when
+  the `(spec_id, version)` pair already has `parsed_at`.
+- Per spec: immutable-skip when the `(spec_id, version)` source row already
+  carries `parsed_at` (unless `--force`); oversized zips land in the `skipped`
+  bucket; unknown spec/version, empty (no-`.docx`) zips, and every other error
+  land in the `failures` bucket. One spec never aborts the batch
+  (`SpecDocBatchResult(successes/skipped/failures)`).
+- `parse` = fetch-if-missing + `list_spec_docx` (`.doc` entries warn-skip) +
+  `convert_document_to_blocks` + `order_spec_files` (front-matter TOC file first,
+  then section-tuple sort, TOC tiebreak, unnumbered lexicographic tail) +
+  `extract_spec_toc` + per-file `chunk_blocks` → `upsert_toc` + `replace_chunks`
+  + per-file markdown cache (`{spec_doc.cache_dir}/markdown/<spec_id>/<version>/`) +
+  `record_parsed` + best-effort auto-index (`upsert_for_version`, gated on
+  `[spec_doc] auto_index_on_parse`, default `true`) / auto-embed
+  (`index_for_version`, gated on `[spec_doc] auto_embed_on_parse`, default `true`).
+- Chunking reuses `semantic_search.chunk_size` (default 512) / `chunk_overlap`
+  (default 24, `None` → reuse) alongside `max_chunk_chars` (default 1500);
+  table rows are atomic; `chunk_id = {spec_id}@{version}#{chunk_index}`.
+  Chunk `sections` and `tables` metadata is newline-delimited, with one
+  single-line combined `<identifier> <title>` entry per line; empty metadata
+  is `null`. Oversized tables repeat the Markdown header once at the start of
+  each chunk, and table rows are not included in overlap prefixes.
+  Alphanumeric section identifiers such as `7.2A.3` and `7.2A.3A` are kept
+  intact in both chunk metadata and the TOC.
+
+Examples:
+
+```bash
+# Parse the newest version of 38.331 with a published ZIP download link.
+doc3gpp spec doc parse --spec 38.331
+
+# Parse two specs at a pinned release.
+doc3gpp spec doc parse --spec 38.331 --spec 38.523-1 --release Rel-18
+
+# Re-parse even when already parsed.
+doc3gpp spec doc parse --spec 38.331 --force
+```
+
+### doc3gpp spec doc toc show
+
+Purpose:
+
+- Render the parsed TOC for one `(spec_id, version)` pair (stored rows only,
+  no network).
+
+Options:
+
+- --spec: dotted spec id (e.g. `38.331`). Required.
+- --version: exact version, e.g. `18.5.0`. Required.
+- --release: release marker, e.g. `Rel-18`. Optional; informational only (TOC
+  rows are keyed by `(spec_id, version)` alone).
+- --fields: comma-separated list of fields to include (or `all` for all fields).
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o PATH: write results to PATH instead of stdout. Pass `-` for stdout.
+- --compact: strip output formatting (see `Compact output` below).
+
+Behavior:
+
+- `SpecDocService.get_toc(spec, version)`; a miss raises `BadParameter`
+  pointing at `doc3gpp spec doc parse --spec <id> --version <v>`.
+- Default output fields (configurable via `[output.fields] spec_doc_toc`):
+  `section_no, title, level, source_file`.
+- JSON payload: `{"spec_id", "version", "release", "docx_count", "entries": [...],
+  "files": [...]}` with entries projected through the selected fields and
+  `files` as `{source_file, file_order, first_section}` rows.
+
+Examples:
+
+```bash
+doc3gpp spec doc toc show --spec 38.331 --version 18.5.0
+doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
+```
+
+### doc3gpp spec doc search query
+
+Purpose:
+
+- Full-text search over the spec-document FTS5 index (chunk-level hits).
+
+Options:
+
+- QUERY: positional FTS5 MATCH expression (plain text or FTS5 operators). Required.
+- --spec: only search chunks for the given spec id. Optional.
+- --release: rich filter over release. Optional.
+- --version: rich filter over version. Optional.
+- --sections: rich filter over combined section identifier/title metadata.
+  Optional.
+- --tables: rich filter over combined table identifier/title metadata. Optional.
+- --limit: max results. Default `20`, range `>= 0`.
+- --offset: rows to skip before applying `--limit`. Default `0`, range `>= 0`.
+- --fields: comma-separated list of fields to include (or `all` for all fields).
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --compact: strip JSON / markdown decorators.
+
+Behavior:
+
+- `SpecDocSearchService.search(query, filters)` → repo builds the `MATCH`
+  expression internally via `SearchQueryBuilder`, pushes the rich filters down,
+  ranks with `bm25(spec_doc_search, weights)` over the 6 indexed columns
+  `(text, sections, tables, spec_id, version, release)` with
+  `[spec_doc] bm25_weights` (default `(5.0, 5.0, 5.0, 1.0, 1.0, 1.0)`), and
+  binds one `snippet(...)` per `weight > 0` column — a column surfaces in the
+  hit's `previews` map only when its snippet contains a match. The FTS5-side
+  filters are `LIKE`-normalised (`normalize_query`) so dotted filters
+  (`38.331`) match their indexed form (`38_331`).
+- Default output fields (configurable via `[output.fields] spec_doc`):
+  `spec_id, version, release, sections, tables, chunk_index, text`.
+- Bad query → exit `2`; corrupt index → exit `3` with a rebuild hint.
+- The search service also exposes `upsert_for_version` / `remove_for_version` /
+  `rebuild` (batched with `--resume`/`--stale-only` resume semantics via
+  `spec_doc_search_meta`) / `status`, but there is no
+  `doc3gpp spec doc search index` CLI today — the corrupt-index hint names it
+  aspirationally; auto-index on parse is the only writer path from the CLI.
+
+Examples:
+
+```bash
+doc3gpp spec doc search query "handover" --spec 38.331 --limit 10
+doc3gpp spec doc search query "handover" --spec 38.331 --format json
+```
+
+### doc3gpp spec doc search sem
+
+Purpose:
+
+- Semantic (embedding + optional FTS5) search over spec-doc chunks
+  (chunk-level RRF fusion, unlike the tdoc-level merge).
+
+Options:
+
+- QUERY: positional natural-language query (embedded only; never feeds FTS5).
+  Required.
+- --fts5-query: optional FTS5 MATCH expression. When omitted, the FTS5 path is
+  skipped (only embedding-KNN runs; no RRF). Default `None`.
+- --fts5-weight: blend weight for the FTS5 rank in RRF (`0.0..1.0`). The vector
+  weight is `1 - fts5_weight`. Ignored when `--fts5-query` is omitted.
+  Default `0.5`.
+- --spec: only search chunks for the given spec id. Optional.
+- --release: filter over release. Optional.
+- --version: filter over version. Optional.
+- --sections: filter over combined section identifier/title metadata. Optional.
+- --tables: filter over combined table identifier/title metadata. Optional.
+- --limit: max results. Default `20`, range `>= 0`.
+- --format: `table` (default), `json`, or `markdown`.
+- --compact: strip decorators.
+
+Behavior:
+
+- `SpecDocSemanticService.search` always embeds `QUERY`; with `--fts5-query`
+  both sides fan out to `limit * fanout_multiplier` and merge via `rrf_merge`
+  (`rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) * (1 - fts5_weight)`,
+  `k = 60`); without it pure vector KNN returns dressed as
+  `SpecDocSemanticHit` with `rank_fts5=None` (`hit=None` for vector-only chunks).
+- Vector-side `spec_id`/`version`/`release` are exact `=` and `sections`/`tables`
+  use plain `LIKE` (no rich grammar — pass plain strings for exact agreement); the
+  FTS5 side interprets the rich grammar. Requires
+  `[semantic_search].embedding_base_url`; without it the command exits `1`.
+
+Examples:
+
+```bash
+doc3gpp spec doc search sem "handover signalling procedures" --spec 38.331 --limit 10
+doc3gpp spec doc search sem "handover signalling" --fts5-query "handover" --fts5-weight 0.5
+```
+
+### doc3gpp spec doc schema
+
+Purpose:
+
+- Describe every column of the three `spec_doc` tables (25 rows):
+  `spec_doc_sources` (8), `spec_doc_tocs` (7), `spec_doc_chunks` (10).
+  Chunk rows document the combined `sections` and `tables` columns; TOC
+  entries continue to expose their low-level `section_no` and `title` fields.
+
+Options:
+
+- --format: `table` (default, tab-separated), `json`, or `markdown`.
+- --output, -o: write results to FILE instead of stdout. Pass `-`
+  for stdout.
+- --compact: strip output formatting (see `Compact output` below).
+  No-op for `table`.
+
+Behavior:
+
+- No filters, no DB reads — same flat `table, field, type, nullable,
+  description, values` shape as the other `schema` commands.
+
+Examples:
+
+```bash
+doc3gpp spec doc schema --format json
 ```
 
 ## Common list output options
@@ -2658,7 +2922,8 @@ CLI > allowlisted env > file > defaults.
 ## server Commands
 
 The `doc3gpp server` group starts, inspects and supervises the HTTP server +
-MCP endpoint. Every subcommand refuses to run while `[server] enabled = false`.
+MCP endpoint. The server is enabled by default on `127.0.0.1:13999`; every
+subcommand refuses to run when `[server] enabled = false`.
 The full end-user guide lives in [`docs/web-server.md`](web-server.md).
 
 ### `doc3gpp server start [flags]`

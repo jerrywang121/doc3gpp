@@ -127,3 +127,34 @@ def test_build_spec_service_wires_settings(monkeypatch, tmp_path) -> None:
         assert svc._repository is not None
     finally:
         get_settings.cache_clear()
+
+
+def test_build_spec_service_wires_parsed_status_repository(monkeypatch) -> None:
+    """The spec service receives the configured parsed-status reader."""
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    import doc3gpp.services.factory as factory
+
+    spec_repository = object()
+    parsed_status_repository = object()
+    spec_sync_interval = timedelta(hours=12)
+    settings = SimpleNamespace(
+        sync=SimpleNamespace(spec_sync_interval=spec_sync_interval)
+    )
+    monkeypatch.setattr(
+        factory, "SQLAlchemySpecRepository", lambda: spec_repository
+    )
+    monkeypatch.setattr(
+        factory,
+        "SQLAlchemySpecDocRepository",
+        lambda: parsed_status_repository,
+        raising=False,
+    )
+    monkeypatch.setattr(factory, "get_settings", lambda: settings)
+
+    service = factory.build_spec_service()
+
+    assert service._repository is spec_repository
+    assert service._parsed_status_repository is parsed_status_repository
+    assert service._sync_interval == spec_sync_interval

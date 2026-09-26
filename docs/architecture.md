@@ -20,6 +20,13 @@ Current scope:
 - RAN5 testcase status snapshots (History zip → workbook → `testcases` /
   `testcase_status` / `testcase_sources` rows; `testcase sync` / `list`
   / `show`).
+- Spec-document corpus (`spec doc parse` / `toc show` /
+  `search query` / `search sem`): version-zip download → `.docx` →
+  blocks → ordered files → per-version TOC + chunk rows in the
+  separate specdata sqlite file, searchable via FTS5 + hybrid vector
+  search. Chunk rows carry newline-delimited combined `sections` and
+  `tables` metadata; low-level DOCX blocks and TOC entries retain their
+  `section_no` / table fields.
 
 ## Layers
 
@@ -65,7 +72,12 @@ Per-layer modules:
 - `settings/` — schema and loader for environment-driven and TOML config;
   exposes `get_settings()` (cached) with `Settings` (root) +
   `SyncSettings` / `OutputSettings` / `OutputFieldsSettings` /
-  `CacheSettings` / `TDocParseSettings` sub-models.
+  `CacheSettings` / `TDocParseSettings` / `SpecDocSettings` (TOML
+  `[spec_doc]` block: dedicated `cache_dir = ~/.cache/doc3gpp/specs`,
+  `max_zip_size_kb = 0`, `max_chunk_chars = 1500`,
+  `chunk_overlap = null` → reuse `semantic_search.chunk_overlap`,
+  `auto_index_on_parse` / `auto_embed_on_parse`, 6-entry `bm25_weights`)
+  sub-models.
     - `src/doc3gpp/settings/schema.py`
     - `src/doc3gpp/settings/loader.py`
     - `src/doc3gpp/settings/config_source.py` (TOML discovery)
@@ -82,8 +94,14 @@ Per-layer modules:
       `select_latest` on `(year, week, revision)`)
     - `scraping/tdoc_zip_source.py` — TDoc zip URL builder + downloader
       (`R5s` TTCN + `R5w` Workshop branches)
+    - `scraping/spec_doc_source.py` — spec-document transport (network
+      only): `resolve_spec_doc_version` (numeric sort on
+      `SpecVersion.version`, optional `release` / `version` pins) +
+      `fetch_spec_doc_zip` (zip bytes for one `SpecVersion.ftp_url`)
     - `scraping/cache.py` — `TDocCache` (two-subtree on-disk cache for
-      zip + markdown, size-based FIFO eviction)
+      TDoc zip + markdown, size-based FIFO eviction). Spec-document
+      ZIP/Markdown sidecars use the separate `SpecDocSettings.cache_dir`;
+      the TDoc cache remains `~/.cache/doc3gpp/tdocs`.
 - `parsers/` — `bytes|str` → domain objects. No network I/O.
     - `parsers/calendar_parser.py`, `parsers/html_parsers.py`,
       `parsers/normalizers.py` — meetings HTML → `Meeting`
@@ -112,7 +130,24 @@ Per-layer modules:
       optional `python-docx` extra (raises
       `PythonDocxNotInstalledError` when missing). The legacy `.doc`
       binary format is rejected at the wrapper boundary because
-      python-docx only supports the OOXML container.
+      python-docx only supports the OOXML container. Also exposes
+      `convert_document_to_blocks` (`.docx` → `HeadingBlock` /
+      `ParagraphBlock` / `TableBlock` list) consumed by the spec-doc
+      parse pipeline.
+    - `parsers/spec_doc.py` — spec-zip parsing (no network):
+      `list_spec_docx` (`.docx` members; `.doc` entries warn-skip),
+      `order_spec_files` (front-matter TOC file first, then
+      natural section-tuple sort that preserves alphanumeric identifiers
+      such as `7.2A.3A`, TOC tiebreak, unnumbered lexicographic tail),
+      `extract_spec_toc` (headings → `SpecDocTocEntry` /
+      `SpecDocTocFile` rows per `(spec_id, version)`).
+    - `parsers/spec_doc_chunker.py` — pure block → `ChunkDraft` splitter:
+      `chunk_blocks(blocks, chunk_size=512, chunk_overlap=24,
+      max_chunk_chars=1500)` (break priority paragraph → sentence →
+       table-row; table rows atomic; oversized-table chunks contain one
+       Markdown header; overlap prepends trailing non-table tokens only so
+       rows are never duplicated; chunk metadata is newline-delimited
+       combined `sections` / `tables`).
     - `parsers/cr_parser.py` — thin re-export shim around
       `parsers/cr/`, exposing `parse_cr_details(markdown) ->
       TDocCRParseResult(cover, ttcn)`. The actual implementations
@@ -134,6 +169,16 @@ Per-layer modules:
       DTO (`statuses: list[TestCaseStatus]`), `TestCaseSource` sync
       ledger, plus `TestcaseSourceNotFoundError` (`LookupError`) and
       `TestcaseWorkbookNotFoundError` (`ValueError`)
+    - `models/spec_doc.py` — spec-document DTOs (`SpecDocSource` sync
+      ledger, `SpecDocToc` + `SpecDocTocEntry` / `SpecDocTocFile`,
+      `ChunkDraft` chunker output vs `SpecDocChunk` persisted with
+      combined `sections` / `tables` metadata and
+      `chunk_id = {spec_id}@{version}#{chunk_index}`, chunk-level
+      `SpecDocSearchFilters` / `SpecDocHit` / `SpecDocSemanticHit`,
+      `SpecDocBatchResult(successes/skipped/failures)`) plus the
+      `SpecDocError` hierarchy (`SpecDocUnknownSpecError`,
+      `SpecDocUnknownVersionError`, `SpecDocNoDocxError`,
+      `SpecDocTooLargeError`)
 - `repository/` — abstract `Protocol` contracts used by services.
     - `repository/protocols.py` — `MeetingRepository`,
       `TDocRepository` (+ `get_by_id`), `TsgRepository`,
@@ -146,7 +191,15 @@ Per-layer modules:
       + insert per id) / `list` with text filters + any-path
       `status`/`gcf_status` `EXISTS` / `get` / `list_statuses`
       (`PATH_RANK`-sorted) / `get_source` / `record_download` /
-      `record_parsed`)
+      `record_parsed`),
+      `SpecDocRepository` (`get_source` / `record_download` /
+      `record_parsed` / `get_toc` / `upsert_toc` / `replace_chunks` /
+      `list_chunks`),
+      `SpecDocSearchRepository` (`upsert_for_version` /
+      `remove_for_version` / `search` / `rebuild_batch` /
+      `count_versions_to_index` / resume-cursor + `status`),
+      `SpecDocVectorRepository` (`upsert_for_version` /
+      `remove_for_version` / `knn`)
 - `services/` — orchestration. Constructed via `services/factory.py`
   (`build_*` helpers); the CLI never imports a concrete SQL repository
   directly.
@@ -165,7 +218,14 @@ Per-layer modules:
       `build_tsg_service`, `build_wi_service`, `build_testcase_service`
       (`TestCaseService(SQLAlchemyTestCaseRepository())`),
       `build_tdoc_repository`, `build_tdoc_cr_repository`,
-      `build_tdoc_cr_ttcn_repository`
+      `build_tdoc_cr_ttcn_repository`,
+      `build_spec_doc_service` (main-DB `SQLAlchemySpecRepository` +
+      specdata `SQLAlchemySpecDocRepository` + FTS5/vector hooks +
+      one shared embedder), `build_spec_doc_search_service` (`None`
+      when `[search].enabled` is false or FTS5 is unavailable),
+      `build_spec_doc_semantic_service` (`None` when the semantic
+      stack is disabled, FTS5 is unavailable, or no embedder is
+      configured)
     - `services/testcase_service.py` — `TestCaseService.sync(*,
       force=False, on_progress=None)` (latest-History-zip →
       `upsert_many` + per-`(id, group)` `replace_statuses`, with the
@@ -173,6 +233,27 @@ Per-layer modules:
       `list_recent` (headers + `{path: ttcn_status}` dicts),
       `get` (`TestCaseDetail | None`, optional group) + `get_all`
       (every stored group for an id)
+    - `services/spec_doc_service.py` — `SpecDocService.fetch`
+      (resolve via `resolve_spec_doc_version` → zip-cache hit or
+      `fetch_spec_doc_zip` → `record_download`) / `parse`
+      (fetch-if-missing + convert + order + TOC + per-file
+      `chunk_blocks` → `upsert_toc` + `replace_chunks` + markdown
+      cache + `record_parsed` + best-effort auto-index/auto-embed) /
+      `parse_many` (immutable `(spec_id, version)` skip → per-spec
+      `parse`; oversized → `skipped`, unknown/no-docx/other →
+      `failures`; never aborts; optional `on_progress`) / `get_toc`
+      (stored rows only; miss → `SpecDocUnknownVersionError`).
+      Cache layout: `{spec_doc.cache_dir}/zips/<spec_id>/<version>.zip`
+      + `{spec_doc.cache_dir}/markdown/<spec_id>/<version>/<file_order>-<stem>.md`.
+    - `services/spec_doc_search_service.py` — `SpecDocSearchService`
+      (`upsert_for_version` / `remove_for_version` best-effort,
+      `search(query, filters)` raw-text FTS5, `rebuild` generator with
+      `batch_size` / `resume` / `stale_only` via `spec_doc_search_meta`,
+      `status`).
+    - `services/spec_doc_semantic_service.py` —
+      `SpecDocSemanticService` (chunk-level `rrf_merge`, `k=60`;
+      `search` always embeds, FTS5 opt-in via `fts5_query`;
+      `index_for_version` / `remove_for_version`).
 - `storage/` — SQLAlchemy ORM models, engine / session factory,
   backend-specific options, concrete Protocol implementations.
     - `storage/db/models.py` — ORM classes (including
@@ -184,17 +265,26 @@ Per-layer modules:
       (the sidecar's `required_changes` blob today; tolerant
       decoding covers future binary detail columns)
     - `storage/db/session.py` — `get_engine`, `get_session_factory`
-      (cached, main DB) and `get_testcase_engine`,
+      (cached, main DB), `get_testcase_engine`,
       `get_testcase_session_factory`,
-      `resolve_testcase_database_url` (cached, testcase DB)
+      `resolve_testcase_database_url` (cached, testcase DB), and
+      `get_specdata_engine`, `get_specdata_session_factory`,
+      `resolve_specdata_database_url` (cached, specdata DB — sibling
+      `<main-stem>_specdata.db` unless `specdata_database_url` is set)
     - `storage/db/base.py` — declarative `Base`
     - `storage/db/testcase_base.py` — declarative `TestCaseBase`
       (owns the three testcase ORMs: `testcases`, `testcase_status`,
       `testcase_sources`)
+    - `storage/db/specdata_base.py` — declarative `SpecDataBase`
+      (owns the three spec-doc ORMs in `storage/db/models.py`:
+      `spec_doc_sources`, `spec_doc_tocs`, `spec_doc_chunks`)
     - `storage/db/migrate.py` — `create_schema(scope)` (calls
       `Base.metadata.create_all` for `"main"`,
-      `TestCaseBase.metadata.create_all` for `"testcase"`, both for
-      `"all"`)
+      `TestCaseBase.metadata.create_all` for `"testcase"`,
+      `SpecDataBase.metadata.create_all` + `_create_specdata_search_schema`
+      (`spec_doc_search` + `spec_doc_search_meta`) +
+      `_create_specdata_vector_schema` (`vec_spec_doc_embeddings` +
+      `vec_spec_doc_meta`) for `"specdata"`, all three for `"all"`)
     - `storage/db/migrations/` — placeholder for future Alembic
     - `storage/backends/sqlite.py` — engine kwargs
     - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
@@ -208,12 +298,37 @@ Per-layer modules:
       `gcf_status` via any-path `EXISTS`, `list_statuses` Python-sorted
       by `PATH_RANK`). Bound to the testcase session factory
       (`get_testcase_session_factory()`), not the main one.
+    - `storage/repositories/spec_doc_sql.py` —
+      `SQLAlchemySpecDocRepository` (owns `spec_doc_sources` +
+      `spec_doc_tocs` (gzip-compressed TOC JSON) + `spec_doc_chunks`;
+      `record_download` / `record_parsed` ledger, `upsert_toc`,
+      `replace_chunks` (delete-then-insert per pair, `chunk_id`
+      assigned `{spec_id}@{version}#{index}`), `list_chunks`
+      (rich-filtered)). Bound to the specdata session factory
+      (`get_specdata_session_factory()`).
+    - `storage/repositories/spec_doc_search_sql.py` —
+      `SQLAlchemySpecDocSearchRepository` (owns the 6-column
+      `spec_doc_search` FTS5 table + `spec_doc_search_meta`; FTS5 rows
+      carry the `normalize_query` form and the combined `sections` /
+      `tables` values; ranking via `bm25(...)` with
+      `SpecDocSettings.bm25_weights`, one `snippet(...)` per
+      `weight > 0` column, surfaced in `previews` only on a match).
+    - `storage/repositories/spec_doc_vector_sql.py` —
+      `SQLAlchemySpecDocVectorRepository` (owns
+      `vec_spec_doc_embeddings` + `vec_spec_doc_meta`, gated on
+      sqlite + sqlite-vec; `upsert_for_version` /
+      `remove_for_version` / `knn` with exact `=` on `spec_id` /
+      `version` / `release` and plain `LIKE` on `sections` / `tables`
+      via a `spec_doc_chunks` JOIN).
 
 Data flow by database: testcase traffic →
 `SQLAlchemyTestCaseRepository` → testcase factory
 (`get_testcase_session_factory()` → `get_testcase_engine()` →
-`testcase_database_url`); everything else → main factory
-(`get_session_factory()` → `get_engine()` → `database_url`).
+`testcase_database_url`); spec-document traffic →
+specdata factory (`get_specdata_session_factory()` →
+`get_specdata_engine()` → `specdata_database_url`); everything else →
+main factory (`get_session_factory()` → `get_engine()` →
+`database_url`).
 
 | `services/search_service.py` | orchestration; injected with a `SearchIndexRepository` impl + `EmbeddingReranker` via `services/factory.build_search_service` |
 | `storage/db/fts5_query.py` | `normalize_query` index-time pre-processor (T3); applies TDoc-ID base+full duplication + spec-id `dot→underscore` rejoin |
@@ -223,7 +338,7 @@ Data flow by database: testcase traffic →
 
 The CLI composes a service via the factory, the service drives the
 scrapers + parsers + repos through the Protocols, and the repos own the
-SQLAlchemy session. There are five primary end-to-end flows; the
+SQLAlchemy session. There are six primary end-to-end flows; the
 "meeting-based TDoc sync" flow is itself composed of two sub-flows,
 and the TDoc CR extraction is the deepest.
 
@@ -480,16 +595,94 @@ and syncs each through the `--tsg` path below.
 6. `doc3gpp spec list [filters]` reads cached header rows via
    `SpecRepository.list(...)` (rich filter grammar via the same
    `_apply_text_filter` / `_apply_date_filter` helpers used by the
-   other list commands). No network traffic.
+   other list commands). `SpecService` transiently enriches those
+   rows from `SpecParsedStatusRepository`, whose read-only source is
+   non-null `spec_doc_sources.parsed_at` in the separate specdata
+   database. When `--parsed true|false` is supplied, the service
+   requests the unbounded main-database result, enriches and filters
+   it, then applies `offset` / `limit`; this preserves pre-pagination
+   filtering. A missing or uninitialized specdata ledger is treated as
+   an empty status source, so existing main-database reads remain
+   available with null parsed list values. No network traffic occurs.
 7. `doc3gpp spec show <spec-id>` resolves the header via
    `SpecRepository.get(spec_id)`; a miss raises `SpecNotFoundError`
    (rendered as `typer.BadParameter` pointing at
    `doc3gpp spec sync --tsg <tsg>`). On hit, the version rows come
-   from `SpecRepository.list_versions(spec_id)` and the CLI
-   renders header + versions in the requested format (table,
-   JSON, or markdown). The JSON payload splits the data into
+   from `SpecRepository.list_versions(spec_id)` and `SpecService`
+   transiently adds a native boolean from the same specdata status
+   reader, with missing rows represented as `false`. The CLI,
+   REST, and MCP adapters render header + versions in the requested
+   format (table, JSON, or markdown) using the same version field
+   order. The JSON payload splits the data into
    `{"spec": {...}, "versions": [{...}]}` so downstream consumers
    don't need to scan a flat list.
+
+### Spec-document corpus (parse → TOC → search)
+
+1. `doc3gpp spec doc parse --spec <id>... [--release R] [--version V]
+   [--force]` calls `SpecDocService.parse_many`. The version resolves via
+   `resolve_spec_doc_version` — for automatic selection, filters to rows with
+   a non-empty `.zip` URL, then applies numeric sort on `SpecVersion.version`
+   (segment-wise ints, non-numeric → 0); optional `release` filters before
+   selection. An explicit `version` is strict and raises
+   `SpecDocUnknownVersionError` if its ZIP link is missing. A miss raises
+   `SpecDocUnknownSpecError` (no
+   `spec_versions` rows — run `spec sync --spec-id` first) or
+   `SpecDocUnknownVersionError`. `parse_many` calls `parse`, which fetches
+   the ZIP when absent via internal `fetch_spec_doc_zip` or uses the cache at
+    `{spec_doc.cache_dir}/zips/<spec_id>/<version>.zip`, records the download,
+   and checks the zip size against `[spec_doc] max_zip_size_kb` (default `0`
+   = unlimited). `--force` makes the internal fetch re-download before
+   parsing, including when the source row already has `parsed_at`.
+   Each spec short-circuits
+   into the `skipped` bucket when its `(spec_id, version)` source row
+   already carries `parsed_at` (immutable ledger; `--force` re-parses);
+   `parse` itself short-circuits the same way. `parse` =
+   fetch-if-missing + `list_spec_docx` (empty zip →
+   `SpecDocNoDocxError` failure; `.doc` entries warn-skip) +
+   `convert_document_to_blocks` + `order_spec_files` + `extract_spec_toc`
+   → `upsert_toc` + per-file `chunk_blocks` → `replace_chunks` +
+    per-file markdown cache +
+    `{spec_doc.cache_dir}/markdown/<spec_id>/<version>/<file_order>-<stem>.md`
+   + `record_parsed` + best-effort auto-index (`upsert_for_version`,
+   gated on `auto_index_on_parse`) / auto-embed (`index_for_version`,
+   gated on `auto_embed_on_parse`). Oversized zips land in `skipped`
+   (`SpecDocTooLargeError`); unknown spec/version and empty zips land in
+   `failures`; one spec never aborts the batch. The CLI prints
+   `ok` / `skipped <reason>` / `failed <reason>` (stderr) bucket lines
+   only — its `--format/--output/--compact` flags are accepted but
+   ignored.
+2. `doc3gpp spec doc toc show --spec <id> --version <v>` calls
+   `SpecDocService.get_toc` (stored rows only, no network; miss →
+   `SpecDocUnknownVersionError` rendered as `BadParameter`).
+3. `doc3gpp spec doc search query "QUERY" [filters]` calls
+   `SpecDocSearchService.search(query, filters)` → repo builds the
+   `MATCH` internally via `SearchQueryBuilder` + pushes the rich
+   filters down over the combined `sections` / `tables` columns + ranks
+   with `bm25(spec_doc_search, weights)` over
+   `(text, sections, tables, spec_id, version, release)`
+   (`[spec_doc] bm25_weights`, default `(5.0, 5.0, 5.0, 1.0, 1.0,
+   1.0)`) + one `snippet(...)` per `weight > 0` column (surfaced in
+   `previews` only on a match) → `list[SpecDocHit]` (chunk-level).
+   The repo also exposes `upsert_for_version` / `remove_for_version` /
+   `rebuild` (`batch_size` / `resume` / `stale_only` via
+   `spec_doc_search_meta`) / `status`, but there is no
+   `spec doc search index` CLI today — auto-index on parse is the only
+   writer path from the CLI (the search-corrupt hint names the index
+   command aspirationally).
+4. `doc3gpp spec doc search sem QUERY [--fts5-query Q]
+   [--fts5-weight 0.5] [filters]` calls
+   `SpecDocSemanticService.search` → the positional `QUERY` is always
+   embedded (vector path); the opt-in FTS5 side feeds `fts5_query`
+   verbatim (no `SearchQueryBuilder` preprocessing). With
+   `--fts5-query` both sides fan out to `limit * fanout_multiplier`
+   and fuse via chunk-level `rrf_merge` (`k=60`, vector weight
+   `1 - fts5_weight`); without it pure vector KNN returns dressed as
+   `SpecDocSemanticHit` (`rank_fts5=None`, `hit=None` for vector-only
+    chunks). Vector-side `spec_id`/`version`/`release` are exact `=`;
+    `sections`/`tables` use plain `LIKE` (no rich grammar — pass plain values
+    for exact agreement). Requires
+   `[semantic_search].embedding_base_url`.
 
 ### Cache + CLI
 
@@ -501,7 +694,7 @@ and syncs each through the `--tsg` path below.
   `DOC3GPP_CACHE__PURGE_CONFIRM` is outside the env-var allowlist)
   → `TDocCache.purge_subdir(scope)` for the scoped case, or
   `TDocCache.purge()` for `--scope all`.
-- `doc3gpp search query "QUERY" [filters]` → `SearchService.search(query,
+- `doc3gpp tdoc search query "QUERY" [filters]` → `SearchService.search(query,
   filters)` → `repo.search` (FTS5 MATCH + filters + bm25) →
   `EmbeddingReranker.rerank` (`PassthroughReranker` for v1) →
   `list[SearchHit]` → CLI formatter. The ranking stage uses
@@ -512,11 +705,11 @@ and syncs each through the `--tsg` path below.
   `weight > 0` column, and the result surfaces in the hit's
   `previews` map only when the snippet contains a match. Fires
   the stale-index hint on the side (one-shot, gated on `--quiet`).
-- `doc3gpp search index --rebuild` → `SearchService.rebuild(...)`
+- `doc3gpp tdoc search index --rebuild` → `SearchService.rebuild(...)`
   generator → `repo.rebuild_batch(...)` per batch → per-row
   `repo.upsert(tdoc_id)` → updates `tdoc_search_meta` cursor.
   Resumable via `--resume`; cheap incremental via `--stale-only`.
-- `doc3gpp search sem QUERY [filters]` →
+- `doc3gpp tdoc search sem QUERY [filters]` →
   `SemanticSearchService.search` → original `QUERY` embedding (vector
   path, always on) → opt-in FTS5 path (the explicit `--fts5-query`
   string is preprocessed by `SearchQueryBuilder` — no stopword strip)
@@ -528,8 +721,8 @@ and syncs each through the `--tsg` path below.
   (0.0..1.0, default 0.5) blends the two ranks via
   `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) *
   (1 - fts5_weight)` (`k=60`); the flag is ignored when `--fts5-query`
-  is omitted. `search query` (FTS5-only) is unchanged.
-- `doc3gpp search index --rebuild-embeddings [--stale-only] [--batch N]
+  is omitted. `tdoc search query` (FTS5-only) is unchanged.
+- `doc3gpp tdoc search index --rebuild-embeddings [--stale-only] [--batch N]
   [--resume] [--quiet]` → `SemanticSearchService.rebuild_embeddings`
   → on a fresh (non-resume) run drops + recreates `vec_tdoc_embeddings`
   at the live embedder dim and stamps `embedding_dim` + `embedding_model`
@@ -547,13 +740,13 @@ and syncs each through the `--tsg` path below.
 
 The web layer (`src/doc3gpp/web/`) is a thin adapter over the same service
 + repository layer the CLI uses. A single process serves an HTMX/Jinja2 HTML
-interface and a Streamable HTTP MCP endpoint on one port (`127.0.0.1:8765`
+interface and a Streamable HTTP MCP endpoint on one port (`127.0.0.1:13999`
 by default). The MCP mount answers each POST with a plain `application/json`
 body (`json_response=True`), the mode every modern MCP client (including the
 TypeScript SDK) expects; the legacy SSE-streamed response is rejected by
 those clients with "Legacy MCP SSE endpoints are not supported". It is
-disabled by default (`[server] enabled = false`); every
-`doc3gpp server` subcommand refuses to run while disabled.
+enabled by default and binds to loopback; set `[server] enabled = false` to
+disable it. Every `doc3gpp server` subcommand refuses to run while disabled.
 
 - `doc3gpp server start` → uvicorn runs `doc3gpp.web.app:build_app`
   (`--factory`); the FastAPI lifespan calls `build_state(settings)` to
@@ -593,6 +786,28 @@ disabled by default (`[server] enabled = false`); every
   `error="orphaned_after_restart"` so the nav badge can't get stuck on
   a job the new process never claimed.
 
+Current TDoc search HTTP surfaces are `GET /tdocs/search`,
+`GET /tdocs/search/sem`, and `POST /jobs/tdocs/search/rebuild`. The old
+unscoped search routes were removed without redirects. The corresponding MCP
+tools are `search_tdoc`,
+`semantic_search_tdoc`, and `rebuild_tdoc_search_index`; the old plural
+TDoc tool aliases were removed. Spec-document search remains under
+`/spec-docs/search`, `/spec-docs/search/sem`, `search_spec_docs`, and
+`semantic_search_spec_docs`.
+
+The human-facing spec-document portal is version-first: `GET
+/specs/{spec_id}/docs?version=...` composes the parent spec/version metadata
+with the specdata source state, stored TOC, and paginated chunks. The
+  `spec_show.html` version rows link to this page. Its parse/re-parse form
+  enqueues the existing `POST /jobs/parse/spec-docs` job; a missing ZIP is
+  downloaded by that parse path, and no standalone fetch route exists. Shared
+  TDoc Search / Spec Docs Search tabs expose both search families, and Spec Docs
+  hits link to the matching version page and chunk anchor. The portal uses
+  `spec_doc_show.html`, `partials/spec_doc_show_results.html`, and
+  `partials/spec_doc_chunks.html`; search uses
+  `partials/spec_doc_search_form.html` and
+  `partials/spec_doc_search_results_table.html`.
+
 
 ## Database Schema
 
@@ -619,6 +834,38 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `type` (`revision` / `review` / `support`), `file`, `ftp_url`
       (unique, the upsert key; stored as a path relative to the
       canonical 3GPP FTP root), `uploaded_date`.
+- `spec_doc_sources` (specdata DB — `SpecDataBase`, not main `Base`):
+    - `(spec_id, version)` composite PK, `release` (nullable),
+      `ftp_url` (absolute version-zip URL), `downloaded_at` /
+      `parsed_at` (nullable UTC — `parsed_at` is the immutable-skip
+      key), `chunk_count` / `docx_count` (`Integer`, default 0).
+- `spec_doc_tocs` (specdata DB):
+    - `(spec_id, version)` composite PK, `release` (nullable),
+      `toc_json_gzip` (nullable gzip JSON `{entries, files}`),
+      `file_order_json` (nullable JSON `{source_file: file_order}`),
+      `docx_count` (`Integer`), `created_at` (nullable UTC).
+- `spec_doc_chunks` (specdata DB):
+    - `chunk_id` (PK, `{spec_id}@{version}#{chunk_index}`), `spec_id`,
+      `version`, `release` (nullable), `file_order` / `chunk_index`
+      (`Integer`), `source_file` (bare `.docx` name),
+    `sections` / `tables` (nullable newline-delimited combined
+    identifier/title entries), `text` (chunk body, no further splitting
+    applied).
+- `spec_doc_search` (specdata DB, FTS5): 7-column virtual table —
+  `chunk_id` (UNINDEXED cid 0) + 6 indexed columns `(text, sections,
+  tables, spec_id, version, release)` (cids 1..6) holding the
+  `normalize_query` form. Backed by the chunk-level
+  `SQLAlchemySpecDocSearchRepository` (one FTS5 row per chunk).
+- `spec_doc_search_meta` (specdata DB): sidecar for spec-doc rebuild
+  resume + staleness (`last_indexed_parsed_at`,
+  `last_rebuild_at`, resume cursor).
+- `vec_spec_doc_embeddings` (specdata DB, sqlite-vec): virtual table
+  keyed on `chunk_id` (`{spec_id}@{version}#{index}`); one row per
+  chunk embedding. Gated on the sqlite + sqlite-vec support matrix
+  (`_create_specdata_vector_schema`); silently skipped when the
+  extension is unavailable.
+- `vec_spec_doc_meta` (specdata DB): vector sidecar mirroring the
+  `vec_meta` contract for the spec-doc vector table.
 - `tdoc_cr_cover_page`:
     - `ftp_url` (PK, immutable download URL stored relative to the
       3GPP FTP root) + `tdoc_id` (non-PK FK → `tdocs.tdoc_id` with
@@ -805,19 +1052,19 @@ files; `db reset` removes stale sidecars before recreating the schema.
 
 ## CLI Surface
 
-Implemented command groups in `src/doc3gpp/cli.py` (ten sub-apps,
-29 commands) plus the `server` group in `cli_server.py`
+Implemented command groups in `src/doc3gpp/cli.py` (12 sub-apps incl.
+the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group in `cli_server.py`
 (6 commands):
 
 - `db`:
-    - `check` — `--scope main|testcase|all` (default `all`); connects
+    - `check` — `--scope main|testcase|specdata|all` (default `all`); connects
       per scope and prints the selected URL(s)
-    - `init` — `--scope main|testcase|all` (default `all`); creates the
+    - `init` — `--scope main|testcase|specdata|all` (default `all`); creates the
       selected schema(s) via `create_schema(scope)` and seeds the
       `tsgs` reference table when main is in scope
-    - `reset` — `--scope main|testcase|all` (default `all`);
+    - `reset` — `--scope main|testcase|specdata|all` (default `all`);
       SQLite-only destructive reset; deletes the selected DB file(s)
-      and sidecars, clears both engine caches, recreates the selected
+      and sidecars, clears every engine cache, recreates the selected
       schema(s), and re-seeds `tsgs` when main is in scope
 - `meeting`:
     - `sync` — validates `--tsg` against the reference table
@@ -845,6 +1092,9 @@ Implemented command groups in `src/doc3gpp/cli.py` (ten sub-apps,
       for the parser's `full=True` mode. End-to-end filter-driven:
       candidates are the intersection of every supplied predicate, with
       CR-type as the implicit default and a `max_batch` cap.
+    - `search query`, `search index`, and `search sem` — TDoc FTS5,
+      index-maintenance, and hybrid semantic search commands nested under
+      `tdoc search`.
     - `show` — `--tdoc` (mutually exclusive with `--ftp-url`); renders
       the matching TDoc, the slim cover-page row from
       `tdoc_cr_cover_page` (URL-keyed on `tdoc.ftp_url`), the
@@ -891,6 +1141,22 @@ Implemented command groups in `src/doc3gpp/cli.py` (ten sub-apps,
 - `wi`:
     - `sync` — `--tsg`
     - `list` — filters by `--tsg`, `--name`, `--acronym`, `--release`
+ - `spec doc` (nested under `spec` as `spec doc ...`):
+     - `parse` — repeatable `--spec` (at least one required), `--release`,
+       `--version`, `--force/-f`; resolves the numeric-newest or pinned
+       version, fetches the ZIP when missing, and records the download;
+       `--force` re-downloads and re-parses, including already-parsed pairs.
+       Also accepts `--format/--output/--compact` (currently ignored); prints
+       `ok` / `skipped <reason>` / `failed <reason>` (stderr) bucket lines.
+    - `toc show` — `--spec` + `--version` (both required), `--release`,
+      `--fields`, `--format/--output/--compact`.
+     - `search query QUERY` — `--spec/--release/--version/--sections/--tables`,
+      `--limit` (default 20), `--offset` (default 0), `--fields`,
+      `--format`, `--compact`.
+     - `search sem QUERY` — `--fts5-query`, `--fts5-weight` (default 0.5),
+       `--spec/--release/--version/--sections/--tables`, `--limit` (default 20),
+      `--format`, `--compact`.
+     - `schema` — `--format/--output/--compact`; 25 rows, no filters, no DB.
 - `config`:
     - `init` — bootstrap a default TOML at `--target {auto,project,user}`
       (default `auto`: `./doc3gpp.toml` from a project root, otherwise
@@ -918,7 +1184,8 @@ Implemented command groups in `src/doc3gpp/cli.py` (ten sub-apps,
     - `install systemd|launchd` — `--user/--system`, `--no-start`, `--dry-run`
     - `uninstall systemd|launchd` — refuses non-managed units
       (`InstallNotManagedError`)
-    - Every subcommand requires `[server] enabled = true`.
+    - Every subcommand requires `[server] enabled = true`; this is the
+      default, and can be turned off with `[server] enabled = false`.
 
 Every `* list` command also accepts `--format table|json|markdown`
 and `-o/--output PATH`. `meeting list`, `tdoc list`, `tsg list`, and
@@ -998,9 +1265,17 @@ uvicorn with `build_app`.
       `test_tdoc_cr_sqlite.py`, `test_tsg_sqlite.py`, `test_wi_sqlite.py`
     - web + MCP end-to-end (`test_web_end_to_end.py`,
       `test_mcp_end_to_end.py`, `test_cli_server.py`)
+    - spec-doc corpus (`test_spec_doc_blocks.py`,
+      `test_spec_doc_chunker.py`, `test_spec_doc_models.py`,
+      `test_spec_doc_parser.py`, `test_spec_doc_settings.py`,
+      `test_spec_doc_source.py` unit; `test_spec_doc_service.py`,
+      `test_spec_doc_repo.py`, `test_spec_doc_search_repo.py`,
+      `test_spec_doc_search_service.py`, `test_spec_doc_cli.py`,
+      `test_spec_doc_web.py` integration)
     - `test_online_3gpp_calendar.py`, `test_online_tdoc_parse.py`,
-      `test_online_tdoc_fetch_r5.py` (live 3GPP endpoints,
-      `@pytest.mark.online`)
+      `test_online_tdoc_fetch_r5.py`, `test_online_spec_doc_sync.py`
+      (live 3GPP endpoints, `@pytest.mark.online`; the spec-doc test
+      resolves the numeric-newest version at runtime — no pins)
 - `tests/fixtures/tdoc_cr_doc/` — 7 CR zip fixtures
   (`C6-250028.zip`, `R5-227476.zip`, `R5-253079.zip`,
   `R5s260009.zip`, `R5s260051.zip`, `R5s260135.zip`,
@@ -1029,10 +1304,11 @@ readers:
   signature on any repo, update both the Protocol and the impl.
 - **CLI depends on `services/factory.py` only** — never instantiate a
   concrete `SQLAlchemy*Repository` from `cli.py`.
-- **Settings caching** — `get_settings`, `get_engine`, and
-  `get_testcase_engine` are `@lru_cache(maxsize=1)`; any test that
+- **Settings caching** — `get_settings`, `get_engine`,
+  `get_testcase_engine`, and `get_specdata_engine` are
+  `@lru_cache(maxsize=1)`; any test that
   mutates an allowlisted `DOC3GPP_*` env var must call `cache_clear()`
-  on all three in teardown (the `sqlite_env` fixture is the canonical
+  on all four in teardown (the `sqlite_env` fixture is the canonical
   pattern — it pins both database URLs and clears all three caches).
 
 ## Out of scope (today)

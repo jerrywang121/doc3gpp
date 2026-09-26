@@ -25,6 +25,14 @@ from doc3gpp.models.search import (
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.spec_doc import (
+    ChunkDraft,
+    SpecDocChunk,
+    SpecDocHit,
+    SpecDocSearchFilters,
+    SpecDocSource,
+    SpecDocToc,
+)
 from doc3gpp.models.testcase import TestCase, TestCaseSource, TestCaseStatus
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -371,7 +379,7 @@ class SpecRepository(Protocol):
 
     def list(
         self,
-        limit: int = 50,
+        limit: int | None = 50,
         offset: int = 0,
         tsg: str | None = None,
         type: str | None = None,
@@ -411,6 +419,74 @@ class SpecRepository(Protocol):
         Rows with a ``NULL`` ``tsg`` are ignored.
         """
         ...
+
+
+class SpecParsedStatusRepository(Protocol):
+    """Read-only parsed-version status from the specdata database."""
+
+    def list_parsed_versions(
+        self, spec_ids: Iterable[str] | None = None
+    ) -> dict[str, list[str]]:
+        """Return parsed versions grouped by spec id, newest first."""
+        ...
+
+
+class SpecDocRepository(Protocol):
+    """Storage operations for the spec-document corpus (specdata sqlite file)."""
+
+    def get_source(self, spec_id: str, version: str) -> SpecDocSource | None: ...
+
+    def record_download(
+        self,
+        spec_id: str,
+        version: str,
+        *,
+        release: str | None,
+        ftp_url: str,
+        docx_count: int,
+    ) -> None: ...
+
+    def invalidate_parse_state(self, spec_id: str, version: str) -> None: ...
+
+    def record_parsed(
+        self, spec_id: str, version: str, *, chunk_count: int
+    ) -> None: ...
+
+    def get_toc(self, spec_id: str, version: str) -> SpecDocToc | None: ...
+
+    def upsert_toc(self, toc: SpecDocToc) -> None: ...
+
+    def replace_chunks(
+        self,
+        spec_id: str,
+        version: str,
+        *,
+        release: str | None,
+        drafts: list[ChunkDraft],
+    ) -> list[SpecDocChunk]: ...
+
+    def list_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str | None = None,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[SpecDocChunk]: ...
+
+
+    def count_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str | None = None,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+    ) -> int: ...
 
 
 class TestCaseRepository(Protocol):
@@ -686,7 +762,7 @@ class SearchIndexRepository(Protocol):
     def get_resume_cursor(self) -> str | None:
         """Return the last ``tdoc_id`` written to ``tdoc_search_meta``.
 
-        ``None`` means no cursor has been recorded; ``search index
+        ``None`` means no cursor has been recorded; ``tdoc search index
         --rebuild --resume`` starts at the first id > cursor.
         """
         ...
@@ -702,7 +778,7 @@ class SearchIndexRepository(Protocol):
         """Remove the resume cursor so the next rebuild starts at
         the first TDoc.
 
-        ``search index --rebuild`` (no ``--resume``) calls this at
+        ``tdoc search index --rebuild`` (no ``--resume``) calls this at
         the start of a rebuild to force a truly fresh start; the
         first successful batch upsert then writes a new cursor via
         :meth:`set_resume_cursor`.
@@ -710,7 +786,7 @@ class SearchIndexRepository(Protocol):
         ...
 
     def status(self) -> SearchIndexStatus:
-        """Return a :class:`SearchIndexStatus` snapshot for ``search index``.
+        """Return a :class:`SearchIndexStatus` snapshot for ``tdoc search index``.
 
         Reads ``tdoc_search_meta`` + ``COUNT(*)`` from the FTS5 table
         + ``MAX(uploaded_date)`` from ``tdocs`` to compute
@@ -751,7 +827,7 @@ class EmbeddingReranker(Protocol):
         ``final_limit``.
 
         ``final_limit`` is the user-visible output count (e.g. the
-        ``--limit`` value from ``search query --sem-query``).
+        ``--limit`` value from ``tdoc search query --sem-query``).
         The caller (CLI) is responsible for asking the upstream
         FTS5 repo for a *wider* candidate bag, then letting the
         reranker trim back to ``final_limit``.
@@ -993,3 +1069,122 @@ class JobRepository(Protocol):
         """
         ...
 
+
+class SpecDocSearchRepository(Protocol):
+    """FTS5-backed search index for spec-doc chunks (specdata engine).
+
+    Mirrors :class:`SearchIndexRepository` minus the ``tdocs`` /
+    ``meetings`` JOINs: one FTS5 row per ``spec_doc_chunks`` row,
+    keyed by ``chunk_id = "{spec_id}@{version}#{index}"``. Takes the
+    raw user query and builds the ``MATCH`` expression internally via
+    ``SearchQueryBuilder`` (same as ``SearchService.search``), so
+    services pass raw text.
+    """
+
+    def upsert_for_version(self, spec_id: str, version: str) -> None:
+        """Rebuild the FTS5 rows for one ``(spec_id, version)`` pair.
+
+        Idempotent: a re-upsert of the same pair replaces the
+        existing rows in place.
+        """
+        ...
+
+    def remove_for_version(self, spec_id: str, version: str) -> None:
+        """Delete the FTS5 rows for ``(spec_id, version)``. No-op if absent."""
+        ...
+
+    def search(
+        self, query: str, filters: SpecDocSearchFilters,
+        snippet_tokens: int | None = None,
+    ) -> list[SpecDocHit]:
+        """Run an FTS5 ``MATCH`` + filters + ``bm25()`` scoring.
+
+        Returns at most ``filters.limit`` hits (after
+        ``filters.offset``), ordered by score ascending (lower =
+        better in FTS5). ``snippet_tokens`` is an optional per-call
+        override for the configured
+        ``Settings.search.snippet_tokens`` knob.
+        """
+        ...
+
+    def rebuild_batch(
+        self,
+        batch_size: int,
+        after_id: str | None,
+        stale_only: bool,
+    ) -> Iterable[list[tuple[str, str]]]:
+        """Yield ``(spec_id, version)`` batches for the rebuild loop.
+
+        ``stale_only=True`` returns only versions whose
+        ``spec_doc_sources.parsed_at`` is newer than the
+        ``last_indexed_parsed_at`` watermark. ``after_id`` is a
+        ``"spec_id@version"`` cursor — pairs strictly greater are
+        returned so resume picks up where the previous run stopped.
+        """
+        ...
+
+    def count_versions_to_index(
+        self, stale_only: bool, after_id: str | None = None,
+    ) -> int:
+        """Return how many ``(spec_id, version)`` pairs the rebuild will process."""
+        ...
+
+    def get_resume_cursor(self) -> str | None:
+        """Return the ``"spec_id@version"`` cursor from ``spec_doc_search_meta``."""
+        ...
+
+    def set_resume_cursor(self, cursor: str) -> None:
+        """Update the resume cursor after a successful batch upsert."""
+        ...
+
+    def clear_resume_cursor(self) -> None:
+        """Remove the resume cursor so the next rebuild starts fresh."""
+        ...
+
+    def status(self) -> SearchIndexStatus:
+        """Return a :class:`SearchIndexStatus` snapshot."""
+        ...
+
+
+class SpecDocVectorRepository(Protocol):
+    """sqlite-vec backed vector index for spec-doc chunks (specdata engine).
+
+    Mirrors :class:`VectorIndexRepository` minus the ``tdocs`` /
+    ``meetings`` JOINs. One ``(spec_id, version)`` pair maps to N
+    chunk rows (``chunk_id = "{spec_id}@{version}#{index}"``).
+    """
+
+    def upsert_for_version(
+        self, spec_id: str, version: str, embeddings: list[np.ndarray],
+    ) -> None:
+        """Replace all chunk rows for ``(spec_id, version)``.
+
+        Deletes the pair's rows then inserts one row per embedding
+        with ``chunk_id = "{spec_id}@{version}#{index}"``.
+        """
+        ...
+
+    def remove_for_version(self, spec_id: str, version: str) -> None:
+        """Delete all chunk rows for ``(spec_id, version)``. No-op if absent."""
+        ...
+
+    def knn(
+        self,
+        query_vec: np.ndarray,
+        limit: int,
+        filters: SpecDocSearchFilters | None = None,
+    ) -> list[tuple[str, float]]:
+        """KNN by cosine distance; returns ``(chunk_id, distance)``.
+
+        The chunk index is recoverable from the ``chunk_id`` suffix.
+        ``limit`` caps the chunk count.
+        """
+        ...
+
+    def verify_compatible(self, dim: int, model: str | None) -> None:
+        """Raise on live-vs-stored dim/model mismatch without writing."""
+        ...
+
+    def reset_for_rebuild(self, dim: int, model: str | None) -> None:
+        """Drop + recreate ``vec_spec_doc_embeddings`` at ``dim``."""
+        ...

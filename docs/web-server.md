@@ -5,7 +5,7 @@
 The `doc3gpp` web server serves a browsable HTML interface over the same
 services the CLI uses, plus an MCP (Model Context Protocol) endpoint for
 AI tooling. It runs as a single process on one HTTP port
-(`127.0.0.1:8765` by default).
+(`127.0.0.1:13999` by default).
 
 The web layer is a thin adapter over the service + repository layer. Every
 HTTP route calls the same services the CLI calls; the HTTP JSON output and
@@ -30,21 +30,18 @@ MCP package.
 # 1. Initialise a config file (auto-detects project root vs user home)
 doc3gpp config init
 
-# 2. Enable the server (it is disabled by default)
-doc3gpp config set server.enabled true
-
-# 3. Install a service unit (optional; systemd or launchd)
+# 2. Install a service unit (optional; systemd or launchd)
 doc3gpp server install systemd --no-start    # Linux
 doc3gpp server install launchd --no-start    # macOS
 
-# 4. Start the server
+# 3. Start the server
 doc3gpp server start        # opens your browser when ready
 # or, for a supervised service:
 doc3gpp server start --no-open
 
-# 5. Browse
-#    HTML:  http://127.0.0.1:8765/
-#    MCP:   http://127.0.0.1:8765/mcp
+# 4. Browse
+#    HTML:  http://127.0.0.1:13999/
+#    MCP:   http://127.0.0.1:13999/mcp
 ```
 
 Check it is up:
@@ -66,9 +63,9 @@ The web server is configured under `[server]` and `[mcp]` in `doc3gpp.toml`
 
 ```toml
 [server]
-enabled = false            # master switch; all `server` commands refuse when false
+enabled = true             # master switch; set false to disable server commands
 host = "127.0.0.1"
-port = 8765
+port = 13999
 max_concurrent_jobs = 1    # how many background jobs run at once
 poll_interval_seconds = 1  # how often the worker checks for new QUEUED jobs
 progress_interval_seconds = 10  # min gap between periodic progress log lines for long-running jobs
@@ -100,7 +97,8 @@ does not change pickup speed.
 ## CLI reference
 
 `doc3gpp server` groups the server commands. Every subcommand starts with a
-guard that refuses to run while `[server] enabled = false`.
+guard that refuses to run when `[server] enabled = false` (the server defaults
+to enabled on loopback at `127.0.0.1:13999`).
 
 ### `doc3gpp server start [flags]`
 
@@ -188,9 +186,15 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/specs/schema` | Spec field descriptors across `specs` + `spec_versions` (HTML grouped by table; `?format=json` is the `doc3gpp spec schema --format json` payload verbatim). No DB access. |
 | GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
 | GET | `/wis` | List WIs. |
+| GET | `/specs` | List specs (`?format=json`; filters include `tsg,type,spec_id,title,status,radio_tech,initial_release,wis,rapporteurs,parsed,limit,offset`; `parsed=true|false` filters by parsed status before pagination; default JSON fields include `parsed`). |
 | GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
-| GET | `/testcases/{testcase_id}` | Testcase detail (HTML or JSON; optional `?group=` to scope to one `(id, group)` row — unknown group → 400 `invalid_filter`). Without `?group=` every stored group returns: JSON is an array of flat per-`(id, group)` objects with nested `statuses` (single-element when one group matches; status rows carry `{path, gcf_ptcrb, ttcn_status}` with no `group`); HTML renders one section per group. Unknown id → 404 `testcase_not_found`. |
-| GET | `/search` | FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
+| GET | `/specs/{spec_id}/docs` | Human-facing collapsed, version-first spec-document page (`?version=` required; optional `release`, `sections`, `tables`, `limit`, `offset`) with source state, parse/re-parse form, collapsed TOC, and paginated chunks (`spec_doc_show.html`; HTMX fragment `partials/spec_doc_show_results.html`). |
+| GET | `/specs/{spec_id}/docs/toc` | Spec-doc TOC for one `(spec_id, version)` pair (`?version=` required, `?release=` informational; `?format=json` is the `doc3gpp spec doc toc show --format json` envelope verbatim: `{spec_id, version, release, docx_count, entries, files}`; full page `spec_doc_toc.html`, HTMX fragment `partials/spec_doc_toc_results.html`). Miss → 404. |
+| GET | `/spec-docs/search` | Spec-doc FTS5 search (`?q=`, filters `spec,release,version,sections,tables,limit,offset`; `?format=json` is the `doc3gpp spec doc search query --format json` hit array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Corrupt index → 500 with a rebuild hint. |
+| GET | `/spec-docs/search/sem` | Spec-doc hybrid search (`?q=`, filters `spec,release,version,sections,tables`, `?fts5_query=` blank → `None` = pure vector, `?fts5_weight=` 0.0..1.0; `?format=json` is the `doc3gpp spec doc search sem --format json` semantic-hit array verbatim; same templates as `/spec-docs/search`). |
+| GET | `/spec-docs/schema` | Spec-doc field descriptors across the three spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
+| GET | `/tdocs/search` | TDoc FTS5 search (`?format=json`). Accepts an optional `sem` query param — when present, the FTS5 hits are reordered by cosine similarity to that text (CLI `--sem-query` parity; empty/absent = pure FTS5). |
+| GET | `/tdocs/search/sem` | TDoc hybrid search (`?format=json`). The natural-language query is embedded; `fts5_query` opts into the FTS5 side and RRF merge. |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. A `tsg` not present in the `tsgs` reference table is rejected (the job fails fast before any network work). |
@@ -199,18 +203,19 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/sync/specs` | Enqueue `sync_specs` (exactly one of `tsg` / `spec_id`). A `tsg` not present in the `tsgs` reference table is rejected (the job fails fast before any network work). |
 | POST | `/jobs/sync/testcases` | Enqueue `sync_testcases` (`{"force": bool}`, default `false`) → 202 job envelope. |
 | POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. |
-| POST | `/jobs/search/rebuild` | Enqueue `rebuild_search`. |
+| POST | `/jobs/tdocs/search/rebuild` | Enqueue `rebuild_search`. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
 | POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single 3GPP FTP URL or folder; `url` must be `https://www.3gpp.org/ftp/...`, `recursive` XOR `max_depth`). |
+| POST | `/jobs/parse/spec-docs` | Enqueue `parse_spec_docs` for one or more spec ids (`spec_ids`, optional `release`, `version`, and `force`); progress is streamed through the normal job SSE endpoint. This job is intentionally not a panel on the ten-form `/sync` hub. |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. Accepts `?format=html` to return the refreshed job row as an `outerHTML` swap target for the list page's per-row Cancel button. JSON otherwise. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
-| GET | `/sync` | Sync hub page: ten enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, search-rebuild, cache-purge, testcases) + a "Recent sync jobs" table. |
+| GET | `/sync` | Sync hub page: ten enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, TDoc-search-rebuild, cache-purge, testcases) + a "Recent sync jobs" table. |
 | GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.
 
-The six `/<resources>/schema` routes render the shared `schema.html`
+The seven `/<resources>/schema` routes render the shared `schema.html`
 template by default (one section per DB table: field, type,
 nullable as `yes`/`no`, description, possible values) and return the
 CLI JSON payload verbatim at `?format=json`; an HTMX request swaps
@@ -231,6 +236,21 @@ flashes a "Sync job queued" indication after enqueueing.
 The filter form supports TSG, name, year, location, and a TDoc id
 selector, all with the same rich-filter grammar as the CLI.
 
+The spec list form has a `Parsed` control with `Any`, `true`, and `false`
+choices. `GET /specs?parsed=true|false` uses the same case-insensitive
+boolean filter; an omitted or empty value means `Any`, while another
+non-empty value is rejected with HTTP 400. Parsed filtering happens before
+`limit` / `offset` pagination. The status is derived from a non-null
+`spec_doc_sources.parsed_at` in the separate specdata database, not from a
+column in the main `specs` or `spec_versions` tables, so `/specs/schema` does
+not add a `parsed` field.
+
+Spec-list JSON returns `parsed` as a comma-separated numeric-newest-first
+version string, or native JSON `null` when no version is parsed; the HTML
+list displays `-` for the null state. Spec-show version JSON returns native
+boolean `parsed` values for every version. These values match the CLI and MCP
+outputs.
+
 The spec detail page shows a Sync card with a Force sync checkbox that
 enqueues a single-spec sync job for that spec; the page auto-refreshes
 when the job completes. A "Per-version details" checkbox alongside
@@ -238,11 +258,52 @@ when the job completes. A "Per-version details" checkbox alongside
 worker always re-fetches the ETSI PDF + CR-list follow-ups for every
 version (default OFF — without it, cached rows are preserved).
 
+### Spec-document portal
+
+The human-facing spec-document flow is version-first. The `/specs/{spec_id}`
+page has a `Docs` column with a `show` link for every stored version. Each
+link opens `/specs/{spec_id}/docs?version={version}`; the page also accepts
+`release`, `sections`, `tables`, `limit`, and `offset` query parameters for the
+displayed document data. `sections` and `tables` filter the newline-delimited
+combined identifier/title metadata stored on chunks; low-level DOCX blocks and
+TOC entries continue to use `section_no` and table fields.
+
+The version page's source card exposes three states: a version with no
+specdata source row has not been downloaded or parsed; a downloaded source is
+waiting for parsing; and a parsed source shows its parse timestamp, DOCX and
+chunk counts. The only document action is `Parse document` (or `Force
+re-parse`, available only for a parsed source. It enqueues the existing
+`POST /jobs/parse/spec-docs` job with `spec_ids`, the selected exact `version`,
+and `force`, then
+polls the normal job status. The parser downloads a missing ZIP internally;
+there is intentionally no standalone spec-document fetch route or fetch
+control.
+
+Parsed versions render the stored table of contents followed by individually
+collapsed chunk cards. Chunk display is paginated through `limit` / `offset`,
+using the filtered matching-chunk count rather than the source ledger's
+unfiltered total. Pagination links preserve `version`, `release`, `sections`,
+`tables`, and `limit`. The footer shows the visible range, first/previous/next/
+last controls, and up to ten rolling numeric page links with ellipses. An
+out-of-range offset clamps to the last page, while zero filtered matches omit
+the pagination controls.
+The search form uses a full-width Query field and exposes the same plural
+`sections` / `tables` filters. The `TDoc Search` and `Spec Docs Search` tabs
+are shared by both search families, and Spec Docs results link to the matching
+version page and chunk anchor
+(`/specs/{spec_id}/docs?version={version}#chunk-{chunk_index}`).
+
+The spec-document corpus is not repaired at runtime. The pre-deployment local
+corpus is repaired once from cached ZIPs using an internal maintenance helper;
+there is no public repair command or migration path. New deployments use the
+fresh specdata schema and the dedicated `~/.cache/doc3gpp/specs` cache root by
+default, while TDoc extraction remains under `~/.cache/doc3gpp/tdocs`.
+
 The sync hub (`/sync`) is a single page for enqueueing every sync-shaped job. Each panel submits a JSON body to the matching `/jobs/...` route via the shared `bindJobPolling` helper; when the job reaches a terminal state the bottom "Recent sync jobs" table is refreshed in place via HTMX (`GET /sync?format=fragment`) rather than a full page reload, so the user keeps their scroll position. The tenth form (`id="testcase-form"`) enqueues `POST /jobs/sync/testcases` with `{force}` from its Force-sync checkbox (`sync_hub.js` `"testcase-form"` body builder); the handler (`_sync_testcases`, `JobKind.SYNC_TESTCASES = "sync_testcases"`) calls `services.testcase.sync(force=force, on_progress=...)` and returns `{"status","reason","synced_count"}`.
 
 The testcase list page (`/testcases`) mirrors the spec list: an HTMX filter form (`partials/testcase_filters.html`) swaps the `#results` partial (`partials/testcase_results.html`) on `HX-Request: true`, otherwise the full `testcase_list.html` page renders. Columns are TC, Title, Spec, Group, Release, Statuses (as `path=gcf/ttcn` chips), each row linking to its group-scoped detail page (`/testcases/{id}?group={group}` → `testcase_show.html`: one header-card + status-triples table per group, with `path` / `gcf_ptcrb` / `ttcn_status`).
 
-The header nav is ordered Home, TSGs, Meetings, TDocs, Specs, Testcases, WIs, Search, Jobs, Sync.
+The header nav is ordered Home, TSGs, Meetings, TDocs, Specs, Testcases, WIs, Search, Jobs, Sync. Spec Docs is discoverable from the landing page and the shared search tabs rather than as a second top-level nav item.
 The Jobs link shows a badge with the number of queued jobs (e.g. `Jobs (2)`)
 when any are pending. The TSG list links each TSG name to the TSG's own URL
 and its `show` link jumps to the meetings list pre-filtered to that TSG
@@ -289,22 +350,22 @@ The filter form (submitted via HTMX to `GET /meetings`, swapping the
 `end_doc` range brackets it. An empty value is ignored; a malformed value
 returns a 400 `invalid_filter` response.
 
-Both search modes (`GET /search` and `GET /search/sem`) accept a
+Both TDoc search modes (`GET /tdocs/search` and `GET /tdocs/search/sem`) accept a
 `tdoc-id` query param — an exact-match tdoc filter identical in
-semantics to the CLI's `search query --tdoc-id`. The search form
+semantics to the CLI's `tdoc search query --tdoc-id`. The search form
 carries a TDoc text input in both the FTS5 and the semantic branch
 (empty input → no filter).
 
-The search form uses a 5-column grid: on `/search` the Query box spans
+The search form uses a 5-column grid: on `/tdocs/search` the Query box spans
 2 columns and an optional Semantic box (the `sem` param) spans the
-remaining 3; on `/search/sem` the Query box spans 3 columns and the
+remaining 3; on `/tdocs/search/sem` the Query box spans 3 columns and the
 FTS5 query box spans 2. Both forms share the full filter set (TSG,
-Meeting, TDoc, Release, Spec, Since, Until, Limit; `/search/sem` also
+Meeting, TDoc, Release, Spec, Since, Until, Limit; `/tdocs/search/sem` also
 keeps FTS5 weight). Each page links to the other at the top right
-(`/search` → "Hybrid search", `/search/sem` → "FTS5 search").
-The `/search/sem` form always submits an `fts5_query` field; a blank or
+(`/tdocs/search` → "Hybrid search", `/tdocs/search/sem` → "FTS5 search").
+The `/tdocs/search/sem` form always submits an `fts5_query` field; a blank or
 whitespace-only value is normalised to `None` server-side so the default
-is pure-vector (matching `doc3gpp search sem`), rather than running FTS5
+is pure-vector (matching `doc3gpp tdoc search sem`), rather than running FTS5
 with an empty query and returning zero hits.
 
 Search results render one collapsible "Matching fields" block per hit
@@ -345,8 +406,8 @@ HTML column selection.
 
 ## Jobs
 
-Long-running operations (meeting sync, TDoc sync, parse, search rebuild,
-cache purge) run as background jobs. A job is a row in the SQLite `jobs`
+Long-running operations (meeting sync, TDoc sync, spec-document parse, TDoc search
+index rebuild, and cache purge) run as background jobs. A job is a row in the SQLite `jobs`
 table, claimed by a single asyncio worker (one job at a time by default).
 
 A job has a lifecycle: `queued → running → succeeded | failed | cancelled`.
@@ -388,12 +449,26 @@ log for an `Invalid Origin header` warning before touching the transport.
 
 The tool set and the JSON parity guarantees are identical across both
 transports; `sse` exists for clients that only speak the legacy protocol.
-It exposes 33 tools:
+It exposes 38 tools. Legacy unscoped HTTP routes and plural TDoc search
+tool aliases were removed without redirects. Spec-document search keeps
+its existing HTTP and MCP names.
 **Read tools** — `list_meetings`, `get_meeting`, `list_tdocs`, `get_tdoc`,
 `get_tdoc_content`, `list_tsgs`, `get_tsg`, `list_wis`, `list_specs`,
 `get_spec`, `list_testcases`, `get_testcase`, `get_tsg_schema`,
 `get_meeting_schema`, `get_tdoc_schema`, `get_wi_schema`,
-`get_spec_schema`, `get_testcase_schema`, `search_tdocs`, `semantic_search_tdocs`.
+`get_spec_schema`, `get_testcase_schema`, `search_tdoc`,
+`semantic_search_tdoc`, `get_spec_toc`, `search_spec_docs`,
+`semantic_search_spec_docs`, and `get_spec_doc_schema`.
+
+`list_specs(..., parsed=None, limit=50, offset=0)` accepts an optional native
+boolean `parsed` argument. `true` keeps specs with at least one parsed
+version, `false` keeps specs with none, and `None` leaves the filter unset;
+the service applies this filter before pagination. The list payload uses the
+same native JSON `null` or comma-separated numeric-newest-first version
+semantics as `GET /specs?format=json`. `get_spec` emits native boolean
+`parsed` values on every version row. Both are derived from the separate
+specdata `spec_doc_sources.parsed_at` ledger and are not main-table/schema
+fields.
 
 `get_tdoc` accepts `tdoc_id` (canonical id, e.g. `R5-260013`) and/or
 `ftp_url` (a 3GPP FTP URL or relative path); when both are supplied
@@ -405,7 +480,8 @@ is never triggered (no parent TDoc / meeting to anchor on). A
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,
-`sync_testcases`, `rebuild_search_index`, `purge_cache`, `get_job`, `cancel_job`, `list_jobs`.
+`parse_spec_docs`, `sync_testcases`, `rebuild_tdoc_search_index`, `purge_cache`,
+`get_job`, `cancel_job`, `list_jobs`.
 `cancel_job` is idempotent on terminal jobs: cancelling a job that has
 already reached SUCCEEDED / FAILED / CANCELLED returns the envelope
 instead of erroring, so callers can inspect the result without a
@@ -428,9 +504,9 @@ group simply misses and raises `TestcaseNotFoundError`).
 `{"force": force}` and returns the `{job_id,status,message,links{self,events}}`
 envelope.
 
-The six schema tools — `get_tsg_schema`, `get_meeting_schema`,
+The seven schema tools — `get_tsg_schema`, `get_meeting_schema`,
 `get_tdoc_schema`, `get_wi_schema`, `get_spec_schema`,
-`get_testcase_schema` — take no params and return
+`get_testcase_schema`, and `get_spec_doc_schema` — take no params and return
 `_to_json(schema_payload(...))` for their resource: a bare array of
 `{table, field, type, nullable, description, values}` rows
 (`nullable` a JSON bool, `values` comma-joined or `"-"`),
@@ -439,15 +515,22 @@ route and the matching `doc3gpp <resource> schema --format json`
 output.
 
 Every read tool returns exactly the bytes of the equivalent
-`?format=json` HTTP route. `search_tdocs` normalises the query into a
-valid FTS5 `MATCH` expression exactly like the CLI and the `/search`
-route (a stopwords-only or empty query raises an MCP invalid-params
-error, `-32602`). `search_tdocs` also accepts an optional `sem_query` argument — when
+`?format=json` HTTP route. `search_tdoc` normalises the query into a
+valid FTS5 `MATCH` expression exactly like the CLI and the
+`/tdocs/search` route (a stopwords-only or empty query raises an MCP
+invalid-params error, `-32602`). `search_tdoc` also accepts an optional `sem_query` argument — when
 provided, the FTS5 hits are reordered by cosine similarity to that
-text, mirroring the `/search?sem=` route and the CLI's
-`search query --sem-query`. The job tools enqueue the same work as the
+text, mirroring the `/tdocs/search?sem=` route and the CLI's
+`tdoc search query --sem-query`. The job tools enqueue the same work as the
 HTTP `POST /jobs/...` routes, but the enqueue envelope adds a `message`
 key (the only parity exception).
+
+The spec-document tools use the separate specdata database. `get_spec_toc`
+reads one parsed `(spec_id, version)` TOC, `search_spec_docs` searches the
+chunk-level FTS5 index, and `semantic_search_spec_docs` performs pure-vector
+or optional FTS5/vector hybrid search. `parse_spec_docs` enqueues the same
+`PARSE_SPEC_DOCS` job as `POST /jobs/parse/spec-docs`; it accepts
+`spec_ids`, optional `release`/`version`, and `force`.
 
 The MCP `serverInfo` block returned on every `initialize` handshake carries `name` ("doc3gpp"), `version` (from `importlib.metadata.version("doc3gpp")`, falling back to `doc3gpp.__version__`), `title`, `description`, and `website_url`. Clients do not need a tool call to read the version.
 
@@ -465,7 +548,7 @@ payload = {
     "params": {"name": "list_meetings", "arguments": {"limit": 5}},
 }
 req = urllib.request.Request(
-    "http://127.0.0.1:8765/mcp",
+    "http://127.0.0.1:13999/mcp",
     data=json.dumps(payload).encode(),
     headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
 )

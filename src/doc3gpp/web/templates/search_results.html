@@ -3,11 +3,12 @@
 {% block content %}
   <div class="page-header">
     <h1>Search</h1>
+    {% include "partials/search_resource_tabs.html" %}
     <div class="page-actions">
       {% if mode == 'sem' %}
-        <a class="btn" href="/search">FTS5 search</a>
+        <a class="btn" href="/tdocs/search">FTS5 search</a>
       {% else %}
-        <a class="btn" href="/search/sem">Hybrid search</a>
+        <a class="btn" href="/tdocs/search/sem">Hybrid search</a>
       {% endif %}
     </div>
   </div>

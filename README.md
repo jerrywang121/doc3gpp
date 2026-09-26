@@ -49,7 +49,7 @@ SQLite is the sole storage backend.
 - **TDoc CR extraction** — Download and parse TDoc CR into structured records.
 - **Full-text search (FTS5 + BM25, with optional semantic rerank)** — SQLite FTS5 keyword search with BM25-ranked hits and highlighted snippets; optionally semantic reranked by a natural language string.
 - **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
-- **Web server + MCP** — a single-port HTTP server (FastAPI + HTMX + Jinja2) for browsing and searching 3GPP data in a browser, plus a Streamable-HTTP Model Context Protocol endpoint (`/mcp`) exposing the same data to AI clients with byte-for-byte JSON parity with the HTTP `?format=json` routes. Background jobs (sync, parse, search rebuild, cache purge) run on a shared asyncio worker with live SSE progress.
+- **Web server + MCP** — a single-port HTTP server (FastAPI + HTMX + Jinja2) for browsing and searching 3GPP data in a browser, plus a Streamable-HTTP Model Context Protocol endpoint (`/mcp`) exposing the same data to AI clients with byte-for-byte JSON parity with the HTTP `?format=json` routes. Background jobs (sync, parse, TDoc search index rebuild, cache purge) run on a shared asyncio worker with live SSE progress.
 - **SQLite storage backend** — via SQLAlchemy 2.0.
 
 ## Installation
@@ -142,6 +142,7 @@ doc3gpp spec sync --tsg r5                 # scrape spec list + parallel detail 
 doc3gpp spec sync --spec-id 36.579-5       # sync a single stored spec
 doc3gpp spec list --type TS --limit 20
 doc3gpp spec show 36.579-5                 # header + version rows
+doc3gpp spec doc parse --spec 38.331         # fetch, convert, chunk, and index a spec zip
 doc3gpp testcase sync                      # latest TTCN status History zip → testcases
 doc3gpp testcase list --group 5G --limit 20
 doc3gpp testcase show --testcase TC_1      # header + per-path status rows
@@ -149,12 +150,13 @@ doc3gpp testcase show --testcase TC_1      # header + per-path status rows
 
 ## CLI Usage
 
-The CLI ships ten sub-apps. The most common
+The CLI ships twelve sub-apps. The most common
 entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
 (TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR cover
 pages), `tdoc show --format raw` (render the converted `.docx`
-markdown), `spec sync` (3GPP specification records with versions), and
-`search query` (FTS5 + BM25 full-text search).
+markdown), `spec sync` (3GPP specification records with versions),
+`spec doc parse` (specification document conversion and chunking), and
+`tdoc search query` (FTS5 + BM25 TDoc full-text search).
 
 ### `db` — database lifecycle
 
@@ -240,11 +242,14 @@ doc3gpp spec sync --spec-id 36.579-5                # sync a single stored spec 
 doc3gpp spec sync --spec-id 36.579-5 --force        # bypass the skip rule for one spec
 doc3gpp spec sync --tsg r5 --per-version-details    # always re-fetch ETSI PDF + CR list per version (default OFF)
 
-# list — 9 filter flags combine freely (rich-filter grammar: %, !pattern, null, not-null)
+# list — filters combine freely (rich-filter grammar: %, !pattern, null, not-null;
+# --parsed accepts exactly true or false)
 doc3gpp spec list --limit 20
 doc3gpp spec list --tsg R5 --type TS --status "Under change control"
 doc3gpp spec list --spec-id '36.579%' --title '%conformance%'
 doc3gpp spec list --tsg R5 --format json -o r5_specs.json
+doc3gpp spec list --parsed true --format json
+doc3gpp spec list --parsed false --limit 20
 
 # show — dotted spec id; renders header + version rows
 doc3gpp spec show 36.579-5
@@ -263,6 +268,47 @@ re-syncs the rest; `--force` bypasses the check. Each spec's
 (ETSI PDF + CR list) are skipped by default; pass `--per-version-details`
 to fetch them. The default preserves any previously-cached `pdf_url` /
 `crs` values on existing rows.
+
+The default `spec list` fields end with `rapporteurs, parsed`. Parsed status
+is derived from non-null `spec_doc_sources.parsed_at` values in the separate
+specdata database; it is not a column in the main `specs` or `spec_versions`
+tables and is not part of `spec schema`. List JSON returns a comma-separated,
+numeric-newest-first parsed-version string or native `null`; table and
+Markdown output display `-`. The `--parsed true|false` filter is applied
+before pagination. `spec show --format json` returns native boolean `parsed`
+values on every version row.
+
+### `spec doc` — specification document corpus
+
+```bash
+# use newest version with a published .zip, fetch-if-missing, convert every .docx, chunk, and auto-index
+doc3gpp spec doc parse --spec 38.331 --spec 38.523-1
+doc3gpp spec doc parse --spec 38.331 --force  # re-download and re-parse
+
+# inspect the stored TOC and search chunk text/combined metadata
+doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
+doc3gpp spec doc search query "handover" --spec 38.331 --sections "%handover%" --tables "%UE%" --limit 20
+doc3gpp spec doc search sem "handover" --fts5-query "handover" --fts5-weight 0.5
+doc3gpp spec doc schema --format json
+```
+
+Spec-document rows live in a separate sibling database, normally
+`<main-stem>_specdata.db`, and are cached below the dedicated
+`~/.cache/doc3gpp/specs` root by default. The TDoc extraction cache remains
+`~/.cache/doc3gpp/tdocs`. Chunk `sections` and `tables` values are
+newline-delimited combined identifier/title entries; TOC entries retain their
+`section_no` and `title` fields. Section identifiers may be alphanumeric, such
+as `7.2A.3` or `7.2A.3A`. Version selection is numeric rather than lexical;
+parsed `(spec_id, version)` rows are immutable and skip on later
+parses unless `--force` is supplied, which re-downloads and re-parses. The
+`parse` command fetches the ZIP when it is missing and reports `ok`, `skipped`,
+and `failed` buckets per requested spec. See [`docs/cli.md`](docs/cli.md) for
+all filters and defaults.
+
+The pre-deployment specdata corpus is repaired once from its cached ZIPs using
+an internal maintenance helper. This is not a runtime migration and there is
+no public repair command; deployments should start from the fresh schema and
+parse ledger.
 
 ### `testcase` — RAN5 conformance testcases
 
@@ -294,29 +340,29 @@ columns `testcase_id,title,spec,group,release,statuses` (TOML
 flat per-`(testcase_id, group)` shape with all 8 header fields
 inline plus the nested `statuses` list.
 
-### `search` — FTS5 + BM25 full-text search
+### `tdoc search` — FTS5 + BM25 TDoc full-text search
 
 Requires the `doc3gpp[search]` extra (ships FTS5 helpers; sqlite-only).
-On builds without FTS5, `search` reports
+On builds without FTS5, TDoc search reports
 unavailable with a one-liner and the rest of the CLI is unaffected.
 
 ```bash
 # query — BM25-ranked hits with highlighted snippets
-doc3gpp search query "NB-IoT scheduling" --tsg RAN1 --limit 10
-doc3gpp search query "R5-1234567" --format json
-doc3gpp search query "scheduling NR" --spec 38.300 --since 2026-01-01
+doc3gpp tdoc search query "NB-IoT scheduling" --tsg RAN1 --limit 10
+doc3gpp tdoc search query "R5-1234567" --format json
+doc3gpp tdoc search query "scheduling NR" --spec 38.300 --since 2026-01-01
 
 # query --sem-query — rerank FTS5 hits by cosine similarity
-doc3gpp search query "NB-IoT scheduling" --tsg RAN1 \
+doc3gpp tdoc search query "NB-IoT scheduling" --tsg RAN1 \
   --sem-query "power saving for NB-IoT UEs" --limit 10
-doc3gpp search query "scheduling NR" --spec 38.300 \
+doc3gpp tdoc search query "scheduling NR" --spec 38.300 \
   --sem-query "FR2 scheduler design" --quiet
 
 # index — status, rebuild, resume, stale-only refresh
-doc3gpp search index                                  # show SearchIndexStatus
-doc3gpp search index --rebuild                        # drop + rebuild from scratch
-doc3gpp search index --rebuild --resume --batch 1000  # resume a crashed rebuild
-doc3gpp search index --rebuild --stale-only --quiet   # re-index only newer tdocs
+doc3gpp tdoc search index                                  # show SearchIndexStatus
+doc3gpp tdoc search index --rebuild                        # drop + rebuild from scratch
+doc3gpp tdoc search index --rebuild --resume --batch 1000  # resume a crashed rebuild
+doc3gpp tdoc search index --rebuild --stale-only --quiet   # re-index only newer tdocs
 ```
 
 The auto-index hook keeps the index fresh after every successful
@@ -324,19 +370,19 @@ The auto-index hook keeps the index fresh after every successful
 `doc3gpp.toml` (`enabled`, `auto_index_on_parse`,
 `rebuild_batch_size`, `snippet_tokens`, `search_fanout_factor`).
 
-#### Search query syntax
+#### TDoc search query syntax
 
-`search query` uses the FTS5 rich-text search pattern. Plain text is
+`tdoc search query` uses the FTS5 rich-text search pattern. Plain text is
 wrapped as a quoted expression (implicit `AND` between terms), so
 `"NB-IoT scheduling"` matches documents containing both terms. Queries
 that contain an FTS5 operator (`AND`, `OR`, `NOT`, `NEAR`, `*`, or a
 `"`) pass through unchanged, letting you write full FTS5 expressions:
 
 ```bash
-doc3gpp search query "scheduling AND (NR OR LTE)"
-doc3gpp search query "R5-*"                       # prefix match on TDoc ids
-doc3gpp search query "38.300*"                    # prefix match on spec ids
-doc3gpp search query '"CSI report" NEAR/5 feedback'
+doc3gpp tdoc search query "scheduling AND (NR OR LTE)"
+doc3gpp tdoc search query "R5-*"                       # prefix match on TDoc ids
+doc3gpp tdoc search query "38.300*"                    # prefix match on spec ids
+doc3gpp tdoc search query '"CSI report" NEAR/5 feedback'
 ```
 
 Single-quoted phrases are rewritten to FTS5 double-quoted phrases
@@ -347,7 +393,7 @@ error. TDoc ids and spec numbers are normalized on both the index and
 query side so `R5-1234567r2` matches every revision and `38.300`
 stays a single token.
 
-#### `search query --sem-query`
+#### `tdoc search query --sem-query`
 
 Optional `--sem-query STR` reranks the BM25 hits by cosine similarity
 to a natural-language string. The FTS5 path fetches
@@ -358,12 +404,12 @@ reranker truncates back to `--limit`. Missing candidates receive a
 `WARNING` is logged (suppress with `--quiet`). Empty `--sem-query ""`
 is a no-op. Requires the `[semantic]` extra and a populated
 `vec_tdoc_embeddings` index — build it with
-`doc3gpp search index --rebuild-embeddings` first.
+`doc3gpp tdoc search index --rebuild-embeddings` first.
 
 The legacy `--rerank` flag was removed; callers should switch to
 `--sem-query`.
 
-### `search sem` — hybrid FTS5 + embedding vector search
+### `tdoc search sem` — hybrid FTS5 + embedding vector search
 
 Requires the `doc3gpp[semantic]` extra (sqlite-vec) **plus** a remote
 OpenAI-compatible embeddings API — e.g. Ollama locally
@@ -372,22 +418,22 @@ Set `[semantic_search].embedding_base_url` (and optionally
 `embedding_api_key`); when unset the whole semantic stack is disabled
 and only the FTS5 path runs. Builds need sqlite-only; on builds
 without sqlite-vec the command reports unavailable with a one-liner;
-`search query` (FTS5-only) still works. A dim/model mismatch against a
+`tdoc search query` (FTS5-only) still works. A dim/model mismatch against a
 previously built index fails fast with a
-`search index --rebuild-embeddings` hint (swapping models forces a
+`tdoc search index --rebuild-embeddings` hint (swapping models forces a
 rebuild even when dims collide).
 
 ```bash
 # sem — vector-only by default; opt into FTS5 via --fts5-query
-doc3gpp search sem "what CRs touch NB-IoT power saving" --limit 10
-doc3gpp search sem "scheduling NR for FR2" --spec 38.300 --format json
-doc3gpp search sem "TTCN changes for R5-12345" \
+doc3gpp tdoc search sem "what CRs touch NB-IoT power saving" --limit 10
+doc3gpp tdoc search sem "scheduling NR for FR2" --spec 38.300 --format json
+doc3gpp tdoc search sem "TTCN changes for R5-12345" \
   --fts5-query "R5-12345" --fts5-weight 0.5
 
-# extend `search index` to manage the embedding index
-doc3gpp search index --rebuild-embeddings           # drop + rebuild vec_tdoc_embeddings
-doc3gpp search index --rebuild-embeddings --stale-only --quiet
-doc3gpp search index --rebuild-all                   # both FTS5 + vector in sequence
+# extend `tdoc search index` to manage the embedding index
+doc3gpp tdoc search index --rebuild-embeddings           # drop + rebuild vec_tdoc_embeddings
+doc3gpp tdoc search index --rebuild-embeddings --stale-only --quiet
+doc3gpp tdoc search index --rebuild-all                   # both FTS5 + vector in sequence
 ```
 
 The auto-embed hook keeps `vec_tdoc_embeddings` fresh after every
@@ -449,19 +495,23 @@ Full command reference: [`docs/cli.md`](docs/cli.md).
 
 The optional `doc3gpp[web]` extra installs a single-port HTTP server that
 serves both a browsable HTMX UI and a Model Context Protocol endpoint.
-Enable it in the TOML config, install an OS service, then start it:
+It is enabled by default and binds only to loopback at port `13999`; install
+an OS service if desired, then start it:
 
 ```bash
-doc3gpp config set server.enabled true
 doc3gpp server install systemd --no-start     # or `launchd` on macOS
-doc3gpp server start                          # opens http://127.0.0.1:8765/
+doc3gpp server start                          # opens http://127.0.0.1:13999/
 ```
 
-- **HTML UI** — browse meetings, TDocs, TSGs, WIs, and search results.
+- **HTML UI** — browse meetings, TDocs, TSGs, WIs, specs, spec-document TOCs,
+  and FTS5/semantic search results.
 - **JSON API** — every read route accepts `?format=json`, byte-for-byte
-  identical to the MCP tools.
-- **MCP** — `http://127.0.0.1:8765/mcp` exposes 33 tools covering the
-  same reads (including the six `get_*_schema` field-descriptor tools,
+  identical to the MCP tools. TDoc search is available at
+  `GET /tdocs/search` and `GET /tdocs/search/sem`; its rebuild job is
+  `POST /jobs/tdocs/search/rebuild`. Legacy unscoped search routes were
+  removed without redirects.
+- **MCP** — `http://127.0.0.1:13999/mcp` exposes 38 tools covering the
+  same reads (including the schema and spec-document TOC/search tools,
   byte-identical to the `GET /<resources>/schema?format=json` routes)
   plus job lifecycle. The transport is set under `[mcp]` in the
   TOML config: `streamable_http` (default, single `POST /mcp`) or `sse`
@@ -473,8 +523,13 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
   the resulting 403 as the misleading "Legacy MCP SSE endpoints are not
   supported" error (check the server log for an `Invalid Origin header`
   warning before touching the transport).
-- **Jobs** — sync, parse, search rebuild, and cache purge run on a shared
-  asyncio worker; watch live progress over SSE at `/jobs/{id}/events`.
+  The current TDoc search tools are `search_tdoc`,
+  `semantic_search_tdoc`, and `rebuild_tdoc_search_index`; legacy plural
+  TDoc search tool aliases were removed. Spec-document search remains
+  `search_spec_docs` and `semantic_search_spec_docs`.
+- **Jobs** — sync, TDoc/spec-document parse, TDoc search index rebuild, and cache purge
+  run on a shared asyncio worker; watch live progress over SSE at
+  `/jobs/{id}/events`.
 
 Point an MCP client at the endpoint. For example, in Claude Desktop's
 `claude_desktop_config.json` (or any client that supports a
@@ -485,7 +540,7 @@ Streamable-HTTP MCP server):
   "mcpServers": {
     "doc3gpp": {
       "type": "http",
-      "url": "http://127.0.0.1:8765/mcp"
+      "url": "http://127.0.0.1:13999/mcp"
     }
   }
 }
@@ -503,7 +558,7 @@ doc3gpp config set mcp.transport sse
   "mcpServers": {
     "doc3gpp": {
       "type": "sse",
-      "url": "http://127.0.0.1:8765/mcp/sse"
+      "url": "http://127.0.0.1:13999/mcp/sse"
     }
   }
 }
@@ -523,6 +578,7 @@ honoured), and the TOML config file (everything else).
 | Variable | Purpose |
 | --- | --- |
 | `DOC3GPP_DATABASE_URL` | SQLAlchemy URL (omit for default SQLite) |
+| `DOC3GPP_SPECDATA_DATABASE_URL` | Optional separate spec-document SQLite URL (omit to use the sibling `<main-stem>_specdata.db`) |
 | `DOC3GPP_DB_ECHO` | Echo SQL to stdout |
 | `DOC3GPP_LOG_LEVEL` | Library log level |
 | `DOC3GPP_HTTP_VERIFY` | TLS verification toggle |
@@ -582,6 +638,16 @@ dir = "~/.cache/doc3gpp/tdocs"
 size_limit_mb = 1024
 purge_confirm = true
 
+[spec_doc]
+cache_dir = "~/.cache/doc3gpp/specs"
+max_zip_size_kb = 0
+max_chunk_chars = 1500
+chunk_overlap = null
+auto_index_on_parse = true
+auto_embed_on_parse = true
+# Order: (text, sections, tables, spec_id, version, release)
+bm25_weights = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
+
 [tdoc_parse]
 max_batch = 100
 max_ftp_depth = 2
@@ -596,11 +662,11 @@ snippet_tokens = 8                   # FTS5 snippet() length; --snippet-tokens o
 # ttcn_text). Weight 0 excludes a column from ranking AND from
 # previews; weight > 0 gives it its own highlighted snippet (only
 # when the snippet actually contains a match). Tune via
-# `doc3gpp search --explain`.
+# `doc3gpp tdoc search query --explain`.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 
 # Multiplier for the candidate pool fed into semantic rerank via
-# `search query --sem-query`. FTS5 fetches `limit * search_fanout_factor`
+# `tdoc search query --sem-query`. FTS5 fetches `limit * search_fanout_factor`
 # rows; the reranker then truncates back to `--limit`. Only consulted
 # when `--sem-query` is supplied. Default 4. Range 1..64.
 search_fanout_factor = 4
@@ -609,12 +675,12 @@ search_fanout_factor = 4
 # remote embeddings API (see [semantic_search].embedding_base_url).
 # sqlite-only; when the URL is unset the vector path is a no-op.
 [semantic_search]
-enabled = true                       # master switch for `search sem` + auto-embed
+enabled = true                       # master switch for `tdoc search sem` + auto-embed
 auto_embed_on_parse = true           # upsert embeddings after every successful parse
 embedding_base_url = "http://localhost:11434/v1"  # unset disables the semantic stack
 embedding_model = "embeddinggemma:300m" # remote model name sent in the /embeddings payload
 chunk_size = 512                     # whitespace tokens per chunk
-chunk_overlap = 24                   # trailing tokens repeated at next chunk start
+chunk_overlap = 24                   # trailing non-table tokens repeated at next chunk start
 rrf_k = 60                           # RRF k constant
 fts5_weight = 0.5                    # 0.0 = vector-only, 1.0 = FTS5-only (vector weight = 1 - fts5_weight)
 fanout_multiplier = 4                # hybrid-path fanout: limit * fanout per side
@@ -623,9 +689,9 @@ max_chunks_per_tdoc = 8              # cap on chunks per TDoc
 # Web server + MCP — both TOML-only (no env overrides); only loaded
 # with the `doc3gpp[web]` extra installed.
 [server]
-enabled = false                      # master switch; gates every `server` subcommand
+enabled = true                       # master switch; set false to disable `server` commands
 host = "127.0.0.1"
-port = 8765
+port = 13999
 
 [mcp]
 enabled = true                       # mount /mcp; no effect unless server.enabled

@@ -2,7 +2,7 @@
 
 The :class:`SemanticReranker` is the embedding-backed impl of the
 :class:`doc3gpp.repository.protocols.EmbeddingReranker` Protocol. The
-FTS5 path in ``search query --sem-query`` fetches a wider candidate
+FTS5 path in ``tdoc search query --sem-query`` fetches a wider candidate
 bag; this class re-orders it by cosine similarity to a user-supplied
 string.
 

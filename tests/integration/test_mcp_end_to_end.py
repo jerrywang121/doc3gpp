@@ -74,8 +74,8 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "get_spec",
         "list_testcases",
         "get_testcase",
-        "search_tdocs",
-        "semantic_search_tdocs",
+        "search_tdoc",
+        "semantic_search_tdoc",
         "sync_meetings",
         "sync_tdocs",
         "sync_tdocs_by_meeting",
@@ -84,13 +84,19 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "sync_testcases",
         "parse_tdocs",
         "parse_tdoc_url",
-        "rebuild_search_index",
+        "parse_spec_docs",
+        "rebuild_tdoc_search_index",
         "purge_cache",
         "get_job",
         "cancel_job",
         "list_jobs",
     }
     assert expected <= names
+    assert "search_tdocs" not in names
+    assert "semantic_search_tdocs" not in names
+    assert "rebuild_search_index" not in names
+    assert "parse_spec_docs" in names
+    assert not any(name.startswith("fetch_spec") for name in names)
 
 
 def test_call_list_meetings_empty(sqlite_env) -> None:
@@ -162,6 +168,34 @@ def test_job_tools_enqueue_and_poll(sqlite_env) -> None:
     detail_payload = json.loads(detail.content[0].text)
     assert detail_payload["kind"] == "sync_meetings"
     assert detail_payload["params"] == {"tsg": "SA2"}
+    del state.engine
+
+
+def test_rebuild_tdoc_search_index_enqueues(sqlite_env) -> None:
+    """The TDoc search-index MCP tool preserves its job payload and kind."""
+    import asyncio
+    import json
+
+    state, server = _state_and_server()
+
+    async def run():
+        created = await server.call_tool(
+            "rebuild_tdoc_search_index",
+            {"stale_only": True, "resume": True},
+        )
+        envelope = json.loads(created.content[0].text)
+        detail = await server.call_tool(
+            "get_job", {"job_id": envelope["job_id"]}
+        )
+        return envelope, detail
+
+    envelope, detail = asyncio.run(run())
+    assert envelope["status"] == "queued"
+    assert envelope["message"] == "queued rebuild_tdoc_search_index"
+    assert detail.is_error is False
+    detail_payload = json.loads(detail.content[0].text)
+    assert detail_payload["kind"] == "rebuild_search"
+    assert detail_payload["params"] == {"stale_only": True, "resume": True}
     del state.engine
 
 
@@ -530,6 +564,7 @@ def test_list_specs_tool(sqlite_env) -> None:
     payload = json.loads(result.content[0].text)
     assert "spec_id" in payload[0]
     assert payload[0]["spec_id"] == "36.579-5"
+    assert "parsed" in payload[0]
 
 
 def test_list_specs_rapporteurs_filter(sqlite_env) -> None:
@@ -625,7 +660,10 @@ def test_get_spec_tool_version_and_no_wis_crs(sqlite_env) -> None:
         assert http_resp.status_code == 200, http_resp.text
         http_bytes = http_resp.content.decode("utf-8")
         assert json.loads(mcp_bytes) == json.loads(http_bytes)
-        assert "wis" not in json.loads(mcp_bytes)["spec"]
+        mcp_payload = json.loads(mcp_bytes)
+        assert "wis" not in mcp_payload["spec"]
+        assert mcp_payload["versions"][0]["parsed"] is False
+        assert "crs" not in mcp_payload["versions"][0]
 
         asyncio.run(call(
             "get_spec",
@@ -680,6 +718,102 @@ def test_spec_tools_parity_with_http_json(sqlite_env) -> None:
     del state.engine
 
 
+def test_spec_doc_mcp_exposes_plural_metadata_filters(sqlite_env) -> None:
+    import asyncio
+
+    from doc3gpp.models.spec_doc import SpecDocHit, SpecDocSemanticHit
+
+    state, server = _state_and_server()
+
+    class FakeSearch:
+        def __init__(self):
+            self.filters = None
+            self.hit = SpecDocHit(
+                chunk_id="38.331@19.0.0#0",
+                spec_id="38.331",
+                version="19.0.0",
+                release="Rel-19",
+                sections="5 Scope",
+                tables="Table 1 Values",
+                chunk_index=0,
+                text="handover",
+                score=0.1,
+                previews={},
+            )
+
+        def search(self, _query, _filters):
+            self.filters = _filters
+            return [self.hit]
+
+    search_service = FakeSearch()
+
+    class FakeSemantic:
+        def __init__(self):
+            self.kwargs = None
+
+        def search(self, _query, **_kwargs):
+            self.kwargs = _kwargs
+            return [
+                SpecDocSemanticHit(
+                    chunk_id="38.331@19.0.0#0",
+                    rrf_score=0.1,
+                    hit=search_service.hit,
+                )
+            ]
+
+    semantic_service = FakeSemantic()
+    state.services.spec_doc_search = search_service
+    state.services.spec_doc_semantic = semantic_service
+
+    async def run():
+        tools = await server.list_tools()
+        by_name = {tool.name: tool for tool in tools}
+        for name in ("search_spec_docs", "semantic_search_spec_docs"):
+            properties = by_name[name].input_schema["properties"]
+            assert "sections" in properties
+            assert "tables" in properties
+            assert "section" not in properties
+
+        search_result = await server.call_tool(
+            "search_spec_docs",
+            {"query": "handover", "sections": "%5%", "tables": "%UE%"},
+        )
+        semantic_result = await server.call_tool(
+            "semantic_search_spec_docs",
+            {"query": "handover", "sections": "%5%", "tables": "%UE%"},
+        )
+        return search_result, semantic_result
+
+    search_result, semantic_result = asyncio.run(run())
+    assert search_result.is_error is False
+    assert semantic_result.is_error is False
+    assert json.loads(search_result.content[0].text)[0]["sections"] == "5 Scope"
+    nested = json.loads(semantic_result.content[0].text)[0]["hit"]
+    assert set(nested) == {
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "sections",
+        "tables",
+        "chunk_index",
+        "text",
+        "score",
+        "previews",
+    }
+    assert nested["sections"] == "5 Scope"
+    assert nested["tables"] == "Table 1 Values"
+    assert search_service.filters.sections == "%5%"
+    assert search_service.filters.tables == "%UE%"
+    assert semantic_service.kwargs["filters"].sections == "%5%"
+    assert semantic_service.kwargs["filters"].tables == "%UE%"
+
+    from doc3gpp.storage.db.session import get_engine
+
+    get_engine.cache_clear()
+    del state.engine
+
+
 def _state_and_search_server(search_corpus):
     """Build state + MCP server with a real passthrough search service.
 
@@ -700,7 +834,7 @@ def _state_and_search_server(search_corpus):
     return state, server
 
 
-def test_search_tdocs_normalises_jargon_queries(search_corpus) -> None:
+def test_search_tdoc_normalises_jargon_queries(search_corpus) -> None:
     """``nb-iot`` in an operator query must not crash FTS5.
 
     Regression for the ``no such column: iot`` error that previously
@@ -716,7 +850,7 @@ def test_search_tdocs_normalises_jargon_queries(search_corpus) -> None:
 
     async def run():
         return await server.call_tool(
-            "search_tdocs", {"query": "nb-iot AND scheduling", "limit": 20}
+            "search_tdoc", {"query": "nb-iot AND scheduling", "limit": 20}
         )
 
     result = asyncio.run(run())
@@ -728,7 +862,7 @@ def test_search_tdocs_normalises_jargon_queries(search_corpus) -> None:
     del state.engine
 
 
-def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> None:
+def test_search_tdoc_stopwords_only_raises_invalid_params(search_corpus) -> None:
     """A stopwords-only query is a client error (invalid params), not a 500."""
     import asyncio
 
@@ -740,7 +874,7 @@ def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> Non
     state, server = _state_and_search_server(search_corpus)
 
     async def run():
-        return await server.call_tool("search_tdocs", {"query": "the"})
+        return await server.call_tool("search_tdoc", {"query": "the"})
 
     with pytest.raises(MCPError) as exc_info:
         asyncio.run(run())
@@ -749,8 +883,8 @@ def test_search_tdocs_stopwords_only_raises_invalid_params(search_corpus) -> Non
     del state.engine
 
 
-def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
-    """search_tdocs forwards sem_query to the search service."""
+def test_search_tdoc_accepts_sem_query(sqlite_env, search_corpus) -> None:
+    """search_tdoc forwards sem_query to the search service."""
     import asyncio
 
     import numpy as np
@@ -807,7 +941,7 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
 
     async def run():
         return await server.call_tool(
-            "search_tdocs",
+            "search_tdoc",
             {"query": "scheduling", "limit": 5, "sem_query": "scheduling"},
         )
 
@@ -820,6 +954,147 @@ def test_search_tdocs_accepts_sem_query(sqlite_env, search_corpus) -> None:
     get_testcase_engine.cache_clear()
     del state.engine
     del state.testcase_engine
+
+
+def test_semantic_search_tdoc_forwards_args_and_preserves_contract(sqlite_env) -> None:
+    """The renamed MCP semantic tool preserves forwarding, output, and errors."""
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.models.search import SearchFilters, SearchHit
+    from doc3gpp.models.semantic_search import SemanticSearchHit
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    class RecordingSemanticSearchService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def search(
+            self,
+            query: str,
+            *,
+            fts5_query: str | None,
+            filters: SearchFilters,
+            limit: int,
+            fts5_weight: float,
+        ) -> list[SemanticSearchHit]:
+            self.calls.append(
+                {
+                    "query": query,
+                    "fts5_query": fts5_query,
+                    "filters": filters,
+                    "limit": limit,
+                    "fts5_weight": fts5_weight,
+                }
+            )
+            return [
+                SemanticSearchHit(
+                    tdoc_id="R5-260001",
+                    rrf_score=0.42,
+                    hit=SearchHit(
+                        tdoc_id="R5-260001",
+                        score=-1.2,
+                        previews={},
+                        title="Handover signalling",
+                        meeting="RAN5#108",
+                        tsg="R5",
+                        uploaded_date="2026-01-02",
+                        ftp_url="r5/26.001/r5-260001.zip",
+                        wis="FS_HANDOVER",
+                    ),
+                    rank_fts5=1,
+                    rank_vec=0,
+                    min_chunk_distance=0.125,
+                    best_chunk_id="R5-260001#0",
+                ),
+            ]
+
+    state, server = _state_and_server()
+    fake = RecordingSemanticSearchService()
+    state.services.semantic_search = fake
+
+    async def run():
+        return await server.call_tool(
+            "semantic_search_tdoc",
+            {
+                "query": "handover signalling",
+                "fts5_query": '"handover" AND signalling',
+                "tsg": "R5",
+                "meeting": "%RAN%",
+                "meeting_id": 108,
+                "tdoc_id": "R5-260001",
+                "release": "Rel-18",
+                "spec": "38.300",
+                "since": "2026-01-01",
+                "until": "2026-12-31",
+                "limit": 7,
+                "fts5_weight": 0.75,
+            },
+        )
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    assert fake.calls == [
+        {
+            "query": "handover signalling",
+            "fts5_query": '"handover" AND signalling',
+            "filters": SearchFilters(
+                tsg="R5",
+                meeting="%RAN%",
+                meeting_id=108,
+                tdoc_id="R5-260001",
+                release="Rel-18",
+                spec="38.300",
+                since="2026-01-01",
+                until="2026-12-31",
+                limit=7,
+            ),
+            "limit": 7,
+            "fts5_weight": 0.75,
+        },
+    ]
+    assert json.loads(result.content[0].text) == [
+        {
+            "tdoc_id": "R5-260001",
+            "rrf_score": 0.42,
+            "rank_fts5": 1,
+            "rank_vec": 0,
+            "min_chunk_distance": 0.125,
+            "best_chunk_id": "R5-260001#0",
+            "hit": {
+                "tdoc_id": "R5-260001",
+                "title": "Handover signalling",
+                "ftp_url": "r5/26.001/r5-260001.zip",
+                "wis": "FS_HANDOVER",
+            },
+        },
+    ]
+
+    async def run_invalid_weight():
+        return await server.call_tool(
+            "semantic_search_tdoc",
+            {"query": "handover", "fts5_weight": 1.1},
+        )
+
+    with pytest.raises(MCPError) as invalid_exc:
+        asyncio.run(run_invalid_weight())
+    assert invalid_exc.value.code == MCP_CODE_INVALID_PARAMS
+    assert invalid_exc.value.data["error"] == "invalid_filter"
+
+    async def run_removed_name():
+        return await server.call_tool(
+            "semantic_search_tdocs", {"query": "handover"}
+        )
+
+    with pytest.raises(ToolError, match="Unknown tool: semantic_search_tdocs") as old_exc:
+        asyncio.run(run_removed_name())
+    assert str(old_exc.value) == "Unknown tool: semantic_search_tdocs"
+
+    get_engine.cache_clear()
+    del state.engine
 
 
 def test_web_errors_maps_spec_unknown_on_upstream() -> None:

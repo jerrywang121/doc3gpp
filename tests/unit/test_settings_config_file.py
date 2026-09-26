@@ -115,6 +115,12 @@ def test_built_in_defaults_match_previously_hardcoded_values(
     assert s.output.fields.wi == ["wi_id", "acronym", "release", "name"]
 
 
+def test_spec_default_fields_include_parsed() -> None:
+    from doc3gpp.settings.schema import Settings
+
+    assert Settings().output.fields.spec[-1] == "parsed"
+
+
 def test_tdoc_parse_defaults_and_bounds(clean_settings) -> None:
     """``tdoc_parse`` defaults and validation rules are enforced."""
     from pydantic import ValidationError
@@ -327,8 +333,9 @@ def test_load_malformed_toml_raises_with_path(
 ) -> None:
     cfg = write_toml("bad.toml", "this is = not = valid toml ===")
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    with pytest.raises(ValueError, match=str(cfg)):
+    with pytest.raises(ValueError) as excinfo:
         load_config_data()
+    assert str(cfg) in str(excinfo.value)
 
 
 def test_settings_drops_unknown_top_level_keys(
@@ -360,7 +367,7 @@ def test_env_overrides_toml_for_cache_dir(
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", "/tmp/from-env")
     get_settings.cache_clear()
     s = get_settings()
-    assert str(s.cache.dir) == "/tmp/from-env"  # env wins
+    assert s.cache.dir.as_posix() == "/tmp/from-env"  # env wins
 
 
 def test_tdoc_parse_max_ftp_depth_is_toml_only(
@@ -404,12 +411,12 @@ def test_cache_clear_picks_up_new_env(clean_settings, monkeypatch) -> None:
     for ``sqlite_env``.
     """
     s1 = get_settings()
-    assert str(s1.cache.dir) != "/tmp/from-cache-clear-env"
+    assert s1.cache.dir.as_posix() != "/tmp/from-cache-clear-env"
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", "/tmp/from-cache-clear-env")
     # Without cache_clear the cached instance keeps the old value.
-    assert str(get_settings().cache.dir) != "/tmp/from-cache-clear-env"
+    assert get_settings().cache.dir.as_posix() != "/tmp/from-cache-clear-env"
     get_settings.cache_clear()
-    assert str(get_settings().cache.dir) == "/tmp/from-cache-clear-env"
+    assert get_settings().cache.dir.as_posix() == "/tmp/from-cache-clear-env"
 
 
 def test_non_allowlisted_env_vars_are_silently_ignored(
@@ -474,12 +481,12 @@ def test_allowlisted_env_vars_override_toml(
 
     get_settings.cache_clear()
     s = get_settings()
-    assert len(ALLOWED_ENV_VARS) == 8
+    assert len(ALLOWED_ENV_VARS) == 9
     assert s.database_url == "sqlite+pysqlite:////tmp/env.db"
     assert s.db_echo is True
     assert s.log_level == "DEBUG"
     assert s.http_verify is True
-    assert str(s.cache.dir) == "/tmp/env-cache"
+    assert s.cache.dir.as_posix() == "/tmp/env-cache"
     assert s.sync.auto_sync is True
 
 
@@ -670,3 +677,10 @@ def test_default_paths_are_distinct() -> None:
     assert DEFAULT_PROJECT_CONFIG != DEFAULT_USER_CONFIG
     assert DEFAULT_PROJECT_CONFIG.name == "doc3gpp.toml"
     assert DEFAULT_USER_CONFIG.name == "config.toml"
+
+
+def test_spec_doc_config_example_contains_dedicated_cache_dir() -> None:
+    text = Path("src/doc3gpp/data/doc3gpp.toml.example").read_text()
+    assert "cache_dir" in text
+    assert "sections" in text
+    assert "tables" in text

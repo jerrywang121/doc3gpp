@@ -65,7 +65,7 @@ def test_search_with_filters(sqlite_env) -> None:
     result = runner.invoke(
         app,
         [
-            "search", "query", "NB-IoT",
+            "tdoc", "search", "query", "NB-IoT",
             "--tsg", "RAN1",
             "--release", "Rel-17",
             "--spec", "38.300",
@@ -208,7 +208,7 @@ def test_search_with_lowercase_tsg(sqlite_env) -> None:
     result = runner.invoke(
         app,
         [
-            "search", "query", "NB-IoT",
+            "tdoc", "search", "query", "NB-IoT",
             "--tsg", "ran1",
             "--limit", "5",
             "--format", "json",
@@ -244,7 +244,7 @@ def test_search_malformed_match_cli_exits_cleanly(semantic_search_corpus) -> Non
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["search", "query", '"foo', "--format", "json"],
+        ["tdoc", "search", "query", '"foo', "--format", "json"],
     )
     assert result.exit_code == 2
     assert "bad query" in result.output

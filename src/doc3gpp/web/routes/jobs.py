@@ -136,6 +136,13 @@ class _ParseTDocURLBody(BaseModel):
     full: bool = False
 
 
+class _ParseSpecDocsBody(BaseModel):
+    spec_ids: list[str]
+    release: str | None = None
+    version: str | None = None
+    force: bool = False
+
+
 # ---------------------------------------------------------------------------
 # POST enqueue endpoints
 # ---------------------------------------------------------------------------
@@ -226,7 +233,7 @@ async def post_parse_tdocs(
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 
-@router.post("/search/rebuild", status_code=202)
+@router.post("/tdocs/search/rebuild", status_code=202)
 async def post_search_rebuild(
     body: _SearchRebuildBody,
     job_repo: JobRepository = Depends(get_job_repo),
@@ -278,6 +285,28 @@ async def post_parse_tdoc_url(
     if not body.recursive:
         params["max_depth"] = body.max_depth
     job = job_repo.create(JobKind.PARSE_TDOC_URL, params)
+    return JSONResponse(status_code=202, content=_envelope(job, queued=True))
+
+
+@router.post("/parse/spec-docs", status_code=202)
+async def post_parse_spec_docs(
+    body: _ParseSpecDocsBody,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> JSONResponse:
+    """Enqueue a spec-doc parse batch (mirrors ``doc3gpp spec doc parse``)."""
+    if not body.spec_ids:
+        raise InvalidFilterError(
+            "parse/spec-docs requires a non-empty 'spec_ids' list in the body"
+        )
+    params: dict[str, JSONValue] = {
+        "spec_ids": list(body.spec_ids),
+        "force": body.force,
+    }
+    if body.release is not None:
+        params["release"] = body.release
+    if body.version is not None:
+        params["version"] = body.version
+    job = job_repo.create(JobKind.PARSE_SPEC_DOCS, params)
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

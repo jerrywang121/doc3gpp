@@ -22,12 +22,12 @@ _LIMIT_CAP = 200
 
 # Mirrors ``settings.output.fields.spec`` — what
 # ``doc3gpp spec list --format json`` emits by default.
-_SPEC_DEFAULT_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs"]
+_SPEC_DEFAULT_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs", "parsed"]
 # Spec-show header fields: keeps ``wis`` by default (dropped only under
 # ``no_wis_crs``), matching ``doc3gpp spec show``. Distinct from the
 # ``spec list`` default fields which omit ``wis``.
 _SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
-_VERSION_FIELDS = ["version", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
+_VERSION_FIELDS = ["version", "parsed", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
 
 
 @router.get("", include_in_schema=False)
@@ -43,6 +43,7 @@ async def list_specs(
     initial_release: str | None = Query(default=None),
     wis: str | None = Query(default=None),
     rapporteurs: str | None = Query(default=None),
+    parsed: str | None = Query(default=None),
     limit: str | None = Query(default="50"),
     offset: str | None = Query(default="0"),
     format: str | None = Query(default=None, alias="format"),
@@ -64,6 +65,7 @@ async def list_specs(
     """
     parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 50
     parsed_offset = parse_int_query(offset, min=0) or 0
+    parsed_filter = parse_bool_query(parsed.lower() if parsed else None)
     specs = service.list_recent(
         limit=parsed_limit,
         offset=parsed_offset,
@@ -76,6 +78,7 @@ async def list_specs(
         initial_release=parse_text_query(initial_release),
         wis=parse_text_query(wis),
         rapporteurs=parse_text_query(rapporteurs),
+        parsed=parsed_filter,
     )
 
     if format == "json":
@@ -108,6 +111,7 @@ async def list_specs(
                 "initial_release": initial_release or "",
                 "wis": wis or "",
                 "rapporteurs": rapporteurs or "",
+                "parsed": "" if parsed_filter is None else str(parsed_filter).lower(),
                 "limit": parsed_limit,
             },
         },

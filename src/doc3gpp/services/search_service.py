@@ -11,7 +11,7 @@ The :class:`SearchService` owns three responsibilities:
 3. **Maintenance** — :meth:`rebuild` is a generator that yields
    :class:`RebuildProgress` per batch (the CLI's ``--quiet`` flag
    controls whether the consumer prints each batch);
-   :meth:`status` snapshots the index for ``search index`` (no
+   :meth:`status` snapshots the index for ``tdoc search index`` (no
    flags).
 
 Both ``rebuild`` and ``upsert_for_tdoc`` update
@@ -116,7 +116,7 @@ class SearchService:
         parsed as a column-minus-token; a stopwords-only or empty
         query raises :class:`SearchQueryError`.
 
-        ``sem_query`` mirrors the CLI's ``search query --sem-query``:
+        ``sem_query`` mirrors the CLI's ``tdoc search query --sem-query``:
         when ``None`` (default) the hits are returned verbatim and the
         reranker is NOT invoked — pure FTS5, matching the CLI without
         ``--sem-query``. When provided, the FTS5 query is re-run with

@@ -414,7 +414,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         """Remove the resume cursor from ``tdoc_search_meta``.
 
         Called by :meth:`SearchService.rebuild` when the operator
-        runs ``search index --rebuild`` without ``--resume`` to
+        runs ``tdoc search index --rebuild`` without ``--resume`` to
         force a fresh start from the very first TDoc. After this
         call, :meth:`get_resume_cursor` returns ``None`` until the
         rebuild's first batch upserts a new cursor.

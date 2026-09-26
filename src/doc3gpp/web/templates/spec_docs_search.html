@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · spec docs search{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <h1>Spec docs search</h1>
+    {% include "partials/search_resource_tabs.html" %}
+    <div class="page-actions">
+      {% if mode == 'sem' %}
+        <a class="btn" href="/spec-docs/search">FTS5 search</a>
+      {% else %}
+        <a class="btn" href="/spec-docs/search/sem">Hybrid search</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% include "partials/spec_doc_search_form.html" %}
+
+  <p
+    id="search-indicator"
+    class="search-loading htmx-indicator"
+    role="status"
+    aria-live="polite"
+  >
+    <span class="spinner" aria-hidden="true"></span>
+    Searching…
+  </p>
+
+  {% include "partials/spec_doc_search_results.html" %}
+
+  <script src="/static/js/search.js" defer></script>
+{% endblock %}

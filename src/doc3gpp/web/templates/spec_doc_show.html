@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · spec document {{ spec.spec_id }}@{{ version_row.version }}{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <div>
+      <p class="meta"><a href="/specs/{{ spec.spec_id | urlencode }}">← {{ spec.spec_id }}</a></p>
+      <h1>{{ spec.type or '' }} {{ spec.spec_id }} · version {{ version_row.version }}</h1>
+      <p class="lead">{{ spec.title or '' }}</p>
+    </div>
+  </div>
+
+  <dl class="kv spec-doc-version-meta">
+    <dt>Release</dt><dd>{{ version_row.release or '-' }}</dd>
+    <dt>Upload date</dt><dd>{{ version_row.upload_date.isoformat() if version_row.upload_date else '-' }}</dd>
+    <dt>ZIP</dt>
+    <dd>
+      {% if version_row.ftp_url %}
+        <a href="{{ version_row.ftp_url }}" target="_blank" rel="noopener">open</a>
+      {% else %}-{% endif %}
+    </dd>
+    <dt>PDF</dt>
+    <dd>
+      {% if version_row.pdf_url %}
+        <a href="{{ version_row.pdf_url }}" target="_blank" rel="noopener">open</a>
+      {% else %}-{% endif %}
+    </dd>
+  </dl>
+
+  <form
+    id="spec-doc-parse-form"
+    class="spec-doc-parse-form"
+    method="post"
+    action="/jobs/parse/spec-docs"
+    data-spec-id="{{ spec.spec_id }}"
+    data-version="{{ version_row.version }}"
+    data-source-parsed="{{ 'true' if source and source.parsed_at else 'false' }}"
+  >
+    {% if source and source.parsed_at %}
+      <label class="inline-check">
+        <input type="checkbox" name="force"> Force re-parse
+      </label>
+    {% endif %}
+    <button type="submit" class="btn primary">Parse document</button>
+    <span class="spec-doc-parse-queued" style="display:none">Parse job queued</span>
+  </form>
+  <div id="spec-doc-parse-job-target"></div>
+
+  {% include "partials/spec_doc_show_results.html" %}
+  <script src="/static/js/job_poller.js" defer></script>
+  <script src="/static/js/spec_doc_parse.js" defer></script>
+{% endblock %}

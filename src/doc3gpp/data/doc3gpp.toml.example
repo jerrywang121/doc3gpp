@@ -29,6 +29,11 @@
 #   # be reset independently (`doc3gpp db reset --scope testcase`). Unset
 #   # (default) derives a sibling of database_url with `_testcase` suffixed
 #   # to the stem. Also settable via DOC3GPP_TESTCASE_DATABASE_URL.
+# specdata_database_url = "sqlite+pysqlite:////home/you/.local/share/doc3gpp/doc3gpp_specdata.db"
+#   # Optional: spec-document corpus lives in its own sqlite file so it can
+#   # be reset independently (`doc3gpp db reset --scope specdata`). Unset
+#   # (default) derives a sibling of database_url with `_specdata` suffixed
+#   # to the stem. Also settable via DOC3GPP_SPECDATA_DATABASE_URL.
 # db_echo = false
 # db_auto_migrate = true
 
@@ -67,12 +72,16 @@
 # wi = ["wi_id", "acronym", "release", "name"]
 # spec = [
 #   "spec_id", "type", "title", "status",
-#   "radio_tech", "initial_release", "tsg", "rapporteurs",
+#   "radio_tech", "initial_release", "tsg", "rapporteurs", "parsed",
 #   # "wis" — opt back in via config if you want it in spec list output
 # ]
 # testcase = [
 #   "testcase_id", "title", "spec",
 #   "group", "release", "statuses",
+# ]
+# spec_doc = [
+#   "spec_id", "version", "release", "sections", "tables",
+#   "chunk_index", "text",
 # ]
 
 # ── TDoc extraction cache ───────────────────────────────────────────────────
@@ -143,7 +152,7 @@ enabled = true
 # SearchService.upsert_for_tdoc(tdoc_id) so the index stays in sync.
 auto_index_on_parse = true
 
-# TDocs per SQL page during `search index --rebuild`. Smaller
+# TDocs per SQL page during `doc3gpp tdoc search index --rebuild`. Smaller
 # values reduce the worst-case duplicate work on Ctrl-C
 # (the cursor only advances per page); larger values save SQL
 # round-trips. Progress is reported per TDoc via a tqdm bar
@@ -161,15 +170,61 @@ snippet_tokens = 8
 # column with weight 0 is excluded from both ranking and previews; a
 # column with weight > 0 gets its own highlighted snippet in query
 # results (one per column, only when the snippet actually contains
-# a match). Tune interactively via `doc3gpp search --explain`.
+# a match). Tune interactively via `doc3gpp tdoc search query --explain`.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 
-# When `search query --sem-query` is used, the FTS5 path fetches
+# When `doc3gpp tdoc search query --sem-query` is used, the FTS5 path fetches
 # limit * search_fanout_factor candidates before the semantic
 # reranker truncates back to limit. Higher values give the
 # reranker more to work with at the cost of more vector lookups
 # per query. Only honored when --sem-query is supplied.
 search_fanout_factor = 4
+
+# ── Spec-document corpus (`doc3gpp spec doc ...`) ────────────────────────────
+# Knobs for the spec-document parse/chunk/search subsystem. The corpus
+# lives in its own sqlite file (`specdata_database_url`, default sibling
+# `<main-stem>_specdata.db`) so it can be reset independently
+# (`doc3gpp db reset --scope specdata`).
+
+# [spec_doc]
+# Dedicated root for spec-document ZIP and Markdown caches. This remains
+# separate from the TDoc extraction cache under [cache].dir.
+# cache_dir = "~/.cache/doc3gpp/specs"
+
+# Per-zip cap in KB for spec-document downloads. Zips larger than this
+# land in the parse skip bucket. 0 disables the limit (spec zips are
+# legitimately multi-MB, so unlimited is the default).
+# max_zip_size_kb = 0
+
+# Hard char ceiling per chunk, applied alongside
+# `semantic_search.chunk_size` tokens (whichever budget hits first).
+# max_chunk_chars = 1500
+
+# Trailing-token overlap between consecutive chunks. Null reuses
+# `semantic_search.chunk_overlap`; an explicit value wins.
+# chunk_overlap = null
+
+# When true, every successful spec-doc parse upserts the new chunks
+# into the FTS5 `spec_doc_search` index so search sees the latest rows.
+# auto_index_on_parse = true
+
+# When true, every successful spec-doc parse embeds the new chunks into
+# the `vec_spec_doc_embeddings` vector index. Mirrors
+# `[semantic_search].auto_embed_on_parse`.
+# auto_embed_on_parse = true
+
+# Per-column BM25 weights passed to FTS5's bm25() ranking function
+# and snippet() selection. Order MUST match the 6 indexed columns of
+# the spec_doc_search virtual table: (text, sections, tables, spec_id,
+# version, release). A column with weight 0 is excluded from
+# both ranking and previews; a column with weight > 0 gets its own
+# highlighted snippet in query results (one per column, only when the
+# snippet actually contains a match).
+# bm25_weights = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
+
+# Search filters use --sections and --tables over the combined metadata
+# columns. Each stored value is newline-delimited: one <identifier> <title>
+# entry per line; empty metadata is stored as null.
 
 # ── Semantic search (hybrid FTS5 + vector) ──────────────────────────────────
 # Hybrid search subsystem: remote OpenAI-compatible embeddings API +
@@ -182,13 +237,13 @@ search_fanout_factor = 4
 # when unset, only the FTS5 path is active and the vector path is a
 # no-op.
 #
-# As of 2026-08-01 spaCy is no longer used: `search sem` embeds the
+# As of 2026-08-01 spaCy is no longer used: `doc3gpp tdoc search sem` embeds the
 # natural-language positional QUERY only; supplying an FTS5 keyword
 # query is opt-in via `--fts5-query`.
 
 # [semantic_search]
 # Master switch for the semantic search subsystem. False disables the
-# `search sem` command, the auto-embed hook, and the
+# `doc3gpp tdoc search sem` command, the auto-embed hook, and the
 # `vec_tdoc_embeddings` DDL creation.
 # enabled = true
 
@@ -201,7 +256,7 @@ search_fanout_factor = 4
 # `/embeddings` payload. Must produce a vector dimension that
 # matches the `vec_tdoc_embeddings` schema at creation time;
 # changing this on a populated index requires
-# `search index --rebuild-embeddings`.
+# `doc3gpp tdoc search index --rebuild-embeddings`.
 # embedding_model = "embeddinggemma:300m"
 
 # Base URL of the OpenAI-compatible embeddings API. Unset disables the
@@ -233,17 +288,17 @@ search_fanout_factor = 4
 # low-ranked candidates; smaller `k` sharpens the top.
 # rrf_k = 60
 
-# Default `--fts5-weight` for `search sem`. Range 0.0..1.0;
+# Default `--fts5-weight` for `doc3gpp tdoc search sem`. Range 0.0..1.0;
 # the vector weight is `1 - fts5_weight`. 0.0 is pure vector;
 # 1.0 is pure FTS5. Ignored when `--fts5-query` is omitted.
 # fts5_weight = 0.5
 
 # Fan-out multiplier for the hybrid FTS5 + vector paths of
-# `search sem`. When `--fts5-query` is supplied, each side
+# `doc3gpp tdoc search sem`. When `--fts5-query` is supplied, each side
 # retrieves `fanout_multiplier * --limit` candidates before RRF
 # merge and truncation. Ignored when `--fts5-query` is omitted
 # (pure-vector path). Mirrors `search.search_fanout_factor` for
-# `search query --sem-query`.
+# `doc3gpp tdoc search query --sem-query`.
 # fanout_multiplier = 4
 
 # Hard cap on the number of chunks indexed per TDoc. Prevents
@@ -251,21 +306,19 @@ search_fanout_factor = 4
 # max_chunks_per_tdoc = 8
 
 # ── HTTP server (`doc3gpp server`) ───────────────────────────────────────────
-# Knobs for the optional FastAPI/uvicorn HTTP surface mounted by the
-# `doc3gpp server` CLI sub-app. The server is disabled by default so a
-# fresh install does not open a port without an explicit operator
-# opt-in. Requires the `[web]` pyproject extra
+# Knobs for the FastAPI/uvicorn HTTP surface mounted by the
+# `doc3gpp server` CLI sub-app. It binds only to loopback by default.
+# Requires the `[web]` pyproject extra
 # (`pip install "doc3gpp[web]"`) for fastapi + uvicorn + mcp.
 
-# [server]
-# Master switch for the `doc3gpp server` sub-app. False rejects every
-# server subcommand at the CLI gate with a hint to flip this flag.
-# enabled = false
+[server]
+# Master switch for the `doc3gpp server` sub-app.
+enabled = true
 
 # Bind address. Defaults to loopback so the server is not reachable
 # from the network until the operator binds a public address.
-# host = "127.0.0.1"
-# port = 8765
+host = "127.0.0.1"
+port = 13999
 
 # Caps on the in-process job worker. `max_concurrent_jobs` is bounded
 # at 1..16 to keep sqlite writer contention predictable; raise it for

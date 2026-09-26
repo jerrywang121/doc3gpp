@@ -246,6 +246,7 @@ dl.kv dd {
 
 .pagination {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
   align-items: center;
   margin: 1rem 0;
@@ -511,4 +512,44 @@ table.spec-grid {
 /* Spec detail: multi-line WIs (wrapped at comma delimiters). */
 .wrap-csv {
   white-space: pre-line;
+}
+
+/* Spec document version page: source metadata and readable chunk cards. */
+.spec-doc-version-meta {
+  margin-bottom: 1.25rem;
+}
+
+.spec-doc-source-card {
+  margin-bottom: 1.25rem;
+}
+
+.spec-doc-chunks {
+  margin-top: 1.25rem;
+}
+
+.spec-doc-chunk {
+  overflow: hidden;
+}
+
+.spec-doc-chunk-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.spec-doc-chunk pre {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--code-bg);
+  border-radius: 4px;
+}
+
+@media (max-width: 700px) {
+  .spec-doc-chunk-header {
+    display: block;
+  }
 }

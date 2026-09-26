@@ -14,13 +14,15 @@ def test_build_app_returns_fastapi_instance() -> None:
     assert isinstance(app, FastAPI)
 
 
-def test_build_app_default_server_disabled(sqlite_env) -> None:
-    """Default :class:`Settings` keeps ``server.enabled`` False (no port opened)."""
+def test_build_app_default_server_enabled_on_loopback(sqlite_env) -> None:
+    """Default :class:`Settings` enables the server on the loopback port."""
     app = build_app(Settings())
     with TestClient(app):
         state: WebState = app.state.web
         assert isinstance(state, WebState)
-        assert state.settings.server.enabled is False
+        assert state.settings.server.enabled is True
+        assert state.settings.server.host == "127.0.0.1"
+        assert state.settings.server.port == 13999
 
 
 def test_build_state_wires_service_container(sqlite_env) -> None:

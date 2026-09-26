@@ -58,6 +58,7 @@ _HUMAN_DELTA_RE = re.compile(r"^(?P<value>[+-]?\d+(?:\.\d+)?)(?P<unit>[smhd])$",
 ALLOWED_ENV_VARS: frozenset[str] = frozenset(
     {
         "DOC3GPP_DATABASE_URL",
+        "DOC3GPP_SPECDATA_DATABASE_URL",
         "DOC3GPP_TESTCASE_DATABASE_URL",
         "DOC3GPP_DB_ECHO",
         "DOC3GPP_LOG_LEVEL",
@@ -212,6 +213,26 @@ class OutputFieldsSettings(BaseModel):
             "initial_release",
             "tsg",
             "rapporteurs",
+            "parsed",
+        ]
+    )
+    spec_doc: list[str] = Field(
+        default_factory=lambda: [
+            "spec_id",
+            "version",
+            "release",
+            "sections",
+            "tables",
+            "chunk_index",
+            "text",
+        ]
+    )
+    spec_doc_toc: list[str] = Field(
+        default_factory=lambda: [
+            "section_no",
+            "title",
+            "level",
+            "source_file",
         ]
     )
     testcase: list[str] = Field(
@@ -405,6 +426,106 @@ _SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
 )
 
 
+#: The 6 FTS5 indexed columns of the ``spec_doc_search`` virtual table,
+#: in DDL order. Single source of truth for ``SpecDocSettings.bm25_weights``
+#: validation and the per-column snippet selection in the spec-doc search
+#: repo. Mirrors :data:`_SNIPPET_COLUMN_NAMES` (the 8-column ``tdoc_search``
+#: table). Keep in sync with the DDL in ``storage/db/migrate.py``.
+_SPEC_DOC_SNIPPET_COLUMNS: tuple[str, ...] = (
+    "text",
+    "sections",
+    "tables",
+    "spec_id",
+    "version",
+    "release",
+)
+
+
+class SpecDocSettings(BaseModel):
+    """Knobs for the spec-document corpus (``doc3gpp spec doc ...``).
+
+    Defaults match the conservative end: ``max_zip_size_kb`` is ``0``
+    (unlimited — spec zips are legitimately multi-MB, so the TDoc
+    1000KB default would false-skip them) and ``chunk_overlap`` is
+    ``None`` (reuse ``semantic_search.chunk_overlap``; an explicit
+    value wins). ``max_chunk_chars`` is the hard char ceiling applied
+    alongside ``semantic_search.chunk_size`` tokens.
+
+    TOML-only (no ``DOC3GPP_SPEC_DOC__*`` env vars on the
+    :data:`ALLOWED_ENV_VARS` allowlist, matching the sibling knobs).
+    """
+
+    cache_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".cache" / "doc3gpp" / "specs",
+        description="Root directory for spec-document ZIP and Markdown caches.",
+    )
+
+    max_zip_size_kb: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Per-zip cap in KB for spec-document downloads. "
+            "Zips larger than this land in the parse skip bucket. "
+            "0 disables the limit."
+        ),
+    )
+    max_chunk_chars: int = Field(
+        default=1500,
+        ge=1,
+        description=(
+            "Hard char ceiling per chunk, applied alongside "
+            "semantic_search.chunk_size tokens."
+        ),
+    )
+    chunk_overlap: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Trailing-token overlap between consecutive chunks. "
+            "None reuses semantic_search.chunk_overlap."
+        ),
+    )
+    auto_index_on_parse: bool = Field(
+        default=True,
+        description=(
+            "When true, every successful spec-doc parse calls "
+            "SpecDocSearchService.upsert_for_version so the FTS5 "
+            "index stays in sync."
+        ),
+    )
+    auto_embed_on_parse: bool = Field(
+        default=True,
+        description=(
+            "When true, every successful spec-doc parse embeds the "
+            "new chunks into the vector index."
+        ),
+    )
+    bm25_weights: tuple[float, ...] = Field(
+        default=(5.0, 5.0, 5.0, 1.0, 1.0, 1.0),
+        description=(
+            "Per-column BM25 weights applied via FTS5's "
+            "bm25() function. Order MUST match the 6 indexed "
+            "columns of the spec_doc_search virtual table "
+            "(see :data:`_SPEC_DOC_SNIPPET_COLUMNS`)."
+        ),
+    )
+
+    @field_validator("cache_dir", mode="after")
+    @classmethod
+    def _expand_cache_dir(cls, value: Path) -> Path:
+        return value.expanduser()
+
+    @field_validator("bm25_weights", mode="before")
+    @classmethod
+    def _validate_bm25_weights_length(cls, value: object) -> object:
+        if isinstance(value, (tuple, list)) and len(value) != 6:
+            raise ValueError(
+                "bm25_weights must have exactly 6 entries (one per FTS5 "
+                f"column), got {len(value)}"
+            )
+        return value
+
+
 class SearchSettings(BaseModel):
     """Knobs for the FTS5 full-text search subsystem.
 
@@ -412,7 +533,7 @@ class SearchSettings(BaseModel):
     ``auto_index_on_parse`` both default to True so the index
     stays in sync with every successful ``tdoc parse`` until the
     operator opts out. ``rebuild_batch_size`` keeps the default
-    CLI ``search index --rebuild`` manageable on huge DBs;
+    CLI ``tdoc search index --rebuild`` manageable on huge DBs;
     ``snippet_tokens`` caps the FTS5 ``snippet(...)`` length.
 
     TOML-only (the ``DOC3GPP_SEARCH__*`` env vars are outside the
@@ -446,7 +567,7 @@ class SearchSettings(BaseModel):
         default=100,
         ge=1,
         description=(
-            "TDocs per batch during `search index --rebuild`. "
+            "TDocs per batch during `tdoc search index --rebuild`. "
             "Smaller values reduce peak memory and crash-recovery "
             "loss (cursor advances per batch); larger values "
             "finish faster."
@@ -488,7 +609,7 @@ class SearchSettings(BaseModel):
     search_fanout_factor: int = Field(
         default=4, ge=1, le=64,
         description=(
-            "When `search query --sem-query` is used, the FTS5 path "
+            "When `tdoc search query --sem-query` is used, the FTS5 path "
             "fetches limit * search_fanout_factor candidates before "
             "the semantic reranker truncates back to limit. Higher "
             "values give the reranker more to work with at the cost "
@@ -551,11 +672,11 @@ class SemanticSearchSettings(BaseModel):
     fanout_multiplier: int = Field(
         default=4, ge=1,
         description=(
-            "Internal fan-out factor for the hybrid `search sem` path. "
+            "Internal fan-out factor for the hybrid `tdoc search sem` path. "
             "When --fts5-query is supplied, each side fetches "
             "limit * fanout_multiplier candidates before RRF merge; "
             "ignored on the pure-vector path. Mirrors "
-            "search.search_fanout_factor for `search query --sem-query`."
+            "search.search_fanout_factor for `tdoc search query --sem-query`."
         ),
     )
     max_chunks_per_tdoc: int = Field(
@@ -576,8 +697,8 @@ class ServerSettings(BaseModel):
     """Knobs for ``doc3gpp server`` (FastAPI + uvicorn HTTP surface).
 
     :attr:`enabled` is the master switch — the CLI's ``server_app`` rejects
-    every subcommand when this is ``False``. Defaults to ``False`` so a
-    fresh install does not open a port without an explicit operator opt-in.
+    every subcommand when this is ``False``. The default server is enabled
+    on loopback so local use works without exposing it to the network.
 
     :attr:`host` defaults to the loopback interface so the server is not
     reachable from the network until the operator binds a public address.
@@ -603,16 +724,15 @@ class ServerSettings(BaseModel):
     """
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Master switch for the `doc3gpp server` HTTP surface. False "
-            "rejects every `server` subcommand at the CLI gate so a "
-            "fresh install does not open a port without an explicit "
-            "operator opt-in via `[server] enabled = true`."
+            "Master switch for the `doc3gpp server` HTTP surface. True "
+            "allows server subcommands; set `[server] enabled = false` "
+            "to disable the server. The default bind address is loopback."
         ),
     )
     host: str = Field(default="127.0.0.1")
-    port: int = Field(default=8765, ge=1, le=65535)
+    port: int = Field(default=13999, ge=1, le=65535)
     max_concurrent_jobs: int = Field(default=1, ge=1, le=16)
     poll_interval_seconds: float = Field(
         default=1.0,
@@ -755,7 +875,7 @@ class Settings(BaseSettings):
     """Application configuration loaded from environment variables or .env.
 
     The flat fields at the root (``database_url``, ``testcase_database_url``,
-    ``db_echo``,
+    ``specdata_database_url``, ``db_echo``,
     ``log_level``, ``http_verify``) are populated from the
     :data:`ALLOWED_ENV_VARS` subset of ``DOC3GPP_*`` env vars.
     Nested sub-models (``output``, ``cache``, ``tdoc_parse``,
@@ -775,6 +895,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="DOC3GPP_TESTCASE_DATABASE_URL",
     )
+    specdata_database_url: str | None = Field(
+        default=None,
+        validation_alias="DOC3GPP_SPECDATA_DATABASE_URL",
+    )
     db_echo: bool = Field(default=False, validation_alias="DOC3GPP_DB_ECHO")
     db_auto_migrate: bool = Field(default=True)
     log_level: str = Field(default="INFO", validation_alias="DOC3GPP_LOG_LEVEL")
@@ -787,6 +911,7 @@ class Settings(BaseSettings):
     tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)
     sync: SyncSettings = Field(default_factory=SyncSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
+    spec_doc: SpecDocSettings = Field(default_factory=SpecDocSettings)
     semantic_search: SemanticSearchSettings = Field(default_factory=SemanticSearchSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)

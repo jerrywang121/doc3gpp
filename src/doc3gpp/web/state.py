@@ -29,6 +29,9 @@ if TYPE_CHECKING:
     from doc3gpp.services.meetings_service import MeetingService
     from doc3gpp.services.search_service import SearchService
     from doc3gpp.services.semantic_search_service import SemanticSearchService
+    from doc3gpp.services.spec_doc_search_service import SpecDocSearchService
+    from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
+    from doc3gpp.services.spec_doc_service import SpecDocService
     from doc3gpp.services.spec_service import SpecService
     from doc3gpp.services.tdoc_cr_service import TDocCrService
     from doc3gpp.services.tdoc_service import TDocService
@@ -141,6 +144,14 @@ class ServiceContainer:
     Each field holds the live instance the lifespan built via
     :mod:`doc3gpp.services.factory`. Routes depend on individual fields
     via the helpers in :mod:`doc3gpp.web.deps`.
+
+    The ``spec_doc*`` fields sit between ``semantic_search`` and
+    ``tdoc_file_repo`` (swallow ``None`` by default) so both
+    production wiring (:func:`doc3gpp.web.app.build_state`) and
+    pre-Task-12 test call sites (``test_job_worker``,
+    ``test_mcp_end_to_end``) that omit them keep working — handlers
+    and routes treat ``None`` as "subsystem unavailable" (503), the
+    same convention as the ``search`` / ``semantic_search`` fields.
     """
 
     meeting: "MeetingService"
@@ -154,8 +165,11 @@ class ServiceContainer:
     testcase: "TestCaseService"
     search: "SearchService | None"
     semantic_search: "SemanticSearchService | None"
-    tdoc_file_repo: SQLAlchemyTDocFileRepository
-    job_repo: "JobRepository"
+    spec_doc: "SpecDocService | None" = None
+    spec_doc_search: "SpecDocSearchService | None" = None
+    spec_doc_semantic: "SpecDocSemanticService | None" = None
+    tdoc_file_repo: SQLAlchemyTDocFileRepository | None = None
+    job_repo: "JobRepository | None" = None
 
 
 @dataclass(slots=True)
@@ -164,8 +178,14 @@ class WebState:
 
     Holds the resolved :class:`Settings`, the singleton SQLAlchemy
     :class:`Engine` for the main corpus plus the sibling testcase
-    :class:`Engine`, the :class:`ServiceContainer` of wired services,
-    and a placeholder :class:`JobWorkerHandle` (replaced by T7).
+    :class:`Engine` and the sibling specdata :class:`Engine`, the
+    :class:`ServiceContainer` of wired services, and a placeholder
+    :class:`JobWorkerHandle` (replaced by T7).
+
+    ``specdata_engine`` defaults to ``None`` (like the ``spec_doc*``
+    service fields) so pre-Task-12 test call sites that omit it keep
+    working; production wiring always fills it via
+    :func:`doc3gpp.web.app.build_state`.
     """
 
     settings: Settings
@@ -173,6 +193,7 @@ class WebState:
     testcase_engine: Engine
     services: ServiceContainer
     jobs: JobWorkerHandle
+    specdata_engine: Engine | None = None
 
 
 __all__ = ["JobWorkerHandle", "ServiceContainer", "WebState"]

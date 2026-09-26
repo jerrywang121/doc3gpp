@@ -40,6 +40,14 @@ def test_sibling_derivation_preserves_suffixless_name(_clean_db_env) -> None:
     )
 
 
+def test_windows_absolute_path_derives_windows_style_sibling(_clean_db_env) -> None:
+    s = Settings(database_url="sqlite+pysqlite:///C:/data/doc3gpp.db")
+    assert (
+        resolve_testcase_database_url(s)
+        == "sqlite+pysqlite:///C:/data/doc3gpp_testcase.db"
+    )
+
+
 def test_memory_main_gives_private_memory_testcase(_clean_db_env) -> None:
     s = Settings(database_url="sqlite+pysqlite:///:memory:")
     assert resolve_testcase_database_url(s) == "sqlite+pysqlite:///:memory:"

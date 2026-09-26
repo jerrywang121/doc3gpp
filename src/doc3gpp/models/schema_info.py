@@ -280,10 +280,51 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
             ),
         ),
     ),
+    "spec_doc": (
+        TableSchema(
+            table="spec_doc_sources",
+            fields=(
+                FieldInfo("spec_id", "str", False, "Dotted spec id, e.g. 38.331; first half of the composite PK."),
+                FieldInfo("version", "str", False, "Version string, e.g. 18.5.0; second half of the composite PK."),
+                FieldInfo("release", "str", True, "Canonical release marker, e.g. Rel-18."),
+                FieldInfo("ftp_url", "str", False, "Absolute 3GPP FTP URL of the version zip."),
+                FieldInfo("downloaded_at", "datetime", True, "UTC timestamp of the last zip download, else null."),
+                FieldInfo("parsed_at", "datetime", True, "UTC timestamp of the last successful parse, else null."),
+                FieldInfo("chunk_count", "int", False, "Number of chunk rows stored for this pair."),
+                FieldInfo("docx_count", "int", False, "Number of .docx files found in the version zip."),
+            ),
+        ),
+        TableSchema(
+            table="spec_doc_tocs",
+            fields=(
+                FieldInfo("spec_id", "str", False, "Dotted spec id, e.g. 38.331; first half of the composite PK."),
+                FieldInfo("version", "str", False, "Version string, e.g. 18.5.0; second half of the composite PK."),
+                FieldInfo("release", "str", True, "Canonical release marker, e.g. Rel-18."),
+                FieldInfo("toc_json_gzip", "gzip-json", True, "TOC snapshot as JSON object with keys entries (level, section_no, title, source_file, file_order) and files (source_file, file_order, first_section)."),
+                FieldInfo("file_order_json", "text", True, "JSON map of source_file to file_order, e.g. {\"38331-j30.docx\": 0}."),
+                FieldInfo("docx_count", "int", False, "Number of .docx files covered by the TOC."),
+                FieldInfo("created_at", "datetime", True, "UTC timestamp of the TOC snapshot, else null."),
+            ),
+        ),
+        TableSchema(
+            table="spec_doc_chunks",
+            fields=(
+                FieldInfo("chunk_id", "str", False, "Chunk identity {spec_id}@{version}#{chunk_index}; primary key."),
+                FieldInfo("spec_id", "str", False, "Dotted spec id, e.g. 38.331."),
+                FieldInfo("version", "str", False, "Version string, e.g. 18.5.0."),
+                FieldInfo("release", "str", True, "Canonical release marker, e.g. Rel-18."),
+                FieldInfo("file_order", "int", False, "Zero-based order of the source file within the version zip."),
+                FieldInfo("source_file", "str", False, "Bare .docx filename inside the zip, e.g. 38331-j30.docx."),
+                FieldInfo("chunk_index", "int", False, "Zero-based chunk position within the version."),
+                FieldInfo("sections", "text", True, "Newline-delimited combined section identifier/title entries represented in the chunk, one entry per line, e.g. 5.1 Handover."),
+                FieldInfo("tables", "text", True, "Newline-delimited combined table identifier/title entries represented in the chunk, one entry per line, e.g. 1 UE values."),
+                FieldInfo("text", "text", False, "Chunk body text (chunk-shaped, no further splitting applied)."),
+            ),
+        ),
+    ),
     "testcase": (
         TableSchema(
-            table="testcases",
-            fields=(
+            table="testcases",            fields=(
                 FieldInfo("testcase_id", "str", False, "Testcase id, formed by clause number in which it is defined in the spec, and sub sequence number if applicable, may also have suffixes of test mode (e.g. NR5GC, ENDC); first half of the composite PK."),
                 FieldInfo("group", "str", False, "Testcase group; second half of the composite PK.", TESTCASE_GROUPS),
                 FieldInfo("title", "text", True, "Testcase title."),

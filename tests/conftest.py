@@ -3,23 +3,33 @@ from __future__ import annotations
 import pytest
 
 from doc3gpp.settings.loader import get_settings
-from doc3gpp.storage.db.session import get_engine, get_testcase_engine
+from doc3gpp.storage.db.session import (
+    get_engine,
+    get_specdata_engine,
+    get_testcase_engine,
+)
 
 
 @pytest.fixture()
 def sqlite_env(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
     testcase_db_path = tmp_path / "test_testcase.db"
+    specdata_db_path = tmp_path / "test_specdata.db"
     monkeypatch.setenv("DOC3GPP_DATABASE_URL", f"sqlite+pysqlite:///{db_path}")
     monkeypatch.setenv(
         "DOC3GPP_TESTCASE_DATABASE_URL", f"sqlite+pysqlite:///{testcase_db_path}"
     )
+    monkeypatch.setenv(
+        "DOC3GPP_SPECDATA_DATABASE_URL", f"sqlite+pysqlite:///{specdata_db_path}"
+    )
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_testcase_engine.cache_clear()
+    get_specdata_engine.cache_clear()
     yield db_path
     get_engine.cache_clear()
     get_testcase_engine.cache_clear()
+    get_specdata_engine.cache_clear()
     get_settings.cache_clear()
 
 

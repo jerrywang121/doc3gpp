@@ -16,6 +16,7 @@ from doc3gpp.web.routes.jobs import router as jobs_router
 from doc3gpp.web.routes.landing import router as landing_router
 from doc3gpp.web.routes.meetings import router as meetings_router
 from doc3gpp.web.routes.search import router as search_router
+from doc3gpp.web.routes.spec_docs import router as spec_docs_router
 from doc3gpp.web.routes.specs import router as specs_router
 from doc3gpp.web.routes.sync import router as sync_router
 from doc3gpp.web.routes.tdocs import router as tdocs_router
@@ -29,12 +30,13 @@ def all_routers() -> list[APIRouter]:
     return [
         landing_router,
         meetings_router,
+        search_router,
         tdocs_router,
         tsgs_router,
         wis_router,
         specs_router,
+        spec_docs_router,
         testcases_router,
-        search_router,
         jobs_router,
         sync_router,
     ]

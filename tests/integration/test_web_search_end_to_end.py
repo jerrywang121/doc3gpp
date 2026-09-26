@@ -28,7 +28,7 @@ from doc3gpp.web.deps import get_search_service
 
 @pytest.fixture()
 def search_app(search_corpus, monkeypatch: pytest.MonkeyPatch, tmp_path):
-    """A built app whose /search route hits the real FTS5 index.
+    """A built app whose /tdocs/search route hits the real FTS5 index.
 
     ``build_app`` composes the real engine + services through
     ``build_state``; the search service dependency is swapped for a
@@ -65,7 +65,7 @@ def test_search_query_with_jargon_operators_returns_hits(search_app) -> None:
     ``MATCH``, which parses ``nb-iot`` as ``nb - iot``.
     """
     with TestClient(search_app) as client:
-        response = client.get("/search", params={"q": "nb-iot AND scheduling"})
+        response = client.get("/tdocs/search", params={"q": "nb-iot AND scheduling"})
     assert response.status_code == 200
     assert "RP-2200456" in response.text
     get_engine.cache_clear()
@@ -75,7 +75,7 @@ def test_search_query_json_with_jargon_operators_returns_hits(search_app) -> Non
     """The JSON branch surfaces the same normalised-match behaviour."""
     with TestClient(search_app) as client:
         response = client.get(
-            "/search",
+            "/tdocs/search",
             params={"q": "nb-iot AND scheduling", "format": "json"},
         )
     assert response.status_code == 200
@@ -88,7 +88,7 @@ def test_search_query_json_with_jargon_operators_returns_hits(search_app) -> Non
 def test_search_query_stopwords_only_returns_400(search_app) -> None:
     """A stopwords-only query is a client error, not a server error."""
     with TestClient(search_app) as client:
-        response = client.get("/search", params={"q": "the"})
+        response = client.get("/tdocs/search", params={"q": "the"})
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_query"
     get_engine.cache_clear()
@@ -105,7 +105,7 @@ def test_search_query_with_meeting_like_filter(search_app) -> None:
     """
     with TestClient(search_app) as client:
         response = client.get(
-            "/search",
+            "/tdocs/search",
             params={"q": "nb-iot AND scheduling", "meeting": "%plenary%"},
         )
     assert response.status_code == 200
@@ -114,7 +114,7 @@ def test_search_query_with_meeting_like_filter(search_app) -> None:
     # A pattern matching nothing yields zero hits, not an error.
     with TestClient(search_app) as client:
         response = client.get(
-            "/search",
+            "/tdocs/search",
             params={"q": "nb-iot AND scheduling", "meeting": "%no-such-meeting%"},
         )
     assert response.status_code == 200
@@ -130,7 +130,7 @@ def test_search_query_with_release_like_filter(search_app) -> None:
     """
     with TestClient(search_app) as client:
         response = client.get(
-            "/search",
+            "/tdocs/search",
             params={"q": "nb-iot AND scheduling", "release": "Rel-1%"},
         )
     assert response.status_code == 200
@@ -138,7 +138,7 @@ def test_search_query_with_release_like_filter(search_app) -> None:
 
     with TestClient(search_app) as client:
         response = client.get(
-            "/search",
+            "/tdocs/search",
             params={"q": "nb-iot AND scheduling", "release": "Rel-99"},
         )
     assert response.status_code == 200
@@ -151,7 +151,7 @@ def test_search_query_with_spec_like_filter(search_app) -> None:
     ``38.300-1`` can only be partial-matched)."""
     with TestClient(search_app) as client:
         response = client.get(
-            "/search",
+            "/tdocs/search",
             params={"q": "nb-iot AND scheduling", "spec": "38.3%"},
         )
     assert response.status_code == 200
@@ -159,7 +159,7 @@ def test_search_query_with_spec_like_filter(search_app) -> None:
 
     with TestClient(search_app) as client:
         response = client.get(
-            "/search",
+            "/tdocs/search",
             params={"q": "nb-iot AND scheduling", "spec": "36.5%"},
         )
     assert response.status_code == 200

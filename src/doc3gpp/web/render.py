@@ -32,6 +32,88 @@ from doc3gpp.models.tdoc import TDocWithMeeting
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 
 
+def _serialise_scalar(value: Any) -> Any:
+    """Normalise ``date`` / ``datetime`` exactly like the CLI's ``_serialise_show_value``."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def spec_doc_toc_to_json(toc: Any, out_fields: list[str]) -> dict[str, Any]:
+    """Shape one :class:`SpecDocToc` exactly like the CLI's TOC JSON payload.
+
+    Mirrors ``cli.py::spec_doc_toc_show`` (json branch): the same
+    top-level keys (``spec_id / version / release / docx_count /
+    entries / files``), ``entries`` projected through the same
+    ``out_fields`` with :func:`_serialise_scalar`, and ``files`` as
+    ``{source_file, file_order, first_section}`` rows.
+    """
+    return {
+        "spec_id": toc.spec_id,
+        "version": toc.version,
+        "release": _serialise_scalar(getattr(toc, "release", None)),
+        "docx_count": getattr(toc, "docx_count", 0),
+        "entries": [
+            {f: _serialise_scalar(getattr(e, f)) for f in out_fields}
+            for e in getattr(toc, "entries", [])
+        ],
+        "files": [
+            {
+                "source_file": f.source_file,
+                "file_order": f.file_order,
+                "first_section": _serialise_scalar(
+                    getattr(f, "first_section", None)
+                ),
+            }
+            for f in getattr(toc, "files", [])
+        ],
+    }
+
+
+def spec_doc_hit_to_json(hit: Any) -> dict[str, Any]:
+    """Shape one :class:`SpecDocHit` exactly like the CLI's query JSON renderer.
+
+    Mirrors ``cli.py::_spec_doc_hit_to_dict``: the same key order and
+    values, including ``None``-preserving metadata (the nested ``hit``
+    object in the sem payload relies on this via
+    :func:`spec_doc_semantic_hit_to_json`).
+    """
+    return {
+        "chunk_id": hit.chunk_id,
+        "spec_id": hit.spec_id,
+        "version": hit.version,
+        "release": _serialise_scalar(getattr(hit, "release", None)),
+        "sections": _serialise_scalar(getattr(hit, "sections", None)),
+        "tables": _serialise_scalar(getattr(hit, "tables", None)),
+        "chunk_index": getattr(hit, "chunk_index", 0),
+        "text": getattr(hit, "text", ""),
+        "score": getattr(hit, "score", 0.0),
+        "previews": dict(getattr(hit, "previews", {}) or {}),
+    }
+
+
+def spec_doc_semantic_hit_to_json(hit: Any) -> dict[str, Any]:
+    """Shape one :class:`SpecDocSemanticHit` exactly like the CLI's sem JSON renderer.
+
+    Mirrors ``cli.py::_spec_doc_semantic_hit_to_dict``: top-level RRF
+    fields with the query dict nested under ``hit`` (``None`` for
+    vector-only chunks).
+    """
+    inner = getattr(hit, "hit", None)
+    return {
+        "chunk_id": getattr(hit, "chunk_id"),
+        "rrf_score": getattr(hit, "rrf_score"),
+        "rank_fts5": getattr(hit, "rank_fts5", None),
+        "rank_vec": getattr(hit, "rank_vec", None),
+        "min_chunk_distance": getattr(hit, "min_chunk_distance", None),
+        "hit": spec_doc_hit_to_json(inner) if inner is not None else None,
+    }
+
+
 # HTML column catalogue for the tdoc list page. The keys mirror the
 # field names used by ``tdoc_rows``; the values are the table headers.
 TDOC_COLUMN_LABELS: dict[str, str] = {
@@ -189,6 +271,13 @@ def _coerce_cell(value: Any) -> str:
     return str(value)
 
 
+def _spec_cell(field: str, value: Any) -> object:
+    """Preserve transient parsed values in spec JSON rows."""
+    if field == "parsed":
+        return value
+    return _coerce_cell(value)
+
+
 def meeting_rows(
     meetings: list[Any],
     fields: list[str],
@@ -251,18 +340,20 @@ def wi_rows(wis: list[Any], fields: list[str]) -> list[dict[str, str]]:
     ]
 
 
-def spec_rows(specs: list[Any], fields: list[str]) -> list[dict[str, str]]:
+def spec_rows(specs: list[Any], fields: list[str]) -> list[dict[str, object]]:
     """Build ``spec list --format json``-shaped rows for ``specs``."""
     return [
-        {f: _coerce_cell(getattr(spec, f, None)) for f in fields}
+        {f: _spec_cell(f, getattr(spec, f, None)) for f in fields}
         for spec in specs
     ]
 
 
-def spec_version_rows(versions: list[Any], fields: list[str]) -> list[dict[str, str]]:
+def spec_version_rows(
+    versions: list[Any], fields: list[str]
+) -> list[dict[str, object]]:
     """Build version rows for a spec."""
     return [
-        {f: _coerce_cell(getattr(v, f, None)) for f in fields}
+        {f: _spec_cell(f, getattr(v, f, None)) for f in fields}
         for v in versions
     ]
 
@@ -320,6 +411,9 @@ __all__ = [
     "TDOC_COLUMN_LABELS",
     "TDOC_HTML_DEFAULT_FIELDS",
     "meeting_rows",
+    "spec_doc_hit_to_json",
+    "spec_doc_semantic_hit_to_json",
+    "spec_doc_toc_to_json",
     "spec_rows",
     "spec_version_rows",
     "tdoc_rows",

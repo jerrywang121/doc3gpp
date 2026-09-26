@@ -63,6 +63,69 @@ class _StubSpecRepo:
         return self.versions.get(spec_id, [])
 
 
+class _StubSpecRepoWithRows:
+    def __init__(self) -> None:
+        self.specs = [
+            Spec(spec_id="36.579-5", type="TS", title="NR conformance"),
+            Spec(spec_id="38.331", type="TS", title="NR RRC"),
+            Spec(spec_id="39.001", type="TR", title="NR study"),
+        ]
+        self.versions = {
+            "36.579-5": [
+                SpecVersion(
+                    spec_id="36.579-5",
+                    version="19.2.0",
+                    ftp_url="https://example.test/19.2.0.zip",
+                ),
+                SpecVersion(
+                    spec_id="36.579-5",
+                    version="19.1.0",
+                    ftp_url="https://example.test/19.1.0.zip",
+                ),
+            ]
+        }
+        self.list_calls: list[tuple[int | None, int]] = []
+
+    def list(
+        self,
+        limit: int | None = 50,
+        offset: int = 0,
+        **_filters,
+    ) -> list[Spec]:
+        self.list_calls.append((limit, offset))
+        rows = self.specs[offset:]
+        return rows if limit is None else rows[:limit]
+
+    def list_versions(
+        self,
+        spec_id: str,
+        limit: int = 200,
+        offset: int = 0,
+        version: str | None = None,
+    ) -> list[SpecVersion]:
+        rows = self.versions.get(spec_id, [])[offset:]
+        return rows[:limit]
+
+
+class _StubParsedStatusRepo:
+    def __init__(self, parsed: dict[str, list[str]]) -> None:
+        self.parsed = parsed
+        self.calls: list[list[str] | None] = []
+
+    def list_parsed_versions(
+        self, spec_ids: list[str] | None = None
+    ) -> dict[str, list[str]]:
+        ids = None if spec_ids is None else list(spec_ids)
+        self.calls.append(ids)
+        if ids is None:
+            return {spec_id: list(versions) for spec_id, versions in self.parsed.items()}
+        return {
+            spec_id: list(self.parsed[spec_id])
+            for spec_id in ids
+            if spec_id in self.parsed
+        }
+
+
 LIST_HTML = """
 <html><body><table class="dsptab adynspec dsp-tsgwg">
 <tr><td><span>TS</span><a href="/DynaReport/36579-5.htm">36.579-5</a></td><td>NR conformance</td><td>r</td></tr>
@@ -95,6 +158,37 @@ def test_service_list_versions_forwards_version_filter() -> None:
     repo.list_versions.assert_called_once_with(
         "36.579-5", limit=10, offset=2, version="19.%"
     )
+
+
+def test_list_recent_enriches_parsed_versions_and_uses_null_when_empty() -> None:
+    status = _StubParsedStatusRepo({"36.579-5": ["19.2.0", "19.1.0"]})
+    service = SpecService(_StubSpecRepoWithRows(), parsed_status_repository=status)
+
+    rows = service.list_recent(limit=50, offset=0)
+
+    assert rows[0].parsed == "19.2.0,19.1.0"
+    assert rows[1].parsed is None
+
+
+def test_list_recent_parsed_filter_happens_before_pagination() -> None:
+    repo = _StubSpecRepoWithRows()
+    status = _StubParsedStatusRepo({"38.331": ["19.2.0"]})
+    service = SpecService(repo, parsed_status_repository=status)
+
+    rows = service.list_recent(limit=1, offset=0, parsed=True)
+
+    assert [row.spec_id for row in rows] == ["38.331"]
+    assert repo.list_calls == [(None, 0)]
+    assert status.calls == [["36.579-5", "38.331", "39.001"]]
+
+
+def test_list_versions_sets_native_booleans() -> None:
+    status = _StubParsedStatusRepo({"36.579-5": ["19.2.0"]})
+    service = SpecService(_StubSpecRepoWithRows(), parsed_status_repository=status)
+
+    rows = service.list_versions("36.579-5")
+
+    assert [row.parsed for row in rows] == [True, False]
 
 
 def test_sync_skips_etsi_fetch_when_pdf_url_already_persisted(monkeypatch) -> None:

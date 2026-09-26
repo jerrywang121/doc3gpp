@@ -11,7 +11,26 @@ from doc3gpp.models.schema_info import (
 
 def test_schema_field_order_and_keys() -> None:
     assert SCHEMA_FIELDS == ["table", "field", "type", "nullable", "description", "values"]
-    assert sorted(RESOURCE_SCHEMAS) == ["meeting", "spec", "tdoc", "testcase", "tsg", "wi"]
+    assert sorted(RESOURCE_SCHEMAS) == ["meeting", "spec", "spec_doc", "tdoc", "testcase", "tsg", "wi"]
+
+
+def test_spec_doc_schema_lists_combined_chunk_fields() -> None:
+    payload = schema_payload("spec_doc")
+    chunk_fields = [
+        row["field"] for row in payload if row["table"] == "spec_doc_chunks"
+    ]
+    assert chunk_fields == [
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "file_order",
+        "source_file",
+        "chunk_index",
+        "sections",
+        "tables",
+        "text",
+    ]
 
 
 def test_tsg_payload_shape() -> None:
@@ -71,6 +90,9 @@ def test_registry_matches_orm_columns() -> None:
     from doc3gpp.models.schema_info import RESOURCE_SCHEMAS
     from doc3gpp.storage.db.models import (
         MeetingORM,
+        SpecDocChunkORM,
+        SpecDocSourceORM,
+        SpecDocTocORM,
         SpecORM,
         SpecVersionORM,
         TDocCrChangeDetailOrm,
@@ -98,6 +120,9 @@ def test_registry_matches_orm_columns() -> None:
         "wis": WiORM,
         "specs": SpecORM,
         "spec_versions": SpecVersionORM,
+        "spec_doc_sources": SpecDocSourceORM,
+        "spec_doc_tocs": SpecDocTocORM,
+        "spec_doc_chunks": SpecDocChunkORM,
         "testcases": TestCaseORM,
         "testcase_status": TestCaseStatusORM,
         "testcase_sources": TestCaseSourceORM,
@@ -162,10 +187,14 @@ def test_cli_schema_json_all_resources() -> None:
     from doc3gpp.models.schema_info import schema_payload
 
     runner = CliRunner()
-    for resource in ("tsg", "meeting", "tdoc", "wi", "spec", "testcase"):
+    flat = ("tsg", "meeting", "tdoc", "wi", "spec", "testcase")
+    for resource in flat:
         result = runner.invoke(app, [resource, "schema", "--format", "json"])
         assert result.exit_code == 0, (resource, result.output)
         assert json.loads(result.output) == schema_payload(resource), resource
+    nested = runner.invoke(app, ["spec", "doc", "schema", "--format", "json"])
+    assert nested.exit_code == 0, ("spec doc schema", nested.output)
+    assert json.loads(nested.output) == schema_payload("spec_doc"), "spec_doc"
 
 
 def test_cli_schema_table_nullable_yes_no() -> None:

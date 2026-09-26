@@ -43,6 +43,7 @@ class JobKind(str, Enum):
     SYNC_TESTCASES = "sync_testcases"
     PARSE_TDOCS = "parse_tdocs"
     PARSE_TDOC_URL = "parse_tdoc_url"
+    PARSE_SPEC_DOCS = "parse_spec_docs"
     REBUILD_SEARCH = "rebuild_search"
     CACHE_PURGE = "cache_purge"
 

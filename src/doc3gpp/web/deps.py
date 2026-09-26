@@ -15,6 +15,9 @@ from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
+from doc3gpp.services.spec_doc_search_service import SpecDocSearchService
+from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
+from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.services.spec_service import SpecService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_service import TDocService
@@ -83,6 +86,18 @@ def get_semantic_search_service(request: Request) -> SemanticSearchService | Non
     return get_services(request).semantic_search
 
 
+def get_spec_doc_service(request: Request) -> SpecDocService | None:
+    return get_services(request).spec_doc
+
+
+def get_spec_doc_search_service(request: Request) -> SpecDocSearchService | None:
+    return get_services(request).spec_doc_search
+
+
+def get_spec_doc_semantic_service(request: Request) -> SpecDocSemanticService | None:
+    return get_services(request).spec_doc_semantic
+
+
 def get_tdoc_file_repo(request: Request) -> SQLAlchemyTDocFileRepository:
     return get_services(request).tdoc_file_repo
 
@@ -104,7 +119,6 @@ def get_pending_jobs(
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> int:
     """Return the number of in-flight background jobs (for the nav badge).
-
     Counts ``QUEUED`` + ``RUNNING`` rows via the :class:`JobRepository`
     protocol's ``list(status=...)`` — from the user's perspective both
     states are "pending" (the job is either waiting to start or is
@@ -144,6 +158,9 @@ __all__ = [
     "get_semantic_search_service",
     "get_services",
     "get_settings",
+    "get_spec_doc_search_service",
+    "get_spec_doc_semantic_service",
+    "get_spec_doc_service",
     "get_spec_service",
     "get_state",
     "get_tdoc_cr_service",

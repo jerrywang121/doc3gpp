@@ -6,6 +6,16 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 
+def spec_version_sort_key(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for segment in version.split("."):
+        try:
+            parts.append(int(segment))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
 @dataclass(slots=True)
 class Spec:
     """A 3GPP specification (TS or TR) header, scraped from the DynaReport list + detail pages.
@@ -27,6 +37,8 @@ class Spec:
             attempt for this spec crashed mid-flight — in which case
             the next sync retries the detail page so the missing data
             can be back-filled.
+        parsed: Transient output value indicating the newest parsed version;
+            it is not persisted in the ``specs`` table.
     """
 
     spec_id: str
@@ -39,6 +51,7 @@ class Spec:
     wis: str | None = None
     rapporteurs: str | None = None
     last_synced_at: datetime | None = None
+    parsed: str | None = None
 
 
 @dataclass(slots=True)
@@ -61,6 +74,8 @@ class SpecVersion:
         pdf_url: ETSI "download as PDF" link (nullable).
         crs: Comma-joined ``tdoc_id``s from the CR list page (nullable).
         wki_id: Transient ETSI work-item id (not persisted).
+        parsed: Transient output value indicating whether this version has
+            parsed spec-document content; it is not persisted.
     """
 
     spec_id: str
@@ -74,3 +89,4 @@ class SpecVersion:
     pdf_url: str | None = None
     crs: str | None = None
     wki_id: int | None = None
+    parsed: bool = False

@@ -23,6 +23,16 @@ from fastapi.testclient import TestClient
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.search import SearchHit
+from doc3gpp.models.spec_doc import (
+    SpecDocChunk,
+    SpecDocHit,
+    SpecDocSemanticHit,
+    SpecDocSource,
+    SpecDocToc,
+    SpecDocTocEntry,
+    SpecDocTocFile,
+    SpecDocUnknownVersionError,
+)
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -41,6 +51,10 @@ from doc3gpp.web.deps import (
     get_search_service,
     get_semantic_search_service,
     get_settings,
+    get_spec_doc_search_service,
+    get_spec_doc_semantic_service,
+    get_spec_doc_service,
+    get_spec_service,
     get_tdoc_file_repo,
     get_tdoc_service,
     get_tsg_service,
@@ -53,6 +67,7 @@ from doc3gpp.web.render import (
     tsg_rows,
     wi_rows,
 )
+from doc3gpp.web.routes.spec_docs import _spec_doc_page_items
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +263,29 @@ class FakeSemanticSearchService(SemanticSearchService):
         return list(self._hits)
 
 
+class FakeSpecDocSearchService:
+    def __init__(self) -> None:  # noqa: D401 - intentional override
+        self.last_filters = None
+        self._hits = [
+            SpecDocHit(
+                chunk_id="38.331@18.5.0#0",
+                spec_id="38.331",
+                version="18.5.0",
+                release="Rel-18",
+                sections="1 Handover",
+                tables=None,
+                chunk_index=0,
+                text="handover",
+                score=-1.0,
+                previews={},
+            ),
+        ]
+
+    def search(self, _query: str, filters: Any) -> list[SpecDocHit]:
+        self.last_filters = filters
+        return list(self._hits)
+
+
 class _EmptyJobRepo:
     """No-op :class:`JobRepository` for the fake-wired app fixture.
 
@@ -293,6 +331,9 @@ def _build_app_with_fakes(
     app.dependency_overrides[get_search_service] = lambda: FakeSearchService()
     app.dependency_overrides[get_semantic_search_service] = (
         lambda: FakeSemanticSearchService()
+    )
+    app.dependency_overrides[get_spec_doc_search_service] = (
+        lambda: FakeSpecDocSearchService()
     )
     app.dependency_overrides[get_tdoc_file_repo] = lambda: MagicMock()
     # ``get_pending_jobs`` is routed through ``Depends(get_job_repo)`` so the
@@ -341,7 +382,7 @@ def test_nav_order_home_tsgs_meetings_tdocs_specs_wis_search_jobs(
     hrefs = [line.split('href="')[1].split('"')[0] for line in nav.splitlines() if 'href="' in line]
     assert hrefs == [
         "/", "/tsgs", "/meetings", "/tdocs", "/specs", "/testcases", "/wis",
-        "/search", "/jobs", "/sync",
+        "/tdocs/search", "/jobs", "/sync",
     ]
 
 
@@ -1049,8 +1090,8 @@ def test_wi_list_invalid_numeric_filter_returns_400(client: TestClient) -> None:
 
 
 def test_search_query_empty_numeric_filter_returns_200(client: TestClient) -> None:
-    """``GET /search?q=foo&limit=`` is 200, not 422."""
-    response = client.get("/search?q=foo&limit=")
+    """``GET /tdocs/search?q=foo&limit=`` is 200, not 422."""
+    response = client.get("/tdocs/search?q=foo&limit=")
     assert response.status_code == 200
 
 
@@ -1181,22 +1222,22 @@ def test_tdoc_list_empty_text_filter_returns_all_rows(client: TestClient) -> Non
 
 
 def test_search_query_empty_date_filter_returns_200(client: TestClient) -> None:
-    """``GET /search?since=&until=`` is 200, not 400."""
-    response = client.get("/search?q=foo&since=&until=")
+    """``GET /tdocs/search?since=&until=`` is 200, not 400."""
+    response = client.get("/tdocs/search?q=foo&since=&until=")
     assert response.status_code == 200
 
 
 def test_search_query_invalid_date_filter_returns_400(client: TestClient) -> None:
-    """``GET /search?since=bogus`` is 400 with invalid_filter envelope."""
-    response = client.get("/search?since=bogus")
+    """``GET /tdocs/search?since=bogus`` is 400 with invalid_filter envelope."""
+    response = client.get("/tdocs/search?since=bogus")
     assert response.status_code == 400
     body = response.json()
     assert body["error"] == "invalid_filter"
 
 
 def test_search_sem_empty_numeric_filter_returns_200(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&limit=`` is 200, not 422."""
-    response = client.get("/search/sem?q=foo&limit=")
+    """``GET /tdocs/search/sem?q=foo&limit=`` is 200, not 422."""
+    response = client.get("/tdocs/search/sem?q=foo&limit=")
     assert response.status_code == 200
 
 
@@ -1538,15 +1579,32 @@ def test_wi_list_uses_acronym_not_id(client: TestClient) -> None:
 
 
 def test_search_query_renders_html(client: TestClient) -> None:
-    """``GET /search?q=foo`` returns 200 with the search template."""
-    response = client.get("/search?q=foo")
+    """``GET /tdocs/search?q=foo`` returns 200 with the search template."""
+    response = client.get("/tdocs/search?q=foo")
     assert response.status_code == 200
     assert "R5-260001" in response.text
 
 
+def test_tdoc_search_resource_tabs(client: TestClient) -> None:
+    body = client.get("/tdocs/search?q=foo").text
+    assert ">TDoc Search<" in body
+    assert 'href="/spec-docs/search"' in body
+
+
+def test_spec_doc_search_resource_tabs(client: TestClient) -> None:
+    body = client.get("/spec-docs/search?q=handover").text
+    assert ">Spec Docs Search<" in body
+    assert 'href="/tdocs/search"' in body
+
+
+def test_spec_doc_search_hit_links_to_document_page(client: TestClient) -> None:
+    body = client.get("/spec-docs/search?q=handover").text
+    assert "/specs/38.331/docs?version=18.5.0#chunk-0" in body
+
+
 def test_search_results_single_details_per_hit(client: TestClient) -> None:
     """One details.hit-details block per hit (single folding), not per column."""
-    response = client.get("/search?q=foo")
+    response = client.get("/tdocs/search?q=foo")
     assert response.status_code == 200
     body = response.text
     assert body.count('<details class="hit-details">') == 1
@@ -1555,32 +1613,32 @@ def test_search_results_single_details_per_hit(client: TestClient) -> None:
 
 def test_search_results_has_master_toggle(client: TestClient) -> None:
     """The results fragment carries the fold/unfold-all toggle."""
-    response = client.get("/search?q=foo", headers={"HX-Request": "true"})
+    response = client.get("/tdocs/search?q=foo", headers={"HX-Request": "true"})
     assert response.status_code == 200
     assert 'id="fold-toggle"' in response.text
 
 
 def test_search_results_toggle_absent_without_hits(client: TestClient) -> None:
     """No hits -> no toggle and no details."""
-    response = client.get("/search")
+    response = client.get("/tdocs/search")
     assert response.status_code == 200
     assert 'id="fold-toggle"' not in response.text
 
 
 def test_search_full_page_loads_search_js(client: TestClient) -> None:
     """The full search page includes the fold-toggle script."""
-    html = client.get("/search?q=foo").text
+    html = client.get("/tdocs/search?q=foo").text
     assert 'src="/static/js/search.js"' in html
 
 
 def test_search_query_htmx_returns_partial(client: TestClient) -> None:
-    """``GET /search`` with ``HX-Request: true`` returns the results partial.
+    """``GET /tdocs/search`` with ``HX-Request: true`` returns the results partial.
 
     The Search button uses HTMX with ``hx-swap=\"outerHTML\" hx-target=\"#results\"``,
     so the response must be the ``partials/search_results.html`` fragment
     — a single ``<div id=\"results\">`` block — not a full HTML document.
     """
-    response = client.get("/search?q=foo", headers={"HX-Request": "true"})
+    response = client.get("/tdocs/search?q=foo", headers={"HX-Request": "true"})
     assert response.status_code == 200
     body = response.text
     assert "<!DOCTYPE" not in body
@@ -1589,8 +1647,8 @@ def test_search_query_htmx_returns_partial(client: TestClient) -> None:
 
 
 def test_search_sem_htmx_returns_partial(client: TestClient) -> None:
-    """``GET /search/sem`` with ``HX-Request: true`` returns the results partial."""
-    response = client.get("/search/sem?q=foo", headers={"HX-Request": "true"})
+    """``GET /tdocs/search/sem`` with ``HX-Request: true`` returns the results partial."""
+    response = client.get("/tdocs/search/sem?q=foo", headers={"HX-Request": "true"})
     assert response.status_code == 200
     body = response.text
     assert "<!DOCTYPE" not in body
@@ -1599,13 +1657,13 @@ def test_search_sem_htmx_returns_partial(client: TestClient) -> None:
 
 
 def test_search_query_json(client: TestClient) -> None:
-    """``GET /search?q=foo&format=json`` returns the CLI-shaped hit array.
+    """``GET /tdocs/search?q=foo&format=json`` returns the CLI-shaped hit array.
 
     Ruling B: the payload must be a bare array of hit objects matching
-    ``doc3gpp search query --format json`` (tdoc_id / score / previews
+    ``doc3gpp tdoc search query --format json`` (tdoc_id / score / previews
     / title / meeting / tsg / uploaded_date / ftp_url / wis).
     """
-    response = client.get("/search?q=foo&format=json")
+    response = client.get("/tdocs/search?q=foo&format=json")
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
@@ -1618,16 +1676,16 @@ def test_search_query_json(client: TestClient) -> None:
 
 
 def test_search_query_bad_date_filter_400(client: TestClient) -> None:
-    """``GET /search?since=<bad>`` returns 400 with the invalid_filter envelope."""
-    response = client.get("/search?q=foo&since=not-a-date")
+    """``GET /tdocs/search?since=<bad>`` returns 400 with the invalid_filter envelope."""
+    response = client.get("/tdocs/search?q=foo&since=not-a-date")
     assert response.status_code == 400
     body = response.json()
     assert body["error"] == "invalid_filter"
 
 
 def test_search_sem_renders_html(client: TestClient) -> None:
-    """``GET /search/sem?q=foo`` returns 200 with the search template."""
-    response = client.get("/search/sem?q=foo")
+    """``GET /tdocs/search/sem?q=foo`` returns 200 with the search template."""
+    response = client.get("/tdocs/search/sem?q=foo")
     assert response.status_code == 200
 
 
@@ -1640,7 +1698,7 @@ def test_search_sem_table_renders_nested_metadata(client: TestClient) -> None:
     ranks (top-level fields) worked. The template must unwrap the
     nested bag in ``sem`` mode.
     """
-    html = client.get("/search/sem?q=foo").text
+    html = client.get("/tdocs/search/sem?q=foo").text
     assert "CR on NR measurement" in html
     assert "RAN5#99-e" in html
     assert ">R5<" in html
@@ -1650,13 +1708,13 @@ def test_search_sem_table_renders_nested_metadata(client: TestClient) -> None:
 
 
 def test_search_sem_json(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
+    """``GET /tdocs/search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
 
-    Ruling B: semantic hits mirror ``doc3gpp search sem --format json``
+    Ruling B: semantic hits mirror ``doc3gpp tdoc search sem --format json``
     — RRF fields at the top level and the metadata bag nested under
     ``hit``.
     """
-    response = client.get("/search/sem?q=foo&format=json")
+    response = client.get("/tdocs/search/sem?q=foo&format=json")
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
@@ -1670,13 +1728,13 @@ def test_search_sem_json(client: TestClient) -> None:
 
 
 def test_search_query_tdoc_id_filter_forwarded(client: TestClient) -> None:
-    """``GET /search?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    """``GET /tdocs/search?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&tdoc-id=R5-260001")
+        response = client.get("/tdocs/search?q=foo&tdoc-id=R5-260001")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1685,13 +1743,13 @@ def test_search_query_tdoc_id_filter_forwarded(client: TestClient) -> None:
 
 
 def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
-    """``GET /search?q=foo&tdoc-id=`` is 200 and tdoc_id stays None."""
+    """``GET /tdocs/search?q=foo&tdoc-id=`` is 200 and tdoc_id stays None."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&tdoc-id=")
+        response = client.get("/tdocs/search?q=foo&tdoc-id=")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1700,13 +1758,13 @@ def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
 
 
 def test_search_query_sem_param_forwarded(client: TestClient) -> None:
-    """``GET /search?sem=<text>`` forwards sem_query into the service."""
+    """``GET /tdocs/search?sem=<text>`` forwards sem_query into the service."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&sem=hybrid+rerank")
+        response = client.get("/tdocs/search?q=foo&sem=hybrid+rerank")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1714,13 +1772,13 @@ def test_search_query_sem_param_forwarded(client: TestClient) -> None:
 
 
 def test_search_query_sem_empty_is_none(client: TestClient) -> None:
-    """``GET /search?sem=`` leaves sem_query None (no rerank)."""
+    """``GET /tdocs/search?sem=`` leaves sem_query None (no rerank)."""
     from doc3gpp.web.deps import get_search_service
 
     service = FakeSearchService()
     client.app.dependency_overrides[get_search_service] = lambda: service
     try:
-        response = client.get("/search?q=foo&sem=")
+        response = client.get("/tdocs/search?q=foo&sem=")
     finally:
         client.app.dependency_overrides.pop(get_search_service, None)
     assert response.status_code == 200
@@ -1728,13 +1786,13 @@ def test_search_query_sem_empty_is_none(client: TestClient) -> None:
 
 
 def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
-    """``GET /search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
+    """``GET /tdocs/search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
     from doc3gpp.web.deps import get_semantic_search_service
 
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
-        response = client.get("/search/sem?q=foo&tdoc-id=R5-260001")
+        response = client.get("/tdocs/search/sem?q=foo&tdoc-id=R5-260001")
     finally:
         client.app.dependency_overrides.pop(get_semantic_search_service, None)
     assert response.status_code == 200
@@ -1744,7 +1802,7 @@ def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
 
 
 def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&fts5_query=`` passes fts5_query=None.
+    """``GET /tdocs/search/sem?q=foo&fts5_query=`` passes fts5_query=None.
 
     Regression: the sem form always submits an ``fts5_query`` field, so
     a blank value arrived as ``""``. The service treats any non-``None``
@@ -1757,7 +1815,7 @@ def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
-        response = client.get("/search/sem?q=foo&fts5_query=")
+        response = client.get("/tdocs/search/sem?q=foo&fts5_query=")
     finally:
         client.app.dependency_overrides.pop(get_semantic_search_service, None)
     assert response.status_code == 200
@@ -1765,13 +1823,13 @@ def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
 
 
 def test_search_sem_whitespace_fts5_query_is_none(client: TestClient) -> None:
-    """``GET /search/sem?q=foo&fts5_query=%20%20`` passes fts5_query=None."""
+    """``GET /tdocs/search/sem?q=foo&fts5_query=%20%20`` passes fts5_query=None."""
     from doc3gpp.web.deps import get_semantic_search_service
 
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
-        response = client.get("/search/sem?q=foo&fts5_query=%20%20")
+        response = client.get("/tdocs/search/sem?q=foo&fts5_query=%20%20")
     finally:
         client.app.dependency_overrides.pop(get_semantic_search_service, None)
     assert response.status_code == 200
@@ -1779,14 +1837,14 @@ def test_search_sem_whitespace_fts5_query_is_none(client: TestClient) -> None:
 
 
 def test_search_sem_full_filters_forwarded(client: TestClient) -> None:
-    """``GET /search/sem`` forwards tsg/meeting/release/spec/since/until."""
+    """``GET /tdocs/search/sem`` forwards tsg/meeting/release/spec/since/until."""
     from doc3gpp.web.deps import get_semantic_search_service
 
     service = FakeSemanticSearchService()
     client.app.dependency_overrides[get_semantic_search_service] = lambda: service
     try:
         response = client.get(
-            "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e"
+            "/tdocs/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e"
             "&release=18&spec=38.300"
             "&since=%3E%3D%20%272026-01-01%27"
             "&until=%3C%3D%20%272026-06-01%27"
@@ -1805,29 +1863,29 @@ def test_search_sem_full_filters_forwarded(client: TestClient) -> None:
 
 
 def test_search_sem_bad_date_filter_400(client: TestClient) -> None:
-    """``GET /search/sem?since=<bad>`` returns 400 invalid_filter."""
-    response = client.get("/search/sem?q=foo&since=not-a-date")
+    """``GET /tdocs/search/sem?since=<bad>`` returns 400 invalid_filter."""
+    response = client.get("/tdocs/search/sem?q=foo&since=not-a-date")
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_filter"
 
 
 def test_search_form_renders_tdoc_input_fts5(client: TestClient) -> None:
     """The FTS5 search form carries a tdoc-id input with the round-tripped value."""
-    html = client.get("/search?q=foo&tdoc-id=R5-260001").text
+    html = client.get("/tdocs/search?q=foo&tdoc-id=R5-260001").text
     assert 'name="tdoc-id"' in html
     assert 'value="R5-260001"' in html
 
 
 def test_search_form_renders_tdoc_input_sem(client: TestClient) -> None:
     """The semantic search form carries a tdoc-id input with the round-tripped value."""
-    html = client.get("/search/sem?q=foo&tdoc-id=R5-260001").text
+    html = client.get("/tdocs/search/sem?q=foo&tdoc-id=R5-260001").text
     assert 'name="tdoc-id"' in html
     assert 'value="R5-260001"' in html
 
 
 def test_search_form_fts5_has_semantic_input(client: TestClient) -> None:
     """The FTS5 form carries a Semantic input with the round-tripped value."""
-    html = client.get("/search?q=foo&sem=rerank+me").text
+    html = client.get("/tdocs/search?q=foo&sem=rerank+me").text
     assert 'name="sem"' in html
     assert 'value="rerank me"' in html
 
@@ -1835,7 +1893,7 @@ def test_search_form_fts5_has_semantic_input(client: TestClient) -> None:
 def test_search_form_sem_has_full_filters(client: TestClient) -> None:
     """The semantic form carries TSG/Meeting/Release/Spec/Since/Until inputs."""
     html = client.get(
-        "/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e&release=18"
+        "/tdocs/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e&release=18"
         "&spec=38.300"
         "&since=%3E%3D%20%272026-01-01%27"
         "&until=%3C%3D%20%272026-06-01%27"
@@ -1850,23 +1908,39 @@ def test_search_form_sem_has_full_filters(client: TestClient) -> None:
 
 def test_search_form_sem_keeps_fts5_weight_and_limit(client: TestClient) -> None:
     """The semantic form keeps the FTS5 weight + Limit controls."""
-    html = client.get("/search/sem?q=foo").text
+    html = client.get("/tdocs/search/sem?q=foo").text
     assert 'name="fts5_weight"' in html
     assert 'name="limit"' in html
 
 
 def test_search_page_links_to_hybrid(client: TestClient) -> None:
-    """The FTS5 search page links to /search/sem at top right."""
-    html = client.get("/search?q=foo").text
-    assert 'href="/search/sem"' in html
+    """The FTS5 search page links to /tdocs/search/sem at top right."""
+    html = client.get("/tdocs/search?q=foo").text
+    assert 'href="/tdocs/search/sem"' in html
     assert "Hybrid search" in html
 
 
 def test_search_sem_page_links_to_fts5(client: TestClient) -> None:
-    """The semantic search page links to /search at top right."""
-    html = client.get("/search/sem?q=foo").text
-    assert 'href="/search"' in html
+    """The semantic search page links to /tdocs/search at top right."""
+    html = client.get("/tdocs/search/sem?q=foo").text
+    assert 'href="/tdocs/search"' in html
     assert "FTS5 search" in html
+
+
+def test_search_legacy_paths_are_absent(client: TestClient) -> None:
+    """The old search and rebuild paths are no longer registered."""
+    assert client.get("/search").status_code == 404
+    assert client.get("/search/sem").status_code == 404
+    assert client.post("/jobs/search/rebuild", json={}).status_code == 404
+
+
+def test_tdoc_search_route_wins_over_tdoc_detail(client: TestClient) -> None:
+    """The exact TDoc search route takes precedence over ``/tdocs/{tdoc_id}``."""
+    response = client.get("/tdocs/search?format=json")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert all("tdoc" not in hit for hit in body)
 
 
 # ---------------------------------------------------------------------------
@@ -1879,6 +1953,8 @@ def test_static_css_served(client: TestClient) -> None:
     response = client.get("/static/style.css")
     assert response.status_code == 200
     assert "doc3gpp" in response.text or "color" in response.text
+    assert ".pagination" in response.text
+    assert "flex-wrap: wrap" in response.text
 
 
 def test_static_htmx_served(client: TestClient) -> None:
@@ -2225,6 +2301,24 @@ def test_spec_rows_coerces_cells() -> None:
         "title": "NR conformance",
         "status": "-",
     }
+
+
+def test_spec_rows_preserves_parsed_null() -> None:
+    from doc3gpp.models.spec import Spec
+    from doc3gpp.web.render import spec_rows
+
+    spec = Spec(spec_id="36.579-5", type="TS", title="NR", parsed=None)
+
+    assert spec_rows([spec], ["parsed"]) == [{"parsed": None}]
+
+
+def test_spec_version_rows_preserves_parsed_boolean() -> None:
+    from doc3gpp.models.spec import SpecVersion
+    from doc3gpp.web.render import spec_version_rows
+
+    version = SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)
+
+    assert spec_version_rows([version], ["parsed"]) == [{"parsed": False}]
 
 
 class FakeTestCaseService:
@@ -2604,6 +2698,690 @@ class FakeSpecService:
         return [v for v in self._versions if v.spec_id == spec_id][offset : offset + limit]
 
 
+class FakeSpecDocService:
+    """Stub the public spec-document reads used by the version page."""
+
+    def __init__(
+        self,
+        source: SpecDocSource | None = None,
+        toc: SpecDocToc | None = None,
+        chunks: list[SpecDocChunk] | None = None,
+        total_chunks: int | None = None,
+    ) -> None:
+        self.source = source
+        self.toc = toc
+        self.chunks = list(chunks or [])
+        self.total_chunks = len(self.chunks) if total_chunks is None else total_chunks
+        self.calls: list[tuple[Any, ...]] = []
+
+    def get_source(self, spec_id: str, version: str) -> SpecDocSource | None:
+        self.calls.append(("source", spec_id, version))
+        return self.source
+
+    def get_toc(
+        self, spec_id: str, version: str, *, release: str | None = None
+    ) -> SpecDocToc:
+        self.calls.append(("toc", spec_id, version, release))
+        if self.toc is None:
+            raise SpecDocUnknownVersionError("no parsed TOC")
+        return self.toc
+
+    def count_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+    ) -> int:
+        self.calls.append(("count", spec_id, version, release, sections, tables))
+        return self.total_chunks
+
+    def list_chunks(
+        self,
+        spec_id: str,
+        *,
+        version: str,
+        release: str | None = None,
+        sections: str | None = None,
+        tables: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[SpecDocChunk]:
+        self.calls.append(
+            ("chunks", spec_id, version, release, sections, tables, limit, offset)
+        )
+        return self.chunks[offset : offset + limit]
+
+
+def _spec_doc_source(*, parsed: bool) -> SpecDocSource:
+    return SpecDocSource(
+        spec_id="36.579-5",
+        version="18.0.0",
+        release="Rel-18",
+        ftp_url="https://www.3gpp.org/ftp/spec-doc.zip",
+        downloaded_at=datetime(2026, 5, 2, tzinfo=timezone.utc),
+        parsed_at=(
+            datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc) if parsed else None
+        ),
+        chunk_count=2 if parsed else 0,
+        docx_count=1 if parsed else 0,
+    )
+
+
+@pytest.mark.parametrize(
+    "current,total,expected",
+    [
+        (1, 0, []),
+        (1, 1, [1]),
+        (3, 8, list(range(1, 9))),
+        (6, 11, list(range(1, 11)) + [None]),
+        (7, 11, [None, *range(2, 12)]),
+        (6, 12, list(range(1, 11)) + [None]),
+        (7, 12, [None, *range(3, 13)]),
+        (8, 12, [None, *range(3, 13)]),
+        (1, 20, list(range(1, 11)) + [None]),
+        (6, 20, list(range(1, 11)) + [None]),
+        (7, 20, [None, *range(3, 13), None]),
+        (16, 20, [None, *range(11, 21)]),
+        (20, 20, [None, *range(11, 21)]),
+    ],
+)
+def test_spec_doc_page_items_uses_rolling_ten_page_window(
+    current: int, total: int, expected: list[int | None]
+) -> None:
+    assert _spec_doc_page_items(current, total) == expected
+
+
+def _spec_doc_toc() -> SpecDocToc:
+    return SpecDocToc(
+        spec_id="36.579-5",
+        version="18.0.0",
+        release="Rel-18",
+        entries=[
+            SpecDocTocEntry(
+                level=1,
+                section_no="1",
+                title="Scope",
+                source_file="36.579-5.docx",
+                file_order=0,
+            )
+        ],
+        files=[
+            SpecDocTocFile(
+                source_file="36.579-5.docx",
+                file_order=0,
+                first_section="1",
+            )
+        ],
+        docx_count=1,
+    )
+
+
+def _spec_doc_chunks(count: int = 3) -> list[SpecDocChunk]:
+    return [
+        SpecDocChunk(
+            file_order=0,
+            source_file="36.579-5.docx",
+            sections=f"{index + 1} Section {index + 1}",
+            tables=None,
+            text=f"Chunk text {index}",
+            chunk_id=f"36.579-5@18.0.0#{index}",
+            spec_id="36.579-5",
+            version="18.0.0",
+            release="Rel-18",
+            chunk_index=index,
+        )
+        for index in range(count)
+    ]
+
+
+def _override_spec_doc_services(
+    client: TestClient, service: FakeSpecDocService
+) -> None:
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    client.app.dependency_overrides[get_spec_doc_service] = lambda: service
+
+
+def _clear_spec_doc_services(client: TestClient) -> None:
+    client.app.dependency_overrides.pop(get_spec_service, None)
+    client.app.dependency_overrides.pop(get_spec_doc_service, None)
+
+
+def test_spec_doc_show_unparsed_state(client: TestClient) -> None:
+    service = FakeSpecDocService(source=_spec_doc_source(parsed=False))
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "18.0.0" in response.text
+    assert "Parse document" in response.text
+    assert "Scope" not in response.text
+    assert "Force re-parse" not in response.text
+    assert 'data-source-parsed="false"' in response.text
+    assert not any(call[0] in {"count", "toc", "chunks"} for call in service.calls)
+
+
+def test_spec_doc_show_parsed_state_renders_toc_and_chunks(
+    client: TestClient,
+) -> None:
+    chunks = _spec_doc_chunks(2)
+    chunks[0].sections = "5 Scope\n6 Details"
+    chunks[0].tables = "Table 1 Values\nTable 2 Timers"
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=chunks,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Scope" in response.text
+    assert "Chunk text 0" in response.text
+    assert "36.579-5.docx" in response.text
+    assert "Source files" in response.text
+    assert "first section 1" in response.text
+    assert "Force re-parse" in response.text
+    assert 'data-source-parsed="true"' in response.text
+    assert "18.0.0" in response.text
+    assert "2 chunk" in response.text
+    assert '<details class="spec-doc-toc-details' in response.text
+    toc_tag = response.text.split('<details class="spec-doc-toc-details', 1)[1].split(">", 1)[0]
+    assert " open" not in toc_tag
+    for index in range(len(chunks)):
+        assert (
+            f'<details class="card spec-doc-chunk" id="chunk-{index}">'
+            in response.text
+        )
+        assert f'id="chunk-{index}" open' not in response.text
+    assert "<summary>" in response.text
+    assert "5 Scope\n6 Details" in response.text
+    assert "Table 1 Values\nTable 2 Timers" in response.text
+    assert 'id="chunk-0" open' not in response.text
+    assert any(call[0] == "toc" for call in service.calls)
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 21, 0
+    )
+
+
+def test_spec_doc_show_pagination_forwards_filters_and_uses_probe(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(5),
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&sections=%255.1%25&tables=%25UE%25&limit=2&offset=2"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Chunk text 2" in response.text
+    assert "Chunk text 3" in response.text
+    assert "Chunk text 4" not in response.text
+    assert "sections=%255.1%25" in response.text
+    assert "tables=%25UE%25" in response.text
+    assert "offset=4" in response.text
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, "%5.1%", "%UE%", 3, 2
+    )
+
+
+def test_spec_doc_show_middle_page_renders_filtered_pagination_metadata(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&release=Rel-18&sections=%255.1%25&tables=%25UE%25&limit=2&offset=12"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert service.calls[2] == (
+        "count", "36.579-5", "18.0.0", "Rel-18", "%5.1%", "%UE%"
+    )
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", "Rel-18", "%5.1%", "%UE%", 3, 12
+    )
+    assert "Showing 13–14" in response.text
+    assert "[7]" in response.text
+    assert "..." in response.text
+    assert "first" in response.text
+    assert "prev" in response.text
+    assert "next" in response.text
+    assert "last" in response.text
+    assert "offset=0" in response.text
+    assert "offset=10" in response.text
+    assert "version=18.0.0" in response.text
+    assert "release=Rel-18" in response.text
+    assert "sections=%255.1%25" in response.text
+    assert "tables=%25UE%25" in response.text
+
+
+@pytest.mark.parametrize(
+    "requested_offset,expected_offset,expected_range",
+    [
+        (1, 0, "Showing 1–10"),
+        (11, 10, "Showing 11–20"),
+    ],
+)
+def test_spec_doc_show_normalizes_offset_to_page_boundary(
+    client: TestClient,
+    requested_offset: int,
+    expected_offset: int,
+    expected_range: str,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            f"/specs/36.579-5/docs?version=18.0.0&limit=10&offset={requested_offset}"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert expected_range in response.text
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 11, expected_offset
+    )
+
+
+def test_spec_doc_show_first_page_renders_forward_navigation_only(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=10&offset=0"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert 'title="First page"' not in response.text
+    assert 'title="Previous page"' not in response.text
+    assert 'title="Next page"' in response.text
+    assert 'title="Last page"' in response.text
+
+
+def test_spec_doc_show_final_page_omits_forward_navigation(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(31),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=10&offset=20"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "next ›" not in response.text
+    assert "last ››" not in response.text
+    assert "prev" in response.text
+    assert service.calls[2] == (
+        "count", "36.579-5", "18.0.0", None, None, None
+    )
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 11, 20
+    )
+
+
+def test_spec_doc_show_uses_filtered_total_for_page_count(
+    client: TestClient,
+) -> None:
+    source = _spec_doc_source(parsed=True)
+    source.chunk_count = 200
+    service = FakeSpecDocService(
+        source=source,
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(3),
+        total_chunks=3,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=2&offset=999"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Chunk text 2" in response.text
+    assert "Showing 3–3" in response.text
+    assert service.calls[2] == (
+        "count", "36.579-5", "18.0.0", None, None, None
+    )
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 3, 2
+    )
+
+
+def test_spec_doc_show_clamps_stale_offset_to_final_page(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&limit=10&offset=999"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Showing 21–25" in response.text
+    assert service.calls[-1] == (
+        "chunks", "36.579-5", "18.0.0", None, None, None, 11, 20
+    )
+
+
+def test_spec_doc_show_zero_filtered_chunks_omits_pagination(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(1),
+        total_chunks=0,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&sections=%255.1%25"
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "No document chunks match these filters." in response.text
+    assert "pagination" not in response.text
+    assert not any(call[0] == "chunks" for call in service.calls)
+
+
+def test_spec_doc_show_middle_page_htmx_matches_full_page_pagination(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(25),
+        total_chunks=25,
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0&sections=%255.1%25&tables=%25UE%25&limit=2&offset=12",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert '<div id="results"' in response.text
+    assert "Showing 13–14" in response.text
+    assert "first" in response.text
+    assert "prev" in response.text
+    assert "next" in response.text
+    assert "last" in response.text
+    assert "sections=%255.1%25" in response.text
+    assert "tables=%25UE%25" in response.text
+    assert "<!DOCTYPE" not in response.text
+    assert "<html" not in response.text
+
+
+def test_spec_doc_search_accepts_sections_and_tables(client: TestClient) -> None:
+    service = FakeSpecDocSearchService()
+    client.app.dependency_overrides[get_spec_doc_search_service] = lambda: service
+    response = client.get(
+        "/spec-docs/search?format=json&q=handover&sections=%255.1%25&tables=%25UE%25"
+    )
+    client.app.dependency_overrides.pop(get_spec_doc_search_service, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload[0]) == {
+        "chunk_id",
+        "spec_id",
+        "version",
+        "release",
+        "sections",
+        "tables",
+        "chunk_index",
+        "text",
+        "score",
+        "previews",
+    }
+    assert payload[0]["sections"] == "1 Handover"
+    assert payload[0]["tables"] is None
+
+    assert service.last_filters.sections == "%5.1%"
+    assert service.last_filters.tables == "%UE%"
+
+
+def test_spec_doc_search_query_spans_full_row(client: TestClient) -> None:
+    response = client.get("/spec-docs/search")
+
+    assert response.status_code == 200
+    assert 'label class="span-5" style="grid-column: span 5">Query' in response.text
+    assert 'name="sections"' in response.text
+    assert 'name="tables"' in response.text
+
+
+def test_spec_doc_semantic_query_and_fts5_query_are_full_width(
+    client: TestClient,
+) -> None:
+    client.app.dependency_overrides[get_spec_doc_semantic_service] = lambda: object()
+    try:
+        response = client.get("/spec-docs/search/sem")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_semantic_service, None)
+
+    assert response.status_code == 200
+    assert 'label class="span-5" style="grid-column: span 5">Query' in response.text
+    assert (
+        'label class="span-5" style="grid-column: span 5">FTS5 query'
+        in response.text
+    )
+    assert 'class="span-3">Query' not in response.text
+
+
+def test_spec_doc_search_results_render_combined_multiline_metadata(
+    client: TestClient,
+) -> None:
+    service = FakeSpecDocSearchService()
+    service._hits = [
+        SpecDocHit(
+            chunk_id="38.331@18.5.0#0",
+            spec_id="38.331",
+            version="18.5.0",
+            release="Rel-18",
+            sections="5 Scope\n6 Details",
+            tables="Table 1 Values\nTable 2 Timers",
+            chunk_index=0,
+            text="handover",
+            score=-1.0,
+            previews={},
+        ),
+    ]
+    client.app.dependency_overrides[get_spec_doc_search_service] = lambda: service
+    try:
+        response = client.get("/spec-docs/search?q=handover")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_search_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Sections</th>" in response.text
+    assert "<th>Tables</th>" in response.text
+    assert "5 Scope\n6 Details" in response.text
+    assert "Table 1 Values\nTable 2 Timers" in response.text
+    assert "/specs/38.331/docs?version=18.5.0#chunk-0" in response.text
+
+
+def test_spec_doc_semantic_vector_only_result_is_safe(client: TestClient) -> None:
+    class _VectorOnlyService:
+        def search(self, *_args: Any, **_kwargs: Any) -> list[SpecDocSemanticHit]:
+            return [
+                SpecDocSemanticHit(
+                    chunk_id="38.331@18.5.0#0",
+                    rrf_score=0.01,
+                    hit=None,
+                    rank_fts5=None,
+                    rank_vec=0,
+                    min_chunk_distance=0.1,
+                )
+            ]
+
+    client.app.dependency_overrides[get_spec_doc_semantic_service] = (
+        lambda: _VectorOnlyService()
+    )
+    try:
+        response = client.get("/spec-docs/search/sem?q=handover")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_semantic_service, None)
+
+    assert response.status_code == 200
+    assert "38.331@18.5.0#0" in response.text
+    assert "<td>-</td>" in response.text
+
+
+def test_spec_doc_show_zero_chunk_source_has_incomplete_message(
+    client: TestClient,
+) -> None:
+    source = _spec_doc_source(parsed=True)
+    source.chunk_count = 0
+    service = FakeSpecDocService(source=source, toc=_spec_doc_toc())
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "Parsed source contains zero chunks" in response.text
+    assert "No document chunks match these filters" not in response.text
+
+
+def test_spec_doc_show_htmx_returns_results_fragment(client: TestClient) -> None:
+    service = FakeSpecDocService(
+        source=_spec_doc_source(parsed=True),
+        toc=_spec_doc_toc(),
+        chunks=_spec_doc_chunks(1),
+    )
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=18.0.0",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert "<!DOCTYPE" not in response.text
+    assert "<html" not in response.text
+    assert '<div id="results"' in response.text
+
+
+def test_spec_doc_show_unknown_version_returns_404(client: TestClient) -> None:
+    service = FakeSpecDocService(source=_spec_doc_source(parsed=False))
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get(
+            "/specs/36.579-5/docs?version=99.0.0",
+            headers={"accept": "application/json"},
+        )
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "spec_doc_unknown_version"
+    assert "18.0.0" in response.json()["detail"]
+
+
+def test_get_spec_show_version_row_links_to_document_page(client: TestClient) -> None:
+    """Each spec version row links to its version-specific document page."""
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Docs</th>" in response.text
+    assert (
+        'href="/specs/36.579-5/docs?version=18.0.0">show</a>'
+        in response.text
+    )
+
+
+def test_spec_doc_show_renders_parse_form(client: TestClient) -> None:
+    """The version page exposes the JSON spec-document parse job form."""
+    service = FakeSpecDocService(source=_spec_doc_source(parsed=False))
+    _override_spec_doc_services(client, service)
+    try:
+        response = client.get("/specs/36.579-5/docs?version=18.0.0")
+    finally:
+        _clear_spec_doc_services(client)
+
+    assert response.status_code == 200
+    assert 'id="spec-doc-parse-form"' in response.text
+    assert 'action="/jobs/parse/spec-docs"' in response.text
+    assert 'data-spec-id="36.579-5"' in response.text
+    assert 'data-version="18.0.0"' in response.text
+    assert 'data-source-parsed="false"' in response.text
+    assert 'name="force"' not in response.text
+    assert 'id="spec-doc-parse-job-target"' in response.text
+    assert 'src="/static/js/job_poller.js"' in response.text
+    assert 'src="/static/js/spec_doc_parse.js"' in response.text
+
+
 def test_get_specs_renders_list(client: TestClient) -> None:
     """``GET /specs`` returns 200 with the spec list template."""
     from doc3gpp.web.deps import get_spec_service
@@ -2629,6 +3407,120 @@ def test_get_specs_json(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert any(row["spec_id"] == "36.579-5" for row in body)
+
+
+def test_get_specs_json_preserves_parsed_null_and_forwards_filter(
+    client: TestClient,
+) -> None:
+    """Spec list JSON preserves null parsed state and forwards true."""
+    from doc3gpp.models.spec import Spec
+    from doc3gpp.web.deps import get_spec_service
+
+    captured: dict[str, Any] = {}
+
+    class _RecordingSpecService(FakeSpecService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            captured.update(kwargs)
+            return [Spec(spec_id="36.579-5", type="TS", title="NR", parsed=None)]
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _RecordingSpecService()
+    try:
+        response = client.get("/specs?format=json&parsed=TRUE")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert response.json()[0]["parsed"] is None
+    assert captured["parsed"] is True
+
+
+def test_get_specs_rejects_invalid_parsed_query(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs?parsed=maybe")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 400
+
+
+def test_get_specs_omitted_or_empty_parsed_is_any(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    captured: list[bool | None] = []
+
+    class _RecordingSpecService(FakeSpecService):
+        def list_recent(self, **kwargs: Any) -> list[Any]:
+            captured.append(kwargs["parsed"])
+            return []
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _RecordingSpecService()
+    try:
+        omitted = client.get("/specs?format=json")
+        empty = client.get("/specs?format=json&parsed=")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert omitted.status_code == 200
+    assert empty.status_code == 200
+    assert captured == [None, None]
+
+
+def test_get_specs_parsed_filter_survives_form_and_pagination(
+    client: TestClient,
+) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    class _FullPageService(FakeSpecService):
+        def list_recent(self, **_kwargs: Any) -> list[Any]:
+            return list(self._specs)
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _FullPageService()
+    try:
+        response = client.get("/specs?parsed=TRUE&offset=10&limit=2")
+        htmx_response = client.get(
+            "/specs?parsed=TRUE&offset=10&limit=2",
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert 'name="parsed"' in response.text
+    assert 'value="true" selected' in response.text
+    assert htmx_response.status_code == 200
+    assert "parsed=TRUE" in htmx_response.text
+
+
+def test_get_specs_filter_form_has_any_true_false_choices(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert '<select name="parsed">' in response.text
+    assert ">Any</option>" in response.text
+    assert ">true</option>" in response.text
+    assert ">false</option>" in response.text
+
+
+def test_get_specs_renders_parsed_versions_column(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs", headers={"HX-Request": "true"})
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Parsed versions</th>" in response.text
 
 
 def test_get_specs_htmx_returns_partial(client: TestClient) -> None:
@@ -2691,6 +3583,41 @@ def test_get_spec_show_json(client: TestClient) -> None:
     assert body["spec"]["rapporteurs"] == "Ericsson LM"
     assert len(body["versions"]) == 1
     assert body["versions"][0]["version"] == "18.0.0"
+
+
+def test_get_spec_show_json_preserves_version_boolean(client: TestClient) -> None:
+    from doc3gpp.models.spec import Spec, SpecVersion
+    from doc3gpp.web.deps import get_spec_service
+
+    class _ParsedFalseSpecService(FakeSpecService):
+        def get(self, _spec_id: str) -> Any:
+            return Spec(spec_id="36.579-5", type="TS", title="NR")
+
+        def list_versions(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+            return [SpecVersion("36.579-5", "19.2.0", "ftp://x", parsed=False)]
+
+    client.app.dependency_overrides[get_spec_service] = lambda: _ParsedFalseSpecService()
+    try:
+        response = client.get("/specs/36.579-5?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert response.json()["versions"][0]["parsed"] is False
+
+
+def test_get_spec_show_renders_false_parsed_value(client: TestClient) -> None:
+    from doc3gpp.web.deps import get_spec_service
+
+    client.app.dependency_overrides[get_spec_service] = lambda: FakeSpecService()
+    try:
+        response = client.get("/specs/36.579-5")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_service, None)
+
+    assert response.status_code == 200
+    assert "<th>Parsed</th>" in response.text
+    assert "<td>false</td>" in response.text
 
 
 def test_get_specs_forwards_rapporteurs_filter(client: TestClient) -> None:
@@ -3178,6 +4105,18 @@ def test_spec_sync_js_wires_on_terminal_reload() -> None:
     text = (_JS_DIR / "spec_sync.js").read_text(encoding="utf-8")
     assert "onTerminal" in text
     assert "window.location.reload" in text
+
+
+def test_spec_doc_parse_js_posts_version_scoped_json() -> None:
+    """The spec-doc parse wrapper binds the shared JSON job poller contract."""
+    body = (_JS_DIR / "spec_doc_parse.js").read_text(encoding="utf-8")
+    assert "bindJobPolling" in body
+    assert 'contentType: "application/json"' in body
+    assert '"spec_ids"' in body
+    assert '"version"' in body
+    assert '"force"' in body
+    assert "sourceParsed &&" in body
+    assert "spec-doc-parse-form" in body
 
 
 # ---------------------------------------------------------------------------

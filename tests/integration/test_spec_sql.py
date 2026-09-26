@@ -212,6 +212,16 @@ def test_list_rich_filters(session_factory) -> None:
     assert [s.spec_id for s in repo.list(initial_release="Rel-20")] == []
 
 
+def test_list_without_limit_returns_all_rows(session_factory) -> None:
+    repo = SQLAlchemySpecRepository(session_factory)
+    for index in range(55):
+        repo.upsert(Spec(spec_id=f"99.{index:03d}", type="TS", title="T"))
+
+    rows = repo.list(limit=None, offset=0)
+
+    assert len(rows) == 55
+
+
 def test_list_rapporteurs_filter(session_factory) -> None:
     repo = SQLAlchemySpecRepository(session_factory)
     repo.upsert(Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5", rapporteurs="Ericsson LM"))

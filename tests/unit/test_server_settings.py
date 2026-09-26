@@ -12,11 +12,11 @@ from doc3gpp.settings.schema import MCPSettings, ServerSettings, Settings
 
 
 def test_server_defaults() -> None:
-    """``ServerSettings`` ships with safe loopback defaults."""
+    """``ServerSettings`` defaults to enabled on the configured loopback port."""
     settings = Settings()
     assert settings.server.host == "127.0.0.1"
-    assert settings.server.port == 8765
-    assert settings.server.enabled is False
+    assert settings.server.port == 13999
+    assert settings.server.enabled is True
 
 
 def test_mcp_defaults() -> None:

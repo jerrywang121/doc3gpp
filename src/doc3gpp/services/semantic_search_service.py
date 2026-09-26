@@ -133,7 +133,7 @@ class SemanticSearchService:
 
         ``query`` is always embedded; it never feeds FTS5. ``fts5_query``,
         when provided, runs through :class:`SearchQueryBuilder` (same
-        preprocessing as ``doc3gpp search query``) and feeds the FTS5
+        preprocessing as ``doc3gpp tdoc search query``) and feeds the FTS5
         path; when ``None``, the FTS5 path and RRF are skipped — only
         vector KNN results return, ranked by cosine distance, dressed as
         :class:`SemanticSearchHit` with synthesized metadata stubs.

@@ -1,0 +1,25 @@
+<div id="results" hx-target="this" hx-swap="outerHTML">
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+
+  {% if query %}
+    <p class="meta">
+      Query <code>{{ query }}</code> ·
+      {% if mode == 'sem' %}
+        semantic rerank
+      {% else %}
+        {{ total }} FTS5 hit{{ '' if total == 1 else 's' }}
+      {% endif %}
+    </p>
+
+    {% if hits %}
+      <label class="fold-toggle">
+        <input type="checkbox" id="fold-toggle">
+        Expand all matching fields
+      </label>
+    {% endif %}
+
+    {% include "partials/spec_doc_search_results_table.html" %}
+  {% endif %}
+</div>

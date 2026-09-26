@@ -63,6 +63,7 @@ def test_status_reports_running_when_pidfile_alive(cli_server: Settings, monkeyp
 
     import doc3gpp.cli_server as cli_server_module
 
+    monkeypatch.setattr(cli_server_module.sys, "platform", "linux")
     monkeypatch.setattr(cli_server_module.os, "kill", lambda pid, sig: None)
     result = _invoke(["status"])
     assert result.exit_code == 0, result.output
@@ -123,6 +124,46 @@ def test_logs_job_id(cli_server: Settings, sqlite_env, monkeypatch: pytest.Monke
     assert "world" in result.output
 
 
+def test_stop_windows_uses_native_termination_and_process_probe(
+    cli_server: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import doc3gpp.cli_server as cli_server_module
+
+    pid_path = cli_server.cache.dir / "server.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("4242\n", encoding="utf-8")
+
+    alive = True
+    terminated: list[int] = []
+    probes: list[int] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        raise AssertionError("Windows stop must not call os.kill")
+
+    def fake_windows_terminate(pid: int) -> None:
+        nonlocal alive
+        terminated.append(pid)
+        alive = False
+
+    def fake_windows_alive(pid: int) -> bool:
+        probes.append(pid)
+        return alive
+
+    monkeypatch.setattr(cli_server_module.sys, "platform", "win32")
+    monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
+    monkeypatch.setattr(cli_server_module, "_terminate_pid_windows", fake_windows_terminate)
+    monkeypatch.setattr(cli_server_module, "_is_pid_alive_windows", fake_windows_alive)
+    monkeypatch.setattr(cli_server_module.time, "sleep", lambda seconds: None)
+
+    result = _invoke(["stop"])
+
+    assert result.exit_code == 0, result.output
+    assert terminated == [4242]
+    assert probes == [4242]
+    assert not pid_path.exists()
+    assert "server stopped" in result.output
+
+
 def test_stop_signals_and_removes_pidfile(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     import doc3gpp.cli_server as cli_server_module
 
@@ -143,16 +184,18 @@ def test_stop_signals_and_removes_pidfile(cli_server: Settings, monkeypatch: pyt
         if sig == 15:  # SIGTERM
             dead = True
 
+    monkeypatch.setattr(cli_server_module.sys, "platform", "linux")
     monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
     result = _invoke(["stop"])
     assert result.exit_code == 0, result.output
     assert signal.SIGTERM in signals
-    assert signal.SIGKILL not in signals
+    if hasattr(signal, "SIGKILL"):
+        assert signal.SIGKILL not in signals
     assert not pid_path.exists()
     assert "stopped" in result.output
 
 
-def test_stop_escalates_to_sigkill_when_ungraceful(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stop_escalates_when_ungraceful(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     import doc3gpp.cli_server as cli_server_module
 
     pid_path = cli_server.cache.dir / "server.pid"
@@ -167,17 +210,22 @@ def test_stop_escalates_to_sigkill_when_ungraceful(cli_server: Settings, monkeyp
         # Simulate a process that ignores SIGTERM but dies on SIGKILL:
         if sig == signal.SIGTERM:
             return
-        if sig == 0:
+        if sig == 0 and time.monotonic() > deadline[0]:
             # pretend alive while the loop polls, then die after the timeout
-            if time.monotonic() > deadline[0]:
-                raise ProcessLookupError()
+            raise ProcessLookupError()
 
+    monkeypatch.setattr(cli_server_module.sys, "platform", "linux")
     monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
     monkeypatch.setattr(cli_server_module.time, "sleep", lambda s: None)
     result = _invoke(["stop"])
     assert result.exit_code == 0, result.output
     assert signal.SIGTERM in signals
-    assert signal.SIGKILL in signals
+    expected_final_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    assert expected_final_signal in signals
+    if expected_final_signal == signal.SIGTERM:
+        assert "SIGTERM as final termination signal" in result.output
+    else:
+        assert "SIGKILL as final termination signal" in result.output
     assert not pid_path.exists()
 
 

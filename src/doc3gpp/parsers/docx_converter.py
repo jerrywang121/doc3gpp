@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import io
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -322,4 +323,129 @@ def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
 __all__ = [
     "PythonDocxNotInstalledError",
     "convert_document_to_markdown",
+    "convert_document_to_blocks",
+    "HeadingBlock",
+    "ParagraphBlock",
+    "TableBlock",
+    "Block",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Block converter (spec-doc corpus).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True, frozen=True)
+class HeadingBlock:
+    level: int
+    section_no: str | None
+    title: str
+    raw: str
+
+
+@dataclass(slots=True, frozen=True)
+class ParagraphBlock:
+    text: str
+
+
+@dataclass(slots=True, frozen=True)
+class TableBlock:
+    gfm: str
+    table_no: str | None = None
+    table_title: str | None = None
+
+
+Block = HeadingBlock | ParagraphBlock | TableBlock
+
+
+_SECTION_RE = re.compile(r"^(\d[A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*)\s+(.*)$", re.DOTALL)
+_TABLE_IDENTIFIER = (
+    r"\d[A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*"
+    r"(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?"
+)
+_CAPTION_RE = re.compile(
+    rf"^Table\s+(?P<table_no>{_TABLE_IDENTIFIER})"
+    r"(?:\s*:\s*|\s*-\s*|\s+)(?P<title>.+)$",
+    re.IGNORECASE,
+)
+
+
+def _split_section(text: str) -> tuple[str | None, str]:
+    m = _SECTION_RE.match(text.strip())
+    if m:
+        return m.group(1), m.group(2).strip()
+    return None, text.strip()
+
+
+def _split_table_caption(text: str) -> tuple[str | None, str | None]:
+    normalized = " ".join(text.split())
+    match = _CAPTION_RE.fullmatch(normalized)
+    if match is None:
+        return None, None
+    return match.group("table_no"), match.group("title").strip()
+
+
+def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingBlock | ParagraphBlock | TableBlock]:
+    """Convert ``.docx`` bytes to a flat list of heading/paragraph/table blocks.
+
+    Same extension guard, missing-dependency path, and empty-render error
+    as :func:`convert_document_to_markdown`; only the wrapper is new — GFM
+    rendering (:func:`_table_to_markdown`) and heading-style logic are
+    unchanged.
+    """
+    suffix = Path(filename).suffix.lower()
+    if suffix != ".docx":
+        raise ValueError(f"Unsupported extension {suffix!r}; only .docx is supported")
+    try:
+        document = Document(io.BytesIO(doc_bytes))
+    except ImportError as exc:  # pragma: no cover - only triggered when [extract] missing
+        logger.error(
+            "python-docx is not installed; it is required for document conversion. "
+            "Install with `pip install doc3gpp[extract]`."
+        )
+        raise PythonDocxNotInstalledError() from exc
+    raw_blocks: list[tuple[str, object]] = []  # ("h"|"p"|"t", payload)
+    body = document.element.body
+    for child in body.iterchildren():
+        if _is_paragraph(child):
+            p = Paragraph(child, document)
+            md = _clean_text(_paragraph_to_markdown(p))
+            if not md:
+                continue
+            style = _style_name(p).lower()
+            if style.startswith("heading") or style.startswith("title") or style.startswith("subtitle"):
+                level = 1
+                if style.startswith("heading"):
+                    try:
+                        level = int(style.split()[-1])
+                    except ValueError:
+                        level = 1
+                sec, title = _split_section(md.lstrip("#").strip())
+                raw_blocks.append(("h", HeadingBlock(level, sec, title, md)))
+            else:
+                raw_blocks.append(("p", ParagraphBlock(md)))
+        elif _is_table(child):
+            t = Table(child, document)
+            gfm = _clean_text(_table_to_markdown(t))
+            if gfm:
+                raw_blocks.append(("t", TableBlock(gfm)))
+    # second pass: attach "Table N: title" captions from adjacent paragraphs
+    out: list = []
+    for i, (kind, payload) in enumerate(raw_blocks):
+        if kind == "t":
+            no, title = None, None
+            if i > 0 and raw_blocks[i - 1][0] == "p":
+                no, title = _split_table_caption(
+                    raw_blocks[i - 1][1].text  # type: ignore[union-attr]
+                )
+            if no is None and i + 1 < len(raw_blocks) and raw_blocks[i + 1][0] == "p":
+                no, title = _split_table_caption(
+                    raw_blocks[i + 1][1].text  # type: ignore[union-attr]
+                )
+            out.append(TableBlock(payload.gfm, no, title))  # type: ignore[union-attr]
+        else:
+            out.append(payload)
+    if not out:
+        raise RuntimeError(f"python-docx returned empty result for {filename}")
+    return out

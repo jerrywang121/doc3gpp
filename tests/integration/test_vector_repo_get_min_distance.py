@@ -32,7 +32,6 @@ def repo_and_seeded_db(sqlite_env):
     is hardcoded to ``FLOAT[384]``; this fixture mirrors the loading
     sequence without depending on the production DDL.
     """
-    import sqlite_vec
     from sqlalchemy import text
 
     from doc3gpp.storage.db.session import get_engine
@@ -52,7 +51,9 @@ def repo_and_seeded_db(sqlite_env):
                 "VALUES ('embedding_dim', '4')"
             )
         )
-        sqlite_vec.load(conn.connection.driver_connection)
+        from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
+        load_sqlite_vec(conn.connection.driver_connection)
         conn.execute(
             text(
                 """

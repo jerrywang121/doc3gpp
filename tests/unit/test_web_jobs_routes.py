@@ -246,7 +246,7 @@ def test_post_parse_tdocs_single_tdoc_payload(client: Any) -> None:
 
 def test_post_search_rebuild(client: Any) -> None:
     c, repo, _ = client
-    r = c.post("/jobs/search/rebuild", json={"stale_only": True, "resume": False})
+    r = c.post("/jobs/tdocs/search/rebuild", json={"stale_only": True, "resume": False})
     assert r.status_code == 202
     job = repo.get(r.json()["job_id"])
     assert job is not None
@@ -341,8 +341,15 @@ def test_get_jobs_filters_by_status(client: Any) -> None:
     assert [job["job_id"] for job in body["jobs"]] == [queued.id]
 
 
-def test_get_jobs_pagination(client: Any) -> None:
+def test_get_jobs_pagination(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     c, repo, _ = client
+    from datetime import datetime, timedelta, timezone
+
+    from doc3gpp.storage.repositories import jobs_sql
+
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    timestamps = iter(base + timedelta(seconds=i) for i in range(5))
+    monkeypatch.setattr(jobs_sql, "_utcnow", lambda: next(timestamps))
     created = [repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"}) for _ in range(5)]
     r = c.get("/jobs?format=json&limit=2&offset=1")
     body = r.json()

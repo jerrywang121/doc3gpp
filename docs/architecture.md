@@ -621,9 +621,12 @@ and syncs each through the `--tsg` path below.
 
 1. `doc3gpp spec doc parse --spec <id>... [--release R] [--version V]
    [--force]` calls `SpecDocService.parse_many`. The version resolves via
-   `resolve_spec_doc_version` — numeric sort on `SpecVersion.version`
-   (segment-wise ints, non-numeric → 0), optional `release` / `version`
-   pins, newest wins; a miss raises `SpecDocUnknownSpecError` (no
+   `resolve_spec_doc_version` — for automatic selection, filters to rows with
+   a non-empty `.zip` URL, then applies numeric sort on `SpecVersion.version`
+   (segment-wise ints, non-numeric → 0); optional `release` filters before
+   selection. An explicit `version` is strict and raises
+   `SpecDocUnknownVersionError` if its ZIP link is missing. A miss raises
+   `SpecDocUnknownSpecError` (no
    `spec_versions` rows — run `spec sync --spec-id` first) or
    `SpecDocUnknownVersionError`. `parse_many` calls `parse`, which fetches
    the ZIP when absent via internal `fetch_spec_doc_zip` or uses the cache at

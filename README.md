@@ -281,7 +281,7 @@ values on every version row.
 ### `spec doc` — specification document corpus
 
 ```bash
-# fetch-if-missing, convert every .docx, chunk, and auto-index
+# use newest version with a published .zip, fetch-if-missing, convert every .docx, chunk, and auto-index
 doc3gpp spec doc parse --spec 38.331 --spec 38.523-1
 doc3gpp spec doc parse --spec 38.331 --force  # re-download and re-parse
 

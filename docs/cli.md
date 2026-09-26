@@ -2489,7 +2489,10 @@ defaulting to `~/.cache/doc3gpp/specs`; the TDoc cache remains
 `~/.cache/doc3gpp/tdocs`.
 
 Versions resolve at runtime — `parse` picks the numeric-newest stored
-`SpecVersion.version` (no pins) unless `--release`/`--version` pins one. Run
+`SpecVersion.version` with a non-empty `.zip` download link (no pins) unless
+`--release`/`--version` pins one. A version listed without a ZIP link is treated
+as not yet published for automatic selection. An explicit `--version` remains
+strict and fails clearly if that version has no ZIP link. Run
 `doc3gpp spec sync --spec-id <id>` first so the `spec_versions` rows exist.
 
 ### doc3gpp spec doc parse
@@ -2512,8 +2515,12 @@ Options:
 
 Behavior:
 
-- Resolves the version via `resolve_spec_doc_version`; parse fetches the ZIP when
-  it is missing and records `spec_doc_sources.downloaded_at` before conversion.
+- Resolves the newest numerically ordered version with a `.zip` URL via
+  `resolve_spec_doc_version`; rows without a ZIP URL are ignored for automatic
+  selection. `--release` filters candidates before selection. An explicit
+  `--version` selects only that version and reports an unpublished ZIP clearly.
+  Parse fetches the ZIP when it is missing and records
+  `spec_doc_sources.downloaded_at` before conversion.
 - `--force` re-downloads the resolved ZIP and then re-parses it, including when
   the `(spec_id, version)` pair already has `parsed_at`.
 - Per spec: immutable-skip when the `(spec_id, version)` source row already
@@ -2542,7 +2549,7 @@ Behavior:
 Examples:
 
 ```bash
-# Parse the newest version of 38.331.
+# Parse the newest version of 38.331 with a published ZIP download link.
 doc3gpp spec doc parse --spec 38.331
 
 # Parse two specs at a pinned release.

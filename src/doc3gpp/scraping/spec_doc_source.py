@@ -24,23 +24,40 @@ def resolve_spec_doc_version(
 ) -> SpecVersion:
     if not versions:
         raise SpecDocUnknownVersionError("no versions stored for this spec", available=[])
-    pool = [
-        v
-        for v in versions
-        if (release is None or v.release == release) and (version is None or v.version == version)
-    ]
-    if not pool:
-        avail = sorted(versions, key=_version_key, reverse=True)[:5]
-        raise SpecDocUnknownVersionError(
-            f"unknown version release={release!r} version={version!r}; available: "
-            + ", ".join(f"{v.version} ({v.release})" for v in avail),
-            available=[v.version for v in avail],
-        )
+
+    pool = [v for v in versions if release is None or v.release == release]
     if version is not None:
         exact = [v for v in pool if v.version == version]
-        if exact:
-            return exact[0]
-    return sorted(pool, key=_version_key, reverse=True)[0]
+        if not exact:
+            avail = sorted(versions, key=_version_key, reverse=True)[:5]
+            raise SpecDocUnknownVersionError(
+                f"unknown version release={release!r} version={version!r}; available: "
+                + ", ".join(f"{v.version} ({v.release})" for v in avail),
+                available=[v.version for v in avail],
+            )
+        selected = exact[0]
+        if not _has_zip_url(selected):
+            raise SpecDocUnknownVersionError(
+                f"version {selected.version} has no downloadable .zip link; "
+                "the archive may not have been published yet",
+                available=[selected.version],
+            )
+        return selected
+
+    downloadable = [v for v in pool if _has_zip_url(v)]
+    if not downloadable:
+        release_label = f" for release {release!r}" if release is not None else ""
+        raise SpecDocUnknownVersionError(
+            f"no downloadable .zip links found{release_label}; "
+            "the archive may not have been published yet",
+            available=[v.version for v in sorted(pool, key=_version_key, reverse=True)[:5]],
+        )
+    return max(downloadable, key=_version_key)
+
+
+def _has_zip_url(version: SpecVersion) -> bool:
+    """Return whether a version row carries a non-empty ZIP download link."""
+    return version.ftp_url.strip().lower().split("?", 1)[0].split("#", 1)[0].endswith(".zip")
 
 
 def fetch_spec_doc_zip(ftp_url: str, client=None) -> bytes:

@@ -1,7 +1,8 @@
-from doc3gpp.models.spec import SpecVersion
-from doc3gpp.scraping.spec_doc_source import fetch_spec_doc_zip, resolve_spec_doc_version
-from doc3gpp.models.spec_doc import SpecDocUnknownVersionError
 import pytest
+
+from doc3gpp.models.spec import SpecVersion
+from doc3gpp.models.spec_doc import SpecDocUnknownVersionError
+from doc3gpp.scraping.spec_doc_source import fetch_spec_doc_zip, resolve_spec_doc_version
 
 
 class _FakeClient:
@@ -25,6 +26,14 @@ def _v(ver, rel="Rel-18"):
 def test_default_newest_numeric():
     vs = [_v("18.2.1"), _v("18.10.1"), _v("18.5.0")]
     assert resolve_spec_doc_version(vs).version == "18.10.1"
+
+
+def test_default_chooses_newest_version_with_zip_url():
+    vs = [_v("19.5.0", "Rel-19"), _v("19.6.0", "Rel-19"), _v("19.7.0", "Rel-19")]
+    vs[1].ftp_url = "https://www.3gpp.org/ftp/x/19.6.0.doc"
+    vs[2].ftp_url = ""
+
+    assert resolve_spec_doc_version(vs).version == "19.5.0"
 
 
 def test_exact_release_version():
@@ -56,6 +65,29 @@ def test_empty_versions_raises_with_empty_available():
 def test_release_only_picks_newest_in_release():
     vs = [_v("18.2.1", "Rel-18"), _v("18.10.1", "Rel-18"), _v("17.3.0", "Rel-17")]
     assert resolve_spec_doc_version(vs, release="Rel-17").version == "17.3.0"
+
+
+def test_release_selection_skips_newer_unpublished_version():
+    versions = [_v("19.5.0", "Rel-19"), _v("19.6.0", "Rel-19"), _v("18.9.0", "Rel-18")]
+    versions[1].ftp_url = ""
+
+    assert resolve_spec_doc_version(versions, release="Rel-19").version == "19.5.0"
+
+
+def test_explicit_version_without_zip_url_stays_strict():
+    versions = [_v("19.5.0", "Rel-19"), _v("19.6.0", "Rel-19")]
+    versions[1].ftp_url = ""
+
+    with pytest.raises(SpecDocUnknownVersionError, match="19.6.0.*downloadable"):
+        resolve_spec_doc_version(versions, version="19.6.0")
+
+
+def test_no_downloadable_version_reports_publication_state():
+    versions = [_v("19.5.0", "Rel-19")]
+    versions[0].ftp_url = ""
+
+    with pytest.raises(SpecDocUnknownVersionError, match="no downloadable .zip links"):
+        resolve_spec_doc_version(versions)
 
 
 def test_non_numeric_segment_sorts_as_zero():

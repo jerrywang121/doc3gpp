@@ -260,6 +260,7 @@ def test_is_pid_alive_recognises_running_and_dead(monkeypatch) -> None:
         if not alive:
             raise ProcessLookupError()
 
+    monkeypatch.setattr(cli_server_module.sys, "platform", "linux")
     monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
     assert _is_pid_alive(12345) is True
     alive = False

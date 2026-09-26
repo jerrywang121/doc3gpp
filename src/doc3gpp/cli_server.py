@@ -55,14 +55,80 @@ def _read_pid(settings: Settings) -> int | None:
         return None
 
 
-def _is_pid_alive(pid: int) -> bool:
-    """Return ``True`` if a process with ``pid`` is currently running.
+def _is_pid_alive_windows(pid: int) -> bool:
+    """Return whether a Windows process exists without using ``os.kill(pid, 0)``."""
+    import ctypes
+    from ctypes import wintypes
 
-    Uses ``os.kill(pid, 0)`` (signal 0 = existence probe). Returns
-    ``False`` on ``ProcessLookupError`` (no such pid); propagates
-    ``PermissionError`` (a process exists but we cannot signal it — still
-    "alive" from the user's perspective).
-    """
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    open_process.restype = wintypes.HANDLE
+    get_exit_code = kernel32.GetExitCodeProcess
+    get_exit_code.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    get_exit_code.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    handle = open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 5:  # ERROR_ACCESS_DENIED: process exists but is not queryable.
+            return True
+        if error == 87:  # ERROR_INVALID_PARAMETER: no process has this pid.
+            return False
+        raise ctypes.WinError(error)
+
+    try:
+        exit_code = wintypes.DWORD()
+        if not get_exit_code(handle, ctypes.byref(exit_code)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return exit_code.value == 259  # STILL_ACTIVE
+    finally:
+        close_handle(handle)
+
+
+def _terminate_pid_windows(pid: int) -> None:
+    """Terminate a Windows process by PID using the native process API."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    open_process.restype = wintypes.HANDLE
+    terminate_process = kernel32.TerminateProcess
+    terminate_process.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    terminate_process.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(0x0001, False, pid)  # PROCESS_TERMINATE
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 5:  # ERROR_ACCESS_DENIED
+            raise PermissionError(error, "cannot terminate process", pid)
+        if error == 87:  # ERROR_INVALID_PARAMETER
+            raise ProcessLookupError(error, "process does not exist", pid)
+        raise ctypes.WinError(error)
+
+    try:
+        if not terminate_process(handle, 1):
+            error = ctypes.get_last_error()
+            if error == 5:
+                raise PermissionError(error, "cannot terminate process", pid)
+            if error == 87:
+                raise ProcessLookupError(error, "process does not exist", pid)
+            raise ctypes.WinError(error)
+    finally:
+        close_handle(handle)
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Return ``True`` if a process with ``pid`` is currently running."""
+    if sys.platform == "win32":
+        return _is_pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -262,7 +328,10 @@ def server_stop() -> None:
         click.echo("server is not running (no pid file).")
         return
     try:
-        os.kill(pid, signal.SIGTERM)
+        if sys.platform == "win32":
+            _terminate_pid_windows(pid)
+        else:
+            os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         click.echo(f"pid {pid} is not alive; removing stale pid file.")
         pid_path.unlink(missing_ok=True)
@@ -272,15 +341,16 @@ def server_stop() -> None:
 
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not _is_pid_alive(pid):
             break
         time.sleep(0.2)
     else:
         force_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
         try:
-            os.kill(pid, force_signal)
+            if sys.platform == "win32":
+                _terminate_pid_windows(pid)
+            else:
+                os.kill(pid, force_signal)
         except ProcessLookupError:
             pass
         signal_name = "SIGKILL" if force_signal != signal.SIGTERM else "SIGTERM"
@@ -307,14 +377,7 @@ def server_status() -> None:
             click.echo(f"  OS service: {os_service}")
         return
 
-    alive = False
-    try:
-        os.kill(pid, 0)
-        alive = True
-    except ProcessLookupError:
-        alive = False
-    except PermissionError:
-        alive = True
+    alive = _is_pid_alive(pid)
 
     if not alive:
         click.echo("stopped (pid file present but process is not alive)")

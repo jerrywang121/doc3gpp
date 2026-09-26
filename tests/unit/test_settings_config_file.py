@@ -333,8 +333,9 @@ def test_load_malformed_toml_raises_with_path(
 ) -> None:
     cfg = write_toml("bad.toml", "this is = not = valid toml ===")
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
-    with pytest.raises(ValueError, match=str(cfg)):
+    with pytest.raises(ValueError) as excinfo:
         load_config_data()
+    assert str(cfg) in str(excinfo.value)
 
 
 def test_settings_drops_unknown_top_level_keys(
@@ -366,7 +367,7 @@ def test_env_overrides_toml_for_cache_dir(
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", "/tmp/from-env")
     get_settings.cache_clear()
     s = get_settings()
-    assert str(s.cache.dir) == "/tmp/from-env"  # env wins
+    assert s.cache.dir.as_posix() == "/tmp/from-env"  # env wins
 
 
 def test_tdoc_parse_max_ftp_depth_is_toml_only(
@@ -410,12 +411,12 @@ def test_cache_clear_picks_up_new_env(clean_settings, monkeypatch) -> None:
     for ``sqlite_env``.
     """
     s1 = get_settings()
-    assert str(s1.cache.dir) != "/tmp/from-cache-clear-env"
+    assert s1.cache.dir.as_posix() != "/tmp/from-cache-clear-env"
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", "/tmp/from-cache-clear-env")
     # Without cache_clear the cached instance keeps the old value.
-    assert str(get_settings().cache.dir) != "/tmp/from-cache-clear-env"
+    assert get_settings().cache.dir.as_posix() != "/tmp/from-cache-clear-env"
     get_settings.cache_clear()
-    assert str(get_settings().cache.dir) == "/tmp/from-cache-clear-env"
+    assert get_settings().cache.dir.as_posix() == "/tmp/from-cache-clear-env"
 
 
 def test_non_allowlisted_env_vars_are_silently_ignored(
@@ -485,7 +486,7 @@ def test_allowlisted_env_vars_override_toml(
     assert s.db_echo is True
     assert s.log_level == "DEBUG"
     assert s.http_verify is True
-    assert str(s.cache.dir) == "/tmp/env-cache"
+    assert s.cache.dir.as_posix() == "/tmp/env-cache"
     assert s.sync.auto_sync is True
 
 

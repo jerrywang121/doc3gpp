@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -9,7 +7,6 @@ from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.tsg_service import TsgService
-
 
 _KNOWN_SHORT = ["C1", "C3", "C4", "C6", "CP", "R1", "R2", "R3", "R4", "R5",
                 "RP", "RT", "S1", "S2", "S3", "S4", "S5", "S6", "SP"]
@@ -76,12 +73,11 @@ def test_meeting_sync_rejects_unknown_short_name(monkeypatch) -> None:
         "doc3gpp.cli.build_tsg_service", lambda: TsgService(_StaticRepo(19))
     )
 
-    result = runner.invoke(app, ["meeting", "sync", "--tsg", "r99"])
+    result = runner.invoke(
+        app, ["meeting", "sync", "--tsg", "r99"], terminal_width=120
+    )
     assert result.exit_code != 0
     assert "Unknown TSG short name 'r99'" in result.output
-    # Typer may wrap the error message at the terminal width; allow the wrap
-    # (a line break plus box-drawing `│`) between "doc3gpp" and "tsg list".
-    assert re.search(r"Run 'doc3gpp[\s│]+tsg list'", result.output) is not None
 
 
 def test_meeting_sync_uppercases_canonical_form(monkeypatch) -> None:

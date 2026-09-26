@@ -42,7 +42,7 @@ def cache_env(tmp_path, monkeypatch) -> Iterator[Path]:
     config_path = tmp_path / "cache-config.toml"
     config_path.write_text(
         f'[cache]\n'
-        f'dir = "{cache_root}"\n'
+        f"dir = '{cache_root}'\n"
         f'size_limit_mb = 16\n',
         encoding="utf-8",
     )
@@ -104,7 +104,7 @@ def test_cache_status_unlimited_limit(cache_env, monkeypatch, tmp_path) -> None:
     config_path = tmp_path / "unlimited-config.toml"
     config_path.write_text(
         f'[cache]\n'
-        f'dir = "{tmp_path / "cache"}"\n'
+        f"dir = '{tmp_path / 'cache'}'\n"
         f'size_limit_mb = 0\n',
         encoding="utf-8",
     )
@@ -151,7 +151,7 @@ def test_cache_purge_without_yes_aborts_when_confirm_enabled(
     config_path = tmp_path / "confirm-on.toml"
     config_path.write_text(
         f'[cache]\n'
-        f'dir = "{tmp_path / "cache"}"\n'
+        f"dir = '{tmp_path / 'cache'}'\n"
         f'size_limit_mb = 16\n'
         f'purge_confirm = true\n',
         encoding="utf-8",
@@ -180,7 +180,7 @@ def test_cache_purge_toml_overrides_confirm(
     config_path = tmp_path / "confirm-off.toml"
     config_path.write_text(
         f'[cache]\n'
-        f'dir = "{tmp_path / "cache"}"\n'
+        f"dir = '{tmp_path / 'cache'}'\n"
         f'size_limit_mb = 16\n'
         f'purge_confirm = false\n',
         encoding="utf-8",

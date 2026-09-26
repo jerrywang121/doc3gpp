@@ -278,11 +278,13 @@ def server_stop() -> None:
             break
         time.sleep(0.2)
     else:
+        force_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, force_signal)
         except ProcessLookupError:
             pass
-        click.echo("server did not exit gracefully; sent SIGKILL.")
+        signal_name = "SIGKILL" if force_signal != signal.SIGTERM else "SIGTERM"
+        click.echo(f"server did not exit gracefully; sent {signal_name} as final termination signal.")
     pid_path.unlink(missing_ok=True)
     click.echo(f"server stopped (pid {pid}).")
 

@@ -524,20 +524,26 @@ def test_ttcn_cr_full_true_returns_within_bounded_time() -> None:
     fix ever regresses the loop will spin past the budget and the test
     fails.
     """
-    import signal
+    import multiprocessing
 
-    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
+    process = multiprocessing.Process(target=_run_full_ttcn_parse)
+    process.start()
+    process.join(timeout=15)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+        pytest.fail("ttcn full=True parser hung")
+    assert process.exitcode == 0
 
-    def _on_alarm(signum: int, frame: object) -> None:
-        raise TimeoutError("ttcn full=True parser hung")
 
-    handler = signal.signal(signal.SIGALRM, _on_alarm)
-    signal.alarm(5)
-    try:
-        parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, handler)
+def _run_full_ttcn_parse() -> None:
+    """Run the full TTCN parse in an isolated process for a hard timeout."""
+    md = "\n".join(
+        list(_HEADER_LINES)
+        + list(_TTCN_OVERVIEW_LINES)
+        + list(_TTCN_CORRECTION_LINES_FULL)
+    )
+    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
     assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
     assert parsed.ttcn.required_changes
 

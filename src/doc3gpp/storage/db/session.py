@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from sqlalchemy import create_engine
@@ -41,9 +41,10 @@ def resolve_testcase_database_url(settings: Settings | None = None) -> str:
             "testcase_database_url explicitly (TOML key "
             "'testcase_database_url' or DOC3GPP_TESTCASE_DATABASE_URL)."
         )
-    db_path = Path(parsed.database)
+    path_type = PureWindowsPath if PureWindowsPath(parsed.database).is_absolute() else PurePosixPath
+    db_path = path_type(parsed.database)
     sibling = db_path.with_name(f"{db_path.stem}_testcase{db_path.suffix}")
-    return f"sqlite+pysqlite:///{sibling}"
+    return f"sqlite+pysqlite:///{sibling.as_posix()}"
 
 
 def resolve_specdata_database_url(settings: Settings | None = None) -> str:
@@ -71,9 +72,10 @@ def resolve_specdata_database_url(settings: Settings | None = None) -> str:
             "specdata_database_url explicitly (TOML key "
             "'specdata_database_url' or DOC3GPP_SPECDATA_DATABASE_URL)."
         )
-    db_path = Path(parsed.database)
+    path_type = PureWindowsPath if PureWindowsPath(parsed.database).is_absolute() else PurePosixPath
+    db_path = path_type(parsed.database)
     sibling = db_path.with_name(f"{db_path.stem}_specdata{db_path.suffix}")
-    return f"sqlite+pysqlite:///{sibling}"
+    return f"sqlite+pysqlite:///{sibling.as_posix()}"
 
 
 @lru_cache(maxsize=1)

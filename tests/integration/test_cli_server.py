@@ -147,12 +147,13 @@ def test_stop_signals_and_removes_pidfile(cli_server: Settings, monkeypatch: pyt
     result = _invoke(["stop"])
     assert result.exit_code == 0, result.output
     assert signal.SIGTERM in signals
-    assert signal.SIGKILL not in signals
+    if hasattr(signal, "SIGKILL"):
+        assert signal.SIGKILL not in signals
     assert not pid_path.exists()
     assert "stopped" in result.output
 
 
-def test_stop_escalates_to_sigkill_when_ungraceful(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stop_escalates_when_ungraceful(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     import doc3gpp.cli_server as cli_server_module
 
     pid_path = cli_server.cache.dir / "server.pid"
@@ -167,17 +168,21 @@ def test_stop_escalates_to_sigkill_when_ungraceful(cli_server: Settings, monkeyp
         # Simulate a process that ignores SIGTERM but dies on SIGKILL:
         if sig == signal.SIGTERM:
             return
-        if sig == 0:
+        if sig == 0 and time.monotonic() > deadline[0]:
             # pretend alive while the loop polls, then die after the timeout
-            if time.monotonic() > deadline[0]:
-                raise ProcessLookupError()
+            raise ProcessLookupError()
 
     monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
     monkeypatch.setattr(cli_server_module.time, "sleep", lambda s: None)
     result = _invoke(["stop"])
     assert result.exit_code == 0, result.output
     assert signal.SIGTERM in signals
-    assert signal.SIGKILL in signals
+    expected_final_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    assert expected_final_signal in signals
+    if expected_final_signal == signal.SIGTERM:
+        assert "SIGTERM as final termination signal" in result.output
+    else:
+        assert "SIGKILL as final termination signal" in result.output
     assert not pid_path.exists()
 
 

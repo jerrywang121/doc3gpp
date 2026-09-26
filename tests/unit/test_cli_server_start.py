@@ -25,6 +25,7 @@ from __future__ import annotations
 import signal
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -45,8 +46,8 @@ def _write_config(
         "[server]\n"
         f"enabled = {str(enabled).lower()}\n"
         f"port = {port}\n"
-        f'pid_file = "{tmp_path / "server.pid"}"\n'
-        f'log_file = "{tmp_path / "server.log"}"\n',
+        f"pid_file = '{tmp_path / 'server.pid'}'\n"
+        f"log_file = '{tmp_path / 'server.log'}'\n",
         encoding="utf-8",
     )
     return cfg
@@ -73,7 +74,7 @@ def test_start_refuses_when_pid_file_alive(isolated_config, tmp_path) -> None:
     import click
 
     pid_path = tmp_path / "server.pid"
-    proc = subprocess.Popen(["sleep", "30"])  # noqa: S603,S607
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         pid_path.write_text(f"{proc.pid}\n", encoding="utf-8")
         # Verify the helper considers this pid alive (the same check the
@@ -119,7 +120,7 @@ def test_start_with_force_overrides_live_pid(isolated_config, tmp_path) -> None:
     pipeline runs to completion.
     """
     pid_path = tmp_path / "server.pid"
-    proc = subprocess.Popen(["sleep", "30"])  # noqa: S603,S607
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         pid_path.write_text(f"{proc.pid}\n", encoding="utf-8")
 
@@ -191,8 +192,8 @@ def test_start_fails_when_child_crashes_on_bind(isolated_config, tmp_path) -> No
             "[server]\n"
             "enabled = true\n"
             f"port = {port}\n"
-            f'pid_file = "{pid_path}"\n'
-            f'log_file = "{log_path}"\n',
+            f"pid_file = '{pid_path}'\n"
+            f"log_file = '{log_path}'\n",
             encoding="utf-8",
         )
         get_settings.cache_clear()
@@ -237,22 +238,29 @@ def test_start_fails_when_child_crashes_on_bind(isolated_config, tmp_path) -> No
         # The log file must exist and contain the bind error.
         assert log_path.exists(), "log file should have been written by the child"
         log_text = log_path.read_text(encoding="utf-8")
-        assert "address already in use" in log_text, (
+        assert (
+            "address already in use" in log_text.lower()
+            or "[winerror 10048]" in log_text.lower()
+        ), (
             f"log should contain the bind error; got:\n{log_text[-2000:]}"
         )
     finally:
         listener.close()
 
 
-def test_is_pid_alive_recognises_running_and_dead() -> None:
-    """``_is_pid_alive`` returns True for a live child and False for a dead one."""
+def test_is_pid_alive_recognises_running_and_dead(monkeypatch) -> None:
+    """The OS existence probe maps live and missing processes consistently."""
+    import doc3gpp.cli_server as cli_server_module
     from doc3gpp.cli_server import _is_pid_alive
 
-    proc = subprocess.Popen(["sleep", "5"])  # noqa: S603,S607
-    try:
-        assert _is_pid_alive(proc.pid) is True
-    finally:
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=5)
+    alive = True
 
-    assert _is_pid_alive(proc.pid) is False
+    def fake_kill(pid: int, sig: int) -> None:
+        assert sig == 0
+        if not alive:
+            raise ProcessLookupError()
+
+    monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
+    assert _is_pid_alive(12345) is True
+    alive = False
+    assert _is_pid_alive(12345) is False

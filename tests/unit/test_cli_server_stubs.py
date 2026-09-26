@@ -1,14 +1,7 @@
-"""Tests for the ``doc3gpp server`` Typer sub-app scaffold.
+"""Tests for the ``doc3gpp server`` Typer sub-app.
 
-The ``server_app`` is added in T2 as a placeholder Typer app with six
-stub commands. T10 (install/uninstall) and T11 (start/stop/status/logs)
-have since replaced the stubs with real implementations. The tests in
-this module lock in:
-
-* the sub-app is registered under the name ``server`` with the full
-  set of six subcommands listed in the T2 brief;
-* the ``[server] enabled = true`` gate rejects the subcommand before
-  the command body runs when the operator has not opted in.
+The server is enabled by default. Setting ``[server] enabled = false``
+rejects subcommands before their command bodies run.
 
 The brief's literal ``runner.invoke(server_app, [...])`` invocation
 pattern is used directly because Typer's :class:`CliRunner` accepts it
@@ -46,8 +39,8 @@ def test_subcommands_registered() -> None:
 
 
 def test_guard_raises_when_disabled() -> None:
-    """``_require_server_enabled`` rejects the call when ``[server] enabled = False``."""
-    settings = Settings()
+    """``_require_server_enabled`` rejects explicit ``enabled = False``."""
+    settings = Settings(server=ServerSettings(enabled=False))
     assert settings.server.enabled is False
     with pytest.raises(click.UsageError) as exc_info:
         _require_server_enabled(settings)
@@ -63,17 +56,16 @@ def test_guard_does_not_raise_when_enabled() -> None:
 
 
 def test_start_blocked_by_disabled_gate(tmp_path, monkeypatch) -> None:
-    """Without ``[server] enabled = true``, ``server start`` is rejected by the guard.
+    """An explicit ``enabled = false`` setting makes ``server start`` refuse.
 
     The real ``server start`` reads the ambient config through
     ``get_settings()``, which falls through to the user-wide
     ``~/.config/doc3gpp/config.toml`` when no ``DOC3GPP_CONFIG`` or
-    project ``doc3gpp.toml`` is present. Point ``DOC3GPP_CONFIG`` at an
-    empty temp file so the resolved settings keep the ``enabled = False``
-    default regardless of what the operator's real config contains.
+    project ``doc3gpp.toml`` is present. Point ``DOC3GPP_CONFIG`` at a
+    temp file that explicitly disables the server.
     """
     cfg = tmp_path / "config.toml"
-    cfg.write_text("", encoding="utf-8")
+    cfg.write_text("[server]\nenabled = false\n", encoding="utf-8")
     monkeypatch.setenv("DOC3GPP_CONFIG", str(cfg))
     get_settings.cache_clear()
     runner = CliRunner()

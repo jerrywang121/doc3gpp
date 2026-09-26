@@ -2922,7 +2922,8 @@ CLI > allowlisted env > file > defaults.
 ## server Commands
 
 The `doc3gpp server` group starts, inspects and supervises the HTTP server +
-MCP endpoint. Every subcommand refuses to run while `[server] enabled = false`.
+MCP endpoint. The server is enabled by default on `127.0.0.1:13999`; every
+subcommand refuses to run when `[server] enabled = false`.
 The full end-user guide lives in [`docs/web-server.md`](web-server.md).
 
 ### `doc3gpp server start [flags]`

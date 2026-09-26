@@ -101,9 +101,8 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
     # And: the file parses cleanly via the public loader.
     path, data = load_config_data()
     assert path is not None and path.name == "doc3gpp.toml"
-    # The packaged template is all comments except the active [search]
-    # block, so the parsed dict surfaces search defaults — every other
-    # table is commented out and disappears into the dict.
+    # The packaged template has active [search] and [server] blocks;
+    # every other table is commented out and disappears into the dict.
     assert data == {
         "search": {
             "enabled": True,
@@ -112,8 +111,16 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
             "snippet_tokens": 8,
             "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
             "search_fanout_factor": 4,
-        }
+        },
+        "server": {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 13999,
+        },
     }
+    assert Settings(**data).server.enabled is True
+    assert Settings(**data).server.host == "127.0.0.1"
+    assert Settings(**data).server.port == 13999
 
     # Then: config show reflects the settings cache after init cleared it.
     show_result = Runner().invoke(app, ["config", "show"])
@@ -231,5 +238,10 @@ def test_config_init_force_overwrites(sqlite_env, tmp_path, monkeypatch) -> None
             "snippet_tokens": 8,
             "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
             "search_fanout_factor": 4,
-        }
+        },
+        "server": {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 13999,
+        },
     }

@@ -495,12 +495,12 @@ Full command reference: [`docs/cli.md`](docs/cli.md).
 
 The optional `doc3gpp[web]` extra installs a single-port HTTP server that
 serves both a browsable HTMX UI and a Model Context Protocol endpoint.
-Enable it in the TOML config, install an OS service, then start it:
+It is enabled by default and binds only to loopback at port `13999`; install
+an OS service if desired, then start it:
 
 ```bash
-doc3gpp config set server.enabled true
 doc3gpp server install systemd --no-start     # or `launchd` on macOS
-doc3gpp server start                          # opens http://127.0.0.1:8765/
+doc3gpp server start                          # opens http://127.0.0.1:13999/
 ```
 
 - **HTML UI** — browse meetings, TDocs, TSGs, WIs, specs, spec-document TOCs,
@@ -510,7 +510,7 @@ doc3gpp server start                          # opens http://127.0.0.1:8765/
   `GET /tdocs/search` and `GET /tdocs/search/sem`; its rebuild job is
   `POST /jobs/tdocs/search/rebuild`. Legacy unscoped search routes were
   removed without redirects.
-- **MCP** — `http://127.0.0.1:8765/mcp` exposes 38 tools covering the
+- **MCP** — `http://127.0.0.1:13999/mcp` exposes 38 tools covering the
   same reads (including the schema and spec-document TOC/search tools,
   byte-identical to the `GET /<resources>/schema?format=json` routes)
   plus job lifecycle. The transport is set under `[mcp]` in the
@@ -540,7 +540,7 @@ Streamable-HTTP MCP server):
   "mcpServers": {
     "doc3gpp": {
       "type": "http",
-      "url": "http://127.0.0.1:8765/mcp"
+      "url": "http://127.0.0.1:13999/mcp"
     }
   }
 }
@@ -558,7 +558,7 @@ doc3gpp config set mcp.transport sse
   "mcpServers": {
     "doc3gpp": {
       "type": "sse",
-      "url": "http://127.0.0.1:8765/mcp/sse"
+      "url": "http://127.0.0.1:13999/mcp/sse"
     }
   }
 }
@@ -689,9 +689,9 @@ max_chunks_per_tdoc = 8              # cap on chunks per TDoc
 # Web server + MCP — both TOML-only (no env overrides); only loaded
 # with the `doc3gpp[web]` extra installed.
 [server]
-enabled = false                      # master switch; gates every `server` subcommand
+enabled = true                       # master switch; set false to disable `server` commands
 host = "127.0.0.1"
-port = 8765
+port = 13999
 
 [mcp]
 enabled = true                       # mount /mcp; no effect unless server.enabled

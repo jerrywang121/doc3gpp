@@ -306,21 +306,19 @@ search_fanout_factor = 4
 # max_chunks_per_tdoc = 8
 
 # ── HTTP server (`doc3gpp server`) ───────────────────────────────────────────
-# Knobs for the optional FastAPI/uvicorn HTTP surface mounted by the
-# `doc3gpp server` CLI sub-app. The server is disabled by default so a
-# fresh install does not open a port without an explicit operator
-# opt-in. Requires the `[web]` pyproject extra
+# Knobs for the FastAPI/uvicorn HTTP surface mounted by the
+# `doc3gpp server` CLI sub-app. It binds only to loopback by default.
+# Requires the `[web]` pyproject extra
 # (`pip install "doc3gpp[web]"`) for fastapi + uvicorn + mcp.
 
-# [server]
-# Master switch for the `doc3gpp server` sub-app. False rejects every
-# server subcommand at the CLI gate with a hint to flip this flag.
-# enabled = false
+[server]
+# Master switch for the `doc3gpp server` sub-app.
+enabled = true
 
 # Bind address. Defaults to loopback so the server is not reachable
 # from the network until the operator binds a public address.
-# host = "127.0.0.1"
-# port = 8765
+host = "127.0.0.1"
+port = 13999
 
 # Caps on the in-process job worker. `max_concurrent_jobs` is bounded
 # at 1..16 to keep sqlite writer contention predictable; raise it for

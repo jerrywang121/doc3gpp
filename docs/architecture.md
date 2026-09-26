@@ -740,13 +740,13 @@ and syncs each through the `--tsg` path below.
 
 The web layer (`src/doc3gpp/web/`) is a thin adapter over the same service
 + repository layer the CLI uses. A single process serves an HTMX/Jinja2 HTML
-interface and a Streamable HTTP MCP endpoint on one port (`127.0.0.1:8765`
+interface and a Streamable HTTP MCP endpoint on one port (`127.0.0.1:13999`
 by default). The MCP mount answers each POST with a plain `application/json`
 body (`json_response=True`), the mode every modern MCP client (including the
 TypeScript SDK) expects; the legacy SSE-streamed response is rejected by
 those clients with "Legacy MCP SSE endpoints are not supported". It is
-disabled by default (`[server] enabled = false`); every
-`doc3gpp server` subcommand refuses to run while disabled.
+enabled by default and binds to loopback; set `[server] enabled = false` to
+disable it. Every `doc3gpp server` subcommand refuses to run while disabled.
 
 - `doc3gpp server start` → uvicorn runs `doc3gpp.web.app:build_app`
   (`--factory`); the FastAPI lifespan calls `build_state(settings)` to
@@ -1184,7 +1184,8 @@ the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group 
     - `install systemd|launchd` — `--user/--system`, `--no-start`, `--dry-run`
     - `uninstall systemd|launchd` — refuses non-managed units
       (`InstallNotManagedError`)
-    - Every subcommand requires `[server] enabled = true`.
+    - Every subcommand requires `[server] enabled = true`; this is the
+      default, and can be turned off with `[server] enabled = false`.
 
 Every `* list` command also accepts `--format table|json|markdown`
 and `-o/--output PATH`. `meeting list`, `tdoc list`, `tsg list`, and

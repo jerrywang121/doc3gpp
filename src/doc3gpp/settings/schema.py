@@ -697,8 +697,8 @@ class ServerSettings(BaseModel):
     """Knobs for ``doc3gpp server`` (FastAPI + uvicorn HTTP surface).
 
     :attr:`enabled` is the master switch — the CLI's ``server_app`` rejects
-    every subcommand when this is ``False``. Defaults to ``False`` so a
-    fresh install does not open a port without an explicit operator opt-in.
+    every subcommand when this is ``False``. The default server is enabled
+    on loopback so local use works without exposing it to the network.
 
     :attr:`host` defaults to the loopback interface so the server is not
     reachable from the network until the operator binds a public address.
@@ -724,16 +724,15 @@ class ServerSettings(BaseModel):
     """
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Master switch for the `doc3gpp server` HTTP surface. False "
-            "rejects every `server` subcommand at the CLI gate so a "
-            "fresh install does not open a port without an explicit "
-            "operator opt-in via `[server] enabled = true`."
+            "Master switch for the `doc3gpp server` HTTP surface. True "
+            "allows server subcommands; set `[server] enabled = false` "
+            "to disable the server. The default bind address is loopback."
         ),
     )
     host: str = Field(default="127.0.0.1")
-    port: int = Field(default=8765, ge=1, le=65535)
+    port: int = Field(default=13999, ge=1, le=65535)
     max_concurrent_jobs: int = Field(default=1, ge=1, le=16)
     poll_interval_seconds: float = Field(
         default=1.0,

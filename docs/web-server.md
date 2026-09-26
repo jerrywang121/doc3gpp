@@ -5,7 +5,7 @@
 The `doc3gpp` web server serves a browsable HTML interface over the same
 services the CLI uses, plus an MCP (Model Context Protocol) endpoint for
 AI tooling. It runs as a single process on one HTTP port
-(`127.0.0.1:8765` by default).
+(`127.0.0.1:13999` by default).
 
 The web layer is a thin adapter over the service + repository layer. Every
 HTTP route calls the same services the CLI calls; the HTTP JSON output and
@@ -30,21 +30,18 @@ MCP package.
 # 1. Initialise a config file (auto-detects project root vs user home)
 doc3gpp config init
 
-# 2. Enable the server (it is disabled by default)
-doc3gpp config set server.enabled true
-
-# 3. Install a service unit (optional; systemd or launchd)
+# 2. Install a service unit (optional; systemd or launchd)
 doc3gpp server install systemd --no-start    # Linux
 doc3gpp server install launchd --no-start    # macOS
 
-# 4. Start the server
+# 3. Start the server
 doc3gpp server start        # opens your browser when ready
 # or, for a supervised service:
 doc3gpp server start --no-open
 
-# 5. Browse
-#    HTML:  http://127.0.0.1:8765/
-#    MCP:   http://127.0.0.1:8765/mcp
+# 4. Browse
+#    HTML:  http://127.0.0.1:13999/
+#    MCP:   http://127.0.0.1:13999/mcp
 ```
 
 Check it is up:
@@ -66,9 +63,9 @@ The web server is configured under `[server]` and `[mcp]` in `doc3gpp.toml`
 
 ```toml
 [server]
-enabled = false            # master switch; all `server` commands refuse when false
+enabled = true             # master switch; set false to disable server commands
 host = "127.0.0.1"
-port = 8765
+port = 13999
 max_concurrent_jobs = 1    # how many background jobs run at once
 poll_interval_seconds = 1  # how often the worker checks for new QUEUED jobs
 progress_interval_seconds = 10  # min gap between periodic progress log lines for long-running jobs
@@ -100,7 +97,8 @@ does not change pickup speed.
 ## CLI reference
 
 `doc3gpp server` groups the server commands. Every subcommand starts with a
-guard that refuses to run while `[server] enabled = false`.
+guard that refuses to run when `[server] enabled = false` (the server defaults
+to enabled on loopback at `127.0.0.1:13999`).
 
 ### `doc3gpp server start [flags]`
 
@@ -550,7 +548,7 @@ payload = {
     "params": {"name": "list_meetings", "arguments": {"limit": 5}},
 }
 req = urllib.request.Request(
-    "http://127.0.0.1:8765/mcp",
+    "http://127.0.0.1:13999/mcp",
     data=json.dumps(payload).encode(),
     headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
 )

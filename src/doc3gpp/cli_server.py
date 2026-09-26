@@ -21,12 +21,12 @@ server_app = typer.Typer(
 
 
 def _require_server_enabled(settings: Settings) -> None:
-    """Refuse the subcommand unless the operator opted in via ``[server] enabled = true``.
+    """Refuse the subcommand when disabled via ``[server] enabled = false``.
 
     Raises:
         click.UsageError: when ``Settings.server.enabled is False``. The
             message points the operator at the TOML flag so they can
-            enable the server before retrying.
+            re-enable the server before retrying.
     """
     if not settings.server.enabled:
         raise click.UsageError(

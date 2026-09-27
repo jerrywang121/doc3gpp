@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
@@ -37,9 +36,6 @@ from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
 from doc3gpp.web.templates_setup import mount_static
 from doc3gpp.web.workers.job_worker import JobWorker
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger(__name__)
 
 
@@ -50,23 +46,80 @@ def build_state(settings: Settings) -> WebState:
     engine-level cleanup (``engine.dispose()``) on shutdown.
     """
     engine = get_engine()
-    embedder = factory.build_embedder(settings)
+    embedder: object | None = None
+    embedder_loaded = False
+    embedder_builder = factory.build_embedder
+
+    def shared_embedder() -> object | None:
+        nonlocal embedder, embedder_loaded
+        if not embedder_loaded:
+            embedder = embedder_builder(settings)
+            embedder_loaded = True
+        return embedder
+
+    search = factory.build_lazy_search_service(
+        settings, embedder_factory=shared_embedder
+    )
+    semantic_search = factory.build_lazy_semantic_search_service(
+        settings,
+        fts5_service=search,
+        embedder_factory=shared_embedder,
+    )
+    spec_doc_search = factory.build_lazy_spec_doc_search_service(settings)
+    spec_doc_semantic = factory.build_lazy_spec_doc_semantic_service(
+        settings,
+        fts5_service=spec_doc_search,
+        embedder_factory=shared_embedder,
+    )
+    tdoc_repo = factory.build_tdoc_repository()
+    spec_doc_repo = factory.build_spec_doc_repository()
     services = ServiceContainer(
         meeting=factory.build_meeting_service(),
         tdoc=factory.build_tdoc_service(),
-        tdoc_cr=factory.build_tdoc_cr_service(embedder=embedder),
+        tdoc_cr=factory.build_tdoc_cr_service(
+            search_service=search,
+            semantic_service=semantic_search,
+        ),
         tdoc_sync=factory.build_tdoc_sync_coordinator(),
-        tdoc_repo=factory.build_tdoc_repository(),
+        tdoc_repo=tdoc_repo,
         tsg=factory.build_tsg_service(),
         wi=factory.build_wi_service(),
         spec=factory.build_spec_service(),
         testcase=factory.build_testcase_service(),
-        search=factory.build_search_service(embedder=embedder),
-        semantic_search=factory.build_semantic_search_service(embedder=embedder),
-        spec_doc=factory.build_spec_doc_service(embedder=embedder),
-        spec_doc_search=factory.build_spec_doc_search_service(),
-        spec_doc_semantic=factory.build_spec_doc_semantic_service(
-            embedder=embedder
+        search=search,
+        semantic_search=semantic_search,
+        spec_doc=factory.build_spec_doc_service(
+            settings=settings,
+            search_service=spec_doc_search,
+            semantic_service=spec_doc_semantic,
+        ),
+        spec_doc_search=spec_doc_search,
+        spec_doc_semantic=spec_doc_semantic,
+        tdoc_search=factory.build_tdoc_search_facade(
+            settings,
+            fts5_service=search,
+            semantic_service=semantic_search,
+            source_repo=tdoc_repo,
+            embedder_factory=shared_embedder,
+        ),
+        spec_doc_search_facade=factory.build_spec_doc_search_facade(
+            settings,
+            fts5_service=spec_doc_search,
+            semantic_service=spec_doc_semantic,
+            source_repo=spec_doc_repo,
+            embedder_factory=shared_embedder,
+        ),
+        tdoc_index=factory.build_tdoc_index_service(
+            settings,
+            fts5_service=search,
+            semantic_service=semantic_search,
+            embedder=embedder,
+        ),
+        spec_doc_index=factory.build_spec_doc_index_service(
+            settings,
+            fts5_service=spec_doc_search,
+            semantic_service=spec_doc_semantic,
+            embedder=embedder,
         ),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
@@ -103,8 +156,9 @@ async def _mount_mcp_in_lifespan(app: FastAPI):
         yield
         return
     try:
-        from doc3gpp.web.mcp_server import build_mcp_server
         from mcp.server.transport_security import TransportSecuritySettings
+
+        from doc3gpp.web.mcp_server import build_mcp_server
 
         server = build_mcp_server(app.state.web)
         security = TransportSecuritySettings(

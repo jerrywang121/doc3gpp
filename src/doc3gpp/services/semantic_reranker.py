@@ -1,10 +1,12 @@
-"""Semantic rerank for the FTS5 hit list.
+"""Legacy semantic rerank seam for the internal FTS5 service.
 
-The :class:`SemanticReranker` is the embedding-backed impl of the
-:class:`doc3gpp.repository.protocols.EmbeddingReranker` Protocol. The
-FTS5 path in ``tdoc search query --sem-query`` fetches a wider candidate
-bag; this class re-orders it by cosine similarity to a user-supplied
-string.
+The :class:`SemanticReranker` is the embedding-backed implementation of the
+:class:`doc3gpp.repository.protocols.EmbeddingReranker` Protocol retained for
+the legacy ``SearchService`` seam. Public unified search is dispatched by
+``TDocSearchFacade`` and selects FTS5, vector, hybrid, or filter-only mode;
+this class is not a separate public command or route. The legacy internal
+FTS5 path can fetch a wider candidate bag, which this class re-orders by
+cosine similarity to a supplied string.
 
 Scoring source: :class:`doc3gpp.repository.protocols.VectorIndexRepository`
 — specifically, :meth:`get_min_distance_for_tdocs`. Candidates with
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class SemanticReranker:
-    """Rerank FTS5 hits by cosine distance to a user-supplied query.
+    """Legacy internal reranker for FTS5 hits.
 
     The class is duck-typed against the
     :class:`~doc3gpp.repository.protocols.EmbeddingReranker` Protocol

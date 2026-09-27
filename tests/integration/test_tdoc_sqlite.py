@@ -7,7 +7,9 @@ from typer.testing import CliRunner
 
 from doc3gpp.cli import app
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.models.search import SearchFilters
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.models import TDocCrDetailOrm
@@ -75,6 +77,75 @@ def test_tdoc_repository_upsert_and_list(sqlite_env) -> None:
     assert by_id["R1-000001"].cr_pack == "RP-000124"
     assert by_id["R1-000002"].title == "Second"
     assert by_id["R1-000002"].source is None
+
+
+def test_tdoc_repository_list_for_search_filters_source_rows(sqlite_env) -> None:
+    create_schema()
+    from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
+
+    SQLAlchemyTsgRepository().upsert_many(
+        [Tsg(tsg_name="TSG RAN", short_name="RAN", description="RAN")]
+    )
+    repo = SQLAlchemyTDocRepository()
+    meeting_repo = SQLAlchemyMeetingRepository()
+    meeting_repo.upsert_many(
+        [
+            Meeting(
+                meeting_id=150,
+                name="RAN1#150",
+                title="RAN1 meeting 150",
+                location="Online",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 1, 2),
+                tsg="RAN",
+            ),
+        ]
+    )
+    repo.upsert_many(
+        [
+            TDoc(
+                tdoc_id="R1-25-0002",
+                meeting_id=150,
+                type="LS",
+                status="Rejected",
+                release="Rel-18",
+            ),
+            TDoc(
+                tdoc_id="R1-25-0001",
+                meeting_id=150,
+                type="CR",
+                status="Agreed",
+                release="Rel-18",
+            ),
+            TDoc(
+                tdoc_id="R2-25-0001",
+                meeting_id=150,
+                type="CR",
+                status="Agreed",
+                release="Rel-18",
+            ),
+            TDoc(
+                tdoc_id="R1-25-0003",
+                meeting_id=150,
+                type="CR",
+                status="Agreed",
+                release="Rel-17",
+            ),
+        ]
+    )
+
+    rows = repo.list_for_search(
+        SearchFilters(tdoc_id="R1-%", release="Rel-18", limit=10)
+    )
+
+    assert [row.tdoc.tdoc_id for row in rows] == [
+        "R1-25-0001",
+        "R1-25-0002",
+    ]
+    assert rows[0].tdoc.type == "CR"
+    assert rows[0].tdoc.status == "Agreed"
+    assert rows[0].meeting_name == "RAN1#150"
+    assert rows[0].meeting_tsg == "RAN"
 
 
 def test_tdoc_repository_list_distinct_meeting_ids(sqlite_env) -> None:

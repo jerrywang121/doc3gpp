@@ -1,42 +1,48 @@
-"""HTTP routes for search.
-
-``GET /tdocs/search`` runs the FTS5 ``SearchService.search(query, filters)``
-read path; ``GET /tdocs/search/sem`` runs the hybrid FTS5 + vector read via
-``SemanticSearchService.search``. The ``?fts5_query=`` opt-in FTS5
-path on ``/tdocs/search/sem`` honours the spec: without it the route is
-pure-vector.
-
-Both routes share ``search_results.html``. The semantic variant
-swaps the search form partial to surface ``fts5_query``,
-``fts5_weight``, and a RRF-aware column layout.
-
-``?format=json`` returns the same payload shape as
-``doc3gpp tdoc search query --format json`` /
-``doc3gpp tdoc search sem --format json``:
-a bare array of hit objects. FTS5 hits carry ``tdoc_id / score /
-previews / title / meeting / tsg / uploaded_date / ftp_url / wis``;
-semantic hits carry the RRF fields with the metadata sub-record nested
-under ``hit``.
-"""
+"""Unified TDoc search and index-status routes."""
+# FastAPI dependency calls in route signatures are intentional.
+# ruff: noqa: B008
 from __future__ import annotations
 
+import html
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
-from doc3gpp.models.search import SearchFilters, SearchHit
-from doc3gpp.models.semantic_search import SemanticSearchHit
-from doc3gpp.services.search_service import SearchService
-from doc3gpp.services.semantic_search_service import SemanticSearchService
-from doc3gpp.web.deps import get_pending_jobs, get_search_service, get_semantic_search_service
-from doc3gpp.web.errors import InvalidFilterError, SettingsDisabledError
-from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
+from doc3gpp.models.index import IndexStatus
+from doc3gpp.models.search import (
+    SearchFilters,
+    SearchIndexCorruptError,
+    SearchUnavailableError,
+)
+from doc3gpp.models.semantic_search import (
+    EmbedderUnavailableError,
+    SemanticSearchUnavailableError,
+    VectorIndexUnavailableError,
+)
+from doc3gpp.models.unified_search import (
+    SearchMode,
+    TDocSearchResult,
+    tdoc_search_result_to_dict,
+)
+from doc3gpp.services.tdoc_index_service import TDocIndexService
+from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
+from doc3gpp.web.deps import (
+    get_pending_jobs,
+    get_tdoc_index_service,
+    get_tdoc_search_facade,
+)
+from doc3gpp.web.errors import SearchIndexCorruptWebError, SettingsDisabledError
+from doc3gpp.web.filters import (
+    is_htmx_request,
+    parse_date_query,
+    parse_int_query,
+    parse_text_query,
+)
 from doc3gpp.web.templates_setup import templates
 
-
-router = APIRouter(prefix="/tdocs/search", tags=["search"])
-
+router = APIRouter(tags=["search"])
 
 _LIMIT_CAP = 200
 
@@ -52,12 +58,6 @@ def _build_filters(
     tdoc_id: str | None,
     limit: int,
 ) -> SearchFilters:
-    """Compose a :class:`SearchFilters` from raw query params.
-
-    ``since`` / ``until`` are validated as date filters first so a
-    malformed value surfaces as HTTP 400 (``invalid_filter``) rather
-    than being swallowed by the query path.
-    """
     return SearchFilters(
         tsg=parse_text_query(tsg),
         meeting=parse_text_query(meeting),
@@ -70,206 +70,161 @@ def _build_filters(
     )
 
 
-def _fts5_hit_to_json(hit: SearchHit) -> dict[str, Any]:
-    """Shape one :class:`SearchHit` exactly like the CLI's JSON renderer.
+def _resolved_mode(
+    results: list[TDocSearchResult],
+    text: str | None,
+    semantic: str | None,
+) -> SearchMode:
+    if results:
+        return results[0].search_mode
+    has_text = bool(text and text.strip())
+    has_semantic = bool(semantic and semantic.strip())
+    if has_text and has_semantic:
+        return SearchMode.HYBRID
+    if has_text:
+        return SearchMode.FTS5
+    if has_semantic:
+        return SearchMode.SEMANTIC
+    return SearchMode.FILTER
 
-    Mirrors ``cli.py::_render_search_hits`` (json branch): the same
-    key order and the same values, including the raw ``previews``
-    mapping with its ``<<...>>`` match markers.
-    """
+
+def _tdoc_context(
+    *,
+    text: str | None,
+    semantic: str | None,
+    results: list[TDocSearchResult],
+    filters: dict[str, str],
+    limit: int,
+    error: str | None,
+    pending_jobs: int,
+) -> dict[str, Any]:
+    mode = _resolved_mode(results, text, semantic)
     return {
-        "tdoc_id": hit.tdoc_id,
-        "score": hit.score,
-        "previews": hit.previews,
-        "title": hit.title,
-        "meeting": hit.meeting,
-        "tsg": hit.tsg,
-        "uploaded_date": hit.uploaded_date,
-        "ftp_url": hit.ftp_url,
-        "wis": hit.wis,
+        "active_nav": "search",
+        "search_resource": "tdoc",
+        "search_mode": mode.value,
+        "text": text or "",
+        "semantic": semantic or "",
+        "query": text or "",
+        "results": results,
+        "hits": results,
+        "total": len(results),
+        "limit": limit,
+        "offset": 0,
+        "error": error,
+        "pending_jobs": pending_jobs,
+        "filters": filters,
     }
 
 
-def _semantic_hit_to_json(hit: SemanticSearchHit) -> dict[str, Any]:
-    """Shape one :class:`SemanticSearchHit` exactly like the CLI's JSON renderer.
-
-    Mirrors ``cli.py::_render_semantic_hits`` (json branch): RRF
-    fields at the top level and the ``SearchHit`` metadata bag nested
-    under ``hit``.
-    """
-    return {
-        "tdoc_id": hit.tdoc_id,
-        "rrf_score": hit.rrf_score,
-        "rank_fts5": hit.rank_fts5,
-        "rank_vec": hit.rank_vec,
-        "min_chunk_distance": hit.min_chunk_distance,
-        "best_chunk_id": hit.best_chunk_id,
-        "hit": {
-            "tdoc_id": hit.hit.tdoc_id,
-            "title": hit.hit.title,
-            "ftp_url": hit.hit.ftp_url,
-            "wis": hit.hit.wis,
-        },
-    }
-
-
-@router.get("", include_in_schema=False)
-@router.get("/", include_in_schema=False)
+@router.get("/tdocs/search", include_in_schema=False)
+@router.get("/tdocs/search/", include_in_schema=False)
 async def search_query(
     request: Request,
-    q: str | None = Query(default=None),
+    text: str | None = Query(default=None),
+    semantic: str | None = Query(default=None),
     tsg: str | None = Query(default=None),
     meeting: str | None = Query(default=None),
     release: str | None = Query(default=None),
     spec: str | None = Query(default=None),
     since: str | None = Query(default=None),
     until: str | None = Query(default=None),
-    sem: str | None = Query(default=None),
     tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
     limit: str | None = Query(default="20"),
     format: str | None = Query(default=None, alias="format"),
-    service: SearchService | None = Depends(get_search_service),
+    facade: TDocSearchFacade | None = Depends(get_tdoc_search_facade),
     pending_jobs: int = Depends(get_pending_jobs),
 ) -> Any:
-    """Render ``search_results.html`` or a JSON list of FTS5 hits."""
-    if service is None:
-        raise SettingsDisabledError(
-            "search is not enabled in settings (set [search].enabled = true)"
-        )
+    if facade is None:
+        raise SettingsDisabledError("search is not available in this build")
     parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 20
-    filters = _build_filters(
-        tsg=tsg, meeting=meeting, release=release,
-        spec=spec, since=since, until=until, tdoc_id=tdoc_id,
+    parsed_filters = _build_filters(
+        tsg=tsg,
+        meeting=meeting,
+        release=release,
+        spec=spec,
+        since=since,
+        until=until,
+        tdoc_id=tdoc_id,
         limit=parsed_limit,
     )
-    hits: list[SearchHit] = []
-    error: str | None = None
-    if q:
-        # Service exceptions propagate to the generic handler, which
-        # emits the 500 envelope with a request_id correlation id.
-        hits = service.search(q, filters, sem_query=sem or None)
-
+    try:
+        results = facade.search(text=text, semantic=semantic, filters=parsed_filters)
+    except SearchIndexCorruptError as exc:
+        raise SearchIndexCorruptWebError(str(exc), resource="tdoc") from exc
+    except (
+        SearchUnavailableError,
+        SemanticSearchUnavailableError,
+        EmbedderUnavailableError,
+        VectorIndexUnavailableError,
+    ) as exc:
+        raise SettingsDisabledError(str(exc)) from exc
     if format == "json":
-        return JSONResponse(
-            content=[_fts5_hit_to_json(h) for h in hits],
-        )
+        return JSONResponse(content=[tdoc_search_result_to_dict(result) for result in results])
 
-    template_name = (
-        "partials/search_results.html" if is_htmx_request(request) else "search_results.html"
-    )
-    return templates.TemplateResponse(
-        request=request,
-        name=template_name,
-        context={
-            "active_nav": "search",
-            "search_resource": "tdoc",
-            "mode": "fts5",
-            "query": q,
-            "hits": hits,
-            "total": len(hits),
-            "limit": parsed_limit,
-            "error": error,
-            "pending_jobs": pending_jobs,
-            "filters": {
-                "tsg": tsg or "",
-                "meeting": meeting or "",
-                "release": release or "",
-                "spec": spec or "",
-                "since": since or "",
-                "until": until or "",
-                "sem": sem or "",
-                "tdoc_id": tdoc_id or "",
-            },
+    context = _tdoc_context(
+        text=text,
+        semantic=semantic,
+        results=results,
+        filters={
+            "tsg": tsg or "",
+            "meeting": meeting or "",
+            "release": release or "",
+            "spec": spec or "",
+            "since": since or "",
+            "until": until or "",
+            "tdoc_id": tdoc_id or "",
         },
+        limit=parsed_limit,
+        error=None,
+        pending_jobs=pending_jobs,
     )
+    template_name = (
+        "partials/search_results.html"
+        if is_htmx_request(request)
+        else "search_results.html"
+    )
+    return templates.TemplateResponse(request=request, name=template_name, context=context)
 
 
-@router.get("/sem", include_in_schema=False)
-async def search_semantic(
+def _index_status_html(
+    resource: str,
+    status: IndexStatus,
+    *,
+    htmx: bool,
+) -> HTMLResponse:
+    payload = json.dumps(status.to_dict(), ensure_ascii=False, indent=2)
+    title = html.escape(resource)
+    if htmx:
+        body = f'<div id="index-status"><h2>{title} index</h2><pre>{html.escape(payload)}</pre></div>'
+    else:
+        body = (
+            "<!doctype html><html><head><title>doc3gpp index status</title></head>"
+            f"<body><main><h1>{title} index</h1><pre>{html.escape(payload)}</pre></main></body></html>"
+        )
+    return HTMLResponse(body)
+
+
+async def _get_index_status(
     request: Request,
-    q: str | None = Query(default=None),
-    tsg: str | None = Query(default=None),
-    meeting: str | None = Query(default=None),
-    release: str | None = Query(default=None),
-    spec: str | None = Query(default=None),
-    since: str | None = Query(default=None),
-    until: str | None = Query(default=None),
-    tdoc_id: str | None = Query(default=None, alias="tdoc-id"),
-    fts5_query: str | None = Query(default=None),
-    fts5_weight: float | None = Query(default=0.5),
-    limit: str | None = Query(default="20"),
-    format: str | None = Query(default=None, alias="format"),
-    service: SemanticSearchService | None = Depends(get_semantic_search_service),
-    pending_jobs: int = Depends(get_pending_jobs),
+    service: TDocIndexService | None,
+    format: str | None,
 ) -> Any:
-    """Render ``search_results.html`` or a JSON list of semantic hits."""
     if service is None:
-        raise SettingsDisabledError(
-            "semantic search is not enabled (set [semantic_search].enabled = true)"
-        )
-    parsed_limit = parse_int_query(limit, min=1, max=_LIMIT_CAP) or 20
-    if fts5_weight is None or not (0.0 <= fts5_weight <= 1.0):
-        raise InvalidFilterError(
-            f"fts5_weight must be between 0.0 and 1.0, got {fts5_weight!r}"
-        )
-    # The sem form always submits an ``fts5_query`` field; a blank value
-    # arrives as ``""``. The service treats any non-``None`` value as an
-    # opt-in FTS5 path, so an empty string would run FTS5 with an empty
-    # query and return zero hits. Normalise blank to ``None`` so the
-    # default is pure-vector, matching ``doc3gpp tdoc search sem``.
-    if fts5_query is not None and not fts5_query.strip():
-        fts5_query = None
-
-    hits: list[SemanticSearchHit] = []
-    error: str | None = None
-    if q:
-        # Service exceptions propagate to the generic handler, which
-        # emits the 500 envelope with a request_id correlation id.
-        hits = service.search(
-            q,
-            fts5_query=fts5_query,
-            filters=_build_filters(
-                tsg=tsg, meeting=meeting, release=release,
-                spec=spec, since=since, until=until, tdoc_id=tdoc_id,
-                limit=parsed_limit,
-            ),
-            limit=parsed_limit,
-            fts5_weight=fts5_weight,
-        )
-
+        raise SettingsDisabledError("index maintenance is not available in this build")
+    status = service.status()
     if format == "json":
-        return JSONResponse(
-            content=[_semantic_hit_to_json(h) for h in hits],
-        )
+        return JSONResponse(content=status.to_dict())
+    return _index_status_html("TDoc", status, htmx=is_htmx_request(request))
 
-    template_name = (
-        "partials/search_results.html" if is_htmx_request(request) else "search_results.html"
-    )
-    return templates.TemplateResponse(
-        request=request,
-        name=template_name,
-        context={
-            "active_nav": "search",
-            "search_resource": "tdoc",
-            "mode": "sem",
-            "query": q,
-            "fts5_query": fts5_query,
-            "fts5_weight": fts5_weight,
-            "limit": parsed_limit,
-            "hits": hits,
-            "error": error,
-            "pending_jobs": pending_jobs,
-            "filters": {
-                "tsg": tsg or "",
-                "meeting": meeting or "",
-                "release": release or "",
-                "spec": spec or "",
-                "since": since or "",
-                "until": until or "",
-                "tdoc_id": tdoc_id or "",
-            },
-        },
-    )
+
+@router.get("/tdocs/index", include_in_schema=False)
+async def tdoc_index_status(
+    request: Request,
+    format: str | None = Query(default=None, alias="format"),
+    service: TDocIndexService | None = Depends(get_tdoc_index_service),
+) -> Any:
+    return await _get_index_status(request, service, format)
 
 
 __all__ = ["router"]

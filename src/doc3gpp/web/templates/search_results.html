@@ -4,13 +4,6 @@
   <div class="page-header">
     <h1>Search</h1>
     {% include "partials/search_resource_tabs.html" %}
-    <div class="page-actions">
-      {% if mode == 'sem' %}
-        <a class="btn" href="/tdocs/search">FTS5 search</a>
-      {% else %}
-        <a class="btn" href="/tdocs/search/sem">Hybrid search</a>
-      {% endif %}
-    </div>
   </div>
 
   {% include "partials/search_form.html" %}
@@ -30,15 +23,12 @@
       <p class="error">{{ error }}</p>
     {% endif %}
 
-    {% if query %}
-      <p class="meta">
-        Query <code>{{ query }}</code> ·
-        {% if mode == 'sem' %}
-          semantic rerank
-        {% else %}
-          {{ total }} FTS5 hit{{ '' if total == 1 else 's' }}
-        {% endif %}
-      </p>
+     {% if text or semantic or filters.tsg or filters.meeting or filters.release or filters.spec or filters.since or filters.until or filters.tdoc_id %}
+       <p class="meta">
+         {% if text %}Text <code>{{ text }}</code>{% endif %}
+         {% if semantic %}Semantic <code>{{ semantic }}</code>{% endif %}
+         · {{ search_mode }} · {{ total }} result{{ '' if total == 1 else 's' }}
+       </p>
 
       {% if hits %}
         <label class="fold-toggle">
@@ -47,7 +37,7 @@
         </label>
       {% endif %}
 
-      {% include "partials/search_results_table.html" %}
+       {% include "partials/search_results_table.html" %}
     {% endif %}
   </div>
 

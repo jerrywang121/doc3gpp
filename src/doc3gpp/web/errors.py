@@ -30,12 +30,17 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from doc3gpp.models.search import SearchQueryError
+from doc3gpp.models.search import SearchIndexCorruptError, SearchQueryError
+from doc3gpp.models.semantic_search import (
+    EmbedderUnavailableError,
+    SemanticSearchQueryError,
+    VectorIndexUnavailableError,
+)
 from doc3gpp.models.spec_doc import (
-    SpecDocNoDocxError as SpecDocNoDocxError,
-    SpecDocTooLargeError as SpecDocTooLargeError,
-    SpecDocUnknownSpecError as SpecDocUnknownSpecError,
-    SpecDocUnknownVersionError as SpecDocUnknownVersionError,
+    SpecDocNoDocxError,
+    SpecDocTooLargeError,
+    SpecDocUnknownSpecError,
+    SpecDocUnknownVersionError,
 )
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
@@ -90,6 +95,24 @@ class CacheMissError(LookupError):
         self.hint = hint
 
 
+class SearchIndexCorruptWebError(RuntimeError):
+    """HTTP-facing corruption error carrying the affected resource."""
+
+    def __init__(self, message: str, *, resource: str) -> None:
+        super().__init__(message)
+        self.resource = resource
+
+
+def _resource_for_search_corruption(exc: SearchIndexCorruptError) -> str:
+    return getattr(exc, "resource", "search")
+
+
+def map_search_error(exc: Exception, *, resource: str) -> Exception:
+    if isinstance(exc, SearchIndexCorruptError):
+        return SearchIndexCorruptWebError(str(exc), resource=resource)
+    return exc
+
+
 # JSON-RPC error codes used on the MCP surface (see the design spec's
 # "Error mapping" section). -32000..-32099 are MCP-application-defined;
 # -32600..-32603 are the standard JSON-RPC codes.
@@ -120,6 +143,10 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     CacheMissError: ("tdoc_content", MCP_CODE_CACHE_MISS),
     InvalidFilterError: ("filter", MCP_CODE_INVALID_PARAMS),
     SearchQueryError: ("query", MCP_CODE_INVALID_PARAMS),
+    SemanticSearchQueryError: ("query", MCP_CODE_INVALID_PARAMS),
+    EmbedderUnavailableError: ("search", MCP_CODE_INTERNAL_ERROR),
+    VectorIndexUnavailableError: ("search", MCP_CODE_INTERNAL_ERROR),
+    SearchIndexCorruptError: ("search", MCP_CODE_INTERNAL_ERROR),
 }
 
 
@@ -161,6 +188,11 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     SpecDocNoDocxError: "spec_doc_no_docx",
     InvalidFilterError: "invalid_filter",
     SearchQueryError: "invalid_query",
+    SemanticSearchQueryError: "invalid_query",
+    EmbedderUnavailableError: "settings_disabled",
+    VectorIndexUnavailableError: "settings_disabled",
+    SearchIndexCorruptError: "search_index_corrupt",
+    SearchIndexCorruptWebError: "search_index_corrupt",
     JobNotFoundError: "job_not_found",
     SettingsDisabledError: "settings_disabled",
     CacheMissError: "cache_miss",
@@ -182,6 +214,11 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     SpecDocNoDocxError: 422,
     InvalidFilterError: 400,
     SearchQueryError: 400,
+    SemanticSearchQueryError: 400,
+    EmbedderUnavailableError: 503,
+    VectorIndexUnavailableError: 503,
+    SearchIndexCorruptError: 500,
+    SearchIndexCorruptWebError: 500,
     JobNotFoundError: 404,
     SettingsDisabledError: 503,
     CacheMissError: 404,
@@ -211,6 +248,8 @@ def map_domain_error(exc: Exception) -> JSONResponse:
     also includes a ``"request_id"`` correlation id so operators can
     grep server logs for the matching request.
     """
+    if isinstance(exc, SearchIndexCorruptError):
+        exc = SearchIndexCorruptWebError(str(exc), resource=_resource_for_search_corruption(exc))
     if isinstance(exc, httpx.HTTPError):
         return JSONResponse(
             status_code=502,
@@ -221,10 +260,17 @@ def map_domain_error(exc: Exception) -> JSONResponse:
         if exc_type is Exception:
             continue
         if isinstance(exc, exc_type):
-            slug = _ERROR_SLUGS[exc_type]
+            slug = _ERROR_SLUGS.get(exc_type, "internal_error")
             body: dict[str, Any] = {"error": slug, "detail": str(exc)}
             if isinstance(exc, CacheMissError) and exc.hint:
                 body["hint"] = exc.hint
+            if isinstance(exc, SearchIndexCorruptWebError):
+                body["resource"] = exc.resource
+                body["hint"] = (
+                    "run: doc3gpp tdoc index --rebuild"
+                    if exc.resource == "tdoc"
+                    else "run: doc3gpp spec doc index --rebuild"
+                )
             return JSONResponse(status_code=status, content=body)
 
     return _internal_error_response()
@@ -247,25 +293,25 @@ def register_error_handlers(app: FastAPI) -> None:
 
 
 __all__ = [
+    "MCP_CODE_CACHE_MISS",
+    "MCP_CODE_INTERNAL_ERROR",
+    "MCP_CODE_INVALID_PARAMS",
+    "MCP_CODE_NOT_FOUND",
+    "MCP_CODE_TOO_LARGE",
     "CacheMissError",
-    "TSGNotFoundError",
-    "WINotFoundError",
-    "SpecNotFoundError",
-    "TestcaseNotFoundError",
     "InvalidFilterError",
+    "JobNotFoundError",
     "SearchQueryError",
+    "SettingsDisabledError",
     "SpecDocNoDocxError",
     "SpecDocTooLargeError",
     "SpecDocUnknownSpecError",
     "SpecDocUnknownVersionError",
-    "JobNotFoundError",
-    "SettingsDisabledError",
-    "MCP_CODE_NOT_FOUND",
-    "MCP_CODE_CACHE_MISS",
-    "MCP_CODE_TOO_LARGE",
-    "MCP_CODE_INVALID_PARAMS",
-    "MCP_CODE_INTERNAL_ERROR",
-    "map_mcp_error",
+    "SpecNotFoundError",
+    "TSGNotFoundError",
+    "TestcaseNotFoundError",
+    "WINotFoundError",
     "map_domain_error",
+    "map_mcp_error",
     "register_error_handlers",
 ]

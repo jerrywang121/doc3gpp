@@ -43,16 +43,44 @@ def _seed_minimal_db(title: str = "RAN1#1") -> None:
             text(
                 """
                 INSERT INTO tdocs (
-                    tdoc_id, meeting_id, title, ftp_url, type, source,
+                    tdoc_id, meeting_id, title, ftp_url, type, status, source,
                     uploaded_date, release, spec
                 ) VALUES (
                     'R5-1000000', 1, 'NB-IoT scheduling study',
                     'https://www.3gpp.org/ftp/R5-1000000.zip',
-                    'CR', 'TSG', '2026-01-02T00:00:00', 'Rel-17', '38.300'
+                    'CR', 'Agreed', 'TSG', '2026-01-02T00:00:00',
+                    'Rel-17', '38.300'
                 )
                 """
             )
         )
+
+
+def test_search_and_metadata_include_tdoc_type_and_status(sqlite_env) -> None:
+    create_schema()
+    _seed_minimal_db()
+
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+    from doc3gpp.storage.repositories.vector_sql import (
+        SQLAlchemyVectorIndexRepository,
+    )
+
+    search_repo = SQLAlchemySearchIndexRepository()
+    search_repo.upsert("R5-1000000")
+    hits = search_repo.search('"NB-IoT"', SearchFilters(limit=10))
+
+    assert len(hits) == 1
+    assert hits[0].type == "CR"
+    assert hits[0].status == "Agreed"
+
+    metadata = SQLAlchemyVectorIndexRepository().get_tdocs_metadata(
+        ["R5-1000000"]
+    )
+    assert metadata["R5-1000000"].type == "CR"
+    assert metadata["R5-1000000"].status == "Agreed"
 
 
 def test_search_with_filters(sqlite_env) -> None:
@@ -65,7 +93,7 @@ def test_search_with_filters(sqlite_env) -> None:
     result = runner.invoke(
         app,
         [
-            "tdoc", "search", "query", "NB-IoT",
+            "tdoc", "search", "--text", "NB-IoT",
             "--tsg", "RAN1",
             "--release", "Rel-17",
             "--spec", "38.300",
@@ -208,7 +236,7 @@ def test_search_with_lowercase_tsg(sqlite_env) -> None:
     result = runner.invoke(
         app,
         [
-            "tdoc", "search", "query", "NB-IoT",
+            "tdoc", "search", "--text", "NB-IoT",
             "--tsg", "ran1",
             "--limit", "5",
             "--format", "json",
@@ -244,7 +272,7 @@ def test_search_malformed_match_cli_exits_cleanly(semantic_search_corpus) -> Non
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["tdoc", "search", "query", '"foo', "--format", "json"],
+        ["tdoc", "search", "--text", '"foo', "--format", "json"],
     )
     assert result.exit_code == 2
     assert "bad query" in result.output

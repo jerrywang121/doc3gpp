@@ -6,31 +6,25 @@
         <th>Title</th>
         <th>Meeting</th>
         <th>TSG</th>
-        {% if mode == 'sem' %}<th>RRF</th><th>FTS5 rank</th><th>vec rank</th>{% else %}<th>Score</th>{% endif %}
+        <th>Mode</th><th>Score</th>
       </tr>
     </thead>
     <tbody>
       {% for hit in hits %}
-        {% set meta = hit.hit if mode == 'sem' else hit %}
         <tr>
           <td><a href="/tdocs/{{ hit.tdoc_id }}"><code>{{ hit.tdoc_id }}</code></a></td>
-          <td>{{ meta.title or '-' }}</td>
-          <td>{{ meta.meeting or '-' }}</td>
-          <td>{{ meta.tsg or '-' }}</td>
-          {% if mode == 'sem' %}
-            <td>{{ '%.4f' | format(hit.rrf_score) }}</td>
-            <td>{{ hit.rank_fts5 if hit.rank_fts5 is not none else '-' }}</td>
-            <td>{{ hit.rank_vec if hit.rank_vec is not none else '-' }}</td>
-          {% else %}
-            <td>{{ '%.4f' | format(hit.score) }}</td>
-          {% endif %}
+          <td>{{ hit.title or '-' }}</td>
+          <td>{{ hit.meeting or '-' }}</td>
+          <td>{{ hit.tsg or '-' }}</td>
+          <td>{{ hit.search_mode.value }}</td>
+          <td>{{ '%.4f' | format(hit.score) if hit.score is not none else '-' }}</td>
         </tr>
-        {% if meta.previews %}
+        {% if hit.previews is not none and hit.previews %}
           <tr class="preview-row">
             <td colspan="6">
               <details class="hit-details">
                 <summary>Matching fields</summary>
-                {% for col, snippet in meta.previews.items() %}
+                {% for col, snippet in hit.previews.items() %}
                   <div class="preview-field">
                     <span class="preview-label">{{ col }}</span>
                     <pre>{{ snippet }}</pre>

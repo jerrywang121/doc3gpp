@@ -533,7 +533,7 @@ class SearchSettings(BaseModel):
     ``auto_index_on_parse`` both default to True so the index
     stays in sync with every successful ``tdoc parse`` until the
     operator opts out. ``rebuild_batch_size`` keeps the default
-    CLI ``tdoc search index --rebuild`` manageable on huge DBs;
+     CLI ``tdoc index --rebuild`` manageable on huge DBs;
     ``snippet_tokens`` caps the FTS5 ``snippet(...)`` length.
 
     TOML-only (the ``DOC3GPP_SEARCH__*`` env vars are outside the
@@ -567,7 +567,7 @@ class SearchSettings(BaseModel):
         default=100,
         ge=1,
         description=(
-            "TDocs per batch during `tdoc search index --rebuild`. "
+            "TDocs per batch during `tdoc index --rebuild`. "
             "Smaller values reduce peak memory and crash-recovery "
             "loss (cursor advances per batch); larger values "
             "finish faster."
@@ -609,12 +609,9 @@ class SearchSettings(BaseModel):
     search_fanout_factor: int = Field(
         default=4, ge=1, le=64,
         description=(
-            "When `tdoc search query --sem-query` is used, the FTS5 path "
-            "fetches limit * search_fanout_factor candidates before "
-            "the semantic reranker truncates back to limit. Higher "
-            "values give the reranker more to work with at the cost "
-            "of more vector lookups per query. Only honored when "
-            "--sem-query is supplied. Default 4. Range 1..64."
+            "Candidate multiplier for unified semantic and hybrid "
+            "search. Higher values give RRF more candidates at the "
+            "cost of more vector lookups. Default 4. Range 1..64."
         ),
     )
 
@@ -626,10 +623,10 @@ class SemanticSearchSettings(BaseModel):
     API configured by :attr:`embedding_base_url`. When the base URL is
     unset the semantic stack is disabled and the FTS5 path is used alone.
 
-    As of the 2026-08-01 design revision, spaCy is no longer
-    used; the FTS5 path runs the explicit ``--fts5-query`` string
-    through :class:`doc3gpp.cli_filters.SearchQueryBuilder` without
-    any stopword stripping.
+    Unified search supplies the text input to the FTS5 path and uses
+    the semantic input for vector search; supplying both selects the
+    hybrid path. The persisted ``fts5_weight`` setting controls the
+    blend and is not a request-level option.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -664,19 +661,17 @@ class SemanticSearchSettings(BaseModel):
     fts5_weight: float = Field(
         default=0.5, ge=0.0, le=1.0,
         description=(
-            "Blend weight for the FTS5 rank in RRF (0.0..1.0). The "
-            "vector weight is 1 - fts5_weight. 0.0 is pure vector; "
-            "1.0 is pure FTS5. Ignored when --fts5-query is omitted."
+            "Persisted FTS5 weight for hybrid requests (0.0..1.0). "
+            "The vector weight is 1 - fts5_weight. This is not a "
+            "request-level CLI, HTTP, or MCP option."
         ),
     )
     fanout_multiplier: int = Field(
         default=4, ge=1,
         description=(
-            "Internal fan-out factor for the hybrid `tdoc search sem` path. "
-            "When --fts5-query is supplied, each side fetches "
-            "limit * fanout_multiplier candidates before RRF merge; "
-            "ignored on the pure-vector path. Mirrors "
-            "search.search_fanout_factor for `tdoc search query --sem-query`."
+            "Internal fan-out factor for the unified hybrid search path. "
+            "When both text and semantic inputs are supplied, each side "
+            "fetches limit * fanout_multiplier candidates before RRF merge."
         ),
     )
     max_chunks_per_tdoc: int = Field(

@@ -109,20 +109,20 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             raise VectorIndexUnavailableError(
                 f"vector dim mismatch: stored={self._dim} "
                 f"expected={self._expected_dim}; run "
-                f"`doc3gpp tdoc search index --rebuild-embeddings`"
+                f"`doc3gpp tdoc index --rebuild-embeddings`"
             )
         if dim != self._dim:
             prefix = "query" if what == "query" else "vector"
             raise VectorIndexUnavailableError(
                 f"{prefix} dim mismatch: stored={self._dim} "
                 f"requested={dim}; run "
-                f"`doc3gpp tdoc search index --rebuild-embeddings`"
+                f"`doc3gpp tdoc index --rebuild-embeddings`"
             )
         if self._expected_model is not None and self._stored_model != self._expected_model:
             raise VectorIndexUnavailableError(
                 f"vector model mismatch: stored={self._stored_model!r} "
                 f"expected={self._expected_model!r}; run "
-                f"`doc3gpp tdoc search index --rebuild-embeddings`"
+                f"`doc3gpp tdoc index --rebuild-embeddings`"
             )
 
     def verify_compatible(self, dim: int, model: str | None) -> None:
@@ -138,13 +138,13 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             raise VectorIndexUnavailableError(
                 f"vector dim mismatch: stored={self._dim} "
                 f"requested={dim}; run "
-                f"`doc3gpp tdoc search index --rebuild-embeddings`"
+                f"`doc3gpp tdoc index --rebuild-embeddings`"
             )
         if model is not None and self._stored_model != model:
             raise VectorIndexUnavailableError(
                 f"vector model mismatch: stored={self._stored_model!r} "
                 f"expected={model!r}; run "
-                f"`doc3gpp tdoc search index --rebuild-embeddings`"
+                f"`doc3gpp tdoc index --rebuild-embeddings`"
             )
 
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
@@ -241,8 +241,10 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     ) -> list[tuple[str, str, int, float]]:
         self._check_compatible(int(query_vec.shape[-1]), what="query")
         sql = [
-            "SELECT chunk_id, vec_tdoc_embeddings.tdoc_id AS tdoc_id, "
-            "chunk_index, distance",
+            (
+                "SELECT chunk_id, vec_tdoc_embeddings.tdoc_id AS tdoc_id, "
+                "chunk_index, distance"
+            ),
             "  FROM vec_tdoc_embeddings",
         ]
         params: dict = {
@@ -362,7 +364,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         """Remove the resume cursor from ``vec_meta``.
 
         Called by :meth:`SemanticSearchService.rebuild_embeddings`
-        when the operator runs ``tdoc search index --rebuild-embeddings``
+        when the operator runs ``tdoc index --rebuild-embeddings``
         without ``--resume`` to force a fresh start from the very
         first TDoc. Mirrors
         :meth:`SQLAlchemySearchIndexRepository.clear_resume_cursor`.
@@ -431,7 +433,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 placeholders = ", ".join(f":id_{i}" for i in range(len(chunk)))
                 sql = (
                     "SELECT t.tdoc_id, t.title, t.ftp_url, t.related_wis AS wis,"
-                    "       m.title AS meeting, m.tsg, t.uploaded_date "
+                    "       m.title AS meeting, m.tsg, t.uploaded_date,"
+                    "       t.type, t.status "
                     "  FROM tdocs t "
                     "  LEFT JOIN meetings m ON t.meeting_id = m.meeting_id "
                     f" WHERE t.tdoc_id IN ({placeholders})"
@@ -447,6 +450,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                         meeting=row[4],
                         tsg=row[5],
                         uploaded_date=row[6],
+                        type=row[7],
+                        status=row[8],
                     )
         return out
 

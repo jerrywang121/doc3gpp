@@ -39,6 +39,19 @@
     return null;
   }
 
+  function buildIndexBody(form) {
+    var body = {
+      rebuild: readCheckbox(form, "rebuild"),
+      rebuild_embeddings: readCheckbox(form, "rebuild_embeddings"),
+      rebuild_all: readCheckbox(form, "rebuild_all"),
+      resume: readCheckbox(form, "resume"),
+      stale_only: readCheckbox(form, "stale_only")
+    };
+    var batch = readText(form, "batch");
+    if (batch) body.batch = parseInt(batch, 10);
+    return JSON.stringify(body);
+  }
+
   var BODY_BUILDERS = {
     "sync-meetings-form": function (form) {
       return JSON.stringify({
@@ -115,12 +128,8 @@
       }
       return JSON.stringify(body);
     },
-    "rebuild-search-form": function (form) {
-      return JSON.stringify({
-        stale_only: readCheckbox(form, "stale_only"),
-        resume: readCheckbox(form, "resume"),
-      });
-    },
+    "tdoc-index-form": buildIndexBody,
+    "spec-doc-index-form": buildIndexBody,
     "purge-cache-form": function (form) {
       var select = form.querySelector('select[name="scope"]');
       return JSON.stringify({

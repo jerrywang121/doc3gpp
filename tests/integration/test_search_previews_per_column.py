@@ -32,8 +32,9 @@ import re
 
 from sqlalchemy import event, text
 
-from doc3gpp.cli import _render_search_hits
+from doc3gpp.cli import _render_unified_tdoc_results
 from doc3gpp.models.search import SearchFilters
+from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 
@@ -53,6 +54,27 @@ _DEFAULT_WEIGHTS = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
 
 def _restore_weights(original: tuple[float, ...]) -> None:
     object.__setattr__(get_settings().search, "bm25_weights", original)
+
+
+def _unified_results(hits) -> list[TDocSearchResult]:
+    return [
+        TDocSearchResult(
+            tdoc_id=hit.tdoc_id,
+            score=hit.score,
+            search_mode=SearchMode.FTS5,
+            previews=hit.previews,
+            title=hit.title,
+            meeting=hit.meeting,
+            tsg=hit.tsg,
+            uploaded_date=hit.uploaded_date,
+            ftp_url=hit.ftp_url,
+            wis=hit.wis,
+            type=hit.type,
+            status=hit.status,
+            best_chunk_id=None,
+        )
+        for hit in hits
+    ]
 
 
 def _seed_index_only(search_corpus) -> tuple[list[str], object]:
@@ -293,7 +315,9 @@ def test_render_search_hits_table_prints_all_weight_positive_columns(
         repo = SQLAlchemySearchIndexRepository()
         hits = repo.search("nb", SearchFilters(limit=5))
         assert hits
-        _render_search_hits(hits, format="table", compact=False)
+        _render_unified_tdoc_results(
+            _unified_results(hits), format="table", compact=False
+        )
     finally:
         _restore_weights(_original)
 
@@ -347,7 +371,9 @@ def test_render_search_hits_markdown_prints_all_weight_positive_columns(
         repo = SQLAlchemySearchIndexRepository()
         hits = repo.search("nb", SearchFilters(limit=5))
         assert hits
-        _render_search_hits(hits, format="markdown", compact=False)
+        _render_unified_tdoc_results(
+            _unified_results(hits), format="markdown", compact=False
+        )
     finally:
         _restore_weights(_original)
 
@@ -390,7 +416,9 @@ def test_render_search_hits_json_emits_previews_mapping(
         repo = SQLAlchemySearchIndexRepository()
         hits = repo.search("nb", SearchFilters(limit=5))
         assert hits
-        _render_search_hits(hits, format="json", compact=False)
+        _render_unified_tdoc_results(
+            _unified_results(hits), format="json", compact=False
+        )
     finally:
         _restore_weights(_original)
 

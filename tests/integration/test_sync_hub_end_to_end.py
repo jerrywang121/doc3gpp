@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 # ``app_with_deps`` is defined in ``test_web_end_to_end``; there is no
 # ``tests/integration/conftest.py`` so pytest would NOT share it across
 # modules without this explicit import (C5).
-from tests.integration.test_web_end_to_end import app_with_deps  # noqa: F401,F811  (reused fixture)
+from tests.integration.test_web_end_to_end import app_with_deps  # noqa: F401  (reused fixture)
 
 
 @pytest.fixture()
@@ -33,7 +33,8 @@ def test_sync_page_renders_end_to_end(seeded_app: Any) -> None:
         "Spec sync",
         "Parse TDocs (filter-driven)",
         "Parse from URL",
-        "Rebuild search index",
+        "TDoc index maintenance",
+        "Spec-document index maintenance",
         "Purge cache",
         "Recent sync jobs",
     ):
@@ -147,10 +148,24 @@ def test_sync_page_forms_have_real_inputs(seeded_app: Any) -> None:
             },
         ),
         (
-            "/jobs/tdocs/search/rebuild",
-            {"stale_only": True, "resume": False},
-            "rebuild_search",
-            {"stale_only": True, "resume": False},
+            "/jobs/tdocs/index",
+            {
+                "rebuild": True,
+                "rebuild_embeddings": False,
+                "rebuild_all": False,
+                "batch": 25,
+                "resume": True,
+                "stale_only": True,
+            },
+            "index_tdocs",
+            {
+                "rebuild": True,
+                "rebuild_embeddings": False,
+                "rebuild_all": False,
+                "batch": 25,
+                "resume": True,
+                "stale_only": True,
+            },
         ),
         # cache/purge drops the ``yes`` confirmation flag from stored params (C2).
         (

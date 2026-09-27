@@ -248,7 +248,8 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         sql.extend([
             "       t.title, m.title AS meeting, m.tsg AS tsg,",
             "       t.uploaded_date,",
-            "       tdoc_search.ftp_url, tdoc_search.wis",
+            "       tdoc_search.ftp_url, tdoc_search.wis,",
+            "       t.type, t.status",
             "  FROM tdoc_search",
             "  JOIN tdocs t   ON t.tdoc_id = tdoc_search.tdoc_id",
             "  JOIN meetings m ON t.meeting_id = m.meeting_id",
@@ -327,6 +328,8 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                     uploaded_date=row[5 + len(snippet_columns)],
                     ftp_url=row[6 + len(snippet_columns)],
                     wis=row[7 + len(snippet_columns)],
+                    type=row[8 + len(snippet_columns)],
+                    status=row[9 + len(snippet_columns)],
                 )
             )
         return hits
@@ -414,7 +417,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         """Remove the resume cursor from ``tdoc_search_meta``.
 
         Called by :meth:`SearchService.rebuild` when the operator
-        runs ``tdoc search index --rebuild`` without ``--resume`` to
+        runs ``tdoc index --rebuild`` without ``--resume`` to
         force a fresh start from the very first TDoc. After this
         call, :meth:`get_resume_cursor` returns ``None`` until the
         rebuild's first batch upserts a new cursor.

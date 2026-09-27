@@ -7,6 +7,8 @@ error so the caller can inspect the result without a separate
 ``GET /jobs/{job_id}`` round-trip. ``JobNotFoundError`` still surfaces
 as a 404 when the ``job_id`` is unknown.
 """
+# FastAPI dependency calls in route signatures are intentional.
+# ruff: noqa: B008, BLE001
 from __future__ import annotations
 
 import asyncio
@@ -17,17 +19,17 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from doc3gpp.models.jobs import JSONValue, Job, JobKind, JobStatus
+from doc3gpp.models.jobs import Job, JobKind, JobStatus, JSONValue
 from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.web.deps import get_job_repo, get_job_worker
 from doc3gpp.web.errors import (
     InvalidFilterError,
     JobNotFoundError,
 )
+from doc3gpp.web.filters import parse_int_query
 from doc3gpp.web.render import to_jsonable
 from doc3gpp.web.state import JobWorkerHandle
 from doc3gpp.web.templates_setup import templates
-
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -118,9 +120,13 @@ class _ParseTDocsBody(BaseModel):
     max_batch: int | None = None
 
 
-class _SearchRebuildBody(BaseModel):
-    stale_only: bool = False
+class _IndexBody(BaseModel):
+    rebuild: bool = False
+    rebuild_embeddings: bool = False
+    rebuild_all: bool = False
+    batch: int | None = None
     resume: bool = False
+    stale_only: bool = False
 
 
 class _CachePurgeBody(BaseModel):
@@ -233,15 +239,40 @@ async def post_parse_tdocs(
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 
-@router.post("/tdocs/search/rebuild", status_code=202)
-async def post_search_rebuild(
-    body: _SearchRebuildBody,
+def _index_params(body: _IndexBody) -> dict[str, JSONValue]:
+    if body.batch is not None and body.batch <= 0:
+        parse_int_query(str(body.batch), min=1)
+    if body.rebuild_all and (body.rebuild or body.rebuild_embeddings):
+        raise InvalidFilterError(
+            "rebuild_all is mutually exclusive with rebuild and rebuild_embeddings"
+        )
+    params: dict[str, JSONValue] = {
+        "rebuild": body.rebuild,
+        "rebuild_embeddings": body.rebuild_embeddings,
+        "rebuild_all": body.rebuild_all,
+        "resume": body.resume,
+        "stale_only": body.stale_only,
+    }
+    if body.batch is not None:
+        params["batch"] = body.batch
+    return params
+
+
+@router.post("/tdocs/index", status_code=202)
+async def post_tdoc_index(
+    body: _IndexBody,
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> JSONResponse:
-    job = job_repo.create(
-        JobKind.REBUILD_SEARCH,
-        {"stale_only": body.stale_only, "resume": body.resume},
-    )
+    job = job_repo.create(JobKind.INDEX_TDOCS, _index_params(body))
+    return JSONResponse(status_code=202, content=_envelope(job, queued=True))
+
+
+@router.post("/spec-docs/index", status_code=202)
+async def post_spec_doc_index(
+    body: _IndexBody,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> JSONResponse:
+    job = job_repo.create(JobKind.INDEX_SPEC_DOCS, _index_params(body))
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

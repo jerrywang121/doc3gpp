@@ -6,28 +6,38 @@ letting callers depend only on the Protocol-typed service interface.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from doc3gpp.models.search import SearchUnavailableError
+from doc3gpp.models.semantic_search import (
+    SemanticSearchUnavailableError,
+    VectorIndexUnavailableError,
+)
 from doc3gpp.repository.protocols import (
-    EmbeddingReranker,
     Embedder,
+    EmbeddingReranker,
     SearchIndexRepository,
+    SpecDocRepository,
     SpecDocSearchRepository,
     SpecDocVectorRepository,
     TDocCrChangeDetailsRepository,
     TDocCrTTCNDetailRepository,
+    TDocRepository,
 )
-from doc3gpp.models.search import SearchUnavailableError
-from doc3gpp.models.semantic_search import VectorIndexUnavailableError
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
+from doc3gpp.services.spec_doc_index_service import SpecDocIndexService
+from doc3gpp.services.spec_doc_search_facade import SpecDocSearchFacade
 from doc3gpp.services.spec_service import SpecService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_file_service import TDocFileService
+from doc3gpp.services.tdoc_index_service import TDocIndexService
+from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
 from doc3gpp.services.testcase_service import TestCaseService
@@ -40,10 +50,10 @@ if TYPE_CHECKING:
     from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
-from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
 from doc3gpp.storage.repositories.spec_doc_search_sql import (
     SQLAlchemySpecDocSearchRepository,
 )
+from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
 from doc3gpp.storage.repositories.spec_doc_vector_sql import (
     SQLAlchemySpecDocVectorRepository,
 )
@@ -59,6 +69,36 @@ from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseReposito
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
 from doc3gpp.storage.repositories.wi_sql import SQLAlchemyWiRepository
+
+_UNSET = object()
+
+
+class _LazyService:
+    """Load an optional service only when one of its methods is used."""
+
+    def __init__(
+        self,
+        builder: Callable[[], object | None],
+        error_factory: Callable[[], Exception] | None = None,
+    ) -> None:
+        self._builder = builder
+        self._error_factory = error_factory
+        self._loaded = False
+        self._service: object | None = None
+
+    def _get(self) -> object | None:
+        if not self._loaded:
+            self._service = self._builder()
+            self._loaded = True
+        return self._service
+
+    def __getattr__(self, name: str) -> object:
+        service = self._get()
+        if service is None:
+            if self._error_factory is not None:
+                raise self._error_factory()
+            raise AttributeError(name)
+        return getattr(service, name)
 
 
 def build_meeting_service() -> MeetingService:
@@ -85,6 +125,156 @@ def build_tdoc_repository() -> SQLAlchemyTDocRepository:
     the existing :func:`build_tdoc_service` factory untouched.
     """
     return SQLAlchemyTDocRepository()
+
+
+def build_tdoc_search_facade(
+    settings: Settings | None = None,
+    *,
+    fts5_service: SearchService | None | object = _UNSET,
+    semantic_service: SemanticSearchService | None | object = _UNSET,
+    source_repo: TDocRepository | None | object = _UNSET,
+    embedder: Embedder | None = None,
+    embedder_factory: Callable[[], Embedder | None] | None = None,
+) -> TDocSearchFacade:
+    """Construct the unified TDoc search facade from live collaborators."""
+    if settings is None:
+        settings = get_settings()
+    embedder_value = embedder
+    embedder_loaded = embedder is not None
+
+    def shared_embedder() -> Embedder | None:
+        nonlocal embedder_value, embedder_loaded
+        if not embedder_loaded:
+            embedder_value = (
+                embedder_factory() if embedder_factory is not None
+                else build_embedder(settings)
+            )
+            embedder_loaded = True
+        return embedder_value
+
+    if fts5_service is _UNSET:
+        fts5_service = _LazyService(
+            lambda: build_search_service(settings, embedder=shared_embedder()),
+            lambda: SearchUnavailableError("FTS5 search is not available"),
+        )
+    if semantic_service is _UNSET:
+        semantic_service = _LazyService(
+            lambda: build_semantic_search_service(
+                settings,
+                fts5_service=fts5_service,  # type: ignore[arg-type]
+                embedder=shared_embedder(),
+            ),
+            lambda: SemanticSearchUnavailableError(
+                "semantic search is not available"
+            ),
+        )
+    if source_repo is _UNSET:
+        source_repo = SQLAlchemyTDocRepository()
+    return TDocSearchFacade(
+        fts5_service=fts5_service,
+        semantic_service=semantic_service,
+        source_repo=source_repo,
+        settings=settings,
+    )
+
+
+def build_tdoc_index_service(
+    settings: Settings | None = None,
+    *,
+    fts5_service: SearchService | None | object = _UNSET,
+    semantic_service: SemanticSearchService | None | object = _UNSET,
+    embedder: Embedder | None = None,
+) -> TDocIndexService:
+    """Construct the TDoc index coordinator from live low-level services."""
+    if settings is None:
+        settings = get_settings()
+    if fts5_service is _UNSET:
+        fts5_service = build_search_service(settings, embedder=embedder)
+    if semantic_service is _UNSET:
+        semantic_service = build_semantic_search_service(
+            settings,
+            fts5_service=fts5_service,  # type: ignore[arg-type]
+            embedder=embedder,
+        )
+    return TDocIndexService(
+        fts5_service=fts5_service,
+        semantic_service=semantic_service,
+        settings=settings,
+    )
+
+
+def build_spec_doc_search_facade(
+    settings: Settings | None = None,
+    *,
+    fts5_service: object = _UNSET,
+    semantic_service: object = _UNSET,
+    source_repo: SpecDocRepository | None | object = _UNSET,
+    embedder: Embedder | None = None,
+    embedder_factory: Callable[[], Embedder | None] | None = None,
+) -> SpecDocSearchFacade:
+    """Construct the unified spec-document search facade."""
+    if settings is None:
+        settings = get_settings()
+    embedder_value = embedder
+    embedder_loaded = embedder is not None
+
+    def shared_embedder() -> Embedder | None:
+        nonlocal embedder_value, embedder_loaded
+        if not embedder_loaded:
+            embedder_value = (
+                embedder_factory() if embedder_factory is not None
+                else build_embedder(settings)
+            )
+            embedder_loaded = True
+        return embedder_value
+
+    if fts5_service is _UNSET:
+        fts5_service = _LazyService(
+            lambda: build_spec_doc_search_service(settings),
+            lambda: SearchUnavailableError("FTS5 search is not available"),
+        )
+    if semantic_service is _UNSET:
+        semantic_service = _LazyService(
+            lambda: build_spec_doc_semantic_service(
+                settings,
+                embedder=shared_embedder(),
+                fts5_service=fts5_service,
+            ),
+            lambda: SemanticSearchUnavailableError(
+                "semantic search is not available"
+            ),
+        )
+    if source_repo is _UNSET:
+        source_repo = build_spec_doc_repository()
+    return SpecDocSearchFacade(
+        fts5_service=fts5_service,
+        semantic_service=semantic_service,
+        source_repo=source_repo,
+        settings=settings,
+    )
+
+
+def build_spec_doc_index_service(
+    settings: Settings | None = None,
+    *,
+    fts5_service: object = _UNSET,
+    semantic_service: object = _UNSET,
+    embedder: Embedder | None = None,
+) -> SpecDocIndexService:
+    """Construct the spec-document index coordinator."""
+    if settings is None:
+        settings = get_settings()
+    if fts5_service is _UNSET:
+        fts5_service = build_spec_doc_search_service(settings)
+    if semantic_service is _UNSET:
+        semantic_service = build_spec_doc_semantic_service(
+            settings, embedder=embedder, fts5_service=fts5_service
+        )
+    return SpecDocIndexService(
+        fts5_service=fts5_service,
+        semantic_service=semantic_service,
+        settings=settings,
+    )
 
 
 def build_tdoc_cr_repository() -> SQLAlchemyTDocCrRepository:
@@ -152,6 +342,11 @@ def build_spec_service() -> SpecService:
     )
 
 
+def build_spec_doc_repository() -> SQLAlchemySpecDocRepository:
+    """Construct the spec-document source repository."""
+    return SQLAlchemySpecDocRepository()
+
+
 def build_spec_doc_search_service(
     settings: Settings | None = None,
     repo: SpecDocSearchRepository | None = None,
@@ -181,32 +376,78 @@ def build_spec_doc_search_service(
         return None
 
 
+def build_lazy_search_service(
+    settings: Settings,
+    *,
+    embedder_factory: Callable[[], Embedder | None],
+) -> _LazyService:
+    return _LazyService(
+        lambda: build_search_service(settings, embedder=embedder_factory()),
+        lambda: SearchUnavailableError("FTS5 search is not available"),
+    )
+
+
+def build_lazy_semantic_search_service(
+    settings: Settings,
+    *,
+    fts5_service: object,
+    embedder_factory: Callable[[], Embedder | None],
+) -> _LazyService:
+    return _LazyService(
+        lambda: build_semantic_search_service(
+            settings,
+            fts5_service=fts5_service,  # type: ignore[arg-type]
+            embedder=embedder_factory(),
+        ),
+        lambda: SemanticSearchUnavailableError(
+            "semantic search is not available"
+        ),
+    )
+
+
+def build_lazy_spec_doc_search_service(
+    settings: Settings,
+) -> _LazyService:
+    return _LazyService(
+        lambda: build_spec_doc_search_service(settings),
+        lambda: SearchUnavailableError("FTS5 search is not available"),
+    )
+
+
+def build_lazy_spec_doc_semantic_service(
+    settings: Settings,
+    *,
+    fts5_service: object,
+    embedder_factory: Callable[[], Embedder | None],
+) -> _LazyService:
+    return _LazyService(
+        lambda: build_spec_doc_semantic_service(
+            settings,
+            fts5_service=fts5_service,
+            embedder=embedder_factory(),
+        ),
+        lambda: SemanticSearchUnavailableError(
+            "semantic search is not available"
+        ),
+    )
+
+
 def build_spec_doc_semantic_service(
     settings: Settings | None = None,
     vector_repo: SpecDocVectorRepository | None = None,
     embedder: Embedder | None = None,
+    fts5_service: object | None = None,
 ) -> object | None:
-    """Build a spec-doc hybrid semantic hook or return ``None`` if unavailable.
-
-    Mirrors :func:`build_semantic_search_service` against the
-    specdata vector repo: disabled when
-    ``settings.semantic_search.enabled`` is ``False``, when FTS5 is
-    unavailable (the foundation), or when no embedder is configured
-    (``embedding_base_url`` unset). Best-effort: vector probing /
-    construction failures degrade to ``None``.
-    """
-    from doc3gpp.models.semantic_search import EmbedderUnavailableError
-
+    """Build a spec-doc hybrid semantic hook or return ``None`` if unavailable."""
     from sqlalchemy.exc import OperationalError as SAOperationalError
+
+    from doc3gpp.models.semantic_search import EmbedderUnavailableError
 
     if settings is None:
         settings = get_settings()
     if not settings.semantic_search.enabled:
         return None
     try:
-        fts5_service = build_spec_doc_search_service(settings)
-        if fts5_service is None:
-            return None
         if embedder is None:
             embedder = build_embedder(settings)
             if embedder is None:
@@ -232,6 +473,7 @@ def build_spec_doc_semantic_service(
             embedder=embedder,
             vector_repo=vector_repo,
             settings=settings,
+            doc_repo=SQLAlchemySpecDocRepository(),
         )
     except (
         VectorIndexUnavailableError,
@@ -245,7 +487,9 @@ def build_spec_doc_service(
     embedder: Embedder | None = None,
     *,
     settings: Settings | None = None,
-) -> "SpecDocService":
+    search_service: object | None = None,
+    semantic_service: object | None = None,
+) -> SpecDocService:
     """Construct a :class:`SpecDocService` for the ``spec doc`` commands.
 
     Wires the main-DB :class:`SQLAlchemySpecRepository` (version
@@ -263,13 +507,21 @@ def build_spec_doc_service(
 
     if settings is None:
         settings = get_settings()
-    if embedder is None:
+    if embedder is None and semantic_service is None:
         embedder = build_embedder(settings)
     return SpecDocService(
         spec_repo=SQLAlchemySpecRepository(),
         settings=settings,
-        search_service=build_spec_doc_search_service(settings),
-        semantic_service=build_spec_doc_semantic_service(settings, embedder=embedder),
+        search_service=(
+            search_service
+            if search_service is not None
+            else build_spec_doc_search_service(settings)
+        ),
+        semantic_service=(
+            semantic_service
+            if semantic_service is not None
+            else build_spec_doc_semantic_service(settings, embedder=embedder)
+        ),
         embedder=embedder,
     )
 
@@ -325,7 +577,9 @@ def build_tdoc_cr_service(
     cr_change_details_repository: TDocCrChangeDetailsRepository | None = None,
     *,
     max_tdoc_size_bytes: int | None = None,
-    embedder: Embedder | None = None,  # noqa: F821
+    embedder: Embedder | None = None,
+    search_service: object | None = None,
+    semantic_service: object | None = None,
 ) -> TDocCrService:
     """Construct a :class:`TDocCrService` for the ``tdoc parse`` command.
 
@@ -383,7 +637,9 @@ def build_tdoc_cr_service(
     # build_semantic_search_service each build+probe their own when
     # passed None, which would cost two HTTP probe round-trips per
     # parse. The web app already shares one instance per process.
-    if embedder is None:
+    if embedder is None and (
+        search_service is None or semantic_service is None
+    ):
         embedder = build_embedder(settings)
     return TDocCrService(
         cache=TDocCache(
@@ -399,15 +655,23 @@ def build_tdoc_cr_service(
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
-        search_service=build_search_service(embedder=embedder),
-        semantic_service=build_semantic_search_service(embedder=embedder),
+        search_service=(
+            search_service
+            if search_service is not None
+            else build_search_service(embedder=embedder)
+        ),
+        semantic_service=(
+            semantic_service
+            if semantic_service is not None
+            else build_semantic_search_service(embedder=embedder)
+        ),
     )
 
 
 def build_semantic_search_service(
     settings: Settings | None = None,
     fts5_service: SearchService | None = None,
-    embedder: Embedder | None = None,  # noqa: F821
+    embedder: Embedder | None = None,
     vector_repo: VectorIndexRepository | None = None,  # noqa: F821
 ) -> SemanticSearchService | None:
     """Build a :class:`SemanticSearchService` or return ``None`` if unavailable.
@@ -418,11 +682,12 @@ def build_semantic_search_service(
     foundation — if :func:`build_search_service` returns ``None`` this
     returns ``None`` too.
     """
+    from sqlalchemy.exc import OperationalError as SAOperationalError
+
     from doc3gpp.models.semantic_search import (
         EmbedderUnavailableError,
         VectorIndexUnavailableError,
     )
-    from sqlalchemy.exc import OperationalError as SAOperationalError
     from doc3gpp.storage.repositories.vector_sql import (
         SQLAlchemyVectorIndexRepository,
     )
@@ -432,10 +697,6 @@ def build_semantic_search_service(
     if not settings.semantic_search.enabled:
         return None
     try:
-        if fts5_service is None:
-            fts5_service = build_search_service(settings)
-        if fts5_service is None:
-            return None
         if embedder is None:
             embedder = build_embedder(settings)
             if embedder is None:
@@ -477,7 +738,7 @@ def build_search_service(
     reranker: EmbeddingReranker | None = None,
     *,
     quiet: bool = False,
-    embedder: Embedder | None = None,  # noqa: F821
+    embedder: Embedder | None = None,
 ) -> SearchService | None:
     """Build a :class:`SearchService` or return ``None`` if unavailable.
 

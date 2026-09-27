@@ -69,3 +69,4 @@ class TDocWithMeeting:
 
     tdoc: TDoc
     meeting_name: str | None = None
+    meeting_tsg: str | None = None

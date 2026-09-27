@@ -23,7 +23,7 @@ from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, 
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
 from doc3gpp.web.app import build_app
-from doc3gpp.web.deps import get_search_service
+from doc3gpp.web.deps import get_tdoc_search_facade
 
 
 @pytest.fixture()
@@ -50,9 +50,15 @@ def search_app(search_corpus, monkeypatch: pytest.MonkeyPatch, tmp_path):
         cache=CacheSettings(dir=tmp_path / "cache"),
     )
     app = build_app(settings)
-    app.dependency_overrides[get_search_service] = lambda: SearchService(
-        repo=SQLAlchemySearchIndexRepository(),
-        reranker=PassthroughReranker(),
+    from doc3gpp.services.factory import build_tdoc_search_facade
+
+    app.dependency_overrides[get_tdoc_search_facade] = lambda: build_tdoc_search_facade(
+        settings,
+        fts5_service=SearchService(
+            repo=SQLAlchemySearchIndexRepository(),
+            reranker=PassthroughReranker(),
+        ),
+        semantic_service=None,
     )
     return app
 
@@ -65,7 +71,7 @@ def test_search_query_with_jargon_operators_returns_hits(search_app) -> None:
     ``MATCH``, which parses ``nb-iot`` as ``nb - iot``.
     """
     with TestClient(search_app) as client:
-        response = client.get("/tdocs/search", params={"q": "nb-iot AND scheduling"})
+        response = client.get("/tdocs/search", params={"text": "nb-iot AND scheduling"})
     assert response.status_code == 200
     assert "RP-2200456" in response.text
     get_engine.cache_clear()
@@ -76,7 +82,7 @@ def test_search_query_json_with_jargon_operators_returns_hits(search_app) -> Non
     with TestClient(search_app) as client:
         response = client.get(
             "/tdocs/search",
-            params={"q": "nb-iot AND scheduling", "format": "json"},
+            params={"text": "nb-iot AND scheduling", "format": "json"},
         )
     assert response.status_code == 200
     hits = json.loads(response.content)
@@ -88,7 +94,7 @@ def test_search_query_json_with_jargon_operators_returns_hits(search_app) -> Non
 def test_search_query_stopwords_only_returns_400(search_app) -> None:
     """A stopwords-only query is a client error, not a server error."""
     with TestClient(search_app) as client:
-        response = client.get("/tdocs/search", params={"q": "the"})
+        response = client.get("/tdocs/search", params={"text": "the"})
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_query"
     get_engine.cache_clear()
@@ -106,7 +112,7 @@ def test_search_query_with_meeting_like_filter(search_app) -> None:
     with TestClient(search_app) as client:
         response = client.get(
             "/tdocs/search",
-            params={"q": "nb-iot AND scheduling", "meeting": "%plenary%"},
+            params={"text": "nb-iot AND scheduling", "meeting": "%plenary%"},
         )
     assert response.status_code == 200
     assert "RP-2200456" in response.text
@@ -115,7 +121,7 @@ def test_search_query_with_meeting_like_filter(search_app) -> None:
     with TestClient(search_app) as client:
         response = client.get(
             "/tdocs/search",
-            params={"q": "nb-iot AND scheduling", "meeting": "%no-such-meeting%"},
+            params={"text": "nb-iot AND scheduling", "meeting": "%no-such-meeting%"},
         )
     assert response.status_code == 200
     assert "No matches" in response.text
@@ -131,7 +137,7 @@ def test_search_query_with_release_like_filter(search_app) -> None:
     with TestClient(search_app) as client:
         response = client.get(
             "/tdocs/search",
-            params={"q": "nb-iot AND scheduling", "release": "Rel-1%"},
+            params={"text": "nb-iot AND scheduling", "release": "Rel-1%"},
         )
     assert response.status_code == 200
     assert "RP-2200456" in response.text
@@ -139,7 +145,7 @@ def test_search_query_with_release_like_filter(search_app) -> None:
     with TestClient(search_app) as client:
         response = client.get(
             "/tdocs/search",
-            params={"q": "nb-iot AND scheduling", "release": "Rel-99"},
+            params={"text": "nb-iot AND scheduling", "release": "Rel-99"},
         )
     assert response.status_code == 200
     assert "No matches" in response.text
@@ -152,7 +158,7 @@ def test_search_query_with_spec_like_filter(search_app) -> None:
     with TestClient(search_app) as client:
         response = client.get(
             "/tdocs/search",
-            params={"q": "nb-iot AND scheduling", "spec": "38.3%"},
+            params={"text": "nb-iot AND scheduling", "spec": "38.3%"},
         )
     assert response.status_code == 200
     assert "RP-2200456" in response.text
@@ -160,7 +166,7 @@ def test_search_query_with_spec_like_filter(search_app) -> None:
     with TestClient(search_app) as client:
         response = client.get(
             "/tdocs/search",
-            params={"q": "nb-iot AND scheduling", "spec": "36.5%"},
+            params={"text": "nb-iot AND scheduling", "spec": "36.5%"},
         )
     assert response.status_code == 200
     assert "No matches" in response.text

@@ -1,7 +1,7 @@
 # tests/integration/test_spec_doc_search_repo.py
 """Integration tests for the specdata FTS5 + vector repos (Task 8)."""
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from doc3gpp.models.search import SearchQueryError
 from doc3gpp.models.spec_doc import ChunkDraft, SpecDocSearchFilters
@@ -171,6 +171,69 @@ def test_fts_rich_metadata_filters_support_positive_negated_and_and_semantics(sq
     assert [hit.chunk_index for hit in positive_tables] == [2, 4]
     assert [hit.chunk_index for hit in negated_tables] == [2, 4]
     assert [hit.chunk_index for hit in both] == [4]
+
+
+def test_get_chunks_by_ids_uses_one_batch_and_omits_missing_ids(sqlite_env):
+    create_schema("specdata")
+    repo = SQLAlchemySpecDocRepository()
+    repo.replace_chunks(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=[ChunkDraft(0, "a.docx", "5 Scope", "Table 1", "body")],
+    )
+    engine = get_specdata_engine()
+    statements = []
+
+    def record_select(_conn, _cursor, statement, _parameters, _context, _many):
+        if "FROM spec_doc_chunks" in statement:
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_select)
+    try:
+        chunks = repo.get_chunks_by_ids(
+            ["38.331@18.5.0#0", "missing@1.0.0#0"]
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_select)
+
+    assert list(chunks) == ["38.331@18.5.0#0"]
+    assert chunks["38.331@18.5.0#0"].text == "body"
+    assert len(statements) == 1
+
+
+def test_list_for_search_applies_rich_filters_and_deterministic_paging(sqlite_env):
+    create_schema("specdata")
+    repo = SQLAlchemySpecDocRepository()
+    repo.replace_chunks(
+        "38.331",
+        "20.0.0",
+        release="Rel-20",
+        drafts=[
+            ChunkDraft(0, "a.docx", "5 Scope", "Table 1", "first"),
+            ChunkDraft(0, "a.docx", "6 Other", "Table 2", "second"),
+        ],
+    )
+    repo.replace_chunks(
+        "38.331",
+        "19.0.0",
+        release="Rel-19",
+        drafts=[ChunkDraft(0, "a.docx", "5 Scope", "Table 1", "third")],
+    )
+
+    rows = repo.list_for_search(
+        SpecDocSearchFilters(
+            spec_id="38.331",
+            release="Rel-20",
+            version="20.0.0",
+            sections="%Scope%",
+            tables="%Table 1%",
+            limit=1,
+            offset=0,
+        )
+    )
+
+    assert [row.text for row in rows] == ["first"]
 
 
 def test_stale_only_rebuild_uses_one_cutoff_for_all_batches(sqlite_env):
@@ -365,3 +428,52 @@ def test_vector_knn_release_filter_is_exact(sqlite_env):
         "38.331@18.5.0#0"
     ]
     assert wildcard == []
+
+
+def test_vector_failed_pair_survives_later_success_for_resume_and_stale(sqlite_env):
+    import numpy as np
+
+    create_schema("specdata")
+    repo = SQLAlchemySpecDocRepository()
+    for version in ("18.0.0", "19.0.0"):
+        repo.replace_chunks(
+            "38.331",
+            version,
+            release="Rel-18",
+            drafts=[ChunkDraft(0, "a.docx", None, None, version)],
+        )
+        repo.record_parsed("38.331", version, chunk_count=1)
+    with get_specdata_engine().begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE spec_doc_sources SET parsed_at = CASE version "
+                "WHEN '18.0.0' THEN '2026-01-01 00:00:00.000000' "
+                "WHEN '19.0.0' THEN '2026-01-02 00:00:00.000000' END"
+            )
+        )
+
+    vec = _vec_repo(sqlite_env)
+    vector = np.zeros(vec._dim, dtype=np.float32)
+    vector[0] = 1.0
+    vec.upsert_for_version("38.331", "19.0.0", [vector])
+    vec.record_rebuild_failure("38.331", "18.0.0")
+    vec.set_resume_cursor("38.331@19.0.0")
+
+    resume_pairs = list(
+        vec.rebuild_batch(
+            batch_size=10,
+            after_id="38.331@19.0.0",
+            stale_only=False,
+        )
+    )
+    stale_pairs = list(
+        vec.rebuild_batch(
+            batch_size=10,
+            after_id="38.331@19.0.0",
+            stale_only=True,
+        )
+    )
+
+    assert resume_pairs == [[("38.331", "18.0.0")]]
+    assert stale_pairs == [[("38.331", "18.0.0")]]
+    assert vec.status().is_stale

@@ -11,24 +11,28 @@ import httpx
 import pytest
 
 from doc3gpp.models.search import SearchQueryError
+from doc3gpp.models.semantic_search import (
+    EmbedderUnavailableError,
+    SemanticSearchQueryError,
+    VectorIndexUnavailableError,
+)
 from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
 from doc3gpp.services.tdoc_sync_coordinator import MeetingNotFoundError
 from doc3gpp.web.errors import (
+    MCP_CODE_CACHE_MISS,
+    MCP_CODE_INTERNAL_ERROR,
+    MCP_CODE_INVALID_PARAMS,
+    MCP_CODE_NOT_FOUND,
     CacheMissError,
     InvalidFilterError,
     JobNotFoundError,
     SettingsDisabledError,
     TSGNotFoundError,
     WINotFoundError,
-    MCP_CODE_CACHE_MISS,
-    MCP_CODE_INTERNAL_ERROR,
-    MCP_CODE_INVALID_PARAMS,
-    MCP_CODE_NOT_FOUND,
     map_domain_error,
     map_mcp_error,
     register_error_handlers,
 )
-
 
 _MAPPING_CASES = [
     pytest.param(TSGNotFoundError, "r5", 404, "tsg_not_found", id="tsg_not_found"),
@@ -38,6 +42,9 @@ _MAPPING_CASES = [
     pytest.param(SettingsDisabledError, "feature off", 503, "settings_disabled", id="settings_disabled"),
     pytest.param(CacheMissError, "no cached markdown", 404, "cache_miss", id="cache_miss"),
     pytest.param(SearchQueryError, "query has only stopwords", 400, "invalid_query", id="search_query_error"),
+    pytest.param(SemanticSearchQueryError, "query has only stopwords", 400, "invalid_query", id="semantic_search_query_error"),
+    pytest.param(EmbedderUnavailableError, "embedder down", 503, "settings_disabled", id="embedder_unavailable"),
+    pytest.param(VectorIndexUnavailableError, "vector down", 503, "settings_disabled", id="vector_unavailable"),
 ]
 
 
@@ -98,6 +105,20 @@ def test_map_domain_error_cache_miss_surfaces_hint() -> None:
     assert '"hint":"run: doc3gpp tdoc parse --tdoc R5-260001"' in body
 
 
+def test_map_domain_error_search_corruption_carries_rebuild_hint() -> None:
+    from doc3gpp.web.errors import SearchIndexCorruptWebError
+
+    response = map_domain_error(
+        SearchIndexCorruptWebError("broken index", resource="tdoc")
+    )
+
+    assert response.status_code == 500
+    body = response.body.decode("utf-8")
+    assert '"error":"search_index_corrupt"' in body
+    assert '"resource":"tdoc"' in body
+    assert '"hint":"run: doc3gpp tdoc index --rebuild"' in body
+
+
 def test_map_domain_error_generic_exception_returns_500() -> None:
     """A bare ``Exception`` maps to 500 + ``request_id`` correlation id."""
     response = map_domain_error(RuntimeError("boom"))
@@ -126,6 +147,9 @@ def test_register_error_handlers_attaches_handlers() -> None:
         SettingsDisabledError,
         CacheMissError,
         SearchQueryError,
+        SemanticSearchQueryError,
+        EmbedderUnavailableError,
+        VectorIndexUnavailableError,
         httpx.HTTPError,
         Exception,
     ):

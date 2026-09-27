@@ -205,26 +205,29 @@ table below is for navigation only.
 | `_looks_like_3gpp_file_url` | function | `cli_url_helpers.py` | True when the URL ends with `.docx` or `.zip` (3GPP file shape). |
 | `_looks_like_3gpp_folder_url` | function | `cli_url_helpers.py` | True when the URL ends with `/` (3GPP folder shape). |
 
-## TDoc search subsystem (`src/doc3gpp/models/search.py`, `src/doc3gpp/services/search_service.py`, `src/doc3gpp/storage/db/fts5_query.py`, `src/doc3gpp/storage/repositories/search_sql.py`)
+## Unified search/index subsystem (`src/doc3gpp/models/unified_search.py`, `src/doc3gpp/models/index.py`, `src/doc3gpp/services/tdoc_search_facade.py`, `src/doc3gpp/services/tdoc_index_service.py`, `src/doc3gpp/services/spec_doc_search_facade.py`, `src/doc3gpp/services/spec_doc_index_service.py`)
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
-| `doc3gpp.models.search.SearchHit` | dataclass | `models/search.py` | One FTS5 hit joined back to `tdocs` + `meetings` |
-| `doc3gpp.models.search.SearchFilters` | dataclass | `models/search.py` | Filter arguments for a TDoc search query |
-| `doc3gpp.models.search.SearchIndexStatus` | dataclass | `models/search.py` | Snapshot of the TDoc search index state for `tdoc search index` |
-| `doc3gpp.models.search.SearchError` (+ 3 subclasses) | exception hierarchy | `models/search.py` | `SearchUnavailableError`, `SearchQueryError`, `SearchIndexCorruptError` for the search subsystem |
-| `doc3gpp.services.search_service.SearchService` | service | `services/search_service.py` | Orchestration: `upsert_for_tdoc`, `remove_for_tdoc`, `search`, `rebuild`, `status` |
-| `doc3gpp.services.search_service.PassthroughReranker` | service | `services/search_service.py` | Default `EmbeddingReranker` impl |
-| `doc3gpp.services.semantic_reranker.SemanticReranker` | service | `services/semantic_reranker.py` | Embedding-based reranker used by `tdoc search query --sem-query`; consults `VectorIndexRepository` and applies `MISSING_FLOOR` for unindexed rows |
+| `doc3gpp.models.search.SearchHit` | dataclass | `models/search.py` | Internal FTS5 hit joined back to `tdocs` + `meetings` |
+| `doc3gpp.models.search.SearchFilters` | dataclass | `models/search.py` | Internal filter arguments consumed by the unified TDoc facade |
+| `doc3gpp.models.unified_search.SearchMode` | enum | `models/unified_search.py` | Public mode: `fts5`, `semantic`, `hybrid`, or `filter`. |
+| `doc3gpp.models.unified_search.TDocSearchResult` / `SpecDocSearchResult` | dataclasses | `models/unified_search.py` | Flattened, shared CLI/HTTP/MCP result rows with one `score`, `search_mode`, and FTS5-only `previews`. |
+| `doc3gpp.models.index.IndexRequest` / `IndexStatus` / `IndexRebuildResult` | dataclasses | `models/index.py` | Shared index maintenance request, component status, and processed-count result. |
+| `doc3gpp.models.search.SearchError` (+ 3 subclasses) | exception hierarchy | `models/search.py` | Search subsystem errors used by the unified facade and index services |
+| `doc3gpp.services.search_service.SearchService` | service | `services/search_service.py` | Internal FTS5 indexing/search implementation used by the facade |
+| `doc3gpp.services.search_service.PassthroughReranker` | service | `services/search_service.py` | Internal compatibility implementation |
+| `doc3gpp.services.tdoc_search_facade.TDocSearchFacade` | service | `services/tdoc_search_facade.py` | Selects FTS5, semantic, hybrid, or filter-only source SQL from `--text` / `--semantic` and enriches flattened TDoc rows. |
+| `doc3gpp.services.tdoc_index_service.TDocIndexService` | service | `services/tdoc_index_service.py` | Reports and independently rebuilds TDoc FTS5/vector index components. |
 | `doc3gpp.storage.db.fts5_query.normalize_query` | function | `storage/db/fts5_query.py` | Index-time pre-processor for TDoc ID + spec ID recognition |
 | `doc3gpp.storage.repositories.search_sql.SQLAlchemySearchIndexRepository` | repository | `storage/repositories/search_sql.py` | Concrete FTS5-backed `SearchIndexRepository` impl |
 
-## Semantic search subsystem (`src/doc3gpp/models/semantic_search.py`, `src/doc3gpp/services/semantic_search_service.py`, `src/doc3gpp/services/embedding/`, `src/doc3gpp/storage/repositories/vector_sql.py`)
+## Semantic search implementation (`src/doc3gpp/models/semantic_search.py`, `src/doc3gpp/services/semantic_search_service.py`, `src/doc3gpp/services/embedding/`, `src/doc3gpp/storage/repositories/vector_sql.py`)
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
-| `doc3gpp.models.semantic_search.SemanticSearchHit` | dataclass | `models/semantic_search.py` | One hybrid (FTS5 + vector) hit with merged `rrf_score` and per-source ranks |
-| `doc3gpp.models.semantic_search.SemanticSearchFilters` | dataclass | `models/semantic_search.py` | Filter arguments for `tdoc search sem` |
+| `doc3gpp.models.semantic_search.SemanticSearchHit` | dataclass | `models/semantic_search.py` | Internal semantic/hybrid hit consumed by the unified search facade; not a public CLI/HTTP/MCP row. |
+| `doc3gpp.models.semantic_search.SemanticSearchFilters` | dataclass | `models/semantic_search.py` | Internal vector-side filter arguments for unified search. |
 | `doc3gpp.models.semantic_search.SemanticSearchError` (+ subclasses) | exception hierarchy | `models/semantic_search.py` | Errors raised by the semantic-search subsystem (incl. dim mismatch) |
 | `doc3gpp.services.semantic_search_service.SemanticSearchService` | service | `services/semantic_search_service.py` | Hybrid RRF orchestration: `search`, `index_for_tdoc`, `rebuild_embeddings`, `status` |
 | `doc3gpp.services.embedding.chunker.chunk_text` | function | `services/embedding/chunker.py` | Pure `_chunks(text, size, overlap)` window splitter |
@@ -232,12 +235,14 @@ table below is for navigation only.
 | `doc3gpp.services.embedding.stopwords.strip_stopwords` | function | `services/embedding/stopwords.py` | spaCy + custom-stopword strip; respects `user_defined_stop_words` and `keep_negation_words` |
 | `doc3gpp.storage.repositories.vector_sql.SQLAlchemyVectorIndexRepository` | repository | `storage/repositories/vector_sql.py` | Concrete `VectorIndexRepository` impl backed by sqlite-vec (`vec_tdoc_embeddings` + `vec_meta`) |
 
-## Spec-document search subsystem (`src/doc3gpp/models/spec_doc.py`, `src/doc3gpp/services/spec_doc_search_service.py`, `src/doc3gpp/services/spec_doc_semantic_service.py`, `src/doc3gpp/storage/repositories/spec_doc_search_sql.py`, `src/doc3gpp/storage/repositories/spec_doc_vector_sql.py`)
+## Spec-document search/index subsystem (`src/doc3gpp/models/spec_doc.py`, `src/doc3gpp/services/spec_doc_search_facade.py`, `src/doc3gpp/services/spec_doc_index_service.py`, `src/doc3gpp/services/spec_doc_search_service.py`, `src/doc3gpp/services/spec_doc_semantic_service.py`, `src/doc3gpp/storage/repositories/spec_doc_search_sql.py`, `src/doc3gpp/storage/repositories/spec_doc_vector_sql.py`)
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
-| `SpecDocSearchFilters` / `SpecDocHit` | dataclasses | `models/spec_doc.py` | Scalar metadata filters and chunk-level FTS5 result DTOs. |
-| `SpecDocSemanticHit` | dataclass | `models/spec_doc.py` | Chunk-level pure-vector or hybrid result with FTS5/vector ranks and minimum distance. |
+| `SpecDocSearchFilters` / `SpecDocHit` | dataclasses | `models/spec_doc.py` | Internal scalar metadata filters and chunk-level FTS5 DTOs. |
+| `SpecDocSemanticHit` | dataclass | `models/spec_doc.py` | Internal chunk-level vector/hybrid result; facade output is `SpecDocSearchResult`. |
+| `SpecDocSearchFacade` | service | `services/spec_doc_search_facade.py` | Unified four-mode search selection and flattened spec-document result serialization. |
+| `SpecDocIndexService` | service | `services/spec_doc_index_service.py` | Reports and independently rebuilds spec-document FTS5/vector index components. |
 | `SpecDocSearchService` | service | `services/spec_doc_search_service.py` | FTS5 search over combined `sections` / `tables` metadata, per-version indexing, rebuild cursor/status, and stale-only rebuild orchestration. |
 | `SpecDocSemanticService` | service | `services/spec_doc_semantic_service.py` | Embeds the query, performs vector KNN, optionally fans out FTS5, and merges chunk ranks with RRF. |
 | `rrf_merge` | function | `services/spec_doc_semantic_service.py` | Weighted reciprocal-rank fusion with `k=60` by default; preserves vector-only chunks with no FTS5 hit. |
@@ -246,7 +251,7 @@ table below is for navigation only.
 
 ## CLI entry (`src/doc3gpp/cli.py`)
 
-Twelve Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list` / `schema`), `tdoc` (`sync` / `list` / `schema` / `parse` / `show` / nested `search query` / `search index` / `search sem`), `tsg` (`list` / `schema` / `show` / `seed`), `wi` (`sync` / `list` / `schema`), `spec` (`sync` / `list` / `schema` / `show` / nested `doc`), `testcase` (`sync` / `list` / `schema` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), plus the nested `spec doc` commands (`parse` / `toc show` / `search query` / `search sem` / `schema`) and the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
+Twelve Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `list` / `schema`), `tdoc` (`sync` / `list` / `schema` / `parse` / `show` / `search` / `index`), `tsg` (`list` / `schema` / `show` / `seed`), `wi` (`sync` / `list` / `schema`), `spec` (`sync` / `list` / `schema` / `show` / nested `doc`), `testcase` (`sync` / `list` / `schema` / `show`), `config` (`path` / `show` / `set` / `init`), `cache` (`status` / `purge`), plus the nested `spec doc` commands (`parse` / `toc show` / `search` / `index` / `schema`) and the `server` group in `cli_server.py` (`start` / `stop` / `status` / `logs` / `install` / `uninstall`). Per-command option and behavior details live in [`docs/cli.md`](cli.md).
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
@@ -258,8 +263,9 @@ Twelve Typer sub-apps: `db` (`check` / `init` / `reset`), `meeting` (`sync` / `l
 
 The `doc3gpp[web]` extra adds a single-port FastAPI server (HTML UI + JSON API + Streamable-HTTP MCP) with a shared asyncio job worker. `[server] enabled` gates every `server` subcommand and the MCP mount. CLI↔HTTP JSON parity is byte-for-byte (compact separators + `ensure_ascii=False`) — see [`docs/web-server.md`](web-server.md).
 
-Legacy unscoped TDoc search routes and plural TDoc search tool aliases are
-removed; spec-document search keeps its existing HTTP and MCP names.
+Search and index surfaces are unified across CLI, HTTP, and MCP; removed
+`/search/sem` routes and split semantic/rebuild-only tool names are not current
+APIs.
 
 | Symbol | Kind | File | Role |
 | --- | --- | --- | --- |
@@ -269,15 +275,15 @@ removed; spec-document search keeps its existing HTTP and MCP names.
 | `ServiceContainer` | dataclass | `web/state.py` | Bundle of services/repos injected into routes |
 | `JobWorkerHandle` | class | `web/state.py` | asyncio handle over the worker: `enqueue`, `cancel`, `event_queues`, `register_queue`/`unregister_queue`, `shutdown` |
 | `get_state`/`get_settings`/`get_engine`/`get_services` | dependency | `web/deps.py` | FastAPI `Depends` helpers reading `request.app.state.web` |
-| `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_wi_service`/`get_tsg_service`/`get_search_service`/`get_semantic_search_service`/`get_spec_doc_service`/`get_spec_doc_search_service`/`get_spec_doc_semantic_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service `Depends` helpers |
+| `get_meeting_service`/`get_tdoc_service`/`get_tdoc_cr_service`/`get_wi_service`/`get_tsg_service`/`get_tdoc_search_facade`/`get_tdoc_index_service`/`get_spec_doc_service`/`get_spec_doc_search_facade`/`get_spec_doc_index_service`/`get_tdoc_file_repo` | dependency | `web/deps.py` | Per-service/facade/index `Depends` helpers |
 | `get_job_repo` / `get_job_worker` | dependency | `web/deps.py` | Job repository + worker-handle deps (overridden in tests) |
-| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP via `mcp.server.mcpserver.MCPServer`; 38 tools. Current TDoc search tools are `search_tdoc`, `semantic_search_tdoc`, and `rebuild_tdoc_search_index`; spec-document read tools include `get_spec_toc`, `search_spec_docs`, `semantic_search_spec_docs`, and `get_spec_doc_schema`; `parse_spec_docs` enqueues the background parse job. All schema/read results use `_to_json` and the same render payloads as the corresponding HTTP/CLI JSON surfaces. |
+| `build_mcp_server` | factory | `web/mcp_server.py` | Streamable-HTTP MCP; current unified search/index tools are `search_tdoc`, `search_spec_docs`, `get_tdoc_index`, `index_tdocs`, `get_spec_doc_index`, and `index_spec_docs`. Search results use the flattened JSON rows shared with CLI/HTTP. |
 | `testcase_rows` / `testcase_status_rows` | functions | `web/render.py` | List/detail rows matching CLI `testcase --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects; every other field coerced like the CLI cells). |
 | `routes/landing.py` | APIRouter | `web/routes/landing.py` | `GET /` — static navigation sections for the landing page; includes the `Spec Docs` section linking to `/spec-docs/search` and preserves the `{"sections": [...]}` JSON envelope at `?format=json`. |
 | `routes/testcases.py` | APIRouter | `web/routes/testcases.py` | `/testcases` — list (filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; `_LIMIT_CAP=200`, default limit 50; unknown `group` → `InvalidFilterError`) + `/{testcase_id}` detail (optional `?group=`; without it every stored group returns; HTML renders one section per group or `?format=json` → array of flat per-`(id, group)` objects with nested `statuses` (no `group` in status rows); unknown → 404 `testcase_not_found`) + `/schema` descriptors (shared `schema.html` / `partials/schema_results.html`). |
-| `routes/spec_docs.py` | APIRouter | `web/routes/spec_docs.py` | `/specs/{spec_id}/docs` — collapsed version-first HTML/HTMX page with source state, parse/re-parse job form, collapsed TOC, and paginated chunks; `/specs/{spec_id}/docs/toc`, `/spec-docs/search`, `/spec-docs/search/sem`, and `/spec-docs/schema` retain their existing TOC/search/schema contracts. Search exposes a full-width Query field plus plural `sections` / `tables` filters. HTML and HTMX use `spec_doc_show.html`, `partials/spec_doc_show_results.html`, `partials/spec_doc_chunks.html`, `partials/spec_doc_search_form.html`, and `partials/spec_doc_search_results_table.html`; the version page has no new JSON envelope. |
+| `routes/spec_docs.py` | APIRouter | `web/routes/spec_docs.py` | `/specs/{spec_id}/docs` — collapsed version-first HTML/HTMX page; `/specs/{spec_id}/docs/toc`, `/spec-docs/search`, `/spec-docs/index`, and `/spec-docs/schema` expose the current spec-document portal, unified search, index status, and schema contracts. |
 | `TestcaseNotFoundError` | exception | `web/errors.py` | Lookup miss on a testcase id → HTTP 404 `testcase_not_found` / MCP `-32004`. |
-| `JobKind.SYNC_TESTCASES` | enum member | `models/jobs.py` | `"sync_testcases"`; handled by `_sync_testcases` (`services.testcase.sync`) and enqueued via `POST /jobs/sync/testcases` (tenth sync-hub panel `id="testcase-form"`). |
+| `JobKind.SYNC_TESTCASES` | enum member | `models/jobs.py` | `"sync_testcases"`; handled by `_sync_testcases` (`services.testcase.sync`) and enqueued via `POST /jobs/sync/testcases` (eleventh sync-hub form `id="testcase-form"`). |
 | `_to_json` | function | `web/mcp_server.py` | `json.dumps(value, separators=(",", ":"), ensure_ascii=False)` — byte-matches Starlette `JSONResponse` |
 | `meeting_rows`/`tdoc_rows`/`tsg_rows`/`wi_rows`/`spec_rows`/`spec_version_rows` | function | `web/render.py` | List-of-dict rows matching CLI `--format json` (`_coerce_cell`: `None`→`"-"`, date→isoformat) |
 | `to_jsonable` | function | `web/render.py` | Recursively convert dataclasses/values to JSON-safe structures |
@@ -286,11 +292,11 @@ removed; spec-document search keeps its existing HTTP and MCP names.
 | `InstallNotManagedError` | exception | `web/install.py` | Raised when uninstalling a missing/non-managed unit |
 | `all_routers` | function | `web/routes/__init__.py` | Aggregate `[landing, meetings, search, tdocs, tsgs, wis, specs, spec_docs, testcases, jobs, sync]`; the search router precedes the dynamic TDoc router so `/tdocs/search` is not captured by `/{tdoc_id}`. |
 | `is_htmx_request` | function | `web/filters.py` | `request.headers["HX-Request"] == "true"` — list routes use this to switch between full page (no header) and `partials/<resource>_results.html` fragment (HTMX-driven swap target). |
-| `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue (sync/meetings, sync/tdocs, sync/tdocs/all, sync/specs, sync/testcases, parse/tdocs, parse/spec-docs, tdocs/search/rebuild, cache/purge, sync_tdocs), list (renders `templates/job_status.html` with `partials/_job_row.html` per row), get, SSE `/events`, cancel (idempotent on terminal jobs; `?format=html` returns the refreshed row partial as an `outerHTML` swap target for the list page's per-row Cancel button) |
+| `routes/jobs.py` | APIRouter | `web/routes/jobs.py` | `/jobs` — enqueue sync/parse jobs plus `POST /jobs/tdocs/index` and `POST /jobs/spec-docs/index` for unified index maintenance; list, get, SSE `/events`, and cancel. |
 | `JobWorker` | class | `web/workers/job_worker.py` | asyncio worker: polls `QUEUED` jobs at `Settings.server.poll_interval_seconds` (default `1.0`s, range `0.05..60.0`), runs handlers (semaphore-bounded by `max_concurrent_jobs`), streams SSE, emits throttled periodic progress lines at `Settings.server.progress_interval_seconds` (default 10.0), cooperative cancel, skips handlers when the `mark_running` claim loses the race (`(claimed, job)` return), and sweeps orphaned `RUNNING` rows on startup → `FAILED` with `error="orphaned_after_restart"`. Retention cleanup runs on the independent `cleanup_interval_seconds` cadence. |
 | `JobHandlers.KIND_TO_HANDLER` | mapping | `web/workers/handlers.py` | `JobKind`→async handler (network-touching sync/parse/rebuild/purge) |
 | `Job` | dataclass | `models/jobs.py` | `id, kind, status, params, log_lines, result_summary, error, created_at, started_at, finished_at` |
-| `JobKind` / `JobStatus` | enum | `models/jobs.py` | `SYNC_MEETINGS/SYNC_TDOCS/SYNC_TDOCS_ALL/SYNC_SPECS/SYNC_TESTCASES/PARSE_TDOCS/PARSE_TDOC_URL/PARSE_SPEC_DOCS/REBUILD_SEARCH/CACHE_PURGE`; `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED` |
+| `JobKind` / `JobStatus` | enum | `models/jobs.py` | `SYNC_MEETINGS/SYNC_TDOCS/SYNC_TDOCS_ALL/SYNC_SPECS/SYNC_TESTCASES/PARSE_TDOCS/PARSE_TDOC_URL/PARSE_SPEC_DOCS/INDEX_TDOCS/INDEX_SPEC_DOCS/CACHE_PURGE`; `REBUILD_SEARCH` is retained only for decoding historical persisted jobs; `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED` |
 | `SQLAlchemyJobRepository` | repository | `storage/repositories/jobs_sql.py` | SQL impl of `JobRepository`: `create/get/list/mark_running` (idempotent `UPDATE ... WHERE status = 'queued'` — `rowcount == 0` is a no-op so two workers can't both overwrite `started_at` / `log_lines`; returns `(claimed, job)` so the caller can detect a lost claim)/`append_log` (FIFO-capped at 50)/`mark_succeeded`/`mark_failed`/`mark_cancelled`/`delete_older_than` |
 | `server_app` (6 commands) | Typer group | `cli_server.py` | `server start|stop|status|logs|install|uninstall`; `_require_server_enabled` gates all |
 

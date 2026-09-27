@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from collections.abc import Iterable
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
+from doc3gpp.models.spec import spec_version_sort_key
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
     SpecDocChunk,
+    SpecDocSearchFilters,
     SpecDocSource,
     SpecDocToc,
     SpecDocTocEntry,
     SpecDocTocFile,
 )
-from doc3gpp.models.spec import spec_version_sort_key
 from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.models import (
     SpecDocChunkORM,
@@ -279,6 +280,43 @@ class SQLAlchemySpecDocRepository:
             )
             rows = session.scalars(stmt).all()
         return [_orm_to_chunk(r) for r in rows]
+
+    def get_chunks_by_ids(self, chunk_ids: list[str]) -> dict[str, SpecDocChunk]:
+        """Return existing chunk metadata for all ids in one SQL query."""
+        if not chunk_ids:
+            return {}
+        with self._session_factory() as session:
+            stmt = select(SpecDocChunkORM).where(
+                SpecDocChunkORM.chunk_id.in_(chunk_ids)
+            )
+            rows = session.scalars(stmt).all()
+        return {chunk.chunk_id: chunk for chunk in map(_orm_to_chunk, rows)}
+
+    def list_for_search(
+        self, filters: SpecDocSearchFilters
+    ) -> list[SpecDocChunk]:
+        """Return source chunks matching rich search filters."""
+        with self._session_factory() as session:
+            stmt = select(SpecDocChunkORM)
+            for column, value in (
+                (SpecDocChunkORM.spec_id, filters.spec_id),
+                (SpecDocChunkORM.release, filters.release),
+                (SpecDocChunkORM.version, filters.version),
+                (SpecDocChunkORM.sections, filters.sections),
+                (SpecDocChunkORM.tables, filters.tables),
+            ):
+                stmt = apply_text_filter(stmt, column, value)
+            stmt = (
+                stmt.order_by(
+                    SpecDocChunkORM.spec_id,
+                    SpecDocChunkORM.version,
+                    SpecDocChunkORM.chunk_index,
+                )
+                .offset(max(filters.offset, 0))
+                .limit(max(filters.limit, 0))
+            )
+            rows = session.scalars(stmt).all()
+        return [_orm_to_chunk(row) for row in rows]
 
 
     def count_chunks(

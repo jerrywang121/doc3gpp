@@ -1,10 +1,8 @@
-"""End-to-end test for ``tdoc search query --sem-query`` over sqlite + sqlite-vec.
+"""End-to-end tests for unified hybrid TDoc search over sqlite + sqlite-vec.
 
-Exercises the full CLI flow — :class:`typer.testing.CliRunner` →
-:func:`doc3gpp.services.factory.build_search_service` →
-:class:`doc3gpp.services.search_service.SearchService` (FTS5 path) →
-:class:`doc3gpp.services.semantic_reranker.SemanticReranker` (vector
-rerank) → CLI table renderer.
+Exercises the full CLI flow through the unified TDoc facade, which dispatches
+the text and semantic inputs to the FTS5/vector hybrid service and the unified
+table renderer.
 
 The factory's :func:`build_embedder` is patched so the test does
 not depend on a remote embeddings API. The corpus uses
@@ -14,20 +12,13 @@ stay short and the cosine-distance arithmetic is obvious.
 
 Four cases pin the contract:
 
-1. 4x FTS5 fanout + rerank truncation: ``--limit 2`` + the
-   ``search.search_fanout_factor=4`` default fetches 8 candidates;
-   the reranker sorts them by cosine distance to the ``--sem-query``
-   vector and truncates back to 2. Top-2 are the two vectors closest
-   to the query.
-2. Empty ``vec_tdoc_embeddings``: all candidates map to
-   :attr:`SemanticReranker.MISSING_FLOOR`; the reranker logs the
-   one-shot "no rows in vec_tdoc_embeddings" warning and returns
-   hits in FTS5 order.
-3. Empty ``--sem-query`` string: the CLI treats ``""`` as
-   falsy and skips the rerank branch entirely — encode() is never
-   called, output is the raw FTS5 hit list.
-4. Zero FTS5 hits: the reranker's ``if not hits: return []`` guard
-   short-circuits before encode() is called.
+ 1. Hybrid search uses the semantic query for embedding and truncates the
+    result list to ``--limit``.
+ 2. Empty ``vec_tdoc_embeddings`` preserves the FTS5 side's order without the
+    old reranker warning.
+ 3. An empty semantic input selects FTS5 mode, so encode() is never called.
+ 4. Hybrid mode still embeds the semantic query even when the FTS5 side has no
+    matches.
 """
 from __future__ import annotations
 
@@ -39,7 +30,7 @@ import pytest
 from sqlalchemy import text
 from typer.testing import CliRunner
 
-from doc3gpp.cli import tdoc_search_app
+from doc3gpp.cli import app
 from doc3gpp.services import factory
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
@@ -198,7 +189,7 @@ class _FakeEmbedder:
     """Deterministic embedder that returns a fixed 4-D vector per call.
 
     Tracks every ``encode`` call so tests can assert the CLI only
-    hit the embedder for the ``--sem-query`` argument (and not for
+    hits the embedder for the ``--semantic`` argument (and not for
     each FTS5 candidate).
     """
 
@@ -216,8 +207,8 @@ class _FakeEmbedder:
 def _patch_embedder(embedder: _FakeEmbedder):
     """Patch :func:`factory.build_embedder` for the duration of a test.
 
-    The factory's :func:`build_search_service` constructs the
-    embedder via ``build_embedder(settings)`` inside the reranker
+    The factory's unified search construction path builds the
+    embedder via ``build_embedder(settings)`` inside the semantic
     branch — patching it avoids any HTTP call to the remote
     embeddings API and routes ``encode`` to the test's
     :class:`_FakeEmbedder` instance.
@@ -240,15 +231,15 @@ def test_sem_query_uses_4x_fanout_then_truncates_to_limit(seeded_engine):
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch:
         result = CliRunner().invoke(
-            tdoc_search_app,
+            app,
             [
-                "query", "R5*", "--sem-query", "anything",
+                "tdoc", "search", "--text", "R5*", "--semantic", "anything",
                 "--limit", "2",
             ],
         )
     assert result.exit_code == 0, result.output
     # Embedder was called exactly once (for the semantic query), with
-    # the literal ``--sem-query`` string as the only input.
+    # the literal ``--semantic`` string as the only input.
     assert embedder.calls == [["anything"]]
     # Top 2 by cosine distance to [1,0,0,0] are R5-1, then R5-2.
     # The table renderer emits one summary line per tdoc (plus
@@ -270,14 +261,12 @@ def test_sem_query_empty_vector_index_falls_back_to_fts5_order(
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch, caplog.at_level(logging.WARNING):
         result = CliRunner().invoke(
-            tdoc_search_app, ["query", "R5*", "--sem-query", "anything"],
-        )
+            app,
+            ["tdoc", "search", "--text", "R5*", "--semantic", "anything"],
+    )
     assert result.exit_code == 0, result.output
-    # Every candidate maps to MISSING_FLOOR → one-shot warning.
-    assert any(
-        "no rows in vec_tdoc_embeddings" in rec.message
-        for rec in caplog.records
-    ), [r.message for r in caplog.records]
+    assert embedder.calls == [["anything"]]
+    assert not any("no rows in vec_tdoc_embeddings" in rec.message for rec in caplog.records)
 
 
 def test_sem_query_empty_string_is_no_op(seeded_engine):
@@ -290,11 +279,11 @@ def test_sem_query_empty_string_is_no_op(seeded_engine):
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch:
         result = CliRunner().invoke(
-            tdoc_search_app, ["query", "R5*", "--sem-query", ""],
+            app,
+            ["tdoc", "search", "--text", "R5*", "--semantic", ""],
         )
     assert result.exit_code == 0, result.output
-    # The CLI's `if sem_query:` guard treats the empty string as
-    # falsy → rerank branch skipped → encode() never called.
+    # The facade treats the empty string as absent, selecting FTS5 mode.
     assert embedder.calls == []
 
 
@@ -308,12 +297,13 @@ def test_sem_query_fts5_zero_results_does_not_encode(seeded_engine):
     (embedder_patch,) = _patch_embedder(embedder)
     with embedder_patch:
         result = CliRunner().invoke(
-            tdoc_search_app, ["query", "nothing", "--sem-query", "anything"],
+            app,
+            ["tdoc", "search", "--text", "nothing", "--semantic", "anything"],
         )
     assert result.exit_code == 0, result.output
-    # SemanticReranker.rerank short-circuits on `if not hits: return []`
-    # so the embedder is never called when FTS5 returns zero hits.
-    assert embedder.calls == []
+    # Hybrid mode always embeds the semantic input; the two paths are
+    # coordinated by the facade rather than by the old reranker branch.
+    assert embedder.calls == [["anything"]]
 
 
 # ----------------------------------------------------------------------
@@ -324,15 +314,8 @@ def test_sem_query_fts5_zero_results_does_not_encode(seeded_engine):
 # ----------------------------------------------------------------------
 
 
-def test_sem_query_quiet_suppresses_warning(seeded_engine, caplog):
-    """``--quiet`` suppresses the empty-vector WARNING end-to-end.
-
-    The vector index is empty, so the reranker would normally emit
-    ``"semantic rerank: no rows in vec_tdoc_embeddings; falling back
-    to FTS5 order"``. With ``--quiet`` the warning is silent and the
-    FTS5 order is still preserved (the suppression is a side-channel
-    gate, not a behaviour change for the visible output).
-    """
+def test_sem_query_quiet_preserves_hybrid_output(seeded_engine, caplog):
+    """``--quiet`` does not alter the unified hybrid result ordering."""
     _seed_vectors({})
     embedder = _FakeEmbedder([0.0, 0.0, 0.0, 0.0])
     (embedder_patch,) = _patch_embedder(embedder)
@@ -340,16 +323,12 @@ def test_sem_query_quiet_suppresses_warning(seeded_engine, caplog):
         logging.WARNING, logger="doc3gpp.services.semantic_reranker",
     ):
         result = CliRunner().invoke(
-            tdoc_search_app,
-            ["query", "R5*", "--sem-query", "anything", "--quiet"],
+            app,
+            [
+                "tdoc", "search", "--text", "R5*", "--semantic", "anything",
+                "--quiet",
+            ],
         )
     assert result.exit_code == 0, result.output
-    warnings = [
-        rec for rec in caplog.records
-        if rec.levelno == logging.WARNING
-        and "no rows in vec_tdoc_embeddings" in rec.message
-    ]
-    assert warnings == [], (
-        f"expected no empty-vector WARNING under --quiet; got: "
-        f"{[r.message for r in caplog.records]}"
-    )
+    assert embedder.calls == [["anything"]]
+    assert not any("tdoc search index" in rec.message for rec in caplog.records)

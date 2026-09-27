@@ -244,14 +244,31 @@ def test_post_parse_tdocs_single_tdoc_payload(client: Any) -> None:
     }
 
 
-def test_post_search_rebuild(client: Any) -> None:
+def test_post_tdoc_index_creates_job(client: Any) -> None:
     c, repo, _ = client
-    r = c.post("/jobs/tdocs/search/rebuild", json={"stale_only": True, "resume": False})
+    r = c.post(
+        "/jobs/tdocs/index",
+        json={
+            "rebuild": True,
+            "rebuild_embeddings": False,
+            "rebuild_all": False,
+            "batch": 25,
+            "resume": True,
+            "stale_only": True,
+        },
+    )
     assert r.status_code == 202
     job = repo.get(r.json()["job_id"])
     assert job is not None
-    assert job.kind is JobKind.REBUILD_SEARCH
-    assert job.params == {"stale_only": True, "resume": False}
+    assert job.kind is JobKind.INDEX_TDOCS
+    assert job.params == {
+        "rebuild": True,
+        "rebuild_embeddings": False,
+        "rebuild_all": False,
+        "batch": 25,
+        "resume": True,
+        "stale_only": True,
+    }
 
 
 def test_post_cache_purge_requires_yes(client: Any) -> None:

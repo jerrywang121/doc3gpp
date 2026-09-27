@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import dataclasses
 import json
 import logging
@@ -21,8 +20,6 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
-from doc3gpp.config import get_settings
-from doc3gpp.settings.schema import Settings, env_var_for_dotted_key
 from doc3gpp.cli_auto_sync import (
     _build_meeting_url,
     collect_tdoc_candidates_for_url,
@@ -35,33 +32,32 @@ from doc3gpp.cli_url_helpers import (
     _looks_like_3gpp_folder_url,
     is_3gpp_ftp_url,
 )
+from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.schema_info import SCHEMA_FIELDS, schema_payload
-from doc3gpp.models.spec_doc import SpecDocSearchFilters
-from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.spec_doc import SpecDocSearchFilters
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
-from doc3gpp.models.testcase import TestCaseDetail, TestCaseStatus, TestCaseWithStatuses
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     TDocCRDetails,
 )
 from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl, TDocShowRepos
+from doc3gpp.models.testcase import TestCaseDetail, TestCaseStatus, TestCaseWithStatuses
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
-from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
-from doc3gpp.scraping.cache import CacheStatus, TDocCache
-from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
     extract_tdoc_id_from_filename,
 )
+from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.parsers.normalizers import normalize_ftp_path
+from doc3gpp.scraping.cache import CacheStatus, TDocCache
+from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
-    build_spec_doc_search_service,
-    build_spec_doc_semantic_service,
     build_spec_doc_service,
     build_spec_service,
     build_tdoc_cr_change_details_repository,
@@ -76,6 +72,9 @@ from doc3gpp.services.factory import (
     build_tsg_service,
     build_wi_service,
 )
+from doc3gpp.services.spec_service import (
+    SpecUnknownOnUpstreamError,
+)
 from doc3gpp.services.tdoc_cr_service import (
     TDocNotFoundError,
     TDocTypeUnsupportedError,
@@ -84,9 +83,6 @@ from doc3gpp.services.tdoc_cr_service import (
 )
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
-)
-from doc3gpp.services.spec_service import (
-    SpecUnknownOnUpstreamError,
 )
 from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.settings.config_source import find_config_file, load_config_data
@@ -102,6 +98,7 @@ from doc3gpp.settings.config_writer import (
     walk_known_dotted_keys,
     write_toml,
 )
+from doc3gpp.settings.schema import Settings, env_var_for_dotted_key
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import (
     get_engine,
@@ -115,7 +112,6 @@ app = typer.Typer(help="doc3gpp command line tools")
 db_app = typer.Typer(help="database commands")
 meeting_app = typer.Typer(help="meeting commands")
 tdoc_app = typer.Typer(help="tdoc commands")
-tdoc_search_app = typer.Typer(help="search over stored TDocs and TDoc sidecars")
 tsg_app = typer.Typer(help="tsg reference data commands")
 wi_app = typer.Typer(help="wi commands")
 spec_app = typer.Typer(help="spec commands")
@@ -125,7 +121,6 @@ cache_app = typer.Typer(help="TDoc extraction cache commands")
 app.add_typer(db_app, name="db")
 app.add_typer(meeting_app, name="meeting")
 app.add_typer(tdoc_app, name="tdoc")
-tdoc_app.add_typer(tdoc_search_app, name="search")
 app.add_typer(tsg_app, name="tsg")
 app.add_typer(wi_app, name="wi")
 app.add_typer(spec_app, name="spec")
@@ -530,8 +525,7 @@ def _emit_markdown(
         for index, row in enumerate(rows):
             if index:
                 stream.write("\n")
-            for field, cell in zip(fields, row):
-                stream.write(f"{field}: {cell}\n")
+            stream.writelines(f"{field}: {cell}\n" for field, cell in zip(fields, row))
         return
     stream.write("| " + " | ".join(_md_cell(h) for h in fields) + " |\n")
     stream.write("|" + "|".join(["---"] * len(fields)) + "|\n")
@@ -645,6 +639,237 @@ def _emit_records(
     finally:
         if close_after:
             stream.close()
+
+
+def _validate_search_filter_values(
+    *,
+    release: str | None = None,
+    spec: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> None:
+    """Validate search filters before constructing a facade request."""
+    from doc3gpp.cli_filters import (
+        parse_date_filter,
+        parse_release_filter,
+        parse_spec_filter,
+    )
+
+    try:
+        if since:
+            parse_date_filter(since)
+        if until:
+            parse_date_filter(until)
+        if release:
+            parse_release_filter(release)
+        if spec:
+            parse_spec_filter(spec)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _display_value(value: object) -> str:
+    """Render one unified result value for table/Markdown output."""
+    if value is None:
+        return "-"
+    if hasattr(value, "value"):
+        value = value.value
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value)
+
+
+def _render_unified_tdoc_results(
+    results: list,
+    format: str,
+    compact: bool,
+) -> None:
+    """Render flattened TDoc results without exposing internal hit DTOs."""
+    from doc3gpp.models.unified_search import tdoc_search_result_to_dict
+
+    if format == "json":
+        payload = [tdoc_search_result_to_dict(result) for result in results]
+        kwargs = {"ensure_ascii": False}
+        if compact:
+            kwargs["separators"] = (",", ":")
+        else:
+            kwargs["indent"] = 2
+        typer.echo(json.dumps(payload, **kwargs))
+        return
+
+    fields = [
+        "tdoc_id",
+        "score",
+        "search_mode",
+        "title",
+        "meeting",
+        "tsg",
+        "uploaded_date",
+        "ftp_url",
+        "wis",
+        "type",
+        "status",
+        "best_chunk_id",
+    ]
+    if any(result.previews is not None for result in results):
+        fields.append("previews")
+    rows = [
+        [_display_value(getattr(result, field)) for field in fields]
+        for result in results
+    ]
+    if "previews" in fields:
+        preview_index = fields.index("previews")
+        for row, result in zip(rows, results):
+            previews = result.previews or {}
+            row[preview_index] = "\n".join(
+                f"{column}: {snippet}" for column, snippet in previews.items()
+            ) or "-"
+    if format == "markdown":
+        _emit_markdown(rows, sys.stdout, fields, compact=compact)
+        return
+    typer.echo("\t".join(fields))
+    for row in rows:
+        _emit_table([row], sys.stdout)
+
+
+def _render_unified_spec_doc_results(
+    results: list,
+    format: str,
+    compact: bool,
+    fields: list[str],
+    output: str | None = None,
+) -> None:
+    """Render flattened spec-document results with field selection."""
+    from doc3gpp.models.unified_search import spec_doc_search_result_to_dict
+
+    if format == "json":
+        payload = [spec_doc_search_result_to_dict(result) for result in results]
+        stream, close_after = _open_output(output)
+        try:
+            kwargs = {"ensure_ascii": False}
+            if compact:
+                kwargs["separators"] = (",", ":")
+            else:
+                kwargs["indent"] = 2
+            json.dump(payload, stream, **kwargs)
+            if not compact:
+                stream.write("\n")
+        finally:
+            if close_after:
+                stream.close()
+        return
+
+    display_fields = ["score", "search_mode"]
+    display_fields.extend(
+        field for field in fields if field not in {"score", "search_mode"}
+    )
+    if not any(result.previews is not None for result in results):
+        display_fields = [field for field in display_fields if field != "previews"]
+    rows = [
+        [_display_value(getattr(result, field)) for field in display_fields]
+        for result in results
+    ]
+    stream, close_after = _open_output(output)
+    try:
+        if not rows:
+            if output is None:
+                stream.write("No spec document chunks found\n")
+            return
+        if format == "markdown":
+            _emit_markdown(rows, stream, display_fields, compact=compact)
+            return
+        stream.write("\t".join(display_fields) + "\n")
+        _emit_table(rows, stream)
+    finally:
+        if close_after:
+            stream.close()
+
+
+def _render_index_result(result: object, *, resource: str, action: bool) -> None:
+    """Render an index status or the processed counts from a rebuild."""
+    if hasattr(result, "fts5_processed"):
+        typer.echo(f"{resource} index rebuild complete")
+        typer.echo(f"FTS5 processed: {result.fts5_processed}")
+        typer.echo(f"Vector processed: {result.vector_processed}")
+        return
+
+    if action:
+        return
+    typer.echo(f"{resource.title()} index status")
+    for label, component in (
+        ("FTS5", getattr(result, "fts5", None)),
+        ("Vector", getattr(result, "vector", None)),
+    ):
+        if component is None or not component.available:
+            error = getattr(component, "error", None) or "unavailable"
+            typer.echo(f"{label}: unavailable ({error})")
+            continue
+        status = getattr(component, "status", None)
+        if status is None:
+            typer.echo(f"{label}: available")
+            continue
+        typer.echo(f"{label}: available")
+        typer.echo(f"{label} rows: {status.row_count:,}")
+        if label == "FTS5":
+            typer.echo(
+                f"Last rebuild: {status.last_rebuild_at or 'never'}"
+            )
+            typer.echo(
+                f"Last indexed: {status.last_indexed_uploaded_date or 'never'}"
+            )
+            typer.echo(
+                f"Latest tdocs: {status.latest_tdocs_uploaded_date or 'none'}"
+            )
+        if getattr(status, "embedding_model", None) is not None:
+            typer.echo(f"{label} model: {status.embedding_model}")
+        if getattr(status, "embedding_dim", None) is not None:
+            typer.echo(f"{label} dim: {status.embedding_dim}")
+        if getattr(status, "is_stale", False):
+            typer.echo(f"{label} status: STALE")
+
+
+def _emit_unified_search_explain(
+    text: str,
+    snippet_tokens: int,
+    settings: object,
+) -> None:
+    """Print the existing FTS5 explanation without bypassing the facade."""
+    from doc3gpp.cli_filters import SearchQueryBuilder
+
+    match = SearchQueryBuilder(text).build()
+    weights = getattr(getattr(settings, "search", None), "bm25_weights", ())
+    typer.echo("# search config", err=True)
+    typer.echo(f"match:           {match}", err=True)
+    typer.echo(f"snippet_tokens:  {snippet_tokens}", err=True)
+    typer.echo(f"bm25_weights:    {list(weights)}", err=True)
+
+
+def _emit_unified_stale_hint(
+    facade: object,
+    *,
+    quiet: bool,
+    resource: str,
+    fts_bearing: bool,
+) -> None:
+    """Emit a stale hint when an injected facade exposes status metadata."""
+    global _stale_index_hint_emitted
+    if quiet or _stale_index_hint_emitted or not fts_bearing:
+        return
+    status_method = getattr(facade, "status", None)
+    if not callable(status_method):
+        return
+    try:
+        status = status_method()
+    except Exception:  # noqa: BLE001 - stale hint is best-effort only
+        return
+    if getattr(status, "is_stale", False):
+        typer.echo(
+            f"search index is stale; run `doc3gpp {resource} index --rebuild` to refresh",
+            err=True,
+        )
+        _stale_index_hint_emitted = True
 
 
 def _emit_schema(
@@ -1466,6 +1691,190 @@ def tdoc_list(
     )
 
 
+@tdoc_app.command("search")
+def tdoc_search(
+    text: str | None = typer.Option(
+        None, "--text", help="FTS5 text or MATCH expression."
+    ),
+    semantic: str | None = typer.Option(
+        None, "--semantic", help="Natural-language semantic query."
+    ),
+    tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
+    meeting: str | None = typer.Option(
+        None,
+        "--meeting",
+        help="Rich filter over meeting name or title.",
+    ),
+    meeting_id: int | None = typer.Option(
+        None, "--meeting-id", help="Filter by meetings.meeting_id."
+    ),
+    tdoc_id: str | None = typer.Option(
+        None, "--tdoc-id", help="Filter by tdocs.tdoc_id."
+    ),
+    release: str | None = typer.Option(
+        None, "--release", help="Rich filter over tdocs.release."
+    ),
+    spec: str | None = typer.Option(
+        None, "--spec", help="Rich filter over tdocs.spec."
+    ),
+    since: str | None = typer.Option(
+        None, "--since", help="Uploaded-date lower bound."
+    ),
+    until: str | None = typer.Option(
+        None, "--until", help="Uploaded-date upper bound."
+    ),
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    fmt: str | None = typer.Option(
+        None, "--format", help="table | json | markdown"
+    ),
+    compact: bool = typer.Option(False, "--compact", help="Strip JSON / Markdown decorators."),
+    snippet_tokens: int = typer.Option(
+        8, "--snippet-tokens", min=1, max=64, help="FTS5 snippet length."
+    ),
+    explain: bool = typer.Option(
+        False, "--explain", help="Print the FTS5 search configuration."
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", help="Suppress stale-index hints and progress output."
+    ),
+) -> None:
+    """Search TDocs using text, semantic, hybrid, or filter mode."""
+    from doc3gpp.models.search import (
+        SearchError,
+        SearchFilters,
+        SearchIndexCorruptError,
+        SearchQueryError,
+        SearchUnavailableError,
+    )
+    from doc3gpp.models.semantic_search import (
+        EmbedderUnavailableError,
+        SemanticSearchQueryError,
+        SemanticSearchUnavailableError,
+        VectorIndexUnavailableError,
+    )
+    from doc3gpp.services.factory import build_tdoc_search_facade
+
+    _validate_search_filter_values(
+        release=release,
+        spec=spec,
+        since=since,
+        until=until,
+    )
+    settings = get_settings()
+    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    filters = SearchFilters(
+        tsg=tsg,
+        meeting=meeting,
+        meeting_id=meeting_id,
+        tdoc_id=tdoc_id,
+        release=release,
+        spec=spec,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    facade = build_tdoc_search_facade()
+    try:
+        results = facade.search(
+            text=text,
+            semantic=semantic,
+            filters=filters,
+            snippet_tokens=snippet_tokens,
+        )
+    except SearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SemanticSearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SearchIndexCorruptError:
+        typer.echo(
+            "search index corrupt; run `doc3gpp tdoc index --rebuild`",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+    except SearchUnavailableError:
+        typer.echo("search disabled in settings", err=True)
+        raise typer.Exit(code=0)
+    except EmbedderUnavailableError as exc:
+        typer.echo(f"embedding model load failed: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except VectorIndexUnavailableError as exc:
+        typer.echo(f"vector index unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except SemanticSearchUnavailableError as exc:
+        typer.echo(f"search sem unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except SearchError:
+        typer.echo(
+            "search index corrupt; run `doc3gpp tdoc index --rebuild`",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+
+    if explain and text and text.strip():
+        _emit_unified_search_explain(text, snippet_tokens, settings)
+    _render_unified_tdoc_results(results, fmt_resolved, resolved_compact)
+    _emit_unified_stale_hint(
+        facade,
+        quiet=quiet,
+        resource="tdoc",
+        fts_bearing=bool(text and text.strip()),
+    )
+
+
+@tdoc_app.command("index")
+def tdoc_index(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild the FTS5 index."),
+    rebuild_embeddings: bool = typer.Option(
+        False, "--rebuild-embeddings", help="Rebuild the vector index."
+    ),
+    rebuild_all: bool = typer.Option(
+        False, "--rebuild-all", help="Rebuild both indexes."
+    ),
+    batch: int | None = typer.Option(None, "--batch", min=1, help="Rebuild batch size."),
+    resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
+    stale_only: bool = typer.Option(
+        False, "--stale-only", help="Only rebuild stale rows."
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", help="Suppress rebuild progress messages."
+    ),
+) -> None:
+    """Show or maintain TDoc FTS5 and vector indexes."""
+    from doc3gpp.models.index import IndexRequest
+    from doc3gpp.models.search import SearchUnavailableError
+    from doc3gpp.models.semantic_search import SemanticSearchUnavailableError
+    from doc3gpp.services.factory import build_tdoc_index_service
+
+    service = build_tdoc_index_service()
+    request = IndexRequest(
+        rebuild=rebuild,
+        rebuild_embeddings=rebuild_embeddings,
+        rebuild_all=rebuild_all,
+        batch=batch,
+        resume=resume,
+        stale_only=stale_only,
+    )
+    try:
+        result = service.rebuild(
+            request,
+            quiet=quiet,
+            on_progress=None if quiet else typer.echo,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except (SearchUnavailableError, SemanticSearchUnavailableError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    _render_index_result(
+        result,
+        resource="tdoc",
+        action=any((rebuild, rebuild_embeddings, rebuild_all)),
+    )
+
+
 @tdoc_app.command("schema")
 def tdoc_schema(
     fmt: str | None = typer.Option(
@@ -1540,7 +1949,7 @@ def _resolve_url_batch_depth(
     *,
     recursive: bool,
     max_depth: int | None,
-    settings: "Settings",
+    settings: Settings,
 ) -> int:
     """Return the effective recursion depth for a URL-folder batch parse."""
     if max_depth is not None:
@@ -1553,7 +1962,7 @@ def _resolve_url_batch_depth(
 def _resolve_max_tdoc_size_bytes(
     *,
     override_kb: int | None,
-    settings: "Settings",
+    settings: Settings,
 ) -> int:
     """Return the effective per-file cap in bytes; ``0`` = unlimited.
 
@@ -2261,9 +2670,7 @@ def _warn_on_ignored_filter_flags(
         if value is not None and value != "":
             ignored.append(name)
     if ignored:
-        if from_path is None:
-            mode_label = "direct-parse mode"
-        elif from_path_is_file:
+        if from_path is None or from_path_is_file:
             mode_label = "direct-parse mode"
         else:
             mode_label = "local-batch mode"
@@ -2416,7 +2823,7 @@ def _emit_record_table(
     record: TDocCRDetails,
     output: str | None,
     *,
-    compact: bool = False,  # noqa: ARG001 — table is already compact
+    compact: bool = False,
 ) -> None:
     """Emit a single record as a tab-separated header + data row."""
     stream, close_after = _open_output(output)
@@ -2478,7 +2885,7 @@ def _emit_record_raw(
     markdown: str,
     output: str | None,
     *,
-    compact: bool = False,  # noqa: ARG001 — raw is already compact
+    compact: bool = False,
 ) -> None:
     """Write the converted markdown bytes verbatim, no wrapping."""
     stream, close_after = _open_output(output)
@@ -2844,8 +3251,7 @@ def _render_tdoc_show_markdown_full(
                     stream.write(f"- **{f.name}**: —\n")
                 else:
                     stream.write(f"- **{f.name}**:\n")
-                    for entry in value:
-                        stream.write(f"  * {entry}\n")
+                    stream.writelines(f"  * {entry}\n" for entry in value)
                 continue
             formatted = _serialise_show_value(value)
             rendered = "—" if formatted is None else str(formatted)
@@ -2863,8 +3269,7 @@ def _render_tdoc_show_markdown_full(
                 )
             if block["text"]:
                 stream.write("  * Changes:\n")
-                for ln in block["text"].split("\n"):
-                    stream.write(f">{ln}\n")
+                stream.writelines(f">{ln}\n" for ln in block["text"].split("\n"))
                 stream.write("\n")
 
     if record.files:
@@ -3065,8 +3470,7 @@ def _render_tdoc_show_table_body(
         else:
             count = len(ttcn.changed_functions)
             stream.write(f"changed_functions: {count} item(s)\n")
-            for entry in ttcn.changed_functions:
-                stream.write(f"  - {entry}\n")
+            stream.writelines(f"  - {entry}\n" for entry in ttcn.changed_functions)
 
     if record.changes is not None:
         stream.write("\n[Change Details]\n")
@@ -3106,7 +3510,7 @@ def _render_tdoc_show_table(
     record: TDocShowRecord,
     output: str | TextIO | None,
     *,
-    compact: bool = False,  # noqa: ARG001 — table is already compact
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --format table`` (the default).
 
@@ -3146,7 +3550,7 @@ def _render_tdoc_show_raw(
     tdoc_id: str,
     output: str | TextIO | None,
     *,
-    compact: bool = False,  # noqa: ARG001 — raw is already compact
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --format raw``.
 
@@ -3269,7 +3673,7 @@ def _render_tdoc_show_raw_by_url(
     url: str,
     output: str | None,
     *,
-    compact: bool = False,  # noqa: ARG001 — raw is already compact
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --ftp-url --format raw``.
 
@@ -3388,7 +3792,7 @@ def _render_tdoc_show_by_url_table(
     record: TDocShowRecordByUrl,
     output: str | None,
     *,
-    compact: bool = False,  # noqa: ARG001 — table is already compact
+    compact: bool = False,
 ) -> None:
     """Emit ``tdoc show --ftp-url --format table`` (the default for URL mode).
 
@@ -3653,7 +4057,7 @@ def _tdoc_parse_url_batch(
 
 def _emit_url_batch_results(
     *,
-    batch: "DirectParseBatchResult",
+    batch: DirectParseBatchResult,
     root_url: str,
     output: str | None,
     fmt: str,
@@ -4343,12 +4747,16 @@ def spec_sync(
 
         bar: tqdm | None = None
 
-        def _on_progress(event: str, data: dict) -> None:
+        def _on_progress(
+            event: str,
+            data: dict,
+            tsg_name: str = tsg_short,
+        ) -> None:
             nonlocal bar
             if event == "list_parsed":
                 bar = tqdm(
                     total=data["total"],
-                    desc=f"spec {tsg_short}",
+                    desc=f"spec {tsg_name}",
                     unit="spec",
                     dynamic_ncols=True,
                 )
@@ -4524,41 +4932,188 @@ SPEC_DOC_TOC_FIELDS: list[str] = [
     "source_file",
 ]
 
+SPEC_DOC_SEARCH_FIELDS: list[str] = [
+    "chunk_id",
+    "score",
+    "search_mode",
+    "previews",
+    "spec_id",
+    "version",
+    "release",
+    "sections",
+    "tables",
+    "chunk_index",
+    "text",
+]
+
 spec_doc_app = typer.Typer(help="spec document corpus: parse, TOC, search")
 spec_app.add_typer(spec_doc_app, name="doc")
 spec_doc_toc_app = typer.Typer(help="spec document TOC commands")
 spec_doc_app.add_typer(spec_doc_toc_app, name="toc")
-spec_doc_search_app = typer.Typer(help="search over the spec document corpus")
-spec_doc_app.add_typer(spec_doc_search_app, name="search")
+
+
+@spec_doc_app.command("search")
+def spec_doc_search(
+    text: str | None = typer.Option(
+        None, "--text", help="FTS5 text or MATCH expression."
+    ),
+    semantic: str | None = typer.Option(
+        None, "--semantic", help="Natural-language semantic query."
+    ),
+    spec: str | None = typer.Option(None, "--spec", help="Rich filter over spec id."),
+    release: str | None = typer.Option(None, "--release", help="Rich filter over release."),
+    version: str | None = typer.Option(None, "--version", help="Rich filter over version."),
+    sections: str | None = typer.Option(
+        None, "--sections", help="Rich filter over combined section metadata."
+    ),
+    tables: str | None = typer.Option(
+        None, "--tables", help="Rich filter over combined table metadata."
+    ),
+    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    offset: int = typer.Option(
+        0, "--offset", min=0, help="Number of rows to skip before applying --limit."
+    ),
+    fields: str | None = typer.Option(
+        None, "--fields", help="Comma-separated fields, or 'all'."
+    ),
+    output: str | None = typer.Option(
+        None, "--output", "-o", help="Write results to PATH instead of stdout."
+    ),
+    fmt: str | None = typer.Option(
+        None, "--format", help="table | json | markdown"
+    ),
+    compact: bool = typer.Option(False, "--compact", help="Strip JSON / Markdown decorators."),
+) -> None:
+    """Search spec-document chunks using text, semantic, hybrid, or filter mode."""
+    from doc3gpp.models.search import (
+        SearchError,
+        SearchIndexCorruptError,
+        SearchQueryError,
+        SearchUnavailableError,
+    )
+    from doc3gpp.models.semantic_search import (
+        EmbedderUnavailableError,
+        SemanticSearchQueryError,
+        SemanticSearchUnavailableError,
+        VectorIndexUnavailableError,
+    )
+    from doc3gpp.services.factory import build_spec_doc_search_facade
+
+    _validate_search_filter_values(release=release, spec=spec)
+    settings = get_settings()
+    out_fields = _parse_field_selection(
+        fields,
+        SPEC_DOC_SEARCH_FIELDS,
+        settings.output.fields.spec_doc,
+    )
+    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
+    resolved_compact = _resolve_compact(compact)
+    filters = SpecDocSearchFilters(
+        spec_id=spec,
+        release=release,
+        version=version,
+        sections=sections,
+        tables=tables,
+        limit=limit,
+        offset=offset,
+    )
+    facade = build_spec_doc_search_facade()
+    try:
+        results = facade.search(
+            text=text,
+            semantic=semantic,
+            filters=filters,
+        )
+    except SearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SemanticSearchQueryError as exc:
+        typer.echo(f"bad query: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except SearchIndexCorruptError:
+        typer.echo(
+            "search index corrupt; run `doc3gpp spec doc index --rebuild`",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+    except SearchUnavailableError:
+        typer.echo("search disabled in settings", err=True)
+        raise typer.Exit(code=0)
+    except EmbedderUnavailableError as exc:
+        typer.echo(f"embedding model load failed: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except VectorIndexUnavailableError as exc:
+        typer.echo(f"vector index unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except SemanticSearchUnavailableError as exc:
+        typer.echo(f"search sem unavailable: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except SearchError as exc:
+        typer.echo(f"search index corrupt; run `doc3gpp spec doc index --rebuild`: {exc}", err=True)
+        raise typer.Exit(code=3)
+    _render_unified_spec_doc_results(
+        results, fmt_resolved, resolved_compact, out_fields, output
+    )
+
+
+@spec_doc_app.command("index")
+def spec_doc_index(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild the FTS5 index."),
+    rebuild_embeddings: bool = typer.Option(
+        False, "--rebuild-embeddings", help="Rebuild the vector index."
+    ),
+    rebuild_all: bool = typer.Option(
+        False, "--rebuild-all", help="Rebuild both indexes."
+    ),
+    batch: int | None = typer.Option(None, "--batch", min=1, help="Rebuild batch size."),
+    resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
+    stale_only: bool = typer.Option(
+        False, "--stale-only", help="Only rebuild stale rows."
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", help="Suppress rebuild progress messages."
+    ),
+) -> None:
+    """Show or maintain spec-document FTS5 and vector indexes."""
+    from doc3gpp.models.index import IndexRequest
+    from doc3gpp.models.search import SearchUnavailableError
+    from doc3gpp.models.semantic_search import SemanticSearchUnavailableError
+    from doc3gpp.services.factory import build_spec_doc_index_service
+
+    service = build_spec_doc_index_service()
+    request = IndexRequest(
+        rebuild=rebuild,
+        rebuild_embeddings=rebuild_embeddings,
+        rebuild_all=rebuild_all,
+        batch=batch,
+        resume=resume,
+        stale_only=stale_only,
+    )
+    try:
+        result = service.rebuild(
+            request,
+            quiet=quiet,
+            on_progress=None if quiet else typer.echo,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except (SearchUnavailableError, SemanticSearchUnavailableError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    _render_index_result(result, resource="spec doc", action=any((rebuild, rebuild_embeddings, rebuild_all)))
 
 
 def _spec_doc_source_to_row(src: object) -> dict[str, object]:
     """Serialise a :class:`SpecDocSource` for the fetch/parse JSON payload."""
     return {
-        "spec_id": getattr(src, "spec_id"),
-        "version": getattr(src, "version"),
+        "spec_id": src.spec_id,
+        "version": src.version,
         "release": _serialise_show_value(getattr(src, "release", None)),
         "ftp_url": getattr(src, "ftp_url", ""),
         "downloaded_at": _serialise_show_value(getattr(src, "downloaded_at", None)),
         "parsed_at": _serialise_show_value(getattr(src, "parsed_at", None)),
         "chunk_count": getattr(src, "chunk_count", 0),
         "docx_count": getattr(src, "docx_count", 0),
-    }
-
-
-def _spec_doc_hit_to_dict(hit: object) -> dict[str, object]:
-    """Serialise a :class:`SpecDocHit` for the query JSON payload."""
-    return {
-        "chunk_id": getattr(hit, "chunk_id"),
-        "spec_id": getattr(hit, "spec_id"),
-        "version": getattr(hit, "version"),
-        "release": _serialise_show_value(getattr(hit, "release", None)),
-        "sections": _serialise_show_value(getattr(hit, "sections", None)),
-        "tables": _serialise_show_value(getattr(hit, "tables", None)),
-        "chunk_index": getattr(hit, "chunk_index", 0),
-        "text": getattr(hit, "text", ""),
-        "score": getattr(hit, "score", 0.0),
-        "previews": dict(getattr(hit, "previews", {}) or {}),
     }
 
 
@@ -4572,89 +5127,10 @@ def _spec_doc_toc_entry_to_row(entry: object, fields: list[str]) -> list[str]:
     return [str(getattr(entry, f, None) if getattr(entry, f, None) is not None else "-") for f in fields]
 
 
-def _spec_doc_semantic_hit_to_dict(hit: object) -> dict[str, object]:
-    """Serialise a :class:`SpecDocSemanticHit` for the sem JSON payload."""
-    inner = getattr(hit, "hit", None)
-    return {
-        "chunk_id": getattr(hit, "chunk_id"),
-        "rrf_score": getattr(hit, "rrf_score"),
-        "rank_fts5": getattr(hit, "rank_fts5", None),
-        "rank_vec": getattr(hit, "rank_vec", None),
-        "min_chunk_distance": getattr(hit, "min_chunk_distance", None),
-        "hit": _spec_doc_hit_to_dict(inner) if inner is not None else None,
-    }
-
-
-def _render_spec_doc_hits(hits: list, *, fmt: str, compact: bool, fields: list[str]) -> None:
-    """Render query hits in the chosen format.
-
-    JSON emits one dict per hit (Task 11 contract); markdown emits one
-    bold-headed block per hit with previews as quotes; table emits one
-    row per hit over ``fields``.
-    """
-    if fmt == "json":
-        payload = [_spec_doc_hit_to_dict(h) for h in hits]
-        if compact:
-            typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-        else:
-            typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    if fmt == "markdown":
-        for h in hits:
-            typer.echo(f"**{h.chunk_id}** — {h.spec_id}@{h.version}")
-            if getattr(h, "sections", None):
-                typer.echo(f"sections: {h.sections}")
-            if getattr(h, "tables", None):
-                typer.echo(f"tables: {h.tables}")
-            for col, snippet in (getattr(h, "previews", {}) or {}).items():
-                typer.echo(f"> {col}: {snippet}")
-            typer.echo("")
-        return
-    if not hits:
-        typer.echo("No spec document chunks found")
-        return
-    rows = [_spec_doc_chunk_to_row(h, fields) for h in hits]
-    _emit_table(rows, sys.stdout)
-
-
-def _render_spec_doc_semantic_hits(hits: list, *, fmt: str, compact: bool) -> None:
-    """Render :class:`SpecDocSemanticHit` list in table / json / markdown.
-
-    Mirrors :func:`_render_semantic_hits` but chunk-level: the ``hit``
-    sub-record is the spec-doc query dict (or ``None`` for
-    vector-only chunks).
-    """
-    if fmt == "json":
-        payload = [_spec_doc_semantic_hit_to_dict(h) for h in hits]
-        if compact:
-            typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-        else:
-            typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    if fmt == "markdown":
-        for i, h in enumerate(hits, 1):
-            typer.echo(f"{i}. **{h.chunk_id}** — rrf={h.rrf_score:.4f}")
-            if h.min_chunk_distance is not None:
-                typer.echo(f"   dist: {h.min_chunk_distance:.4f}")
-            inner = getattr(h, "hit", None)
-            if inner is not None and getattr(inner, "sections", None):
-                typer.echo(f"   sections: {inner.sections}")
-            if inner is not None and getattr(inner, "tables", None):
-                typer.echo(f"   tables: {inner.tables}")
-            typer.echo("")
-        return
-    typer.echo(f"{'rank':>4} {'chunk_id':<28} {'rrf':>8} {'fts':>4} {'vec':>4} {'dist':>8}")
-    for i, h in enumerate(hits, 1):
-        fts = str(h.rank_fts5) if h.rank_fts5 is not None else "-"
-        vec = str(h.rank_vec) if h.rank_vec is not None else "-"
-        dist = f"{h.min_chunk_distance:.4f}" if h.min_chunk_distance is not None else "-"
-        typer.echo(f"{i:>4} {h.chunk_id:<28} {h.rrf_score:>8.4f} {fts:>4} {vec:>4} {dist:>8}")
-
-
 @spec_doc_app.command("parse")
 def spec_doc_parse(
-    spec: list[str] = typer.Option(
-        [],
+    spec: list[str] | None = typer.Option(  # noqa: B008 - Typer option declaration
+        None,
         "--spec",
         help="Spec id to parse; repeat per spec (at least one required).",
     ),
@@ -4689,7 +5165,7 @@ def spec_doc_parse(
     if not spec:
         raise typer.BadParameter("pass at least one --spec <id>")
     svc = build_spec_doc_service()
-    result = svc.parse_many(list(spec), release=release, version=version, force=force)
+    result = svc.parse_many(spec, release=release, version=version, force=force)
     for sid in result.successes:
         typer.echo(f"ok {sid}")
     for sid, why in result.skipped.items():
@@ -4778,215 +5254,6 @@ def spec_doc_toc_show(
         no_records_msg=f"No TOC entries stored for {spec}@{version}",
         compact=resolved_compact,
     )
-
-
-@spec_doc_search_app.command("query")
-def spec_doc_search_query(
-    query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),
-    spec: str | None = typer.Option(
-        None,
-        "--spec",
-        help="Only search chunks for the given spec id.",
-    ),
-    release: str | None = typer.Option(
-        None,
-        "--release",
-        help="Rich filter over release.",
-    ),
-    version: str | None = typer.Option(
-        None,
-        "--version",
-        help="Rich filter over version.",
-    ),
-    sections: str | None = typer.Option(
-        None,
-        "--sections",
-        help="Rich filter over combined section metadata.",
-    ),
-    tables: str | None = typer.Option(
-        None,
-        "--tables",
-        help="Rich filter over combined table metadata.",
-    ),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
-    offset: int = typer.Option(0, "--offset", min=0, help="Number of rows to skip before applying --limit."),
-    fields: str | None = typer.Option(
-        None,
-        help="Comma-separated list of fields to include (or 'all' for all fields).",
-    ),
-    fmt: str | None = typer.Option(
-        None,
-        "--format",
-        help="Output format: table (default, tab-separated), json, or markdown.",
-    ),
-    compact: bool = typer.Option(
-        False,
-        "--compact",
-        help="Strip JSON / markdown decorators.",
-    ),
-) -> None:
-    """Run a full-text search over the spec-document FTS5 index."""
-    from doc3gpp.models.search import SearchError, SearchQueryError
-
-    create_schema("all")
-    svc = build_spec_doc_search_service()
-    if svc is None:
-        typer.echo("search disabled in settings", err=True)
-        raise typer.Exit(code=0)
-    settings = get_settings()
-    default_fields = settings.output.fields.spec_doc
-    out_fields = _parse_field_selection(fields, SPEC_DOC_LIST_FIELDS, default_fields)
-    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
-    resolved_compact = _resolve_compact(compact)
-    filters = SpecDocSearchFilters(
-        spec_id=spec,
-        release=release,
-        version=version,
-        sections=sections,
-        tables=tables,
-        limit=limit,
-        offset=offset,
-    )
-    try:
-        hits = svc.search(query, filters)
-    except SearchQueryError as exc:
-        typer.echo(f"bad query: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except SearchError:
-        typer.echo("search index corrupt; run `doc3gpp spec doc search index --rebuild`", err=True)
-        raise typer.Exit(code=3)
-    if fmt_resolved == "json":
-        _render_spec_doc_hits(hits, fmt="json", compact=resolved_compact, fields=out_fields)
-        return
-    if fmt_resolved != "table":
-        _render_spec_doc_hits(hits, fmt=fmt_resolved, compact=resolved_compact, fields=out_fields)
-        return
-    rows = [_spec_doc_chunk_to_row(h, out_fields) for h in hits]
-    _emit_records(
-        rows=rows,
-        fields=out_fields,
-        fmt=fmt_resolved,
-        output=None,
-        no_records_msg="No spec document chunks found",
-        compact=resolved_compact,
-    )
-
-
-@spec_doc_search_app.command("sem")
-def spec_doc_search_sem(
-    query: str = typer.Argument(..., help="Natural-language query (embedded only; not used for FTS5)."),
-    fts5_query: str | None = typer.Option(
-        None,
-        "--fts5-query",
-        help=(
-            "Optional FTS5 MATCH expression. When omitted, the FTS5 "
-            "path is skipped (only embedding-KNN runs; no RRF)."
-        ),
-    ),
-    fts5_weight: float = typer.Option(
-        0.5,
-        "--fts5-weight",
-        min=0.0,
-        max=1.0,
-        help=(
-            "Blend weight for FTS5 rank in RRF (0.0..1.0). "
-            "The vector weight is 1 - fts5_weight. "
-            "Ignored when --fts5-query is omitted."
-        ),
-    ),
-    spec: str | None = typer.Option(
-        None,
-        "--spec",
-        help="Only search chunks for the given spec id.",
-    ),
-    release: str | None = typer.Option(
-        None,
-        "--release",
-        help="Filter over release.",
-    ),
-    version: str | None = typer.Option(
-        None,
-        "--version",
-        help="Filter over version.",
-    ),
-    sections: str | None = typer.Option(
-        None,
-        "--sections",
-        help="Filter over combined section metadata.",
-    ),
-    tables: str | None = typer.Option(
-        None,
-        "--tables",
-        help="Filter over combined table metadata.",
-    ),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
-    fmt: str | None = typer.Option(
-        None,
-        "--format",
-        help="Output format: table (default, tab-separated), json, or markdown.",
-    ),
-    compact: bool = typer.Option(
-        False,
-        "--compact",
-        help="Strip decorators.",
-    ),
-) -> None:
-    """Run a semantic (embedding + optional FTS5) search over spec-doc chunks."""
-    from doc3gpp.models.search import SearchError
-    from doc3gpp.models.semantic_search import (
-        EmbedderUnavailableError,
-        SemanticSearchQueryError,
-        SemanticSearchUnavailableError,
-        VectorIndexUnavailableError,
-    )
-
-    create_schema("all")
-    svc = build_spec_doc_semantic_service()
-    if svc is None:
-        typer.echo(
-            "search sem unavailable; "
-            "set [semantic_search].embedding_base_url "
-            "(e.g. http://localhost:11434/v1); "
-            "run `pip install doc3gpp[semantic]` for sqlite-vec",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    settings = get_settings()
-    fmt_resolved = _resolve_format(fmt, default=settings.output.format)
-    resolved_compact = _resolve_compact(compact)
-    filters = SpecDocSearchFilters(
-        spec_id=spec,
-        release=release,
-        version=version,
-        sections=sections,
-        tables=tables,
-        limit=limit,
-        offset=0,
-    )
-    try:
-        hits = svc.search(
-            query,
-            fts5_query=fts5_query,
-            filters=filters,
-            limit=limit,
-            fts5_weight=fts5_weight,
-        )
-    except SearchError as exc:
-        typer.echo(f"bad fts5 query: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except SemanticSearchQueryError as exc:
-        typer.echo(f"bad query: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except EmbedderUnavailableError as exc:
-        typer.echo(f"embedding model load failed: {exc}", err=True)
-        raise typer.Exit(code=1)
-    except VectorIndexUnavailableError as exc:
-        typer.echo(f"vector index unavailable: {exc}", err=True)
-        raise typer.Exit(code=1)
-    except SemanticSearchUnavailableError as exc:
-        typer.echo(f"search sem unavailable: {exc}", err=True)
-        raise typer.Exit(code=1)
-    _render_spec_doc_semantic_hits(hits, fmt=fmt_resolved, compact=resolved_compact)
 
 
 @spec_doc_app.command("schema")
@@ -5571,16 +5838,16 @@ def config_init(
     template = load_default_template()
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp_file = tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=target_path.parent,
-        delete=False,
-    )
-    tmp_path = Path(tmp_file.name)
+    tmp_path: Path
     try:
-        tmp_file.write(template)
-        tmp_file.close()
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target_path.parent,
+            delete=False,
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(template)
         os.replace(tmp_path, target_path)
     except Exception:
         tmp_path.unlink(missing_ok=True)
@@ -5720,665 +5987,6 @@ def config_set(
             f"it overrides this at runtime."
         )
     typer.echo("  Run 'doc3gpp config show' to verify the active value.")
-
-
-@tdoc_search_app.command("query")
-def search_command(
-    ctx: typer.Context,
-    query: str = typer.Argument(..., help="FTS5 MATCH expression (plain text or FTS5 operators)."),
-    tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
-    meeting: str | None = typer.Option(None, help="Rich filter over meetings.name or meetings.title (LIKE, !NOT LIKE, null/not-null)."),
-    meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
-    tdoc_id: str | None = typer.Option(None, help="Filter by tdocs.tdoc_id."),
-    release: str | None = typer.Option(None, help="Rich filter over tdocs.release (LIKE, !NOT LIKE, null/not-null)."),
-    spec: str | None = typer.Option(None, help="Rich filter over tdocs.spec (LIKE, !NOT LIKE, null/not-null)."),
-    since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
-    until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
-    format: str = typer.Option("table", "--format", help="table | json | markdown"),
-    compact: bool = typer.Option(False, "--compact", help="Strip JSON / markdown decorators."),
-    sem_query: str | None = typer.Option(
-        None, "--sem-query",
-        help=(
-            "Reorder the FTS5 hit list by cosine similarity to this "
-            "natural-language string. The FTS5 path fetches "
-            "`limit * search.search_fanout_factor` candidates "
-            "(default 4x) before the reranker truncates back to "
-            "`limit`. Requires the [semantic] extra + vector "
-            "index; otherwise the command exits with code 1."
-        ),
-    ),
-    # NOTE: the old --rerank flag was removed. We declare a hidden
-    # option so the parser still accepts the flag (otherwise Typer
-    # would reject it before the body runs) and raise a clear
-    # migration message from the body when a caller supplies it.
-    rerank: bool = typer.Option(
-        False, "--rerank", hidden=True, help=argparse.SUPPRESS,
-    ),
-    snippet_tokens: int = typer.Option(8, "--snippet-tokens", min=1, max=64, help="FTS5 snippet length."),
-    explain: bool = typer.Option(False, "--explain", help="Print the resolved MATCH + SQL plan."),
-    quiet: bool = typer.Option(
-        False, "--quiet",
-        help=(
-            "Suppress the stale-index hint and the one-shot "
-            "semantic-rerank empty-vector warning."
-        ),
-    ),
-) -> None:
-    """Run a full-text search over the FTS5 index.
-
-    Filter optional flags are combinable; the query is ANDed together:
-      --tsg, --meeting, --meeting-id, --tdoc-id, --release, --spec,
-      --since, --until
-    See docs/cli.md for full semantics and examples.
-    """
-    from doc3gpp.cli_filters import (
-        SearchQueryBuilder,
-        parse_date_filter,
-        parse_release_filter,
-        parse_spec_filter,
-    )
-    from doc3gpp.models.search import (
-        SearchError,
-        SearchFilters,
-        SearchQueryError,
-    )
-    from doc3gpp.services.factory import build_search_service
-
-    # Reject the removed --rerank flag with a clear migration message.
-    if rerank:
-        raise typer.BadParameter(
-            "--rerank was removed; use --sem-query to enable semantic rerank"
-        )
-
-    try:
-        if since:
-            parse_date_filter(since)
-        if until:
-            parse_date_filter(until)
-        if release:
-            parse_release_filter(release)
-        if spec:
-            parse_spec_filter(spec)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc))
-
-    svc = build_search_service(quiet=quiet)
-    if svc is None:
-        typer.echo("search disabled in settings", err=True)
-        raise typer.Exit(code=0)
-    try:
-        match_expr = SearchQueryBuilder(query).build()
-    except SearchError as exc:
-        typer.echo(f"bad query: {exc}", err=True)
-        raise typer.Exit(code=2)
-    settings = get_settings()
-    fanout = limit * settings.search.search_fanout_factor
-    filters = SearchFilters(
-        tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
-        release=release, spec=spec, since=since, until=until,
-        limit=fanout if sem_query else limit,
-    )
-    if explain:
-        _emit_explain(
-            match_expr=match_expr,
-            snippet_tokens=snippet_tokens,
-            repo=svc._repo,  # noqa: SLF001 - read the cached config the search will use
-        )
-    try:
-        raw_hits = svc._repo.search(  # noqa: SLF001 - bypass reranker when --sem-query off
-            match_expr, filters, snippet_tokens=snippet_tokens,
-        )
-        if sem_query:
-            hits = svc._reranker.rerank(  # noqa: SLF001
-                semantic_query=sem_query, hits=raw_hits,
-                final_limit=limit, quiet=svc._quiet,  # noqa: SLF001
-            )
-        else:
-            hits = raw_hits
-    except SearchQueryError as exc:
-        typer.echo(f"bad query: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except SearchError:
-        typer.echo(
-            "search index corrupt; run `doc3gpp tdoc search index --rebuild`",
-            err=True,
-        )
-        raise typer.Exit(code=3)
-    _render_search_hits(hits, format=format, compact=compact)
-    _emit_search_status(svc, quiet=quiet)
-
-
-@tdoc_search_app.command("index")
-def index_command(
-    ctx: typer.Context,
-    rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the FTS5 table."),
-    rebuild_embeddings: bool = typer.Option(
-        False, "--rebuild-embeddings",
-        help="Drop and rebuild the vec_tdoc_embeddings table.",
-    ),
-    rebuild_all: bool = typer.Option(
-        False, "--rebuild-all",
-        help="Rebuild both the FTS5 and the vector index.",
-    ),
-    batch: int | None = typer.Option(
-        None, "--batch", min=1,
-        help=(
-            "TDocs per SQL page (default: Settings.search.rebuild_batch_size = 100). "
-            "Smaller = finer-grained crash recovery; larger = fewer round-trips. "
-            "Progress is reported once per 1% of work (~100 updates for a full "
-            "corpus rebuild regardless of batch size)."
-        ),
-    ),
-    resume: bool = typer.Option(False, "--resume", help="Resume from the last cursor."),
-    stale_only: bool = typer.Option(False, "--stale-only", help="Only re-index rows newer than the last indexed uploaded_date."),
-    quiet: bool = typer.Option(False, "--quiet", help="Suppress per-batch progress logs."),
-) -> None:
-    """Manage the search index.
-
-    With no flags, prints the current index status (rows indexed,
-    last rebuild time, last indexed uploaded_date, latest uploaded_date
-    in tdocs, and whether the index is stale).
-
-    Index maintenance flags (combinable):
-      --rebuild, --rebuild-embeddings, --rebuild-all, --batch, --resume,
-      --stale-only, --quiet
-    See docs/cli.md for full semantics and examples.
-    """
-    from doc3gpp.services.factory import (
-        build_search_service, build_semantic_search_service,
-    )
-    from doc3gpp.settings.loader import get_settings
-
-    do_fts5 = rebuild or rebuild_all
-    do_vec = rebuild_embeddings or rebuild_all
-    fts5_svc = build_search_service()
-    if fts5_svc is None and not do_vec:
-        typer.echo("search disabled in settings", err=True)
-        raise typer.Exit(code=0)
-    if not do_fts5 and not do_vec:
-        from sqlalchemy import text as _text
-        from sqlalchemy.exc import OperationalError as _SAOperationalError
-
-        from doc3gpp.settings.loader import get_settings as _get_settings
-        from doc3gpp.storage.db.session import get_engine as _get_engine
-
-        status = fts5_svc.status()
-        sem_svc = build_semantic_search_service()
-        # The vector row count lives on a separate
-        # vec_tdoc_embeddings table; surface it alongside the FTS5
-        # row count so operators don't confuse the two indexes when
-        # the panel shows only one number. The stored model/dim are
-        # read from vec_meta directly (not via the service) so a
-        # model/dim mismatch stays visible instead of collapsing to
-        # "semantic unavailable": the factory returns None on
-        # mismatch, but the panel must still show stored-vs-configured
-        # values plus the rebuild hint. The configured model comes
-        # from settings; the live dim needs a network probe, so the
-        # panel shows "live — probed at rebuild" instead of calling
-        # the API.
-        vec_status_block = ""
-        try:
-            with _get_engine().begin() as _conn:
-                _vrows = _conn.execute(
-                    _text("SELECT COUNT(*) FROM vec_tdoc_embeddings"),
-                ).scalar()
-                _stored_dim = _conn.execute(
-                    _text("SELECT value FROM vec_meta WHERE key='embedding_dim'"),
-                ).scalar()
-                _stored_model = _conn.execute(
-                    _text("SELECT value FROM vec_meta WHERE key='embedding_model'"),
-                ).scalar()
-        except _SAOperationalError:  # no vector schema yet; omit the block
-            _vrows = None
-        if _vrows is not None:
-            sem_settings = _get_settings().semantic_search
-            configured_model = sem_settings.embedding_model
-            stored_model = _stored_model or "(unset — rebuild required)"
-            stored_dim = _stored_dim if _stored_dim is not None else "unknown"
-            vec_status_block = (
-                f"\nVector rows:    {_vrows:,}"
-                f"\nVector model:   {stored_model} (configured: {configured_model})"
-                f"\nVector dim:     {stored_dim} (configured: live — probed at rebuild)"
-            )
-            if _stored_model is not None and _stored_model != configured_model:
-                vec_status_block += (
-                    "\nVector status:  MODEL MISMATCH — run "
-                    "`doc3gpp tdoc search index --rebuild-embeddings`"
-                )
-        elif sem_svc is not None:
-            vec_status = sem_svc.status()
-            vec_status_block = (
-                f"\nVector rows:    {vec_status.row_count:,}"
-            )
-        typer.echo(
-            f"Search index: enabled (sqlite + fts5)\n"
-            f"FTS5 rows:      {status.row_count:,}"
-            f"{vec_status_block}\n"
-            f"Last rebuild:  {status.last_rebuild_at or 'never'}\n"
-            f"Last indexed:  {status.last_indexed_uploaded_date or 'never'}\n"
-            f"Latest tdocs:  {status.latest_tdocs_uploaded_date or 'none'}\n"
-            f"Status:        {'STALE' if status.is_stale else 'OK'}"
-        )
-        return
-    if do_fts5 and fts5_svc is None:
-        typer.echo("FTS5 search unavailable; skipping FTS5 rebuild", err=True)
-    if do_fts5 and fts5_svc is not None:
-        settings = get_settings()
-        batch_size = batch or settings.search.rebuild_batch_size
-        if quiet:
-            for _progress in fts5_svc.rebuild(
-                batch_size=batch_size, resume=resume,
-                stale_only=stale_only, quiet=True,
-            ):
-                pass
-        else:
-            from tqdm import tqdm
-            # Mirror rebuild: total must account for the resume
-            # cursor when --resume is passed, otherwise the bar ends
-            # short and looks stuck.
-            after_id = (
-                fts5_svc._repo.get_resume_cursor() if resume else None
-            )
-            total = fts5_svc._repo.count_tdocs_to_index(
-                stale_only=stale_only, after_id=after_id,
-            )
-            with tqdm(
-                total=total,
-                desc="rebuild",
-                unit="tdoc",
-                dynamic_ncols=True,
-            ) as bar:
-                for progress in fts5_svc.rebuild(
-                    batch_size=batch_size, resume=resume,
-                    stale_only=stale_only, quiet=False,
-                ):
-                    bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
-                    bar.update(progress.processed - bar.n)
-        typer.echo("search index rebuild complete")
-    if do_vec:
-        sem_svc = build_semantic_search_service()
-        if sem_svc is None:
-            typer.echo(
-                "semantic search unavailable; "
-                "set [semantic_search].embedding_base_url "
-                "(e.g. http://localhost:11434/v1); "
-                "run `pip install doc3gpp[semantic]` for sqlite-vec",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        settings = get_settings()
-        batch_size = batch or settings.search.rebuild_batch_size
-        if quiet:
-            for _progress in sem_svc.rebuild_embeddings(
-                batch_size=batch_size,
-                stale_only=stale_only,
-                quiet=True,
-                resume=resume,
-            ):
-                pass
-        else:
-            from tqdm import tqdm
-            # Mirror rebuild_embeddings: total must account for the
-            # resume cursor when --resume is passed so the bar ends
-            # at 100% (otherwise it stops short and looks stuck).
-            # When --resume is NOT passed, the service clears the
-            # cursor first so total reflects a fresh full-corpus
-            # rebuild.
-            after_id = (
-                sem_svc._vec.get_resume_cursor() if resume else None
-            )
-            total = sem_svc._vec.count_tdocs_to_index(
-                stale_only=stale_only, after_id=after_id,
-            )
-            with tqdm(
-                total=total,
-                desc="embed",
-                unit="tdoc",
-                dynamic_ncols=True,
-            ) as bar:
-                for progress in sem_svc.rebuild_embeddings(
-                    batch_size=batch_size,
-                    stale_only=stale_only,
-                    quiet=False,
-                    resume=resume,
-                ):
-                    bar.set_postfix_str(progress.current_tdoc_id, refresh=True)
-                    bar.update(progress.processed - bar.n)
-        typer.echo("search index embedding rebuild complete")
-
-
-@tdoc_search_app.command("sem")
-def sem_command(
-    ctx: typer.Context,
-    query: str = typer.Argument(..., help="Natural-language query (embedded only; not used for FTS5)."),
-    fts5_query: str | None = typer.Option(
-        None, "--fts5-query",
-        help=(
-            "Optional FTS5 MATCH expression. When omitted, the FTS5 "
-            "path is skipped (only embedding-KNN runs; no RRF). When "
-            "supplied, it is processed exactly like `doc3gpp tdoc search query` "
-            "(SearchQueryBuilder; no stopword stripping)."
-        ),
-    ),
-    tsg: str | None = typer.Option(None, "--tsg", help="Filter by meetings.tsg."),
-    meeting: str | None = typer.Option(None, help="Rich filter over meetings.name or meetings.title (LIKE, !NOT LIKE, null/not-null)."),
-    meeting_id: int | None = typer.Option(None, help="Filter by meetings.meeting_id."),
-    tdoc_id: str | None = typer.Option(None, help="Filter by tdocs.tdoc_id."),
-    release: str | None = typer.Option(None, help="Rich filter over tdocs.release (LIKE, !NOT LIKE, null/not-null)."),
-    spec: str | None = typer.Option(None, help="Rich filter over tdocs.spec (LIKE, !NOT LIKE, null/not-null)."),
-    since: str | None = typer.Option(None, help="Uploaded-date lower bound (YYYY-MM-DD)."),
-    until: str | None = typer.Option(None, help="Uploaded-date upper bound (YYYY-MM-DD)."),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
-    fts5_weight: float = typer.Option(
-        0.5, "--fts5-weight", min=0.0, max=1.0,
-        help=(
-            "Blend weight for FTS5 rank in RRF (0.0..1.0). "
-            "The vector weight is 1 - fts5_weight. "
-            "Ignored when --fts5-query is omitted."
-        ),
-    ),
-    format: str = typer.Option("table", "--format", help="table | json | markdown"),
-    compact: bool = typer.Option(False, "--compact", help="Strip decorators."),
-    explain: bool = typer.Option(False, "--explain", help="Print RRF config + best chunk."),
-    quiet: bool = typer.Option(False, "--quiet", help="Suppress stale-index hint."),
-) -> None:
-    """Run a semantic (embedding + optional FTS5) search over TDocs.
-
-    The natural-language ``QUERY`` is embedded and matched against the
-    vector KNN index. When ``--fts5-query`` is supplied, that string is
-    run through ``SearchQueryBuilder`` and matched against the FTS5
-    index; results from both paths are merged via reciprocal-rank
-    fusion (RRF) and truncated to ``--limit``. When ``--fts5-query``
-    is omitted, the FTS5 path and RRF are skipped — only top
-    ``--limit`` vector hits return, ranked by cosine distance.
-    """
-    from doc3gpp.cli_filters import (
-        parse_date_filter, parse_release_filter, parse_spec_filter,
-    )
-    from doc3gpp.models.search import SearchError, SearchFilters
-    from doc3gpp.models.semantic_search import (
-        EmbedderUnavailableError, SemanticSearchQueryError,
-        SemanticSearchUnavailableError, VectorIndexUnavailableError,
-    )
-    from doc3gpp.services.factory import build_semantic_search_service
-
-    try:
-        if since:
-            parse_date_filter(since)
-        if until:
-            parse_date_filter(until)
-        if release:
-            parse_release_filter(release)
-        if spec:
-            parse_spec_filter(spec)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc))
-
-    svc = build_semantic_search_service()
-    if svc is None:
-        from doc3gpp.settings.loader import get_settings as _get_settings2
-        from doc3gpp.storage.db.session import get_engine as _get_engine
-
-        _sem = _get_settings2().semantic_search
-        _stored: str | None = None
-        try:
-            from sqlalchemy import text as _text2
-            from sqlalchemy.exc import OperationalError as _SAOpErr2
-
-            with _get_engine().begin() as _conn:
-                _stored = _conn.execute(
-                    _text2("SELECT value FROM vec_meta WHERE key='embedding_model'"),
-                ).scalar()
-        except _SAOpErr2:  # no vector schema yet; fall through to the URL hint
-            _stored = None
-        if _stored is not None and _stored != _sem.embedding_model:
-            typer.echo(
-                f"vector model mismatch: stored={_stored!r} "
-                f"expected={_sem.embedding_model!r}; run "
-                "`doc3gpp tdoc search index --rebuild-embeddings`",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        typer.echo(
-            "search sem unavailable; "
-            "set [semantic_search].embedding_base_url "
-            "(e.g. http://localhost:11434/v1); "
-            "run `pip install doc3gpp[semantic]` for sqlite-vec",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    filters = SearchFilters(
-        tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
-        release=release, spec=spec, since=since, until=until, limit=limit,
-    )
-    try:
-        hits = svc.search(
-            query, fts5_query=fts5_query, filters=filters,
-            limit=limit, fts5_weight=fts5_weight,
-        )
-    except SearchError as exc:
-        typer.echo(f"bad fts5 query: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except SemanticSearchQueryError as exc:
-        typer.echo(f"bad query: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except EmbedderUnavailableError as exc:
-        typer.echo(f"embedding model load failed: {exc}", err=True)
-        raise typer.Exit(code=1)
-    except VectorIndexUnavailableError as exc:
-        typer.echo(f"vector index unavailable: {exc}", err=True)
-        raise typer.Exit(code=1)
-    except SemanticSearchUnavailableError as exc:
-        typer.echo(f"search sem unavailable: {exc}", err=True)
-        raise typer.Exit(code=1)
-    if explain:
-        from urllib.parse import urlsplit
-
-        from doc3gpp.settings.loader import get_settings as _get_settings
-
-        typer.echo("# semantic search config", err=True)
-        typer.echo(f"fts5_query:      {fts5_query!r}", err=True)
-        typer.echo(f"fts5_weight:     {fts5_weight}", err=True)
-        typer.echo(f"vector_weight:   {1.0 - fts5_weight:.4f}", err=True)
-        typer.echo(f"limit:           {limit}", err=True)
-        sem_settings = _get_settings().semantic_search
-        typer.echo(
-            f"embedding_model: {sem_settings.embedding_model}", err=True,
-        )
-        parts = urlsplit(sem_settings.embedding_base_url or "")
-        host = parts.hostname or "(unset)"
-        if parts.port is not None:
-            host = f"{host}:{parts.port}"
-        typer.echo(f"embedding_host:  {host}", err=True)
-        stored_model = getattr(svc._vec, "_stored_model", None)  # noqa: SLF001
-        stored_dim = getattr(svc._vec, "_dim", None)  # noqa: SLF001
-        typer.echo(
-            f"stored_model:    {stored_model if stored_model is not None else '(unset)'}",
-            err=True,
-        )
-        typer.echo(
-            f"stored_dim:      {stored_dim if stored_dim is not None else 'unknown'}",
-            err=True,
-        )
-        typer.echo(
-            f"rrf_k:           {svc._settings.semantic_search.rrf_k}",
-            err=True,
-        )
-        typer.echo(
-            f"fanout:          "
-            f"{svc._settings.semantic_search.fanout_multiplier}",
-            err=True,
-        )
-        typer.echo(
-            f"fts5 path:       "
-            f"{'hybrid (FTS5 + RRF)' if fts5_query is not None else 'skipped (pure vector)'}",
-            err=True,
-        )
-    _render_semantic_hits(hits, format=format, compact=compact)
-    _emit_search_status(svc, quiet=quiet)
-
-
-def _render_semantic_hits(hits: list, *, format: str, compact: bool) -> None:
-    """Render :class:`SemanticSearchHit` list in table / json / markdown.
-
-    Mirrors :func:`_render_search_hits` — three renderers sharing
-    the same hit-shape so callers can pick a presentation without
-    touching the upstream service. The ``hit`` sub-record is
-    embedded under its own key in JSON and as a labelled continuation
-    in markdown / table.
-    """
-    if format == "json":
-        import json as _json
-        payload = [
-            {
-                "tdoc_id": h.tdoc_id, "rrf_score": h.rrf_score,
-                "rank_fts5": h.rank_fts5, "rank_vec": h.rank_vec,
-                "min_chunk_distance": h.min_chunk_distance,
-                "best_chunk_id": h.best_chunk_id,
-                "hit": {
-                    "tdoc_id": h.hit.tdoc_id, "title": h.hit.title,
-                    "ftp_url": h.hit.ftp_url, "wis": h.hit.wis,
-                },
-            }
-            for h in hits
-        ]
-        if compact:
-            typer.echo(_json.dumps(payload, separators=(",", ":")))
-        else:
-            typer.echo(_json.dumps(payload, indent=2))
-    elif format == "markdown":
-        for i, h in enumerate(hits, 1):
-            typer.echo(f"{i}. **{h.tdoc_id}** — rrf={h.rrf_score:.4f}")
-            if h.best_chunk_id:
-                typer.echo(
-                    f"   best chunk: {h.best_chunk_id} "
-                    f"(dist={h.min_chunk_distance:.4f})"
-                )
-            if h.hit.title:
-                typer.echo(f"   title: {h.hit.title}")
-            typer.echo("")
-    else:
-        typer.echo(
-            f"{'rank':>4} {'tdoc_id':<14} {'rrf':>8} {'fts':>4} {'vec':>4} "
-            f"{'dist':>8}  title"
-        )
-        for i, h in enumerate(hits, 1):
-            fts = str(h.rank_fts5) if h.rank_fts5 is not None else "-"
-            vec = str(h.rank_vec) if h.rank_vec is not None else "-"
-            dist = (
-                f"{h.min_chunk_distance:.4f}"
-                if h.min_chunk_distance is not None else "-"
-            )
-            title = (h.hit.title or "")[:40]
-            typer.echo(
-                f"{i:>4} {h.tdoc_id:<14} {h.rrf_score:>8.4f} {fts:>4} "
-                f"{vec:>4} {dist:>8}  {title}"
-            )
-
-
-def _render_search_hits(hits: list, *, format: str, compact: bool) -> None:
-    """Render hits in the chosen format.
-
-    Each hit carries a ``previews`` dict mapping every column whose
-    ``bm25_weights[i] > 0`` to its FTS5 ``snippet(...)`` output. All
-    three renderers (json / markdown / table) emit one snippet per
-    weight>0 column; weight=0 columns are absent (so the
-    ``previews`` dict is the source of truth for the column list).
-    """
-    if format == "json":
-        import json as _json
-        payload = [
-            {
-                "tdoc_id": h.tdoc_id, "score": h.score,
-                "previews": h.previews,
-                "title": h.title, "meeting": h.meeting, "tsg": h.tsg,
-                "uploaded_date": h.uploaded_date,
-                "ftp_url": h.ftp_url, "wis": h.wis,
-            }
-            for h in hits
-        ]
-        if compact:
-            typer.echo(_json.dumps(payload, separators=(",", ":")))
-        else:
-            typer.echo(_json.dumps(payload, indent=2))
-    elif format == "markdown":
-        for h in hits:
-            typer.echo(f"**{h.tdoc_id}** — {h.title}")
-            if h.ftp_url:
-                typer.echo(f"ftp_url: {h.ftp_url}")
-            if h.wis:
-                typer.echo(f"wis: {h.wis}")
-            for col, snippet in h.previews.items():
-                typer.echo(f"> {col}: {snippet}")
-            typer.echo("")
-    else:
-        typer.echo(
-            f"{'tdoc_id':<12} {'score':>8}  {'ftp_url':<48}  {'wis':<20}  preview"
-        )
-        for h in hits:
-            ftp = h.ftp_url or "-"
-            wis = h.wis or "-"
-            # Render every weight>0 column's snippet. The first
-            # column's snippet fills the table-row "preview" slot
-            # (no leading label, to keep the table header stable);
-            # every other weight>0 column is emitted on a
-            # continuation line with an explicit
-            # ``<column_name>: <snippet>`` label so operators can
-            # still tell the columns apart.
-            items = list(h.previews.items())
-            if items:
-                first_col, first_snip = items[0]
-                typer.echo(
-                    f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {ftp:<48.48}  "
-                    f"{wis:<20.20}  {first_col}: {first_snip}"
-                )
-                for col, snippet in items[1:]:
-                    typer.echo(f"  {col + ':':<14} {snippet}")
-            else:
-                typer.echo(
-                    f"{h.tdoc_id!s:<12} {h.score:>8.3f}  {ftp:<48.48}  "
-                    f"{wis:<20.20}  -"
-                )
-
-
-def _emit_search_status(svc: object, *, quiet: bool) -> None:
-    """Print a one-shot stale-index hint to stderr."""
-    global _stale_index_hint_emitted
-    if quiet or _stale_index_hint_emitted:
-        return
-    status = svc.status()  # type: ignore[attr-defined]
-    if status.is_stale:
-        typer.echo(
-            "search index is stale; run `doc3gpp tdoc search index --rebuild` "
-            "to refresh",
-            err=True,
-        )
-        _stale_index_hint_emitted = True
-
-
-def _emit_explain(
-    *, match_expr: str, snippet_tokens: int, repo: object,
-) -> None:
-    """Print the resolved search config to stderr.
-
-    The block surfaces the FTS5 ``MATCH`` expression the CLI actually
-    sent, the snippet token count (the per-call override from
-    ``--snippet-tokens`` when provided, otherwise the cached setting
-    value), and the BM25 weight vector. The format matches the perf
-    spec at ``docs/superpowers/specs/2026-07-30-fts5-perf.md`` §"``--explain``
-    wire-up".
-    """
-    weights = getattr(repo, "_weights", ())
-    weights_str = "[" + ", ".join(str(w) for w in weights) + "]"
-    typer.echo("# search config", err=True)
-    # ``match_expr`` is the FTS5 MATCH expression the repo will
-    # receive (already wrapped in quotes by SearchQueryBuilder for
-    # plain text, or passed-through for operator queries); print it
-    # verbatim so operators can confirm what the CLI sent.
-    typer.echo(f"match:           {match_expr}", err=True)
-    typer.echo(f"snippet_tokens:  {snippet_tokens}", err=True)
-    typer.echo(f"bm25_weights:    {weights_str}", err=True)
 
 
 def main() -> None:

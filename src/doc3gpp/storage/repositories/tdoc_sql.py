@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Select, distinct, select
+from sqlalchemy import ColumnElement, Select, distinct, not_, or_, select
 
 from doc3gpp.cli_filters import (
     DATE_FILTER_RE,
@@ -8,8 +8,9 @@ from doc3gpp.cli_filters import (
     is_null_token,
     split_not_like_prefix,
 )
+from doc3gpp.models.search import SearchFilters
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocORM, MeetingORM
+from doc3gpp.storage.db.models import MeetingORM, TDocCrDetailOrm, TDocORM
 from doc3gpp.storage.db.session import get_session_factory
 
 
@@ -350,6 +351,56 @@ class SQLAlchemyTDocRepository:
             for tdoc in tdocs
         ]
 
+    def list_for_search(self, filters: SearchFilters) -> list[TDocWithMeeting]:
+        """Return source rows for filter-only search in ascending ID order."""
+        with self._session_factory() as session:
+            stmt = (
+                select(TDocORM, MeetingORM.name, MeetingORM.tsg)
+                .outerjoin(MeetingORM, TDocORM.meeting_id == MeetingORM.meeting_id)
+            )
+            if filters.tsg:
+                stmt = stmt.where(MeetingORM.tsg == filters.tsg.upper())
+            if filters.meeting:
+                value = filters.meeting
+                if is_null_token(value):
+                    meeting_filter = or_(
+                        MeetingORM.name.is_(None), MeetingORM.title.is_(None)
+                    )
+                elif is_not_null_token(value):
+                    meeting_filter = or_(
+                        MeetingORM.name.is_not(None),
+                        MeetingORM.title.is_not(None),
+                    )
+                else:
+                    negated, pattern = split_not_like_prefix(value)
+                    meeting_filter = or_(
+                        MeetingORM.name.like(pattern),
+                        MeetingORM.title.like(pattern),
+                    )
+                    if negated:
+                        meeting_filter = not_(meeting_filter)
+                stmt = stmt.where(meeting_filter)
+            if filters.meeting_id is not None:
+                stmt = stmt.where(TDocORM.meeting_id == filters.meeting_id)
+            stmt = _apply_text_filter(stmt, TDocORM.tdoc_id, filters.tdoc_id)
+            stmt = _apply_text_filter(stmt, TDocORM.release, filters.release)
+            stmt = _apply_text_filter(stmt, TDocORM.spec, filters.spec)
+            if filters.since:
+                stmt = stmt.where(TDocORM.uploaded_date >= filters.since)
+            if filters.until:
+                stmt = stmt.where(TDocORM.uploaded_date <= filters.until)
+            stmt = stmt.order_by(TDocORM.tdoc_id.asc()).limit(max(filters.limit, 0))
+            rows = session.execute(stmt).all()
+
+        return [
+            TDocWithMeeting(
+                tdoc=_orm_to_domain(tdoc),
+                meeting_name=meeting_name,
+                meeting_tsg=meeting_tsg,
+            )
+            for tdoc, meeting_name, meeting_tsg in rows
+        ]
+
 
 def _orm_to_domain(row: TDocORM) -> TDoc:
     """Map an ORM row to a TDoc dataclass (no joined metadata)."""
@@ -423,4 +474,9 @@ def _apply_date_filter(
     return stmt.where(column.op(match["op"])(match["date"]))
 
 
-__all__ = ["SQLAlchemyTDocRepository", "_apply_text_filter", "_apply_date_filter", "DATE_FILTER_RE"]
+__all__ = [
+    "DATE_FILTER_RE",
+    "SQLAlchemyTDocRepository",
+    "_apply_date_filter",
+    "_apply_text_filter",
+]

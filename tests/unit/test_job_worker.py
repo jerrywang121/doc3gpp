@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from doc3gpp.models.index import IndexRebuildResult, IndexRequest
 from doc3gpp.models.jobs import JobKind, JobStatus
 from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult
 from doc3gpp.repository.protocols import JobRepository
@@ -70,6 +71,25 @@ class _FakeTsgService:
 
     def is_known_short_name(self, short_name: str) -> bool:
         return short_name.upper() in self._known
+
+
+class _RecordingIndexService:
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self.requests: list[IndexRequest] = []
+        self.progress: list[str] = []
+
+    def rebuild(
+        self,
+        request: IndexRequest,
+        *,
+        quiet: bool = False,
+        on_progress=None,
+    ) -> IndexRebuildResult:
+        self.requests.append(request)
+        if on_progress is not None:
+            on_progress(f"{self.label} progress")
+        return IndexRebuildResult(fts5_processed=4, vector_processed=2)
 
 
 def _make_state(
@@ -163,6 +183,64 @@ def _drain(queue: asyncio.Queue) -> list[dict]:
             out.append(queue.get_nowait())
         except asyncio.QueueEmpty:
             return out
+
+
+def test_worker_runs_tdoc_index_job_with_exact_request_and_progress() -> None:
+    repo = _make_repo()
+    state = _make_state(repo)
+    index = _RecordingIndexService("tdoc")
+    state.services.tdoc_index = index  # type: ignore[assignment]
+    job = repo.create(
+        JobKind.INDEX_TDOCS,
+        {
+            "rebuild": True,
+            "rebuild_embeddings": False,
+            "rebuild_all": False,
+            "batch": 25,
+            "resume": True,
+            "stale_only": True,
+        },
+    )
+
+    _run_worker_once(JobWorker(state, repo=repo), repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert index.requests == [
+        IndexRequest(
+            rebuild=True,
+            rebuild_embeddings=False,
+            rebuild_all=False,
+            batch=25,
+            resume=True,
+            stale_only=True,
+        )
+    ]
+    assert any("tdoc progress" in line for line in done.log_lines)
+    assert done.result_summary == {"fts5_processed": 4, "vector_processed": 2}
+
+
+def test_worker_runs_spec_doc_index_job_with_exact_request_and_progress() -> None:
+    repo = _make_repo()
+    state = _make_state(repo)
+    index = _RecordingIndexService("spec doc")
+    state.services.spec_doc_index = index  # type: ignore[assignment]
+    job = repo.create(
+        JobKind.INDEX_SPEC_DOCS,
+        {"rebuild_all": True, "batch": 10},
+    )
+
+    _run_worker_once(JobWorker(state, repo=repo), repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert index.requests == [
+        IndexRequest(rebuild_all=True, batch=10)
+    ]
+    assert any("spec doc progress" in line for line in done.log_lines)
+    assert done.result_summary == {"fts5_processed": 4, "vector_processed": 2}
 
 
 def test_worker_runs_queued_job() -> None:
@@ -867,8 +945,8 @@ def test_parse_tdoc_url_handler_rejects_non_3gpp_url() -> None:
 
 def test_parse_tdoc_url_handler_happy_path() -> None:
     """Happy path: results map to ``files[]`` with the right status labels."""
-    from doc3gpp.models.tdoc_cr import DirectParseResult
     from doc3gpp.models.jobs import JobKind
+    from doc3gpp.models.tdoc_cr import DirectParseResult
 
     repo = _make_repo()
     state = _make_state(
@@ -1141,6 +1219,7 @@ def test_parse_tdoc_url_handler_auto_sync_failure_does_not_abort() -> None:
 def test_parse_tdoc_url_handler_cancellation_raises_cancelled() -> None:
     """``cancel_event`` set before the service call → ``CANCELLED`` job state."""
     import asyncio as _asyncio
+
     from doc3gpp.models.jobs import JobKind
     from doc3gpp.web.workers.job_worker import JobWorker as _JW
 
@@ -1309,21 +1388,21 @@ def _run_worker_with_mid_flight_cancel(
 def _make_state_with_services(repo: JobRepository, **services_kwargs) -> WebState:
     """Build a :class:`WebState` with the named fake services, defaults for the rest."""
     from doc3gpp.settings.schema import Settings
-    defaults = dict(
-        meeting=None,
-        tdoc=None,
-        tdoc_cr=None,
-        tdoc_sync=None,
-        tdoc_repo=None,
-        tsg=_FakeTsgService({"R5"}),
-        wi=None,
-        spec=_FakeSpecService(),
-        testcase=None,
-        search=None,
-        semantic_search=None,
-        tdoc_file_repo=None,
-        job_repo=repo,
-    )
+    defaults = {
+        "meeting": None,
+        "tdoc": None,
+        "tdoc_cr": None,
+        "tdoc_sync": None,
+        "tdoc_repo": None,
+        "tsg": _FakeTsgService({"R5"}),
+        "wi": None,
+        "spec": _FakeSpecService(),
+        "testcase": None,
+        "search": None,
+        "semantic_search": None,
+        "tdoc_file_repo": None,
+        "job_repo": repo,
+    }
     defaults.update(services_kwargs)
     return WebState(
         settings=Settings(),

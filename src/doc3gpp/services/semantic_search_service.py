@@ -2,13 +2,14 @@
 
 :class:`SemanticSearchService` owns four responsibilities:
 
-1. **Read path** — :meth:`search` always embeds the natural-language
-   ``query``; the FTS5 path is opt-in via ``fts5_query`` and is
-   preprocessed by ``SearchQueryBuilder`` (NOT spaCy). When
-   ``fts5_query`` is provided, the service runs FTS5 + vector fan-out
-   and RRF with ``vector_weight = 1 - fts5_weight``; when omitted, the
-   service returns pure vector KNN top-``limit`` results dressed as
-   :class:`SemanticSearchHit` (no RRF, no FTS5 fan-out).
+1. **Read path** — :meth:`search` is an internal vector/hybrid seam used by
+    the unified search facades. It always embeds ``query``; the optional
+    internal ``fts5_query`` value is preprocessed by
+    ``SearchQueryBuilder``. When supplied, the service runs FTS5 + vector
+    fan-out and RRF with ``vector_weight = 1 - fts5_weight``; when omitted,
+    it returns pure vector KNN results dressed as
+    :class:`SemanticSearchHit`. ``fts5_query`` is not a public CLI, HTTP,
+    or MCP parameter.
 2. **Write paths** — :meth:`index_for_tdoc` builds the embed text,
    chunks it, embeds the chunks, and upserts. :meth:`remove_for_tdoc`
    deletes the chunk rows.
@@ -99,12 +100,14 @@ def _build_fts5_stub(tdoc_id: str, meta):
             tdoc_id=tdoc_id, score=0.0, previews={},
             title="", meeting=None, tsg=None,
             uploaded_date=None, ftp_url=None, wis=None,
+            type=None, status=None,
         )
     return SearchHit(
         tdoc_id=tdoc_id, score=0.0, previews={},
         title=meta.title, meeting=meta.meeting, tsg=meta.tsg,
         uploaded_date=meta.uploaded_date,
         ftp_url=meta.ftp_url, wis=meta.wis,
+        type=meta.type, status=meta.status,
     )
 
 
@@ -131,9 +134,9 @@ class SemanticSearchService:
     ) -> list[SemanticSearchHit]:
         """Vector-only or hybrid (FTS5 + vector) read path.
 
-        ``query`` is always embedded; it never feeds FTS5. ``fts5_query``,
-        when provided, runs through :class:`SearchQueryBuilder` (same
-        preprocessing as ``doc3gpp tdoc search query``) and feeds the FTS5
+        ``query`` is always embedded; it never feeds FTS5. ``fts5_query``
+        is the internal text value supplied by the unified search facade and
+        runs through :class:`SearchQueryBuilder` before feeding the FTS5
         path; when ``None``, the FTS5 path and RRF are skipped — only
         vector KNN results return, ranked by cosine distance, dressed as
         :class:`SemanticSearchHit` with synthesized metadata stubs.

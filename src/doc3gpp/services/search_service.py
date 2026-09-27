@@ -11,7 +11,7 @@ The :class:`SearchService` owns three responsibilities:
 3. **Maintenance** — :meth:`rebuild` is a generator that yields
    :class:`RebuildProgress` per batch (the CLI's ``--quiet`` flag
    controls whether the consumer prints each batch);
-   :meth:`status` snapshots the index for ``tdoc search index`` (no
+   :meth:`status` snapshots the internal FTS5 index for ``tdoc index`` (no
    flags).
 
 Both ``rebuild`` and ``upsert_for_tdoc`` update
@@ -107,8 +107,9 @@ class SearchService:
         query: str,
         filters: SearchFilters,
         sem_query: str | None = None,
+        snippet_tokens: int | None = None,
     ) -> list[SearchHit]:
-        """Run FTS5 ``MATCH`` + optional semantic rerank + return hits.
+        """Run the internal FTS5 ``MATCH`` path and return source hits.
 
         The raw query is normalised into a valid FTS5 ``MATCH``
         expression via :class:`SearchQueryBuilder` (the same path the
@@ -116,23 +117,21 @@ class SearchService:
         parsed as a column-minus-token; a stopwords-only or empty
         query raises :class:`SearchQueryError`.
 
-        ``sem_query`` mirrors the CLI's ``tdoc search query --sem-query``:
-        when ``None`` (default) the hits are returned verbatim and the
-        reranker is NOT invoked — pure FTS5, matching the CLI without
-        ``--sem-query``. When provided, the FTS5 query is re-run with
-        a fanout limit (``filters.limit * search_fanout_factor``) and
-        the raw hits are reordered by cosine similarity to
-        ``sem_query`` via :meth:`EmbeddingReranker.rerank`, truncated
-        back to ``filters.limit``. The *raw* query is forwarded to the
-        reranker only when ``sem_query`` is provided; the reranker
-        embeds that text verbatim.
+        ``sem_query`` is retained for the internal legacy service seam;
+        public callers use ``TDocSearchFacade`` with separate ``text`` and
+        ``semantic`` inputs, which selects FTS5, vector, hybrid, or
+        filter-only mode and serializes flattened result rows.
         """
         from doc3gpp.cli_filters import SearchQueryBuilder
         from doc3gpp.settings.loader import get_settings
 
         match_expr = SearchQueryBuilder(query).build()
         if sem_query is None:
-            return self._repo.search(match_expr, filters)
+            if snippet_tokens is None:
+                return self._repo.search(match_expr, filters)
+            return self._repo.search(
+                match_expr, filters, snippet_tokens=snippet_tokens,
+            )
         settings = get_settings()
         fanout = filters.limit * settings.search.search_fanout_factor
         fanout_filters = SearchFilters(
@@ -146,7 +145,12 @@ class SearchService:
             until=filters.until,
             limit=fanout,
         )
-        raw_hits = self._repo.search(match_expr, fanout_filters)
+        if snippet_tokens is None:
+            raw_hits = self._repo.search(match_expr, fanout_filters)
+        else:
+            raw_hits = self._repo.search(
+                match_expr, fanout_filters, snippet_tokens=snippet_tokens,
+            )
         return self._reranker.rerank(
             semantic_query=sem_query,
             hits=raw_hits,

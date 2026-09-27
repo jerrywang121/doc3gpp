@@ -2,19 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     import numpy as np
 
 from doc3gpp.models.jobs import Job, JobKind, JobStatus, JSONValue
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.models.tdoc_cr import (
-    TDocCRDetails,
-    TDocCRTTCNDetails,
-    TDocExtractMeta,
-)
 from doc3gpp.models.search import (
     RebuildProgress,  # noqa: F401
     SearchFilters,
@@ -22,8 +16,6 @@ from doc3gpp.models.search import (
     SearchIndexStatus,
     TDocMeta,
 )
-from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
-from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
@@ -33,6 +25,14 @@ from doc3gpp.models.spec_doc import (
     SpecDocSource,
     SpecDocToc,
 )
+from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_cr import (
+    TDocCRDetails,
+    TDocCRTTCNDetails,
+    TDocExtractMeta,
+)
+from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.testcase import TestCase, TestCaseSource, TestCaseStatus
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -223,6 +223,15 @@ class TDocRepository(Protocol):
         and pagination as :meth:`list` (including ``exclude_parsed`` and
         the ``ls_to`` / ``ls_cc`` / ``original_ls`` / ``tdoc_for`` /
         ``abstract`` / ``secretary_remarks`` rich-filter grammar).
+        """
+        ...
+
+    def list_for_search(self, filters: SearchFilters) -> list[TDocWithMeeting]:
+        """Return source TDocs matching search filters in ascending ID order.
+
+        This is the direct SQL path for filter-only search. It applies the
+        same rich text/date filter grammar as the indexed search paths but
+        does not read or initialize an FTS5 index.
         """
         ...
 
@@ -475,6 +484,14 @@ class SpecDocRepository(Protocol):
         tables: str | None = None,
         limit: int = 50,
         offset: int = 0,
+    ) -> list[SpecDocChunk]: ...
+
+    def get_chunks_by_ids(
+        self, chunk_ids: list[str]
+    ) -> dict[str, SpecDocChunk]: ...
+
+    def list_for_search(
+        self, filters: SpecDocSearchFilters
     ) -> list[SpecDocChunk]: ...
 
 
@@ -762,7 +779,7 @@ class SearchIndexRepository(Protocol):
     def get_resume_cursor(self) -> str | None:
         """Return the last ``tdoc_id`` written to ``tdoc_search_meta``.
 
-        ``None`` means no cursor has been recorded; ``tdoc search index
+        ``None`` means no cursor has been recorded; ``tdoc index
         --rebuild --resume`` starts at the first id > cursor.
         """
         ...
@@ -778,7 +795,7 @@ class SearchIndexRepository(Protocol):
         """Remove the resume cursor so the next rebuild starts at
         the first TDoc.
 
-        ``tdoc search index --rebuild`` (no ``--resume``) calls this at
+        ``tdoc index --rebuild`` (no ``--resume``) calls this at
         the start of a rebuild to force a truly fresh start; the
         first successful batch upsert then writes a new cursor via
         :meth:`set_resume_cursor`.
@@ -786,7 +803,7 @@ class SearchIndexRepository(Protocol):
         ...
 
     def status(self) -> SearchIndexStatus:
-        """Return a :class:`SearchIndexStatus` snapshot for ``tdoc search index``.
+        """Return a :class:`SearchIndexStatus` snapshot for ``tdoc index``.
 
         Reads ``tdoc_search_meta`` + ``COUNT(*)`` from the FTS5 table
         + ``MAX(uploaded_date)`` from ``tdocs`` to compute
@@ -827,7 +844,7 @@ class EmbeddingReranker(Protocol):
         ``final_limit``.
 
         ``final_limit`` is the user-visible output count (e.g. the
-        ``--limit`` value from ``tdoc search query --sem-query``).
+        ``--limit`` value from unified ``tdoc search``).
         The caller (CLI) is responsible for asking the upstream
         FTS5 repo for a *wider* candidate bag, then letting the
         reranker trim back to ``final_limit``.
@@ -853,7 +870,7 @@ class Embedder(Protocol):
     :class:`SemanticSearchService` or the CLI.
     """
 
-    def encode(self, texts: list[str]) -> "np.ndarray":
+    def encode(self, texts: list[str]) -> np.ndarray:
         """Return shape ``(len(texts), dim)``, dtype float32."""
         ...
 
@@ -889,8 +906,8 @@ class VectorIndexRepository(Protocol):
         ...
 
     def knn(
-        self, query_vec: "np.ndarray", limit: int,
-        filters: "SearchFilters | None" = None,
+        self, query_vec: np.ndarray, limit: int,
+        filters: SearchFilters | None = None,
     ) -> list[tuple[str, str, int, float]]:
         """KNN by cosine distance; returns ``(tdoc_id, chunk_id, chunk_index, distance)``.
 
@@ -901,20 +918,20 @@ class VectorIndexRepository(Protocol):
         ...
 
     def rebuild_batch(
-        self, batch_size: int, after_id: "str | None", stale_only: bool,
+        self, batch_size: int, after_id: str | None, stale_only: bool,
     ) -> Iterable[list[str]]:
         """Yield batches of ``tdoc_id`` strings in ``ORDER BY tdoc_id ASC``."""
         ...
 
     def count_tdocs_to_index(self, stale_only: bool) -> int: ...
 
-    def get_resume_cursor(self) -> "str | None": ...
+    def get_resume_cursor(self) -> str | None: ...
 
     def set_resume_cursor(self, tdoc_id: str) -> None: ...
 
     def clear_resume_cursor(self) -> None: ...
 
-    def status(self) -> "SearchIndexStatus": ...
+    def status(self) -> SearchIndexStatus: ...
 
     def get_tdocs_metadata(
         self, tdoc_ids: list[str],
@@ -1187,4 +1204,47 @@ class SpecDocVectorRepository(Protocol):
 
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec_spec_doc_embeddings`` at ``dim``."""
+        ...
+
+    def rebuild_batch(
+        self,
+        batch_size: int,
+        after_id: str | None,
+        stale_only: bool,
+    ) -> Iterable[list[tuple[str, str]]]:
+        """Yield parsed ``(spec_id, version)`` pairs for embedding rebuilds."""
+        ...
+
+    def count_versions_to_index(
+        self, stale_only: bool, after_id: str | None = None
+    ) -> int:
+        """Return the number of parsed pairs in the next rebuild."""
+        ...
+
+    def get_resume_cursor(self) -> str | None:
+        """Return the last ``spec_id@version`` rebuild cursor."""
+        ...
+
+    def set_resume_cursor(self, cursor: str) -> None:
+        """Persist the last successfully processed pair cursor."""
+        ...
+
+    def clear_resume_cursor(self) -> None:
+        """Clear the embedding rebuild cursor."""
+        ...
+
+    def record_rebuild_failure(self, spec_id: str, version: str) -> None:
+        """Keep a failed parsed pair in the rebuild work set."""
+        ...
+
+    def clear_rebuild_failure(self, spec_id: str, version: str) -> None:
+        """Remove a pair's failed-rebuild marker after success."""
+        ...
+
+    def touch_rebuild_at(self) -> None:
+        """Persist the completion timestamp for the vector rebuild."""
+        ...
+
+    def status(self) -> SearchIndexStatus:
+        """Return the vector index status snapshot."""
         ...

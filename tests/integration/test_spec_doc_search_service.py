@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
+    SpecDocChunk,
     SpecDocHit,
     SpecDocSearchFilters,
     SpecDocSemanticHit,
@@ -196,7 +197,7 @@ def test_semantic_index_and_pure_vector_search(sqlite_env):
         fts5_weight=0.5,
     )
     assert [h.chunk_id for h in hits] == ["38.331@18.5.0#0", "38.331@18.5.0#1"]
-    assert all(h.rank_fts5 is None and h.hit is None for h in hits)
+    assert all(h.rank_fts5 is None and h.hit is not None for h in hits)
 
 
 def test_semantic_hybrid_search(sqlite_env):
@@ -231,6 +232,62 @@ class RecordingVectorRepository:
     def knn(self, _query_vec, *, limit, filters):
         self.filters = filters
         return [("38.331@19.0.0#0", 0.1)][:limit]
+
+
+class RecordingChunkRepository:
+    def __init__(self, chunk):
+        self.chunk = chunk
+        self.requested = []
+
+    def get_chunks_by_ids(self, chunk_ids):
+        self.requested.append(list(chunk_ids))
+        return {self.chunk.chunk_id: self.chunk}
+
+
+def test_semantic_vector_only_hit_is_enriched_from_chunk_metadata():
+    chunk = SpecDocChunk(
+        file_order=2,
+        source_file="part.docx",
+        sections="5 Scope",
+        tables="Table 1 Values",
+        text="scope body",
+        chunk_id="38.331@19.0.0#0",
+        spec_id="38.331",
+        version="19.0.0",
+        release="Rel-19",
+        chunk_index=0,
+    )
+    chunks = RecordingChunkRepository(chunk)
+    service = SpecDocSemanticService(
+        fts5_service=RecordingFTSService(),
+        embedder=FakeEmbedder(),
+        vector_repo=RecordingVectorRepository(),
+        doc_repo=chunks,
+        settings=SimpleNamespace(
+            semantic_search=SimpleNamespace(fanout_multiplier=2, rrf_k=60)
+        ),
+    )
+
+    hits = service.search(
+        "handover",
+        fts5_query=None,
+        filters=SpecDocSearchFilters(),
+        limit=10,
+        fts5_weight=0.5,
+    )
+
+    assert len(hits) == 1
+    assert hits[0].hit is not None
+    assert hits[0].hit.spec_id == "38.331"
+    assert hits[0].hit.version == "19.0.0"
+    assert hits[0].hit.release == "Rel-19"
+    assert hits[0].hit.sections == "5 Scope"
+    assert hits[0].hit.tables == "Table 1 Values"
+    assert hits[0].hit.chunk_index == 0
+    assert hits[0].hit.text == "scope body"
+    assert hits[0].hit.score == 0.0
+    assert hits[0].hit.previews == {}
+    assert chunks.requested == [["38.331@19.0.0#0"]]
 
 
 def test_semantic_hybrid_copies_sections_and_tables_filters():

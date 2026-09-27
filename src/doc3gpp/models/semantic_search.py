@@ -22,8 +22,8 @@ class SemanticSearchUnavailableError(SemanticSearchError):
 
 
 class SemanticSearchQueryError(SemanticSearchError):
-    """The user-supplied `--fts5-query` string yields no indexable tokens
-    after ``SearchQueryBuilder.build()`` (e.g. `--fts5-query "the and of"`).
+    """The internal FTS5 text value yields no indexable tokens after
+    ``SearchQueryBuilder.build()`` (for example, a stopwords-only query).
     Exit code 2."""
 
 

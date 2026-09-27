@@ -239,8 +239,11 @@ def test_model_mismatch_raises_even_when_dim_matches(sqlite_env):
     with eng.begin() as conn:
         conn.execute(text("UPDATE vec_meta SET value='old-model' WHERE key='embedding_model'"))
     repo = SQLAlchemyVectorIndexRepository(expected_model="new-model")
-    with pytest.raises(VectorIndexUnavailableError, match="rebuild-embeddings"):
+    with pytest.raises(VectorIndexUnavailableError) as excinfo:
         repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+    message = str(excinfo.value)
+    assert "doc3gpp tdoc index --rebuild-embeddings" in message
+    assert "tdoc search index" not in message
 
 
 def test_legacy_db_missing_model_treated_as_mismatch(sqlite_env):

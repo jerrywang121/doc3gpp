@@ -16,11 +16,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from typing import ClassVar
 
 from doc3gpp.cli_auto_sync import (
     collect_tdoc_candidates_for_url,
     trigger_auto_sync,
 )
+from doc3gpp.models.index import IndexRequest
 from doc3gpp.models.jobs import Job, JobKind, JSONValue
 from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
 from doc3gpp.settings.schema import Settings
@@ -281,7 +283,9 @@ async def _parse_tdocs(
 ) -> Mapping[str, JSONValue]:
     filters = job.params.get("filter", {})
     if not isinstance(filters, dict):
-        raise ValueError("parse_tdocs job requires a 'filter' mapping parameter")
+        raise ValueError(  # noqa: TRY004 - preserve the handler's public error type
+            "parse_tdocs job requires a 'filter' mapping parameter"
+        )
     force = bool(job.params.get("force", False))
     full = bool(job.params.get("full", False))
     max_batch = job.params.get("max_batch")
@@ -531,6 +535,92 @@ async def _rebuild_search(
     return {"processed": True}
 
 
+def _index_request(params: Mapping[str, JSONValue]) -> IndexRequest:
+    batch = params.get("batch")
+    return IndexRequest(
+        rebuild=bool(params.get("rebuild", False)),
+        rebuild_embeddings=bool(params.get("rebuild_embeddings", False)),
+        rebuild_all=bool(params.get("rebuild_all", False)),
+        batch=int(batch) if batch is not None else None,
+        resume=bool(params.get("resume", False)),
+        stale_only=bool(params.get("stale_only", False)),
+    )
+
+
+async def _run_index(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+    resource: str,
+) -> Mapping[str, JSONValue]:
+    service = getattr(services, resource)
+    if service is None:
+        raise RuntimeError(f"{resource.replace('_', ' ')} index is not available")
+    request = _index_request(job.params)
+    progress(f"starting {resource.replace('_', ' ')} index maintenance")
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+
+    def on_progress(message: str) -> None:
+        if cancel_event.is_set():
+            raise asyncio.CancelledError()
+        progress(message, force=True)
+
+    result = await asyncio.to_thread(
+        service.rebuild,
+        request,
+        quiet=True,
+        on_progress=on_progress,
+    )
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    if hasattr(result, "to_dict"):
+        summary = result.to_dict()
+    else:
+        summary = {"status": "complete"}
+    progress(f"{resource.replace('_', ' ')} index maintenance complete", force=True)
+    return summary
+
+
+async def _index_tdocs(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    return await _run_index(
+        job,
+        services,
+        settings,
+        progress=progress,
+        cancel_event=cancel_event,
+        resource="tdoc_index",
+    )
+
+
+async def _index_spec_docs(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    return await _run_index(
+        job,
+        services,
+        settings,
+        progress=progress,
+        cancel_event=cancel_event,
+        resource="spec_doc_index",
+    )
+
+
 async def _cache_purge(
     job: Job,
     services: ServiceContainer,
@@ -570,7 +660,7 @@ class JobHandlers:
     by the worker via :data:`KIND_TO_HANDLER`.
     """
 
-    KIND_TO_HANDLER: dict[JobKind, Handler] = {
+    KIND_TO_HANDLER: ClassVar[dict[JobKind, Handler]] = {
         JobKind.SYNC_MEETINGS: _sync_meetings,
         JobKind.SYNC_TDOCS: _sync_tdocs,
         JobKind.SYNC_TDOCS_ALL: _sync_tdocs_all,
@@ -579,6 +669,8 @@ class JobHandlers:
         JobKind.PARSE_TDOCS: _parse_tdocs,
         JobKind.PARSE_TDOC_URL: _parse_tdoc_url,
         JobKind.PARSE_SPEC_DOCS: _parse_spec_docs,
+        JobKind.INDEX_TDOCS: _index_tdocs,
+        JobKind.INDEX_SPEC_DOCS: _index_spec_docs,
         JobKind.REBUILD_SEARCH: _rebuild_search,
         JobKind.CACHE_PURGE: _cache_purge,
     }

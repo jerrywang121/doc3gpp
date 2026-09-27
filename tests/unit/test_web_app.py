@@ -36,6 +36,10 @@ def test_build_state_wires_service_container(sqlite_env) -> None:
         assert state.services.tdoc_cr is not None
         assert state.services.wi is not None
         assert state.services.tdoc_file_repo is not None
+        assert state.services.tdoc_search is not None
+        assert state.services.spec_doc_search_facade is not None
+        assert state.services.tdoc_index is not None
+        assert state.services.spec_doc_index is not None
         assert state.services.job_repo is not None
 
 
@@ -52,29 +56,39 @@ def test_build_state_shares_one_embedder(sqlite_env) -> None:
     from unittest.mock import MagicMock
 
     from doc3gpp.services import factory
+    from doc3gpp.settings.schema import Settings
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.web.app import build_state
-    from doc3gpp.settings.schema import Settings
 
     settings = Settings()
     create_schema()
     fake_embedder = MagicMock()
+    build_calls = []
+
+    def build_embedder(_settings):
+        build_calls.append(True)
+        return fake_embedder
+
     monkeypatch = __import__("pytest").MonkeyPatch()
-    monkeypatch.setattr(factory, "build_embedder", lambda s: fake_embedder)
+    monkeypatch.setattr(factory, "build_embedder", build_embedder)
     try:
         state = build_state(settings)
+        assert build_calls == []
+        tdoc_embedder = state.services.semantic_search._embedder
+        spec_doc_embedder = state.services.spec_doc_semantic._embedder
     finally:
         monkeypatch.undo()
-    assert state.services.search._reranker._embedder is fake_embedder
-    assert state.services.semantic_search._embedder is fake_embedder
-    assert state.services.tdoc_cr._semantic_service._embedder is fake_embedder
+    assert build_calls == [True]
+    assert tdoc_embedder is fake_embedder
+    assert spec_doc_embedder is fake_embedder
+    assert state.services.spec_doc._embedder is None
 
 
 def test_build_state_wires_testcase_engine(sqlite_env) -> None:
     """``build_state`` carries the shared testcase engine on ``WebState``."""
+    from doc3gpp.settings.schema import Settings
     from doc3gpp.storage.db.session import get_testcase_engine
     from doc3gpp.web.app import build_state
-    from doc3gpp.settings.schema import Settings
 
     state = build_state(Settings())
     assert state.testcase_engine is get_testcase_engine()

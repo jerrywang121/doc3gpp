@@ -242,19 +242,22 @@ The same grammar also applies to:
   patterns on `--tsg` are upper-cased to match the canonical stored
   value; `null` / `not-null` / `!pattern` pass through unchanged).
 - `wi list` — `--name`, `--acronym`, `--release`.
-- `tdoc search query` / `tdoc search sem` — `--meeting` (over `name` **or**
-  `title`), `--release`, `--spec`. For the compound `--meeting`
+- `tdoc search` / `spec doc search` — `--meeting` (over `name` **or**
+  `title`), `--release`, `--spec`, and the resource-specific metadata
+  filters. Both commands use the same `--text` / `--semantic` mode selection.
+  For the compound `--meeting`
   filter, a negated `!pattern` wraps the whole `name OR title` group
   (`NOT (name LIKE OR title LIKE)`), so a row is kept only when
   neither column matches.
 - The MCP tools `list_meetings`, `list_tdocs`, `list_wis`,
-  `search_tdoc`, `semantic_search_tdoc`, and the `parse_tdocs`
+  `search_tdoc`, `search_spec_docs`, and the `parse_tdocs`
   filter dict — the same grammar, documented per-parameter.
 
-TDoc search is exposed under the `tdoc search` CLI namespace and the
-`/tdocs/search` HTTP routes. Spec-document search remains under
-`doc3gpp spec doc search ...` and the `search_spec_docs` /
-`semantic_search_spec_docs` MCP tools.
+TDoc search is exposed under the `tdoc search` CLI namespace and
+`GET /tdocs/search`; spec-document search is exposed under
+`doc3gpp spec doc search`, `GET /spec-docs/search`, and `search_spec_docs`.
+Index status and maintenance use the matching `index` commands, status
+routes, job routes, and `get_*_index` / `index_*` MCP tools.
 
 ## tdoc parse workflow
 

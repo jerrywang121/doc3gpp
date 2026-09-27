@@ -4,13 +4,6 @@
   <div class="page-header">
     <h1>Spec docs search</h1>
     {% include "partials/search_resource_tabs.html" %}
-    <div class="page-actions">
-      {% if mode == 'sem' %}
-        <a class="btn" href="/spec-docs/search">FTS5 search</a>
-      {% else %}
-        <a class="btn" href="/spec-docs/search/sem">Hybrid search</a>
-      {% endif %}
-    </div>
   </div>
 
   {% include "partials/spec_doc_search_form.html" %}

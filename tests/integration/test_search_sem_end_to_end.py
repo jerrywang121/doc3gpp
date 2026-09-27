@@ -45,10 +45,15 @@ def semantic_service(semantic_search_corpus):
     embedder that returns the pre-computed corpus vectors for known
     texts (queries and chunk text alike).
     """
+    from sqlalchemy import text
+
     from doc3gpp.services.factory import build_search_service
     from doc3gpp.services.semantic_search_service import SemanticSearchService
     from doc3gpp.settings.loader import get_settings
     from tests.fixtures.semantic_search_corpus import ENCODE_TABLE
+
+    with semantic_search_corpus.begin() as conn:
+        conn.execute(text("UPDATE tdocs SET status = 'Agreed'"))
 
     fts5 = build_search_service()
     assert fts5 is not None
@@ -320,6 +325,8 @@ def test_search_sem_without_fts5_query_returns_pure_vector_results(semantic_serv
         assert h.rank_fts5 is None
         assert h.rrf_score < 0
         assert h.hit is not None
+        assert h.hit.type == "CR"
+        assert h.hit.status == "Agreed"
 
 
 def test_search_sem_with_fts5_query_returns_rrf_merged_results(semantic_service):

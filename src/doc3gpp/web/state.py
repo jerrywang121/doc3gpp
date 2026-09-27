@@ -29,11 +29,15 @@ if TYPE_CHECKING:
     from doc3gpp.services.meetings_service import MeetingService
     from doc3gpp.services.search_service import SearchService
     from doc3gpp.services.semantic_search_service import SemanticSearchService
+    from doc3gpp.services.spec_doc_index_service import SpecDocIndexService
+    from doc3gpp.services.spec_doc_search_facade import SpecDocSearchFacade
     from doc3gpp.services.spec_doc_search_service import SpecDocSearchService
     from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
     from doc3gpp.services.spec_doc_service import SpecDocService
     from doc3gpp.services.spec_service import SpecService
     from doc3gpp.services.tdoc_cr_service import TDocCrService
+    from doc3gpp.services.tdoc_index_service import TDocIndexService
+    from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
     from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
     from doc3gpp.services.testcase_service import TestCaseService
@@ -154,22 +158,26 @@ class ServiceContainer:
     same convention as the ``search`` / ``semantic_search`` fields.
     """
 
-    meeting: "MeetingService"
-    tdoc: "TDocService"
-    tdoc_cr: "TDocCrService"
-    tdoc_sync: "TDocSyncCoordinator"
-    tdoc_repo: "TDocRepository"
-    tsg: "TsgService"
-    wi: "WiService"
-    spec: "SpecService"
-    testcase: "TestCaseService"
-    search: "SearchService | None"
-    semantic_search: "SemanticSearchService | None"
-    spec_doc: "SpecDocService | None" = None
-    spec_doc_search: "SpecDocSearchService | None" = None
-    spec_doc_semantic: "SpecDocSemanticService | None" = None
+    meeting: MeetingService
+    tdoc: TDocService
+    tdoc_cr: TDocCrService
+    tdoc_sync: TDocSyncCoordinator
+    tdoc_repo: TDocRepository
+    tsg: TsgService
+    wi: WiService
+    spec: SpecService
+    testcase: TestCaseService
+    search: SearchService | None
+    semantic_search: SemanticSearchService | None
+    spec_doc: SpecDocService | None = None
+    spec_doc_search: SpecDocSearchService | None = None
+    spec_doc_semantic: SpecDocSemanticService | None = None
     tdoc_file_repo: SQLAlchemyTDocFileRepository | None = None
-    job_repo: "JobRepository | None" = None
+    job_repo: JobRepository | None = None
+    tdoc_search: TDocSearchFacade | None = None
+    spec_doc_search_facade: SpecDocSearchFacade | None = None
+    tdoc_index: TDocIndexService | None = None
+    spec_doc_index: SpecDocIndexService | None = None
 
 
 @dataclass(slots=True)

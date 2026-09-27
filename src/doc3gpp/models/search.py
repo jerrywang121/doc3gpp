@@ -46,7 +46,7 @@ class SearchIndexCorruptError(SearchError):
     Raised when the index exists but reads/writes fail with a sqlite
     ``OperationalError`` that the repo classifies as corruption rather
     than a query problem. Exit code 3; the CLI suggests running
-    ``doc3gpp tdoc search index --rebuild``.
+     ``doc3gpp tdoc index --rebuild``.
     """
 
 
@@ -91,6 +91,8 @@ class SearchHit:
     uploaded_date: str | None
     ftp_url: str | None
     wis: str | None
+    type: str | None = None
+    status: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -112,11 +114,13 @@ class TDocMeta:
     meeting: str | None
     tsg: str | None
     uploaded_date: str | None
+    type: str | None = None
+    status: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class RebuildProgress:
-    """One batch of the ``tdoc search index --rebuild`` generator.
+    """One batch of the internal TDoc index rebuild generator.
 
     The CLI consumes the generator and (unless ``--quiet``) prints a
     progress line per batch. ``current_tdoc_id`` is the last id
@@ -134,12 +138,12 @@ class RebuildProgress:
 
 @dataclass(slots=True, frozen=True)
 class SearchIndexStatus:
-    """Snapshot of the index state for ``tdoc search index`` (no flags).
+    """Internal FTS5 index snapshot used by ``tdoc index`` (no flags).
 
     ``is_stale`` is ``True`` when
     ``latest_tdocs_uploaded_date > last_indexed_uploaded_date``
     (i.e. there are newer TDoc uploads that have not been re-indexed).
-    The CLI prints a "run ``tdoc search index --rebuild``" hint when this
+    The CLI prints a "run ``tdoc index --rebuild``" hint when this
     is true, gated behind ``--quiet`` and a per-invocation latch.
 
     The vector-backed ``status()`` populates ``embedding_dim`` /

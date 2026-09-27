@@ -148,20 +148,41 @@
     </form>
   </section>
 
-  {# --- Panel 6 — Rebuild search index --- #}
+  {# --- Panel 6 — TDoc index maintenance --- #}
   <section class="card">
-    <h2>Rebuild search index</h2>
-    <form id="rebuild-search-form" class="sync-form"
-          method="post" action="/jobs/tdocs/search/rebuild">
+    <h2>TDoc index maintenance</h2>
+    <form id="tdoc-index-form" class="sync-form"
+          method="post" action="/jobs/tdocs/index">
+      <label class="inline-check"><input type="checkbox" name="rebuild"> Rebuild FTS5</label>
+      <label class="inline-check"><input type="checkbox" name="rebuild_embeddings"> Rebuild embeddings</label>
+      <label class="inline-check"><input type="checkbox" name="rebuild_all"> Rebuild all</label>
       <label class="inline-check">
-        <input type="checkbox" name="stale_only"> Stale only (re-index tdocs uploaded since last build)
+        <input type="checkbox" name="stale_only"> Stale only
       </label>
       <label class="inline-check">
-        <input type="checkbox" name="resume"> Resume from last indexed tdoc
+        <input type="checkbox" name="resume"> Resume
       </label>
-      <button type="submit" class="btn primary">Rebuild FTS5 index</button>
+      <label>Batch <input type="number" name="batch" min="1"></label>
+      <button type="submit" class="btn primary">Maintain TDoc indexes</button>
       <span class="sync-queued" style="display:none">Sync job queued</span>
-      <div id="rebuild-search-form-job-target"></div>
+      <div id="tdoc-index-form-job-target"></div>
+    </form>
+  </section>
+
+  {# --- Panel 6b — Spec-document index maintenance --- #}
+  <section class="card">
+    <h2>Spec-document index maintenance</h2>
+    <form id="spec-doc-index-form" class="sync-form"
+          method="post" action="/jobs/spec-docs/index">
+      <label class="inline-check"><input type="checkbox" name="rebuild"> Rebuild FTS5</label>
+      <label class="inline-check"><input type="checkbox" name="rebuild_embeddings"> Rebuild embeddings</label>
+      <label class="inline-check"><input type="checkbox" name="rebuild_all"> Rebuild all</label>
+      <label class="inline-check"><input type="checkbox" name="stale_only"> Stale only</label>
+      <label class="inline-check"><input type="checkbox" name="resume"> Resume</label>
+      <label>Batch <input type="number" name="batch" min="1"></label>
+      <button type="submit" class="btn primary">Maintain spec-document indexes</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
+      <div id="spec-doc-index-form-job-target"></div>
     </form>
   </section>
 

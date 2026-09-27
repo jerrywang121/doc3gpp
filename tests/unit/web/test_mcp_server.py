@@ -72,6 +72,53 @@ def test_get_spec_emits_native_version_parsed_boolean(sqlite_env) -> None:
     assert payload["versions"][0]["parsed"] is False
 
 
+def test_mcp_semantic_paths_share_one_deferred_embedder(sqlite_env, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory
+
+    fake_embedder = MagicMock()
+    build_calls = []
+    captured_embedders = []
+    tdoc_semantic = MagicMock()
+    tdoc_semantic.search.return_value = []
+    spec_doc_semantic = MagicMock()
+    spec_doc_semantic.search.return_value = []
+
+    def build_embedder(_settings):
+        build_calls.append(True)
+        return fake_embedder
+
+    def build_tdoc_semantic(*_args, **kwargs):
+        captured_embedders.append(kwargs["embedder"])
+        return tdoc_semantic
+
+    def build_spec_doc_semantic(*_args, **kwargs):
+        captured_embedders.append(kwargs["embedder"])
+        return spec_doc_semantic
+
+    monkeypatch.setattr(factory, "build_embedder", build_embedder)
+    monkeypatch.setattr(factory, "build_semantic_search_service", build_tdoc_semantic)
+    monkeypatch.setattr(
+        factory,
+        "build_spec_doc_semantic_service",
+        build_spec_doc_semantic,
+    )
+    state, server = _server()
+
+    assert build_calls == []
+
+    async def run():
+        await _call(server, "search_tdoc", {"semantic": "handover"})
+        await _call(server, "search_spec_docs", {"semantic": "handover"})
+
+    asyncio.run(run())
+
+    assert build_calls == [True]
+    assert captured_embedders == [fake_embedder, fake_embedder]
+    assert state.services.spec_doc._embedder is None
+
+
 def test_parse_tdoc_url_rejects_non_3gpp_url(sqlite_env) -> None:
     """Non-3GPP URLs raise ``InvalidFilterError`` (clean MCP error, no job)."""
     _, server = _server()

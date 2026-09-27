@@ -12,6 +12,8 @@ the CLI's ``--format json`` envelope is a spec violation.
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -20,13 +22,19 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+from doc3gpp.models.index import IndexComponentStatus, IndexStatus
+from doc3gpp.models.jobs import Job, JobKind, JobStatus
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.search import SearchHit
+from doc3gpp.models.search import SearchHit, SearchIndexCorruptError
+from doc3gpp.models.semantic_search import (
+    EmbedderUnavailableError,
+    VectorIndexUnavailableError,
+)
 from doc3gpp.models.spec_doc import (
     SpecDocChunk,
     SpecDocHit,
-    SpecDocSemanticHit,
     SpecDocSource,
     SpecDocToc,
     SpecDocTocEntry,
@@ -35,6 +43,11 @@ from doc3gpp.models.spec_doc import (
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg
+from doc3gpp.models.unified_search import (
+    SearchMode,
+    SpecDocSearchResult,
+    TDocSearchResult,
+)
 from doc3gpp.models.wi import Wi
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
@@ -44,18 +57,20 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.services.wi_service import WiService
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.app import build_app
-from doc3gpp.models.jobs import Job, JobStatus
 from doc3gpp.web.deps import (
     get_job_repo,
     get_meeting_service,
     get_search_service,
     get_semantic_search_service,
     get_settings,
+    get_spec_doc_index_service,
+    get_spec_doc_search_facade,
     get_spec_doc_search_service,
-    get_spec_doc_semantic_service,
     get_spec_doc_service,
     get_spec_service,
     get_tdoc_file_repo,
+    get_tdoc_index_service,
+    get_tdoc_search_facade,
     get_tdoc_service,
     get_tsg_service,
     get_wi_service,
@@ -67,8 +82,8 @@ from doc3gpp.web.render import (
     tsg_rows,
     wi_rows,
 )
+from doc3gpp.web.routes import spec_docs as spec_docs_routes
 from doc3gpp.web.routes.spec_docs import _spec_doc_page_items
-
 
 # ---------------------------------------------------------------------------
 # Fake services — every method the route calls is stubbed. The route never
@@ -78,7 +93,7 @@ from doc3gpp.web.routes.spec_docs import _spec_doc_page_items
 
 
 class FakeMeetingService(MeetingService):
-    def __init__(self) -> None:  # noqa: D401 - intentional override
+    def __init__(self) -> None:
         self._now = datetime.now(timezone.utc)
         self._meetings = [
             Meeting(
@@ -133,7 +148,7 @@ class FakeMeetingService(MeetingService):
 
 
 class FakeTDocService(TDocService):
-    def __init__(self) -> None:  # noqa: D401
+    def __init__(self) -> None:
         self._rows = [
             TDocWithMeeting(
                 tdoc=TDoc(
@@ -170,7 +185,7 @@ class FakeTDocService(TDocService):
 
 
 class FakeTsgService(TsgService):
-    def __init__(self) -> None:  # noqa: D401
+    def __init__(self) -> None:
         self._tsgs = [
             Tsg(
                 tsg_name="RAN Plenary",
@@ -192,7 +207,7 @@ class FakeTsgService(TsgService):
 
 
 class FakeWiService(WiService):
-    def __init__(self) -> None:  # noqa: D401
+    def __init__(self) -> None:
         self._wis = [
             Wi(
                 wi_id="800100",
@@ -208,7 +223,7 @@ class FakeWiService(WiService):
 
 
 class FakeSearchService(SearchService):
-    def __init__(self) -> None:  # noqa: D401
+    def __init__(self) -> None:
         self.last_filters = None
         self._hits = [
             SearchHit(
@@ -233,7 +248,7 @@ class FakeSearchService(SearchService):
 
 
 class FakeSemanticSearchService(SemanticSearchService):
-    def __init__(self) -> None:  # noqa: D401
+    def __init__(self) -> None:
         self.last_kwargs: dict[str, Any] = {}
         from doc3gpp.models.semantic_search import SemanticSearchHit
         self._hits = [
@@ -264,7 +279,7 @@ class FakeSemanticSearchService(SemanticSearchService):
 
 
 class FakeSpecDocSearchService:
-    def __init__(self) -> None:  # noqa: D401 - intentional override
+    def __init__(self) -> None:
         self.last_filters = None
         self._hits = [
             SpecDocHit(
@@ -284,6 +299,151 @@ class FakeSpecDocSearchService:
     def search(self, _query: str, filters: Any) -> list[SpecDocHit]:
         self.last_filters = filters
         return list(self._hits)
+
+
+class FakeTDocSearchFacade:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def search(
+        self,
+        *,
+        text: str | None,
+        semantic: str | None,
+        filters: Any,
+        snippet_tokens: int | None = None,
+    ) -> list[TDocSearchResult]:
+        self.calls.append(
+            {
+                "text": text,
+                "semantic": semantic,
+                "filters": filters,
+                "snippet_tokens": snippet_tokens,
+            }
+        )
+        if text and semantic:
+            mode = SearchMode.HYBRID
+            score = 0.42
+            previews = None
+        elif text:
+            mode = SearchMode.FTS5
+            score = -1.234
+            previews = {"title": "<<NR>> measurement"}
+        elif semantic:
+            mode = SearchMode.SEMANTIC
+            score = 0.12
+            previews = None
+        else:
+            mode = SearchMode.FILTER
+            score = None
+            previews = None
+        return [
+            TDocSearchResult(
+                tdoc_id="R5-260001",
+                score=score,
+                search_mode=mode,
+                previews=previews,
+                title="CR on NR measurement",
+                meeting="RAN5#99-e",
+                tsg="R5",
+                uploaded_date="2026-05-02",
+                ftp_url="r5/26.001/r5-260001.zip",
+                wis=None,
+                type="CR",
+                status="Approved",
+                best_chunk_id="chunk-0" if mode is not SearchMode.FILTER else None,
+            )
+        ]
+
+
+class FakeSpecDocSearchFacade:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.result: SpecDocSearchResult | None = None
+
+    def search(
+        self,
+        *,
+        text: str | None,
+        semantic: str | None,
+        filters: Any,
+        snippet_tokens: int | None = None,
+    ) -> list[SpecDocSearchResult]:
+        self.calls.append(
+            {
+                "text": text,
+                "semantic": semantic,
+                "filters": filters,
+                "snippet_tokens": snippet_tokens,
+            }
+        )
+        if self.result is not None:
+            return [self.result]
+        if text and semantic:
+            mode = SearchMode.HYBRID
+            score = 0.42
+            previews = None
+        elif text:
+            mode = SearchMode.FTS5
+            score = -1.0
+            previews = {"text": "handover <<procedure>>"}
+        elif semantic:
+            mode = SearchMode.SEMANTIC
+            score = 0.12
+            previews = None
+        else:
+            mode = SearchMode.FILTER
+            score = None
+            previews = None
+        return [
+            SpecDocSearchResult(
+                chunk_id="38.331@18.5.0#0",
+                score=score,
+                search_mode=mode,
+                previews=previews,
+                spec_id="38.331",
+                version="18.5.0",
+                release="Rel-18",
+                sections="1 Handover",
+                tables=None,
+                chunk_index=0,
+                text="handover procedure",
+            )
+        ]
+
+
+class FakeIndexService:
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    def status(self) -> IndexStatus:
+        return IndexStatus(
+            fts5=IndexComponentStatus(available=True),
+            vector=IndexComponentStatus(available=False, error="unavailable"),
+        )
+
+
+class _RecordingJobRepo:
+    def __init__(self) -> None:
+        self.created: list[tuple[JobKind, dict[str, Any]]] = []
+
+    def create(self, kind: JobKind, params: dict[str, Any]) -> Job:
+        self.created.append((kind, dict(params)))
+        return Job(
+            id="job-7",
+            kind=kind,
+            status=JobStatus.QUEUED,
+            params=params,
+            log_lines=(),
+            result_summary=None,
+            error=None,
+            created_at=datetime.now(timezone.utc),
+            started_at=None,
+            finished_at=None,
+        )
+
+    def list(self, *, limit: int = 50, status: JobStatus | None = None) -> list[Job]:
+        return []
 
 
 class _EmptyJobRepo:
@@ -335,6 +495,12 @@ def _build_app_with_fakes(
     app.dependency_overrides[get_spec_doc_search_service] = (
         lambda: FakeSpecDocSearchService()
     )
+    app.dependency_overrides[get_tdoc_search_facade] = lambda: FakeTDocSearchFacade()
+    app.dependency_overrides[get_spec_doc_search_facade] = (
+        lambda: FakeSpecDocSearchFacade()
+    )
+    app.dependency_overrides[get_tdoc_index_service] = lambda: FakeIndexService()
+    app.dependency_overrides[get_spec_doc_index_service] = lambda: FakeIndexService()
     app.dependency_overrides[get_tdoc_file_repo] = lambda: MagicMock()
     # ``get_pending_jobs`` is routed through ``Depends(get_job_repo)`` so the
     # test suite can swap the repo via dependency_overrides. The fake-wired
@@ -908,9 +1074,9 @@ def test_tdoc_content_markdown_cache_hit(
     client: TestClient, sqlite_env: Any, tmp_path: Any,
 ) -> None:
     """``GET /tdocs/{id}/content?format=markdown`` reads the cached markdown."""
+    from doc3gpp.scraping.cache_keys import derive_cache_file
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
     url = "r5/26.001/r5-260001.zip"
@@ -1090,8 +1256,8 @@ def test_wi_list_invalid_numeric_filter_returns_400(client: TestClient) -> None:
 
 
 def test_search_query_empty_numeric_filter_returns_200(client: TestClient) -> None:
-    """``GET /tdocs/search?q=foo&limit=`` is 200, not 422."""
-    response = client.get("/tdocs/search?q=foo&limit=")
+    """``GET /tdocs/search?text=foo&limit=`` is 200, not 422."""
+    response = client.get("/tdocs/search?text=foo&limit=")
     assert response.status_code == 200
 
 
@@ -1223,29 +1389,29 @@ def test_tdoc_list_empty_text_filter_returns_all_rows(client: TestClient) -> Non
 
 def test_search_query_empty_date_filter_returns_200(client: TestClient) -> None:
     """``GET /tdocs/search?since=&until=`` is 200, not 400."""
-    response = client.get("/tdocs/search?q=foo&since=&until=")
+    response = client.get("/tdocs/search?text=foo&since=&until=")
     assert response.status_code == 200
 
 
 def test_search_query_invalid_date_filter_returns_400(client: TestClient) -> None:
     """``GET /tdocs/search?since=bogus`` is 400 with invalid_filter envelope."""
-    response = client.get("/tdocs/search?since=bogus")
+    response = client.get("/tdocs/search?text=foo&since=bogus")
     assert response.status_code == 400
     body = response.json()
     assert body["error"] == "invalid_filter"
 
 
-def test_search_sem_empty_numeric_filter_returns_200(client: TestClient) -> None:
-    """``GET /tdocs/search/sem?q=foo&limit=`` is 200, not 422."""
-    response = client.get("/tdocs/search/sem?q=foo&limit=")
+def test_search_empty_numeric_filter_returns_200(client: TestClient) -> None:
+    """``GET /tdocs/search?semantic=foo&limit=`` is 200, not 422."""
+    response = client.get("/tdocs/search?semantic=foo&limit=")
     assert response.status_code == 200
 
 
 def test_tdoc_content_html(client: TestClient, sqlite_env: Any, tmp_path: Any) -> None:
     """``GET /tdocs/{id}/content?format=html`` renders the markdown as HTML."""
+    from doc3gpp.scraping.cache_keys import derive_cache_file
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
     url = "r5/26.001/r5-260001.zip"
@@ -1279,9 +1445,9 @@ def test_tdoc_content_markdown_zip_wrapped_cache(
     import io
     import zipfile
 
+    from doc3gpp.scraping.cache_keys import derive_cache_file
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
     url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260231.zip"
@@ -1316,9 +1482,9 @@ def test_tdoc_content_html_zip_wrapped_cache(
     import io
     import zipfile
 
+    from doc3gpp.scraping.cache_keys import derive_cache_file
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.scraping.cache_keys import derive_cache_file
 
     create_schema()
     url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260231.zip"
@@ -1578,44 +1744,443 @@ def test_wi_list_uses_acronym_not_id(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_unified_tdoc_text_search_returns_flattened_array(client: TestClient) -> None:
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get(
+            "/tdocs/search", params={"text": "handover", "format": "json"}
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, list)
+    assert payload[0]["search_mode"] == "fts5"
+    assert payload[0]["previews"] == {"title": "<<NR>> measurement"}
+    assert set(payload[0]) == {
+        "tdoc_id", "score", "search_mode", "previews", "title", "meeting",
+        "tsg", "uploaded_date", "ftp_url", "wis", "type", "status",
+        "best_chunk_id",
+    }
+    assert facade.calls[0]["text"] == "handover"
+    assert facade.calls[0]["semantic"] is None
+
+
+def test_unified_tdoc_semantic_search_nulls_previews(client: TestClient) -> None:
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get(
+            "/tdocs/search", params={"semantic": "handover", "format": "json"}
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
+
+    assert response.status_code == 200
+    assert response.json()[0]["search_mode"] == "semantic"
+    assert response.json()[0]["previews"] is None
+
+
+def test_unified_tdoc_filter_search_has_null_score(client: TestClient) -> None:
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get(
+            "/tdocs/search",
+            params={"tdoc-id": "R1-%", "format": "json"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
+
+    assert response.status_code == 200
+    assert response.json()[0]["search_mode"] == "filter"
+    assert response.json()[0]["score"] is None
+    assert response.json()[0]["previews"] is None
+    assert facade.calls[0]["filters"].tdoc_id == "R1-%"
+
+
+def test_unified_spec_doc_search_modes_return_flattened_rows(
+    client: TestClient,
+) -> None:
+    facade = FakeSpecDocSearchFacade()
+    client.app.dependency_overrides[get_spec_doc_search_facade] = lambda: facade
+    try:
+        text_response = client.get(
+            "/spec-docs/search", params={"text": "handover", "format": "json"}
+        )
+        semantic_response = client.get(
+            "/spec-docs/search",
+            params={"semantic": "handover", "format": "json"},
+        )
+        filter_response = client.get(
+            "/spec-docs/search",
+            params={"spec": "38.331", "format": "json"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_search_facade, None)
+
+    assert text_response.status_code == 200
+    assert text_response.json()[0]["search_mode"] == "fts5"
+    assert text_response.json()[0]["previews"] == {"text": "handover <<procedure>>"}
+    assert semantic_response.status_code == 200
+    assert semantic_response.json()[0]["search_mode"] == "semantic"
+    assert semantic_response.json()[0]["previews"] is None
+    assert filter_response.status_code == 200
+    assert filter_response.json()[0]["search_mode"] == "filter"
+    assert filter_response.json()[0]["score"] is None
+    assert set(filter_response.json()[0]) == {
+        "chunk_id", "score", "search_mode", "previews", "spec_id", "version",
+        "release", "sections", "tables", "chunk_index", "text",
+    }
+
+
+def test_unified_tdoc_search_json_maps_corruption_with_rebuild_hint(
+    client: TestClient,
+) -> None:
+    class RaisingFacade:
+        def search(self, **_kwargs: Any) -> list[TDocSearchResult]:
+            raise SearchIndexCorruptError("broken index")
+
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: RaisingFacade()
+    try:
+        response = client.get("/tdocs/search?text=handover&format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "search_index_corrupt"
+    assert response.json()["hint"] == "run: doc3gpp tdoc index --rebuild"
+
+
+def test_unified_spec_doc_search_json_maps_corruption_with_rebuild_hint(
+    client: TestClient,
+) -> None:
+    class RaisingFacade:
+        def search(self, **_kwargs: Any) -> list[SpecDocSearchResult]:
+            raise SearchIndexCorruptError("broken index")
+
+    client.app.dependency_overrides[get_spec_doc_search_facade] = lambda: RaisingFacade()
+    try:
+        response = client.get("/spec-docs/search?text=handover&format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_search_facade, None)
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "search_index_corrupt"
+    assert response.json()["hint"] == "run: doc3gpp spec doc index --rebuild"
+
+
+@pytest.mark.parametrize(
+    ("path", "dependency", "error"),
+    [
+        (
+            "/tdocs/search?semantic=handover&format=json",
+            get_tdoc_search_facade,
+            EmbedderUnavailableError("embedder down"),
+        ),
+        (
+            "/spec-docs/search?semantic=handover&format=json",
+            get_spec_doc_search_facade,
+            VectorIndexUnavailableError("vector down"),
+        ),
+    ],
+)
+def test_unified_search_json_maps_semantic_infrastructure_as_unavailable(
+    client: TestClient,
+    path: str,
+    dependency,
+    error: Exception,
+) -> None:
+    class RaisingFacade:
+        def search(self, **_kwargs: Any) -> list[Any]:
+            raise error
+
+    client.app.dependency_overrides[dependency] = lambda: RaisingFacade()
+    try:
+        response = client.get(path)
+    finally:
+        client.app.dependency_overrides.pop(dependency, None)
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "settings_disabled"
+
+
+def test_spec_doc_search_html_preserves_updated_corruption_hint(
+    client: TestClient,
+) -> None:
+    class RaisingFacade:
+        def search(self, **_kwargs: Any) -> list[SpecDocSearchResult]:
+            raise SearchIndexCorruptError("broken index")
+
+    client.app.dependency_overrides[get_spec_doc_search_facade] = lambda: RaisingFacade()
+    try:
+        response = client.get("/spec-docs/search?text=handover")
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_search_facade, None)
+
+    assert response.status_code == 200
+    assert "search index corrupt" in response.text
+    assert "doc3gpp spec doc index --rebuild" in response.text
+
+
+def test_unified_search_routes_remove_legacy_paths_and_parameters(
+    client: TestClient,
+) -> None:
+    from doc3gpp.web.routes.search import search_query
+    from doc3gpp.web.routes.spec_docs import spec_doc_search_query
+
+    assert client.get("/tdocs/search/sem").status_code == 404
+    assert client.get("/spec-docs/search/sem").status_code == 404
+    assert "q" not in inspect.signature(search_query).parameters
+    assert "sem" not in inspect.signature(search_query).parameters
+    assert "fts5_query" not in inspect.signature(search_query).parameters
+    assert "fts5_weight" not in inspect.signature(search_query).parameters
+    assert "q" not in inspect.signature(spec_doc_search_query).parameters
+    assert "fts5_query" not in inspect.signature(spec_doc_search_query).parameters
+    assert "fts5_weight" not in inspect.signature(spec_doc_search_query).parameters
+
+
+def test_unified_search_htmx_returns_only_results_fragment(
+    client: TestClient,
+) -> None:
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get(
+            "/tdocs/search",
+            params={"text": "handover"},
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
+
+    assert response.status_code == 200
+    assert "<!DOCTYPE" not in response.text
+    assert "<html" not in response.text
+    assert '<div id="results"' in response.text
+
+
+def test_unified_search_htmx_preserves_hybrid_mode(
+    client: TestClient,
+) -> None:
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get(
+            "/tdocs/search",
+            params={"text": "handover", "semantic": "procedure"},
+            headers={"HX-Request": "true"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
+
+    assert response.status_code == 200
+    assert '<div id="results"' in response.text
+    assert facade.calls[0]["text"] == "handover"
+    assert facade.calls[0]["semantic"] == "procedure"
+
+
+def test_spec_doc_search_htmx_context_carries_pending_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    facade = FakeSpecDocSearchFacade()
+
+    def capture_template_response(*, request: Request, name: str, context: dict[str, Any]):
+        captured["request"] = request
+        captured["name"] = name
+        captured["context"] = context
+        return context
+
+    monkeypatch.setattr(
+        spec_docs_routes.templates,
+        "TemplateResponse",
+        capture_template_response,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/spec-docs/search",
+            "query_string": b"text=handover",
+            "headers": [(b"hx-request", b"true")],
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+            "http_version": "1.1",
+        }
+    )
+
+    asyncio.run(
+        spec_docs_routes.spec_doc_search_query(
+            request=request,
+            text="handover",
+            semantic=None,
+            spec=None,
+            release=None,
+            version=None,
+            sections=None,
+            tables=None,
+            limit="20",
+            offset="0",
+            format=None,
+            facade=facade,
+            pending_jobs=7,
+        )
+    )
+
+    assert captured["name"] == "partials/spec_doc_search_results.html"
+    assert captured["context"]["pending_jobs"] == 7
+
+
+def test_index_status_routes_return_coordinator_payload(client: TestClient) -> None:
+    service = FakeIndexService()
+    client.app.dependency_overrides[get_tdoc_index_service] = lambda: service
+    client.app.dependency_overrides[get_spec_doc_index_service] = lambda: service
+    try:
+        tdoc_response = client.get("/tdocs/index?format=json")
+        spec_response = client.get("/spec-docs/index?format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_index_service, None)
+        client.app.dependency_overrides.pop(get_spec_doc_index_service, None)
+
+    expected = service.status().to_dict()
+    assert tdoc_response.status_code == 200
+    assert tdoc_response.json() == expected
+    assert spec_response.status_code == 200
+    assert spec_response.json() == expected
+
+
+def test_index_job_routes_enqueue_actions_and_reject_contradictions(
+    client: TestClient,
+) -> None:
+    repo = _RecordingJobRepo()
+    client.app.dependency_overrides[get_job_repo] = lambda: repo
+    try:
+        tdoc_response = client.post(
+            "/jobs/tdocs/index",
+            json={
+                "rebuild": True,
+                "rebuild_embeddings": False,
+                "rebuild_all": False,
+                "batch": 25,
+                "resume": True,
+                "stale_only": True,
+            },
+        )
+        spec_response = client.post(
+            "/jobs/spec-docs/index",
+            json={"rebuild_all": True, "batch": 10},
+        )
+        contradictory = client.post(
+            "/jobs/tdocs/index",
+            json={"rebuild": True, "rebuild_all": True},
+        )
+        invalid_batch = client.post(
+            "/jobs/spec-docs/index", json={"rebuild": True, "batch": 0}
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_job_repo, None)
+
+    assert tdoc_response.status_code == 202
+    assert spec_response.status_code == 202
+    assert repo.created == [
+        (
+            JobKind.INDEX_TDOCS,
+            {
+                "rebuild": True,
+                "rebuild_embeddings": False,
+                "rebuild_all": False,
+                "batch": 25,
+                "resume": True,
+                "stale_only": True,
+            },
+        ),
+        (
+            JobKind.INDEX_SPEC_DOCS,
+            {
+                "rebuild": False,
+                "rebuild_embeddings": False,
+                "rebuild_all": True,
+                "batch": 10,
+                "resume": False,
+                "stale_only": False,
+            },
+        ),
+    ]
+    assert contradictory.status_code == 400
+    assert invalid_batch.status_code == 400
+
+
+def test_old_search_rebuild_job_route_is_not_registered(client: TestClient) -> None:
+    response = client.post("/jobs/tdocs/search/rebuild", json={})
+    assert response.status_code == 404
+
+
 def test_search_query_renders_html(client: TestClient) -> None:
-    """``GET /tdocs/search?q=foo`` returns 200 with the search template."""
-    response = client.get("/tdocs/search?q=foo")
+    """The unified TDoc route renders a result row and the current form."""
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get("/tdocs/search?text=foo")
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
     assert "R5-260001" in response.text
+    assert 'name="text"' in response.text
+    assert 'name="semantic"' in response.text
+
 
 
 def test_tdoc_search_resource_tabs(client: TestClient) -> None:
-    body = client.get("/tdocs/search?q=foo").text
+    body = client.get("/tdocs/search?text=foo").text
     assert ">TDoc Search<" in body
     assert 'href="/spec-docs/search"' in body
 
 
 def test_spec_doc_search_resource_tabs(client: TestClient) -> None:
-    body = client.get("/spec-docs/search?q=handover").text
+    body = client.get("/spec-docs/search?text=handover").text
     assert ">Spec Docs Search<" in body
     assert 'href="/tdocs/search"' in body
 
 
 def test_spec_doc_search_hit_links_to_document_page(client: TestClient) -> None:
-    body = client.get("/spec-docs/search?q=handover").text
+    facade = FakeSpecDocSearchFacade()
+    client.app.dependency_overrides[get_spec_doc_search_facade] = lambda: facade
+    try:
+        body = client.get("/spec-docs/search?text=handover").text
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_search_facade, None)
     assert "/specs/38.331/docs?version=18.5.0#chunk-0" in body
 
 
+
 def test_search_results_single_details_per_hit(client: TestClient) -> None:
-    """One details.hit-details block per hit (single folding), not per column."""
-    response = client.get("/tdocs/search?q=foo")
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get("/tdocs/search?text=foo")
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
     body = response.text
     assert body.count('<details class="hit-details">') == 1
     assert '<span class="preview-label">title</span>' in body
 
 
+
 def test_search_results_has_master_toggle(client: TestClient) -> None:
-    """The results fragment carries the fold/unfold-all toggle."""
-    response = client.get("/tdocs/search?q=foo", headers={"HX-Request": "true"})
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get("/tdocs/search?text=foo", headers={"HX-Request": "true"})
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
     assert 'id="fold-toggle"' in response.text
+
 
 
 def test_search_results_toggle_absent_without_hits(client: TestClient) -> None:
@@ -1627,7 +2192,7 @@ def test_search_results_toggle_absent_without_hits(client: TestClient) -> None:
 
 def test_search_full_page_loads_search_js(client: TestClient) -> None:
     """The full search page includes the fold-toggle script."""
-    html = client.get("/tdocs/search?q=foo").text
+    html = client.get("/tdocs/search?text=foo").text
     assert 'src="/static/js/search.js"' in html
 
 
@@ -1638,7 +2203,7 @@ def test_search_query_htmx_returns_partial(client: TestClient) -> None:
     so the response must be the ``partials/search_results.html`` fragment
     — a single ``<div id=\"results\">`` block — not a full HTML document.
     """
-    response = client.get("/tdocs/search?q=foo", headers={"HX-Request": "true"})
+    response = client.get("/tdocs/search?text=foo", headers={"HX-Request": "true"})
     assert response.status_code == 200
     body = response.text
     assert "<!DOCTYPE" not in body
@@ -1647,8 +2212,10 @@ def test_search_query_htmx_returns_partial(client: TestClient) -> None:
 
 
 def test_search_sem_htmx_returns_partial(client: TestClient) -> None:
-    """``GET /tdocs/search/sem`` with ``HX-Request: true`` returns the results partial."""
-    response = client.get("/tdocs/search/sem?q=foo", headers={"HX-Request": "true"})
+    """Semantic input on the unified route still returns the results partial."""
+    response = client.get(
+        "/tdocs/search?semantic=foo", headers={"HX-Request": "true"}
+    )
     assert response.status_code == 200
     body = response.text
     assert "<!DOCTYPE" not in body
@@ -1657,274 +2224,131 @@ def test_search_sem_htmx_returns_partial(client: TestClient) -> None:
 
 
 def test_search_query_json(client: TestClient) -> None:
-    """``GET /tdocs/search?q=foo&format=json`` returns the CLI-shaped hit array.
-
-    Ruling B: the payload must be a bare array of hit objects matching
-    ``doc3gpp tdoc search query --format json`` (tdoc_id / score / previews
-    / title / meeting / tsg / uploaded_date / ftp_url / wis).
-    """
-    response = client.get("/tdocs/search?q=foo&format=json")
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get("/tdocs/search?text=foo&format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
     assert body[0]["tdoc_id"] == "R5-260001"
     assert body[0]["previews"] == {"title": "<<NR>> measurement"}
-    assert set(body[0]) == {
-        "tdoc_id", "score", "previews", "title", "meeting", "tsg",
-        "uploaded_date", "ftp_url", "wis",
-    }
+    assert body[0]["search_mode"] == "fts5"
+    assert body[0]["type"] == "CR"
+    assert body[0]["status"] == "Approved"
+
 
 
 def test_search_query_bad_date_filter_400(client: TestClient) -> None:
     """``GET /tdocs/search?since=<bad>`` returns 400 with the invalid_filter envelope."""
-    response = client.get("/tdocs/search?q=foo&since=not-a-date")
+    response = client.get("/tdocs/search?text=foo&since=not-a-date")
     assert response.status_code == 400
     body = response.json()
     assert body["error"] == "invalid_filter"
 
 
 def test_search_sem_renders_html(client: TestClient) -> None:
-    """``GET /tdocs/search/sem?q=foo`` returns 200 with the search template."""
-    response = client.get("/tdocs/search/sem?q=foo")
+    """The unified route renders semantic results on the normal page."""
+    response = client.get("/tdocs/search?semantic=foo")
     assert response.status_code == 200
 
 
 def test_search_sem_table_renders_nested_metadata(client: TestClient) -> None:
-    """The sem results table shows title / meeting / tsg from the nested hit.
-
-    Regression: the shared results table accessed ``hit.title`` directly,
-    but semantic hits carry their metadata in the nested ``hit.hit``
-    bag — Title / Meeting / TSG rendered as ``-`` while RRF and the
-    ranks (top-level fields) worked. The template must unwrap the
-    nested bag in ``sem`` mode.
-    """
-    html = client.get("/tdocs/search/sem?q=foo").text
+    """Semantic result rows render flattened metadata and one score."""
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        html = client.get("/tdocs/search?semantic=foo").text
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert "CR on NR measurement" in html
     assert "RAN5#99-e" in html
     assert ">R5<" in html
-    assert "0.5000" in html  # rrf_score
-    assert ">0<" in html  # rank_fts5
-    assert ">1<" in html  # rank_vec
+    assert "semantic" in html
+    assert "0.1200" in html
 
 
 def test_search_sem_json(client: TestClient) -> None:
-    """``GET /tdocs/search/sem?q=foo&format=json`` returns the CLI-shaped hit array.
-
-    Ruling B: semantic hits mirror ``doc3gpp tdoc search sem --format json``
-    — RRF fields at the top level and the metadata bag nested under
-    ``hit``.
-    """
-    response = client.get("/tdocs/search/sem?q=foo&format=json")
+    """Semantic JSON is a bare flattened array with null previews."""
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
+    try:
+        response = client.get("/tdocs/search?semantic=foo&format=json")
+    finally:
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
     assert body[0]["tdoc_id"] == "R5-260001"
-    assert body[0]["rrf_score"] == 0.5
-    assert set(body[0]) == {
-        "tdoc_id", "rrf_score", "rank_fts5", "rank_vec",
-        "min_chunk_distance", "best_chunk_id", "hit",
-    }
-    assert set(body[0]["hit"]) == {"tdoc_id", "title", "ftp_url", "wis"}
+    assert body[0]["score"] == 0.12
+    assert body[0]["search_mode"] == "semantic"
+    assert body[0]["previews"] is None
+    assert "hit" not in body[0]
 
 
 def test_search_query_tdoc_id_filter_forwarded(client: TestClient) -> None:
-    """``GET /tdocs/search?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
-    from doc3gpp.web.deps import get_search_service
-
-    service = FakeSearchService()
-    client.app.dependency_overrides[get_search_service] = lambda: service
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
     try:
-        response = client.get("/tdocs/search?q=foo&tdoc-id=R5-260001")
+        response = client.get("/tdocs/search?tdoc-id=R5-260001")
     finally:
-        client.app.dependency_overrides.pop(get_search_service, None)
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
-    assert service.last_filters is not None
-    assert service.last_filters.tdoc_id == "R5-260001"
+    assert facade.calls[0]["filters"].tdoc_id == "R5-260001"
+
 
 
 def test_search_query_empty_tdoc_id_is_no_filter(client: TestClient) -> None:
-    """``GET /tdocs/search?q=foo&tdoc-id=`` is 200 and tdoc_id stays None."""
-    from doc3gpp.web.deps import get_search_service
-
-    service = FakeSearchService()
-    client.app.dependency_overrides[get_search_service] = lambda: service
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
     try:
-        response = client.get("/tdocs/search?q=foo&tdoc-id=")
+        response = client.get("/tdocs/search?tdoc-id=")
     finally:
-        client.app.dependency_overrides.pop(get_search_service, None)
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
-    assert service.last_filters is not None
-    assert service.last_filters.tdoc_id is None
+    assert facade.calls[0]["filters"].tdoc_id is None
+
 
 
 def test_search_query_sem_param_forwarded(client: TestClient) -> None:
-    """``GET /tdocs/search?sem=<text>`` forwards sem_query into the service."""
-    from doc3gpp.web.deps import get_search_service
-
-    service = FakeSearchService()
-    client.app.dependency_overrides[get_search_service] = lambda: service
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
     try:
-        response = client.get("/tdocs/search?q=foo&sem=hybrid+rerank")
+        response = client.get("/tdocs/search?semantic=hybrid+rerank")
     finally:
-        client.app.dependency_overrides.pop(get_search_service, None)
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
-    assert service.last_sem_query == "hybrid rerank"
+    assert facade.calls[0]["semantic"] == "hybrid rerank"
+
 
 
 def test_search_query_sem_empty_is_none(client: TestClient) -> None:
-    """``GET /tdocs/search?sem=`` leaves sem_query None (no rerank)."""
-    from doc3gpp.web.deps import get_search_service
-
-    service = FakeSearchService()
-    client.app.dependency_overrides[get_search_service] = lambda: service
+    facade = FakeTDocSearchFacade()
+    client.app.dependency_overrides[get_tdoc_search_facade] = lambda: facade
     try:
-        response = client.get("/tdocs/search?q=foo&sem=")
+        response = client.get("/tdocs/search?semantic=")
     finally:
-        client.app.dependency_overrides.pop(get_search_service, None)
+        client.app.dependency_overrides.pop(get_tdoc_search_facade, None)
     assert response.status_code == 200
-    assert service.last_sem_query is None
+    assert facade.calls[0]["semantic"] == ""
 
-
-def test_search_sem_tdoc_id_filter_forwarded(client: TestClient) -> None:
-    """``GET /tdocs/search/sem?tdoc-id=<id>`` forwards tdoc_id into SearchFilters."""
-    from doc3gpp.web.deps import get_semantic_search_service
-
-    service = FakeSemanticSearchService()
-    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
-    try:
-        response = client.get("/tdocs/search/sem?q=foo&tdoc-id=R5-260001")
-    finally:
-        client.app.dependency_overrides.pop(get_semantic_search_service, None)
-    assert response.status_code == 200
-    filters = service.last_kwargs.get("filters")
-    assert filters is not None
-    assert filters.tdoc_id == "R5-260001"
-
-
-def test_search_sem_blank_fts5_query_is_none(client: TestClient) -> None:
-    """``GET /tdocs/search/sem?q=foo&fts5_query=`` passes fts5_query=None.
-
-    Regression: the sem form always submits an ``fts5_query`` field, so
-    a blank value arrived as ``""``. The service treats any non-``None``
-    value as an opt-in FTS5 path, so an empty string ran FTS5 with an
-    empty query and returned zero hits. The route must normalise blank
-    to ``None`` so the default is pure-vector, matching the CLI.
-    """
-    from doc3gpp.web.deps import get_semantic_search_service
-
-    service = FakeSemanticSearchService()
-    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
-    try:
-        response = client.get("/tdocs/search/sem?q=foo&fts5_query=")
-    finally:
-        client.app.dependency_overrides.pop(get_semantic_search_service, None)
-    assert response.status_code == 200
-    assert service.last_kwargs.get("fts5_query") is None
-
-
-def test_search_sem_whitespace_fts5_query_is_none(client: TestClient) -> None:
-    """``GET /tdocs/search/sem?q=foo&fts5_query=%20%20`` passes fts5_query=None."""
-    from doc3gpp.web.deps import get_semantic_search_service
-
-    service = FakeSemanticSearchService()
-    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
-    try:
-        response = client.get("/tdocs/search/sem?q=foo&fts5_query=%20%20")
-    finally:
-        client.app.dependency_overrides.pop(get_semantic_search_service, None)
-    assert response.status_code == 200
-    assert service.last_kwargs.get("fts5_query") is None
-
-
-def test_search_sem_full_filters_forwarded(client: TestClient) -> None:
-    """``GET /tdocs/search/sem`` forwards tsg/meeting/release/spec/since/until."""
-    from doc3gpp.web.deps import get_semantic_search_service
-
-    service = FakeSemanticSearchService()
-    client.app.dependency_overrides[get_semantic_search_service] = lambda: service
-    try:
-        response = client.get(
-            "/tdocs/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e"
-            "&release=18&spec=38.300"
-            "&since=%3E%3D%20%272026-01-01%27"
-            "&until=%3C%3D%20%272026-06-01%27"
-        )
-    finally:
-        client.app.dependency_overrides.pop(get_semantic_search_service, None)
-    assert response.status_code == 200
-    filters = service.last_kwargs.get("filters")
-    assert filters is not None
-    assert filters.tsg == "R5"
-    assert filters.meeting == "RAN5#99-e"
-    assert filters.release == "18"
-    assert filters.spec == "38.300"
-    assert filters.since == ">= '2026-01-01'"
-    assert filters.until == "<= '2026-06-01'"
-
-
-def test_search_sem_bad_date_filter_400(client: TestClient) -> None:
-    """``GET /tdocs/search/sem?since=<bad>`` returns 400 invalid_filter."""
-    response = client.get("/tdocs/search/sem?q=foo&since=not-a-date")
-    assert response.status_code == 400
-    assert response.json()["error"] == "invalid_filter"
 
 
 def test_search_form_renders_tdoc_input_fts5(client: TestClient) -> None:
     """The FTS5 search form carries a tdoc-id input with the round-tripped value."""
-    html = client.get("/tdocs/search?q=foo&tdoc-id=R5-260001").text
+    html = client.get("/tdocs/search?text=foo&tdoc-id=R5-260001").text
     assert 'name="tdoc-id"' in html
     assert 'value="R5-260001"' in html
 
 
-def test_search_form_renders_tdoc_input_sem(client: TestClient) -> None:
-    """The semantic search form carries a tdoc-id input with the round-tripped value."""
-    html = client.get("/tdocs/search/sem?q=foo&tdoc-id=R5-260001").text
-    assert 'name="tdoc-id"' in html
-    assert 'value="R5-260001"' in html
-
-
-def test_search_form_fts5_has_semantic_input(client: TestClient) -> None:
-    """The FTS5 form carries a Semantic input with the round-tripped value."""
-    html = client.get("/tdocs/search?q=foo&sem=rerank+me").text
-    assert 'name="sem"' in html
+def test_search_form_has_semantic_input(client: TestClient) -> None:
+    """The unified form carries the semantic input under its new name."""
+    html = client.get("/tdocs/search?text=foo&semantic=rerank+me").text
+    assert 'name="semantic"' in html
     assert 'value="rerank me"' in html
 
-
-def test_search_form_sem_has_full_filters(client: TestClient) -> None:
-    """The semantic form carries TSG/Meeting/Release/Spec/Since/Until inputs."""
-    html = client.get(
-        "/tdocs/search/sem?q=foo&tsg=R5&meeting=RAN5%2399-e&release=18"
-        "&spec=38.300"
-        "&since=%3E%3D%20%272026-01-01%27"
-        "&until=%3C%3D%20%272026-06-01%27"
-    ).text
-    for name in ("tsg", "meeting", "release", "spec", "since", "until"):
-        assert f'name="{name}"' in html
-    assert 'value="R5"' in html
-    assert 'value="RAN5#99-e"' in html
-    assert "2026-01-01" in html
-    assert "2026-06-01" in html
-
-
-def test_search_form_sem_keeps_fts5_weight_and_limit(client: TestClient) -> None:
-    """The semantic form keeps the FTS5 weight + Limit controls."""
-    html = client.get("/tdocs/search/sem?q=foo").text
-    assert 'name="fts5_weight"' in html
-    assert 'name="limit"' in html
-
-
-def test_search_page_links_to_hybrid(client: TestClient) -> None:
-    """The FTS5 search page links to /tdocs/search/sem at top right."""
-    html = client.get("/tdocs/search?q=foo").text
-    assert 'href="/tdocs/search/sem"' in html
-    assert "Hybrid search" in html
-
-
-def test_search_sem_page_links_to_fts5(client: TestClient) -> None:
-    """The semantic search page links to /tdocs/search at top right."""
-    html = client.get("/tdocs/search/sem?q=foo").text
-    assert 'href="/tdocs/search"' in html
-    assert "FTS5 search" in html
 
 
 def test_search_legacy_paths_are_absent(client: TestClient) -> None:
@@ -2135,13 +2559,13 @@ def test_meeting_show_sync_form_mounts_job_poller(
     selector hooks the poller binds to, and there must be a target
     div the poller injects the polling span into.
     """
+    from doc3gpp.models.meeting import Meeting
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.models import TsgORM
     from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.repositories.meeting_sql import (
         SQLAlchemyMeetingRepository,
     )
-    from doc3gpp.models.meeting import Meeting
 
     create_schema()
     factory = get_session_factory()
@@ -2190,13 +2614,13 @@ def test_meeting_show_sync_queued_hint_still_renders(
     state. The template keeps the hint markup; the JS owns the
     show/hide transitions.
     """
+    from doc3gpp.models.meeting import Meeting
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.models import TsgORM
     from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.repositories.meeting_sql import (
         SQLAlchemyMeetingRepository,
     )
-    from doc3gpp.models.meeting import Meeting
 
     create_schema()
     factory = get_session_factory()
@@ -3175,32 +3599,26 @@ def test_spec_doc_show_middle_page_htmx_matches_full_page_pagination(
 
 
 def test_spec_doc_search_accepts_sections_and_tables(client: TestClient) -> None:
-    service = FakeSpecDocSearchService()
-    client.app.dependency_overrides[get_spec_doc_search_service] = lambda: service
-    response = client.get(
-        "/spec-docs/search?format=json&q=handover&sections=%255.1%25&tables=%25UE%25"
-    )
-    client.app.dependency_overrides.pop(get_spec_doc_search_service, None)
+    facade = FakeSpecDocSearchFacade()
+    client.app.dependency_overrides[get_spec_doc_search_facade] = lambda: facade
+    try:
+        response = client.get(
+            "/spec-docs/search?format=json&text=handover&sections=%255.1%25&tables=%25UE%25"
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_spec_doc_search_facade, None)
 
     assert response.status_code == 200
     payload = response.json()
     assert set(payload[0]) == {
-        "chunk_id",
-        "spec_id",
-        "version",
-        "release",
-        "sections",
-        "tables",
-        "chunk_index",
-        "text",
-        "score",
-        "previews",
+        "chunk_id", "score", "search_mode", "previews", "spec_id", "version",
+        "release", "sections", "tables", "chunk_index", "text",
     }
     assert payload[0]["sections"] == "1 Handover"
     assert payload[0]["tables"] is None
+    assert facade.calls[0]["filters"].sections == "%5.1%"
+    assert facade.calls[0]["filters"].tables == "%UE%"
 
-    assert service.last_filters.sections == "%5.1%"
-    assert service.last_filters.tables == "%UE%"
 
 
 def test_spec_doc_search_query_spans_full_row(client: TestClient) -> None:
@@ -3212,47 +3630,28 @@ def test_spec_doc_search_query_spans_full_row(client: TestClient) -> None:
     assert 'name="tables"' in response.text
 
 
-def test_spec_doc_semantic_query_and_fts5_query_are_full_width(
-    client: TestClient,
-) -> None:
-    client.app.dependency_overrides[get_spec_doc_semantic_service] = lambda: object()
-    try:
-        response = client.get("/spec-docs/search/sem")
-    finally:
-        client.app.dependency_overrides.pop(get_spec_doc_semantic_service, None)
-
-    assert response.status_code == 200
-    assert 'label class="span-5" style="grid-column: span 5">Query' in response.text
-    assert (
-        'label class="span-5" style="grid-column: span 5">FTS5 query'
-        in response.text
-    )
-    assert 'class="span-3">Query' not in response.text
-
-
 def test_spec_doc_search_results_render_combined_multiline_metadata(
     client: TestClient,
 ) -> None:
-    service = FakeSpecDocSearchService()
-    service._hits = [
-        SpecDocHit(
-            chunk_id="38.331@18.5.0#0",
-            spec_id="38.331",
-            version="18.5.0",
-            release="Rel-18",
-            sections="5 Scope\n6 Details",
-            tables="Table 1 Values\nTable 2 Timers",
-            chunk_index=0,
-            text="handover",
-            score=-1.0,
-            previews={},
-        ),
-    ]
-    client.app.dependency_overrides[get_spec_doc_search_service] = lambda: service
+    facade = FakeSpecDocSearchFacade()
+    facade.result = SpecDocSearchResult(
+        chunk_id="38.331@18.5.0#0",
+        spec_id="38.331",
+        version="18.5.0",
+        release="Rel-18",
+        sections="5 Scope\n6 Details",
+        tables="Table 1 Values\nTable 2 Timers",
+        chunk_index=0,
+        text="handover",
+        score=-1.0,
+        search_mode=SearchMode.FTS5,
+        previews={"text": "handover"},
+    )
+    client.app.dependency_overrides[get_spec_doc_search_facade] = lambda: facade
     try:
-        response = client.get("/spec-docs/search?q=handover")
+        response = client.get("/spec-docs/search?text=handover")
     finally:
-        client.app.dependency_overrides.pop(get_spec_doc_search_service, None)
+        client.app.dependency_overrides.pop(get_spec_doc_search_facade, None)
 
     assert response.status_code == 200
     assert "<th>Sections</th>" in response.text
@@ -3261,32 +3660,6 @@ def test_spec_doc_search_results_render_combined_multiline_metadata(
     assert "Table 1 Values\nTable 2 Timers" in response.text
     assert "/specs/38.331/docs?version=18.5.0#chunk-0" in response.text
 
-
-def test_spec_doc_semantic_vector_only_result_is_safe(client: TestClient) -> None:
-    class _VectorOnlyService:
-        def search(self, *_args: Any, **_kwargs: Any) -> list[SpecDocSemanticHit]:
-            return [
-                SpecDocSemanticHit(
-                    chunk_id="38.331@18.5.0#0",
-                    rrf_score=0.01,
-                    hit=None,
-                    rank_fts5=None,
-                    rank_vec=0,
-                    min_chunk_distance=0.1,
-                )
-            ]
-
-    client.app.dependency_overrides[get_spec_doc_semantic_service] = (
-        lambda: _VectorOnlyService()
-    )
-    try:
-        response = client.get("/spec-docs/search/sem?q=handover")
-    finally:
-        client.app.dependency_overrides.pop(get_spec_doc_semantic_service, None)
-
-    assert response.status_code == 200
-    assert "38.331@18.5.0#0" in response.text
-    assert "<td>-</td>" in response.text
 
 
 def test_spec_doc_show_zero_chunk_source_has_incomplete_message(
@@ -4020,6 +4393,8 @@ def test_show_tdoc_cover_card_includes_summary_of_change(
     """The Cover card on ``tdoc_show.html`` renders
     ``Summary of change`` between Reason for change and Consequences
     if not approved (matches the source CR row order)."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_sql import (
         SQLAlchemyTDocCrRepository,
@@ -4027,8 +4402,6 @@ def test_show_tdoc_cover_card_includes_summary_of_change(
     from doc3gpp.storage.repositories.tdoc_sql import (
         SQLAlchemyTDocRepository,
     )
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
     url = "r5/26.001/r5s260001.zip"
@@ -4062,6 +4435,8 @@ def test_show_tdoc_json_includes_cover_summary_of_change(
 ) -> None:
     """``GET /tdocs/{id}?format=json`` surfaces
     ``cover.summary_of_change`` in the JSON envelope."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_sql import (
         SQLAlchemyTDocCrRepository,
@@ -4069,8 +4444,6 @@ def test_show_tdoc_json_includes_cover_summary_of_change(
     from doc3gpp.storage.repositories.tdoc_sql import (
         SQLAlchemyTDocRepository,
     )
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
     url = "r5/26.001/r5s260001.zip"
@@ -4169,9 +4542,9 @@ def test_show_tdoc_by_url_full_url_matches_bare_path(
     client: TestClient, sqlite_env: Any,
 ) -> None:
     """A full https URL and a bare relative path resolve the same row."""
+    from doc3gpp.models.tdoc import TDoc
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
 
     create_schema()
     bare = "r5/26.001/r5s260001.zip"
@@ -4193,6 +4566,10 @@ def test_show_tdoc_by_url_json_byte_matches_cli(
     Builds a ``TDocShowRecordByUrl`` via the same classmethod the CLI
     uses and asserts the JSON envelope matches bit-for-bit.
     """
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.models.tdoc_show import TDocShowRepos
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
         SQLAlchemyTDocCrChangeDetailsRepository,
@@ -4205,10 +4582,6 @@ def test_show_tdoc_by_url_json_byte_matches_cli(
         SQLAlchemyTDocFileRepository,
     )
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
-    from doc3gpp.models.tdoc_file import TDocFile
-    from doc3gpp.models.tdoc_show import TDocShowRepos
     from doc3gpp.web.render import to_jsonable
 
     create_schema()
@@ -4252,11 +4625,11 @@ def test_show_tdoc_by_url_no_parent_tdoc_renders_placeholder(
     this mirrors a real DB where a parent row can be stored under a
     different (revision / re-upload) URL.
     """
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
     url = "r5/26.001/r5s260002.zip"
@@ -4279,11 +4652,11 @@ def test_show_tdoc_by_url_parse_card_omitted_in_url_mode(
     The parent ``tdocs`` row exists but its ``ftp_url`` does not match
     the queried URL, so the URL-anchored record has no parent TDoc.
     """
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
     url = "r5/26.001/r5s260003.zip"
@@ -4311,11 +4684,11 @@ def test_show_tdoc_by_url_lone_extracted_at_renders(
     """
     from datetime import datetime, timezone
 
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocExtractMeta
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocExtractMeta
 
     create_schema()
     url = "r5/26.001/r5s260004.zip"

@@ -3,14 +3,11 @@
     <p class="error">{{ error }}</p>
   {% endif %}
 
-  {% if query %}
+  {% if text or semantic or filters.tsg or filters.meeting or filters.release or filters.spec or filters.since or filters.until or filters.tdoc_id %}
     <p class="meta">
-      Query <code>{{ query }}</code> ·
-      {% if mode == 'sem' %}
-        semantic rerank
-      {% else %}
-        {{ total }} FTS5 hit{{ '' if total == 1 else 's' }}
-      {% endif %}
+       {% if text %}Text <code>{{ text }}</code>{% endif %}
+       {% if semantic %}Semantic <code>{{ semantic }}</code>{% endif %}
+       · {{ search_mode }} · {{ total }} result{{ '' if total == 1 else 's' }}
     </p>
 
     {% if hits %}

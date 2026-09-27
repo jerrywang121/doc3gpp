@@ -53,7 +53,8 @@ def test_sync_page_returns_200_and_contains_all_panels(client: Any) -> None:
         "Spec sync",
         "Parse TDocs (filter-driven)",
         "Parse from URL",
-        "Rebuild search index",
+        "TDoc index maintenance",
+        "Spec-document index maintenance",
         "Purge cache",
         "Recent sync jobs",
     ):
@@ -71,11 +72,16 @@ def test_sync_page_renders_all_ten_forms(client: Any) -> None:
         "sync-specs-id-form",
         "parse-tdocs-form",
         "parse-tdoc-url-form",
-        "rebuild-search-form",
+        "tdoc-index-form",
+        "spec-doc-index-form",
         "purge-cache-form",
         "testcase-form",
     ):
         assert f'id="{form_id}"' in text, f"missing form id: {form_id}"
+
+    assert 'action="/jobs/tdocs/search/rebuild"' not in text
+    assert 'id="rebuild-search-form"' not in text
+    assert "/sem" not in text
 
 
 def test_sync_fragment_returns_partial_only(client: Any) -> None:

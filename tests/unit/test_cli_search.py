@@ -1,603 +1,739 @@
-"""CLI flag-parsing tests for the ``search`` sub-app."""
+"""Typer tests for the unified TDoc and spec-document search CLI."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from sqlalchemy import event, text
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
+from doc3gpp.models.index import (
+    IndexComponentStatus,
+    IndexRebuildResult,
+    IndexStatus,
+)
+from doc3gpp.models.search import (
+    SearchError,
+    SearchFilters,
+    SearchIndexCorruptError,
+    SearchIndexStatus,
+    SearchQueryError,
+)
+from doc3gpp.models.semantic_search import (
+    EmbedderUnavailableError,
+    SemanticSearchUnavailableError,
+    VectorIndexUnavailableError,
+)
+from doc3gpp.models.unified_search import (
+    SearchMode,
+    SpecDocSearchResult,
+    TDocSearchResult,
+)
+
+runner = CliRunner()
+
+TDOC_KEYS = [
+    "tdoc_id",
+    "score",
+    "search_mode",
+    "previews",
+    "title",
+    "meeting",
+    "tsg",
+    "uploaded_date",
+    "ftp_url",
+    "wis",
+    "type",
+    "status",
+    "best_chunk_id",
+]
+
+SPEC_DOC_KEYS = [
+    "chunk_id",
+    "score",
+    "search_mode",
+    "previews",
+    "spec_id",
+    "version",
+    "release",
+    "sections",
+    "tables",
+    "chunk_index",
+    "text",
+]
+
+
+def _settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        log_level="INFO",
+        output=SimpleNamespace(
+            format="table",
+            compact=False,
+            fields=SimpleNamespace(
+                spec_doc=[
+                    "spec_id",
+                    "version",
+                    "release",
+                    "sections",
+                    "tables",
+                    "chunk_index",
+                    "text",
+                ]
+            ),
+        ),
+        search=SimpleNamespace(
+            enabled=True,
+            bm25_weights=(5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        ),
+        semantic_search=SimpleNamespace(fts5_weight=0.35),
+    )
+
+
+def _tdoc_result(mode: SearchMode, *, previews: dict[str, str] | None) -> TDocSearchResult:
+    return TDocSearchResult(
+        tdoc_id="R5-000001",
+        score=1.25 if mode is not SearchMode.FILTER else None,
+        search_mode=mode,
+        previews=previews,
+        title="Handover procedure",
+        meeting="RAN1#120",
+        tsg="RAN",
+        uploaded_date=date(2025, 1, 10),
+        ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+        wis="38.331",
+        type="CR",
+        status="Agreed",
+        best_chunk_id="R5-000001#0" if mode in {SearchMode.SEMANTIC, SearchMode.HYBRID} else None,
+    )
+
+
+def _spec_doc_result(mode: SearchMode, *, previews: dict[str, str] | None) -> SpecDocSearchResult:
+    return SpecDocSearchResult(
+        chunk_id="38.331@18.5.0#0",
+        score=2.5 if mode is not SearchMode.FILTER else None,
+        search_mode=mode,
+        previews=previews,
+        spec_id="38.331",
+        version="18.5.0",
+        release="Rel-18",
+        sections="5.1 Handover",
+        tables="Table 1 Values",
+        chunk_index=0,
+        text="handover procedure",
+    )
+
+
+def _status() -> IndexStatus:
+    fts_status = SearchIndexStatus(
+        enabled=True,
+        row_count=12,
+        last_rebuild_at=None,
+        last_indexed_uploaded_date=None,
+        latest_tdocs_uploaded_date=None,
+        is_stale=False,
+    )
+    return IndexStatus(
+        fts5=IndexComponentStatus(available=True, status=fts_status),
+        vector=IndexComponentStatus(available=False, error="unavailable"),
+    )
 
 
 def test_top_level_search_command_is_removed() -> None:
-    runner = CliRunner()
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "search" not in result.output
 
 
 def test_top_level_search_invocation_is_rejected() -> None:
-    runner = CliRunner()
     result = runner.invoke(app, ["search", "query", "--help"])
     assert result.exit_code != 0
 
 
-def test_spec_doc_cli_json_uses_combined_metadata(monkeypatch):
-    hit = SimpleNamespace(
-        chunk_id="38.331@19.0.0#0",
-        spec_id="38.331",
-        version="19.0.0",
-        release="Rel-19",
-        sections="5 Scope",
-        tables="Table 1 Values",
-        chunk_index=0,
-        text="handover",
-        score=0.1,
-        previews={},
-    )
-
-    class FakeSearch:
-        def __init__(self):
-            self.filters = None
-
-        def search(self, _query, _filters):
-            self.filters = _filters
-            return [hit]
-
-    service = FakeSearch()
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+def test_tdoc_search_direct_uses_facade_and_emits_exact_fts5_payload(monkeypatch) -> None:
+    facade = MagicMock()
+    facade.search.return_value = [
+        _tdoc_result(SearchMode.FTS5, previews={"title": "<<handover>> procedure"})
+    ]
+    facade.status.return_value = SimpleNamespace(is_stale=False)
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
     monkeypatch.setattr(
-        "doc3gpp.cli.build_spec_doc_search_service", lambda: service
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
     )
 
-    result = CliRunner().invoke(
+    result = runner.invoke(
         app,
-        [
-            "spec", "doc", "search", "query", "handover",
-            "--sections", "%5%", "--tables", "%UE%",
-            "--format", "json",
-        ],
+        ["tdoc", "search", "--text", "handover", "--format", "json"],
     )
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert set(payload[0]) == {
-        "chunk_id",
-        "spec_id",
-        "version",
-        "release",
-        "sections",
-        "tables",
-        "chunk_index",
-        "text",
-        "score",
-        "previews",
-    }
-    assert payload[0]["sections"] == "5 Scope"
-    assert payload[0]["tables"] == "Table 1 Values"
-    assert service.filters.sections == "%5%"
-    assert service.filters.tables == "%UE%"
+    assert list(payload[0]) == TDOC_KEYS
+    assert payload[0]["score"] == 1.25
+    assert payload[0]["search_mode"] == "fts5"
+    assert payload[0]["previews"] == {"title": "<<handover>> procedure"}
+    assert payload[0]["type"] == "CR"
+    assert payload[0]["status"] == "Agreed"
+    assert payload[0]["best_chunk_id"] is None
+    call = facade.search.call_args.kwargs
+    assert call["text"] == "handover"
+    assert call["semantic"] is None
+    assert call["snippet_tokens"] == 8
 
 
-def test_spec_doc_cli_help_lists_plural_metadata_filters():
-    result = CliRunner().invoke(
-        app,
-        ["spec", "doc", "search", "query", "--help"],
-    )
+def test_tdoc_search_stale_hint_uses_real_facade_status_boundary(monkeypatch) -> None:
+    from doc3gpp.models.search import SearchIndexStatus
+    from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+    from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
 
-    assert result.exit_code == 0, result.output
-    assert "--sections" in result.output
-    assert "--tables" in result.output
-
-
-def test_spec_doc_cli_rejects_singular_section_filter():
-    result = CliRunner().invoke(
-        app,
-        ["spec", "doc", "search", "query", "handover", "--section", "5"],
-    )
-
-    assert result.exit_code != 0
-    assert "No such option" in result.output
-
-
-def test_search_help_lists_filters() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["tdoc", "search", "query", "--help"])
-    assert result.exit_code == 0
-    for flag in (
-        "--tsg", "--meeting", "--meeting-id", "--tdoc-id",
-        "--release", "--spec", "--since", "--until",
-        "--limit", "--format", "--compact", "--sem-query",
-        "--snippet-tokens", "--explain", "--quiet",
-    ):
-        assert flag in result.output, f"missing flag {flag} in search help"
-    # The old --rerank flag is gone; the new --sem-query is the
-    # only semantic-rerank switch.
-    assert "--rerank" not in result.output, (
-        "--rerank must be removed from search query help; use --sem-query"
-    )
-
-
-def test_index_help_lists_rebuild_flags() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["tdoc", "search", "index", "--help"])
-    assert result.exit_code == 0
-    for flag in ("--rebuild", "--batch", "--resume", "--stale-only", "--quiet"):
-        assert flag in result.output, f"missing flag {flag} in index help"
-
-
-# ----------------------------------------------------------------------
-# Task 3: --explain wire-up + per-call snippet_tokens override
-# ----------------------------------------------------------------------
-
-
-class _CapturingRepo:
-    """In-memory SearchIndexRepository double for the explain test.
-
-    The repo records the args passed to :meth:`search` so the test can
-    assert the per-call ``snippet_tokens`` override. The real
-    FTS5-backed repo would require a sqlite + FTS5 build; the explain
-    test only cares about the CLI's stderr block, not the actual
-    query plan, so the mock is sufficient.
-    """
-
-    def __init__(self) -> None:
-        self.search_calls: list[dict[str, Any]] = []
-        # The CLI's ``_emit_explain`` reads the cached config the
-        # repo will use at search-time. Mirror the real repo's
-        # attributes so the explain block is populated.
-        self._weights = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
-
-    def search(self, query: str, filters, snippet_tokens: int | None = None):
-        self.search_calls.append(
-            {"query": query, "filters": filters, "snippet_tokens": snippet_tokens}
-        )
-        return []
-
-
-class _StubService:
-    """SearchService double that exposes the same internal surface as the real one."""
-
-    def __init__(self) -> None:
-        self._repo = _CapturingRepo()
-        from doc3gpp.services.search_service import PassthroughReranker
-        self._reranker = PassthroughReranker()
-        from doc3gpp.models.search import SearchIndexStatus
-        self._status = SearchIndexStatus(
-            enabled=True,
-            row_count=0,
-            last_rebuild_at=None,
-            last_indexed_uploaded_date=None,
-            latest_tdocs_uploaded_date=None,
-            is_stale=False,
-        )
-
-    def status(self):
-        return self._status
-
-
-def test_explain_prints_match_and_weights(monkeypatch) -> None:
-    """``--explain`` prints the resolved MATCH + weight vector to stderr.
-
-    The block is also visible on stdout (CliRunner mixes streams by
-    default) so the test asserts against ``result.output``. The
-    expected format is the one in the perf spec:
-
-    ::
-
-        # search config
-        match:           "alpha"
-        snippet_tokens:  8
-        bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
-    """
-    runner = CliRunner()
-    stub = _StubService()
-    # The CLI imports ``build_search_service`` lazily inside
-    # ``search_command``; monkeypatch the resolved import site.
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", lambda *a, **kw: stub,
-    )
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
-
-    result = runner.invoke(
-        app,
-        ["tdoc", "search", "query", "alpha", "--explain", "--format", "json"],
-    )
-    assert result.exit_code == 0, result.output
-
-    assert "# search config" in result.output, (
-        f"missing explain header; output was:\n{result.output}"
-    )
-    assert "bm25_weights:" in result.output
-    # Resolved MATCH expression: the SearchQueryBuilder wraps plain
-    # text in double quotes after normalizing.
-    assert 'match:           "alpha"' in result.output
-    assert "snippet_tokens:  8" in result.output
-    assert "[5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]" in result.output
-
-
-def test_snippet_tokens_overrides_setting(
-    tmp_path: Path, monkeypatch, sqlite_env,
-) -> None:
-    """``--snippet-tokens 4`` overrides ``Settings.search.snippet_tokens=16``.
-
-    Captures the SQL via a ``before_cursor_execute`` event hook and
-    asserts the bound ``:tok`` parameter is ``4`` (not ``16``). The
-    override must flow from the CLI through the repo's per-call
-    parameter; the cached setting value on ``self._snippet_tokens``
-    is bypassed.
-    """
-    from doc3gpp.settings.loader import get_settings
-    from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.session import get_engine
-    from doc3gpp.storage.repositories.search_sql import (
-        SQLAlchemySearchIndexRepository,
-    )
-
-    # Set Settings.search.snippet_tokens=16 via TOML (env vars can't
-    # override search.* keys because they're not in ALLOWED_ENV_VARS).
-    config_path = tmp_path / "doc3gpp.toml"
-    config_path.write_text(
-        "[search]\nsnippet_tokens = 16\n", encoding="utf-8"
-    )
-    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
-    get_settings.cache_clear()
-    try:
-        assert get_settings().search.snippet_tokens == 16
-
-        # Seed the FTS5 index so the repo's search() actually runs.
-        create_schema()
-        with get_engine().begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO tsgs (tsg_name, short_name, description) "
-                    "VALUES ('TSG RAN', 'RAN', 'Radio Access Network')"
+    class Source:
+        def list_for_search(self, _filters):
+            return [
+                TDocWithMeeting(
+                    tdoc=TDoc(tdoc_id="R5-000001", title="Filtered"),
+                    meeting_name="RAN#1",
+                    meeting_tsg="RAN",
                 )
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO meetings (
-                        meeting_id, name, title, location, tsg, start_date,
-                        end_date, ftp_url, tdoc_list_last_sync
-                    ) VALUES (
-                        1, 'RAN#1', 'RAN#1 plenary', 'Online', 'RAN',
-                        '2026-01-01', '2026-01-05',
-                        'https://www.3gpp.org/ftp/meetings/RAN_1',
-                        '2026-01-05T00:00:00'
-                    )
-                    """
+            ]
+
+    class Fts:
+        def search(self, _query, _filters, *, snippet_tokens=None):
+            from doc3gpp.models.search import SearchHit
+
+            return [
+                SearchHit(
+                    tdoc_id="R5-000001",
+                    score=-1.0,
+                    previews={"title": "<<Filtered>>"},
+                    title="Filtered",
+                    meeting="RAN#1",
+                    tsg="RAN",
+                    uploaded_date=None,
+                    ftp_url=None,
+                    wis=None,
                 )
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO tdocs (
-                        tdoc_id, meeting_id, title, ftp_url, type, source,
-                        uploaded_date, release, spec
-                    ) VALUES (
-                        'R5-1000001', 1, 'alpha body', 'https://x/A.zip',
-                        'CR', 'TSG', '2026-01-02T00:00:00', 'Rel-17', '38.300'
-                    )
-                    """
-                )
-            )
-        repo = SQLAlchemySearchIndexRepository()
-        repo.upsert("R5-1000001")
-        # Sanity: the cached setting value is 16.
-        assert repo._snippet_tokens == 16
+            ]
 
-        captured: list[tuple[str, tuple]] = []
-        engine = get_engine()
-
-        def _before_cursor_execute(
-            conn, cursor, statement, parameters, context, executemany,
-        ):
-            captured.append((statement, parameters))
-
-        event.listen(engine, "before_cursor_execute", _before_cursor_execute)
-        try:
-            result = CliRunner().invoke(
-                app,
-                [
-                    "tdoc", "search", "query", "alpha",
-                    "--snippet-tokens", "4",
-                    "--format", "json",
-                ],
-            )
-        finally:
-            event.remove(engine, "before_cursor_execute", _before_cursor_execute)
-
-        assert result.exit_code == 0, result.output
-        matched = [
-            (stmt, params) for stmt, params in captured
-            if "snippet(" in stmt and "MATCH" in stmt
-        ]
-        assert matched, (
-            f"expected a SELECT against tdoc_search with snippet(); "
-            f"saw {len(captured)} cursor events\nall events:\n{captured}"
-        )
-        stmt, params = matched[-1]
-        # The :tok bound param is the 10th positional parameter
-        # (w0..w7, col_idx, tok). The override is 4, the cached
-        # setting value was 16 — the override must have flowed
-        # through to the SQL.
-        assert "snippet(tdoc_search, " in stmt
-        assert params[9] == 4, (
-            f"expected snippet_tokens override=4 at params[9]; "
-            f"got {params[9]!r} (cached setting was 16)"
-        )
-    finally:
-        get_settings.cache_clear()
-
-
-# ----------------------------------------------------------------------
-# Status panel: `doc3gpp tdoc search index` (no args) must surface the
-# vector row count when the semantic service is available, and
-# must clearly label the existing FTS5 row count.
-# ----------------------------------------------------------------------
-
-
-def test_search_index_status_panel_includes_vector_rows(monkeypatch) -> None:
-    """When the semantic service is available, the status panel
-    must include the vector row count alongside the FTS5 row count.
-    Otherwise operators see "Rows indexed: 13,693" and assume it
-    covers both indexes — but vec_tdoc_embeddings can be empty
-    after a fresh schema.
-    """
-    from dataclasses import replace
-
-    runner = CliRunner()
-    fts5_stub = _StubService()
-    fts5_stub._status = replace(
-        fts5_stub.status(),
-        row_count=13_693,
-        last_rebuild_at="2026-07-31 23:01:53",
-        is_stale=False,
-    )
-
-    class _VecStub:
-        def __init__(self) -> None:
-            from doc3gpp.models.search import SearchIndexStatus
-            self._status = SearchIndexStatus(
+        def status(self):
+            return SearchIndexStatus(
                 enabled=True,
-                row_count=3_842,
-                last_rebuild_at="2026-07-31 22:50:15",
-                last_indexed_uploaded_date="2026-05-08",
-                latest_tdocs_uploaded_date="2026-07-22",
+                row_count=1,
+                last_rebuild_at=None,
+                last_indexed_uploaded_date=None,
+                latest_tdocs_uploaded_date=None,
                 is_stale=True,
             )
 
-        def status(self):
-            return self._status
-
-    sem_stub = _VecStub()
-
+    settings = _settings()
+    facade = TDocSearchFacade(
+        fts5_service=Fts(),
+        semantic_service=None,
+        source_repo=Source(),
+        settings=settings,
+    )
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
     monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", lambda *a, **kw: fts5_stub,
-    )
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_semantic_search_service",
-        lambda: sem_stub,
-    )
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
-
-    result = runner.invoke(app, ["tdoc", "search", "index"])
-    assert result.exit_code == 0, result.output
-    assert "FTS5 rows:" in result.output, (
-        f"missing FTS5 row label in panel; output was:\n{result.output}"
-    )
-    assert "13,693" in result.output
-    assert "Vector rows:" in result.output, (
-        f"missing vector row label in panel; output was:\n{result.output}"
-    )
-    assert "3,842" in result.output
-
-
-def test_search_index_status_panel_omits_vector_when_service_none(monkeypatch) -> None:
-    """When the semantic service is unavailable (no [semantic]
-    extra installed, sqlite-vec missing, etc.), the panel must
-    not print a Vector rows line. FTS5 still prints.
-    """
-    from dataclasses import replace
-
-    runner = CliRunner()
-    fts5_stub = _StubService()
-    fts5_stub._status = replace(fts5_stub.status(), row_count=100)
-
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", lambda *a, **kw: fts5_stub,
-    )
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_semantic_search_service",
-        lambda: None,
-    )
-    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda *args, **kwargs: None)
-
-    result = runner.invoke(app, ["tdoc", "search", "index"])
-    assert result.exit_code == 0, result.output
-    assert "FTS5 rows:" in result.output
-    assert "100" in result.output
-    assert "Vector rows" not in result.output
-
-
-# ----------------------------------------------------------------------
-# Task 6: --sem-query fanout wiring + removed --rerank flag
-# ----------------------------------------------------------------------
-
-
-def test_search_query_no_sem_query_does_not_invoke_reranker(monkeypatch) -> None:
-    """Without ``--sem-query`` the CLI bypasses the reranker (today's behaviour)."""
-    from doc3gpp.cli import tdoc_search_app
-
-    runner = CliRunner()
-    fake_svc = MagicMock()
-    fake_svc._repo.search.return_value = []  # type: ignore[attr-defined]
-    fake_svc.status.return_value = MagicMock(is_stale=False)
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service",
-        lambda *a, **kw: fake_svc,
-    )
-    result = runner.invoke(tdoc_search_app, ["query", "anything"])
-    assert result.exit_code == 0, result.output
-    fake_svc._reranker.rerank.assert_not_called()  # type: ignore[attr-defined]
-
-
-def test_search_query_sem_query_invokes_reranker_with_fanout(monkeypatch) -> None:
-    """``--sem-query`` triggers fanout filters and a rerank call."""
-    from doc3gpp.cli import tdoc_search_app
-    from doc3gpp.models.search import SearchFilters
-
-    class _FakeSvc:
-        """Service double with a real ``_quiet`` attribute."""
-
-        def __init__(self) -> None:
-            self._reranker = MagicMock()
-            self._repo = MagicMock()
-            self._repo.search.return_value = []
-            self.status = MagicMock(return_value=MagicMock(is_stale=False))
-            self._quiet = False
-
-    fake_svc = _FakeSvc()
-
-    captured: dict = {}
-
-    def _capture_rerank(semantic_query, hits, final_limit=None, quiet=False):
-        captured["semantic_query"] = semantic_query
-        captured["hits"] = hits
-        captured["final_limit"] = final_limit
-        captured["quiet"] = quiet
-        return []
-
-    fake_svc._reranker.rerank.side_effect = _capture_rerank  # type: ignore[attr-defined]
-
-    def _factory(quiet: bool = False):
-        fake_svc._quiet = quiet
-        return fake_svc
-
-    fake_settings = MagicMock()
-    fake_settings.search.search_fanout_factor = 4
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", _factory,
-    )
-    monkeypatch.setattr(
-        "doc3gpp.cli.get_settings", lambda: fake_settings,
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
     )
 
-    runner = CliRunner()
     result = runner.invoke(
-        tdoc_search_app, ["query", "R5-1", "--sem-query", "TTCN handover"],
+        app, ["tdoc", "search", "--text", "filtered", "--format", "json"]
     )
+
     assert result.exit_code == 0, result.output
-    assert captured["semantic_query"] == "TTCN handover"
-    assert captured["final_limit"] == 20  # default --limit
-    # Default --quiet=False: the rerank must see quiet=False so the
-    # empty-vector warning can fire if it ever trips.
-    assert captured["quiet"] is False
-    # The repo was called with filters whose limit == 20 * 4 == 80.
-    call_args = fake_svc._repo.search.call_args  # type: ignore[attr-defined]
-    filters = call_args[0][1]
-    assert isinstance(filters, SearchFilters)
-    assert filters.limit == 80
+    assert "doc3gpp tdoc index --rebuild" in result.output
 
 
-def test_search_query_quiet_flag_reaches_reranker(monkeypatch) -> None:
-    """``--quiet`` on ``search query`` must reach the reranker as ``quiet=True``.
+def test_tdoc_semantic_search_does_not_probe_unavailable_fts5(monkeypatch) -> None:
+    from doc3gpp.models.search import SearchUnavailableError
+    from doc3gpp.services import factory
 
-    Pins the CLI → factory → reranker plumbing for the empty-vector
-    warning gate introduced in the final review. Without ``--quiet``
-    the default is ``False``; with ``--quiet`` the reranker sees
-    ``quiet=True`` and skips the one-shot WARNING.
-    """
-    from doc3gpp.cli import tdoc_search_app
+    settings = _settings()
+    semantic = MagicMock()
+    semantic.search.return_value = []
 
-    class _FakeSvc:
-        """Bare-bones service double with real ``_quiet`` attribute.
+    def unavailable_fts5(*_args, **_kwargs):
+        raise SearchUnavailableError("FTS5 unavailable")
 
-        A :class:`MagicMock` is unsuitable because the CLI reads
-        ``svc._quiet`` (a real ``bool``), not a method call; on a
-        Mock the attribute would be another child Mock and would
-        compare truthy regardless of the input flag.
-        """
+    monkeypatch.setattr(factory, "build_search_service", unavailable_fts5)
+    monkeypatch.setattr(
+        factory,
+        "build_semantic_search_service",
+        lambda *_args, **_kwargs: semantic,
+    )
+    facade = factory.build_tdoc_search_facade(
+        settings,
+        source_repo=MagicMock(),
+        embedder=MagicMock(),
+    )
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
+    )
+    monkeypatch.setattr("doc3gpp.cli._stale_index_hint_emitted", False)
 
-        def __init__(self) -> None:
-            self._reranker = MagicMock()
-            self._repo = MagicMock()
-            self._repo.search.return_value = []
-            self.status = MagicMock(return_value=MagicMock(is_stale=False))
-            self._quiet = False  # mutated per-test
+    result = runner.invoke(
+        app,
+        ["tdoc", "search", "--semantic", "handover", "--format", "json"],
+    )
 
-    fake_svc = _FakeSvc()
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == []
 
-    captured: dict = {}
 
-    def _capture_rerank(
-        semantic_query, hits, final_limit=None, quiet=False,
+def test_tdoc_filter_search_does_not_probe_fts5_status(monkeypatch) -> None:
+    from doc3gpp.models.search import SearchUnavailableError
+    from doc3gpp.services import factory
+
+    settings = _settings()
+    settings.semantic_search.embedding_base_url = None
+
+    def unavailable_fts5(*_args, **_kwargs):
+        raise SearchUnavailableError("FTS5 unavailable")
+
+    monkeypatch.setattr(factory, "build_search_service", unavailable_fts5)
+    source = MagicMock()
+    source.list_for_search.return_value = []
+    facade = factory.build_tdoc_search_facade(settings, source_repo=source)
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
+    )
+    monkeypatch.setattr("doc3gpp.cli._stale_index_hint_emitted", False)
+
+    result = runner.invoke(app, ["tdoc", "search", "--format", "json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == []
+
+
+def test_tdoc_search_ignores_unavailable_stale_status(monkeypatch) -> None:
+    from doc3gpp.models.search import SearchUnavailableError
+
+    settings = _settings()
+    facade = MagicMock()
+    facade.search.return_value = [_tdoc_result(SearchMode.FTS5, previews=None)]
+    facade.status.side_effect = SearchUnavailableError("FTS5 unavailable")
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
+    )
+    monkeypatch.setattr("doc3gpp.cli._stale_index_hint_emitted", False)
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "search", "--text", "handover", "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)[0]["search_mode"] == "fts5"
+
+
+def test_tdoc_filter_result_preserves_meeting_tsg() -> None:
+    from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+    from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
+
+    row = TDocWithMeeting(
+        tdoc=TDoc(tdoc_id="R5-000002", title="Filtered"),
+        meeting_name="RAN#2",
+        meeting_tsg="RAN",
+    )
+    facade = TDocSearchFacade(
+        fts5_service=None,
+        semantic_service=None,
+        source_repo=SimpleNamespace(list_for_search=lambda _filters: [row]),
+        settings=_settings(),
+    )
+
+    result = facade.search(text=None, semantic=None, filters=SearchFilters())
+
+    assert result[0].tsg == "RAN"
+
+
+def test_tdoc_search_dispatches_semantic_hybrid_and_filter_modes(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+
+    cases = [
+        (["--semantic", "handover"], SearchMode.SEMANTIC),
+        (["--text", "handover", "--semantic", "procedure"], SearchMode.HYBRID),
+        ([], SearchMode.FILTER),
+    ]
+    for options, mode in cases:
+        facade = MagicMock()
+        facade.search.return_value = [_tdoc_result(mode, previews={"title": "hidden"})]
+        monkeypatch.setattr(
+            "doc3gpp.services.factory.build_tdoc_search_facade",
+            lambda facade=facade: facade,
+        )
+
+        result = runner.invoke(app, ["tdoc", "search", *options, "--format", "json"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)[0]
+        assert list(payload) == TDOC_KEYS
+        assert payload["search_mode"] == mode.value
+        assert payload["previews"] is None
+        assert payload["score"] is None if mode is SearchMode.FILTER else payload["score"] == 1.25
+        assert facade.search.call_args.kwargs["text"] == (
+            "handover" if "--text" in options else None
+        )
+
+
+def test_tdoc_search_table_and_markdown_show_score_mode_metadata_and_previews(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    facade = MagicMock()
+    facade.search.return_value = [
+        _tdoc_result(SearchMode.FTS5, previews={"title": "<<handover>>"})
+    ]
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
+    )
+
+    table = runner.invoke(app, ["tdoc", "search", "--text", "handover"])
+    markdown = runner.invoke(
+        app,
+        ["tdoc", "search", "--text", "handover", "--format", "markdown"],
+    )
+
+    assert table.exit_code == 0, table.output
+    assert "score" in table.output
+    assert "fts5" in table.output
+    assert "CR" in table.output and "Agreed" in table.output
+    assert "<<handover>>" in table.output
+    assert markdown.exit_code == 0, markdown.output
+    assert "| search_mode |" in markdown.output
+    assert "| 1.25 |" in markdown.output
+    assert "title: <<handover>>" in markdown.output
+
+
+def test_tdoc_search_errors_keep_query_and_rebuild_paths(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    facade = MagicMock()
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
+    )
+
+    facade.search.side_effect = SearchQueryError("bad expression")
+    query_result = runner.invoke(app, ["tdoc", "search", "--text", "["])
+    assert query_result.exit_code == 2
+    assert "bad query" in query_result.output
+
+    facade.search.side_effect = SearchIndexCorruptError("broken")
+    corrupt_result = runner.invoke(app, ["tdoc", "search", "--text", "handover"])
+    assert corrupt_result.exit_code == 3
+    assert "doc3gpp tdoc index --rebuild" in corrupt_result.output
+
+
+def test_tdoc_search_preserves_established_unavailable_messages(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    facade = MagicMock()
+    facade.status.return_value = SimpleNamespace(is_stale=False)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_search_facade",
+        lambda: facade,
+    )
+
+    cases = (
+        (EmbedderUnavailableError("load failed"), "embedding model load failed: load failed", 1),
+        (VectorIndexUnavailableError("vector missing"), "vector index unavailable: vector missing", 1),
+        (SemanticSearchUnavailableError("semantic missing"), "search sem unavailable: semantic missing", 1),
+        (SearchError("broken index"), "doc3gpp tdoc index --rebuild", 3),
+    )
+    for error, expected, exit_code in cases:
+        facade.search.side_effect = error
+        result = runner.invoke(app, ["tdoc", "search", "--semantic", "handover"])
+        assert result.exit_code == exit_code, result.output
+        assert expected in result.output
+
+
+def test_tdoc_index_uses_coordinator_for_status_and_actions(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    coordinator = MagicMock()
+    coordinator.rebuild.return_value = _status()
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_index_service",
+        lambda: coordinator,
+    )
+
+    status_result = runner.invoke(app, ["tdoc", "index"])
+    assert status_result.exit_code == 0, status_result.output
+    assert "FTS5" in status_result.output
+    assert "FTS5 rows: 12" in status_result.output
+    assert "Vector" in status_result.output
+    request = coordinator.rebuild.call_args.args[0]
+    assert request.rebuild is False
+    assert request.rebuild_embeddings is False
+
+    coordinator.rebuild.return_value = IndexRebuildResult(
+        fts5_processed=4,
+        vector_processed=0,
+    )
+    action_result = runner.invoke(
+        app,
+        ["tdoc", "index", "--rebuild", "--batch", "7", "--resume", "--quiet"],
+    )
+    assert action_result.exit_code == 0, action_result.output
+    request = coordinator.rebuild.call_args.args[0]
+    assert request.rebuild is True
+    assert request.batch == 7
+    assert request.resume is True
+    assert "FTS5 processed: 4" in action_result.output
+    assert "Vector processed: 0" in action_result.output
+
+
+def test_tdoc_index_status_renders_index_timestamps(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    status = IndexStatus(
+        fts5=IndexComponentStatus(
+            available=True,
+            status=SearchIndexStatus(
+                enabled=True,
+                row_count=12,
+                last_rebuild_at=datetime(2026, 9, 1, 1, 2, 3, tzinfo=timezone.utc),
+                last_indexed_uploaded_date=datetime(
+                    2026, 9, 2, 4, 5, 6, tzinfo=timezone.utc
+                ),
+                latest_tdocs_uploaded_date=datetime(
+                    2026, 9, 3, 7, 8, 9, tzinfo=timezone.utc
+                ),
+                is_stale=False,
+            ),
+        ),
+        vector=IndexComponentStatus(available=False, error="unavailable"),
+    )
+    coordinator = MagicMock()
+    coordinator.rebuild.return_value = status
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_tdoc_index_service",
+        lambda: coordinator,
+    )
+
+    result = runner.invoke(app, ["tdoc", "index"])
+
+    assert result.exit_code == 0, result.output
+    assert "Last rebuild: 2026-09-01 01:02:03" in result.output
+    assert "Last indexed: 2026-09-02 04:05:06" in result.output
+    assert "Latest tdocs: 2026-09-03 07:08:09" in result.output
+
+
+
+
+def test_spec_doc_search_supports_output_file(monkeypatch, tmp_path) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    create_schema = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli.create_schema", create_schema)
+    facade = MagicMock()
+    facade.search.return_value = [_spec_doc_result(SearchMode.FILTER, previews=None)]
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_spec_doc_search_facade",
+        lambda: facade,
+    )
+    output = tmp_path / "spec-doc-search.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "spec", "doc", "search", "--format", "json",
+            "--output", str(output), "--compact",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(output.read_text(encoding="utf-8"))[0]["search_mode"] == "filter"
+    assert result.stdout == ""
+    create_schema.assert_not_called()
+
+
+def test_spec_doc_search_direct_uses_facade_offset_fields_and_flat_payload(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    facade = MagicMock()
+    facade.search.return_value = [
+        _spec_doc_result(SearchMode.FTS5, previews={"text": "<<handover>>"})
+    ]
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_spec_doc_search_facade",
+        lambda: facade,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "spec",
+            "doc",
+            "search",
+            "--text",
+            "handover",
+            "--spec",
+            "38.331",
+            "--version",
+            "18.5.0",
+            "--sections",
+            "%5%",
+            "--tables",
+            "%UE%",
+            "--limit",
+            "3",
+            "--offset",
+            "2",
+            "--fields",
+            "spec_id,text",
+            "--format",
+            "json",
+            "--compact",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(result.stdout.splitlines()) == 1
+    payload = json.loads(result.stdout)
+    assert list(payload[0]) == SPEC_DOC_KEYS
+    assert payload[0]["score"] == 2.5
+    assert payload[0]["search_mode"] == "fts5"
+    assert payload[0]["previews"] == {"text": "<<handover>>"}
+    filters = facade.search.call_args.kwargs["filters"]
+    assert filters.spec_id == "38.331"
+    assert filters.version == "18.5.0"
+    assert filters.sections == "%5%"
+    assert filters.tables == "%UE%"
+    assert filters.limit == 3
+    assert filters.offset == 2
+
+
+def test_spec_doc_search_accepts_semantic_and_field_only_modes(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    for options, mode in ((["--semantic", "handover"], SearchMode.SEMANTIC), ([], SearchMode.FILTER)):
+        facade = MagicMock()
+        facade.search.return_value = [_spec_doc_result(mode, previews={"text": "hidden"})]
+        monkeypatch.setattr(
+            "doc3gpp.services.factory.build_spec_doc_search_facade",
+            lambda facade=facade: facade,
+        )
+        result = runner.invoke(
+            app,
+            ["spec", "doc", "search", *options, "--format", "json"],
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)[0]
+        assert list(payload) == SPEC_DOC_KEYS
+        assert payload["search_mode"] == mode.value
+        assert payload["previews"] is None
+
+
+def test_spec_doc_table_and_markdown_honor_explicit_fields(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    facade = MagicMock()
+    facade.search.return_value = [
+        _spec_doc_result(SearchMode.FTS5, previews={"text": "<<handover>>"})
+    ]
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_spec_doc_search_facade",
+        lambda: facade,
+    )
+
+    for fmt in ("table", "markdown"):
+        result = runner.invoke(
+            app,
+            [
+                "spec", "doc", "search", "--text", "handover",
+                "--fields", "spec_id,text", "--format", fmt,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "spec_id" in result.output
+        assert "text" in result.output
+        assert "score" in result.output
+        assert "search_mode" in result.output
+        assert "previews" not in result.output
+
+
+def test_spec_doc_search_preserves_established_unavailable_messages(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    facade = MagicMock()
+    facade.status.return_value = SimpleNamespace(is_stale=False)
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_spec_doc_search_facade",
+        lambda: facade,
+    )
+
+    cases = (
+        (EmbedderUnavailableError("load failed"), "embedding model load failed: load failed", 1),
+        (VectorIndexUnavailableError("vector missing"), "vector index unavailable: vector missing", 1),
+        (SemanticSearchUnavailableError("semantic missing"), "search sem unavailable: semantic missing", 1),
+        (SearchError("broken index"), "doc3gpp spec doc index --rebuild", 3),
+    )
+    for error, expected, exit_code in cases:
+        facade.search.side_effect = error
+        result = runner.invoke(
+            app,
+            ["spec", "doc", "search", "--semantic", "handover"],
+        )
+        assert result.exit_code == exit_code, result.output
+        assert expected in result.output
+
+
+def test_spec_doc_index_uses_coordinator(monkeypatch) -> None:
+    settings = _settings()
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    coordinator = MagicMock()
+    coordinator.rebuild.return_value = _status()
+    monkeypatch.setattr(
+        "doc3gpp.services.factory.build_spec_doc_index_service",
+        lambda: coordinator,
+    )
+
+    result = runner.invoke(app, ["spec", "doc", "index"])
+
+    assert result.exit_code == 0, result.output
+    assert "FTS5" in result.output
+    assert "Vector" in result.output
+    assert coordinator.rebuild.call_args.args[0].rebuild_all is False
+
+
+def test_unified_help_removes_old_nested_commands_and_options() -> None:
+    tdoc_help = runner.invoke(app, ["tdoc", "--help"])
+    spec_doc_help = runner.invoke(app, ["spec", "doc", "--help"])
+
+    assert tdoc_help.exit_code == 0, tdoc_help.output
+    assert "search" in tdoc_help.output
+    assert "index" in tdoc_help.output
+    assert spec_doc_help.exit_code == 0, spec_doc_help.output
+    assert "search" in spec_doc_help.output
+    assert "index" in spec_doc_help.output
+
+    for args in (
+        ["tdoc", "search", "query", "handover"],
+        ["tdoc", "search", "sem", "handover"],
+        ["tdoc", "search", "index"],
+        ["spec", "doc", "search", "query", "handover"],
+        ["spec", "doc", "search", "sem", "handover"],
+        ["tdoc", "search", "--fts5-weight", "0.5"],
+        ["tdoc", "search", "--fts5-query", "handover"],
+        ["tdoc", "search", "--sem-query", "handover"],
     ):
-        captured["semantic_query"] = semantic_query
-        captured["final_limit"] = final_limit
-        captured["quiet"] = quiet
-        return []
-
-    fake_svc._reranker.rerank.side_effect = _capture_rerank  # type: ignore[attr-defined]
-
-    def _factory(quiet: bool = False):
-        fake_svc._quiet = quiet
-        return fake_svc
-
-    fake_settings = MagicMock()
-    fake_settings.search.search_fanout_factor = 4
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service", _factory,
-    )
-    monkeypatch.setattr(
-        "doc3gpp.cli.get_settings", lambda: fake_settings,
-    )
-
-    result = CliRunner().invoke(
-        tdoc_search_app,
-        ["query", "R5-1", "--sem-query", "TTCN", "--quiet"],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["quiet"] is True
-
-    # The default (no --quiet) must thread quiet=False so existing
-    # callers see no behaviour change.
-    captured.clear()
-    result_default = CliRunner().invoke(
-        tdoc_search_app, ["query", "R5-1", "--sem-query", "TTCN"],
-    )
-    assert result_default.exit_code == 0, result_default.output
-    assert captured["quiet"] is False
-
-
-def test_search_query_sem_query_empty_string_treated_as_none(monkeypatch) -> None:
-    """``--sem-query ''`` is a no-op (no rerank, no embedder call)."""
-    from doc3gpp.cli import tdoc_search_app
-
-    fake_svc = MagicMock()
-    fake_svc._repo.search.return_value = []  # type: ignore[attr-defined]
-    fake_svc.status.return_value = MagicMock(is_stale=False)
-    monkeypatch.setattr(
-        "doc3gpp.services.factory.build_search_service",
-        lambda *a, **kw: fake_svc,
-    )
-    runner = CliRunner()
-    result = runner.invoke(tdoc_search_app, ["query", "R5-1", "--sem-query", ""])
-    assert result.exit_code == 0, result.output
-    fake_svc._reranker.rerank.assert_not_called()  # type: ignore[attr-defined]
-
-
-def test_search_query_rerank_flag_raises_bad_parameter() -> None:
-    """The removed ``--rerank`` flag must raise a clear migration error."""
-    from doc3gpp.cli import tdoc_search_app
-
-    runner = CliRunner()
-    result = runner.invoke(tdoc_search_app, ["query", "R5-1", "--rerank"])
-    assert result.exit_code != 0
-    assert "--rerank" in (result.output + (result.stderr or ""))
+        assert runner.invoke(app, args).exit_code != 0, args

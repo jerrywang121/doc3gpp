@@ -74,8 +74,20 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "get_spec",
         "list_testcases",
         "get_testcase",
+        "get_tsg_schema",
+        "get_meeting_schema",
+        "get_tdoc_schema",
+        "get_wi_schema",
+        "get_spec_schema",
+        "get_testcase_schema",
+        "get_spec_toc",
         "search_tdoc",
-        "semantic_search_tdoc",
+        "search_spec_docs",
+        "get_spec_doc_schema",
+        "get_tdoc_index",
+        "index_tdocs",
+        "get_spec_doc_index",
+        "index_spec_docs",
         "sync_meetings",
         "sync_tdocs",
         "sync_tdocs_by_meeting",
@@ -85,15 +97,17 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "parse_tdocs",
         "parse_tdoc_url",
         "parse_spec_docs",
-        "rebuild_tdoc_search_index",
         "purge_cache",
         "get_job",
         "cancel_job",
         "list_jobs",
     }
-    assert expected <= names
+    assert names == expected
     assert "search_tdocs" not in names
+    assert "semantic_search_tdoc" not in names
     assert "semantic_search_tdocs" not in names
+    assert "semantic_search_spec_docs" not in names
+    assert "rebuild_tdoc_search_index" not in names
     assert "rebuild_search_index" not in names
     assert "parse_spec_docs" in names
     assert not any(name.startswith("fetch_spec") for name in names)
@@ -171,31 +185,164 @@ def test_job_tools_enqueue_and_poll(sqlite_env) -> None:
     del state.engine
 
 
-def test_rebuild_tdoc_search_index_enqueues(sqlite_env) -> None:
-    """The TDoc search-index MCP tool preserves its job payload and kind."""
+def test_index_tools_enqueue_resource_jobs(sqlite_env) -> None:
+    """Resource index tools preserve action parameters and job kinds."""
     import asyncio
     import json
+
+    from doc3gpp.models.jobs import JobKind
 
     state, server = _state_and_server()
 
     async def run():
-        created = await server.call_tool(
-            "rebuild_tdoc_search_index",
-            {"stale_only": True, "resume": True},
-        )
-        envelope = json.loads(created.content[0].text)
-        detail = await server.call_tool(
-            "get_job", {"job_id": envelope["job_id"]}
-        )
-        return envelope, detail
+        results = []
+        for name in ("index_tdocs", "index_spec_docs"):
+            created = await server.call_tool(
+                name,
+                {
+                    "rebuild_all": True,
+                    "batch": 7,
+                    "resume": True,
+                    "stale_only": True,
+                },
+            )
+            envelope = json.loads(created.content[0].text)
+            detail = await server.call_tool("get_job", {"job_id": envelope["job_id"]})
+            results.append((name, envelope, detail))
+        return results
 
-    envelope, detail = asyncio.run(run())
-    assert envelope["status"] == "queued"
-    assert envelope["message"] == "queued rebuild_tdoc_search_index"
-    assert detail.is_error is False
-    detail_payload = json.loads(detail.content[0].text)
-    assert detail_payload["kind"] == "rebuild_search"
-    assert detail_payload["params"] == {"stale_only": True, "resume": True}
+    results = asyncio.run(run())
+    expected_params = {
+        "rebuild": False,
+        "rebuild_embeddings": False,
+        "rebuild_all": True,
+        "batch": 7,
+        "resume": True,
+        "stale_only": True,
+    }
+    for name, envelope, detail in results:
+        assert envelope["status"] == "queued"
+        assert envelope["message"] == f"queued {name}"
+        assert envelope["links"] == {
+            "self": f"/jobs/{envelope['job_id']}",
+            "events": f"/jobs/{envelope['job_id']}/events",
+        }
+        assert detail.is_error is False
+        detail_payload = json.loads(detail.content[0].text)
+        expected_kind = (
+            JobKind.INDEX_TDOCS.value
+            if name == "index_tdocs"
+            else JobKind.INDEX_SPEC_DOCS.value
+        )
+        assert detail_payload["kind"] == expected_kind
+        assert detail_payload["params"] == expected_params
+    del state.engine
+
+
+def test_index_tools_reject_contradictory_actions_without_creating_job(sqlite_env) -> None:
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    state, server = _state_and_server()
+    before = state.services.job_repo.list(limit=100)
+
+    async def run():
+        return await server.call_tool(
+            "index_tdocs",
+            {"rebuild": True, "rebuild_all": True},
+        )
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+    assert state.services.job_repo.list(limit=100) == before
+    del state.engine
+
+
+def test_index_tools_reject_non_positive_batches_without_creating_jobs(sqlite_env) -> None:
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    state, server = _state_and_server()
+    before = state.services.job_repo.list(limit=100)
+
+    async def run(name: str, batch: int):
+        return await server.call_tool(name, {"rebuild": True, "batch": batch})
+
+    for name in ("index_tdocs", "index_spec_docs"):
+        for batch in (0, -1):
+            with pytest.raises(MCPError):
+                asyncio.run(run(name, batch))
+    assert state.services.job_repo.list(limit=100) == before
+    del state.engine
+
+
+def test_index_status_tools_return_serialized_coordinator_status(sqlite_env) -> None:
+    import asyncio
+    from datetime import datetime, timezone
+
+    from doc3gpp.models.index import IndexComponentStatus, IndexStatus
+    from doc3gpp.models.search import SearchIndexStatus
+
+    state, server = _state_and_server()
+
+    class FakeIndex:
+        def __init__(self, status):
+            self._status = status
+
+        def status(self):
+            return self._status
+
+    status = IndexStatus(
+        fts5=IndexComponentStatus(
+            available=True,
+            status=SearchIndexStatus(
+                enabled=True,
+                row_count=12,
+                last_rebuild_at=datetime(2026, 9, 26, 10, 11, 12, tzinfo=timezone.utc),
+                last_indexed_uploaded_date=datetime(2026, 9, 25, 10, 11, 12, tzinfo=timezone.utc),
+                latest_tdocs_uploaded_date=datetime(2026, 9, 26, 10, 11, 12, tzinfo=timezone.utc),
+                is_stale=True,
+            ),
+        ),
+        vector=IndexComponentStatus(
+            available=True,
+            status=SearchIndexStatus(
+                enabled=True,
+                row_count=8,
+                last_rebuild_at=datetime(2026, 9, 26, 11, 12, 13, tzinfo=timezone.utc),
+                last_indexed_uploaded_date=datetime(2026, 9, 26, 11, 12, 13, tzinfo=timezone.utc),
+                latest_tdocs_uploaded_date=datetime(2026, 9, 26, 11, 12, 13, tzinfo=timezone.utc),
+                is_stale=False,
+                embedding_dim=384,
+                embedding_model="test-model",
+            ),
+        ),
+    )
+    state.services.tdoc_index = FakeIndex(status)
+    state.services.spec_doc_index = FakeIndex(status)
+
+    async def run():
+        return await asyncio.gather(
+            server.call_tool("get_tdoc_index", {}),
+            server.call_tool("get_spec_doc_index", {}),
+        )
+
+    results = asyncio.run(run())
+    assert [json.loads(result.content[0].text) for result in results] == [
+        status.to_dict(),
+        status.to_dict(),
+    ]
+    payload = json.loads(results[0].content[0].text)
+    assert payload["fts5"]["status"]["row_count"] == 12
+    assert payload["fts5"]["status"]["is_stale"] is True
+    assert payload["fts5"]["status"]["last_rebuild_at"] == "2026-09-26T10:11:12+00:00"
+    assert payload["vector"]["status"]["embedding_dim"] == 384
+    assert payload["vector"]["status"]["embedding_model"] == "test-model"
     del state.engine
 
 
@@ -718,99 +865,534 @@ def test_spec_tools_parity_with_http_json(sqlite_env) -> None:
     del state.engine
 
 
-def test_spec_doc_mcp_exposes_plural_metadata_filters(sqlite_env) -> None:
+def test_unified_search_tools_expose_facade_contracts_and_modes(sqlite_env) -> None:
     import asyncio
 
-    from doc3gpp.models.spec_doc import SpecDocHit, SpecDocSemanticHit
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.models.spec_doc import SpecDocSearchFilters
+    from doc3gpp.models.unified_search import (
+        SearchMode,
+        SpecDocSearchResult,
+        TDocSearchResult,
+    )
 
     state, server = _state_and_server()
 
-    class FakeSearch:
+    class RecordingTDocFacade:
         def __init__(self):
-            self.filters = None
-            self.hit = SpecDocHit(
-                chunk_id="38.331@19.0.0#0",
-                spec_id="38.331",
-                version="19.0.0",
-                release="Rel-19",
-                sections="5 Scope",
-                tables="Table 1 Values",
-                chunk_index=0,
-                text="handover",
-                score=0.1,
-                previews={},
-            )
+            self.calls = []
 
-        def search(self, _query, _filters):
-            self.filters = _filters
-            return [self.hit]
-
-    search_service = FakeSearch()
-
-    class FakeSemantic:
-        def __init__(self):
-            self.kwargs = None
-
-        def search(self, _query, **_kwargs):
-            self.kwargs = _kwargs
+        def search(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs["text"] and kwargs["semantic"]:
+                mode = SearchMode.HYBRID
+            elif kwargs["text"]:
+                mode = SearchMode.FTS5
+            elif kwargs["semantic"]:
+                mode = SearchMode.SEMANTIC
+            else:
+                mode = SearchMode.FILTER
             return [
-                SpecDocSemanticHit(
-                    chunk_id="38.331@19.0.0#0",
-                    rrf_score=0.1,
-                    hit=search_service.hit,
+                TDocSearchResult(
+                    tdoc_id="R5-260001",
+                    score=0.1 if mode is not SearchMode.FILTER else None,
+                    search_mode=mode,
+                    previews={"text": "<<handover>>"} if mode is SearchMode.FTS5 else None,
+                    title="Handover",
+                    meeting="RAN5#108",
+                    tsg="R5",
+                    uploaded_date="2026-01-02",
+                    ftp_url="r5/26.001/r5-260001.zip",
+                    wis="FS_HANDOVER",
+                    type="CR",
+                    status="Approved",
+                    best_chunk_id=None,
                 )
             ]
 
-    semantic_service = FakeSemantic()
-    state.services.spec_doc_search = search_service
-    state.services.spec_doc_semantic = semantic_service
+    class RecordingSpecDocFacade:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs["text"] and kwargs["semantic"]:
+                mode = SearchMode.HYBRID
+            elif kwargs["text"]:
+                mode = SearchMode.FTS5
+            elif kwargs["semantic"]:
+                mode = SearchMode.SEMANTIC
+            else:
+                mode = SearchMode.FILTER
+            return [
+                SpecDocSearchResult(
+                    chunk_id="38.331@19.0.0#0",
+                    score=0.1 if mode is not SearchMode.FILTER else None,
+                    search_mode=mode,
+                    previews={"text": "<<handover>>"} if mode is SearchMode.FTS5 else None,
+                    spec_id="38.331",
+                    version="19.0.0",
+                    release="Rel-19",
+                    sections="5 Scope",
+                    tables="Table 1 Values",
+                    chunk_index=0,
+                    text="handover",
+                )
+            ]
+
+    tdoc_facade = RecordingTDocFacade()
+    spec_facade = RecordingSpecDocFacade()
+    state.services.tdoc_search = tdoc_facade
+    state.services.spec_doc_search_facade = spec_facade
 
     async def run():
         tools = await server.list_tools()
         by_name = {tool.name: tool for tool in tools}
-        for name in ("search_spec_docs", "semantic_search_spec_docs"):
+        for name in ("search_tdoc", "search_spec_docs"):
             properties = by_name[name].input_schema["properties"]
-            assert "sections" in properties
-            assert "tables" in properties
-            assert "section" not in properties
+            assert "text" in properties
+            assert "semantic" in properties
+            if name == "search_spec_docs":
+                assert "sections" in properties
+                assert "tables" in properties
+                assert "section" not in properties
+            else:
+                assert "meeting_id" in properties
+                assert "tdoc_id" in properties
+            assert "fts5_weight" not in properties
+            assert "fts5_query" not in properties
+            assert "sem_query" not in properties
 
-        search_result = await server.call_tool(
-            "search_spec_docs",
-            {"query": "handover", "sections": "%5%", "tables": "%UE%"},
-        )
-        semantic_result = await server.call_tool(
-            "semantic_search_spec_docs",
-            {"query": "handover", "sections": "%5%", "tables": "%UE%"},
-        )
-        return search_result, semantic_result
+        calls = [
+            ("search_tdoc", {"text": "handover"}),
+            ("search_tdoc", {"semantic": "handover"}),
+            ("search_tdoc", {"text": "handover", "semantic": "handover"}),
+            ("search_tdoc", {"tdoc_id": "R5-260001", "meeting_id": 108}),
+            ("search_spec_docs", {"text": "handover"}),
+            ("search_spec_docs", {"semantic": "handover"}),
+            ("search_spec_docs", {"text": "handover", "semantic": "handover"}),
+            ("search_spec_docs", {"spec_id": "38.331", "sections": "%5%", "tables": "%UE%"}),
+        ]
+        return [
+            await server.call_tool(name, args) for name, args in calls
+        ]
 
-    search_result, semantic_result = asyncio.run(run())
-    assert search_result.is_error is False
-    assert semantic_result.is_error is False
-    assert json.loads(search_result.content[0].text)[0]["sections"] == "5 Scope"
-    nested = json.loads(semantic_result.content[0].text)[0]["hit"]
-    assert set(nested) == {
-        "chunk_id",
-        "spec_id",
-        "version",
-        "release",
-        "sections",
-        "tables",
-        "chunk_index",
-        "text",
-        "score",
-        "previews",
-    }
-    assert nested["sections"] == "5 Scope"
-    assert nested["tables"] == "Table 1 Values"
-    assert search_service.filters.sections == "%5%"
-    assert search_service.filters.tables == "%UE%"
-    assert semantic_service.kwargs["filters"].sections == "%5%"
-    assert semantic_service.kwargs["filters"].tables == "%UE%"
+    results = asyncio.run(run())
+    assert all(result.is_error is False for result in results)
+    payloads = [json.loads(result.content[0].text) for result in results]
+    assert payloads[0][0]["search_mode"] == "fts5"
+    assert payloads[1][0]["search_mode"] == "semantic"
+    assert payloads[2][0]["search_mode"] == "hybrid"
+    assert payloads[3][0]["search_mode"] == "filter"
+    assert payloads[1][0]["previews"] is None
+    assert payloads[2][0]["previews"] is None
+    assert payloads[3][0]["previews"] is None
+    assert payloads[3][0]["score"] is None
+    assert "hit" not in payloads[2][0]
+    assert "rank_fts5" not in payloads[2][0]
+    assert tdoc_facade.calls[3]["filters"] == SearchFilters(
+        meeting_id=108, tdoc_id="R5-260001"
+    )
+    assert spec_facade.calls[3]["filters"] == SpecDocSearchFilters(
+        spec_id="38.331", sections="%5%", tables="%UE%"
+    )
 
     from doc3gpp.storage.db.session import get_engine
 
     get_engine.cache_clear()
+    del state.engine
+
+
+@pytest.mark.parametrize("removed", ["fts5_weight", "fts5_query", "sem_query"])
+def test_unified_search_tools_reject_removed_request_arguments(sqlite_env, removed: str) -> None:
+    import asyncio
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    state, server = _state_and_server()
+    value = {"text": "handover", removed: "legacy"}
+
+    async def run(name: str):
+        return await server.call_tool(name, value)
+
+    for name in ("search_tdoc", "search_spec_docs"):
+        with pytest.raises(ToolError):
+            asyncio.run(run(name))
+    del state.engine
+
+
+def test_unified_search_tools_normalize_http_filter_values(sqlite_env) -> None:
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.models.spec_doc import SpecDocSearchFilters
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    state, server = _state_and_server()
+
+    class TDocFacade:
+        def __init__(self):
+            self.filters = None
+
+        def search(self, *, text, semantic, filters, snippet_tokens=None):
+            self.filters = filters
+            return []
+
+    class SpecFacade:
+        def __init__(self):
+            self.filters = None
+
+        def search(self, *, text, semantic, filters, snippet_tokens=None):
+            self.filters = filters
+            return []
+
+    tdoc = TDocFacade()
+    spec = SpecFacade()
+    state.services.tdoc_search = tdoc
+    state.services.spec_doc_search_facade = spec
+
+    async def run():
+        await server.call_tool(
+            "search_tdoc",
+            {
+                "since": " >= '2026-01-01' ",
+                "until": "null",
+                "meeting": "",
+                "release": "",
+            },
+        )
+        await server.call_tool(
+            "search_spec_docs",
+            {
+                "spec_id": "",
+                "release": "",
+                "version": "",
+                "sections": "",
+                "tables": "",
+            },
+        )
+
+    asyncio.run(run())
+    assert tdoc.filters == SearchFilters(
+        since=" >= '2026-01-01' ", until="null", meeting=None, release=None
+    )
+    assert spec.filters == SpecDocSearchFilters(
+        spec_id=None, release=None, version=None, sections=None, tables=None
+    )
+
+    async def run_invalid():
+        return await server.call_tool("search_tdoc", {"since": "2026-01-01"})
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run_invalid())
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+    del state.engine
+
+
+def test_unified_search_tools_map_index_corruption_with_resource_hints(sqlite_env) -> None:
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.models.search import SearchIndexCorruptError
+    from doc3gpp.web.errors import MCP_CODE_INTERNAL_ERROR
+
+    state, server = _state_and_server()
+
+    class BrokenFacade:
+        def search(self, **kwargs):
+            raise SearchIndexCorruptError("broken index")
+
+    state.services.tdoc_search = BrokenFacade()
+    state.services.spec_doc_search_facade = BrokenFacade()
+
+    async def run(name: str):
+        return await server.call_tool(name, {"text": "handover"})
+
+    for name, resource, hint in (
+        ("search_tdoc", "tdoc", "doc3gpp tdoc index --rebuild"),
+        ("search_spec_docs", "spec_doc", "doc3gpp spec doc index --rebuild"),
+    ):
+        with pytest.raises(MCPError) as exc_info:
+            asyncio.run(run(name))
+        assert exc_info.value.code == MCP_CODE_INTERNAL_ERROR
+        assert exc_info.value.data["error"] == "search_index_corrupt"
+        assert exc_info.value.data["resource"] == resource
+        assert exc_info.value.data["hint"] == f"run: {hint}"
+        assert hint in exc_info.value.message
+    del state.engine
+
+
+def test_unified_search_tools_map_malformed_semantic_query(sqlite_env) -> None:
+    import asyncio
+
+    from mcp.shared.exceptions import MCPError
+
+    from doc3gpp.models.semantic_search import SemanticSearchQueryError
+    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
+
+    state, server = _state_and_server()
+
+    class BrokenFacade:
+        def search(self, **_kwargs):
+            raise SemanticSearchQueryError("stopwords only")
+
+    state.services.tdoc_search = BrokenFacade()
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(server.call_tool("search_tdoc", {"semantic": "the"}))
+
+    assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
+    assert exc_info.value.data["error"] == "invalid_query"
+    del state.engine
+
+
+def test_unified_search_mcp_matches_http_json_bytes(sqlite_env) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    state, server = _state_and_server()
+    _seed_corpus()
+    state, server = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+        async def call(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        mcp_tdoc = asyncio.run(call("search_tdoc", {"text": "NB-IoT", "limit": 20}))
+        http_tdoc = client.get("/tdocs/search?format=json&text=NB-IoT&limit=20")
+        assert http_tdoc.status_code == 200, http_tdoc.text
+        assert mcp_tdoc == http_tdoc.content.decode("utf-8")
+
+    get_engine.cache_clear()
+    del state.engine
+
+
+def test_unified_search_mcp_matches_http_for_all_modes(sqlite_env) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.models.unified_search import (
+        SearchMode,
+        SpecDocSearchResult,
+        TDocSearchResult,
+    )
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.web.app import build_app
+
+    class TDocFacade:
+        def search(self, *, text, semantic, filters, snippet_tokens=None):
+            mode = (
+                SearchMode.HYBRID
+                if text and semantic
+                else SearchMode.FTS5
+                if text
+                else SearchMode.SEMANTIC
+                if semantic
+                else SearchMode.FILTER
+            )
+            return [
+                TDocSearchResult(
+                    tdoc_id="R5-260001",
+                    score=None if mode is SearchMode.FILTER else 0.42,
+                    search_mode=mode,
+                    previews={"text": "<<handover>>"} if mode is SearchMode.FTS5 else None,
+                    title="Handover",
+                    meeting="RAN5#108",
+                    tsg="R5",
+                    uploaded_date="2026-01-02",
+                    ftp_url="r5/26.001/r5-260001.zip",
+                    wis="FS_HANDOVER",
+                    type="CR",
+                    status="Approved",
+                    best_chunk_id="R5-260001#0" if mode is not SearchMode.FILTER else None,
+                )
+            ]
+
+    class SpecDocFacade:
+        def search(self, *, text, semantic, filters, snippet_tokens=None):
+            mode = (
+                SearchMode.HYBRID
+                if text and semantic
+                else SearchMode.FTS5
+                if text
+                else SearchMode.SEMANTIC
+                if semantic
+                else SearchMode.FILTER
+            )
+            return [
+                SpecDocSearchResult(
+                    chunk_id="38.331@18.5.0#0",
+                    score=None if mode is SearchMode.FILTER else 0.42,
+                    search_mode=mode,
+                    previews={"text": "<<handover>>"} if mode is SearchMode.FTS5 else None,
+                    spec_id="38.331",
+                    version="18.5.0",
+                    release="Rel-18",
+                    sections="5.1 Handover",
+                    tables="Table 1 UE values",
+                    chunk_index=0,
+                    text="handover procedure signalling",
+                )
+            ]
+
+    tdoc_facade = TDocFacade()
+    spec_facade = SpecDocFacade()
+    state, server = _state_and_server()
+    state.services.tdoc_search = tdoc_facade
+    state.services.spec_doc_search_facade = spec_facade
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+        app.state.web.services.tdoc_search = tdoc_facade
+        app.state.web.services.spec_doc_search_facade = spec_facade
+
+        async def call(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        cases = [
+            (
+                "search_tdoc",
+                {"text": "handover"},
+                "/tdocs/search",
+                {"text": "handover"},
+            ),
+            (
+                "search_tdoc",
+                {"semantic": "handover"},
+                "/tdocs/search",
+                {"semantic": "handover"},
+            ),
+            (
+                "search_tdoc",
+                {"text": "handover", "semantic": "handover"},
+                "/tdocs/search",
+                {"text": "handover", "semantic": "handover"},
+            ),
+            (
+                "search_tdoc",
+                {"tdoc_id": "R5-260001", "meeting_id": 108},
+                "/tdocs/search",
+                {"tdoc-id": "R5-260001", "meeting_id": 108},
+            ),
+            (
+                "search_spec_docs",
+                {"text": "handover"},
+                "/spec-docs/search",
+                {"text": "handover"},
+            ),
+            (
+                "search_spec_docs",
+                {"semantic": "handover"},
+                "/spec-docs/search",
+                {"semantic": "handover"},
+            ),
+            (
+                "search_spec_docs",
+                {"text": "handover", "semantic": "handover"},
+                "/spec-docs/search",
+                {"text": "handover", "semantic": "handover"},
+            ),
+            (
+                "search_spec_docs",
+                {"spec_id": "38.331", "sections": "5.1", "tables": "%UE%"},
+                "/spec-docs/search",
+                {"spec": "38.331", "sections": "5.1", "tables": "%UE%"},
+            ),
+        ]
+        for name, args, route, params in cases:
+            mcp_bytes = asyncio.run(call(name, args))
+            http_response = client.get(route, params={**params, "format": "json"})
+            assert http_response.status_code == 200, http_response.text
+            assert mcp_bytes == http_response.content.decode("utf-8"), name
+
+    get_engine.cache_clear()
+    del state.engine
+
+
+def test_unified_spec_doc_search_mcp_matches_http_json_bytes(sqlite_env) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.models.spec_doc import ChunkDraft
+    from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
+    from doc3gpp.storage.db.session import get_engine, get_specdata_engine
+    from doc3gpp.storage.repositories.spec_doc_search_sql import (
+        SQLAlchemySpecDocSearchRepository,
+    )
+    from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
+    from doc3gpp.web.app import build_app
+
+    state, server = _state_and_server()
+    repo = SQLAlchemySpecDocRepository()
+    repo.record_download(
+        "38.331", "18.5.0", release="Rel-18", ftp_url="https://x", docx_count=1
+    )
+    repo.replace_chunks(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=[
+            ChunkDraft(
+                file_order=0,
+                source_file="a.docx",
+                sections="5.1 Handover",
+                tables="Table 1 UE values",
+                text="handover procedure signalling",
+            )
+        ],
+    )
+    SQLAlchemySpecDocSearchRepository().upsert_for_version("38.331", "18.5.0")
+    state, server = _state_and_server()
+    app = build_app(
+        Settings(
+            server=ServerSettings(enabled=True, port=8765),
+            mcp=MCPSettings(enabled=True),
+            cache=CacheSettings(dir=state.settings.cache.dir),
+        )
+    )
+    with TestClient(app) as client:
+        async def call(name: str, args: dict) -> str:
+            result = await server.call_tool(name, args)
+            assert result.is_error is False, result
+            return result.content[0].text
+
+        mcp_spec = asyncio.run(
+            call("search_spec_docs", {"text": "handover", "limit": 20})
+        )
+        http_spec = client.get(
+            "/spec-docs/search?format=json&text=handover&limit=20"
+        )
+        assert http_spec.status_code == 200, http_spec.text
+        assert mcp_spec == http_spec.content.decode("utf-8")
+
+    get_engine.cache_clear()
+    get_specdata_engine.cache_clear()
     del state.engine
 
 
@@ -823,6 +1405,7 @@ def _state_and_search_server(search_corpus):
     :class:`PassthroughReranker` so the FTS5 query path is real and no
     model is touched.
     """
+    from doc3gpp.services import factory
     from doc3gpp.services.search_service import PassthroughReranker, SearchService
     from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
 
@@ -830,6 +1413,12 @@ def _state_and_search_server(search_corpus):
     state.services.search = SearchService(
         repo=SQLAlchemySearchIndexRepository(),
         reranker=PassthroughReranker(),
+    )
+    state.services.tdoc_search = factory.build_tdoc_search_facade(
+        state.settings,
+        fts5_service=state.services.search,
+        semantic_service=None,
+        source_repo=state.services.tdoc_repo,
     )
     return state, server
 
@@ -850,7 +1439,7 @@ def test_search_tdoc_normalises_jargon_queries(search_corpus) -> None:
 
     async def run():
         return await server.call_tool(
-            "search_tdoc", {"query": "nb-iot AND scheduling", "limit": 20}
+            "search_tdoc", {"text": "nb-iot AND scheduling", "limit": 20}
         )
 
     result = asyncio.run(run())
@@ -874,225 +1463,11 @@ def test_search_tdoc_stopwords_only_raises_invalid_params(search_corpus) -> None
     state, server = _state_and_search_server(search_corpus)
 
     async def run():
-        return await server.call_tool("search_tdoc", {"query": "the"})
+        return await server.call_tool("search_tdoc", {"text": "the"})
 
     with pytest.raises(MCPError) as exc_info:
         asyncio.run(run())
     assert exc_info.value.code == MCP_CODE_INVALID_PARAMS
-    get_engine.cache_clear()
-    del state.engine
-
-
-def test_search_tdoc_accepts_sem_query(sqlite_env, search_corpus) -> None:
-    """search_tdoc forwards sem_query to the search service."""
-    import asyncio
-
-    import numpy as np
-
-    from doc3gpp.services.semantic_reranker import SemanticReranker
-    from doc3gpp.services.search_service import SearchService
-    from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
-    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
-    from doc3gpp.web.mcp_server import build_mcp_server
-    from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
-    from doc3gpp.settings.schema import Settings
-    from doc3gpp.storage.db.session import get_engine, get_testcase_engine
-    from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
-    from doc3gpp.services import factory
-
-    recorded: list[str] = []
-
-    class RecordingEmbedder:
-        def encode(self, texts: list[str]) -> np.ndarray:
-            recorded.extend(texts)
-            return np.zeros((len(texts), 384), dtype=np.float32)
-
-    settings = Settings()
-    services = ServiceContainer(
-        meeting=factory.build_meeting_service(),
-        tdoc=factory.build_tdoc_service(),
-        tdoc_cr=factory.build_tdoc_cr_service(embedder=RecordingEmbedder()),
-        tdoc_sync=factory.build_tdoc_sync_coordinator(),
-        tdoc_repo=factory.build_tdoc_repository(),
-        tsg=factory.build_tsg_service(),
-        wi=factory.build_wi_service(),
-        spec=factory.build_spec_service(),
-        testcase=factory.build_testcase_service(),
-        search=SearchService(
-            repo=SQLAlchemySearchIndexRepository(),
-            reranker=SemanticReranker(
-                embedder=RecordingEmbedder(),
-                vector_repo=SQLAlchemyVectorIndexRepository(),
-                settings=settings,
-            ),
-        ),
-        semantic_search=factory.build_semantic_search_service(embedder=RecordingEmbedder()),
-        tdoc_file_repo=factory.build_tdoc_file_repository(),
-        job_repo=SQLAlchemyJobRepository(),
-    )
-    state = WebState(
-        settings=settings,
-        engine=get_engine(),
-        testcase_engine=get_testcase_engine(),
-        services=services,
-        jobs=JobWorkerHandle(),
-    )
-    server = build_mcp_server(state)
-
-    async def run():
-        return await server.call_tool(
-            "search_tdoc",
-            {"query": "scheduling", "limit": 5, "sem_query": "scheduling"},
-        )
-
-    result = asyncio.run(run())
-    assert result is not None
-    text = result.content[0].text
-    assert text.startswith("[")
-    assert recorded == ["scheduling"]
-    get_engine.cache_clear()
-    get_testcase_engine.cache_clear()
-    del state.engine
-    del state.testcase_engine
-
-
-def test_semantic_search_tdoc_forwards_args_and_preserves_contract(sqlite_env) -> None:
-    """The renamed MCP semantic tool preserves forwarding, output, and errors."""
-    import asyncio
-
-    from mcp.server.mcpserver.exceptions import ToolError
-    from mcp.shared.exceptions import MCPError
-
-    from doc3gpp.models.search import SearchFilters, SearchHit
-    from doc3gpp.models.semantic_search import SemanticSearchHit
-    from doc3gpp.storage.db.session import get_engine
-    from doc3gpp.web.errors import MCP_CODE_INVALID_PARAMS
-
-    class RecordingSemanticSearchService:
-        def __init__(self) -> None:
-            self.calls: list[dict] = []
-
-        def search(
-            self,
-            query: str,
-            *,
-            fts5_query: str | None,
-            filters: SearchFilters,
-            limit: int,
-            fts5_weight: float,
-        ) -> list[SemanticSearchHit]:
-            self.calls.append(
-                {
-                    "query": query,
-                    "fts5_query": fts5_query,
-                    "filters": filters,
-                    "limit": limit,
-                    "fts5_weight": fts5_weight,
-                }
-            )
-            return [
-                SemanticSearchHit(
-                    tdoc_id="R5-260001",
-                    rrf_score=0.42,
-                    hit=SearchHit(
-                        tdoc_id="R5-260001",
-                        score=-1.2,
-                        previews={},
-                        title="Handover signalling",
-                        meeting="RAN5#108",
-                        tsg="R5",
-                        uploaded_date="2026-01-02",
-                        ftp_url="r5/26.001/r5-260001.zip",
-                        wis="FS_HANDOVER",
-                    ),
-                    rank_fts5=1,
-                    rank_vec=0,
-                    min_chunk_distance=0.125,
-                    best_chunk_id="R5-260001#0",
-                ),
-            ]
-
-    state, server = _state_and_server()
-    fake = RecordingSemanticSearchService()
-    state.services.semantic_search = fake
-
-    async def run():
-        return await server.call_tool(
-            "semantic_search_tdoc",
-            {
-                "query": "handover signalling",
-                "fts5_query": '"handover" AND signalling',
-                "tsg": "R5",
-                "meeting": "%RAN%",
-                "meeting_id": 108,
-                "tdoc_id": "R5-260001",
-                "release": "Rel-18",
-                "spec": "38.300",
-                "since": "2026-01-01",
-                "until": "2026-12-31",
-                "limit": 7,
-                "fts5_weight": 0.75,
-            },
-        )
-
-    result = asyncio.run(run())
-    assert result.is_error is False
-    assert fake.calls == [
-        {
-            "query": "handover signalling",
-            "fts5_query": '"handover" AND signalling',
-            "filters": SearchFilters(
-                tsg="R5",
-                meeting="%RAN%",
-                meeting_id=108,
-                tdoc_id="R5-260001",
-                release="Rel-18",
-                spec="38.300",
-                since="2026-01-01",
-                until="2026-12-31",
-                limit=7,
-            ),
-            "limit": 7,
-            "fts5_weight": 0.75,
-        },
-    ]
-    assert json.loads(result.content[0].text) == [
-        {
-            "tdoc_id": "R5-260001",
-            "rrf_score": 0.42,
-            "rank_fts5": 1,
-            "rank_vec": 0,
-            "min_chunk_distance": 0.125,
-            "best_chunk_id": "R5-260001#0",
-            "hit": {
-                "tdoc_id": "R5-260001",
-                "title": "Handover signalling",
-                "ftp_url": "r5/26.001/r5-260001.zip",
-                "wis": "FS_HANDOVER",
-            },
-        },
-    ]
-
-    async def run_invalid_weight():
-        return await server.call_tool(
-            "semantic_search_tdoc",
-            {"query": "handover", "fts5_weight": 1.1},
-        )
-
-    with pytest.raises(MCPError) as invalid_exc:
-        asyncio.run(run_invalid_weight())
-    assert invalid_exc.value.code == MCP_CODE_INVALID_PARAMS
-    assert invalid_exc.value.data["error"] == "invalid_filter"
-
-    async def run_removed_name():
-        return await server.call_tool(
-            "semantic_search_tdocs", {"query": "handover"}
-        )
-
-    with pytest.raises(ToolError, match="Unknown tool: semantic_search_tdocs") as old_exc:
-        asyncio.run(run_removed_name())
-    assert str(old_exc.value) == "Unknown tool: semantic_search_tdocs"
-
     get_engine.cache_clear()
     del state.engine
 
@@ -1236,6 +1611,8 @@ def test_mcp_get_tdoc_includes_cover_summary_of_change(sqlite_env) -> None:
     """The ``get_tdoc`` MCP tool surfaces ``cover.summary_of_change``."""
     import asyncio
 
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_sql import (
         SQLAlchemyTDocCrRepository,
@@ -1243,8 +1620,6 @@ def test_mcp_get_tdoc_includes_cover_summary_of_change(sqlite_env) -> None:
     from doc3gpp.storage.repositories.tdoc_sql import (
         SQLAlchemyTDocRepository,
     )
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
 
     create_schema()
     url = "R5/26.001/R5s260001.zip"
@@ -1276,12 +1651,12 @@ def test_mcp_get_tdoc_by_url_matches_http_route(sqlite_env) -> None:
 
     from fastapi.testclient import TestClient
 
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.web.app import build_app
 
     state, server = _state_and_server()  # runs create_schema()
@@ -1377,7 +1752,7 @@ def test_mcp_list_testcases_parity(sqlite_env) -> None:
             ],
         )
     ]
-    state.services.testcase.list_recent = lambda **k: rows  # noqa: ARG005
+    state.services.testcase.list_recent = lambda **k: rows
 
     async def run():
         return await server.call_tool("list_testcases", {})

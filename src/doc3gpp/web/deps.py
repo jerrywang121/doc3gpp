@@ -15,11 +15,15 @@ from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
+from doc3gpp.services.spec_doc_index_service import SpecDocIndexService
+from doc3gpp.services.spec_doc_search_facade import SpecDocSearchFacade
 from doc3gpp.services.spec_doc_search_service import SpecDocSearchService
 from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
 from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.services.spec_service import SpecService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
+from doc3gpp.services.tdoc_index_service import TDocIndexService
+from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.services.testcase_service import TestCaseService
 from doc3gpp.services.tsg_service import TsgService
@@ -98,6 +102,22 @@ def get_spec_doc_semantic_service(request: Request) -> SpecDocSemanticService | 
     return get_services(request).spec_doc_semantic
 
 
+def get_tdoc_search_facade(request: Request) -> TDocSearchFacade | None:
+    return get_services(request).tdoc_search
+
+
+def get_spec_doc_search_facade(request: Request) -> SpecDocSearchFacade | None:
+    return get_services(request).spec_doc_search_facade
+
+
+def get_tdoc_index_service(request: Request) -> TDocIndexService | None:
+    return get_services(request).tdoc_index
+
+
+def get_spec_doc_index_service(request: Request) -> SpecDocIndexService | None:
+    return get_services(request).spec_doc_index
+
+
 def get_tdoc_file_repo(request: Request) -> SQLAlchemyTDocFileRepository:
     return get_services(request).tdoc_file_repo
 
@@ -116,7 +136,7 @@ def get_job_repo(request: Request) -> JobRepository:
 
 def get_pending_jobs(
     request: Request,
-    job_repo: JobRepository = Depends(get_job_repo),
+    job_repo: JobRepository = Depends(get_job_repo),  # noqa: B008
 ) -> int:
     """Return the number of in-flight background jobs (for the nav badge).
     Counts ``QUEUED`` + ``RUNNING`` rows via the :class:`JobRepository`
@@ -138,7 +158,7 @@ def get_pending_jobs(
     try:
         queued = len(job_repo.list(status=JobStatus.QUEUED, limit=1000))
         running = len(job_repo.list(status=JobStatus.RUNNING, limit=1000))
-    except Exception:
+    except Exception:  # noqa: BLE001 - missing jobs table is non-fatal
         return 0
     return queued + running
 
@@ -158,6 +178,8 @@ __all__ = [
     "get_semantic_search_service",
     "get_services",
     "get_settings",
+    "get_spec_doc_index_service",
+    "get_spec_doc_search_facade",
     "get_spec_doc_search_service",
     "get_spec_doc_semantic_service",
     "get_spec_doc_service",
@@ -165,6 +187,8 @@ __all__ = [
     "get_state",
     "get_tdoc_cr_service",
     "get_tdoc_file_repo",
+    "get_tdoc_index_service",
+    "get_tdoc_search_facade",
     "get_tdoc_service",
     "get_testcase_service",
     "get_tsg_service",

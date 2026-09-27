@@ -17,14 +17,31 @@ CLI most recently wrote.
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Annotated, Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 
 from pydantic import Field
 
 from doc3gpp.models.jobs import JobKind
+from doc3gpp.models.search import (
+    SearchFilters,
+    SearchIndexCorruptError,
+    SearchUnavailableError,
+)
+from doc3gpp.models.semantic_search import (
+    EmbedderUnavailableError,
+    SemanticSearchUnavailableError,
+    VectorIndexUnavailableError,
+)
+from doc3gpp.models.spec_doc import SpecDocSearchFilters
+from doc3gpp.models.unified_search import (
+    spec_doc_search_result_to_dict,
+    tdoc_search_result_to_dict,
+)
 from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
 from doc3gpp.web import render
 from doc3gpp.web.errors import (
+    MCP_CODE_INTERNAL_ERROR,
     CacheMissError,
     InvalidFilterError,
     JobNotFoundError,
@@ -37,6 +54,7 @@ from doc3gpp.web.errors import (
     TSGNotFoundError,
     map_mcp_error,
 )
+from doc3gpp.web.filters import parse_date_query, parse_text_query
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
@@ -58,6 +76,7 @@ _TESTCASE_GROUPS = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")
 _SEARCH_FILTER_KEYS = ("tsg", "meeting", "meeting_id", "tdoc_id", "release", "spec", "since", "until")
 
 _F = TypeVar("_F", bound=Callable[..., Any])
+_MCP_FILTER_STRING = str
 
 
 def _package_version() -> str:
@@ -99,7 +118,7 @@ def _mcp_error_guard(fn: _F) -> _F:
             return fn(*args, **kwargs)
         except MCPError:
             raise
-        except Exception as exc:  # noqa: BLE001 - deliberate transport boundary
+        except Exception as exc:
             mapped = map_mcp_error(exc)
             if mapped is not None:
                 code, message, data = mapped
@@ -130,56 +149,6 @@ def _to_json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
-def _fts5_hit_to_json(hit: Any) -> dict[str, Any]:
-    return {
-        "tdoc_id": hit.tdoc_id,
-        "score": hit.score,
-        "previews": hit.previews,
-        "title": hit.title,
-        "meeting": hit.meeting,
-        "tsg": hit.tsg,
-        "uploaded_date": hit.uploaded_date,
-        "ftp_url": hit.ftp_url,
-        "wis": hit.wis,
-    }
-
-
-def _semantic_hit_to_json(hit: Any) -> dict[str, Any]:
-    return {
-        "tdoc_id": hit.tdoc_id,
-        "rrf_score": hit.rrf_score,
-        "rank_fts5": hit.rank_fts5,
-        "rank_vec": hit.rank_vec,
-        "min_chunk_distance": hit.min_chunk_distance,
-        "best_chunk_id": hit.best_chunk_id,
-        "hit": {
-            "tdoc_id": hit.hit.tdoc_id,
-            "title": hit.hit.title,
-            "ftp_url": hit.hit.ftp_url,
-            "wis": hit.hit.wis,
-        },
-    }
-
-
-def _spec_doc_hit_to_json(hit: Any) -> dict[str, Any]:
-    """Shape one :class:`SpecDocHit` exactly like the CLI's query JSON renderer.
-
-    Mirrors ``cli.py::_spec_doc_hit_to_dict`` (same key order and values)
-    so the MCP tool and ``GET /spec-docs/search?format=json`` stay
-    byte-identical through the shared :mod:`doc3gpp.web.render` helpers.
-    """
-    from doc3gpp.web.render import spec_doc_hit_to_json as _render_hit
-
-    return _render_hit(hit)
-
-
-def _spec_doc_semantic_hit_to_json(hit: Any) -> dict[str, Any]:
-    """Shape one :class:`SpecDocSemanticHit` exactly like the CLI's sem renderer."""
-    from doc3gpp.web.render import spec_doc_semantic_hit_to_json as _render_sem
-
-    return _render_sem(hit)
-
-
 def _spec_doc_toc_to_json(toc: Any) -> dict[str, Any]:
     """Shape one :class:`SpecDocToc` exactly like the CLI's TOC JSON payload."""
     from doc3gpp.web.render import spec_doc_toc_to_json as _render_toc
@@ -191,7 +160,7 @@ def _job_url(job_id: str) -> str:
     return f"/jobs/{job_id}"
 
 
-def _enqueue(state: "WebState", kind: JobKind, params: dict[str, Any], message: str) -> str:
+def _enqueue(state: WebState, kind: JobKind, params: dict[str, Any], message: str) -> str:
     job = state.services.job_repo.create(kind, params)
     return _to_json(
         {
@@ -206,7 +175,79 @@ def _enqueue(state: "WebState", kind: JobKind, params: dict[str, Any], message: 
     )
 
 
-def build_mcp_server(state: "WebState") -> "MCPServer":
+def _validate_search_pagination(
+    *, limit: int, offset: int = 0, snippet_tokens: int | None = None
+) -> None:
+    if not 1 <= limit <= 200:
+        raise InvalidFilterError("limit must be between 1 and 200")
+    if offset < 0:
+        raise InvalidFilterError("offset must be non-negative")
+    if snippet_tokens is not None and not 1 <= snippet_tokens <= 64:
+        raise InvalidFilterError("snippet_tokens must be between 1 and 64")
+
+
+def _index_params(
+    *,
+    rebuild: bool,
+    rebuild_embeddings: bool,
+    rebuild_all: bool,
+    batch: int | None,
+    resume: bool,
+    stale_only: bool,
+) -> dict[str, Any]:
+    if batch is not None and batch <= 0:
+        raise InvalidFilterError("batch must be a positive integer")
+    if rebuild_all and (rebuild or rebuild_embeddings):
+        raise InvalidFilterError(
+            "rebuild_all is mutually exclusive with rebuild and rebuild_embeddings"
+        )
+    params: dict[str, Any] = {
+        "rebuild": rebuild,
+        "rebuild_embeddings": rebuild_embeddings,
+        "rebuild_all": rebuild_all,
+        "resume": resume,
+        "stale_only": stale_only,
+    }
+    if batch is not None:
+        params["batch"] = batch
+    return params
+
+
+def _map_search_index_corrupt_error(
+    exc: SearchIndexCorruptError, *, resource: str
+) -> Any:
+    command = (
+        "doc3gpp tdoc index --rebuild"
+        if resource == "tdoc"
+        else "doc3gpp spec doc index --rebuild"
+    )
+    message = f"search index corrupt; run `{command}`: {exc}"
+    from mcp.shared.exceptions import MCPError
+
+    raise MCPError(
+        code=MCP_CODE_INTERNAL_ERROR,
+        message=message,
+        data={
+            "error": "search_index_corrupt",
+            "detail": str(exc),
+            "resource": resource,
+            "hint": f"run: {command}",
+        },
+    ) from exc
+
+
+def _reject_unknown_search_arguments(server: Any) -> None:
+    """Make MCP validation reject fields omitted from the public schemas."""
+    for name in ("search_tdoc", "search_spec_docs"):
+        tool = server._tool_manager.get_tool(name)
+        if tool is None:
+            continue
+        tool.fn_metadata.arg_model.model_config["extra"] = "forbid"
+        tool.fn_metadata.arg_model.model_rebuild(force=True)
+        tool.parameters = tool.fn_metadata.arg_model.model_json_schema(by_alias=True)
+
+
+def build_mcp_server(state: WebState) -> MCPServer:
     """Build and return an :class:`MCPServer` wired to ``state``.
 
     All tools are registered here so :mod:`doc3gpp.web.app` just needs
@@ -631,57 +672,49 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
         toc = services.spec_doc.get_toc(spec_id, version, release=release)
         return _to_json(_spec_doc_toc_to_json(toc))
 
-    @server.tool(name="search_spec_docs", description="Full-text (FTS5) search over spec-doc chunks. The spec, release, version, sections and tables filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. spec='38.33%'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="search_spec_docs", description="Search spec-document chunks using text, semantic, hybrid, or filter mode. Optional rich filters include spec_id, release, version, sections, and tables.")
     @_mcp_error_guard
     def search_spec_docs(
-        query: Annotated[str, Field(description='Full-text query with FTS5 MATCH expression over spec-doc chunk text, phrases shall be wrapped with double quotes, support AND, OR and NOT (e.g. \'handover AND beamforming NOT "CSI report"\').')],
-        spec_id: Annotated[str | None, Field(description="Only search chunks for the given spec id (rich filter pattern).")] = None,
-        release: Annotated[str | None, Field(description="Rich filter over release (e.g. 'Rel-18').")] = None,
-        version: Annotated[str | None, Field(description="Rich filter over version (e.g. '18.5.%').")] = None,
-        sections: Annotated[str | None, Field(description="Rich filter over combined section metadata (e.g. '%handover%').")] = None,
-        tables: Annotated[str | None, Field(description="Rich filter over combined table metadata (e.g. '%UE%').")] = None,
+        text: Annotated[str | None, Field(description="Optional FTS5 text query.")] = None,
+        semantic: Annotated[str | None, Field(description="Optional natural-language semantic query.")] = None,
+        spec_id: Annotated[_MCP_FILTER_STRING, Field(description="Only search chunks for the given spec id (rich filter pattern).")]= None,
+        release: Annotated[_MCP_FILTER_STRING, Field(description="Rich filter over release (e.g. 'Rel-18').")] = None,
+        version: Annotated[_MCP_FILTER_STRING, Field(description="Rich filter over version (e.g. '18.5.%').")] = None,
+        sections: Annotated[_MCP_FILTER_STRING, Field(description="Rich filter over combined section metadata (e.g. '%handover%').")] = None,
+        tables: Annotated[_MCP_FILTER_STRING, Field(description="Rich filter over combined table metadata (e.g. '%UE%').")] = None,
         limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
         offset: Annotated[int, Field(description="Number of hits to skip for pagination.")] = 0,
     ) -> str:
-        if services.spec_doc_search is None:
+        if services.spec_doc_search_facade is None:
             raise SettingsDisabledError("search is not available in this build")
-        from doc3gpp.models.spec_doc import SpecDocSearchFilters
-
+        _validate_search_pagination(limit=limit, offset=offset)
         filters = SpecDocSearchFilters(
-            spec_id=spec_id, release=release, version=version,
-            sections=sections, tables=tables, limit=limit, offset=offset,
+            spec_id=parse_text_query(spec_id),
+            release=parse_text_query(release),
+            version=parse_text_query(version),
+            sections=parse_text_query(sections),
+            tables=parse_text_query(tables),
+            limit=limit,
+            offset=offset,
         )
-        hits = services.spec_doc_search.search(query, filters)
-        return _to_json([_spec_doc_hit_to_json(h) for h in hits])
-
-    @server.tool(name="semantic_search_spec_docs", description="Semantic (embedding) search over spec-doc chunks with natural-language query, optionally blended with an FTS5 query via reciprocal-rank fusion (RRF). Chunk-level fusion (unlike tdoc-level): each chunk_id is ranked by FTS5 position and vector KNN position.")
-    @_mcp_error_guard
-    def semantic_search_spec_docs(
-        query: Annotated[str, Field(description="Natural-language semantic query over spec-doc chunk text (e.g. 'handover signalling procedures').")],
-        fts5_query: Annotated[str | None, Field(description="Optional FTS5 MATCH expression. When omitted, only embedding-KNN runs (no RRF). When supplied, results are merged with the vector ranking via RRF.")] = None,
-        spec_id: Annotated[str | None, Field(description="Only search chunks for the given spec id.")] = None,
-        release: Annotated[str | None, Field(description="Filter over release.")] = None,
-        version: Annotated[str | None, Field(description="Filter over version.")] = None,
-        sections: Annotated[str | None, Field(description="Filter over combined section metadata.")] = None,
-        tables: Annotated[str | None, Field(description="Filter over combined table metadata.")] = None,
-        limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
-        fts5_weight: Annotated[float, Field(description="Blend weight (0.0..1.0) for the FTS5 rank in RRF; the vector weight is 1 - fts5_weight. Ignored when fts5_query is omitted.")] = 0.5,
-    ) -> str:
-        if services.spec_doc_semantic is None:
-            raise SettingsDisabledError("semantic search is not available in this build")
-        if not 0.0 <= fts5_weight <= 1.0:
-            raise InvalidFilterError("fts5_weight must be between 0.0 and 1.0")
-        from doc3gpp.models.spec_doc import SpecDocSearchFilters
-
-        filters = SpecDocSearchFilters(
-            spec_id=spec_id, release=release, version=version,
-            sections=sections, tables=tables, limit=limit, offset=0,
+        try:
+            results = services.spec_doc_search_facade.search(
+                text=text,
+                semantic=semantic,
+                filters=filters,
+            )
+        except SearchIndexCorruptError as exc:
+            _map_search_index_corrupt_error(exc, resource="spec_doc")
+        except (
+            SearchUnavailableError,
+            SemanticSearchUnavailableError,
+            EmbedderUnavailableError,
+            VectorIndexUnavailableError,
+        ) as exc:
+            raise SettingsDisabledError(str(exc)) from exc
+        return _to_json(
+            [spec_doc_search_result_to_dict(result) for result in results]
         )
-        hits = services.spec_doc_semantic.search(
-            query, fts5_query=fts5_query, filters=filters,
-            limit=limit, fts5_weight=fts5_weight,
-        )
-        return _to_json([_spec_doc_semantic_hit_to_json(h) for h in hits])
 
     @server.tool(name="get_spec_doc_schema", description="Describe every column of the spec_doc_sources, spec_doc_tocs and spec_doc_chunks tables (separate specdata sqlite file).")
     @_mcp_error_guard
@@ -690,59 +723,68 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
 
         return _to_json(schema_payload("spec_doc"))
 
+    @server.tool(name="get_tdoc_index", description="Return the current TDoc FTS5 and vector index status.")
+    @_mcp_error_guard
+    def get_tdoc_index() -> str:
+        if services.tdoc_index is None:
+            raise SettingsDisabledError("index maintenance is not available in this build")
+        return _to_json(services.tdoc_index.status().to_dict())
+
+    @server.tool(name="get_spec_doc_index", description="Return the current spec-document FTS5 and vector index status.")
+    @_mcp_error_guard
+    def get_spec_doc_index() -> str:
+        if services.spec_doc_index is None:
+            raise SettingsDisabledError("index maintenance is not available in this build")
+        return _to_json(services.spec_doc_index.status().to_dict())
+
     # ---- Search ---------------------------------------------------
-    @server.tool(name="search_tdoc", description="Full-text (FTS5) search over tdoc text. Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="search_tdoc", description="Search TDocs using text, semantic, hybrid, or filter mode. Optional rich filters include tsg, meeting, meeting_id, tdoc_id, release, spec, since, and until.")
     @_mcp_error_guard
     def search_tdoc(
-        query: Annotated[str, Field(description='Full-text query with FTS5 MATCH expression over tdoc text, phrases shall be wrapped with double quotes, support AND, OR and NOT (e.g. \'handover AND beamforming NOT "CSI report"\').')],
-        tsg: Annotated[str | None, Field(description="Exact TSG short name filter (e.g. 'R5').")] = None,
-        meeting: Annotated[str | None, Field(description="Rich filter on the meeting name or title")] = None,
-        release: Annotated[str | None, Field(description="Rich filter pattern on the release (e.g. 'Rel-17').")] = None,
-        spec: Annotated[str | None, Field(description="Rich filter pattern on the spec (e.g. '38.300').")] = None,
-        since: Annotated[str | None, Field(description="Earliest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
-        until: Annotated[str | None, Field(description="Latest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
-        limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
-        sem_query: Annotated[str | None, Field(description="Optional semantic rerank query; when set, results are reranked by embedding similarity to this text.")] = None,
-    ) -> str:
-        if services.search is None:
-            raise SettingsDisabledError("search is not available in this build")
-        from doc3gpp.services.search_service import SearchFilters
-
-        filters = SearchFilters(tsg=tsg, meeting=meeting, release=release, spec=spec, since=since, until=until, limit=limit)
-        hits = services.search.search(query, filters, sem_query=sem_query)
-        return _to_json([_fts5_hit_to_json(h) for h in hits])
-
-    @server.tool(name="semantic_search_tdoc", description="Semantic (embedding) search over tdoc text with natural-language query, optionally blended with an FTS5 query via reciprocal-rank fusion (RRF). Optional filters on tsg, meeting, release, spec support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
-    @_mcp_error_guard
-    def semantic_search_tdoc(
-        query: Annotated[str, Field(description="Natural-language semantic query over tdoc text (e.g. 'handover signalling procedures').")],
-        fts5_query: Annotated[str | None, Field(description="Optional FTS5 MATCH expression, support AND, OR and NOT (e.g. 'handover AND beamforming NOT \"CSI report\"'). When omitted, only embedding-KNN runs (no RRF). When supplied, results are merged with the vector ranking via RRF.")] = None,
-        tsg: Annotated[str | None, Field(description="Exact TSG short name filter (e.g. 'R5').")] = None,
-        meeting: Annotated[str | None, Field(description="Rich filter on the meeting name or title")] = None,
+        text: Annotated[str | None, Field(description="Optional FTS5 text query.")] = None,
+        semantic: Annotated[str | None, Field(description="Optional natural-language semantic query.")] = None,
+        tsg: Annotated[_MCP_FILTER_STRING, Field(description="Exact TSG short name filter (e.g. 'R5').")] = None,
+        meeting: Annotated[_MCP_FILTER_STRING, Field(description="Rich filter on the meeting name or title")] = None,
         meeting_id: Annotated[int | None, Field(description="Exact numeric meeting id filter.")] = None,
-        tdoc_id: Annotated[str | None, Field(description="Exact tdoc id filter (e.g. 'R5-260013').")] = None,
-        release: Annotated[str | None, Field(description="Rich filter pattern on the release (e.g. 'Rel-17').")] = None,
-        spec: Annotated[str | None, Field(description="Rich filter pattern on the spec (e.g. '38.300').")] = None,
-        since: Annotated[str | None, Field(description="Earliest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
-        until: Annotated[str | None, Field(description="Latest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
+        tdoc_id: Annotated[_MCP_FILTER_STRING, Field(description="Exact tdoc id filter.")] = None,
+        release: Annotated[_MCP_FILTER_STRING, Field(description="Rich filter pattern on the release (e.g. 'Rel-17').")] = None,
+        spec: Annotated[_MCP_FILTER_STRING, Field(description="Rich filter pattern on the spec (e.g. '38.300').")] = None,
+        since: Annotated[_MCP_FILTER_STRING, Field(description="Earliest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
+        until: Annotated[_MCP_FILTER_STRING, Field(description="Latest uploaded_date (ISO 'YYYY-MM-DD').")] = None,
         limit: Annotated[int, Field(description="Maximum number of hits to return.")] = 20,
-        fts5_weight: Annotated[float, Field(description="Blend weight (0.0..1.0) for the FTS5 rank in RRF; the vector weight is 1 - fts5_weight. Ignored when fts5_query is omitted.")] = 0.5,
+        snippet_tokens: Annotated[int | None, Field(description="Optional FTS5 preview length (1-64).")]= None,
     ) -> str:
-        if services.semantic_search is None:
-            raise SettingsDisabledError("semantic search is not available in this build")
-        if not 0.0 <= fts5_weight <= 1.0:
-            raise InvalidFilterError("fts5_weight must be between 0.0 and 1.0")
-        from doc3gpp.models.search import SearchFilters
-
+        if services.tdoc_search is None:
+            raise SettingsDisabledError("search is not available in this build")
+        _validate_search_pagination(limit=limit, snippet_tokens=snippet_tokens)
         filters = SearchFilters(
-            tsg=tsg, meeting=meeting, meeting_id=meeting_id, tdoc_id=tdoc_id,
-            release=release, spec=spec, since=since, until=until, limit=limit,
+            tsg=parse_text_query(tsg),
+            meeting=parse_text_query(meeting),
+            meeting_id=meeting_id,
+            tdoc_id=parse_text_query(tdoc_id),
+            release=parse_text_query(release),
+            spec=parse_text_query(spec),
+            since=parse_date_query(since),
+            until=parse_date_query(until),
+            limit=limit,
         )
-        hits = services.semantic_search.search(
-            query, fts5_query=fts5_query, filters=filters,
-            limit=limit, fts5_weight=fts5_weight,
-        )
-        return _to_json([_semantic_hit_to_json(h) for h in hits])
+        try:
+            results = services.tdoc_search.search(
+                text=text,
+                semantic=semantic,
+                filters=filters,
+                snippet_tokens=snippet_tokens,
+            )
+        except SearchIndexCorruptError as exc:
+            _map_search_index_corrupt_error(exc, resource="tdoc")
+        except (
+            SearchUnavailableError,
+            SemanticSearchUnavailableError,
+            EmbedderUnavailableError,
+            VectorIndexUnavailableError,
+        ) as exc:
+            raise SettingsDisabledError(str(exc)) from exc
+        return _to_json([tdoc_search_result_to_dict(result) for result in results])
 
     # ---- Jobs -----------------------------------------------------
     @server.tool(name="sync_meetings", description="Enqueue a meeting-calendar sync for a TSG.")
@@ -896,13 +938,45 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             f"queued parse_spec_docs for {len(spec_ids)} spec(s)",
         )
 
-    @server.tool(name="rebuild_tdoc_search_index", description="Enqueue an FTS5 search-index rebuild.")
+    @server.tool(name="index_tdocs", description="Enqueue TDoc FTS5/vector index maintenance.")
     @_mcp_error_guard
-    def rebuild_tdoc_search_index(
+    def index_tdocs(
+        rebuild: Annotated[bool, Field(description="Rebuild the TDoc FTS5 index.")] = False,
+        rebuild_embeddings: Annotated[bool, Field(description="Rebuild the TDoc vector index.")] = False,
+        rebuild_all: Annotated[bool, Field(description="Rebuild both TDoc indexes.")] = False,
+        batch: Annotated[int | None, Field(description="Positive rebuild batch size.")] = None,
         stale_only: Annotated[bool, Field(description="Only re-index tdocs uploaded since the last index.")] = False,
         resume: Annotated[bool, Field(description="Resume from the last indexed tdoc instead of starting fresh.")] = False,
     ) -> str:
-        return _enqueue(state, JobKind.REBUILD_SEARCH, {"stale_only": stale_only, "resume": resume}, "queued rebuild_tdoc_search_index")
+        params = _index_params(
+            rebuild=rebuild,
+            rebuild_embeddings=rebuild_embeddings,
+            rebuild_all=rebuild_all,
+            batch=batch,
+            resume=resume,
+            stale_only=stale_only,
+        )
+        return _enqueue(state, JobKind.INDEX_TDOCS, params, "queued index_tdocs")
+
+    @server.tool(name="index_spec_docs", description="Enqueue spec-document FTS5/vector index maintenance.")
+    @_mcp_error_guard
+    def index_spec_docs(
+        rebuild: Annotated[bool, Field(description="Rebuild the spec-document FTS5 index.")] = False,
+        rebuild_embeddings: Annotated[bool, Field(description="Rebuild the spec-document vector index.")] = False,
+        rebuild_all: Annotated[bool, Field(description="Rebuild both spec-document indexes.")] = False,
+        batch: Annotated[int | None, Field(description="Positive rebuild batch size.")] = None,
+        stale_only: Annotated[bool, Field(description="Only re-index stale rows.")] = False,
+        resume: Annotated[bool, Field(description="Resume from the last indexed row.")] = False,
+    ) -> str:
+        params = _index_params(
+            rebuild=rebuild,
+            rebuild_embeddings=rebuild_embeddings,
+            rebuild_all=rebuild_all,
+            batch=batch,
+            resume=resume,
+            stale_only=stale_only,
+        )
+        return _enqueue(state, JobKind.INDEX_SPEC_DOCS, params, "queued index_spec_docs")
 
     @server.tool(name="purge_cache", description="Enqueue a cache purge (scope: markdown, zips or all).")
     @_mcp_error_guard
@@ -976,6 +1050,7 @@ def build_mcp_server(state: "WebState") -> "MCPServer":
             }
         )
 
+    _reject_unknown_search_arguments(server)
     return server
 
 

@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-
 JSONValue = str | int | float | bool | None | list["JSONValue"] | dict[str, "JSONValue"]
 """JSON-compatible scalar / container type.
 
@@ -44,6 +43,8 @@ class JobKind(str, Enum):
     PARSE_TDOCS = "parse_tdocs"
     PARSE_TDOC_URL = "parse_tdoc_url"
     PARSE_SPEC_DOCS = "parse_spec_docs"
+    INDEX_TDOCS = "index_tdocs"
+    INDEX_SPEC_DOCS = "index_spec_docs"
     REBUILD_SEARCH = "rebuild_search"
     CACHE_PURGE = "cache_purge"
 

@@ -1815,17 +1815,13 @@ doc3gpp cache purge --scope zips --yes
 doc3gpp cache purge --scope all --yes
 ```
 
-## `doc3gpp tdoc search query QUERY [filters]`
+## `doc3gpp tdoc search [filters]`
 
-Run a full-text search over the TDoc FTS5 index. The QUERY is either
-plain text (which the CLI wraps in FTS5 quotes after escaping
-special characters) or an FTS5 expression with `AND`, `OR`, `NOT`,
-`NEAR`, `*`, or quoted phrases passed through unchanged. Single-quoted
-phrases (`'CSI report'`) are rewritten to double-quoted phrases
-(`"CSI report"`) because FTS5 only accepts double quotes as phrase
-delimiters. Both plain and operator queries are normalized via
-`normalize_query` so user input matches indexed text token-for-token
-(TDoc ID base + full; spec ID dot replaced with underscore).
+Search TDocs with the unified `--text` and `--semantic` inputs. Text-only
+search uses FTS5, semantic-only search uses vector KNN, both inputs use
+hybrid RRF, and neither input uses filter-only source SQL. Text input is
+normalized through the FTS5 query builder; plain text, operators, and quoted
+phrases follow the FTS5 syntax described below.
 
 Filters (all optional, AND-combined):
 
@@ -1842,10 +1838,11 @@ Filters (all optional, AND-combined):
 | `--limit INT` | max results (default 20) |
 | `--format table|json|markdown` | output format (default `table`) |
 | `--compact` | strip JSON / markdown decorators |
-| `--snippet-tokens INT` | Override `Settings.search.snippet_tokens` for this single invocation. Range 1-64. |
-| `--sem-query STR` | Reorder hits by cosine similarity to STR. Requires the [semantic] extra + vec_tdoc_embeddings. See `search.search_fanout_factor`. |
+| `--text TEXT` | FTS5 text or MATCH expression. Optional. |
+| `--semantic TEXT` | Natural-language semantic query. Optional. |
+| `--snippet-tokens INT` | Override `Settings.search.snippet_tokens` for this single invocation. Range 1-64. Applies to FTS5 search. |
 | `--explain` | Print the resolved FTS5 MATCH expression, snippet column, and BM25 weight vector to stderr (output format below). Useful for tuning `bm25_weights` in `doc3gpp.toml`. |
-| `--quiet` | suppress the stale-index hint and the one-shot semantic-rerank empty-vector warning |
+| `--quiet` | suppress the stale-index hint |
 
 Exit codes: `0` success, `2` bad query, `3` index corrupt. When
 the FTS5 module is unavailable (wrong dialect, missing extra,
@@ -1885,122 +1882,39 @@ per-invocation; `--explain` is the canonical way to discover what
 `Settings.search.bm25_weights` is firing for a given query before
 editing it in `doc3gpp.toml`.
 
-### Semantic rerank
+#### Search JSON contract
 
-When `--sem-query STR` is supplied, `tdoc search query` reorders the FTS5
-hits by cosine similarity to the embedded form of `STR`. The FTS5
-path first fetches `limit * search_fanout_factor` candidates
-(`Settings.search.search_fanout_factor`, default `4`, range `1..64`),
-the `SemanticReranker` re-orders them by cosine distance to the
-embedded query, and the result is truncated back to `--limit`.
-Higher `search_fanout_factor` values give the reranker more to work
-with at the cost of more vector lookups per query; lower values
-sharpen the FTS5 dominance. The knob is only consulted when
-`--sem-query` is set — with no `--sem-query`, the FTS5 path runs
-directly with the user's `--limit`.
+CLI JSON, HTTP JSON, and MCP search rows share the same flattened shape. The
+array is already in final rank order. `search_mode` is one of `fts5`,
+`semantic`, `hybrid`, or `filter`; `score` is respectively the FTS5 BM25
+score, vector distance, RRF score, or JSON `null` for filter mode.
+`previews` is an object only for FTS5 rows and JSON `null` for the other modes.
+TDoc rows also include `type`, `status`, and `best_chunk_id`. Public rows do
+not expose `rank_*`, nested `hit`, `rrf_score`, or `min_chunk_distance` fields.
 
-`--sem-query` requires the `[semantic]` pyproject extra
-(`pip install "doc3gpp[semantic]"`), a populated
-`vec_tdoc_embeddings` table, and a configured
-`[semantic_search].embedding_base_url` (the query string is
-embedded via the remote API). When the semantic stack is
-unavailable (extra missing, URL unset, API down), the command
-exits 1 with a `search sem unavailable; ...` one-liner to stderr
-pointing at the missing piece. The empty-vector
-fallback applies to TDoc rows that have no vector chunks indexed
-yet: `SemanticReranker` assigns them a sentinel
-`MISSING_FLOOR` distance so they sort to the bottom of the rerank
-rather than being silently skipped. On a fully empty
-`vec_tdoc_embeddings`, `SemanticReranker` emits a one-shot
-`WARNING` to `stderr` unless `--quiet` is set. With `--quiet`,
-the FTS5 order is preserved silently.
+The per-request `--fts5-weight`, `fts5_weight`, `--fts5-query`, `fts5_query`,
+`--sem-query`, and `sem_query` controls are removed. Hybrid weighting comes
+from `[semantic_search].fts5_weight`.
 
-The previous `--rerank` flag is **removed**. It was a no-op against
-the default `PassthroughReranker` and would have collided with the
-new semantic rerank. Old callers passing `--rerank` now see
-`typer.BadParameter` pointing at `--sem-query` for the migration
-path.
+## `doc3gpp tdoc index [flags]`
 
-## `doc3gpp tdoc search index [flags]`
-
-Manage the TDoc FTS5 index. With no flags, prints the
-`SearchIndexStatus` snapshot. With `--rebuild`, drops and rebuilds
-the index by walking every `tdocs` row.
+Manage the TDoc FTS5 and vector indexes. With no rebuild flag, prints the
+independent `IndexStatus` snapshot. `--rebuild`, `--rebuild-embeddings`, and
+`--rebuild-all` select the FTS5, vector, or both components.
 
 | Flag | Effect |
 | --- | --- |
-| `--rebuild` | Drop and rebuild the FTS5 table by walking every `tdocs` row. |
-| `--batch INT` | Override `Settings.search.rebuild_batch_size` (default 100). Controls how many TDocs are fetched per SQL page; smaller = finer-grained crash recovery (cursor advances per page), larger = fewer round-trips. Progress is reported once per 1% of work. |
-| `--resume` | Continue from the last `tdoc_id` in `tdoc_search_meta` instead of starting at zero. Implies `--rebuild`. |
-| `--stale-only` | Only re-index rows whose `tdocs.uploaded_date > last_indexed_uploaded_date`. |
-| `--quiet` | Suppress the tqdm progress bar; print only the final summary. |
-| `--rebuild-embeddings` | Drop and rebuild the vector (`vec_tdoc_embeddings`) index. Walks every `tdocs` row and re-embeds each one. Use `--stale-only` for incremental refresh, `--resume` to continue from the last `tdoc_id` in `vec_meta`, `--batch N` to override `Settings.search.rebuild_batch_size`, `--quiet` to suppress the tqdm bar. Gated on the sqlite + sqlite-vec support matrix. |
-| `--rebuild-all` | Run both the FTS5 rebuild and the vector rebuild in sequence. Implies `--rebuild` and `--rebuild-embeddings`. |
+| `--rebuild` | Rebuild every TDoc FTS5 row by walking `tdocs` and upserting the current source text; clears the resume cursor for a fresh rebuild. |
+| `--rebuild-embeddings` | Drop and rebuild the vector index. |
+| `--rebuild-all` | Run both component rebuilds in sequence. |
+| `--batch INT` | Override the configured rebuild batch size. |
+| `--resume` | Continue from the last stored cursor. |
+| `--stale-only` | Only rebuild rows newer than the last indexed source row. |
+| `--quiet` | Suppress rebuild progress messages. |
 
-## `doc3gpp tdoc search sem QUERY [filters]`
-
-Run a TDoc hybrid (FTS5 + vector) search that merges lexical and semantic
-matches with Reciprocal Rank Fusion (RRF). The positional `QUERY`
-is always embedded by the vector path (the remote model named by
-`[semantic_search].embedding_model`, via `embedding_base_url`);
-when `--fts5-query` is supplied, it is preprocessed by
-`SearchQueryBuilder` (same semantics as `tdoc search query`, including
-single-quote → double-quote phrase rewriting) and feeds
-the FTS5 fan-out. Both paths fan out to `2N` candidates, are merged
-via `rrf_merge`, and truncated to `--limit`. When `--fts5-query` is
-omitted, FTS5 + RRF are skipped — only vector KNN results return.
-`tdoc search query` (FTS5-only) is unchanged.
-
-Prerequisites: the `[semantic]` extra (sqlite-vec) **plus**
-`[semantic_search].embedding_base_url` pointing at an OpenAI-compatible
-embeddings API (e.g. Ollama `http://localhost:11434/v1`, OpenAI
-`https://api.openai.com/v1`). When the URL is unset the command exits 1
-with the base-url hint. A dim/model mismatch against a previously built
-index fails fast with a `tdoc search index --rebuild-embeddings` hint —
-swapping models forces a rebuild even when dims collide; `tdoc search index`
-(no flags) shows the stored vs configured model/dim so the mismatch is
-visible up front.
-
-| Flag | Effect |
-| --- | --- |
-| `QUERY` | Positional: the natural-language query (e.g. `"redcap UE measurement gap"`). Always embedded. |
-| `--fts5-query TEXT` | Optional FTS5 MATCH string (same semantics as `tdoc search query`); preprocessed by `SearchQueryBuilder`. When supplied, the FTS5 path runs and the result is RRF-fused with the vector ranks. When omitted, FTS5 + RRF are skipped and only vector KNN results return. |
-| `--tsg TEXT` | `meetings.tsg` filter (any case; matched against the stored upper-case value). |
-| `--meeting TEXT` | Rich filter over `meetings.name` **or** `meetings.title` (`%` wildcards, `!` NOT LIKE, `null`/`not-null`). |
-| `--meeting-id INT` | `meetings.meeting_id` filter. |
-| `--tdoc-id TEXT` | exact `tdocs.tdoc_id` filter. |
-| `--release TEXT` | Rich filter over `tdocs.release` (e.g. `Rel-1%`; `!Rel-1%` for NOT LIKE; `null`/`not-null`). |
-| `--spec TEXT` | Rich filter over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`; `!38.3%` for NOT LIKE; `null`/`not-null`). |
-| `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD). |
-| `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD). |
-| `--limit INT` | max results (default `20`). |
-| `--fts5-weight FLOAT` | FTS5 weight in the RRF blend (default `0.5`); the vector weight is `1 - fts5_weight`. `0.0` = vector-only, `1.0` = FTS5-only. Ignored when `--fts5-query` is omitted. |
-| `--format table\|json\|markdown` | output format (default `table`). |
-| `--compact` | strip JSON / markdown decorators. |
-| `--explain` | Print the configured `embedding_model` + `embedding_host` (host only — the key is never printed), the stored `vec_meta` model/dim, and the RRF config (`fts5_weight`, `1 - fts5_weight`, `rrf_k`, `fanout_multiplier`) to stderr. |
-| `--quiet` | suppress the stale-index hint. |
-
-The merge is `rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) * (1 - fts5_weight)`
-with `k = Settings.semantic_search.rrf_k` (default `60`). Each hit
-carries its FTS5 rank, vector rank, RRF score, and the closest chunk
-distance / id so downstream consumers can inspect either source.
-
-The hybrid search degrades gracefully across three layers:
-
-1. FTS5 path: when `Settings.search.enabled = false`, the FTS5 fan-out
-   returns an empty list and only the vector rank contributes to the
-   RRF score. `--explain` surfaces the missing FTS5 side.
-2. Vector path: when `Settings.semantic_search.enabled = false`,
-   `[semantic_search].embedding_base_url` is unset, or
-   the sqlite-vec extension is unavailable, the vector fan-out returns
-    an empty list and the FTS5 rank drives the result. `tdoc search sem`
-   without a URL exits 1 with the base-url hint instead.
-3. Auto-embed hook: when `Settings.semantic_search.auto_embed_on_parse = false`,
-   newly-parsed TDocs are not embedded automatically; the vector path
-   reflects only what was indexed up to the last manual rebuild.
-
-The TOML knobs live under the `[semantic_search]` block — see
-`doc3gpp.toml.example` for every field with its default.
+The semantic extra and `[semantic_search].embedding_base_url` are required
+for vector operations. Index status reports unavailable components rather than
+changing the search command contract.
 
 ## tsg Commands
 
@@ -2479,9 +2393,11 @@ doc3gpp spec schema --format json
 
 ## spec doc Commands
 
-The `spec doc` sub-app (`spec doc parse/toc show/search query/search sem/schema`
-under `spec`) exposes the spec-document corpus: downloaded spec version zips parsed
-into chunk rows + a per-version TOC, searchable via FTS5 or hybrid vector search.
+The `spec doc` sub-app (`spec doc parse/toc show/search/index/schema` under
+`spec`) exposes the spec-document corpus: downloaded spec version zips parsed
+into chunk rows + a per-version TOC, searchable via unified FTS5, semantic,
+hybrid, or filter-only modes. `spec doc index` reports or rebuilds the FTS5
+and vector components independently.
 Each parsed pair is one `(spec_id, version)` row in the specdata sqlite file
 (`specdata_database_url`, default sibling `<main-stem>_specdata.db`). Parsed
 ZIP and Markdown sidecars use the dedicated `spec_doc.cache_dir` root,
@@ -2594,15 +2510,18 @@ doc3gpp spec doc toc show --spec 38.331 --version 18.5.0
 doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
 ```
 
-### doc3gpp spec doc search query
+### doc3gpp spec doc search
 
 Purpose:
 
-- Full-text search over the spec-document FTS5 index (chunk-level hits).
+- Search spec-document chunks with the unified `--text` and `--semantic`
+  inputs. Text-only uses FTS5, semantic-only uses vector KNN, both inputs
+  use hybrid RRF, and neither input uses filter-only source SQL.
 
 Options:
 
-- QUERY: positional FTS5 MATCH expression (plain text or FTS5 operators). Required.
+- --text: FTS5 text or MATCH expression. Optional.
+- --semantic: natural-language semantic query. Optional.
 - --spec: only search chunks for the given spec id. Optional.
 - --release: rich filter over release. Optional.
 - --version: rich filter over version. Optional.
@@ -2617,74 +2536,44 @@ Options:
 
 Behavior:
 
-- `SpecDocSearchService.search(query, filters)` → repo builds the `MATCH`
-  expression internally via `SearchQueryBuilder`, pushes the rich filters down,
-  ranks with `bm25(spec_doc_search, weights)` over the 6 indexed columns
-  `(text, sections, tables, spec_id, version, release)` with
-  `[spec_doc] bm25_weights` (default `(5.0, 5.0, 5.0, 1.0, 1.0, 1.0)`), and
-  binds one `snippet(...)` per `weight > 0` column — a column surfaces in the
-  hit's `previews` map only when its snippet contains a match. The FTS5-side
-  filters are `LIKE`-normalised (`normalize_query`) so dotted filters
-  (`38.331`) match their indexed form (`38_331`).
-- Default output fields (configurable via `[output.fields] spec_doc`):
-  `spec_id, version, release, sections, tables, chunk_index, text`.
+- `SpecDocSearchFacade.search` applies the four mode-selection rules and
+  returns flattened chunk rows shared by CLI, HTTP, and MCP.
+- JSON rows carry `chunk_id`, `score`, `search_mode`, `previews`, `spec_id`,
+  `version`, `release`, `sections`, `tables`, `chunk_index`, and `text`.
+  `search_mode` is `fts5`, `semantic`, `hybrid`, or `filter`; `score` is the
+  FTS5 BM25 score, vector distance, RRF score, or `null` for filter mode.
+  `previews` is an object for FTS5 and `null` otherwise. Array order is final
+  rank, and per-source rank or nested hit fields are not public.
+- The per-request `--fts5-weight`, `fts5_weight`, `--fts5-query`,
+  `fts5_query`, `--sem-query`, and `sem_query` controls are removed.
+  Hybrid weighting comes from `[semantic_search].fts5_weight`.
 - Bad query → exit `2`; corrupt index → exit `3` with a rebuild hint.
-- The search service also exposes `upsert_for_version` / `remove_for_version` /
-  `rebuild` (batched with `--resume`/`--stale-only` resume semantics via
-  `spec_doc_search_meta`) / `status`, but there is no
-  `doc3gpp spec doc search index` CLI today — the corrupt-index hint names it
-  aspirationally; auto-index on parse is the only writer path from the CLI.
 
 Examples:
 
 ```bash
-doc3gpp spec doc search query "handover" --spec 38.331 --limit 10
-doc3gpp spec doc search query "handover" --spec 38.331 --format json
+doc3gpp spec doc search --text "handover" --spec 38.331 --limit 10
+doc3gpp spec doc search --semantic "handover signalling procedures" --spec 38.331 --limit 10
+doc3gpp spec doc search --text "handover" --semantic "signalling" --format json
+doc3gpp spec doc search --spec 38.331 --sections "%handover%" --tables "%UE%"
 ```
 
-### doc3gpp spec doc search sem
+### doc3gpp spec doc index
 
 Purpose:
 
-- Semantic (embedding + optional FTS5) search over spec-doc chunks
-  (chunk-level RRF fusion, unlike the tdoc-level merge).
+- Report or maintain the independent FTS5 and vector indexes for spec-document
+  chunks. With no rebuild flag, print `IndexStatus`.
 
 Options:
 
-- QUERY: positional natural-language query (embedded only; never feeds FTS5).
-  Required.
-- --fts5-query: optional FTS5 MATCH expression. When omitted, the FTS5 path is
-  skipped (only embedding-KNN runs; no RRF). Default `None`.
-- --fts5-weight: blend weight for the FTS5 rank in RRF (`0.0..1.0`). The vector
-  weight is `1 - fts5_weight`. Ignored when `--fts5-query` is omitted.
-  Default `0.5`.
-- --spec: only search chunks for the given spec id. Optional.
-- --release: filter over release. Optional.
-- --version: filter over version. Optional.
-- --sections: filter over combined section identifier/title metadata. Optional.
-- --tables: filter over combined table identifier/title metadata. Optional.
-- --limit: max results. Default `20`, range `>= 0`.
-- --format: `table` (default), `json`, or `markdown`.
-- --compact: strip decorators.
-
-Behavior:
-
-- `SpecDocSemanticService.search` always embeds `QUERY`; with `--fts5-query`
-  both sides fan out to `limit * fanout_multiplier` and merge via `rrf_merge`
-  (`rrf = 1/(k + rank_fts5) * fts5_weight + 1/(k + rank_vec) * (1 - fts5_weight)`,
-  `k = 60`); without it pure vector KNN returns dressed as
-  `SpecDocSemanticHit` with `rank_fts5=None` (`hit=None` for vector-only chunks).
-- Vector-side `spec_id`/`version`/`release` are exact `=` and `sections`/`tables`
-  use plain `LIKE` (no rich grammar — pass plain strings for exact agreement); the
-  FTS5 side interprets the rich grammar. Requires
-  `[semantic_search].embedding_base_url`; without it the command exits `1`.
-
-Examples:
-
-```bash
-doc3gpp spec doc search sem "handover signalling procedures" --spec 38.331 --limit 10
-doc3gpp spec doc search sem "handover signalling" --fts5-query "handover" --fts5-weight 0.5
-```
+- --rebuild: rebuild the FTS5 component.
+- --rebuild-embeddings: rebuild the vector component.
+- --rebuild-all: rebuild both components.
+- --batch: override the configured rebuild batch size.
+- --resume: continue from the last stored cursor.
+- --stale-only: rebuild only stale rows.
+- --quiet: suppress progress messages.
 
 ### doc3gpp spec doc schema
 

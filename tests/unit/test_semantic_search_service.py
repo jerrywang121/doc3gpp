@@ -74,6 +74,8 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs():
         meeting: str | None
         tsg: str | None
         uploaded_date: str | None
+        type: str | None
+        status: str | None
 
     class _VecRepo:
         def __init__(self) -> None:
@@ -94,6 +96,8 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs():
                     meeting="TSG-RAN WG4 #119",
                     tsg="RAN",
                     uploaded_date="2026-07-22",
+                    type="CR",
+                    status="Agreed",
                 ),
             }
 
@@ -145,6 +149,8 @@ def test_search_mixed_hits_only_looks_up_metadata_for_vector_only():
         meeting: str | None
         tsg: str | None
         uploaded_date: str | None
+        type: str | None
+        status: str | None
 
     class _VecRepo:
         def __init__(self) -> None:
@@ -163,6 +169,7 @@ def test_search_mixed_hits_only_looks_up_metadata_for_vector_only():
                 "R4-2": _Meta(
                     title="R4-2 title", ftp_url="r4-2.zip", wis=None,
                     meeting=None, tsg=None, uploaded_date=None,
+                    type="CR", status="Agreed",
                 ),
             }
 
@@ -560,6 +567,8 @@ def test_search_without_fts5_query_vector_only_populates_metadata():
         meeting: str | None
         tsg: str | None
         uploaded_date: str | None
+        type: str | None
+        status: str | None
 
     class _VecRepo:
         def knn(self, qv, limit, filters):
@@ -570,6 +579,7 @@ def test_search_without_fts5_query_vector_only_populates_metadata():
                 "R5-1": _Meta(
                     title="real title", ftp_url="real.zip", wis=None,
                     meeting=None, tsg=None, uploaded_date=None,
+                    type="CR", status="Agreed",
                 ),
             }
 

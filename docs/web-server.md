@@ -417,7 +417,8 @@ bootstrap — there is no migration step.
 The installed package includes a static AI-agent skill at
 `doc3gpp/data/skills/doc3gpp/SKILL.md`. Give this file to an MCP-capable
 agent for a compact sync → find → parse → search workflow covering meetings,
-TDocs, specs, and spec documents. It is reference material, not an MCP tool.
+TDocs, specs, spec documents, and RAN5 testcases. It is reference material,
+not an MCP tool.
 
 The MCP endpoint is mounted at `/mcp` whenever `server.enabled` and
 `mcp.enabled` are both true. The transport is selected by `[mcp] transport`:

@@ -491,6 +491,8 @@ async def _parse_spec_docs(
     )
     if cancel_event.is_set():
         raise asyncio.CancelledError()
+    for sid, reason in result.failures.items():
+        progress(f"spec {sid} failed: {reason}", force=True)
     progress(
         f"done: {len(result.successes)} ok, "
         f"{len(result.skipped)} skipped, {len(result.failures)} failed",
@@ -501,6 +503,7 @@ async def _parse_spec_docs(
         "successes": len(result.successes),
         "skipped": len(result.skipped),
         "failures": len(result.failures),
+        "failure_details": dict(result.failures),
     }
 
 

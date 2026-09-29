@@ -185,8 +185,10 @@ class SQLAlchemyJobRepository(JobRepository):
             row = session.get(JobORM, job_id)
         return _orm_to_domain(row)
 
-    def mark_failed(self, job_id: str, *, error: str) -> Job:
-        """Transition ``job_id`` to ``FAILED`` with ``error``."""
+    def mark_failed(
+        self, job_id: str, *, error: str, summary: Mapping[str, JSONValue] | None = None
+    ) -> Job:
+        """Transition ``job_id`` to ``FAILED`` with ``error`` and optional result."""
         now = _utcnow()
         with self._session_factory() as session:
             stmt = (
@@ -196,6 +198,9 @@ class SQLAlchemyJobRepository(JobRepository):
                     status=JobStatus.FAILED.value,
                     finished_at=now,
                     error=error,
+                    result_summary=(
+                        _encode_json_object(summary) if summary is not None else None
+                    ),
                 )
             )
             result = session.execute(stmt)

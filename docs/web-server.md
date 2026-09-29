@@ -213,6 +213,11 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/sync` | Sync hub page: eleven enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, TDoc index maintenance, spec-document index maintenance, cache-purge, testcases) + a "Recent sync jobs" table. |
 | GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
 
+`parse_spec_docs` records per-spec errors in `result.failure_details` and the
+job log. If every requested spec fails, the job is `failed` with a populated
+`error` and result; partial successes remain `succeeded` with failure details
+in the result.
+
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.
 

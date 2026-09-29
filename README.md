@@ -294,6 +294,11 @@ doc3gpp spec doc index --rebuild
 doc3gpp spec doc schema --format json
 ```
 
+Background `parse_spec_docs` jobs retain per-spec failure reasons in the job
+result (`failure_details`) and log. A batch where every spec fails has status
+`failed`; a partial success retains status `succeeded` with the failed specs
+listed in the result.
+
 Spec-document rows live in a separate sibling database, normally
 `<main-stem>_specdata.db`, and are cached below the dedicated
 `~/.cache/doc3gpp/specs` root by default. The TDoc extraction cache remains

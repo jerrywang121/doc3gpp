@@ -1057,12 +1057,13 @@ class JobRepository(Protocol):
         """
         ...
 
-    def mark_failed(self, job_id: str, *, error: str) -> Job:
+    def mark_failed(
+        self, job_id: str, *, error: str, summary: Mapping[str, JSONValue] | None = None
+    ) -> Job:
         """Transition ``job_id`` to ``FAILED`` with ``error``.
 
-        Stamps ``finished_at`` with the current UTC time and writes
-        ``error`` into the ``error`` column. Returns the refreshed
-        job.
+        Stamps ``finished_at`` and optionally stores the batch result in
+        ``result_summary``. Returns the refreshed job.
         """
         ...
 

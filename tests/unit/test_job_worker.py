@@ -387,6 +387,63 @@ def test_worker_marks_failed_on_exception() -> None:
     assert "boom" in (done.error or "")
 
 
+def test_parse_spec_docs_all_failed_preserves_reasons_and_fails_job() -> None:
+    from doc3gpp.models.spec_doc import SpecDocBatchResult
+
+    repo = _make_repo()
+    state = _make_state(repo)
+
+    class FailingSpecDocs:
+        def parse_many(self, spec_ids, **kwargs):
+            assert spec_ids == ["38.523-1"]
+            return SpecDocBatchResult(failures={"38.523-1": "The read operation timed out"})
+
+    state.services.spec_doc = FailingSpecDocs()  # type: ignore[assignment]
+    job = repo.create(JobKind.PARSE_SPEC_DOCS, {"spec_ids": ["38.523-1"], "version": "18.3.0"})
+
+    _run_worker_once(JobWorker(state, repo=repo), repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert "38.523-1" in (done.error or "")
+    assert "The read operation timed out" in (done.error or "")
+    assert done.result_summary == {
+        "requested": 1, "successes": 0, "skipped": 0, "failures": 1,
+        "failure_details": {"38.523-1": "The read operation timed out"},
+    }
+    assert any("38.523-1" in line and "timed out" in line for line in done.log_lines)
+
+
+def test_parse_spec_docs_partial_success_keeps_success_status_and_failure_details() -> None:
+    from doc3gpp.models.spec_doc import SpecDocBatchResult
+
+    repo = _make_repo()
+    state = _make_state(repo)
+
+    class PartialSpecDocs:
+        def parse_many(self, spec_ids, **kwargs):
+            assert spec_ids == ["38.523-1", "38.331"]
+            return SpecDocBatchResult(
+                successes={"38.331": object()},
+                failures={"38.523-1": "The read operation timed out"},
+            )
+
+    state.services.spec_doc = PartialSpecDocs()  # type: ignore[assignment]
+    job = repo.create(JobKind.PARSE_SPEC_DOCS, {"spec_ids": ["38.523-1", "38.331"]})
+
+    _run_worker_once(JobWorker(state, repo=repo), repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.error is None
+    assert done.result_summary == {
+        "requested": 2, "successes": 1, "skipped": 0, "failures": 1,
+        "failure_details": {"38.523-1": "The read operation timed out"},
+    }
+
+
 def test_worker_cancels_on_event() -> None:
     """A pre-set cancellation event marks the job CANCELLED."""
     repo = _make_repo()

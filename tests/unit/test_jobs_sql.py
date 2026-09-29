@@ -108,6 +108,24 @@ def test_mark_failed_sets_error() -> None:
     assert failed.result_summary is None
 
 
+def test_mark_failed_can_store_batch_result_with_error() -> None:
+    repo = _make_repo()
+    job = repo.create(JobKind.PARSE_SPEC_DOCS, {"spec_ids": ["38.523-1"]})
+    repo.mark_running(job.id)
+
+    done = repo.mark_failed(
+        job.id,
+        error="38.523-1: The read operation timed out",
+        summary={"requested": 1, "successes": 0, "failures": 1,
+                 "failure_details": {"38.523-1": "The read operation timed out"}},
+    )
+
+    assert done.status is JobStatus.FAILED
+    assert done.error == "38.523-1: The read operation timed out"
+    assert done.result_summary == {"requested": 1, "successes": 0, "failures": 1,
+                                   "failure_details": {"38.523-1": "The read operation timed out"}}
+
+
 def test_mark_cancelled_sets_finished_at() -> None:
     """``mark_cancelled`` stamps ``finished_at`` but leaves ``error`` alone."""
     repo = _make_repo()

@@ -622,12 +622,15 @@ and syncs each through the `--tsg` path below.
 
 ### Spec-document corpus (parse → TOC → search)
 
-1. `doc3gpp spec doc parse --spec <id>... [--release R] [--version V]
-   [--force]` calls `SpecDocService.parse_many`. The version resolves via
+1. `doc3gpp spec doc parse --spec <id> [--release R] [--version V]
+   [--force]` accepts exactly one spec and calls `SpecDocService.parse_many`
+   with a one-item list. The version resolves via
    `resolve_spec_doc_version` — for automatic selection, filters to rows with
    a non-empty `.zip` URL, then applies numeric sort on `SpecVersion.version`
    (segment-wise ints, non-numeric → 0); optional `release` filters before
-   selection. An explicit `version` is strict and raises
+    selection. When both `release` and `version` are supplied, their release
+    numbers must agree (for example, `Rel-18` with `18.5.0`). An explicit
+    `version` is strict and raises
    `SpecDocUnknownVersionError` if its ZIP link is missing. A miss raises
    `SpecDocUnknownSpecError` (no
    `spec_versions` rows — run `spec sync --spec-id` first) or
@@ -1093,8 +1096,8 @@ the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group 
     - `sync` — `--tsg`
     - `list` — filters by `--tsg`, `--name`, `--acronym`, `--release`
  - `spec doc` (nested under `spec` as `spec doc ...`):
-     - `parse` — repeatable `--spec` (at least one required), `--release`,
-       `--version`, `--force/-f`; resolves the numeric-newest or pinned
+     - `parse` — exactly one `--spec` (required), `--release`, `--version`,
+        `--force/-f`; resolves the numeric-newest or pinned
        version, fetches the ZIP when missing, and records the download;
        `--force` re-downloads and re-parses, including already-parsed pairs.
        Also accepts `--format/--output/--compact` (currently ignored); prints

@@ -113,6 +113,21 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
     assert not any(name.startswith("fetch_spec") for name in names)
 
 
+def test_parse_spec_docs_uses_scalar_spec_id(sqlite_env) -> None:
+    import asyncio
+
+    _, server = _state_and_server()
+
+    async def run():
+        tools = await server.list_tools()
+        return next(tool for tool in tools if tool.name == "parse_spec_docs")
+
+    tool = asyncio.run(run())
+    properties = tool.input_schema["properties"]
+    assert "spec_id" in properties
+    assert "spec_ids" not in properties
+
+
 def test_call_list_meetings_empty(sqlite_env) -> None:
     """Empty result is a single ``[]`` JSON string (not zero content items)."""
     import asyncio

@@ -110,7 +110,7 @@ def test_mark_failed_sets_error() -> None:
 
 def test_mark_failed_can_store_batch_result_with_error() -> None:
     repo = _make_repo()
-    job = repo.create(JobKind.PARSE_SPEC_DOCS, {"spec_ids": ["38.523-1"]})
+    job = repo.create(JobKind.PARSE_SPEC_DOCS, {"spec_id": "38.523-1"})
     repo.mark_running(job.id)
 
     done = repo.mark_failed(

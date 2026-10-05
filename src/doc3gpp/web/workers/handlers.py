@@ -24,7 +24,9 @@ from doc3gpp.cli_auto_sync import (
 )
 from doc3gpp.models.index import IndexRequest
 from doc3gpp.models.jobs import Job, JobKind, JSONValue
+from doc3gpp.models.spec_doc import SpecDocSelectionError
 from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
+from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
 
@@ -456,24 +458,26 @@ async def _parse_spec_docs(
     progress: ProgressFn,
     cancel_event: asyncio.Event,
 ) -> Mapping[str, JSONValue]:
-    spec_ids = job.params.get("spec_ids")
-    if not isinstance(spec_ids, list) or not spec_ids or not all(
-        isinstance(s, str) for s in spec_ids
-    ):
+    spec_id = job.params.get("spec_id")
+    if not isinstance(spec_id, str) or not spec_id.strip():
         raise ValueError(
-            "parse_spec_docs job requires a non-empty 'spec_ids' list parameter"
+            "parse_spec_docs job requires a non-empty 'spec_id' string parameter"
         )
     release = job.params.get("release")
     version = job.params.get("version")
     force = bool(job.params.get("force", False))
     release = release if isinstance(release, str) else None
     version = version if isinstance(version, str) else None
+    try:
+        validate_release_version_alignment(release, version)
+    except SpecDocSelectionError as exc:
+        raise ValueError(str(exc)) from exc
 
     service = getattr(services, "spec_doc", None)
     if service is None:
         raise RuntimeError("spec-doc parse is not available in this build")
 
-    progress(f"parsing {len(spec_ids)} spec doc(s)")
+    progress(f"parsing spec doc {spec_id}")
 
     def on_progress(event: str, data: Mapping[str, object]) -> None:
         if event == "spec_done":
@@ -483,7 +487,7 @@ async def _parse_spec_docs(
         raise asyncio.CancelledError()
     result = await asyncio.to_thread(
         service.parse_many,
-        list(spec_ids),
+        [spec_id],
         release=release,
         version=version,
         force=force,
@@ -499,7 +503,7 @@ async def _parse_spec_docs(
         force=True,
     )
     return {
-        "requested": len(spec_ids),
+        "requested": 1,
         "successes": len(result.successes),
         "skipped": len(result.skipped),
         "failures": len(result.failures),

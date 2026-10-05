@@ -16,7 +16,7 @@
       buildBody: function (form) {
         var forceEl = form.querySelector('input[name="force"]');
         return JSON.stringify({
-          "spec_ids": [specId],
+          "spec_id": specId,
           "version": version,
           "force": sourceParsed && !!forceEl && forceEl.checked,
         });

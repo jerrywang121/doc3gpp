@@ -4485,7 +4485,8 @@ def test_spec_doc_parse_js_posts_version_scoped_json() -> None:
     body = (_JS_DIR / "spec_doc_parse.js").read_text(encoding="utf-8")
     assert "bindJobPolling" in body
     assert 'contentType: "application/json"' in body
-    assert '"spec_ids"' in body
+    assert '"spec_id"' in body
+    assert '"spec_ids"' not in body
     assert '"version"' in body
     assert '"force"' in body
     assert "sourceParsed &&" in body

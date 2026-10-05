@@ -283,7 +283,7 @@ values on every version row.
 
 ```bash
 # use newest version with a published .zip, fetch-if-missing, convert every .docx, chunk, and auto-index
-doc3gpp spec doc parse --spec 38.331 --spec 38.523-1
+doc3gpp spec doc parse --spec 38.331 --release Rel-18 --version 18.5.0
 doc3gpp spec doc parse --spec 38.331 --force  # re-download and re-parse
 
 # inspect the stored TOC and search chunk text/combined metadata
@@ -294,10 +294,10 @@ doc3gpp spec doc index --rebuild
 doc3gpp spec doc schema --format json
 ```
 
-Background `parse_spec_docs` jobs retain per-spec failure reasons in the job
-result (`failure_details`) and log. A batch where every spec fails has status
-`failed`; a partial success retains status `succeeded` with the failed specs
-listed in the result.
+Background `parse_spec_docs` jobs retain the selected spec's failure reason in
+the job result (`failure_details`) and log. Each job targets one spec; when
+both release and version are supplied, their release numbers must align (for
+example, `Rel-18` with `18.5.0`).
 
 Spec-document rows live in a separate sibling database, normally
 `<main-stem>_specdata.db`, and are cached below the dedicated

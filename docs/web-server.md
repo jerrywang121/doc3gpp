@@ -207,16 +207,15 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/spec-docs/index` | Enqueue unified spec-doc FTS5/vector index maintenance. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
 | POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single 3GPP FTP URL or folder; `url` must be `https://www.3gpp.org/ftp/...`, `recursive` XOR `max_depth`). |
-| POST | `/jobs/parse/spec-docs` | Enqueue `parse_spec_docs` for one or more spec ids (`spec_ids`, optional `release`, `version`, and `force`); progress is streamed through the normal job SSE endpoint. This job is intentionally not a panel on the eleven-form `/sync` hub. |
+| POST | `/jobs/parse/spec-docs` | Enqueue `parse_spec_docs` for one spec id (`spec_id`, optional `release`, `version`, and `force`); progress is streamed through the normal job SSE endpoint. This job is intentionally not a panel on the eleven-form `/sync` hub. |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. Accepts `?format=html` to return the refreshed job row as an `outerHTML` swap target for the list page's per-row Cancel button. JSON otherwise. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
 | GET | `/sync` | Sync hub page: eleven enqueue forms (meetings, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, TDoc index maintenance, spec-document index maintenance, cache-purge, testcases) + a "Recent sync jobs" table. |
 | GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
 
-`parse_spec_docs` records per-spec errors in `result.failure_details` and the
-job log. If every requested spec fails, the job is `failed` with a populated
-`error` and result; partial successes remain `succeeded` with failure details
-in the result.
+`parse_spec_docs` records the spec error in `result.failure_details` and the
+job log. A failed parse job has a populated `error` and result; a successful or
+skipped parse reports its corresponding one-spec result.
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.
@@ -279,8 +278,8 @@ specdata source row has not been downloaded or parsed; a downloaded source is
 waiting for parsing; and a parsed source shows its parse timestamp, DOCX and
 chunk counts. The only document action is `Parse document` (or `Force
 re-parse`, available only for a parsed source. It enqueues the existing
-`POST /jobs/parse/spec-docs` job with `spec_ids`, the selected exact `version`,
-and `force`, then
+`POST /jobs/parse/spec-docs` job with scalar `spec_id`, the selected exact
+`version`, and `force`, then
 polls the normal job status. The parser downloads a missing ZIP internally;
 there is intentionally no standalone spec-document fetch route or fetch
 control.
@@ -530,8 +529,8 @@ The spec-document tools use the separate specdata database. `get_spec_toc`
 reads one parsed `(spec_id, version)` TOC, `search_spec_docs` selects among
 FTS5, vector, hybrid, and filter-only chunk search, and `get_spec_doc_index`
 reports index status. `parse_spec_docs` enqueues the same
-`PARSE_SPEC_DOCS` job as `POST /jobs/parse/spec-docs`; it accepts
-`spec_ids`, optional `release`/`version`, and `force`.
+`PARSE_SPEC_DOCS` job as `POST /jobs/parse/spec-docs`; it accepts one
+`spec_id`, optional `release`/`version`, and `force`.
 
 The MCP `serverInfo` block returned on every `initialize` handshake carries `name` ("doc3gpp"), `version` (from `importlib.metadata.version("doc3gpp")`, falling back to `doc3gpp.__version__`), `title`, `description`, and `website_url`. Clients do not need a tool call to read the version.
 

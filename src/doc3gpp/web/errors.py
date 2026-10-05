@@ -38,6 +38,7 @@ from doc3gpp.models.semantic_search import (
 )
 from doc3gpp.models.spec_doc import (
     SpecDocNoDocxError,
+    SpecDocSelectionError,
     SpecDocTooLargeError,
     SpecDocUnknownSpecError,
     SpecDocUnknownVersionError,
@@ -137,6 +138,7 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     SpecUnknownOnUpstreamError: ("spec", MCP_CODE_NOT_FOUND),
     SpecDocUnknownSpecError: ("spec_doc", MCP_CODE_NOT_FOUND),
     SpecDocUnknownVersionError: ("spec_doc", MCP_CODE_NOT_FOUND),
+    SpecDocSelectionError: ("spec_doc", MCP_CODE_INVALID_PARAMS),
     SpecDocTooLargeError: ("spec_doc", MCP_CODE_TOO_LARGE),
     SpecDocNoDocxError: ("spec_doc", MCP_CODE_INVALID_PARAMS),
     JobNotFoundError: ("job", MCP_CODE_NOT_FOUND),
@@ -184,6 +186,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     SpecUnknownOnUpstreamError: "spec_unknown_on_upstream",
     SpecDocUnknownSpecError: "spec_doc_unknown_spec",
     SpecDocUnknownVersionError: "spec_doc_unknown_version",
+    SpecDocSelectionError: "spec_doc_invalid_selection",
     SpecDocTooLargeError: "spec_doc_too_large",
     SpecDocNoDocxError: "spec_doc_no_docx",
     InvalidFilterError: "invalid_filter",
@@ -210,6 +213,7 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     SpecUnknownOnUpstreamError: 404,
     SpecDocUnknownSpecError: 404,
     SpecDocUnknownVersionError: 404,
+    SpecDocSelectionError: 400,
     SpecDocTooLargeError: 422,
     SpecDocNoDocxError: 422,
     InvalidFilterError: 400,

@@ -33,12 +33,13 @@ from doc3gpp.models.semantic_search import (
     SemanticSearchUnavailableError,
     VectorIndexUnavailableError,
 )
-from doc3gpp.models.spec_doc import SpecDocSearchFilters
+from doc3gpp.models.spec_doc import SpecDocSearchFilters, SpecDocSelectionError
 from doc3gpp.models.unified_search import (
     spec_doc_search_result_to_dict,
     tdoc_search_result_to_dict,
 )
 from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
+from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.web import render
 from doc3gpp.web.errors import (
     MCP_CODE_INTERNAL_ERROR,
@@ -915,18 +916,22 @@ def build_mcp_server(state: WebState) -> MCPServer:
     ) -> str:
         return _enqueue(state, JobKind.SYNC_TESTCASES, {"force": force}, "queued sync_testcases")
 
-    @server.tool(name="parse_spec_docs", description="Enqueue a spec-doc parse batch (mirrors `doc3gpp spec doc parse`). Each spec resolves its version via the stored spec_versions rows; results land as {requested, successes, skipped, failures}. Returns a job_id; poll `get_job` for progress and `cancel_job` to abort.")
+    @server.tool(name="parse_spec_docs", description="Enqueue a spec-doc parse (mirrors `doc3gpp spec doc parse`). The spec resolves its version via the stored spec_versions rows; results land as {requested, successes, skipped, failures}. Returns a job_id; poll `get_job` for progress and `cancel_job` to abort.")
     @_mcp_error_guard
     def parse_spec_docs(
-        spec_ids: Annotated[list[str], Field(description="Spec ids to parse (at least one, e.g. ['38.331']).")],
+        spec_id: Annotated[str, Field(description="Spec id to parse (e.g. '38.331').")],
         release: Annotated[str | None, Field(description="Release marker (e.g. 'Rel-18').")] = None,
         version: Annotated[str | None, Field(description="Exact version (e.g. '18.5.0').")] = None,
         force: Annotated[bool, Field(description="Re-parse already-parsed pairs.")] = False,
     ) -> str:
-        if not spec_ids:
-            raise InvalidFilterError("spec_ids is required")
+        if not spec_id.strip():
+            raise InvalidFilterError("spec_id is required")
+        try:
+            validate_release_version_alignment(release, version)
+        except SpecDocSelectionError as exc:
+            raise InvalidFilterError(str(exc)) from exc
         params: dict[str, Any] = {
-            "spec_ids": list(spec_ids),
+            "spec_id": spec_id,
             "force": force,
         }
         if release is not None:
@@ -935,7 +940,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
             params["version"] = version
         return _enqueue(
             state, JobKind.PARSE_SPEC_DOCS, params,
-            f"queued parse_spec_docs for {len(spec_ids)} spec(s)",
+            f"queued parse_spec_docs for {spec_id}",
         )
 
     @server.tool(name="index_tdocs", description="Enqueue TDoc FTS5/vector index maintenance.")

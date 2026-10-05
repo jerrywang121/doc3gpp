@@ -2415,12 +2415,12 @@ strict and fails clearly if that version has no ZIP link. Run
 
 Purpose:
 
-- Fetch-if-missing, convert, chunk, and index one or more specs; prints one
-  `ok` / `skipped <reason>` / `failed <reason>` (stderr) line per spec.
+- Fetch-if-missing, convert, chunk, and index one spec; prints one `ok`,
+  `skipped <reason>`, or `failed <reason>` (stderr) line.
 
 Options:
 
-- --spec: spec id to parse; repeat per spec (at least one required).
+- --spec: spec id to parse; exactly one is required.
 - --release: release marker, e.g. `Rel-18`. Optional pin.
 - --version: exact version, e.g. `18.5.0`. Optional pin.
 - --force, -f: re-download and re-parse the resolved version, including
@@ -2439,11 +2439,12 @@ Behavior:
   `spec_doc_sources.downloaded_at` before conversion.
 - `--force` re-downloads the resolved ZIP and then re-parses it, including when
   the `(spec_id, version)` pair already has `parsed_at`.
-- Per spec: immutable-skip when the `(spec_id, version)` source row already
-  carries `parsed_at` (unless `--force`); oversized zips land in the `skipped`
-  bucket; unknown spec/version, empty (no-`.docx`) zips, and every other error
-  land in the `failures` bucket. One spec never aborts the batch
-  (`SpecDocBatchResult(successes/skipped/failures)`).
+- The `(spec_id, version)` source row is skipped when it already carries
+  `parsed_at` (unless `--force`); oversized zips land in the `skipped` bucket;
+  unknown spec/version, empty (no-`.docx`) zips, and every other error land in
+  the `failures` bucket. When both `--release` and `--version` are supplied,
+  their release numbers must agree (for example, `Rel-18` requires a version
+  beginning with `18.`).
 - `parse` = fetch-if-missing + `list_spec_docx` (`.doc` entries warn-skip) +
   `convert_document_to_blocks` + `order_spec_files` (front-matter TOC file first,
   then section-tuple sort, TOC tiebreak, unnumbered lexicographic tail) +
@@ -2468,8 +2469,8 @@ Examples:
 # Parse the newest version of 38.331 with a published ZIP download link.
 doc3gpp spec doc parse --spec 38.331
 
-# Parse two specs at a pinned release.
-doc3gpp spec doc parse --spec 38.331 --spec 38.523-1 --release Rel-18
+# Parse one spec at a pinned release and version.
+doc3gpp spec doc parse --spec 38.331 --release Rel-18 --version 18.5.0
 
 # Re-parse even when already parsed.
 doc3gpp spec doc parse --spec 38.331 --force

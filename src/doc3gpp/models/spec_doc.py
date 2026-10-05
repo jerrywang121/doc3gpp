@@ -1,5 +1,6 @@
 """DTOs for the spec-document corpus (separate specdata sqlite file)."""
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -16,6 +17,10 @@ class SpecDocUnknownVersionError(SpecDocError):
     def __init__(self, msg: str, available: list[str] | None = None):
         super().__init__(msg)
         self.available = available or []
+
+
+class SpecDocSelectionError(SpecDocError):
+    """Raised when a release/version selection is internally inconsistent."""
 
 
 class SpecDocNoDocxError(SpecDocError):

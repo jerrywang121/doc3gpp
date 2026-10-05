@@ -20,7 +20,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from doc3gpp.models.jobs import Job, JobKind, JobStatus, JSONValue
+from doc3gpp.models.spec_doc import SpecDocSelectionError
 from doc3gpp.repository.protocols import JobRepository
+from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.web.deps import get_job_repo, get_job_worker
 from doc3gpp.web.errors import (
     InvalidFilterError,
@@ -143,7 +145,7 @@ class _ParseTDocURLBody(BaseModel):
 
 
 class _ParseSpecDocsBody(BaseModel):
-    spec_ids: list[str]
+    spec_id: str
     release: str | None = None
     version: str | None = None
     force: bool = False
@@ -324,13 +326,17 @@ async def post_parse_spec_docs(
     body: _ParseSpecDocsBody,
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> JSONResponse:
-    """Enqueue a spec-doc parse batch (mirrors ``doc3gpp spec doc parse``)."""
-    if not body.spec_ids:
+    """Enqueue a single spec-doc parse (mirrors ``doc3gpp spec doc parse``)."""
+    if not body.spec_id.strip():
         raise InvalidFilterError(
-            "parse/spec-docs requires a non-empty 'spec_ids' list in the body"
+            "parse/spec-docs requires a non-empty 'spec_id' string in the body"
         )
+    try:
+        validate_release_version_alignment(body.release, body.version)
+    except SpecDocSelectionError as exc:
+        raise InvalidFilterError(str(exc)) from exc
     params: dict[str, JSONValue] = {
-        "spec_ids": list(body.spec_ids),
+        "spec_id": body.spec_id,
         "force": body.force,
     }
     if body.release is not None:

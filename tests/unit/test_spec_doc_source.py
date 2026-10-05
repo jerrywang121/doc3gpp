@@ -1,7 +1,7 @@
 import pytest
 
 from doc3gpp.models.spec import SpecVersion
-from doc3gpp.models.spec_doc import SpecDocUnknownVersionError
+from doc3gpp.models.spec_doc import SpecDocSelectionError, SpecDocUnknownVersionError
 from doc3gpp.scraping.spec_doc_source import fetch_spec_doc_zip, resolve_spec_doc_version
 
 
@@ -39,6 +39,12 @@ def test_default_chooses_newest_version_with_zip_url():
 def test_exact_release_version():
     vs = [_v("18.5.0", "Rel-18"), _v("17.3.0", "Rel-17")]
     assert resolve_spec_doc_version(vs, release="Rel-17", version="17.3.0").version == "17.3.0"
+
+
+def test_misaligned_release_and_version_raises_clear_error():
+    vs = [_v("18.5.0", "Rel-18"), _v("17.3.0", "Rel-17")]
+    with pytest.raises(SpecDocSelectionError, match="release .* does not match version"):
+        resolve_spec_doc_version(vs, release="Rel-18", version="17.3.0")
 
 
 def test_miss_lists_available():

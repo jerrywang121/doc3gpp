@@ -36,7 +36,7 @@ from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.schema_info import SCHEMA_FIELDS, schema_payload
 from doc3gpp.models.spec import Spec, SpecVersion
-from doc3gpp.models.spec_doc import SpecDocSearchFilters
+from doc3gpp.models.spec_doc import SpecDocSearchFilters, SpecDocSelectionError
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tdoc_cr import (
@@ -55,6 +55,7 @@ from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.scraping.cache_keys import derive_cache_file
+from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
@@ -5132,7 +5133,7 @@ def spec_doc_parse(
     spec: list[str] | None = typer.Option(  # noqa: B008 - Typer option declaration
         None,
         "--spec",
-        help="Spec id to parse; repeat per spec (at least one required).",
+        help="Spec id to parse (exactly one required).",
     ),
     release: str | None = typer.Option(
         None, "--release", help="Release marker, e.g. Rel-18.",
@@ -5160,10 +5161,16 @@ def spec_doc_parse(
         help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
     ),
 ) -> None:
-    """Batch form: --spec may repeat; success/skip/failure buckets printed."""
+    """Parse one spec; print its success/skip/failure result."""
     create_schema("all")
     if not spec:
-        raise typer.BadParameter("pass at least one --spec <id>")
+        raise typer.BadParameter("pass exactly one --spec <id>")
+    if len(spec) != 1:
+        raise typer.BadParameter("--spec may be provided only once")
+    try:
+        validate_release_version_alignment(release, version)
+    except SpecDocSelectionError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     svc = build_spec_doc_service()
     result = svc.parse_many(spec, release=release, version=version, force=force)
     for sid in result.successes:

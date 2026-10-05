@@ -59,3 +59,64 @@ def test_spec_doc_parse_forwards_force(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls == [(["38.331"], None, None, True)]
+
+
+def test_spec_doc_parse_rejects_repeated_spec(monkeypatch):
+    calls = []
+
+    class FakeResult:
+        successes = {}
+        skipped = {}
+        failures = {}
+
+    class FakeService:
+        def parse_many(self, spec_ids, *, release, version, force):
+            calls.append((spec_ids, release, version, force))
+            return FakeResult()
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda: FakeService())
+
+    result = CliRunner().invoke(
+        app,
+        ["spec", "doc", "parse", "--spec", "38.331", "--spec", "38.523-1"],
+    )
+
+    assert result.exit_code != 0, result.output
+    assert calls == []
+
+
+def test_spec_doc_parse_rejects_misaligned_release_and_version(monkeypatch):
+    calls = []
+
+    class FakeResult:
+        successes = {}
+        skipped = {}
+        failures = {}
+
+    class FakeService:
+        def parse_many(self, spec_ids, *, release, version, force):
+            calls.append((spec_ids, release, version, force))
+            return FakeResult()
+
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda: FakeService())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "spec",
+            "doc",
+            "parse",
+            "--spec",
+            "38.331",
+            "--release",
+            "Rel-18",
+            "--version",
+            "17.5.0",
+        ],
+    )
+
+    assert result.exit_code != 0, result.output
+    assert "does not match" in result.output
+    assert calls == []

@@ -23,13 +23,34 @@ def test_spec_doc_parse_job_exists_without_fetch_route(sqlite_env):
     with TestClient(build_app(get_settings()), raise_server_exceptions=False) as client:
         parse_response = client.post(
             "/jobs/parse/spec-docs",
-            json={"spec_ids": []},
+            json={"spec_id": ""},
         )
         fetch_response = client.get("/spec-docs/fetch")
 
     assert parse_response.status_code == 400
     assert "parse/spec-docs" in parse_response.json()["detail"]
     assert fetch_response.status_code == 404
+
+
+def test_spec_doc_parse_job_accepts_scalar_spec_and_rejects_misaligned_selection(sqlite_env):
+    create_schema("all")
+    with TestClient(build_app(get_settings()), raise_server_exceptions=False) as client:
+        accepted = client.post(
+            "/jobs/parse/spec-docs",
+            json={"spec_id": "38.331"},
+        )
+        rejected = client.post(
+            "/jobs/parse/spec-docs",
+            json={
+                "spec_id": "38.331",
+                "release": "Rel-18",
+                "version": "17.5.0",
+            },
+        )
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 400
+    assert "does not match" in rejected.json()["detail"]
 
 
 def test_spec_doc_search_form_uses_full_width_query_and_plural_metadata(sqlite_env):

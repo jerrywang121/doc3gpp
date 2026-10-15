@@ -2,6 +2,7 @@ import pytest
 
 from doc3gpp.models.spec import SpecVersion
 from doc3gpp.models.spec_doc import SpecDocSelectionError, SpecDocUnknownVersionError
+from doc3gpp.scraping import spec_doc_source
 from doc3gpp.scraping.spec_doc_source import fetch_spec_doc_zip, resolve_spec_doc_version
 
 
@@ -45,6 +46,15 @@ def test_misaligned_release_and_version_raises_clear_error():
     vs = [_v("18.5.0", "Rel-18"), _v("17.3.0", "Rel-17")]
     with pytest.raises(SpecDocSelectionError, match="release .* does not match version"):
         resolve_spec_doc_version(vs, release="Rel-18", version="17.3.0")
+
+
+def test_release_alignment_does_not_use_backtracking_version_regex(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("version parsing must not call re.match")
+
+    monkeypatch.setattr(spec_doc_source.re, "match", fail_if_called)
+
+    spec_doc_source.validate_release_version_alignment("Rel-18", "18.5.0")
 
 
 def test_miss_lists_available():

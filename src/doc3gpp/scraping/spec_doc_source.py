@@ -24,14 +24,13 @@ def validate_release_version_alignment(
             f"release {release!r} must use the form 'Rel-<number>' when paired with a version"
         )
 
-    version_match = re.match(r"(\d+)(?:\.|$)", version)
-    if version_match is None:
+    version_major = version.partition(".")[0]
+    if not version_major.isdecimal():
         raise SpecDocSelectionError(
             f"version {version!r} must begin with a numeric release when paired with {release!r}"
         )
 
     release_major = release_match.group(1)
-    version_major = version_match.group(1)
     if release_major != version_major:
         raise SpecDocSelectionError(
             f"release {release!r} does not match version {version!r}; "

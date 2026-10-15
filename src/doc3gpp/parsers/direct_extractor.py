@@ -10,10 +10,10 @@ Boundary discipline:
 - ``read_source_bytes`` distinguishes **local** from **URL** sources
   but does no parsing; downstream code paths branch on the returned
   ``source_kind``.
-- ``is_3gpp_ftp_url`` is the single point that decides whether a URL
-  hits the cache + DB write paths (3GPP FTP) or the in-memory parse-
-  only path (everything else). Case-insensitive scheme + path check
-  against :data:`doc3gpp.parsers.normalizers.FTP_BASE_URL`.
+- ``normalize_3gpp_ftp_url`` and ``validate_tdoc_ftp_url`` are the shared
+  boundary policy for canonical HTTPS 3GPP FTP paths, including bare
+  host/path input and TDoc-shaped file basenames. ``is_3gpp_ftp_url``
+  reports the normalized-site check used by lower-level branching.
 - ``extract_tdoc_id_from_filename`` reuses the existing
   :data:`doc3gpp.parsers.cr_parser._TDOC_HEADER_PATTERN` so direct-mode
   extraction agrees with the regular filter path on which id the
@@ -38,7 +38,7 @@ import re
 import typing
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
@@ -47,7 +47,6 @@ from doc3gpp.parsers.cr_parser import (
     _TDOC_HEADER_PATTERN,
     extract_docx_from_zip,
 )
-from doc3gpp.parsers.normalizers import FTP_BASE_URL
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
 
 if typing.TYPE_CHECKING:
@@ -62,41 +61,140 @@ if typing.TYPE_CHECKING:
 _CACHE_KEY_MAX_LEN = 128
 
 
-def is_3gpp_ftp_url(url: str) -> bool:
-    """Return ``True`` iff ``url`` is on the canonical 3GPP FTP root.
+_TDOC_FILE_SUFFIXES = (".docx", ".zip")
 
-    The check is a scheme-validated prefix match: the URL must parse
-    with an ``http`` / ``https`` scheme (case-insensitive — ``HTTP``
-    is accepted) and its ``netloc`` + ``path`` must begin with
-    :data:`doc3gpp.parsers.normalizers.FTP_BASE_URL`. The comparison
-    is host-agnostic: ``HTTP://www.3gpp.org/ftp/...`` and
-    ``https://www.3gpp.org/ftp/...`` both pass, while
-    ``https://example.com/...`` is rejected regardless of scheme. Other
-    schemes — ``ftp``, ``sftp``, ``file`` — are rejected; operators
-    should download those out-of-band and use ``--from-path``.
 
-    Args:
-        url: The URL to test. Strings that don't parse return ``False``
-            rather than raising so the CLI can branch on a single bool
-            without a try/except.
+def normalize_3gpp_ftp_url(url: str) -> str:
+    """Return the canonical HTTPS form of a 3GPP FTP URL.
 
-    Returns:
-        ``True`` only when the scheme is ``http(s)`` and the host +
-        path begin with the FTP root (case-insensitive).
+    Bare ``www.3gpp.org/ftp/...`` inputs are accepted and prefixed with
+    ``https://``. Explicit schemes are never upgraded: only HTTPS is
+    accepted, and the host/path must be exactly the canonical 3GPP FTP
+    site.
     """
-    if not url:
-        return False
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError(
+            "url must be a canonical HTTPS 3GPP FTP URL "
+            "(https://www.3gpp.org/ftp/...);"
+            f" got {url!r}"
+        )
+
+    candidate = url.strip()
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
     try:
-        parsed = urlparse(url)
+        parsed = urlparse(candidate)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            "url must be a canonical HTTPS 3GPP FTP URL "
+            "(https://www.3gpp.org/ftp/...);"
+            f" got {url!r}"
+        ) from exc
+
+    if parsed.scheme.lower() != "https":
+        raise ValueError(
+            "3GPP FTP URLs must use https://; explicit HTTP or other "
+            f"schemes are not accepted: {url!r}"
+        )
+    if (
+        hostname is None
+        or hostname.lower() != "www.3gpp.org"
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.startswith("/ftp/")
+    ):
+        raise ValueError(
+            "url must be a canonical HTTPS 3GPP FTP URL "
+            "(https://www.3gpp.org/ftp/...);"
+            f" got {url!r}"
+        )
+
+    return urlunparse(
+        ("https", "www.3gpp.org", parsed.path, "", parsed.query, parsed.fragment)
+    )
+
+
+def is_3gpp_ftp_candidate_url(url: str) -> bool:
+    """Return whether ``url`` targets the canonical FTP host/path.
+
+    Unlike :func:`is_3gpp_ftp_url`, this deliberately includes explicit
+    HTTP and other schemes so callers that also support unrelated URLs can
+    reject an unsafe 3GPP URL instead of misclassifying it as an arbitrary
+    in-memory source.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return False
+    candidate = url.strip()
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    try:
+        parsed = urlparse(candidate)
     except ValueError:
         return False
-    scheme = parsed.scheme.lower()
-    if scheme not in ("http", "https"):
+    return (
+        parsed.hostname is not None
+        and parsed.hostname.lower() == "www.3gpp.org"
+        and parsed.path.startswith("/ftp/")
+    )
+
+
+def _url_path_basename(url: str) -> str:
+    """Return the URL path basename without query or fragment components."""
+    path = urlparse(url).path.rstrip("/")
+    return unquote(path.rsplit("/", 1)[-1]) if path else ""
+
+
+def is_3gpp_file_url(url: str) -> bool:
+    """Return whether a canonical 3GPP URL names a document file."""
+    try:
+        normalized = normalize_3gpp_ftp_url(url)
+    except ValueError:
         return False
-    ftp_root = FTP_BASE_URL.lower()
-    host_path = (parsed.netloc + parsed.path).lower()
-    ftp_host_path = ftp_root[len("https://"):]
-    return host_path.startswith(ftp_host_path)
+    return _url_path_basename(normalized).lower().endswith(_TDOC_FILE_SUFFIXES)
+
+
+def validate_tdoc_ftp_url(url: str) -> str:
+    """Normalize and validate a TDoc file-or-folder URL.
+
+    A URL with a ``.docx`` or ``.zip`` basename is a file URL and its
+    basename must contain the shared TDoc identifier pattern. Any other
+    canonical FTP path is treated as a folder, whether or not it ends in
+    ``/``.
+    """
+    normalized = normalize_3gpp_ftp_url(url)
+    if is_3gpp_file_url(normalized):
+        basename = _url_path_basename(normalized)
+        if extract_tdoc_id_from_filename(basename) is None:
+            raise ValueError(
+                "url must point to a TDoc .docx or .zip file whose basename "
+                f"contains a TDoc id; got {url!r}"
+            )
+    return normalized
+
+
+def _normalize_3gpp_folder_url(url: str) -> str:
+    """Normalize a canonical FTP folder URL and ensure a trailing slash."""
+    normalized = normalize_3gpp_ftp_url(url)
+    parsed = urlparse(normalized)
+    path = parsed.path.rstrip("/") + "/"
+    return urlunparse(parsed._replace(path=path))
+
+
+def is_3gpp_ftp_url(url: str) -> bool:
+    """Return ``True`` for a canonical HTTPS 3GPP FTP URL.
+
+    Bare ``www.3gpp.org/ftp/...`` paths are recognized because callers
+    may normalize them at their boundary. Explicit HTTP, other schemes,
+    non-canonical hosts, and paths outside ``/ftp/`` return ``False``.
+    """
+    try:
+        normalize_3gpp_ftp_url(url)
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass(slots=True, frozen=True)
@@ -112,7 +210,7 @@ class NotAFolderError(ValueError):
     """Raised when a URL expected to be a 3GPP FTP folder is not a folder."""
 
 
-def list_3gpp_directory(url: str, *, client: "ScraperClient") -> FtpListing:
+def list_3gpp_directory(url: str, *, client: ScraperClient) -> FtpListing:
     """Probe ``url`` and return a structured 3GPP FTP folder listing.
 
     The function fetches ``url`` as text via the injected ``client``. If
@@ -130,7 +228,8 @@ def list_3gpp_directory(url: str, *, client: "ScraperClient") -> FtpListing:
     raised so callers can fall back to treating the URL as a single file.
 
     Args:
-        url: Absolute HTTP(S) URL under ``https://www.3gpp.org/ftp/``.
+        url: A canonical HTTPS URL under ``https://www.3gpp.org/ftp/`` or
+            its bare ``www.3gpp.org/ftp/`` host/path form.
         client: Injected scraper client; ``get_text`` is used for the
             probe and for resolving relative hrefs.
 
@@ -141,24 +240,30 @@ def list_3gpp_directory(url: str, *, client: "ScraperClient") -> FtpListing:
         ValueError: ``url`` is not a 3GPP FTP URL.
         NotAFolderError: the response is not an HTML directory listing.
     """
-    if not is_3gpp_ftp_url(url):
-        raise ValueError(f"URL is not a 3GPP FTP URL: {url}")
+    try:
+        folder_url = _normalize_3gpp_folder_url(url)
+    except ValueError as exc:
+        raise ValueError(f"URL is not a 3GPP FTP URL: {url}") from exc
 
     try:
-        html = client.get_text(url)
+        html = client.get_text(folder_url)
     except Exception as exc:
         raise NotAFolderError(
-            f"URL does not appear to be a folder: {url}"
+            f"URL does not appear to be a folder: {folder_url}"
         ) from exc
 
     stripped = html.lstrip()
     if not stripped.startswith(("<", "<!")):
-        raise NotAFolderError(f"URL does not appear to be a folder: {url}")
+        raise NotAFolderError(
+            f"URL does not appear to be a folder: {folder_url}"
+        )
 
     soup = BeautifulSoup(html, "lxml")
     anchors = soup.find_all("a", href=True)
     if not anchors:
-        raise NotAFolderError(f"URL does not appear to be a folder: {url}")
+        raise NotAFolderError(
+            f"URL does not appear to be a folder: {folder_url}"
+        )
 
     file_urls: list[str] = []
     subfolder_urls: list[str] = []
@@ -166,7 +271,11 @@ def list_3gpp_directory(url: str, *, client: "ScraperClient") -> FtpListing:
 
     for anchor in anchors:
         href = str(anchor["href"])
-        abs_url = urljoin(url, href)
+        abs_url = urljoin(folder_url, href)
+        try:
+            abs_url = normalize_3gpp_ftp_url(abs_url)
+        except ValueError:
+            continue
         if abs_url in seen:
             continue
         seen.add(abs_url)
@@ -175,21 +284,23 @@ def list_3gpp_directory(url: str, *, client: "ScraperClient") -> FtpListing:
             continue
         if href in ("..", "../") or href.rstrip("/").endswith(".."):
             continue
-        if _is_ancestor_or_self(abs_url, url):
+        if _is_ancestor_or_self(abs_url, folder_url):
             continue
 
         anchor_classes = set(anchor.get("class") or [])
         if "file" in anchor_classes:
             basename = abs_url.rsplit("/", 1)[-1]
             lower_name = basename.lower()
-            if lower_name.endswith((".docx", ".zip")):
-                if extract_tdoc_id_from_filename(basename) is not None:
-                    file_urls.append(abs_url)
+            if (
+                lower_name.endswith((".docx", ".zip"))
+                and extract_tdoc_id_from_filename(basename) is not None
+            ):
+                file_urls.append(abs_url)
         elif _looks_like_folder(anchor, href):
             subfolder_urls.append(abs_url)
 
     return FtpListing(
-        folder_url=url,
+        folder_url=folder_url,
         file_urls=tuple(file_urls),
         subfolder_urls=tuple(subfolder_urls),
     )
@@ -354,7 +465,7 @@ def direct_parse_bytes(
     filename: str,
     full: bool = False,
     max_bytes: int = 0,
-) -> tuple[str, str, "TDocCRParseResult"]:
+) -> tuple[str, str, TDocCRParseResult]:
     """Parse ``payload`` (a ``.docx`` or a zip-wrapped ``.docx``) into markdown + parse result.
 
     Dispatch is by ``filename`` extension (not magic bytes — a docx
@@ -493,11 +604,11 @@ def build_no_pattern_warning_message(filename: str) -> str:
 
     The pattern documented in the message matches
     :data:`doc3gpp.parsers.cr_parser._TDOC_HEADER_PATTERN`
-    (i.e. ``[RSC][1-6][-sw]\\d{6}`` case-insensitive).
+    (i.e. ``[RSC][1-6P][-sw]\\d{6}`` case-insensitive).
     """
     return (
         f"warning: filename '{filename}' does not match the 3GPP TDoc id\n"
-        f"         pattern ([RSC][1-6][-sw]\\d{{6}}); skipping cache and DB writes."
+        f"         pattern ([RSC][1-6P][-sw]\\d{{6}}); skipping cache and DB writes."
     )
 
 
@@ -507,6 +618,10 @@ __all__ = [
     "derive_zip_cache_key",
     "direct_parse_bytes",
     "extract_tdoc_id_from_filename",
+    "is_3gpp_file_url",
+    "is_3gpp_ftp_candidate_url",
     "is_3gpp_ftp_url",
+    "normalize_3gpp_ftp_url",
     "read_source_bytes",
+    "validate_tdoc_ftp_url",
 ]

@@ -299,18 +299,18 @@ async def post_parse_tdoc_url(
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> JSONResponse:
     """Enqueue a parse of a single 3GPP FTP URL or folder (closes the MCP-vs-HTTP gap)."""
-    from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
+    from doc3gpp.parsers.direct_extractor import validate_tdoc_ftp_url
 
-    if not is_3gpp_ftp_url(body.url):
-        raise InvalidFilterError(
-            f"url must be a 3GPP FTP URL (https://www.3gpp.org/ftp/...); got {body.url!r}"
-        )
+    try:
+        normalized_url = validate_tdoc_ftp_url(body.url)
+    except ValueError as exc:
+        raise InvalidFilterError(str(exc)) from exc
     if body.recursive and body.max_depth != 2:
         raise InvalidFilterError(
             "recursive and max_depth are mutually exclusive; set one or the other"
         )
     params: dict[str, JSONValue] = {
-        "url": body.url,
+        "url": normalized_url,
         "force": body.force,
         "full": body.full,
         "recursive": body.recursive,

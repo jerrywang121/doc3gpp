@@ -213,6 +213,8 @@ doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../R5s260009.zip # 3GPP 
 doc3gpp tdoc parse --from-url https://example.com/some.zip --format json -o /tmp/out.json  # non-3GPP URL → in-memory only
 doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json         # local batch
 doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --output ./parsed  # online batch
+# 3GPP URLs also accept bare www.3gpp.org/ftp/...; HTTPS is required,
+# and .docx/.zip basenames must contain a TDoc id (including RP-... plenary ids).
 
 # show — --tdoc and --ftp-url are mutually exclusive
 doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json

@@ -25,7 +25,11 @@ from doc3gpp.cli_auto_sync import (
 from doc3gpp.models.index import IndexRequest
 from doc3gpp.models.jobs import Job, JobKind, JSONValue
 from doc3gpp.models.spec_doc import SpecDocSelectionError
-from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
+from doc3gpp.models.tdoc_cr import DirectParseBatchResult
+from doc3gpp.parsers.direct_extractor import (
+    is_3gpp_file_url,
+    validate_tdoc_ftp_url,
+)
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
@@ -366,11 +370,13 @@ async def _parse_tdoc_url(
     progress: ProgressFn,
     cancel_event: asyncio.Event,
 ) -> Mapping[str, JSONValue]:
-    url = job.params.get("url")
-    if not isinstance(url, str) or not is_3gpp_ftp_url(url):
+    raw_url = job.params.get("url")
+    try:
+        url = validate_tdoc_ftp_url(raw_url)
+    except ValueError as exc:
         raise ValueError(
-            f"parse_tdoc_url job requires a 3GPP FTP 'url' parameter; got {url!r}"
-        )
+            f"parse_tdoc_url job requires a valid 3GPP FTP 'url' parameter: {exc}"
+        ) from exc
     force = bool(job.params.get("force", False))
     full = bool(job.params.get("full", False))
     recursive = bool(job.params.get("recursive", False))
@@ -412,16 +418,37 @@ async def _parse_tdoc_url(
 
     if cancel_event.is_set():
         raise asyncio.CancelledError()
-    batch = await asyncio.to_thread(
-        services.tdoc_cr.extract_from_url_batch,
-        url,
-        max_depth=max_depth,
-        force=force,
-        full=full,
-        max_tdoc_size_bytes=max_tdoc_size_bytes or None,
-        on_progress=progress,
-        is_cancelled=cancel_event.is_set,
-    )
+    if is_3gpp_file_url(url):
+        failures: dict[str, str] = {}
+        try:
+            result = await asyncio.to_thread(
+                services.tdoc_cr.extract_from_url,
+                url,
+                force=force,
+                full=full,
+                max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+            )
+        except Exception as exc:
+            logger.warning("Failed to parse %s: %s", url, exc, exc_info=True)
+            failures[url] = f"{type(exc).__name__}: {exc}"
+            batch = DirectParseBatchResult(
+                results=[], failures=failures, skipped={}
+            )
+        else:
+            batch = DirectParseBatchResult(
+                results=[result], failures={}, skipped={}
+            )
+    else:
+        batch = await asyncio.to_thread(
+            services.tdoc_cr.extract_from_url_batch,
+            url,
+            max_depth=max_depth,
+            force=force,
+            full=full,
+            max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+            on_progress=progress,
+            is_cancelled=cancel_event.is_set,
+        )
     if cancel_event.is_set():
         raise asyncio.CancelledError()
 

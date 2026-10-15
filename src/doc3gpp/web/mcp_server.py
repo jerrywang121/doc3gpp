@@ -38,7 +38,7 @@ from doc3gpp.models.unified_search import (
     spec_doc_search_result_to_dict,
     tdoc_search_result_to_dict,
 )
-from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
+from doc3gpp.parsers.direct_extractor import validate_tdoc_ftp_url
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.web import render
 from doc3gpp.web.errors import (
@@ -868,7 +868,8 @@ def build_mcp_server(state: WebState) -> MCPServer:
         name="parse_tdoc_url",
         description=(
             "Enqueue a parse of a single TDoc file or a folder of TDoc files "
-            "from a 3GPP FTP URL (https://www.3gpp.org/ftp/...). Mirrors "
+            "from a canonical 3GPP FTP URL (HTTPS https://www.3gpp.org/ftp/... "
+            "or bare www.3gpp.org/ftp/...; explicit HTTP is rejected). Mirrors "
             "`doc3gpp tdoc parse --from-url`. Use `recursive`/`max_depth` to "
             "scan subfolders; `force` re-parses already-cached files; `full` "
             "parses the TTCN corrections sub-parser. When "
@@ -880,16 +881,16 @@ def build_mcp_server(state: WebState) -> MCPServer:
     )
     @_mcp_error_guard
     def parse_tdoc_url(
-        url: Annotated[str, Field(description="Absolute 3GPP FTP URL (https://www.3gpp.org/ftp/...). Single .docx/.zip file or a folder URL.")],
+        url: Annotated[str, Field(description="Canonical 3GPP FTP URL: HTTPS https://www.3gpp.org/ftp/... or bare www.3gpp.org/ftp/...; a single TDoc-shaped .docx/.zip file or a folder URL with optional trailing slash.")],
         recursive: Annotated[bool, Field(description="Scan subfolders (BFS); equivalent to CLI's --recursive. Mutually exclusive with max_depth.")] = False,
         max_depth: Annotated[int, Field(description="Maximum BFS depth (0 = root folder only). Ignored when recursive=True.")] = 2,
         force: Annotated[bool, Field(description="Re-parse even when a cover-page row already exists (forwarded to the service).")] = False,
         full: Annotated[bool, Field(description="Parse full content for TTCN corrections (forwarded to the service).")] = False,
     ) -> str:
-        if not is_3gpp_ftp_url(url):
-            raise InvalidFilterError(
-                f"url must be a 3GPP FTP URL (https://www.3gpp.org/ftp/...); got {url!r}"
-            )
+        try:
+            url = validate_tdoc_ftp_url(url)
+        except ValueError as exc:
+            raise InvalidFilterError(str(exc)) from exc
         if recursive and max_depth != 2:
             raise InvalidFilterError(
                 "recursive and max_depth are mutually exclusive; set one or the other"

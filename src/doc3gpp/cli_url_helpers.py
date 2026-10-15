@@ -2,8 +2,8 @@
 
 The CLI's ``--from-url`` direct-parse path needs a tiny set of
 predicate functions to decide whether a URL points at a 3GPP FTP
-asset, whether it ends in a known file extension, and whether it
-trails with a slash (a folder marker). The same predicates are
+asset, whether it ends in a known file extension, and whether it is a
+folder path (with or without a trailing slash). The same predicates are
 needed from :mod:`doc3gpp.cli_auto_sync` so the auto-sync helper can
 derive TDoc-id candidates from a URL without dragging the full
 parser module into its import surface.
@@ -16,26 +16,36 @@ import one consistent set of names:
   parser implementation stays in one place.
 * :func:`_looks_like_3gpp_file_url` — true when the URL ends with a
   known document extension.
-* :func:`_looks_like_3gpp_folder_url` — true when the URL ends with
-  a slash (folder marker).
+* :func:`_looks_like_3gpp_folder_url` — true for any other canonical
+  3GPP FTP path.
 """
 
 from __future__ import annotations
 
-from doc3gpp.parsers.direct_extractor import is_3gpp_ftp_url
+from doc3gpp.parsers.direct_extractor import (
+    is_3gpp_file_url,
+    is_3gpp_ftp_candidate_url,
+    is_3gpp_ftp_url,
+    normalize_3gpp_ftp_url,
+    validate_tdoc_ftp_url,
+)
 
 __all__ = [
     "_looks_like_3gpp_file_url",
     "_looks_like_3gpp_folder_url",
+    "is_3gpp_file_url",
+    "is_3gpp_ftp_candidate_url",
     "is_3gpp_ftp_url",
+    "normalize_3gpp_ftp_url",
+    "validate_tdoc_ftp_url",
 ]
 
 
 def _looks_like_3gpp_folder_url(url: str) -> bool:
-    """Return ``True`` when ``url`` is unambiguously a folder path."""
-    return url.endswith("/")
+    """Return ``True`` for a canonical non-file FTP path."""
+    return is_3gpp_ftp_url(url) and not is_3gpp_file_url(url)
 
 
 def _looks_like_3gpp_file_url(url: str) -> bool:
-    """Return ``True`` when ``url`` ends with a known file extension."""
-    return url.lower().endswith((".docx", ".zip"))
+    """Return ``True`` when a canonical URL ends with a known extension."""
+    return is_3gpp_file_url(url)

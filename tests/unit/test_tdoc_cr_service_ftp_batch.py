@@ -190,6 +190,25 @@ def test_collect_3gpp_file_urls_root_only_when_max_depth_zero(service: TDocCrSer
     assert urls == [f"{root}R5s260001.zip"]
 
 
+def test_collect_3gpp_file_urls_accepts_folder_without_trailing_slash(
+    service: TDocCrService,
+) -> None:
+    """A folder URL without ``/`` is normalized before relative links resolve."""
+    root = "https://www.3gpp.org/ftp/Docs"
+    normalized_root = f"{root}/"
+    service._scraper = _FakeScraper(
+        {
+            normalized_root: _folder_html(
+                '<a class="file" href="R5s260001.zip">R5s260001.zip</a>',
+            ),
+        }
+    )
+
+    urls = service._collect_3gpp_file_urls(root, max_depth=0)
+
+    assert urls == [f"{normalized_root}R5s260001.zip"]
+
+
 def test_collect_3gpp_file_urls_recurses_to_max_depth(service: TDocCrService) -> None:
     root = "https://www.3gpp.org/ftp/Docs/"
     sub = f"{root}sub/"

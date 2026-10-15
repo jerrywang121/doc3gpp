@@ -135,6 +135,93 @@ def test_parse_tdoc_url_rejects_non_3gpp_url(sqlite_env) -> None:
     assert "3GPP FTP" in exc_info.value.message
 
 
+def test_parse_tdoc_url_rejects_http_3gpp_url(sqlite_env) -> None:
+    """The MCP URL policy rejects explicit HTTP rather than upgrading it."""
+    _, server = _server()
+
+    async def run():
+        return await _call(
+            server,
+            "parse_tdoc_url",
+            {"url": "http://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+        )
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert "https" in exc_info.value.message.lower()
+
+
+def test_parse_tdoc_url_rejects_spec_archive(sqlite_env) -> None:
+    """A spec archive is not accepted as a TDoc file URL."""
+    _, server = _server()
+
+    async def run():
+        return await _call(
+            server,
+            "parse_tdoc_url",
+            {
+                "url": (
+                    "https://www.3gpp.org/ftp/Specs/archive/36_series/"
+                    "36.508/36508-j31.zip"
+                )
+            },
+        )
+
+    with pytest.raises(MCPError) as exc_info:
+        asyncio.run(run())
+    assert "tdoc" in exc_info.value.message.lower()
+
+
+def test_parse_tdoc_url_normalizes_bare_folder_url(sqlite_env) -> None:
+    """A bare 3GPP host/path is enqueued with an HTTPS URL."""
+    state, server = _server()
+    captured: list[tuple[object, dict]] = []
+    real_create = state.services.job_repo.create
+
+    def capturing_create(kind, params):
+        job = real_create(kind, params)
+        captured.append((kind, dict(params)))
+        return job
+
+    state.services.job_repo.create = capturing_create  # type: ignore[assignment]
+
+    async def run():
+        return await _call(
+            server,
+            "parse_tdoc_url",
+            {"url": "www.3gpp.org/ftp/TSG_RAN/WG5/Docs"},
+        )
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    assert captured[0][1]["url"] == "https://www.3gpp.org/ftp/TSG_RAN/WG5/Docs"
+
+
+def test_parse_tdoc_url_accepts_plenary_file_url(sqlite_env) -> None:
+    """Plenary ``RP-2601234`` filenames are accepted by the MCP boundary."""
+    state, server = _server()
+    captured: list[tuple[object, dict]] = []
+    real_create = state.services.job_repo.create
+
+    def capturing_create(kind, params):
+        job = real_create(kind, params)
+        captured.append((kind, dict(params)))
+        return job
+
+    state.services.job_repo.create = capturing_create  # type: ignore[assignment]
+
+    async def run():
+        return await _call(
+            server,
+            "parse_tdoc_url",
+            {"url": "https://www.3gpp.org/ftp/TSG_RAN/RP-2601234.zip"},
+        )
+
+    result = asyncio.run(run())
+    assert result.is_error is False
+    assert captured[0][1]["url"].endswith("RP-2601234.zip")
+
+
 def test_parse_tdoc_url_rejects_empty_url(sqlite_env) -> None:
     """Empty URL is treated as a non-3GPP URL → rejected."""
     _, server = _server()

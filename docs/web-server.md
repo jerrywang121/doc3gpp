@@ -206,7 +206,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/tdocs/index` | Enqueue unified TDoc FTS5/vector index maintenance. |
 | POST | `/jobs/spec-docs/index` | Enqueue unified spec-doc FTS5/vector index maintenance. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
-| POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single 3GPP FTP URL or folder; `url` must be `https://www.3gpp.org/ftp/...`, `recursive` XOR `max_depth`). |
+| POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single TDoc file or folder on the canonical 3GPP FTP site; accepts HTTPS `https://www.3gpp.org/ftp/...` or bare `www.3gpp.org/ftp/...`, normalizes the latter, rejects explicit HTTP and non-TDoc spec archives, and permits an optional folder trailing slash; `recursive` XOR `max_depth`). |
 | POST | `/jobs/parse/spec-docs` | Enqueue `parse_spec_docs` for one spec id (`spec_id`, optional `release`, `version`, and `force`); progress is streamed through the normal job SSE endpoint. This job is intentionally not a panel on the eleven-form `/sync` hub. |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. Accepts `?format=html` to return the refreshed job row as an `outerHTML` swap target for the list page's per-row Cancel button. JSON otherwise. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |

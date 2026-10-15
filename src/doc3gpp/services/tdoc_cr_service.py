@@ -57,12 +57,12 @@ either parser payload back into the in-memory ``ExtractResult``.
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import io
 import logging
 import re
 import zipfile
-import asyncio
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -86,8 +86,9 @@ from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
     direct_parse_bytes,
     extract_tdoc_id_from_filename,
-    is_3gpp_ftp_url,
+    is_3gpp_ftp_candidate_url,
     list_3gpp_directory,
+    validate_tdoc_ftp_url,
 )
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.parsers.tdoc_parsers import (
@@ -411,7 +412,7 @@ class TDocCrService:
         self,
         *,
         cache: TDocCacheLike,
-        scraper_client: "ScraperClient",
+        scraper_client: ScraperClient,
         cr_repository: TDocCrDetailRepository,
         cr_ttcn_repository: TDocCrTTCNDetailRepository,
         cr_change_details_repository: TDocCrChangeDetailsRepository,
@@ -419,8 +420,8 @@ class TDocCrService:
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
         max_tdoc_size_bytes: int = 0,
-        search_service: "SearchService | None" = None,
-        semantic_service: "SemanticSearchService | None" = None,
+        search_service: SearchService | None = None,
+        semantic_service: SemanticSearchService | None = None,
     ) -> None:
         self._cache = cache
         self._scraper = scraper_client
@@ -834,9 +835,10 @@ class TDocCrService:
           database are never touched.
 
         Args:
-            url: HTTP or HTTPS URL (other schemes raise ``ValueError``
-                — operators should use ``--from-path`` for
-                ``ftp://`` / ``file://`` sources).
+            url: An HTTP(S) URL. Canonical 3GPP FTP paths must use HTTPS
+                (the bare ``www.3gpp.org/ftp/`` form is normalized); other
+                schemes raise ``ValueError`` and should be downloaded out
+                of band for ``--from-path``.
             force: When ``True`` on the 3GPP-URL path, skip the DB
                 short-circuit probe and re-render markdown (bypassing
                 the markdown cache). The on-disk zip is **always**
@@ -856,9 +858,11 @@ class TDocCrService:
             caller is expected to print the warning and emit the
             parsed record to stdout.
         """
-        if not is_3gpp_ftp_url(url):
+        if is_3gpp_ftp_candidate_url(url):
+            url = validate_tdoc_ftp_url(url)
+        else:
             payload = self._scraper.get_bytes(url)
-            markdown, docx_filename, parsed = direct_parse_bytes(
+            markdown, _docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
                 max_bytes=self._max_tdoc_size_bytes,
             )
@@ -880,7 +884,7 @@ class TDocCrService:
 
         if extracted_id is None:
             payload = self._scraper.get_bytes(url)
-            markdown, docx_filename, parsed = direct_parse_bytes(
+            markdown, _docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
                 max_bytes=self._max_tdoc_size_bytes,
             )
@@ -903,7 +907,7 @@ class TDocCrService:
 
         if not self._tdoc_in_tdocs(extracted_id):
             payload = self._scraper.get_bytes(url)
-            markdown, docx_filename, parsed = direct_parse_bytes(
+            markdown, _docx_filename, parsed = direct_parse_bytes(
                 payload, filename=url, full=full,
                 max_bytes=self._max_tdoc_size_bytes,
             )
@@ -977,8 +981,10 @@ class TDocCrService:
             NotAFolderError: ``url`` resolves to a single file rather than
                 a folder listing.
         """
-        if not is_3gpp_ftp_url(url):
-            raise ValueError(f"URL is not a 3GPP FTP URL: {url}")
+        try:
+            url = validate_tdoc_ftp_url(url)
+        except ValueError as exc:
+            raise ValueError(f"URL is not a 3GPP FTP URL: {url}") from exc
 
         file_urls = self.collect_3gpp_file_urls(url, max_depth=max_depth)
 
@@ -1002,7 +1008,7 @@ class TDocCrService:
                 )
                 skipped[file_url] = f"{type(exc).__name__}: {exc}"
                 continue
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "Failed to parse %s: %s", file_url, exc, exc_info=True,
                 )
@@ -1038,7 +1044,7 @@ class TDocCrService:
                     raise
                 logger.warning("Skipping non-folder URL %s", folder_url)
                 continue
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "Failed to list %s: %s", folder_url, exc, exc_info=True,
                 )
@@ -1093,7 +1099,7 @@ class TDocCrService:
             ``"local"`` and whose persistence fields are all false.
         """
         del force
-        markdown, docx_filename, parsed = direct_parse_bytes(
+        markdown, _docx_filename, parsed = direct_parse_bytes(
             docx_bytes, filename=filename, full=full,
             max_bytes=(
                 max_tdoc_size_bytes
@@ -1257,7 +1263,7 @@ class TDocCrService:
         empty value or one that does not match the conservative
         ``[A-Za-z0-9-]{1,32}`` regex. The regex is deliberately
         broader than the CR parser's stricter
-        ``[RSC][1-9][-sw]\d{6}`` because the ``tdocs`` table may also
+        ``[RSC][1-9P][-sw]\d{6}`` because the ``tdocs`` table may also
         hold LS / DRAFT / other non-CR rows whose ids use a different
         shape — the type check downstream is what makes those a
         hard error rather than this regex.
@@ -1337,4 +1343,4 @@ class TDocCrService:
 
 # Re-export the parser-side exception so callers can catch a single
 # type if they want to treat "not a CR markdown" as a soft failure in
-# batch flows. Not part of the Plan but convenient. 
+# batch flows. Not part of the Plan but convenient.

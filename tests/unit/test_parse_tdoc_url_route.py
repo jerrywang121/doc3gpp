@@ -88,6 +88,46 @@ def test_post_parse_tdoc_url_rejects_non_3gpp_url(client: Any) -> None:
     assert r.json()["error"] == "invalid_filter"
 
 
+def test_post_parse_tdoc_url_rejects_http_3gpp_url(client: Any) -> None:
+    """The HTTP job surface rejects explicit HTTP rather than upgrading it."""
+    c, _ = client
+    r = c.post(
+        "/jobs/parse/tdoc-url",
+        json={"url": "http://www.3gpp.org/ftp/TSG_RAN/WG5/"},
+    )
+    assert r.status_code == 400
+    assert "https" in r.json()["detail"].lower()
+
+
+def test_post_parse_tdoc_url_rejects_spec_archive(client: Any) -> None:
+    """The HTTP job surface rejects a spec archive as a non-TDoc file."""
+    c, _ = client
+    r = c.post(
+        "/jobs/parse/tdoc-url",
+        json={
+            "url": (
+                "https://www.3gpp.org/ftp/Specs/archive/36_series/"
+                "36.508/36508-j31.zip"
+            )
+        },
+    )
+    assert r.status_code == 400
+    assert "tdoc" in r.json()["detail"].lower()
+
+
+def test_post_parse_tdoc_url_normalizes_bare_folder_url(client: Any) -> None:
+    """A bare canonical folder URL is stored with an HTTPS scheme."""
+    c, repo = client
+    r = c.post(
+        "/jobs/parse/tdoc-url",
+        json={"url": "www.3gpp.org/ftp/TSG_RAN/WG5/Docs"},
+    )
+    assert r.status_code == 202
+    job = repo.get(r.json()["job_id"])
+    assert job is not None
+    assert job.params["url"] == "https://www.3gpp.org/ftp/TSG_RAN/WG5/Docs"
+
+
 def test_post_parse_tdoc_url_xor_recursive_max_depth(client: Any) -> None:
     c, _ = client
     r = c.post(

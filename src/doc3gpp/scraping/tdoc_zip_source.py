@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 # in sync. Matches ``R5s260009``, ``R5w260009``, ``R5-227476``, ``C6-250028``,
 # plus RAN4's 7-digit form ``R4-2607922`` (and the lower-case variants).
 # First char = meeting family (``R``, ``S``, ``C``), second = working
-# group digit ``[1-9]``, position 2 = subtype separator (``-``, ``s``,
+# group digit ``[1-9]`` or plenary marker ``P``, position 2 = subtype separator (``-``, ``s``,
 # or ``w``), then 6 or 7 sequence digits.
-_CR_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6,7}", re.IGNORECASE)
+_CR_ID_RE = re.compile(r"[RSC][1-9P][-sw]\d{6,7}", re.IGNORECASE)
 
 # Subdir names accepted by the Phase 1 ``TDocCache`` interface. Mirrored
 # here so the Protocol stays narrow and the constant has a single owner.

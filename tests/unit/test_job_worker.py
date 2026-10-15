@@ -922,6 +922,7 @@ class _FakeTDocCrServiceForUrl:
         self.raise_extract = raise_extract
         self.extract_calls: list[dict] = []
         self.collect_calls: list[dict] = []
+        self.single_extract_calls: list[dict] = []
 
     def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> list[str]:
         self.collect_calls.append({"url": url, "max_depth": max_depth})
@@ -952,6 +953,24 @@ class _FakeTDocCrServiceForUrl:
             failures=self.failures,
             skipped=self.skipped,
         )
+
+    def extract_from_url(
+        self,
+        url: str,
+        *,
+        force: bool,
+        full: bool,
+        max_tdoc_size_bytes: int | None,
+    ) -> DirectParseResult:
+        self.single_extract_calls.append({
+            "url": url,
+            "force": force,
+            "full": full,
+            "max_tdoc_size_bytes": max_tdoc_size_bytes,
+        })
+        if not self.results:
+            raise AssertionError("test service has no single-file result")
+        return self.results[0]
 
 
 def test_parse_tdoc_url_passes_on_progress() -> None:
@@ -1057,6 +1076,44 @@ def test_parse_tdoc_url_handler_happy_path() -> None:
             },
         ],
     }
+
+
+def test_parse_tdoc_url_handler_dispatches_single_file_directly() -> None:
+    """A TDoc file URL uses ``extract_from_url``, not folder batch probing."""
+    from doc3gpp.models.jobs import JobKind
+    from doc3gpp.models.tdoc_cr import DirectParseResult
+
+    repo = _make_repo()
+    fake = _FakeTDocCrServiceForUrl(
+        results=[
+            DirectParseResult(
+                source_kind="url-3gpp",
+                markdown="",
+                details=None,
+                extract_meta=None,
+                from_cache=False,
+                persisted=True,
+                tdoc_id="RP-2601234",
+                tdoc_id_in_tdocs=True,
+                source_url="https://www.3gpp.org/ftp/RP-2601234.zip",
+            )
+        ]
+    )
+    state = _make_url_state(repo, url_service=fake)
+    job = repo.create(
+        JobKind.PARSE_TDOC_URL,
+        {"url": "https://www.3gpp.org/ftp/RP-2601234.zip"},
+    )
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert fake.single_extract_calls[0]["url"].endswith("RP-2601234.zip")
+    assert fake.extract_calls == []
+    assert done.result_summary["successes"] == 1
 
 
 class _FakeTDocSyncCoordinator:

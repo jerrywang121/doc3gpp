@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import gzip
 import io
-import sys
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,6 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocCrService,
     _wrap_markdown_zip,
 )
-
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
@@ -779,7 +777,7 @@ def test_extract_many_skipped_only_batch_exits_cleanly(
     result = service.extract_many(["R5s263431"])
     assert result.failures == {}
     assert "R5s263431" in result.skipped
-    assert "TDocNotYetOnFTPError" in result.skipped["R5s263431"]  # noqa: E501
+    assert "TDocNotYetOnFTPError" in result.skipped["R5s263431"]
 
 
 # ---------------------------------------------------------------------------
@@ -861,14 +859,13 @@ def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
     """``extract_from_url_batch`` puts oversized URLs in ``skipped``
     (NOT in ``failures``).
     """
-    from doc3gpp.services import tdoc_cr_service as svc_mod
     from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
 
     service, _, _, _, _, _ = _build_service(tmp_path)
 
     urls = [
-        "https://www.3gpp.org/ftp/a.zip",
-        "https://www.3gpp.org/ftp/b.zip",
+        "https://www.3gpp.org/ftp/R5s260001.zip",
+        "https://www.3gpp.org/ftp/R5s260002.zip",
     ]
 
     service.collect_3gpp_file_urls = lambda url, *, max_depth: urls  # type: ignore[method-assign]
@@ -879,14 +876,9 @@ def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
 
     service.extract_from_url = _boom  # type: ignore[method-assign]
 
-    original_is_3gpp = svc_mod.is_3gpp_ftp_url
-    svc_mod.is_3gpp_ftp_url = lambda u: True  # type: ignore[assignment]
-    try:
-        batch = service.extract_from_url_batch(
-            "https://www.3gpp.org/ftp/folder/", max_depth=0,
-        )
-    finally:
-        svc_mod.is_3gpp_ftp_url = original_is_3gpp  # type: ignore[assignment]
+    batch = service.extract_from_url_batch(
+        "https://www.3gpp.org/ftp/folder/", max_depth=0,
+    )
 
     assert batch.failures == {}
     assert set(batch.skipped.keys()) == set(urls)
@@ -938,7 +930,9 @@ def test_extract_from_url_batch_is_cancelled_aborts_batch(tmp_path) -> None:
 
     service.extract_from_url = _extract  # type: ignore[assignment]
 
-    file_urls = [f"https://www.3gpp.org/ftp/f{i}.docx" for i in range(5)]
+    file_urls = [
+        f"https://www.3gpp.org/ftp/R5s26000{i}.docx" for i in range(5)
+    ]
     service.collect_3gpp_file_urls = lambda url, *, max_depth: list(file_urls)  # type: ignore[assignment]
 
     cancel_calls = {"n": 0}
@@ -947,19 +941,13 @@ def test_extract_from_url_batch_is_cancelled_aborts_batch(tmp_path) -> None:
         cancel_calls["n"] += 1
         return cancel_calls["n"] >= 2
 
-    svc_mod = sys.modules[service.__class__.__module__]
-    original_is_3gpp = svc_mod.is_3gpp_ftp_url
-    svc_mod.is_3gpp_ftp_url = lambda u: True  # type: ignore[assignment]
-    try:
-        with pytest.raises(asyncio.CancelledError):
-            service.extract_from_url_batch(
-                "https://www.3gpp.org/ftp/folder/",
-                max_depth=0,
-                on_progress=progress_lines.append,
-                is_cancelled=_is_cancelled,
-            )
-    finally:
-        svc_mod.is_3gpp_ftp_url = original_is_3gpp  # type: ignore[assignment]
+    with pytest.raises(asyncio.CancelledError):
+        service.extract_from_url_batch(
+            "https://www.3gpp.org/ftp/folder/",
+            max_depth=0,
+            on_progress=progress_lines.append,
+            is_cancelled=_is_cancelled,
+        )
 
     # First file runs, second observes the cancel and aborts.
     assert len(seen) < 5, f"expected cancel to short-circuit; saw {seen}"

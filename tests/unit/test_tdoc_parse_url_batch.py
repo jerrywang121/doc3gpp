@@ -101,6 +101,23 @@ def test_folder_url_routes_to_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fake.batch_calls[0][1]["max_depth"] == 0
 
 
+def test_folder_url_without_trailing_slash_routes_to_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder URL does not need a trailing slash for CLI dispatch."""
+    batch = DirectParseBatchResult(results=[], failures={})
+    fake = _FakeBatchService(batch_result=batch)
+    _build_service_factory(monkeypatch, fake)
+
+    result = Runner().invoke(
+        app, ["tdoc", "parse", "--from-url", "https://www.3gpp.org/ftp/Docs"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(fake.batch_calls) == 1
+    assert not fake.direct_calls
+
+
 def test_file_url_routes_to_direct(monkeypatch: pytest.MonkeyPatch) -> None:
     direct = _dummy_details("R5s260001")
     fake = _FakeBatchService(direct_result=direct)
@@ -165,11 +182,12 @@ def test_max_depth_without_recursive_implies_recursion(
     assert fake.batch_calls[0][1]["max_depth"] == 3
 
 
-def test_ambiguous_url_that_is_file_falls_back_to_direct(
+def test_extensionless_canonical_url_is_treated_as_a_folder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    direct = _dummy_details("R5s260001")
-    fake = _FakeBatchService(direct_result=direct)
+    fake = _FakeBatchService(
+        batch_result=DirectParseBatchResult(results=[], failures={})
+    )
     _build_service_factory(monkeypatch, fake)
 
     result = Runner().invoke(
@@ -177,8 +195,8 @@ def test_ambiguous_url_that_is_file_falls_back_to_direct(
         ["tdoc", "parse", "--from-url", "https://www.3gpp.org/ftp/Docs/R5s260001"],
     )
     assert result.exit_code == 0, result.output
-    assert len(fake.direct_calls) == 1
-    assert len(fake.batch_calls) == 1  # probe
+    assert len(fake.batch_calls) == 1
+    assert not fake.direct_calls
 
 
 def test_batch_writes_output_mirroring_ftp_structure(

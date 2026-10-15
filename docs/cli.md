@@ -1269,18 +1269,23 @@ Options:
   detected: a file is parsed as a single source, a directory is
   processed as a batch. The cache and database are never touched for
   local files.
-- `--from-url URL`: download the URL (HTTP or HTTPS) and parse it.
-  When the URL is on the canonical 3GPP FTP root
-  (`https://www.3gpp.org/ftp/...`) the result is cached on disk and
-  written to `tdoc_extracts` + `tdoc_cr_cover_page` (and to
+- `--from-url URL`: download the URL and parse it. For the canonical
+  3GPP FTP site, only HTTPS URLs under
+  `https://www.3gpp.org/ftp/...` are accepted; the bare form
+  `www.3gpp.org/ftp/...` is also accepted and normalized to HTTPS,
+  while an explicit `http://www.3gpp.org/ftp/...` URL is rejected.
+  A canonical `.docx` or `.zip` file must have a TDoc-shaped basename
+  (including plenary ids such as `RP-2601234`); a spec archive such as
+  `36508-j31.zip` is rejected. Every other canonical 3GPP path is
+  treated as a folder, and its trailing slash is optional. Canonical
+  single files are parsed directly; folders are processed as batches.
+  Canonical 3GPP results are cached on disk and written to
+  `tdoc_extracts` + `tdoc_cr_cover_page` (and to
   `tdoc_cr_ttcn_details` when the parser produced a TTCN sidecar —
-  subject to the FK matrix below); any other URL is parsed
-  in-memory only. Schemes other than `http(s)` (e.g. `ftp://`,
-  `file://`) are rejected — download out of band and use
-  `--from-path` instead. A URL ending in `/` is treated as a 3GPP
-  FTP folder and processed as a batch; URLs ending in `.docx`/`.zip`
-  are treated as single files;
-  ambiguous URLs are probed once and routed accordingly.
+  subject to the FK matrix below). Other HTTP(S) URLs retain the
+  existing in-memory parsing behavior. Schemes other than `http(s)`
+  (e.g. `ftp://`, `file://`) are rejected — download out of band and
+  use `--from-path` instead.
 - `--format {table,markdown,json,raw}`: output format. Default
   `table` (tab-separated header + single data row, matching
   `tdoc list --format table`). `markdown` writes a single-row GFM
@@ -1379,7 +1384,7 @@ FK-aware behaviour matrix (3GPP URL):
 |---|---|---|---|---|---|---|
 | `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | yes — only when the parser emitted a TTCN sidecar (i.e. `is_ttcn_tdoc(tdoc_id)` and the document contained a TTCN overview / corrections section) | always | no |
 | `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
-| No `tdoc_id` pattern in filename | no | no | no | no | always | yes — pattern-miss notice |
+| Canonical `.docx`/`.zip` basename has no `tdoc_id` pattern | no | no | no | no | no — rejected at the URL boundary | yes — validation error mentioning TDoc |
 
 Local files and non-3GPP URLs always emit output and never touch
 the cache or the database.
@@ -1390,13 +1395,14 @@ the URL **before** dispatching to the parse helpers, then fires
 `trigger_auto_sync(...)` with the candidate set:
 
 - **3GPP FTP file URL** (`.docx` / `.zip` suffix) → one candidate parsed
-  out of the basename via `extract_tdoc_id_from_filename()`. Empty when
-  the basename has no recognised `tdoc_id` pattern.
-- **3GPP FTP folder URL** (trailing `/`) → BFS via
+  out of the TDoc-shaped basename via
+  `extract_tdoc_id_from_filename()`.
+- **3GPP FTP folder URL** (trailing `/` optional) → BFS via
   `TDocCrService.collect_3gpp_file_urls()` (up to `--max-depth` /
   `--recursive`), then extract `tdoc_id`s per file. Empty when BFS
   fails (warning only — the parse still proceeds).
-- **3GPP URL of unknown shape** → best-effort basename extraction.
+- **Other canonical 3GPP paths** → treated as folders, including paths
+  without a trailing `/`.
 - **Non-3GPP URL** → empty. The CLI gates the call on
   `is_3gpp_ftp_url()` so non-3GPP URLs never trigger the candidate
   helper.

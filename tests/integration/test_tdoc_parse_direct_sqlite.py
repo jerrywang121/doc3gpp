@@ -200,7 +200,7 @@ def test_direct_3gpp_url_missing_tdoc_warns_and_skips_db(
 
 
 # ---------------------------------------------------------------------------
-# 3. 3GPP URL + filename with no tdoc_id pattern: warning + no DB.
+# 3. 3GPP URL + filename with no tdoc_id pattern: rejected before download.
 # ---------------------------------------------------------------------------
 
 
@@ -208,10 +208,10 @@ def test_direct_3gpp_url_missing_tdoc_warns_and_skips_db(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_direct_3gpp_url_no_pattern_in_filename_warns(
+def test_direct_3gpp_url_no_pattern_in_filename_is_rejected(
     sqlite_env, monkeypatch, tmp_path,
 ) -> None:
-    """A 3GPP URL whose filename has no tdoc_id pattern: warning + no rows."""
+    """A 3GPP document URL must have a TDoc-shaped basename."""
     create_schema()
 
     fixture = FIXTURES_DIR / "R5s260009.zip"
@@ -232,11 +232,9 @@ def test_direct_3gpp_url_no_pattern_in_filename_warns(
             "--from-url", "https://www.3gpp.org/ftp/.../meeting_minutes.zip",
         ],
     )
-    assert result.exit_code == 0, result.output
-
-    combined = (result.stdout or "") + (result.stderr or "")
-    assert "does not match the 3GPP TDoc id" in combined
-    assert "meeting_minutes.zip" in combined
+    assert result.exit_code == 2, result.output
+    assert "TDoc" in (result.output or "")
+    assert "meeting_minutes.zip" in (result.output or "")
 
     cr_repo = SQLAlchemyTDocCrRepository()
     # The synthetic LOCAL-* id is what would be used internally; we

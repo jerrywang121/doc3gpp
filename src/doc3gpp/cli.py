@@ -30,7 +30,9 @@ from doc3gpp.cli_server import server_app
 from doc3gpp.cli_url_helpers import (
     _looks_like_3gpp_file_url,
     _looks_like_3gpp_folder_url,
+    is_3gpp_ftp_candidate_url,
     is_3gpp_ftp_url,
+    validate_tdoc_ftp_url,
 )
 from doc3gpp.config import get_settings
 from doc3gpp.models.meeting import Meeting
@@ -2238,6 +2240,11 @@ def tdoc_parse(
                     f"--from-path is neither a file nor a directory: {from_path}"
                 )
         else:
+            if is_3gpp_ftp_candidate_url(from_url):
+                try:
+                    from_url = validate_tdoc_ftp_url(from_url)
+                except ValueError as exc:
+                    raise typer.BadParameter(str(exc)) from exc
             effective_depth = _resolve_url_batch_depth(
                 recursive=recursive,
                 max_depth=max_depth,

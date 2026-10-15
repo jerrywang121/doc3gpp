@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING
 from doc3gpp.cli_filters import parse_tdoc_id
 from doc3gpp.cli_url_helpers import (
     _looks_like_3gpp_file_url,
-    _looks_like_3gpp_folder_url,
-    is_3gpp_ftp_url,
+    is_3gpp_ftp_candidate_url,
+    validate_tdoc_ftp_url,
 )
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.parsers.direct_extractor import (
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TSG_PREFIX_RE = re.compile(r"^([RSC][1-9])", re.IGNORECASE)
+_TSG_PREFIX_RE = re.compile(r"^([RSC][1-9P])", re.IGNORECASE)
 
 
 def _build_meeting_url(tsg: str, ext: str = "htm") -> str:
@@ -176,7 +176,7 @@ def sync_meeting_internal(
 def collect_tdoc_candidates_for_url(
     url: str,
     *,
-    tdoc_service: "TDocCrService | None" = None,
+    tdoc_service: TDocCrService | None = None,
     max_depth: int = 0,
 ) -> set[str]:
     """Return distinct tdoc_ids implied by ``url``.
@@ -188,12 +188,12 @@ def collect_tdoc_candidates_for_url(
     - 3GPP FTP file URL (ends with ``.docx`` / ``.zip``) → the tdoc_id
       parsed out of the basename, or empty if the basename has no
       recognised TDoc-id pattern.
-    - 3GPP FTP folder URL (ends with ``/``) → BFS over the folder up to
-      ``max_depth`` via the supplied service and extract tdoc_ids from
-      each file's basename. Returns empty when ``tdoc_service`` is
+    - 3GPP FTP folder URL (trailing ``/`` optional) → BFS over the folder
+      up to ``max_depth`` via the supplied service and extract tdoc_ids
+      from each file's basename. Returns empty when ``tdoc_service`` is
       ``None`` (the helper is a pure no-op in that case).
-    - 3GPP URL of unknown shape → try basename extraction; empty if it
-      doesn't parse.
+    - Any other canonical 3GPP FTP path → treat it as a folder and scan
+      breadth-first using the supplied service.
 
     Network or BFS failures are logged at ``WARNING`` and the helper
     returns whatever candidates were already collected — it never raises
@@ -215,7 +215,12 @@ def collect_tdoc_candidates_for_url(
         failure mode.
     """
     candidates: set[str] = set()
-    if not is_3gpp_ftp_url(url):
+    if not is_3gpp_ftp_candidate_url(url):
+        return candidates
+    try:
+        url = validate_tdoc_ftp_url(url)
+    except ValueError as exc:
+        logger.warning("Auto-sync candidate collection rejected %s: %s", url, exc)
         return candidates
 
     if _looks_like_3gpp_file_url(url):
@@ -224,18 +229,12 @@ def collect_tdoc_candidates_for_url(
             candidates.add(extracted)
         return candidates
 
-    if _looks_like_3gpp_folder_url(url):
-        return _collect_from_3gpp_folder(url, tdoc_service, max_depth)
-
-    extracted = extract_tdoc_id_from_filename(url)
-    if extracted is not None:
-        candidates.add(extracted)
-    return candidates
+    return _collect_from_3gpp_folder(url, tdoc_service, max_depth)
 
 
 def _collect_from_3gpp_folder(
     url: str,
-    tdoc_service: "TDocCrService | None",
+    tdoc_service: TDocCrService | None,
     max_depth: int,
 ) -> set[str]:
     """BFS-collect tdoc_ids from a 3GPP FTP folder URL; empty on any failure."""

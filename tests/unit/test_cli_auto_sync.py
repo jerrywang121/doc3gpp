@@ -588,7 +588,7 @@ class TestCollectTdocCandidatesForUrl:
         assert result == set()
         assert any(record.levelname == "WARNING" for record in caplog.records)
 
-    def test_3gpp_unknown_shape_url_uses_basename_best_effort(self) -> None:
+    def test_3gpp_extensionless_url_is_treated_as_folder(self) -> None:
         service = self._service()
 
         result = collect_tdoc_candidates_for_url(
@@ -597,7 +597,10 @@ class TestCollectTdocCandidatesForUrl:
         )
 
         assert result == set()
-        service.collect_3gpp_file_urls.assert_not_called()
+        service.collect_3gpp_file_urls.assert_called_once_with(
+            "https://www.3gpp.org/ftp/info",
+            max_depth=0,
+        )
 
 
 class TestTriggerAutoSyncTdocIds:

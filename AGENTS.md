@@ -275,6 +275,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   the result is still emitted with a warning). The zip cache is
   keyed on the **original (sanitized) filename** (D10 fix) so
   multiple revisions of the same tdoc_id never collide. When
+  the URL targets the canonical 3GPP FTP site, HTTPS is required (the
+  bare `www.3gpp.org/ftp/...` form is normalized), `.docx`/`.zip` files
+  must have a TDoc-shaped basename including `RP-...` plenary ids, and
+  any other canonical path is a folder with an optional trailing slash.
   `Settings.sync.auto_sync` is enabled, `tdoc parse --from-url`
   on a 3GPP FTP URL extracts tdoc_id candidates from the URL
   (basename for file URLs; BFS up to `--max-depth` / `--recursive`

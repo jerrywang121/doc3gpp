@@ -67,13 +67,13 @@ DATE_FILTER_RE = re.compile(
 )
 
 
-# CR-shape TDoc identifier: ``[RSC][1-9][-sw]\d{6,7}`` — TSG group
-# initial (R/S/C), non-zero TSG digit, shape marker (- / s / w for
+# CR-shape TDoc identifier: ``[RSC][1-9P][-sw]\d{6,7}`` — TSG group
+# initial (R/S/C), non-zero TSG digit or plenary marker P, shape marker (- / s / w for
 # canonical / TTCN / workshop), 6- or 7-digit sequence number.
 # 3GPP RAN4 has used 7-digit numbers since 2016 (e.g. ``R4-2607922``);
 # every other working group is still on 6 digits. Do not narrow without
 # re-checking the RAN4 DynaReport.
-TDOC_ID_RE = re.compile(r"[RSC][1-9][-sw]\d{6,7}", re.IGNORECASE)
+TDOC_ID_RE = re.compile(r"[RSC][1-9P][-sw]\d{6,7}", re.IGNORECASE)
 
 
 def is_null_token(value: str) -> bool:
@@ -142,8 +142,9 @@ def parse_tdoc_id(value: str) -> tuple[str, int]:
         raise ValueError(
             f"Invalid TDoc id {value!r}. Expected a 9- or 10-character "
             f"CR-shape id like 'R5-260013', 'R5s260009', 'R5w260013', or "
-            f"'R4-2607922' — TSG group initial (R/S/C), non-zero TSG digit, "
-            f"shape marker (-/s/w), then 6 or 7 decimal digits."
+            f"'R4-2607922' or 'RP-2601234' — TSG group initial (R/S/C), "
+            f"non-zero TSG digit or plenary marker P, shape marker "
+            f"(-/s/w), then 6 or 7 decimal digits."
         )
     return stripped[:3], int(stripped[3:])
 

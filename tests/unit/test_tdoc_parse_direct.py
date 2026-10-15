@@ -77,9 +77,14 @@ def test_is_3gpp_ftp_url_returns_true_for_canonical_https_root() -> None:
     assert is_3gpp_ftp_url("https://www.3gpp.org/ftp/foo/bar.zip") is True
 
 
-def test_is_3gpp_ftp_url_accepts_uppercase_scheme() -> None:
-    """Uppercase scheme is case-insensitive per the plan's D3 rule."""
-    assert is_3gpp_ftp_url("HTTP://www.3gpp.org/ftp/foo/bar.zip") is True
+def test_is_3gpp_ftp_url_rejects_http_scheme() -> None:
+    """Explicit HTTP is rejected; 3GPP TDoc URLs must use HTTPS."""
+    assert is_3gpp_ftp_url("HTTP://www.3gpp.org/ftp/foo/bar.zip") is False
+
+
+def test_is_3gpp_ftp_url_accepts_bare_canonical_path() -> None:
+    """A bare canonical host/path is accepted for HTTPS normalization."""
+    assert is_3gpp_ftp_url("www.3gpp.org/ftp/foo/bar.zip") is True
 
 
 def test_is_3gpp_ftp_url_returns_false_for_unrelated_domain() -> None:
@@ -120,6 +125,11 @@ def test_extract_tdoc_id_from_filename_handles_dash_form() -> None:
 def test_extract_tdoc_id_from_filename_handles_c6_form() -> None:
     """``C6-250028`` is matched."""
     assert extract_tdoc_id_from_filename("C6-250028.zip") == "C6-250028"
+
+
+def test_extract_tdoc_id_from_filename_handles_plenary_form() -> None:
+    """Plenary meeting TDocs such as ``RP-2601234`` are matched."""
+    assert extract_tdoc_id_from_filename("RP-2601234.zip") == "RP-2601234"
 
 
 def test_extract_tdoc_id_from_filename_returns_none_for_empty() -> None:
@@ -222,7 +232,7 @@ def test_build_no_pattern_warning_message_mentions_pattern() -> None:
     """The no-pattern warning documents the regex it tried to match."""
     msg = build_no_pattern_warning_message("random.docx")
     assert "random.docx" in msg
-    assert "[RSC][1-6][-sw]\\d{6}" in msg
+    assert "[RSC][1-6P][-sw]\\d{6}" in msg
     assert "skipping cache" in msg
 
 
@@ -588,10 +598,10 @@ def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
     assert cache.put_calls == []
 
 
-def test_extract_from_url_3gpp_with_no_pattern_in_filename_skips_db(
+def test_extract_from_url_3gpp_with_no_pattern_in_filename_is_rejected(
     tmp_path: Path,
 ) -> None:
-    """A 3GPP URL whose filename has no TDoc id pattern: no cache, no DB."""
+    """A 3GPP document URL must have a TDoc-shaped basename."""
     if not _docx_available():
         pytest.skip("python-docx not installed")
     from docx import Document
@@ -611,14 +621,12 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_skips_db(
         tmp_path, zip_bytes=b"unused",
     )
     scraper.get_bytes.return_value = docx_bytes
-    result = service.extract_from_url(
-        "https://www.3gpp.org/ftp/.../meeting_minutes.docx",
-        force=False, full=False,
-    )
-    assert result.source_kind == "url-3gpp"
-    assert result.tdoc_id is None
-    assert result.tdoc_id_in_tdocs is False
-    assert result.persisted is False
+    with pytest.raises(ValueError, match="TDoc"):
+        service.extract_from_url(
+            "https://www.3gpp.org/ftp/.../meeting_minutes.docx",
+            force=False, full=False,
+        )
+    scraper.get_bytes.assert_not_called()
     assert cr_repo.upsert.call_count == 0
     assert cache.put_calls == []
     assert tdoc_repo.get_by_id.call_count == 0
@@ -980,7 +988,7 @@ def test_cli_from_url_unreachable_exits_1(monkeypatch) -> None:
     result = runner.invoke(
         app, [
             "tdoc", "parse",
-            "--from-url", "https://www.3gpp.org/ftp/x.zip",
+            "--from-url", "https://www.3gpp.org/ftp/R5s260001.zip",
         ],
     )
     assert result.exit_code == 1
@@ -1043,10 +1051,9 @@ def test_cli_from_url_3gpp_no_pattern_emits_warning(
             "--from-url", "https://www.3gpp.org/ftp/.../meeting_minutes.docx",
         ],
     )
-    assert result.exit_code == 0
-    combined = (result.stdout or "") + (result.stderr or "")
-    assert "does not match the 3GPP TDoc id" in combined
-    assert "meeting_minutes.docx" in combined
+    assert result.exit_code == 2
+    assert "TDoc" in result.output
+    assert "meeting_minutes.docx" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -451,20 +451,28 @@ def build_mcp_server(state: WebState) -> MCPServer:
             raise InvalidFilterError("format must be one of 'markdown'|'html'")
         from pathlib import Path
 
+        from doc3gpp.services.tdoc_cr_service import _read_cached_markdown_path
         from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-        from doc3gpp.web.routes.tdocs import _MD_RENDERER, derive_cache_file
+        from doc3gpp.web.routes.tdocs import _MD_RENDERER, _resolve_cache_file
 
         tdoc = SQLAlchemyTDocRepository().get_by_id(tdoc_id)
         if tdoc is None or not tdoc.ftp_url:
             raise TDocNotFoundError(tdoc_id)
-        cache_file = derive_cache_file(tdoc.ftp_url)
+        cache_file = _resolve_cache_file(tdoc)
         markdown_path = Path(state.settings.cache.dir) / "markdown" / cache_file
         if not markdown_path.exists():
             raise CacheMissError(
                 f"No cached markdown for TDoc {tdoc_id}.",
                 hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id}",
             )
-        text = markdown_path.read_text(encoding="utf-8")
+        text = _read_cached_markdown_path(
+            cache_file, Path(state.settings.cache.dir)
+        )
+        if not text:
+            raise CacheMissError(
+                f"Failed to decode cached markdown for TDoc {tdoc_id}.",
+                hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id} --force",
+            )
         if format == "html":
             return _MD_RENDERER.render(text)
         return text

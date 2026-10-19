@@ -4,11 +4,64 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from threading import BoundedSemaphore, Lock
+from threading import Condition, Lock
 from typing import TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+class _PipelineCapacity:
+    """Thread-safe capacity counter with cancellable async waiters."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._available = limit
+        self._condition = Condition()
+        self._async_waiters: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
+
+    def acquire(self, *, blocking: bool = True) -> bool:
+        """Acquire one slot, optionally returning immediately when full."""
+        with self._condition:
+            if not blocking:
+                if self._available == 0:
+                    return False
+            else:
+                self._condition.wait_for(lambda: self._available > 0)
+            self._available -= 1
+            return True
+
+    async def acquire_async(self) -> None:
+        """Acquire one slot without blocking the event loop or leaking waiters."""
+        loop = asyncio.get_running_loop()
+        while True:
+            with self._condition:
+                if self._available > 0:
+                    self._available -= 1
+                    return
+                event = asyncio.Event()
+                waiter = (loop, event)
+                self._async_waiters.add(waiter)
+            try:
+                await event.wait()
+            finally:
+                with self._condition:
+                    self._async_waiters.discard(waiter)
+
+    def release(self) -> None:
+        """Return one slot and wake async waiters on their owning loops."""
+        with self._condition:
+            if self._available >= self._limit:
+                raise ValueError("capacity released too many times")
+            self._available += 1
+            self._condition.notify()
+            waiters = tuple(self._async_waiters)
+        for loop, event in waiters:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                # The loop may have closed while a waiter was being cancelled.
+                pass
 
 
 class PipelinePermit:
@@ -21,7 +74,7 @@ class PipelinePermit:
     blocks for cleanup.
     """
 
-    def __init__(self, capacity: BoundedSemaphore) -> None:
+    def __init__(self, capacity: _PipelineCapacity) -> None:
         self._capacity = capacity
         self._lock = Lock()
         self._released = False
@@ -52,7 +105,7 @@ class PipelineRuntime:
         if pending < 1:
             raise ValueError("max_pending must be at least 1")
 
-        self._capacity = BoundedSemaphore(pending)
+        self._capacity = _PipelineCapacity(pending)
         self._prepare = ThreadPoolExecutor(max_workers=prepare_workers)
         self._persist = ThreadPoolExecutor(max_workers=1)
 
@@ -63,7 +116,8 @@ class PipelineRuntime:
 
     async def reserve_async(self) -> PipelinePermit:
         """Wait for capacity without blocking the asyncio event loop."""
-        return await asyncio.to_thread(self.reserve)
+        await self._capacity.acquire_async()
+        return PipelinePermit(self._capacity)
 
     def submit_prepare(
         self,

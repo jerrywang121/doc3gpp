@@ -18,7 +18,7 @@ def test_preparation_tasks_overlap_with_configured_worker_count():
     permits = [runtime.reserve(), runtime.reserve()]
 
     def prepare(value: str) -> str:
-        started.wait(timeout=2)
+        assert started.wait(timeout=2) is not None
         return value
 
     try:
@@ -201,6 +201,60 @@ async def _run_async_capacity_wait_test():
     finally:
         held.release()
         await runtime.shutdown_async()
+
+
+def test_default_pending_capacity_is_twice_prepare_workers():
+    runtime = PipelineRuntime(prepare_workers=2)
+    assert runtime._capacity._limit == 4
+    permits = [runtime.reserve() for _ in range(4)]
+    acquired = threading.Event()
+
+    def wait_for_capacity():
+        waiting_permit = runtime.reserve()
+        acquired.set()
+        waiting_permit.release()
+
+    waiter = threading.Thread(target=wait_for_capacity)
+    try:
+        waiter.start()
+        assert not acquired.wait(timeout=0.05)
+        permits[0].release()
+        assert acquired.wait(timeout=2)
+        waiter.join(timeout=2)
+        assert not waiter.is_alive()
+    finally:
+        for permit in permits:
+            permit.release()
+        waiter.join(timeout=2)
+        runtime.shutdown()
+
+
+async def _run_cancelled_async_capacity_wait_test():
+    runtime = PipelineRuntime(prepare_workers=1, max_pending=1)
+    held = runtime.reserve()
+    waiter = asyncio.create_task(runtime.reserve_async())
+
+    try:
+        await asyncio.sleep(0.05)
+        assert not waiter.done()
+        waiter.cancel()
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("expected blocked reservation to be cancelled")
+
+        held.release()
+        replacement = await asyncio.wait_for(runtime.reserve_async(), timeout=2)
+        replacement.release()
+    finally:
+        held.release()
+        await runtime.shutdown_async()
+
+
+def test_cancelled_async_capacity_wait_does_not_consume_capacity():
+    asyncio.run(_run_cancelled_async_capacity_wait_test())
 
 
 def test_async_capacity_wait_does_not_block_event_loop():

@@ -29,6 +29,7 @@ def test_reader_returns_while_wal_writer_transaction_is_open(tmp_path):
 def test_search_read_completes_while_serialized_write_is_delayed(tmp_path):
     import asyncio
     import threading
+    from contextlib import suppress
 
     from doc3gpp.services.pipeline_runtime import PipelineRuntime
     from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
@@ -76,17 +77,24 @@ def test_search_read_completes_while_serialized_write_is_delayed(tmp_path):
         )
         while not write_open.is_set():
             await asyncio.sleep(0)
+        ticker_ready = asyncio.Event()
         ticks = 0
 
         async def ticker():
             nonlocal ticks
             while True:
                 ticks += 1
+                ticker_ready.set()
                 await asyncio.sleep(0)
 
         tick_task = asyncio.create_task(ticker())
-        found = await asyncio.to_thread(search)
-        tick_task.cancel()
+        try:
+            await ticker_ready.wait()
+            found = await asyncio.to_thread(search)
+        finally:
+            tick_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await tick_task
         assert not run.done()  # writer is still blocked mid-transaction
         assert found == ("searchable",)
         assert ticks > 0  # event loop kept running during the read

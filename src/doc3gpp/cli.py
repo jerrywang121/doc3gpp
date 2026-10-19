@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import logging
 import os
@@ -86,7 +87,7 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocZipDownloadError,
     _read_cached_markdown_path,
 )
-from doc3gpp.services.tdoc_pipeline import TDocPipeline
+from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
 )
@@ -1985,12 +1986,36 @@ def _resolve_max_tdoc_size_bytes(
 
 @contextmanager
 def _tdoc_parse_pipeline(settings: Settings):
-    """Own one configured pipeline runtime for a DB-mode parse invocation."""
+    """Own one configured pipeline runtime for a CLI parse invocation."""
     runtime = PipelineRuntime(settings.pipeline.prepare_workers)
     try:
         yield TDocPipeline(runtime)
     finally:
         runtime.shutdown()
+
+
+def _optional_runner_kwargs(method: object, runner: TDocPipeline | None) -> dict[str, object]:
+    """Return a runner keyword when the service method accepts it.
+
+    The concrete TDoc service has supported ``runner`` since the shared
+    pipeline was introduced. Keeping this small compatibility check at the
+    CLI boundary also lets older injected test/service doubles continue to
+    exercise the direct-mode output contract without masking exceptions from
+    methods that do accept the keyword.
+    """
+    if runner is None:
+        return {}
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return {"runner": runner}
+    if any(
+        parameter.name == "runner"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        return {"runner": runner}
+    return {}
 
 
 @tdoc_app.command("parse")
@@ -2224,30 +2249,34 @@ def tdoc_parse(
             if not input_path.exists():
                 raise typer.BadParameter(f"--from-path does not exist: {from_path}")
             if input_path.is_file():
-                _tdoc_parse_direct(
-                    from_path=str(input_path),
-                    from_url=None,
-                    fmt=direct_format,
-                    output=direct_output,
-                    full=full,
-                    max_tdoc_size_bytes=max_tdoc_size_bytes,
-                    compact=resolved_compact,
-                )
+                with _tdoc_parse_pipeline(get_settings()) as pipeline:
+                    _tdoc_parse_direct(
+                        from_path=str(input_path),
+                        from_url=None,
+                        fmt=direct_format,
+                        output=direct_output,
+                        full=full,
+                        max_tdoc_size_bytes=max_tdoc_size_bytes,
+                        compact=resolved_compact,
+                        runner=pipeline,
+                    )
             elif input_path.is_dir():
                 if direct_output is None:
                     raise typer.BadParameter(
                         "--output is required when --from-path is a directory."
                     )
-                _tdoc_parse_local_batch(
-                    from_path=str(input_path),
-                    output=direct_output,
-                    fmt=direct_format,
-                    recursive=recursive,
-                    force=force,
-                    full=full,
-                    max_tdoc_size_bytes=max_tdoc_size_bytes,
-                    compact=resolved_compact,
-                )
+                with _tdoc_parse_pipeline(get_settings()) as pipeline:
+                    _tdoc_parse_local_batch(
+                        from_path=str(input_path),
+                        output=direct_output,
+                        fmt=direct_format,
+                        recursive=recursive,
+                        force=force,
+                        full=full,
+                        max_tdoc_size_bytes=max_tdoc_size_bytes,
+                        compact=resolved_compact,
+                        runner=pipeline,
+                    )
             else:
                 raise typer.BadParameter(
                     f"--from-path is neither a file nor a directory: {from_path}"
@@ -2277,37 +2306,8 @@ def tdoc_parse(
                         tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
                         tdoc_ids=candidates,
                     )
-            if not is_3gpp_ftp_url(from_url) or _looks_like_3gpp_file_url(from_url):
-                _tdoc_parse_direct(
-                    from_path=None,
-                    from_url=from_url,
-                    fmt=direct_format,
-                    output=direct_output,
-                    full=full,
-                    max_tdoc_size_bytes=max_tdoc_size_bytes,
-                    compact=resolved_compact,
-                )
-            elif _looks_like_3gpp_folder_url(from_url):
-                _tdoc_parse_url_batch(
-                    from_url=from_url,
-                    output=direct_output,
-                    fmt=direct_format,
-                    max_depth=effective_depth,
-                    force=force,
-                    full=full,
-                    max_tdoc_size_bytes=max_tdoc_size_bytes,
-                    compact=resolved_compact,
-                )
-            else:
-                try:
-                    batch = tdoc_service.extract_from_url_batch(
-                        from_url,
-                        max_depth=effective_depth,
-                        force=force,
-                        full=full,
-                        max_tdoc_size_bytes=max_tdoc_size_bytes or None,
-                    )
-                except NotAFolderError:
+            with _tdoc_parse_pipeline(get_settings()) as pipeline:
+                if not is_3gpp_ftp_url(from_url) or _looks_like_3gpp_file_url(from_url):
                     _tdoc_parse_direct(
                         from_path=None,
                         from_url=from_url,
@@ -2316,15 +2316,52 @@ def tdoc_parse(
                         full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
+                        runner=pipeline,
                     )
-                else:
-                    _emit_url_batch_results(
-                        batch=batch,
-                        root_url=from_url,
+                elif _looks_like_3gpp_folder_url(from_url):
+                    _tdoc_parse_url_batch(
+                        from_url=from_url,
                         output=direct_output,
                         fmt=direct_format,
+                        max_depth=effective_depth,
+                        force=force,
+                        full=full,
+                        max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
+                        runner=pipeline,
                     )
+                else:
+                    try:
+                        batch = tdoc_service.extract_from_url_batch(
+                            from_url,
+                            max_depth=effective_depth,
+                            force=force,
+                            full=full,
+                            max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+                            **_optional_runner_kwargs(
+                                tdoc_service.extract_from_url_batch,
+                                pipeline,
+                            ),
+                        )
+                    except NotAFolderError:
+                        _tdoc_parse_direct(
+                            from_path=None,
+                            from_url=from_url,
+                            fmt=direct_format,
+                            output=direct_output,
+                            full=full,
+                            max_tdoc_size_bytes=max_tdoc_size_bytes,
+                            compact=resolved_compact,
+                            runner=pipeline,
+                        )
+                    else:
+                        _emit_url_batch_results(
+                            batch=batch,
+                            root_url=from_url,
+                            output=direct_output,
+                            fmt=direct_format,
+                            compact=resolved_compact,
+                        )
         return
 
     trigger_auto_sync(
@@ -2730,6 +2767,7 @@ def _tdoc_parse_direct(
     full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
+    runner: TDocPipeline | None = None,
 ) -> None:
     """Dispatch a single ``--from-path`` (file) or ``--from-url`` call.
 
@@ -2754,7 +2792,6 @@ def _tdoc_parse_direct(
     )
     from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
     from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
-
     resolved_format = _resolve_direct_format(fmt)
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     raw = from_path if from_path is not None else from_url
@@ -2763,14 +2800,28 @@ def _tdoc_parse_direct(
     try:
         if from_path is not None:
             payload = Path(from_path).read_bytes()
+            extract_kwargs: dict[str, object] = {
+                "force": False,
+                "full": full,
+                "max_tdoc_size_bytes": max_tdoc_size_bytes,
+            }
+            extract_kwargs.update(
+                _optional_runner_kwargs(service.extract_from_bytes, runner)
+            )
             result = service.extract_from_bytes(
-                payload, from_path, force=False, full=full,
-                max_tdoc_size_bytes=max_tdoc_size_bytes,
+                payload, from_path, **extract_kwargs,
             )
         else:
+            extract_kwargs = {
+                "force": False,
+                "full": full,
+                "max_tdoc_size_bytes": max_tdoc_size_bytes,
+            }
+            extract_kwargs.update(
+                _optional_runner_kwargs(service.extract_from_url, runner)
+            )
             result = service.extract_from_url(
-                raw, force=False, full=full,
-                max_tdoc_size_bytes=max_tdoc_size_bytes,
+                raw, **extract_kwargs,
             )
     except TDocTooLargeError as exc:
         # Size-limit skip — exit 0 with a warning. The operator's
@@ -3907,18 +3958,15 @@ def _tdoc_parse_local_batch(
     full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
+    runner: TDocPipeline | None = None,
 ) -> None:
     """Parse every ``.docx`` / ``.zip`` under ``from_path`` and write one output file each.
 
-    No cache or DB writes occur. Failures per file are logged and
-    counted; the run continues so one bad file does not abort the
-    whole batch. A summary is printed to stdout after all files are
-    processed.
+    No cache or DB writes occur. File reads and parsing use the shared
+    preparation runner without a persistence callback; output files are
+    emitted by this CLI thread in the sorted source order. Failures per
+    file are logged and counted so one bad file does not abort the batch.
     """
-    from doc3gpp.parsers.cr_parser import CRHeaderMissingError
-    from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
-    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
-
     resolved_format = _resolve_direct_format(fmt)
     input_dir = Path(from_path)
     if not input_dir.exists():
@@ -3947,6 +3995,7 @@ def _tdoc_parse_local_batch(
     re_parsed = 0
     newly_parsed = 0
     failures = 0
+    pending: list[tuple[Path, Path]] = []
 
     for input_path in targets:
         rel = input_path.relative_to(input_dir)
@@ -3972,31 +4021,56 @@ def _tdoc_parse_local_batch(
                 size_skipped += 1
                 continue
 
-        try:
-            payload = input_path.read_bytes()
-            result = service.extract_from_bytes(
-                payload, str(input_path), force=False, full=full,
-                max_tdoc_size_bytes=max_tdoc_size_bytes,
-            )
-        except TDocTooLargeError as exc:
-            logger.warning("Skipping %s: %s", input_path, exc)
-            size_skipped += 1
+        pending.append((input_path, out_path))
+
+    items = [
+        PipelineItem(key=str(input_path), value=(input_path, out_path))
+        for input_path, out_path in pending
+    ]
+
+    def prepare(item: tuple[Path, Path]):
+        input_path, _out_path = item
+        payload = input_path.read_bytes()
+        return service.extract_from_bytes(
+            payload,
+            str(input_path),
+            force=False,
+            full=full,
+            max_tdoc_size_bytes=max_tdoc_size_bytes,
+        )
+
+    def run(pipeline: TDocPipeline):
+        return pipeline.run_sync(items, prepare)
+
+    if runner is None:
+        with _tdoc_parse_pipeline(get_settings()) as owned_pipeline:
+            outcomes = run(owned_pipeline)
+    else:
+        outcomes = run(runner)
+
+    for (input_path, out_path), outcome in zip(pending, outcomes, strict=True):
+        reason = outcome.reason or ""
+        if outcome.status == "skipped":
+            if reason.startswith("TDocTooLargeError:"):
+                logger.warning("Skipping %s: %s", input_path, reason)
+                size_skipped += 1
+            else:
+                logger.warning("Failed to parse %s: %s", input_path, reason)
+                failures += 1
             continue
-        except (FileNotFoundError, IsADirectoryError, PermissionError) as exc:
-            logger.warning("Failed to read %s: %s", input_path, exc)
-            failures += 1
-            continue
-        except (TDocZipDownloadError, CRHeaderMissingError, ValueError) as exc:
-            logger.warning("Failed to parse %s: %s", input_path, exc)
-            failures += 1
-            continue
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Failed to parse %s: %s: %s", input_path, type(exc).__name__, exc
-            )
+        if outcome.status == "failed":
+            if reason.startswith((
+                "FileNotFoundError:",
+                "IsADirectoryError:",
+                "PermissionError:",
+            )):
+                logger.warning("Failed to read %s: %s", input_path, reason)
+            else:
+                logger.warning("Failed to parse %s: %s", input_path, reason)
             failures += 1
             continue
 
+        result = outcome.value
         try:
             if resolved_format == "raw":
                 _emit_record_raw(result.markdown, str(out_path), compact=compact)
@@ -4052,6 +4126,7 @@ def _tdoc_parse_url_batch(
     full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
+    runner: TDocPipeline | None = None,
 ) -> None:
     """Batch-parse every matching file under a 3GPP FTP folder URL.
 
@@ -4061,12 +4136,18 @@ def _tdoc_parse_url_batch(
     """
     resolved_format = _resolve_direct_format(fmt)
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
+    batch_kwargs: dict[str, object] = {
+        "max_depth": max_depth,
+        "force": force,
+        "full": full,
+        "max_tdoc_size_bytes": max_tdoc_size_bytes or None,
+    }
+    batch_kwargs.update(
+        _optional_runner_kwargs(service.extract_from_url_batch, runner)
+    )
     batch = service.extract_from_url_batch(
         from_url,
-        max_depth=max_depth,
-        force=force,
-        full=full,
-        max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+        **batch_kwargs,
     )
     if not batch.results and not batch.failures and max_depth == 0:
         typer.echo(

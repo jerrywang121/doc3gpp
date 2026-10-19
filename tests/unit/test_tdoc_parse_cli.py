@@ -3272,6 +3272,8 @@ class _RecordingCrService:
         self.collect_calls: list[tuple[str, int]] = []
         self.extract_batch_calls: list[tuple[str, int]] = []
         self.extract_url_calls: list[str] = []
+        self.extract_batch_runner_calls: list[object | None] = []
+        self.extract_url_runner_calls: list[object | None] = []
 
     def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> list[str]:
         self.collect_calls.append((url, max_depth))
@@ -3279,16 +3281,18 @@ class _RecordingCrService:
 
     def extract_from_url_batch(
         self, url: str, *, max_depth: int, force: bool, full: bool,
-        max_tdoc_size_bytes: int = 0,
+        max_tdoc_size_bytes: int = 0, runner=None,
     ) -> "_RecordingBatchResult":
         self.extract_batch_calls.append((url, max_depth))
+        self.extract_batch_runner_calls.append(runner)
         return _RecordingBatchResult(results=[], failures={})
 
     def extract_from_url(
         self, url: str, *, force: bool, full: bool,
-        max_tdoc_size_bytes: int = 0,
+        max_tdoc_size_bytes: int = 0, runner=None,
     ) -> "_RecordingSingleResult":
         self.extract_url_calls.append(url)
+        self.extract_url_runner_calls.append(runner)
         return _RecordingSingleResult(
             source_kind="url-3gpp",
             markdown="",

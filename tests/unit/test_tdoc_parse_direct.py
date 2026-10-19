@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,7 +41,6 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.scraping.tdoc_zip_source import download_tdoc_zip
 from doc3gpp.services.tdoc_cr_service import TDocCrService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
@@ -696,21 +696,25 @@ class _FakeService:
         self._result = result
         self.url_calls: list[tuple[str, bool, bool]] = []
         self.bytes_calls: list[tuple[bytes, str, bool, bool]] = []
+        self.url_runner_calls: list[object | None] = []
+        self.bytes_runner_calls: list[object | None] = []
 
     def extract_from_url(
         self, url: str, *, force: bool, full: bool,
-        max_tdoc_size_bytes: int = 0,
+        max_tdoc_size_bytes: int = 0, runner=None,
     ) -> DirectParseResult:
         self.url_calls.append((url, force, full))
+        self.url_runner_calls.append(runner)
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
 
     def extract_from_bytes(
         self, payload: bytes, filename: str, *, force: bool, full: bool,
-        max_tdoc_size_bytes: int = 0,
+        max_tdoc_size_bytes: int = 0, runner=None,
     ) -> DirectParseResult:
         self.bytes_calls.append((payload, filename, force, full))
+        self.bytes_runner_calls.append(runner)
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
@@ -755,6 +759,32 @@ def test_cli_from_path_file_table_format_emits_single_row(tmp_path: Path, monkey
     assert "R5s260009" in lines[1]
     assert "38.523-3" in lines[1]
     assert fake.bytes_calls, "extract_from_bytes was not called"
+
+def test_cli_from_path_file_uses_shared_runner(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A direct local file passes the invocation runner to the service."""
+    source = tmp_path / "R5s260009.docx"
+    source.write_bytes(b"dummy")
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["tdoc", "parse", "--from-path", str(source)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake.bytes_runner_calls and fake.bytes_runner_calls[0] is not None
 
 
 def test_cli_from_path_file_markdown_format_emits_gfm_table(tmp_path: Path, monkeypatch) -> None:
@@ -993,6 +1023,57 @@ def test_cli_from_url_unreachable_exits_1(monkeypatch) -> None:
     )
     assert result.exit_code == 1
     assert "FAILED - TDocZipDownloadError" in (result.output or "")
+
+
+
+def test_cli_from_url_uses_shared_runner(
+    monkeypatch,
+) -> None:
+    """A direct URL passes the invocation runner to the service."""
+    fake = _FakeService(DirectParseResult(
+        source_kind="url-other",
+        markdown="3GPP TSG- blah",
+        details=_dummy_details("R5s260001"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260001",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["tdoc", "parse", "--from-url", "https://example.com/R5s260001.zip"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake.url_runner_calls and fake.url_runner_calls[0] is not None
+
+def test_cli_from_path_size_skip_keeps_exit_and_runner_contract(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A one-file size skip remains a successful CLI outcome."""
+    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
+    source = tmp_path / "R5s260009.docx"
+    source.write_bytes(b"too large")
+    fake = _FakeService(TDocTooLargeError(
+        source=str(source), size=9, limit=1,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse", "--from-path", str(source),
+            "--max-tdoc-size-kb", "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "SKIPPED - TDocTooLargeError" in (result.output or "")
+    assert fake.bytes_runner_calls and fake.bytes_runner_calls[0] is not None
 
 
 def test_cli_from_url_3gpp_missing_tdoc_emits_warning(
@@ -1297,7 +1378,7 @@ def test_cli_from_path_recursive_mirrors_subfolders(
     class _CountingFakeService(_FakeService):
         def extract_from_bytes(
             self, payload: bytes, filename: str, *, force: bool, full: bool,
-            max_tdoc_size_bytes: int = 0,
+            max_tdoc_size_bytes: int = 0, runner=None,
         ) -> DirectParseResult:
             call_count["n"] += 1
             tdoc_id = extract_tdoc_id_from_filename(filename) or "R5s260009"
@@ -1329,6 +1410,83 @@ def test_cli_from_path_recursive_mirrors_subfolders(
     assert (out / "a" / "R5s260001.tsv").exists()
     assert (out / "b" / "R5s260002.tsv").exists()
     assert "Newly parsed:                    2" in result.output
+
+
+
+def test_cli_from_path_folder_prepares_in_parallel_and_emits_sorted(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Folder preparation may finish out of order but output stays sorted."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    first = in_dir / "R5s260001.docx"
+    second = in_dir / "R5s260002.docx"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    out = tmp_path / "out"
+
+    started = threading.Barrier(2)
+    first_can_finish = threading.Event()
+    active = 0
+    active_lock = threading.Lock()
+    preparations_overlapped = False
+
+    class _OverlappingFakeService(_FakeService):
+        def extract_from_bytes(
+            self, payload: bytes, filename: str, *, force: bool, full: bool,
+            max_tdoc_size_bytes: int = 0, runner=None,
+        ) -> DirectParseResult:
+            nonlocal active, preparations_overlapped
+            del payload, force, full, max_tdoc_size_bytes, runner
+            with active_lock:
+                active += 1
+                if active > 1:
+                    preparations_overlapped = True
+            try:
+                started.wait(timeout=1)
+                if filename.endswith("R5s260001.docx"):
+                    first_can_finish.wait(timeout=1)
+                else:
+                    first_can_finish.set()
+                tdoc_id = extract_tdoc_id_from_filename(filename)
+                assert tdoc_id is not None
+                return DirectParseResult(
+                    source_kind="local",
+                    markdown=f"markdown-{tdoc_id}",
+                    details=_dummy_details(tdoc_id),
+                    extract_meta=None,
+                    from_cache=False,
+                    persisted=False,
+                    tdoc_id=tdoc_id,
+                    tdoc_id_in_tdocs=False,
+                )
+            finally:
+                with active_lock:
+                    active -= 1
+
+    _build_service_factory(monkeypatch, _OverlappingFakeService(None))  # type: ignore[arg-type]
+    emitted: list[str] = []
+
+    def emit(record, fmt, output, *, compact=False):
+        del fmt, compact
+        emitted.append(record.tdoc_id)
+        Path(output).write_text(record.tdoc_id)
+
+    monkeypatch.setattr("doc3gpp.cli._emit_record", emit)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse", "--from-path", str(in_dir),
+            "--output", str(out), "--format", "table",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert preparations_overlapped
+    assert emitted == ["R5s260001", "R5s260002"]
+    assert (out / "R5s260001.tsv").read_text() == "R5s260001"
+    assert (out / "R5s260002.tsv").read_text() == "R5s260002"
 
 
 def test_cli_from_path_failure_counts_and_continues(

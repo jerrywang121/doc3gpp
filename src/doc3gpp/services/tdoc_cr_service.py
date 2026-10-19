@@ -66,7 +66,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_cr import (
@@ -803,14 +803,18 @@ class TDocCrService:
         source_ids = list(tdoc_ids)
         items: list[PipelineItem] = []
         repeats: list[PipelineItem] = []
+        item_positions: list[int] = []
+        repeat_positions: list[int] = []
         seen_keys: set[str] = set()
-        for raw_id in source_ids:
+        for position, raw_id in enumerate(source_ids):
             item = PipelineItem(key=raw_id.strip(), value=raw_id)
             if item.key in seen_keys:
                 repeats.append(item)
+                repeat_positions.append(position)
             else:
                 seen_keys.add(item.key)
                 items.append(item)
+                item_positions.append(position)
         owns_runner = runner is None
         runtime: PipelineRuntime | None = None
         if runner is None:
@@ -845,13 +849,18 @@ class TDocCrService:
                     on_progress=report,
                 )
 
-            outcomes = list(run(items, force=force))
+            ordered: dict[int, Any] = dict(
+                zip(item_positions, run(items, force=force), strict=True)
+            )
             if repeats:
-                # Repeated ids run after the first occurrences are persisted,
-                # so they observe the stored state (cache hit unless forced
-                # semantics apply) exactly as sequential execution would.
+                # Repeated ids run only after every first occurrence has been
+                # persisted, so they observe the stored state exactly as
+                # sequential execution would (same ``force`` as the batch).
                 progress_offset = len(items)
-                outcomes.extend(run(repeats, force=False))
+                ordered.update(
+                    zip(repeat_positions, run(repeats, force=force), strict=True)
+                )
+            outcomes = [ordered[i] for i in sorted(ordered)]
         finally:
             if owns_runner and runtime is not None:
                 runtime.shutdown()

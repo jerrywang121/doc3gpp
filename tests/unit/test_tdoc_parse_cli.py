@@ -3564,3 +3564,53 @@ def test_tdoc_parse_compact_flag_accepted_on_from_url(sqlite_env, monkeypatch) -
     assert result.exit_code == 0, result.output
     assert "no such option" not in (result.output or "").lower()
     assert "Unknown option" not in (result.output or "")
+
+def test_tdoc_parse_cli_renders_real_service_skip_and_failure_maps(
+    sqlite_env, monkeypatch,
+) -> None:
+    """The CLI consumes the *real* ``extract_many`` result maps: FTP-unavailable
+    and oversized TDocs are skipped (with distinct reasons), ordinary errors
+    are failures, and the same reasons the web handler reports reach output."""
+    from doc3gpp.services.tdoc_cr_service import (
+        TDocCrService,
+        TDocNotYetOnFTPError,
+        TDocTooLargeError,
+    )
+
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    ftp_exc = TDocNotYetOnFTPError("R5s260002")
+    big_exc = TDocTooLargeError(source="R5s260003", size=10, limit=5)
+
+    def prepare(tdoc_id, **_kwargs):
+        if tdoc_id == "R5s260002":
+            raise ftp_exc
+        if tdoc_id == "R5s260003":
+            raise big_exc
+        if tdoc_id == "R5s260004":
+            raise ValueError("bad parse")
+        return tdoc_id
+
+    service = object.__new__(TDocCrService)
+    service.prepare_extract = prepare
+    service.persist_prepared_extract = lambda prepared: _make_result(prepared)
+    cr_tdocs = [
+        TDoc(tdoc_id=f"R5s26000{n}", type="CR") for n in (1, 2, 3, 4)
+    ]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    _patch_service(monkeypatch, service)
+
+    result = CliRunner().invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s26000%", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"R5s260002: SKIPPED - TDocNotYetOnFTPError: {ftp_exc}" in result.output
+    assert f"R5s260003: SKIPPED - TDocTooLargeError: {big_exc}" in result.output
+    assert "R5s260004: FAILED - ValueError: bad parse" in result.output
+    assert "Skipped (not yet on FTP):                 1" in result.output
+    size_line = next(
+        ln for ln in result.output.splitlines()
+        if ln.startswith("Skipped (exceeds max_tdoc_size_kb")
+    )
+    assert size_line.endswith(" 1"), size_line

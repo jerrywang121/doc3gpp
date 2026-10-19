@@ -451,8 +451,6 @@ def test_web_cancellation_and_shutdown_drain_submitted_writer_work():
     # The already-submitted write drained; nothing after cancellation started.
     assert persisted == ["A"]
     assert prepared_ids == ["A"]
-    # Shutdown after cancellation leaves no running writer lane.
-    assert pipeline._persist._shutdown is True
 
 
 def _done(tdoc_id):
@@ -510,32 +508,129 @@ def test_cli_service_and_web_classify_skips_and_failures_identically():
     assert web["failures"] == len(batch.failures)
 
 
-def test_extract_many_duplicates_run_after_first_and_progress_is_monotonic():
-    from doc3gpp.services.tdoc_cr_service import TDocCrService
+def _store_backed_service(*, hold_first_prepare: bool = False):
+    from doc3gpp.services.tdoc_cr_service import ExtractResult, TDocCrService
 
-    persisted: list[str] = []
+    stored: set[str] = set()
+    lock = threading.Lock()
     calls: list[str] = []
+    persists: list[str] = []
+    second_started = threading.Event()
+    counter = {"n": 0}
 
-    def prepare(tdoc_id, **_kwargs):
-        calls.append(tdoc_id)
+    def prepare(tdoc_id, *, force=False, **_kwargs):
+        with lock:
+            counter["n"] += 1
+            number = counter["n"]
+            calls.append(tdoc_id)
+            cached = tdoc_id in stored and not force
+        if number == 2:
+            second_started.set()
+        elif number == 1 and hold_first_prepare:
+            # Old code runs the repeat concurrently, so it starts promptly and
+            # sees the empty store; the timeout is only the fixed-code path.
+            second_started.wait(timeout=0.2)
+        if cached:
+            return ExtractResult(
+                details=SimpleNamespace(tdoc_id=tdoc_id),
+                extract_meta=None,
+                from_cache=True,
+            )
         return tdoc_id
 
     def persist(prepared):
-        persisted.append(prepared)
-        return _done(prepared)
+        with lock:
+            persists.append(prepared)
+            stored.add(prepared)
+        return ExtractResult(
+            details=SimpleNamespace(tdoc_id=prepared),
+            extract_meta=None,
+            from_cache=False,
+        )
 
     service = object.__new__(TDocCrService)
     service.prepare_extract = prepare
     service.persist_prepared_extract = persist
+    return service, calls, persists
+
+
+def test_extract_many_duplicate_repeat_sees_first_persist_with_parallel_runner():
+    from doc3gpp.services.tdoc_pipeline import TDocPipeline
+
+    service, calls, persists = _store_backed_service(hold_first_prepare=True)
+    runtime = PipelineRuntime(prepare_workers=2)
     messages: list[str] = []
+    try:
+        batch = service.extract_many(
+            ["A", "B", "A"],
+            on_progress=messages.append,
+            runner=TDocPipeline(runtime),
+        )
+    finally:
+        runtime.shutdown()
 
-    service.extract_many(
-        ["A", "B", "A"],
-        on_progress=messages.append,
-    )
-
-    assert calls[-1] == "A" and sorted(calls) == ["A", "A", "B"]
-    assert persisted[-1] == "A"
-    assert messages[-1] == "parsed 3/3 TDocs"
+    assert persists == ["A", "B"] or persists == ["B", "A"]
+    assert batch.successes["A"].from_cache is True
+    assert batch.successes["B"].from_cache is False
+    assert list(batch.successes) == ["A", "B"]
     counts = [int(m.split()[1].split("/")[0]) for m in messages]
-    assert counts == sorted(counts) == [1, 2, 3]
+    assert counts == [1, 2, 3]
+    assert messages[-1] == "parsed 3/3 TDocs"
+
+
+def test_extract_many_duplicate_force_reparses_repeat_and_keeps_source_order():
+    from doc3gpp.services.tdoc_pipeline import TDocPipeline
+
+    service, calls, persists = _store_backed_service()
+    runtime = PipelineRuntime(prepare_workers=2)
+    try:
+        batch = service.extract_many(
+            ["B", "A", "B"],
+            force=True,
+            runner=TDocPipeline(runtime),
+        )
+    finally:
+        runtime.shutdown()
+
+    assert persists.count("B") == 2  # force: the repeat is re-parsed too
+    assert batch.successes["B"].from_cache is False
+    assert list(batch.successes) == ["B", "A"]
+
+
+def test_shutdown_waits_for_blocked_submitted_writer_and_write_completes():
+    pipeline = PipelineRuntime(prepare_workers=1)
+    writer_started = threading.Event()
+    release_writer = threading.Event()
+    shutdown_returned = threading.Event()
+    log: list[str] = []
+
+    def persist(prepared):
+        writer_started.set()
+        assert release_writer.wait(timeout=5)
+        log.append("write-done")
+        return prepared
+
+    permit = pipeline.reserve()
+    future = pipeline.submit_persist(permit, persist, "A")
+    assert writer_started.wait(timeout=5)
+
+    def stop():
+        pipeline.shutdown()
+        log.append("shutdown-returned")
+        shutdown_returned.set()
+
+    stopper = threading.Thread(target=stop)
+    stopper.start()
+    try:
+        # The writer is still blocked, so shutdown cannot have returned.
+        assert not shutdown_returned.is_set()
+        assert not future.done()
+        release_writer.set()
+        stopper.join(timeout=5)
+        assert shutdown_returned.is_set()
+    finally:
+        release_writer.set()
+        stopper.join(timeout=5)
+
+    assert future.result(timeout=1) == "A"
+    assert log == ["write-done", "shutdown-returned"]

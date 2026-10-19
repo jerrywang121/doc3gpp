@@ -801,10 +801,16 @@ class TDocCrService:
         same lifecycle and result contract.
         """
         source_ids = list(tdoc_ids)
-        items = [
-            PipelineItem(key=raw_id.strip(), value=raw_id)
-            for raw_id in source_ids
-        ]
+        items: list[PipelineItem] = []
+        repeats: list[PipelineItem] = []
+        seen_keys: set[str] = set()
+        for raw_id in source_ids:
+            item = PipelineItem(key=raw_id.strip(), value=raw_id)
+            if item.key in seen_keys:
+                repeats.append(item)
+            else:
+                seen_keys.add(item.key)
+                items.append(item)
         owns_runner = runner is None
         runtime: PipelineRuntime | None = None
         if runner is None:
@@ -818,21 +824,29 @@ class TDocCrService:
                 )
 
         try:
-            outcomes = runner.run_sync(
-                items,
-                lambda raw_id: self.prepare_extract(
-                    raw_id,
-                    force=force,
-                    full=full,
-                ),
-                persist=cast(
-                    Callable[[object], object],
-                    self.persist_prepared_extract,
-                ),
-                is_complete=lambda value: isinstance(value, ExtractResult),
-                is_cancelled=is_cancelled,
-                on_progress=report,
-            )
+            def run(batch: list[PipelineItem], *, force: bool):
+                return runner.run_sync(
+                    batch,
+                    lambda raw_id: self.prepare_extract(
+                        raw_id,
+                        force=force,
+                        full=full,
+                    ),
+                    persist=cast(
+                        Callable[[object], object],
+                        self.persist_prepared_extract,
+                    ),
+                    is_complete=lambda value: isinstance(value, ExtractResult),
+                    is_cancelled=is_cancelled,
+                    on_progress=report,
+                )
+
+            outcomes = list(run(items, force=force))
+            if repeats:
+                # Repeated ids run after the first occurrences are persisted,
+                # so they observe the stored state (cache hit unless forced
+                # semantics apply) exactly as sequential execution would.
+                outcomes.extend(run(repeats, force=False))
         finally:
             if owns_runner and runtime is not None:
                 runtime.shutdown()

@@ -1325,11 +1325,13 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
                 full=False,
                 on_progress=None,
                 is_cancelled=None,
+                runner=None,
             ):
-                from doc3gpp.services.tdoc_cr_service import BatchExtractResult
                 from doc3gpp.models.tdoc_cr import TDocCRDetails
+                from doc3gpp.services.tdoc_cr_service import BatchExtractResult
                 ids = list(tdoc_ids)
                 self.many_calls.append(ids)
+                assert runner is not None
                 return BatchExtractResult(
                     successes={
                         tid: type(

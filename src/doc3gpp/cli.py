@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from dataclasses import fields as dataclass_fields
 from datetime import date, datetime
 from pathlib import Path
@@ -75,6 +76,7 @@ from doc3gpp.services.factory import (
     build_tsg_service,
     build_wi_service,
 )
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
 )
@@ -84,6 +86,7 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocZipDownloadError,
     _read_cached_markdown_path,
 )
+from doc3gpp.services.tdoc_pipeline import TDocPipeline
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
 )
@@ -1980,6 +1983,16 @@ def _resolve_max_tdoc_size_bytes(
     return settings.tdoc_parse.max_tdoc_size_kb * 1024
 
 
+@contextmanager
+def _tdoc_parse_pipeline(settings: Settings):
+    """Own one configured pipeline runtime for a DB-mode parse invocation."""
+    runtime = PipelineRuntime(settings.pipeline.prepare_workers)
+    try:
+        yield TDocPipeline(runtime)
+    finally:
+        runtime.shutdown()
+
+
 @tdoc_app.command("parse")
 def tdoc_parse(
     tdoc: str | None = typer.Option(
@@ -2466,8 +2479,15 @@ def tdoc_parse(
         len(tdoc_ids), force, full,
     )
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
+    settings = get_settings()
     try:
-        batch = service.extract_many(tdoc_ids, force=force, full=full)
+        with _tdoc_parse_pipeline(settings) as pipeline:
+            batch = service.extract_many(
+                tdoc_ids,
+                force=force,
+                full=full,
+                runner=pipeline,
+            )
     except PythonDocxNotInstalledError as exc:
         typer.echo(
             "python-docx is not installed; install with `pip install doc3gpp[extract]`.",

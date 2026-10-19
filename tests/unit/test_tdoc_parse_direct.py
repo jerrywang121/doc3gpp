@@ -496,6 +496,43 @@ def test_extract_from_bytes_never_touches_cache_or_db(tmp_path: Path) -> None:
     assert tdoc_repo.get_by_id.call_count == 0
 
 
+def test_cli_local_batch_uses_cli_runner_without_service_runtime(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The real service path must not create a compatibility runtime per file."""
+    if not _docx_available():
+        pytest.skip("python-docx not installed")
+
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    source_dir = tmp_path / "in"
+    source_dir.mkdir()
+    (source_dir / "R5s260009.zip").write_bytes(fixture.read_bytes())
+    service, _, _, _, _, _ = _build_service_with_fake_repos(
+        tmp_path, zip_bytes=fixture.read_bytes(),
+    )
+    monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda **_: service)
+
+    def fail_if_constructed(*args, **kwargs):
+        raise AssertionError("local batch created a service compatibility runtime")
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.PipelineRuntime",
+        fail_if_constructed,
+    )
+
+    output_dir = tmp_path / "out"
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse", "--from-path", str(source_dir),
+            "--output", str(output_dir), "--format", "raw",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (output_dir / "R5s260009.md").exists()
+
+
 # ---------------------------------------------------------------------------
 # Service layer: extract_from_url
 # ---------------------------------------------------------------------------
@@ -718,6 +755,18 @@ class _FakeService:
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
+
+    def prepare_from_bytes(
+        self, payload: bytes, filename: str, *, full: bool,
+        max_tdoc_size_bytes: int = 0,
+    ) -> DirectParseResult:
+        return self.extract_from_bytes(
+            payload,
+            filename,
+            force=False,
+            full=full,
+            max_tdoc_size_bytes=max_tdoc_size_bytes,
+        )
 
 
 def _build_service_factory(monkeypatch, service: TDocCrService) -> None:
@@ -1487,6 +1536,43 @@ def test_cli_from_path_folder_prepares_in_parallel_and_emits_sorted(
     assert emitted == ["R5s260001", "R5s260002"]
     assert (out / "R5s260001.tsv").read_text() == "R5s260001"
     assert (out / "R5s260002.tsv").read_text() == "R5s260002"
+
+
+def test_cli_from_path_folder_preserves_output_collision_skip(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A later source colliding with a newly written output is skipped."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    (in_dir / "R5s260009.docx").write_bytes(b"docx")
+    (in_dir / "R5s260009.zip").write_bytes(b"zip")
+    out = tmp_path / "out"
+
+    fake = _FakeService(DirectParseResult(
+        source_kind="local",
+        markdown="first markdown",
+        details=_dummy_details("R5s260009"),
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    ))
+    _build_service_factory(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse", "--from-path", str(in_dir),
+            "--output", str(out), "--format", "raw",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Skipped (output already exists): 1" in result.output
+    assert "Newly parsed:                    1" in result.output
+    assert "Failures:                        0" in result.output
+    assert (out / "R5s260009.md").read_text() == "first markdown\n"
 
 
 def test_cli_from_path_failure_counts_and_continues(

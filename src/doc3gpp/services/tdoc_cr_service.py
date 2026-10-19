@@ -1161,6 +1161,38 @@ class TDocCrService:
 
     collect_3gpp_file_urls = _collect_3gpp_file_urls
 
+    def prepare_from_bytes(
+        self,
+        docx_bytes: bytes,
+        filename: str,
+        *,
+        full: bool = True,
+        max_tdoc_size_bytes: int | None = None,
+    ) -> DirectParseResult:
+        """Prepare local bytes without creating or owning a pipeline runtime."""
+        max_bytes = (
+            max_tdoc_size_bytes
+            if max_tdoc_size_bytes is not None
+            else self._max_tdoc_size_bytes
+        )
+        markdown, _docx_filename, parsed = direct_parse_bytes(
+            docx_bytes,
+            filename=filename,
+            full=full,
+            max_bytes=max_bytes,
+        )
+        tdoc_id = extract_tdoc_id_from_filename(filename)
+        return DirectParseResult(
+            source_kind="local",
+            markdown=markdown,
+            details=parsed.cover,
+            extract_meta=None,
+            from_cache=False,
+            persisted=False,
+            tdoc_id=tdoc_id,
+            tdoc_id_in_tdocs=False,
+        )
+
     def extract_from_bytes(
         self,
         docx_bytes: bytes,
@@ -1186,22 +1218,11 @@ class TDocCrService:
 
         def prepare_one(payload: bytes) -> DirectParseResult:
             try:
-                markdown, _docx_filename, parsed = direct_parse_bytes(
+                return self.prepare_from_bytes(
                     payload,
-                    filename=filename,
+                    filename,
                     full=full,
-                    max_bytes=max_bytes,
-                )
-                tdoc_id = extract_tdoc_id_from_filename(filename)
-                return DirectParseResult(
-                    source_kind="local",
-                    markdown=markdown,
-                    details=parsed.cover,
-                    extract_meta=None,
-                    from_cache=False,
-                    persisted=False,
-                    tdoc_id=tdoc_id,
-                    tdoc_id_in_tdocs=False,
+                    max_tdoc_size_bytes=max_bytes,
                 )
             except asyncio.CancelledError:
                 raise

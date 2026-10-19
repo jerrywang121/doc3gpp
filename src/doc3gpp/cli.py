@@ -3990,6 +3990,7 @@ def _tdoc_parse_local_batch(
         raise typer.Exit(code=0)
 
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
+    prepare_from_bytes = getattr(service, "prepare_from_bytes", None)
     skipped = 0
     size_skipped = 0
     re_parsed = 0
@@ -4031,6 +4032,13 @@ def _tdoc_parse_local_batch(
     def prepare(item: tuple[Path, Path]):
         input_path, _out_path = item
         payload = input_path.read_bytes()
+        if prepare_from_bytes is not None:
+            return prepare_from_bytes(
+                payload,
+                str(input_path),
+                full=full,
+                max_tdoc_size_bytes=max_tdoc_size_bytes,
+            )
         return service.extract_from_bytes(
             payload,
             str(input_path),
@@ -4049,6 +4057,11 @@ def _tdoc_parse_local_batch(
         outcomes = run(runner)
 
     for (input_path, out_path), outcome in zip(pending, outcomes, strict=True):
+        if not force and out_path.exists():
+            skipped += 1
+            logger.debug("Skipping %s because output already exists: %s", input_path, out_path)
+            continue
+
         reason = outcome.reason or ""
         if outcome.status == "skipped":
             if reason.startswith("TDocTooLargeError:"):

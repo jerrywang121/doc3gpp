@@ -1,11 +1,10 @@
 """Shared preparation and serialized persistence executors for queued jobs."""
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from threading import BoundedSemaphore
 from typing import TypeVar
-
 
 T = TypeVar("T")
 R = TypeVar("R")

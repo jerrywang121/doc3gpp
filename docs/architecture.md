@@ -740,7 +740,30 @@ disable it. Every `doc3gpp server` subcommand refuses to run while disabled.
   executing the job twice; the worker also sweeps any rows stuck at
   `RUNNING` on startup and marks them `FAILED` with
   `error="orphaned_after_restart"` so the nav badge can't get stuck on
-  a job the new process never claimed.
+   a job the new process never claimed.
+
+### Queued parse/sync pipeline concurrency
+
+The server creates one process-scoped `PipelineRuntime` for queued
+`PARSE_TDOCS`, `PARSE_TDOC_URL`, `SYNC_SPECS`, and `PARSE_SPEC_DOCS` work.
+Preparation (downloads, document conversion, parsing, chunking, and other
+network/CPU work) runs in a bounded preparation pool. Preparation returns
+immutable DTOs and performs no repository writes. Every queued job shares a
+separate persistence executor with exactly one worker; that lane owns the
+source rows, parsed sidecars, and post-parse FTS/vector updates. This gives
+the database one writer without serializing independent preparation work.
+
+Cancellation stops work that has not yet been submitted to the preparation
+pool. Preparation already in flight may finish, and persistence futures that
+have been submitted are drained so a partial result is not left mid-write.
+The synchronous CLI service APIs compose the same prepare/persist operations
+directly and remain compatible with existing callers.
+
+SQLite connections enable foreign keys, WAL, and a busy timeout. Search reads
+use their normal independent connections and do not acquire the persistence
+lane; the HTTP search adapters dispatch blocking facade calls to worker
+threads. Consequently, a long parse/sync write does not block search queries
+or the event loop.
 
 Current search HTTP surfaces are `GET /tdocs/search`,
 `GET /spec-docs/search`, `GET /tdocs/index`, and `GET /spec-docs/index`.

@@ -92,7 +92,24 @@ log / SSE stream; intermediate lines under the throttle are dropped, not
 buffered, and terminal-summary emissions bypass the throttle via
 `progress(message, force=True)`. `cleanup_interval_seconds` (default `300`)
 is unrelated and controls retention cleanup cadence only — flipping it
-does not change pickup speed.
+ does not change pickup speed.
+
+### Parse and sync concurrency
+
+Queued TDoc and spec parse/sync jobs use one shared process-wide pipeline.
+Downloads, DOCX conversion, parsing, extraction, and chunking run in a
+bounded preparation pool, while all database mutations and post-parse search
+index updates run through one serialized persistence worker. The preparation
+pool is bounded to avoid unbounded queued work, and the persistence lane is
+shared across jobs rather than one writer per job.
+
+Preparation does not write repositories. Cancelling a job prevents additional
+preparation submissions; work already submitted to the writer is allowed to
+finish before shutdown. CLI calls retain their synchronous behavior by
+calling preparation and persistence consecutively. Search is independent of
+the pipeline: SQLite uses WAL plus a busy timeout, and HTTP search routes run
+blocking facade calls off the asyncio event loop, so search remains available
+while a queued parse or sync is writing.
 
 ## CLI reference
 

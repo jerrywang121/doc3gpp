@@ -13,13 +13,14 @@ regression in any of those layers can be traced here first.
 from __future__ import annotations
 
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
-
 
 # ---------------------------------------------------------------------------
 # Round-trip basics
@@ -323,3 +324,65 @@ def test_get_bytes_does_not_touch_ctime(tmp_path: Path) -> None:
     mtime_after = os.stat(path).st_mtime
     assert ctime_after == ctime_before
     assert mtime_after == mtime_before
+
+
+def test_concurrent_puts_serialize_install_and_eviction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent revisions remain complete and size-bounded.
+
+    Eviction is deliberately slowed so an unguarded writer can overlap
+    another writer's accounting pass; the cache must serialize those
+    critical sections while retaining atomic, revision-specific files.
+    """
+    worker_count = 12
+    keys = [f"R5s2600{i:04d}.zip" for i in range(worker_count)]
+    payloads = {
+        key: (key.encode() + b"|complete|") * 32
+        for key in keys
+    }
+    size_limit = max(map(len, payloads.values())) * 2
+    cache = TDocCache(tmp_path / "cache", size_limit)
+
+    original_enforce = cache.enforce_size_limit
+    probe_lock = threading.Lock()
+    start_barrier = threading.Barrier(worker_count + 1)
+    active_enforcers = 0
+    peak_enforcers = 0
+
+    def probed_enforce() -> int:
+        nonlocal active_enforcers, peak_enforcers
+        with probe_lock:
+            active_enforcers += 1
+            peak_enforcers = max(peak_enforcers, active_enforcers)
+        time.sleep(0.02)
+        try:
+            return original_enforce()
+        finally:
+            with probe_lock:
+                active_enforcers -= 1
+
+    monkeypatch.setattr(cache, "enforce_size_limit", probed_enforce)
+
+    def write_revision(key: str) -> Path:
+        start_barrier.wait()
+        return cache.put_bytes(key, payloads[key], "zips")
+
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = [pool.submit(write_revision, key) for key in keys]
+        start_barrier.wait()
+        paths = [future.result() for future in futures]
+
+    assert peak_enforcers == 1
+    assert paths == [cache.path_for(key, "zips") for key in keys]
+
+    files = sorted((cache.root / "zips").iterdir())
+    assert files
+    for path in files:
+        assert path.read_bytes() == payloads[path.name]
+
+    status = cache.status()
+    actual_bytes = sum(path.stat().st_size for path in files)
+    assert status.total_bytes == actual_bytes
+    assert status.total_bytes <= size_limit
+    assert status.file_count == len(files)

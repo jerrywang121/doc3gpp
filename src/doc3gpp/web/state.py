@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from doc3gpp.services.testcase_service import TestCaseService
     from doc3gpp.services.tsg_service import TsgService
     from doc3gpp.services.wi_service import WiService
+    from doc3gpp.web.workers.pipeline import PipelineRuntime
 
 
 @dataclass(slots=True)
@@ -71,6 +72,7 @@ class JobWorkerHandle:
     task: asyncio.Task | None = None
     event_queues: dict[str, asyncio.Queue[dict]] = field(default_factory=dict)
     cancel_events: dict[str, asyncio.Event] = field(default_factory=dict)
+    pipeline: PipelineRuntime | None = None
     #: Job ids whose cancellation was requested while still ``QUEUED`` (no
     #: running handler event exists yet). Consumed by the worker when it
     #: claims the job, so a cancel-request on a queued job is not lost.
@@ -125,20 +127,21 @@ class JobWorkerHandle:
         for event in self.cancel_events.values():
             event.set()
         task = self.task
-        if task is None or task.done():
-            return
-        task.cancel()
-        try:
-            # return_exceptions swallows the CancelledError raised when the
-            # cancelled task finishes, so shutdown never propagates it up to
-            # the server lifespan / TestClient teardown.
-            await asyncio.wait_for(
-                asyncio.shield(asyncio.gather(task, return_exceptions=True)),
-                timeout=5.0,
-            )
-        except asyncio.TimeoutError:
-            # A stuck handler ignored cancellation; nothing more to do.
-            pass
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                # return_exceptions swallows the CancelledError raised when the
+                # cancelled task finishes, so shutdown never propagates it up to
+                # the server lifespan / TestClient teardown.
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.gather(task, return_exceptions=True)),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                # A stuck handler ignored cancellation; nothing more to do.
+                pass
+        if self.pipeline is not None:
+            self.pipeline.shutdown(wait=True, cancel_pending_preparation=True)
 
 
 @dataclass(slots=True)

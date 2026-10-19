@@ -35,6 +35,7 @@ from doc3gpp.web.routes import all_routers
 from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
 from doc3gpp.web.templates_setup import mount_static
 from doc3gpp.web.workers.job_worker import JobWorker
+from doc3gpp.web.workers.pipeline import PipelineRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -207,10 +208,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         state = build_state(settings)
         app.state.web = state
-        worker = JobWorker(state)
-        handle = JobWorkerHandle(max_concurrent_jobs=settings.server.max_concurrent_jobs)
-        handle.task = asyncio.create_task(worker.run())
+        handle = JobWorkerHandle(
+            max_concurrent_jobs=settings.server.max_concurrent_jobs,
+            pipeline=PipelineRuntime(
+                prepare_workers=settings.server.max_concurrent_jobs,
+            ),
+        )
         state.jobs = handle
+        worker = JobWorker(state)
+        handle.task = asyncio.create_task(worker.run())
         try:
             async with _mount_mcp_in_lifespan(app):
                 yield

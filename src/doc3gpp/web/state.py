@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.engine import Engine
 
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 
@@ -43,7 +44,6 @@ if TYPE_CHECKING:
     from doc3gpp.services.testcase_service import TestCaseService
     from doc3gpp.services.tsg_service import TsgService
     from doc3gpp.services.wi_service import WiService
-    from doc3gpp.web.workers.pipeline import PipelineRuntime
 
 
 @dataclass(slots=True)
@@ -141,7 +141,7 @@ class JobWorkerHandle:
                 # A stuck handler ignored cancellation; nothing more to do.
                 pass
         if self.pipeline is not None:
-            self.pipeline.shutdown(wait=True, cancel_pending_preparation=True)
+            await self.pipeline.shutdown_async(cancel_pending_preparation=True)
 
 
 @dataclass(slots=True)

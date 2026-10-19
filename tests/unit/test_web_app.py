@@ -1,11 +1,15 @@
 """Tests for the FastAPI app factory + lifespan wiring."""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.app import ServiceContainer, WebState, build_app
+from doc3gpp.web.state import JobWorkerHandle
 
 
 def test_build_app_returns_fastapi_instance() -> None:
@@ -41,6 +45,39 @@ def test_build_state_wires_service_container(sqlite_env) -> None:
         assert state.services.tdoc_index is not None
         assert state.services.spec_doc_index is not None
         assert state.services.job_repo is not None
+
+
+def test_web_runtime_uses_pipeline_workers_independently_from_active_job_limit(sqlite_env) -> None:
+    settings = Settings(
+        pipeline={"prepare_workers": 3},
+        server={"max_concurrent_jobs": 1},
+    )
+    app = build_app(settings)
+
+    with TestClient(app):
+        state: WebState = app.state.web
+        runtime = state.jobs.pipeline
+        assert isinstance(runtime, PipelineRuntime)
+        assert runtime is state.services.pipeline
+        assert runtime._prepare._max_workers == 3
+        assert state.jobs.max_concurrent_jobs == 1
+
+
+def test_job_worker_handle_awaits_pipeline_async_shutdown() -> None:
+    class _ShutdownProbe:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def shutdown_async(self, *, cancel_pending_preparation: bool = False) -> None:
+            assert cancel_pending_preparation is True
+            self.called = True
+
+        def shutdown(self, **_kwargs) -> None:
+            raise AssertionError("blocking pipeline shutdown must not be used")
+
+    pipeline = _ShutdownProbe()
+    asyncio.run(JobWorkerHandle(pipeline=pipeline).shutdown())  # type: ignore[arg-type]
+    assert pipeline.called is True
 
 
 def test_healthz_returns_ok(sqlite_env) -> None:

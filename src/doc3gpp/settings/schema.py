@@ -28,6 +28,7 @@ non-flag defaults, so the same precedence applies transparently.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -41,7 +42,6 @@ from pydantic_settings import (
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
-
 
 _HUMAN_DELTA_RE = re.compile(r"^(?P<value>[+-]?\d+(?:\.\d+)?)(?P<unit>[smhd])$", re.IGNORECASE)
 
@@ -688,6 +688,26 @@ class SemanticSearchSettings(BaseModel):
         return v
 
 
+class PipelineSettings(BaseModel):
+    """Configuration for the shared TDoc preparation/persistence runtime.
+
+    ``prepare_workers`` bounds concurrent preparation work. Persistence is
+    always serialized by the service pipeline runtime; the separate server
+    setting controls active jobs, not item preparation.
+    """
+
+    prepare_workers: int = Field(
+        default_factory=lambda: min(32, (os.cpu_count() or 1) + 4),
+        ge=1,
+        le=32,
+        description=(
+            "Maximum number of concurrent preparation workers shared by "
+            "TDoc pipeline surfaces. The default is CPU-aware and bounded "
+            "to 32."
+        ),
+    )
+
+
 class ServerSettings(BaseModel):
     """Knobs for ``doc3gpp server`` (FastAPI + uvicorn HTTP surface).
 
@@ -874,7 +894,7 @@ class Settings(BaseSettings):
     ``log_level``, ``http_verify``) are populated from the
     :data:`ALLOWED_ENV_VARS` subset of ``DOC3GPP_*`` env vars.
     Nested sub-models (``output``, ``cache``, ``tdoc_parse``,
-    ``sync``) come exclusively from the TOML config file via
+    ``sync``, ``pipeline``) come exclusively from the TOML config file via
     :func:`doc3gpp.settings.loader.get_settings`; the nested
     env-overrides are ``DOC3GPP_CACHE__DIR``,
     ``DOC3GPP_SYNC__AUTO_SYNC``, and
@@ -908,6 +928,7 @@ class Settings(BaseSettings):
     search: SearchSettings = Field(default_factory=SearchSettings)
     spec_doc: SpecDocSettings = Field(default_factory=SpecDocSettings)
     semantic_search: SemanticSearchSettings = Field(default_factory=SemanticSearchSettings)
+    pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
 

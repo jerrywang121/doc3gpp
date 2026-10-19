@@ -27,6 +27,7 @@ from fastapi import FastAPI
 
 from doc3gpp.config import get_settings
 from doc3gpp.services import factory
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.session import get_engine, get_specdata_engine, get_testcase_engine
 from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
@@ -35,7 +36,6 @@ from doc3gpp.web.routes import all_routers
 from doc3gpp.web.state import JobWorkerHandle, ServiceContainer, WebState
 from doc3gpp.web.templates_setup import mount_static
 from doc3gpp.web.workers.job_worker import JobWorker
-from doc3gpp.web.workers.pipeline import PipelineRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         handle = JobWorkerHandle(
             max_concurrent_jobs=settings.server.max_concurrent_jobs,
             pipeline=PipelineRuntime(
-                prepare_workers=settings.server.max_concurrent_jobs,
+                prepare_workers=settings.pipeline.prepare_workers,
             ),
         )
         state.jobs = handle

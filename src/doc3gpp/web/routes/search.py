@@ -3,6 +3,7 @@
 # ruff: noqa: B008
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 from typing import Any
@@ -149,7 +150,9 @@ async def search_query(
         limit=parsed_limit,
     )
     try:
-        results = facade.search(text=text, semantic=semantic, filters=parsed_filters)
+        results = await asyncio.to_thread(
+            facade.search, text=text, semantic=semantic, filters=parsed_filters
+        )
     except SearchIndexCorruptError as exc:
         raise SearchIndexCorruptWebError(str(exc), resource="tdoc") from exc
     except (

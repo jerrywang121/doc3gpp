@@ -83,3 +83,31 @@ def test_output_fields_default_spec() -> None:
         "spec_id", "type", "title", "status",
         "radio_tech", "initial_release", "tsg", "rapporteurs", "parsed",
     ]
+
+
+def test_pipeline_default_uses_cpu_aware_bounded_worker_count(monkeypatch) -> None:
+    import os
+
+    from doc3gpp.settings import schema
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 12)
+    assert schema.PipelineSettings().prepare_workers == 16
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 64)
+    assert schema.PipelineSettings().prepare_workers == 32
+
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    assert schema.PipelineSettings().prepare_workers == 5
+
+
+def test_pipeline_prepare_workers_toml_override(tmp_path: Path, monkeypatch) -> None:
+    from doc3gpp.settings.loader import get_settings
+
+    config_path = tmp_path / "doc3gpp.toml"
+    config_path.write_text("[pipeline]\nprepare_workers = 7\n", encoding="utf-8")
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
+    get_settings.cache_clear()
+    try:
+        assert get_settings().pipeline.prepare_workers == 7
+    finally:
+        get_settings.cache_clear()

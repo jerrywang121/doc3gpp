@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -68,8 +69,9 @@ class TDocCache:
         └── markdown/  # python-docx output (keyed by content hash)
 
     The cache owns the directory layout and key sanitisation; callers
-    pass only the data. Concurrent access from multiple processes is
-    not supported — each invocation of the CLI owns the cache for its
+    pass only the data. Installs and eviction are serialized for threads
+    sharing one cache instance; concurrent access from multiple processes
+    is not supported — each invocation of the CLI owns the cache for its
     lifetime.
     """
 
@@ -93,6 +95,7 @@ class TDocCache:
             )
         self._root = Path(root)
         self._size_limit_bytes = size_limit_bytes
+        self._lock = threading.RLock()
         self._root.mkdir(parents=True, exist_ok=True)
         for subdir in _VALID_SUBDIRS:
             (self._root / subdir).mkdir(exist_ok=True)
@@ -156,7 +159,12 @@ class TDocCache:
                 fh.write(payload)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp_name, target_path)
+            # Keep install and its following accounting pass together:
+            # another writer cannot evict this file between the replace
+            # and the size scan. Tempfile I/O remains outside the lock.
+            with self._lock:
+                os.replace(tmp_name, target_path)
+                self.enforce_size_limit()
         except BaseException:
             # Best-effort cleanup if os.replace never ran.
             try:
@@ -172,7 +180,6 @@ class TDocCache:
             key,
             subdir,
         )
-        self.enforce_size_limit()
         return target_path
 
     def get_bytes(self, key: str, subdir: Subdir) -> bytes | None:
@@ -221,6 +228,11 @@ class TDocCache:
         Returns:
             Number of files deleted.
         """
+        with self._lock:
+            return self._enforce_size_limit_unlocked()
+
+    def _enforce_size_limit_unlocked(self) -> int:
+        """Enforce the size limit; the caller must hold ``self._lock``."""
         if self._size_limit_bytes == 0:
             return 0
 

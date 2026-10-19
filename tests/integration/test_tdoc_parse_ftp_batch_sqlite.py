@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import threading
 import zipfile
 from pathlib import Path
 
@@ -11,10 +12,10 @@ from typer.testing import CliRunner
 
 from doc3gpp.cli import app
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
@@ -101,6 +102,96 @@ def test_url_batch_persists_fk_hits_and_warns_on_miss(
     combined = (result.stdout or "") + (result.stderr or "")
     assert "R5s260043" in combined
     assert "not present in the 'tdocs' table" in combined
+
+
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("docx"),
+    reason="python-docx not installed",
+)
+def test_url_batch_prepares_concurrently_and_emits_discovery_order(
+    sqlite_env, monkeypatch, tmp_path,
+) -> None:
+    """FTP preparation overlaps while CLI emission follows URL discovery."""
+    create_schema()
+    from doc3gpp.settings.loader import get_settings
+
+    monkeypatch.setenv("DOC3GPP_PIPELINE__PREPARE_WORKERS", "2")
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    get_settings.cache_clear()
+
+    first_fixture = FIXTURES_DIR / "R5s260009.zip"
+    second_fixture = FIXTURES_DIR / "R5s260051.zip"
+    first_url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    second_url = "https://www.3gpp.org/ftp/Docs/R5s260051.zip"
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260051", type="CR"))
+
+    root = "https://www.3gpp.org/ftp/Docs/"
+    dummy = _DummyScraperClient()
+    dummy.texts[root] = _folder_html(
+        f'<a class="file" href="{first_url}">R5s260009.zip</a>',
+        f'<a class="file" href="{second_url}">R5s260051.zip</a>',
+    )
+    dummy.payloads[first_url] = first_fixture.read_bytes()
+    dummy.payloads[second_url] = second_fixture.read_bytes()
+    monkeypatch.setattr("doc3gpp.services.factory.ScraperClient", lambda: dummy)
+
+    started = threading.Barrier(2)
+    second_finished = threading.Event()
+    active = 0
+    active_lock = threading.Lock()
+    preparations_overlapped = False
+    finished: list[str] = []
+    original_prepare = TDocCrService.prepare_from_url
+
+    def prepare(self, url: str, **kwargs):
+        nonlocal active, preparations_overlapped
+        with active_lock:
+            active += 1
+            if active > 1:
+                preparations_overlapped = True
+        try:
+            started.wait(timeout=2)
+            if url == first_url:
+                second_finished.wait(timeout=2)
+                result = original_prepare(self, url, **kwargs)
+            else:
+                result = original_prepare(self, url, **kwargs)
+                second_finished.set()
+            finished.append(url)
+            return result
+        finally:
+            with active_lock:
+                active -= 1
+
+    monkeypatch.setattr(TDocCrService, "prepare_from_url", prepare)
+
+    import doc3gpp.cli as cli_module
+
+    emitted: list[str] = []
+    original_emit = cli_module._emit_record
+
+    def emit(record, fmt, output, *, compact=False):
+        emitted.append(record.tdoc_id)
+        return original_emit(record, fmt, output, compact=compact)
+
+    monkeypatch.setattr(cli_module, "_emit_record", emit)
+    output = tmp_path / "out"
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse", "--from-url", root,
+            "--format", "table", "--output", str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert preparations_overlapped
+    assert finished == [second_url, first_url]
+    assert emitted == ["R5s260009", "R5s260051"]
+    assert (output / "docs" / "r5s260009.tsv").exists()
+    assert (output / "docs" / "r5s260051.tsv").exists()
 
 
 @pytest.mark.skipif(

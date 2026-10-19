@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -36,6 +37,7 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocTypeUnsupportedError,
     TDocZipDownloadError,
 )
+from doc3gpp.services.tdoc_pipeline import PipelineItem
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
@@ -98,6 +100,7 @@ class _FakeCrService:
         self._raise_from_many = raise_from_many
         self._raise_from_extract = raise_from_extract
         self.many_calls: list[tuple[list[str], bool, bool]] = []
+        self.runner_calls: list[object | None] = []
         self.extract_calls: list[str] = []
 
     def extract_many(
@@ -108,8 +111,10 @@ class _FakeCrService:
         full: bool = False,
         on_progress=None,
         is_cancelled=None,
+        runner=None,
     ) -> BatchExtractResult:
         self.many_calls.append((list(tdoc_ids), force, full))
+        self.runner_calls.append(runner)
         if self._raise_from_many is not None:
             raise self._raise_from_many
         return BatchExtractResult(
@@ -125,6 +130,55 @@ class _FakeCrService:
         if tdoc_id not in self._results:
             raise TDocNotFoundError(tdoc_id)
         return self._results[tdoc_id]
+
+
+class _OverlapCrService(_FakeCrService):
+    """Fake extraction service whose preparation callbacks must overlap."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.preparations_overlapped = False
+
+    def extract_many(
+        self,
+        tdoc_ids,
+        *,
+        force: bool = False,
+        full: bool = False,
+        on_progress=None,
+        is_cancelled=None,
+        runner=None,
+    ) -> BatchExtractResult:
+        del force, full, on_progress, is_cancelled
+        self.runner_calls.append(runner)
+        assert runner is not None
+        ids = list(tdoc_ids)
+        active = 0
+        active_lock = threading.Lock()
+        barrier = threading.Barrier(len(ids))
+
+        def prepare(raw_id: str) -> ExtractResult:
+            nonlocal active
+            with active_lock:
+                active += 1
+                if active > 1:
+                    self.preparations_overlapped = True
+            try:
+                barrier.wait(timeout=2)
+            finally:
+                with active_lock:
+                    active -= 1
+            return _make_result(raw_id)
+
+        runner.run_sync(
+            [PipelineItem(key=raw_id, value=raw_id) for raw_id in ids],
+            prepare,
+        )
+        return BatchExtractResult(
+            successes={raw_id: _make_result(raw_id) for raw_id in ids},
+            failures={},
+            skipped={},
+        )
 
 
 class _FakeTDocRepoList:
@@ -549,6 +603,33 @@ def test_tdoc_parse_tdoc_wildcard_pattern(sqlite_env, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_tdoc_parse_database_batch_uses_configured_runner_for_overlap(
+    sqlite_env, monkeypatch,
+) -> None:
+    """Database-mode parsing shares one configured runner for the batch."""
+    monkeypatch.setenv("DOC3GPP_PIPELINE__PREPARE_WORKERS", "2")
+    get_settings.cache_clear()
+    runner = CliRunner()
+    tdoc_ids = ["R5s260021", "R5s260022"]
+    _patch_tdoc_repo_for_listing(
+        monkeypatch,
+        [TDoc(tdoc_id=tdoc_id, type="CR") for tdoc_id in tdoc_ids],
+    )
+    _patch_cr_repo(monkeypatch, set())
+    fake = _OverlapCrService()
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s26002%", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake.preparations_overlapped
+    assert fake.runner_calls and fake.runner_calls[0] is not None
+    assert "Newly parsed:                              2" in result.output
+    assert "Failures:                                  0" in result.output
+
+
 def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
     """When ``extract_many`` reports a failure for one id via
     ``batch.failures``, the CLI prints ``FAILED - {reason}`` inline and
@@ -578,6 +659,7 @@ def test_tdoc_parse_partial_failure(sqlite_env, monkeypatch) -> None:
     assert "R5s260010: FAILED - TDocNotFoundError: TDoc 'R5s260010' is not stored" in result.output
     assert "Newly parsed:                              1" in result.output
     assert "Failures:                                  1" in result.output
+    assert fake.runner_calls and fake.runner_calls[0] is not None
 
 
 def test_tdoc_parse_all_failures(sqlite_env, monkeypatch) -> None:
@@ -817,6 +899,7 @@ def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
     # to a column width with the bucket label + count).
     assert "Skipped (not yet on FTP):" in result.output
     assert "Failures:                                  0" in result.output
+    assert fake.runner_calls and fake.runner_calls[0] is not None
 
 
 def test_tdoc_parse_unexpected_internal_error_exits_cleanly(
@@ -1675,6 +1758,7 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
     assert "Newly parsed:                              2" in result.output
     assert "Skipped (already parsed before this run): 0" in result.output
     assert "Failures:                                  0" in result.output
+    assert fake.runner_calls and fake.runner_calls[0] is not None
 
 
 def test_tdoc_parse_summary_without_force_dispatches_only_new(
@@ -3188,6 +3272,8 @@ class _RecordingCrService:
         self.collect_calls: list[tuple[str, int]] = []
         self.extract_batch_calls: list[tuple[str, int]] = []
         self.extract_url_calls: list[str] = []
+        self.extract_batch_runner_calls: list[object | None] = []
+        self.extract_url_runner_calls: list[object | None] = []
 
     def collect_3gpp_file_urls(self, url: str, *, max_depth: int) -> list[str]:
         self.collect_calls.append((url, max_depth))
@@ -3195,16 +3281,18 @@ class _RecordingCrService:
 
     def extract_from_url_batch(
         self, url: str, *, max_depth: int, force: bool, full: bool,
-        max_tdoc_size_bytes: int = 0,
+        max_tdoc_size_bytes: int = 0, runner=None,
     ) -> "_RecordingBatchResult":
         self.extract_batch_calls.append((url, max_depth))
+        self.extract_batch_runner_calls.append(runner)
         return _RecordingBatchResult(results=[], failures={})
 
     def extract_from_url(
         self, url: str, *, force: bool, full: bool,
-        max_tdoc_size_bytes: int = 0,
+        max_tdoc_size_bytes: int = 0, runner=None,
     ) -> "_RecordingSingleResult":
         self.extract_url_calls.append(url)
+        self.extract_url_runner_calls.append(runner)
         return _RecordingSingleResult(
             source_kind="url-3gpp",
             markdown="",
@@ -3476,3 +3564,53 @@ def test_tdoc_parse_compact_flag_accepted_on_from_url(sqlite_env, monkeypatch) -
     assert result.exit_code == 0, result.output
     assert "no such option" not in (result.output or "").lower()
     assert "Unknown option" not in (result.output or "")
+
+def test_tdoc_parse_cli_renders_real_service_skip_and_failure_maps(
+    sqlite_env, monkeypatch,
+) -> None:
+    """The CLI consumes the *real* ``extract_many`` result maps: FTP-unavailable
+    and oversized TDocs are skipped (with distinct reasons), ordinary errors
+    are failures, and the same reasons the web handler reports reach output."""
+    from doc3gpp.services.tdoc_cr_service import (
+        TDocCrService,
+        TDocNotYetOnFTPError,
+        TDocTooLargeError,
+    )
+
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    ftp_exc = TDocNotYetOnFTPError("R5s260002")
+    big_exc = TDocTooLargeError(source="R5s260003", size=10, limit=5)
+
+    def prepare(tdoc_id, **_kwargs):
+        if tdoc_id == "R5s260002":
+            raise ftp_exc
+        if tdoc_id == "R5s260003":
+            raise big_exc
+        if tdoc_id == "R5s260004":
+            raise ValueError("bad parse")
+        return tdoc_id
+
+    service = object.__new__(TDocCrService)
+    service.prepare_extract = prepare
+    service.persist_prepared_extract = lambda prepared: _make_result(prepared)
+    cr_tdocs = [
+        TDoc(tdoc_id=f"R5s26000{n}", type="CR") for n in (1, 2, 3, 4)
+    ]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, set())
+    _patch_service(monkeypatch, service)
+
+    result = CliRunner().invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s26000%", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"R5s260002: SKIPPED - TDocNotYetOnFTPError: {ftp_exc}" in result.output
+    assert f"R5s260003: SKIPPED - TDocTooLargeError: {big_exc}" in result.output
+    assert "R5s260004: FAILED - ValueError: bad parse" in result.output
+    assert "Skipped (not yet on FTP):                 1" in result.output
+    size_line = next(
+        ln for ln in result.output.splitlines()
+        if ln.startswith("Skipped (exceeds max_tdoc_size_kb")
+    )
+    assert size_line.endswith(" 1"), size_line

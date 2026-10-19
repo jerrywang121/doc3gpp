@@ -659,6 +659,11 @@ doc3gpp config set sync.auto_sync true    # then edit individual keys
 
 ## Architecture
 
+`tdoc parse` batches (database IDs, FTP folders, local folders) and queued web
+jobs share one service-level pipeline: bounded parallel preparation
+(`[pipeline] prepare_workers`) plus a single serialized database writer, with
+deterministic discovery/output order. See `docs/architecture.md`.
+
 The codebase is split into strict layers to keep concerns separate:
 
 | Layer       | Path                       | Responsibility                       |

@@ -740,7 +740,56 @@ disable it. Every `doc3gpp server` subcommand refuses to run while disabled.
   executing the job twice; the worker also sweeps any rows stuck at
   `RUNNING` on startup and marks them `FAILED` with
   `error="orphaned_after_restart"` so the nav badge can't get stuck on
-  a job the new process never claimed.
+   a job the new process never claimed.
+
+### Cross-surface TDoc pipeline
+
+TDoc batch parsing uses one framework-neutral service runner
+(`services/tdoc_pipeline.py::TDocPipeline` over
+`services/pipeline_runtime.py::PipelineRuntime`). It is shared by database
+IDs, FTP-folder URLs and local folders. The web server builds one runtime per
+process (lifespan); each CLI batch invocation builds one runtime and drains it
+in `finally`. MCP only enqueues the existing jobs and has no runner of its own.
+
+- Preparation (download, conversion, parsing; no repository writes) runs in a
+  bounded pool of `[pipeline] prepare_workers`; pending capacity is
+  `prepare_workers * 2` (async callers wait without blocking the event loop).
+- Persistence (cover, TTCN, body-change, extract metadata, FTS/vector) runs on
+  a single serialized writer, one atomic command per item; a failing item does
+  not stop later items. Local-folder parsing has no writer (in-memory only).
+- Discovery (BFS FTP traversal, sorted local files) and result/output order
+  are deterministic and follow source order regardless of completion order.
+- One classifier maps `TDocNotYetOnFTPError` / `TDocTooLargeError` to
+  *skipped* and other errors to *failed*, with `ExceptionClass: message`
+  reasons keyed by TDoc id (DB) or normalized URL (folders).
+- Cache writes are atomic and eviction is guarded against concurrent tasks.
+  Search reads never take the writer lane (WAL).
+- Cancellation stops new submissions; submitted writes finish; the runtime
+  drains before HTTP client, cache and engines are disposed.
+- `server.max_concurrent_jobs` limits active jobs, not item preparation.
+
+### Queued parse/sync pipeline concurrency
+
+The server creates one process-scoped `PipelineRuntime` for queued
+`PARSE_TDOCS`, `PARSE_TDOC_URL`, `SYNC_SPECS`, and `PARSE_SPEC_DOCS` work.
+Preparation (downloads, document conversion, parsing, chunking, and other
+network/CPU work) runs in a bounded preparation pool. Preparation returns
+immutable DTOs and performs no repository writes. Every queued job shares a
+separate persistence executor with exactly one worker; that lane owns the
+source rows, parsed sidecars, and post-parse FTS/vector updates. This gives
+the database one writer without serializing independent preparation work.
+
+Cancellation stops work that has not yet been submitted to the preparation
+pool. Preparation already in flight may finish, and persistence futures that
+have been submitted are drained so a partial result is not left mid-write.
+The synchronous CLI service APIs compose the same prepare/persist operations
+directly and remain compatible with existing callers.
+
+SQLite connections enable foreign keys, WAL, and a busy timeout. Search reads
+use their normal independent connections and do not acquire the persistence
+lane; the HTTP search adapters dispatch blocking facade calls to worker
+threads. Consequently, a long parse/sync write does not block search queries
+or the event loop.
 
 Current search HTTP surfaces are `GET /tdocs/search`,
 `GET /spec-docs/search`, `GET /tdocs/index`, and `GET /spec-docs/index`.

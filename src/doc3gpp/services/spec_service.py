@@ -6,20 +6,11 @@ import logging
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import SyncOutcome
-from doc3gpp.repository.protocols import SpecParsedStatusRepository, SpecRepository
-from doc3gpp.scraping.client import ScraperClient
-from doc3gpp.services._duration import format_duration as _format_duration
-from doc3gpp.scraping.spec_source import (
-    fetch_cr_list,
-    fetch_dynareport_detail,
-    fetch_etsi_pdf_text,
-    fetch_spec_detail,
-    fetch_spec_list,
-)
 from doc3gpp.parsers.spec_parser import (
     extract_cr_tdocs,
     extract_etsi_pdf_url,
@@ -28,6 +19,16 @@ from doc3gpp.parsers.spec_parser import (
     parse_spec_detail,
     parse_spec_list,
 )
+from doc3gpp.repository.protocols import SpecParsedStatusRepository, SpecRepository
+from doc3gpp.scraping.client import ScraperClient
+from doc3gpp.scraping.spec_source import (
+    fetch_cr_list,
+    fetch_dynareport_detail,
+    fetch_etsi_pdf_text,
+    fetch_spec_detail,
+    fetch_spec_list,
+)
+from doc3gpp.services._duration import format_duration as _format_duration
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,15 @@ Events:
         fetched and upserted (or whose failure was logged and
         swallowed). ``data`` is ``{"spec_id": <str>}``.
 """
+
+
+@dataclass(slots=True, frozen=True)
+class PreparedSpecSync:
+    """Parsed spec aggregate waiting for the serialized DB writer."""
+
+    header: Spec
+    versions: tuple[SpecVersion, ...]
+    canonical: str
 
 
 class SpecUnknownOnUpstreamError(LookupError):
@@ -290,6 +300,39 @@ class SpecService:
         client: ScraperClient,
         per_version_details: bool = False,
     ) -> int:
+        prepared = self._prepare_spec_with_executor(
+            spec, canonical, followup_executor, client,
+            per_version_details=per_version_details,
+        )
+        if prepared is None:
+            return 0
+        return self.persist_prepared_spec(prepared)
+
+    def prepare_spec(
+        self,
+        spec: Spec,
+        canonical: str,
+        client: ScraperClient,
+        *,
+        per_version_details: bool = False,
+    ) -> PreparedSpecSync | None:
+        """Prepare one spec without mutating repository rows."""
+        workers = self._max_workers or min(6, (os.cpu_count() or 4) + 4)
+        with ThreadPoolExecutor(max_workers=workers) as followup_executor:
+            return self._prepare_spec_with_executor(
+                spec, canonical, followup_executor, client,
+                per_version_details=per_version_details,
+            )
+
+    def _prepare_spec_with_executor(
+        self,
+        spec: Spec,
+        canonical: str,
+        followup_executor: ThreadPoolExecutor,
+        client: ScraperClient,
+        *,
+        per_version_details: bool = False,
+    ) -> PreparedSpecSync | None:
         # Per-spec skip rule: a sync interval throttles each spec
         # independently. Read from the *incoming* spec (which already
         # carries the persisted ``last_synced_at`` thanks to
@@ -304,7 +347,7 @@ class SpecService:
                 spec.last_synced_at.isoformat(),
                 self._sync_interval,
             )
-            return 0
+            return None
 
         slug = spec.spec_id.replace(".", "")
         detail_html = fetch_spec_detail(slug, client=client)
@@ -329,6 +372,16 @@ class SpecService:
             versions, followup_executor, client, per_version_details=per_version_details
         )
 
+        return PreparedSpecSync(
+            header=header,
+            versions=tuple(versions),
+            canonical=canonical,
+        )
+
+    def persist_prepared_spec(self, prepared: PreparedSpecSync) -> int:
+        """Persist one prepared spec aggregate on the serialized writer."""
+        header = prepared.header
+        versions = list(prepared.versions)
         # Write the header first WITHOUT ``last_synced_at`` so a failure
         # in ``upsert_versions`` below leaves the timestamp unset on the
         # persisted header row. Set it only after both upserts succeed,

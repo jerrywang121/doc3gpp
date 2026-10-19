@@ -27,6 +27,7 @@ from fastapi import FastAPI
 
 from doc3gpp.config import get_settings
 from doc3gpp.services import factory
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.session import get_engine, get_specdata_engine, get_testcase_engine
 from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
@@ -207,10 +208,16 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         state = build_state(settings)
         app.state.web = state
-        worker = JobWorker(state)
-        handle = JobWorkerHandle(max_concurrent_jobs=settings.server.max_concurrent_jobs)
-        handle.task = asyncio.create_task(worker.run())
+        handle = JobWorkerHandle(
+            max_concurrent_jobs=settings.server.max_concurrent_jobs,
+            pipeline=PipelineRuntime(
+                prepare_workers=settings.pipeline.prepare_workers,
+            ),
+        )
         state.jobs = handle
+        state.services.pipeline = handle.pipeline
+        worker = JobWorker(state)
+        handle.task = asyncio.create_task(worker.run())
         try:
             async with _mount_mcp_in_lifespan(app):
                 yield

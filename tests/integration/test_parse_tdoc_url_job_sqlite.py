@@ -31,55 +31,56 @@ def _run_once(worker, repo, job) -> None:
 
 
 def test_parse_tdoc_url_job_end_to_end(sqlite_env, monkeypatch) -> None:
-    """A 3GPP-URL ``PARSE_TDOC_URL`` job runs, succeeds, summary correct."""
+    """A 3GPP-URL ``PARSE_TDOC_URL`` job runs through the shared runner."""
     from doc3gpp.models.jobs import JobKind, JobStatus
-    from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult
+    from doc3gpp.models.tdoc_cr import DirectParseResult
+    from doc3gpp.services.pipeline_runtime import PipelineRuntime
 
     state, worker = _make_state_and_worker()
+    pipeline = PipelineRuntime(prepare_workers=2)
+    state.services.pipeline = pipeline
 
-    fake_result = DirectParseBatchResult(
-        results=[
-            DirectParseResult(
-                source_kind="url-3gpp",
-                markdown="",
-                details=None,
-                extract_meta=None,
-                from_cache=False,
-                persisted=True,
-                tdoc_id="R5-260001",
-                tdoc_id_in_tdocs=True,
-                source_url="https://www.3gpp.org/ftp/R5s260001.zip",
-            ),
-        ],
-        failures={},
-        skipped={},
+    fake_result = DirectParseResult(
+        source_kind="url-3gpp",
+        markdown="",
+        details=None,
+        extract_meta=None,
+        from_cache=False,
+        persisted=True,
+        tdoc_id="R5-260001",
+        tdoc_id_in_tdocs=True,
+        source_url="https://www.3gpp.org/ftp/R5s260001.zip",
     )
 
-    def fake_extract_from_url_batch(
+    def fake_prepare(
         url,
         *,
-        max_depth,
         force,
         full,
         max_tdoc_size_bytes,
-        on_progress=None,
-        is_cancelled=None,
     ):
-        assert url.startswith("https://www.3gpp.org/ftp/")
-        assert max_depth == 2  # default
+        assert url.endswith("R5s260001.zip")
         assert force is False
         assert full is False
+        assert max_tdoc_size_bytes is not None
+        return url
+
+    def fake_persist(prepared):
+        assert prepared.endswith("R5s260001.zip")
         return fake_result
 
     monkeypatch.setattr(
         state.services.tdoc_cr,
-        "extract_from_url_batch",
-        fake_extract_from_url_batch,
+        "collect_3gpp_file_urls",
+        lambda url, *, max_depth: [
+            "https://www.3gpp.org/ftp/R5s260001.zip"
+        ],
     )
+    monkeypatch.setattr(state.services.tdoc_cr, "prepare_from_url", fake_prepare)
     monkeypatch.setattr(
         state.services.tdoc_cr,
-        "collect_3gpp_file_urls",
-        lambda url, *, max_depth: (),
+        "persist_prepared_url",
+        fake_persist,
     )
     state.settings.sync.auto_sync = False
 
@@ -88,7 +89,10 @@ def test_parse_tdoc_url_job_end_to_end(sqlite_env, monkeypatch) -> None:
         {"url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/", "max_depth": 2},
     )
 
-    _run_once(worker, state.services.job_repo, job)
+    try:
+        _run_once(worker, state.services.job_repo, job)
+    finally:
+        pipeline.shutdown()
 
     done = state.services.job_repo.get(job.id)
     assert done is not None

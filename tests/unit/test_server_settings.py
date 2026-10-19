@@ -17,6 +17,7 @@ def test_server_defaults() -> None:
     assert settings.server.host == "127.0.0.1"
     assert settings.server.port == 13999
     assert settings.server.enabled is True
+    assert settings.server.max_concurrent_jobs == 3
 
 
 def test_mcp_defaults() -> None:
@@ -61,6 +62,22 @@ def test_max_concurrent_jobs_bounds() -> None:
         ServerSettings(max_concurrent_jobs=0)
     with pytest.raises(ValidationError):
         ServerSettings(max_concurrent_jobs=17)
+
+
+def test_pipeline_prepare_workers_bounds_and_server_job_limit_are_independent() -> None:
+    from doc3gpp.settings.schema import PipelineSettings
+
+    with pytest.raises(ValidationError):
+        PipelineSettings(prepare_workers=0)
+    with pytest.raises(ValidationError):
+        PipelineSettings(prepare_workers=33)
+
+    settings = Settings(
+        pipeline={"prepare_workers": 4},
+        server={"max_concurrent_jobs": 1},
+    )
+    assert settings.pipeline.prepare_workers == 4
+    assert settings.server.max_concurrent_jobs == 1
 
 
 def test_progress_interval_seconds_default() -> None:

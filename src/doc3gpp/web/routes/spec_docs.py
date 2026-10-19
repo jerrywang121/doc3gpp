@@ -19,6 +19,7 @@ map to 422 with the handler message.
 # ruff: noqa: B008
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -341,7 +342,9 @@ async def spec_doc_search_query(
     )
     error: str | None = None
     try:
-        results = facade.search(text=text, semantic=semantic, filters=filters)
+        results = await asyncio.to_thread(
+            facade.search, text=text, semantic=semantic, filters=filters
+        )
     except SearchIndexCorruptError as exc:
         if format == "json":
             raise SearchIndexCorruptWebError(str(exc), resource="spec_doc") from exc

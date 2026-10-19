@@ -1307,6 +1307,14 @@ Options:
 - `--max-depth INT`: override the configured `tdoc_parse.max_ftp_depth`
   for a `--from-url` folder batch. Implies `--recursive`. Values must
   be between `0` and `10`; `0` scans the root folder only.
+- Parallelism: database-ID, `--from-url` folder and `--from-path` folder
+  batches share one service-level runner created once per CLI invocation.
+  Files are prepared concurrently by up to `[pipeline] prepare_workers`
+  workers (default `min(32, cpu_count + 4)`; config only, no flag); database
+  and URL writes go through one serialized writer, local folders are
+  in-memory. Discovery, output files, summaries and exit codes keep the
+  deterministic source order. Unavailable-on-FTP and oversized files are
+  skips; other errors are failures.
 - `--force`: when `--from-path` is a directory or `--from-url` is a
   folder, overwrite existing output files. Rejected for single file
   sources.

@@ -301,6 +301,12 @@ search_fanout_factor = 4
 # Requires the `[web]` pyproject extra
 # (`pip install "doc3gpp[web]"`) for fastapi + uvicorn + mcp.
 
+# [pipeline]
+# Shared TDoc preparation pool size for CLI batches and the web server.
+# Persistence is always a single serialized writer; pending capacity is
+# prepare_workers * 2. Range 1..32; default is min(32, cpu_count + 4).
+# prepare_workers = 8
+
 [server]
 # Master switch for the `doc3gpp server` sub-app.
 enabled = true

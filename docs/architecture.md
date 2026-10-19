@@ -742,6 +742,32 @@ disable it. Every `doc3gpp server` subcommand refuses to run while disabled.
   `error="orphaned_after_restart"` so the nav badge can't get stuck on
    a job the new process never claimed.
 
+### Cross-surface TDoc pipeline
+
+TDoc batch parsing uses one framework-neutral service runner
+(`services/tdoc_pipeline.py::TDocPipeline` over
+`services/pipeline_runtime.py::PipelineRuntime`). It is shared by database
+IDs, FTP-folder URLs and local folders. The web server builds one runtime per
+process (lifespan); each CLI batch invocation builds one runtime and drains it
+in `finally`. MCP only enqueues the existing jobs and has no runner of its own.
+
+- Preparation (download, conversion, parsing; no repository writes) runs in a
+  bounded pool of `[pipeline] prepare_workers`; pending capacity is
+  `prepare_workers * 2` (async callers wait without blocking the event loop).
+- Persistence (cover, TTCN, body-change, extract metadata, FTS/vector) runs on
+  a single serialized writer, one atomic command per item; a failing item does
+  not stop later items. Local-folder parsing has no writer (in-memory only).
+- Discovery (BFS FTP traversal, sorted local files) and result/output order
+  are deterministic and follow source order regardless of completion order.
+- One classifier maps `TDocNotYetOnFTPError` / `TDocTooLargeError` to
+  *skipped* and other errors to *failed*, with `ExceptionClass: message`
+  reasons keyed by TDoc id (DB) or normalized URL (folders).
+- Cache writes are atomic and eviction is guarded against concurrent tasks.
+  Search reads never take the writer lane (WAL).
+- Cancellation stops new submissions; submitted writes finish; the runtime
+  drains before HTTP client, cache and engines are disposed.
+- `server.max_concurrent_jobs` limits active jobs, not item preparation.
+
 ### Queued parse/sync pipeline concurrency
 
 The server creates one process-scoped `PipelineRuntime` for queued

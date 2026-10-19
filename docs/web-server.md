@@ -96,6 +96,14 @@ is unrelated and controls retention cleanup cadence only — flipping it
 
 ### Parse and sync concurrency
 
+The web process owns one `PipelineRuntime` sized by `[pipeline]
+prepare_workers` (default `min(32, cpu_count + 4)`, range 1..32). All queued
+TDoc jobs (`parse_tdocs`, `parse_tdoc_url` files and FTP folders) run through
+the same service runner: bounded parallel preparation plus one serialized
+writer. `server.max_concurrent_jobs` only limits active jobs. HTTP and MCP
+enqueue contracts and job envelopes are unchanged; folder results keep
+deterministic discovery order.
+
 Queued TDoc and spec parse/sync jobs use one shared process-wide pipeline.
 Downloads, DOCX conversion, parsing, extraction, and chunking run in a
 bounded preparation pool, while all database mutations and post-parse search
@@ -219,7 +227,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/sync/tdocs/all` | Enqueue `sync_all_tdocs`. |
 | POST | `/jobs/sync/specs` | Enqueue `sync_specs` (exactly one of `tsg` / `spec_id`). A `tsg` not present in the `tsgs` reference table is rejected (the job fails fast before any network work). |
 | POST | `/jobs/sync/testcases` | Enqueue `sync_testcases` (`{"force": bool}`, default `false`) → 202 job envelope. |
-| POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. |
+| POST | `/jobs/parse/tdocs` | Enqueue `parse_tdocs`. Completed results include `requested`, `successes`, `failures`, and `skipped` counts plus per-TDoc `failure_details` and `skipped_details` maps. |
 | POST | `/jobs/tdocs/index` | Enqueue unified TDoc FTS5/vector index maintenance. |
 | POST | `/jobs/spec-docs/index` | Enqueue unified spec-doc FTS5/vector index maintenance. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
@@ -233,6 +241,14 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 `parse_spec_docs` records the spec error in `result.failure_details` and the
 job log. A failed parse job has a populated `error` and result; a successful or
 skipped parse reports its corresponding one-spec result.
+
+`parse_tdocs` preserves per-TDoc reasons in both its queued parallel pipeline
+and synchronous fallback. Ordinary extraction errors are recorded in
+`failure_details` as `ExceptionClass: message`; unavailable-on-FTP and
+oversized-document errors are recorded in `skipped_details` with the same
+format. Skipped/failed keys are the TDoc id (database mode) or normalized FTP URL
+(folder mode). These item-level results do not change the existing job terminal-status
+policy.
 
 Append `?format=json` to any list/detail route to get the CLI-equivalent
 JSON. Append `?format=html` (or omit) for the browsable HTML view.

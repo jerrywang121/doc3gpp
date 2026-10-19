@@ -123,6 +123,14 @@ runtime data flow, and ORM schema.
 
 Workflows in one line (full prose in `docs/architecture.md`):
 
+- TDoc batch parsing (DB IDs, FTP folders, local folders; CLI and queued web
+  jobs) runs through `services/tdoc_pipeline.py::TDocPipeline` on a
+  `PipelineRuntime` (one per web process / CLI invocation): bounded parallel
+  preparation (`[pipeline] prepare_workers`, default
+  `min(32, cpu+4)`, pending `*2`) + one serialized writer, deterministic
+  discovery/output order, shared skipped/failed classifier. HTTP/MCP enqueue
+  contracts are unchanged; `server.max_concurrent_jobs` limits active jobs only.
+
 - `doc3gpp testcase sync [--force]` → `TestCaseService.sync` →
   `list_history_files` → `select_latest` (max `(year, week,
   revision)`) → `fetch_testcase_zip` → `extract_workbook` →

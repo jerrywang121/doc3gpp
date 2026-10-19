@@ -13,6 +13,7 @@ from pathlib import Path
 
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
+    PreparedSpecDocParse,
     SpecDocBatchResult,
     SpecDocChunk,
     SpecDocNoDocxError,
@@ -257,13 +258,53 @@ class SpecDocService:
         force: bool = False,
     ) -> SpecDocSource:
         """Fetch-if-missing, convert, chunk, and index one ``(spec_id, version)`` pair."""
-        src = self.fetch(spec_id, release=release, version=version, force=force)
-        if src.parsed_at is not None and not force:
-            return src
-        raw = self._read_zip_cache(spec_id, src.version)
+        if force:
+            rows = self._versions(spec_id)
+            ver = resolve_spec_doc_version(rows, release, version)
+            if self._doc_repo.get_source(spec_id, ver.version) is not None:
+                # Preserve the synchronous API's retry semantics: a failed
+                # forced download leaves the old parsed marker cleared. The
+                # queued pipeline calls prepare_parse directly and never
+                # performs this repository mutation during preparation.
+                self._doc_repo.invalidate_parse_state(spec_id, ver.version)
+        prepared = self.prepare_parse(
+            spec_id, release=release, version=version, force=force
+        )
+        if isinstance(prepared, SpecDocSource):
+            return prepared
+        return self.persist_prepared_parse(prepared)
+
+    def prepare_parse(
+        self,
+        spec_id: str,
+        *,
+        release: str | None = None,
+        version: str | None = None,
+        force: bool = False,
+    ) -> PreparedSpecDocParse | SpecDocSource:
+        """Fetch and parse one document without mutating repositories."""
+        rows = self._versions(spec_id)
+        ver = resolve_spec_doc_version(rows, release, version)
+        existing = self._doc_repo.get_source(spec_id, ver.version)
+        if existing is not None and existing.parsed_at is not None and not force:
+            return existing
+
+        download_required = force or not self._zip_cache_exists(spec_id, ver.version)
+        if download_required:
+            raw = self._fetcher(ver.ftp_url)
+            limit_kb = self._settings.spec_doc.max_zip_size_kb
+            if limit_kb > 0 and len(raw) > limit_kb * 1024:
+                raise SpecDocTooLargeError(
+                    f"zip for {spec_id}@{ver.version} exceeds max_zip_size_kb "
+                    f"({limit_kb} KB, got {len(raw)} bytes)"
+                )
+            self._write_zip_cache(spec_id, ver.version, raw)
+        else:
+            raw = self._read_zip_cache(spec_id, ver.version)
+
         entries = list_spec_docx(raw)
         if not entries:
-            raise SpecDocNoDocxError(f"zip for {spec_id}@{src.version} contains no .docx files")
+            raise SpecDocNoDocxError(f"zip for {spec_id}@{ver.version} contains no .docx files")
         files = [
             SpecDocFileBlocks(
                 file_order=i,
@@ -274,15 +315,13 @@ class SpecDocService:
         ]
         ordered = order_spec_files(files)
         toc_entries, toc_files = extract_spec_toc(ordered)
-        self._doc_repo.upsert_toc(
-            SpecDocToc(
-                spec_id=spec_id,
-                version=src.version,
-                release=src.release,
-                entries=toc_entries,
-                files=toc_files,
-                docx_count=len(entries),
-            )
+        toc = SpecDocToc(
+            spec_id=spec_id,
+            version=ver.version,
+            release=ver.release,
+            entries=toc_entries,
+            files=toc_files,
+            docx_count=len(entries),
         )
         overlap = self._settings.spec_doc.chunk_overlap
         if overlap is None:
@@ -299,12 +338,47 @@ class SpecDocService:
                     source_file=f.source_file,
                 )
             )
-        self._doc_repo.replace_chunks(spec_id, src.version, release=src.release, drafts=drafts)
-        self._write_markdown_cache(spec_id, src.version, ordered)
-        self._doc_repo.record_parsed(spec_id, src.version, chunk_count=len(drafts))
-        self._index_after_parse(spec_id, src.version)
-        self._embed_after_parse(spec_id, src.version, drafts)
-        return self._doc_repo.get_source(spec_id, src.version)
+        source = existing or SpecDocSource(
+            spec_id=spec_id,
+            version=ver.version,
+            release=ver.release,
+            ftp_url=ver.ftp_url,
+            docx_count=len(entries),
+        )
+        return PreparedSpecDocParse(
+            source=source,
+            toc=toc,
+            drafts=tuple(drafts),
+            ordered_files=tuple(ordered),
+            download_required=download_required,
+            invalidate_parse_state=force and existing is not None,
+        )
+
+    def persist_prepared_parse(self, prepared: PreparedSpecDocParse) -> SpecDocSource:
+        """Persist one prepared parse as the single logical writer operation."""
+        source = prepared.source
+        if prepared.invalidate_parse_state:
+            self._doc_repo.invalidate_parse_state(source.spec_id, source.version)
+        if prepared.download_required:
+            self._doc_repo.record_download(
+                source.spec_id,
+                source.version,
+                release=source.release,
+                ftp_url=source.ftp_url,
+                docx_count=source.docx_count,
+            )
+        self._doc_repo.upsert_toc(prepared.toc)
+        self._doc_repo.replace_chunks(
+            source.spec_id,
+            source.version,
+            release=source.release,
+            drafts=list(prepared.drafts),
+        )
+        self._write_markdown_cache(source.spec_id, source.version, list(prepared.ordered_files))
+        self._doc_repo.record_parsed(source.spec_id, source.version, chunk_count=len(prepared.drafts))
+        self._index_after_parse(source.spec_id, source.version)
+        self._embed_after_parse(source.spec_id, source.version, list(prepared.drafts))
+        return self._doc_repo.get_source(source.spec_id, source.version)
 
     def parse_many(
         self,

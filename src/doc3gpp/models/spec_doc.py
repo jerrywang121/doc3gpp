@@ -44,6 +44,18 @@ class SpecDocSource:
 
 
 @dataclass(slots=True, frozen=True)
+class PreparedSpecDocParse:
+    """Immutable hand-off from spec-document preparation to the DB writer."""
+
+    source: SpecDocSource
+    toc: SpecDocToc
+    drafts: tuple[ChunkDraft, ...]
+    ordered_files: tuple[object, ...]
+    download_required: bool = False
+    invalidate_parse_state: bool = False
+
+
+@dataclass(slots=True, frozen=True)
 class SpecDocTocEntry:
     level: int
     section_no: str | None

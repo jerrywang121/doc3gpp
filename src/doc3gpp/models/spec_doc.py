@@ -53,6 +53,7 @@ class PreparedSpecDocParse:
     ordered_files: tuple[object, ...]
     download_required: bool = False
     invalidate_parse_state: bool = False
+    record_source: bool = False
 
 
 @dataclass(slots=True, frozen=True)

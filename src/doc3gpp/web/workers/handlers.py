@@ -24,7 +24,12 @@ from doc3gpp.cli_auto_sync import (
 )
 from doc3gpp.models.index import IndexRequest
 from doc3gpp.models.jobs import Job, JobKind, JSONValue
-from doc3gpp.models.spec_doc import SpecDocBatchResult, SpecDocSelectionError, SpecDocSource
+from doc3gpp.models.spec_doc import (
+    SpecDocBatchResult,
+    SpecDocSelectionError,
+    SpecDocSource,
+    SpecDocTooLargeError,
+)
 from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult
 from doc3gpp.parsers.direct_extractor import (
     is_3gpp_file_url,
@@ -629,7 +634,16 @@ async def _parse_spec_docs(
                 )
             )
             if isinstance(prepared, SpecDocSource):
-                source = prepared
+                # prepare_parse only short-circuits on already-parsed pairs
+                # without force; mirror parse_many's identity-skip reason.
+                result = SpecDocBatchResult(
+                    skipped={
+                        spec_id: (
+                            f"{spec_id}@{prepared.version} already parsed; "
+                            "use --force to re-parse"
+                        )
+                    }
+                )
             else:
                 source = await _await_future(
                     services.pipeline.submit_persist(
@@ -638,9 +652,12 @@ async def _parse_spec_docs(
                         prepared,
                     )
                 )
-            result = SpecDocBatchResult(successes={spec_id: source})
-        except Exception as exc:  # noqa: BLE001 - preserve batch failure envelope
-            result = SpecDocBatchResult(failures={spec_id: f"{type(exc).__name__}: {exc}"})
+                result = SpecDocBatchResult(successes={spec_id: source})
+                on_progress("spec_done", {"spec_id": spec_id, "version": source.version})
+        except SpecDocTooLargeError as exc:
+            result = SpecDocBatchResult(skipped={spec_id: str(exc)})
+        except Exception as exc:  # noqa: BLE001 - preserve parse_many failure envelope
+            result = SpecDocBatchResult(failures={spec_id: str(exc)})
         finally:
             permit.release()
     if cancel_event.is_set():

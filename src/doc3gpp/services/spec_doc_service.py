@@ -352,6 +352,7 @@ class SpecDocService:
             ordered_files=tuple(ordered),
             download_required=download_required,
             invalidate_parse_state=force and existing is not None,
+            record_source=existing is None,
         )
 
     def persist_prepared_parse(self, prepared: PreparedSpecDocParse) -> SpecDocSource:
@@ -359,7 +360,7 @@ class SpecDocService:
         source = prepared.source
         if prepared.invalidate_parse_state:
             self._doc_repo.invalidate_parse_state(source.spec_id, source.version)
-        if prepared.download_required:
+        if prepared.download_required or prepared.record_source:
             self._doc_repo.record_download(
                 source.spec_id,
                 source.version,

@@ -66,7 +66,7 @@ The web server is configured under `[server]` and `[mcp]` in `doc3gpp.toml`
 enabled = true             # master switch; set false to disable server commands
 host = "127.0.0.1"
 port = 13999
-max_concurrent_jobs = 1    # how many background jobs run at once
+max_concurrent_jobs = 3    # how many background jobs run at once
 poll_interval_seconds = 1  # how often the worker checks for new QUEUED jobs
 progress_interval_seconds = 10  # min gap between periodic progress log lines for long-running jobs
 cleanup_interval_seconds = 300   # how often the worker purges terminal rows

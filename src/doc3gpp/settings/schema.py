@@ -748,7 +748,7 @@ class ServerSettings(BaseModel):
     )
     host: str = Field(default="127.0.0.1")
     port: int = Field(default=13999, ge=1, le=65535)
-    max_concurrent_jobs: int = Field(default=1, ge=1, le=16)
+    max_concurrent_jobs: int = Field(default=3, ge=1, le=16)
     poll_interval_seconds: float = Field(
         default=1.0,
         ge=0.05,

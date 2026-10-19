@@ -17,6 +17,7 @@ def test_server_defaults() -> None:
     assert settings.server.host == "127.0.0.1"
     assert settings.server.port == 13999
     assert settings.server.enabled is True
+    assert settings.server.max_concurrent_jobs == 3
 
 
 def test_mcp_defaults() -> None:

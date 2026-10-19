@@ -215,6 +215,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
         state.jobs = handle
+        state.services.pipeline = handle.pipeline
         worker = JobWorker(state)
         handle.task = asyncio.create_task(worker.run())
         try:

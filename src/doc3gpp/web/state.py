@@ -181,6 +181,7 @@ class ServiceContainer:
     spec_doc_search_facade: SpecDocSearchFacade | None = None
     tdoc_index: TDocIndexService | None = None
     spec_doc_index: SpecDocIndexService | None = None
+    pipeline: PipelineRuntime | None = None
 
 
 @dataclass(slots=True)

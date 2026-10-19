@@ -324,3 +324,218 @@ def test_shared_runtime_serializes_persistence_across_parse_jobs():
         pipeline.shutdown()
 
     assert max_active_writes == 1
+
+
+def _gated_runtime_services(pipeline, tdoc_ids, prepare, persist):
+    return SimpleNamespace(
+        pipeline=pipeline,
+        tdoc_repo=SimpleNamespace(
+            list=lambda **_kwargs: [SimpleNamespace(tdoc_id=i) for i in tdoc_ids]
+        ),
+        tdoc_cr=SimpleNamespace(
+            prepare_extract=prepare,
+            persist_prepared_extract=persist,
+        ),
+    )
+
+
+def test_two_jobs_on_one_runtime_never_overlap_writer_callbacks():
+    pipeline = PipelineRuntime(prepare_workers=2)
+    first_in_writer = threading.Event()
+    release_first = threading.Event()
+    second_prepared = threading.Event()
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    order: list[str] = []
+
+    def persist(prepared):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            order.append(f"start:{prepared}")
+        try:
+            if prepared == "A":
+                first_in_writer.set()
+                # Job B is fully prepared and queued behind the blocked writer.
+                assert second_prepared.wait(timeout=5)
+                assert release_first.wait(timeout=5)
+            return prepared
+        finally:
+            with lock:
+                order.append(f"end:{prepared}")
+                active -= 1
+
+    def prepare(tdoc_id, **_kwargs):
+        if tdoc_id == "B":
+            assert first_in_writer.wait(timeout=5)
+            second_prepared.set()
+        return tdoc_id
+
+    async def run():
+        async def job(tdoc_id):
+            return await _parse_tdocs(
+                _job(),
+                _gated_runtime_services(pipeline, [tdoc_id], prepare, persist),
+                Settings(),
+                progress=lambda *_a, **_k: None,
+                cancel_event=asyncio.Event(),
+            )
+
+        task_a = asyncio.create_task(job("A"))
+        task_b = asyncio.create_task(job("B"))
+        while not second_prepared.is_set():
+            await asyncio.sleep(0)
+        release_first.set()
+        return await asyncio.gather(task_a, task_b)
+
+    try:
+        results = asyncio.run(run())
+    finally:
+        release_first.set()
+        pipeline.shutdown()
+
+    assert [r["successes"] for r in results] == [1, 1]
+    assert max_active == 1
+    assert order == ["start:A", "end:A", "start:B", "end:B"]
+
+
+def test_web_cancellation_and_shutdown_drain_submitted_writer_work():
+    pipeline = PipelineRuntime(prepare_workers=1, max_pending=1)
+    writer_started = threading.Event()
+    release_writer = threading.Event()
+    persisted: list[str] = []
+    prepared_ids: list[str] = []
+    cancel_event = asyncio.Event()
+
+    def prepare(tdoc_id, **_kwargs):
+        prepared_ids.append(tdoc_id)
+        return tdoc_id
+
+    def persist(prepared):
+        writer_started.set()
+        assert release_writer.wait(timeout=5)
+        persisted.append(prepared)
+        return prepared
+
+    async def run():
+        task = asyncio.create_task(
+            _parse_tdocs(
+                _job(),
+                _gated_runtime_services(
+                    pipeline, ["A", "B", "C"], prepare, persist
+                ),
+                Settings(),
+                progress=lambda *_a, **_k: None,
+                cancel_event=cancel_event,
+            )
+        )
+        while not writer_started.is_set():
+            await asyncio.sleep(0)
+        cancel_event.set()
+        release_writer.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return "cancelled"
+        return "finished"
+
+    try:
+        outcome = asyncio.run(run())
+    finally:
+        release_writer.set()
+        pipeline.shutdown()
+
+    assert outcome == "cancelled"
+    # The already-submitted write drained; nothing after cancellation started.
+    assert persisted == ["A"]
+    assert prepared_ids == ["A"]
+    # Shutdown after cancellation leaves no running writer lane.
+    assert pipeline._persist._shutdown is True
+
+
+def _done(tdoc_id):
+    from doc3gpp.services.tdoc_cr_service import ExtractResult
+
+    return ExtractResult(
+        details=SimpleNamespace(tdoc_id=tdoc_id), extract_meta=None, from_cache=False
+    )
+
+
+def test_cli_service_and_web_classify_skips_and_failures_identically():
+    from doc3gpp.services.tdoc_cr_service import TDocCrService
+
+    ids = ["OK", "BAD", "FTP", "BIG"]
+
+    def prepare(tdoc_id, **_kwargs):
+        if tdoc_id == "BAD":
+            raise ValueError("bad parse")
+        if tdoc_id == "FTP":
+            raise TDocNotYetOnFTPError(tdoc_id)
+        if tdoc_id == "BIG":
+            raise TDocTooLargeError(source=tdoc_id, size=10, limit=5)
+        return tdoc_id
+
+    service = object.__new__(TDocCrService)
+    service.prepare_extract = prepare
+    service.persist_prepared_extract = _done
+
+    batch = service.extract_many(ids)
+    assert batch.failures == {"BAD": "ValueError: bad parse"}
+    assert set(batch.skipped) == {"FTP", "BIG"}
+
+    pipeline = PipelineRuntime(prepare_workers=2)
+    services = _gated_runtime_services(
+        pipeline, ids, prepare, _done
+    )
+
+    async def run():
+        return await _parse_tdocs(
+            _job(),
+            services,
+            Settings(),
+            progress=lambda *_a, **_k: None,
+            cancel_event=asyncio.Event(),
+        )
+
+    try:
+        web = asyncio.run(run())
+    finally:
+        pipeline.shutdown()
+
+    assert web["failure_details"] == batch.failures
+    assert web["skipped_details"] == batch.skipped
+    assert web["skipped"] == len(batch.skipped)
+    assert web["failures"] == len(batch.failures)
+
+
+def test_extract_many_duplicates_run_after_first_and_progress_is_monotonic():
+    from doc3gpp.services.tdoc_cr_service import TDocCrService
+
+    persisted: list[str] = []
+    calls: list[str] = []
+
+    def prepare(tdoc_id, **_kwargs):
+        calls.append(tdoc_id)
+        return tdoc_id
+
+    def persist(prepared):
+        persisted.append(prepared)
+        return _done(prepared)
+
+    service = object.__new__(TDocCrService)
+    service.prepare_extract = prepare
+    service.persist_prepared_extract = persist
+    messages: list[str] = []
+
+    service.extract_many(
+        ["A", "B", "A"],
+        on_progress=messages.append,
+    )
+
+    assert calls[-1] == "A" and sorted(calls) == ["A", "A", "B"]
+    assert persisted[-1] == "A"
+    assert messages[-1] == "parsed 3/3 TDocs"
+    counts = [int(m.split()[1].split("/")[0]) for m in messages]
+    assert counts == sorted(counts) == [1, 2, 3]

@@ -817,10 +817,14 @@ class TDocCrService:
             runtime = PipelineRuntime(prepare_workers=1)
             runner = TDocPipeline(runtime)
 
+        progress_offset = 0
+        progress_total = len(items) + len(repeats)
+
         def report(progress: PipelineProgress) -> None:
             if on_progress is not None:
                 on_progress(
-                    f"parsed {progress.completed}/{progress.total} TDocs"
+                    f"parsed {progress_offset + progress.completed}"
+                    f"/{progress_total} TDocs"
                 )
 
         try:
@@ -846,6 +850,7 @@ class TDocCrService:
                 # Repeated ids run after the first occurrences are persisted,
                 # so they observe the stored state (cache hit unless forced
                 # semantics apply) exactly as sequential execution would.
+                progress_offset = len(items)
                 outcomes.extend(run(repeats, force=False))
         finally:
             if owns_runner and runtime is not None:

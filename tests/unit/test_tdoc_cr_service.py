@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import io
+import threading
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -27,11 +28,16 @@ from doc3gpp.models.tdoc_cr import (
 )
 from doc3gpp.parsers.cr_parser import extract_docx_from_zip
 from doc3gpp.scraping.cache import TDocCache
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.services.tdoc_cr_service import (
+    BatchExtractResult,
+    ExtractResult,
     PreparedDirectTDoc,
+    PreparedTDocExtract,
     TDocCrService,
     _wrap_markdown_zip,
 )
+from doc3gpp.services.tdoc_pipeline import TDocPipeline
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
@@ -905,7 +911,7 @@ def test_extract_many_routes_too_large_to_skipped(tmp_path) -> None:
     def _boom(tdoc_id: str, *, force: bool = False, full: bool = False):
         raise TDocTooLargeError(source=tdoc_id, size=10, limit=5)
 
-    service.extract = _boom  # type: ignore[method-assign]
+    service.prepare_extract = _boom  # type: ignore[method-assign]
 
     batch = service.extract_many(["R5-260100", "R5-260101"])
     assert set(batch.failures) == set()
@@ -935,7 +941,7 @@ def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
               max_tdoc_size_bytes: int | None = None):
         raise TDocTooLargeError(source=url, size=99, limit=10)
 
-    service.extract_from_url = _boom  # type: ignore[method-assign]
+    service.prepare_from_url = _boom  # type: ignore[method-assign]
 
     batch = service.extract_from_url_batch(
         "https://www.3gpp.org/ftp/folder/", max_depth=0,
@@ -989,7 +995,7 @@ def test_extract_from_url_batch_is_cancelled_aborts_batch(tmp_path) -> None:
 
         return DirectParseResult(tdoc_id=None, source_url=url)
 
-    service.extract_from_url = _extract  # type: ignore[assignment]
+    service.prepare_from_url = _extract  # type: ignore[assignment]
 
     file_urls = [
         f"https://www.3gpp.org/ftp/R5s26000{i}.docx" for i in range(5)
@@ -1012,3 +1018,140 @@ def test_extract_from_url_batch_is_cancelled_aborts_batch(tmp_path) -> None:
 
     # First file runs, second observes the cancel and aborts.
     assert len(seen) < 5, f"expected cancel to short-circuit; saw {seen}"
+
+
+def test_extract_many_uses_runner_for_parallel_prepare_and_serial_persist(
+    tmp_path: Path,
+) -> None:
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, _tdoc_repo = _build_service(
+        tmp_path,
+    )
+    runtime = PipelineRuntime(prepare_workers=2, max_pending=4)
+    runner = TDocPipeline(runtime)
+    prepare_barrier = threading.Barrier(2)
+    first_writer_started = threading.Event()
+    second_writer_started = threading.Event()
+    release_first_writer = threading.Event()
+    writer_lock = threading.Lock()
+    active_writers = 0
+    max_active_writers = 0
+    writer_calls = 0
+    result_box: list[BatchExtractResult] = []
+    error_box: list[BaseException] = []
+
+    def prepared(tdoc_id: str) -> PreparedTDocExtract:
+        return PreparedTDocExtract(
+            details=_dummy_details(tdoc_id),
+            ttcn=None,
+            changes=None,
+            extract_meta=TDocExtractMeta(
+                ftp_url=f"stored/{tdoc_id}.zip",
+                tdoc_id=tdoc_id,
+                cache_file=f"{tdoc_id}.zip",
+                doc_filename=f"{tdoc_id}.docx",
+            ),
+        )
+
+    def prepare(raw_id: str, *, force: bool = False, full: bool = False):
+        del force, full
+        prepare_barrier.wait(timeout=2)
+        return prepared(raw_id.strip())
+
+    def persist(value: PreparedTDocExtract) -> ExtractResult:
+        nonlocal active_writers, max_active_writers, writer_calls
+        with writer_lock:
+            writer_calls += 1
+            active_writers += 1
+            max_active_writers = max(max_active_writers, active_writers)
+            call_number = writer_calls
+        try:
+            if call_number == 1:
+                first_writer_started.set()
+                assert release_first_writer.wait(timeout=2)
+            else:
+                second_writer_started.set()
+            return ExtractResult(
+                details=value.details,
+                extract_meta=value.extract_meta,
+                from_cache=False,
+            )
+        finally:
+            with writer_lock:
+                active_writers -= 1
+
+    service.prepare_extract = prepare  # type: ignore[method-assign]
+    service.persist_prepared_extract = persist  # type: ignore[method-assign]
+
+    def run() -> None:
+        try:
+            result_box.append(
+                service.extract_many(
+                    [" R5s260001 ", "R5s260002"],
+                    runner=runner,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - assertion aid
+            error_box.append(exc)
+
+    thread = threading.Thread(target=run)
+    try:
+        thread.start()
+        assert first_writer_started.wait(timeout=2)
+        assert not second_writer_started.is_set()
+        release_first_writer.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert not error_box
+        assert max_active_writers == 1
+        assert set(result_box[0].successes) == {"R5s260001", "R5s260002"}
+    finally:
+        release_first_writer.set()
+        thread.join(timeout=2)
+        runtime.shutdown()
+
+
+def test_extract_many_writer_failure_does_not_stop_later_item(tmp_path: Path) -> None:
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, _tdoc_repo = _build_service(
+        tmp_path,
+    )
+    runtime = PipelineRuntime(prepare_workers=2, max_pending=4)
+    runner = TDocPipeline(runtime)
+    persisted: list[str] = []
+
+    def prepared(tdoc_id: str) -> PreparedTDocExtract:
+        return PreparedTDocExtract(
+            details=_dummy_details(tdoc_id),
+            ttcn=None,
+            changes=None,
+            extract_meta=TDocExtractMeta(
+                ftp_url=f"stored/{tdoc_id}.zip",
+                tdoc_id=tdoc_id,
+                cache_file=f"{tdoc_id}.zip",
+                doc_filename=f"{tdoc_id}.docx",
+            ),
+        )
+
+    def prepare(raw_id: str, *, force: bool = False, full: bool = False):
+        del force, full
+        return prepared(raw_id)
+
+    def persist(value: PreparedTDocExtract) -> ExtractResult:
+        persisted.append(value.details.tdoc_id)
+        if value.details.tdoc_id == "first":
+            raise RuntimeError("writer failed")
+        return ExtractResult(
+            details=value.details,
+            extract_meta=value.extract_meta,
+            from_cache=False,
+        )
+
+    service.prepare_extract = prepare  # type: ignore[method-assign]
+    service.persist_prepared_extract = persist  # type: ignore[method-assign]
+    try:
+        result = service.extract_many(["first", "later"], runner=runner)
+    finally:
+        runtime.shutdown()
+
+    assert persisted == ["first", "later"]
+    assert result.successes["later"].details.tdoc_id == "later"
+    assert result.failures == {"first": "RuntimeError: writer failed"}

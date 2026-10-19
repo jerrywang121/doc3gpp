@@ -66,7 +66,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_cr import (
@@ -110,6 +110,8 @@ from doc3gpp.scraping.tdoc_zip_source import (
     download_tdoc_zip,
     resolve_download_url,
 )
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
+from doc3gpp.services.tdoc_pipeline import PipelineItem, PipelineProgress, TDocPipeline
 
 # Re-exported so callers can catch ``TDocTooLargeError`` from a single
 # import path (the service layer) without depending on the scraping
@@ -246,6 +248,14 @@ def _read_cached_markdown_path(cache_file: str, cache_root: Path) -> str:
 # ---------------------------------------------------------------------------
 # Public exceptions raised by the service.
 # ---------------------------------------------------------------------------
+
+
+class _DirectPipelineError(BaseException):
+    """Preserve a direct one-item exception through the runner."""
+
+    def __init__(self, cause: Exception) -> None:
+        self.cause = cause
+        super().__init__(str(cause))
 
 
 class TDocTypeUnsupportedError(ValueError):
@@ -780,80 +790,72 @@ class TDocCrService:
         full: bool = False,
         on_progress: Callable[[str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
+        runner: TDocPipeline | None = None,
     ) -> BatchExtractResult:
-        """Extract a batch of TDocs and bundle successes with per-id failure reasons.
+        """Extract a batch through the ordered shared preparation pipeline.
 
-        Failures are logged at ``WARNING`` level (with the full
-        traceback) and recorded in :attr:`BatchExtractResult.failures`
-        keyed by the normalised tdoc_id, so a single broken id doesn't
-        abort the rest of the batch. The CLI surfaces the short reason
-        inline so the operator can tell which step failed without
-        tailing the log file.
-
-        Rows whose ``ftp_url`` is NULL (the 3GPP upload pipeline
-        hasn't propagated a final URL yet) are routed to the skip
-        bucket (:attr:`BatchExtractResult.skipped`) instead of
-        :attr:`failures` — "FTP is lagging" is not an error from our
-        side, and these IDs deserve a separate CLI summary line so
-        the operator doesn't see them as failures.
-
-        Args:
-            tdoc_ids: Iterable of TDoc ids to extract. Strings that
-                fail the shape guard, are missing from the ``tdocs``
-                table, or aren't CR type are logged and skipped.
-            force: Forwarded to :meth:`extract`. When ``True`` every
-                TDoc is re-fetched and re-parsed from scratch.
-            full: Forwarded to :meth:`extract` for every id in the
-                batch. See :meth:`extract` for the TTCN
-                ``before_change`` / ``after_change`` / ``new_change``
-                semantics.
-
-        Returns:
-            A :class:`BatchExtractResult` whose ``successes`` dict maps
-            the canonical tdoc_id to its :class:`ExtractResult`,
-            whose ``failures`` dict maps the normalised tdoc_id to a
-            short reason string (``"{ExceptionClassName}: {exc}"``),
-            and whose ``skipped`` dict maps the normalised tdoc_id to
-            a short reason string for ids whose ``ftp_url`` is NULL
-            (the 3GPP upload pipeline hasn't propagated yet). The
-            skip bucket is surfaced separately by the CLI so the
-            operator can tell "FTP is lagging" apart from "this
-            batch had real failures".
+        Preparation runs in the runner's bounded pool and the prepared
+        repository writes run on its single persistence lane. When no runner
+        is supplied, a one-worker compatibility runtime is created and
+        drained before returning so existing synchronous callers retain the
+        same lifecycle and result contract.
         """
+        source_ids = list(tdoc_ids)
+        items = [
+            PipelineItem(key=raw_id.strip(), value=raw_id)
+            for raw_id in source_ids
+        ]
+        owns_runner = runner is None
+        runtime: PipelineRuntime | None = None
+        if runner is None:
+            runtime = PipelineRuntime(prepare_workers=1)
+            runner = TDocPipeline(runtime)
+
+        def report(progress: PipelineProgress) -> None:
+            if on_progress is not None:
+                on_progress(
+                    f"parsed {progress.completed}/{progress.total} TDocs"
+                )
+
+        try:
+            outcomes = runner.run_sync(
+                items,
+                lambda raw_id: self.prepare_extract(
+                    raw_id,
+                    force=force,
+                    full=full,
+                ),
+                persist=cast(
+                    Callable[[object], object],
+                    self.persist_prepared_extract,
+                ),
+                is_complete=lambda value: isinstance(value, ExtractResult),
+                is_cancelled=is_cancelled,
+                on_progress=report,
+            )
+        finally:
+            if owns_runner and runtime is not None:
+                runtime.shutdown()
+
         successes: dict[str, ExtractResult] = {}
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
-        tdoc_ids = list(tdoc_ids)
-        total = len(tdoc_ids)
-        for i, raw_id in enumerate(tdoc_ids, start=1):
-            if is_cancelled is not None and is_cancelled():
-                raise asyncio.CancelledError()
-            if on_progress is not None:
-                on_progress(f"parsed {i}/{total} TDocs")
-            try:
-                result = self.extract(raw_id, force=force, full=full)
-            except TDocNotYetOnFTPError as exc:
-                logger.info("Skipping TDoc %r: %s", raw_id, exc)
-                skipped[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
-                continue
-            except TDocTooLargeError as exc:
-                logger.info(
-                    "Skipping TDoc %r: %s bytes exceeds max_tdoc_size_kb limit (%s bytes)",
-                    raw_id, exc.size, exc.limit,
-                )
-                skipped[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
-                continue
-            except (ValueError, LookupError, TDocZipDownloadError, TypeError) as exc:
-                logger.warning(
-                    "Failed to extract TDoc %r: %s",
-                    raw_id,
-                    exc,
-                    exc_info=True,
-                )
-                failures[raw_id.strip()] = f"{type(exc).__name__}: {exc}"
-                continue
-            successes[result.details.tdoc_id] = result
-        return BatchExtractResult(successes=successes, failures=failures, skipped=skipped)
+        for outcome in outcomes:
+            reason = outcome.reason or ""
+            if outcome.status == "success":
+                result = cast(ExtractResult, outcome.value)
+                successes[result.details.tdoc_id] = result
+            elif outcome.status == "skipped":
+                logger.info("Skipping TDoc %r: %s", outcome.key, reason)
+                skipped[outcome.key] = reason
+            else:
+                logger.warning("Failed to extract TDoc %r: %s", outcome.key, reason)
+                failures[outcome.key] = reason
+        return BatchExtractResult(
+            successes=successes,
+            failures=failures,
+            skipped=skipped,
+        )
 
     # ------------------------------------------------------------------
     # Direct-parse path: ``tdoc parse --from-path/--from-url``
@@ -866,57 +868,58 @@ class TDocCrService:
         force: bool = False,
         full: bool = False,
         max_tdoc_size_bytes: int | None = None,
+        runner: TDocPipeline | None = None,
     ) -> DirectParseResult:
-        """Download ``url`` and return a :class:`DirectParseResult`.
+        """Download and parse one URL through the shared one-item pipeline."""
+        owns_runner = runner is None
+        runtime: PipelineRuntime | None = None
+        if runner is None:
+            runtime = PipelineRuntime(prepare_workers=1)
+            runner = TDocPipeline(runtime)
 
-        Branches on :func:`is_3gpp_ftp_url`:
+        def prepare_one(value: str) -> PreparedDirectTDoc | DirectParseResult:
+            try:
+                return self.prepare_from_url(
+                    value,
+                    force=force,
+                    full=full,
+                    max_tdoc_size_bytes=max_tdoc_size_bytes,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # The batch runner intentionally classifies exceptions into
+                # result buckets. A direct one-item API must retain its
+                # established exception contract, so carry the original
+                # exception through the runner's fatal path.
+                raise _DirectPipelineError(exc) from exc
 
-        - **3GPP-URL path**: behaves like the regular
-          :meth:`extract` happy path (cache + DB writes) but uses
-          the URL-derived cache key (via
-          :func:`derive_cache_file`) and a FK probe against
-          ``tdocs`` so the FK on ``tdoc_extracts`` / ``tdoc_cr_cover_page``
-          is never violated. The ``force`` flag is forwarded to
-          :func:`download_tdoc_zip`; the per-TDoc id is auto-extracted
-          from the URL's basename. The ``--format raw`` branch
-          (downstream of this method) writes the ``tdoc_extracts``
-          row but skips the ``tdoc_cr_cover_page`` row.
-        - **Other URL path**: in-memory parse only; the cache and the
-          database are never touched.
+        def persist_one(prepared: PreparedDirectTDoc) -> DirectParseResult:
+            try:
+                return self.persist_prepared_url(prepared)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                raise _DirectPipelineError(exc) from exc
 
-        Args:
-            url: An HTTP(S) URL. Canonical 3GPP FTP paths must use HTTPS
-                (the bare ``www.3gpp.org/ftp/`` form is normalized); other
-                schemes raise ``ValueError`` and should be downloaded out
-                of band for ``--from-path``.
-            force: When ``True`` on the 3GPP-URL path, skip the DB
-                short-circuit probe and re-render markdown (bypassing
-                the markdown cache). The on-disk zip is **always**
-                re-downloaded from ``url`` in the 3GPP-URL path
-                regardless of ``force`` — the direct-parse helper
-                does not consult the zip cache, it overwrites the
-                ``zips/<cache_file>`` slot on every call so the
-                caller always sees fresh bytes. The
-                ``tdoc_cr_cover_page`` / ``tdoc_extracts`` rows are
-                always re-upserted on a 3GPP-URL call.
-            full: Forwarded to :func:`parse_cr_details` as
-                ``full=True`` for the TTCN corrections sub-parser.
+        try:
+            try:
+                outcomes = runner.run_sync(
+                    [PipelineItem(key=url, value=url)],
+                    prepare_one,
+                    persist=cast(Callable[[object], object], persist_one),
+                    is_complete=lambda value: isinstance(value, DirectParseResult),
+                )
+            except _DirectPipelineError as exc:
+                raise exc.cause
+        finally:
+            if owns_runner and runtime is not None:
+                runtime.shutdown()
 
-        Returns:
-            A :class:`DirectParseResult` describing which cache +
-            DB writes landed. Never raises for FK misses — the
-            caller is expected to print the warning and emit the
-            parsed record to stdout.
-        """
-        prepared = self.prepare_from_url(
-            url,
-            force=force,
-            full=full,
-            max_tdoc_size_bytes=max_tdoc_size_bytes,
-        )
-        if isinstance(prepared, DirectParseResult):
-            return prepared
-        return self.persist_prepared_url(prepared)
+        outcome = outcomes[0]
+        if outcome.status != "success":
+            raise RuntimeError(outcome.reason or "direct TDoc parse failed")
+        return cast(DirectParseResult, outcome.value)
 
     def prepare_from_url(
         self,
@@ -1050,70 +1053,71 @@ class TDocCrService:
         max_tdoc_size_bytes: int | None = None,
         on_progress: Callable[[str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
+        runner: TDocPipeline | None = None,
     ) -> DirectParseBatchResult:
-        """Batch-parse every matching ``.docx``/``.zip`` under a 3GPP FTP folder.
-
-        The URL is probed once. If it points to a single file,
-        :class:`NotAFolderError` is raised and the caller should fall back
-        to :meth:`extract_from_url`. If it is a folder, the listing is
-        scanned breadth-first up to ``max_depth`` levels and each matching
-        file URL is handed to :meth:`extract_from_url`, preserving the
-        existing DB/cache behavior for FK hits and the in-memory warning
-        path for FK misses.
-
-        Args:
-            url: A URL that passes :func:`is_3gpp_ftp_url`.
-            max_depth: Maximum folder levels to descend. ``0`` means the
-                root folder only.
-            force: Forwarded to :meth:`extract_from_url` for every file.
-            full: Forwarded to :meth:`extract_from_url` for every file.
-
-        Returns:
-            A :class:`DirectParseBatchResult` with per-file results and a
-            failure map keyed by file URL.
-
-        Raises:
-            ValueError: ``url`` is not a 3GPP FTP URL.
-            NotAFolderError: ``url`` resolves to a single file rather than
-                a folder listing.
-        """
+        """Discover a folder synchronously, then run its files through the pipeline."""
         try:
             url = validate_tdoc_ftp_url(url)
         except ValueError as exc:
             raise ValueError(f"URL is not a 3GPP FTP URL: {url}") from exc
 
+        # Discovery intentionally stays outside the runner: the BFS listing
+        # order is part of the direct-folder contract and must not depend on
+        # preparation completion order.
         file_urls = self.collect_3gpp_file_urls(url, max_depth=max_depth)
+        items = [PipelineItem(key=file_url, value=file_url) for file_url in file_urls]
+
+        owns_runner = runner is None
+        runtime: PipelineRuntime | None = None
+        if runner is None:
+            runtime = PipelineRuntime(prepare_workers=1)
+            runner = TDocPipeline(runtime)
+
+        def report(progress: PipelineProgress) -> None:
+            if on_progress is not None:
+                on_progress(
+                    f"parsed {progress.completed}/{progress.total} files"
+                )
+
+        try:
+            outcomes = runner.run_sync(
+                items,
+                lambda file_url: self.prepare_from_url(
+                    file_url,
+                    force=force,
+                    full=full,
+                    max_tdoc_size_bytes=max_tdoc_size_bytes,
+                ),
+                persist=cast(
+                    Callable[[object], object],
+                    self.persist_prepared_url,
+                ),
+                is_complete=lambda value: isinstance(value, DirectParseResult),
+                is_cancelled=is_cancelled,
+                on_progress=report,
+            )
+        finally:
+            if owns_runner and runtime is not None:
+                runtime.shutdown()
 
         results: list[DirectParseResult] = []
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
-        for i, file_url in enumerate(file_urls, start=1):
-            if is_cancelled is not None and is_cancelled():
-                raise asyncio.CancelledError()
-            if on_progress is not None:
-                on_progress(f"parsed {i}/{len(file_urls)} files")
-            try:
-                result = self.extract_from_url(
-                    file_url, force=force, full=full,
-                    max_tdoc_size_bytes=max_tdoc_size_bytes,
-                )
-            except TDocTooLargeError as exc:
-                logger.info(
-                    "Skipping %s: %s bytes exceeds max_tdoc_size_kb limit (%s bytes)",
-                    file_url, exc.size, exc.limit,
-                )
-                skipped[file_url] = f"{type(exc).__name__}: {exc}"
-                continue
-            except Exception as exc:
-                logger.warning(
-                    "Failed to parse %s: %s", file_url, exc, exc_info=True,
-                )
-                failures[file_url] = f"{type(exc).__name__}: {exc}"
-                continue
-            results.append(result)
+        for outcome in outcomes:
+            reason = outcome.reason or ""
+            if outcome.status == "success":
+                results.append(cast(DirectParseResult, outcome.value))
+            elif outcome.status == "skipped":
+                logger.info("Skipping %s: %s", outcome.key, reason)
+                skipped[outcome.key] = reason
+            else:
+                logger.warning("Failed to parse %s: %s", outcome.key, reason)
+                failures[outcome.key] = reason
 
         return DirectParseBatchResult(
-            results=results, failures=failures, skipped=skipped,
+            results=results,
+            failures=failures,
+            skipped=skipped,
         )
 
     def _collect_3gpp_file_urls(
@@ -1165,55 +1169,61 @@ class TDocCrService:
         force: bool = False,
         full: bool = True,
         max_tdoc_size_bytes: int | None = None,
+        runner: TDocPipeline | None = None,
     ) -> DirectParseResult:
-        """Parse ``docx_bytes`` from a local source — never touches cache or DB.
-
-        Local files have no FK to satisfy, so the result is always
-        emitted (the caller writes the parsed record to stdout or
-        ``--output``) and the on-disk cache + database stay
-        untouched. The dataclass fields that describe cache hits or
-        persistence are therefore always ``False`` / ``None`` for
-        this code path.
-
-        Args:
-            docx_bytes: Raw bytes of the document. The helper
-                :func:`direct_parse_bytes` dispatches on the leading
-                ``b"PK"`` to handle both bare ``.docx`` and zip-
-                wrapped ``.docx`` inputs.
-            filename: Source filename; used to drive the docx
-                extension guard and to auto-extract the TDoc id.
-            force: Accepted for signature parity with
-                :meth:`extract_from_url`; local files always bypass
-                the cache so the flag is a no-op.
-            full: Forwarded to :func:`parse_cr_details` (the
-                default ``True`` mirrors the CLI default for direct
-                mode and surfaces TTCN ``before_change`` /
-                ``after_change`` content).
-
-        Returns:
-            A :class:`DirectParseResult` whose ``source_kind`` is
-            ``"local"`` and whose persistence fields are all false.
-        """
+        """Parse local bytes through the shared one-item preparation lane."""
         del force
-        markdown, _docx_filename, parsed = direct_parse_bytes(
-            docx_bytes, filename=filename, full=full,
-            max_bytes=(
-                max_tdoc_size_bytes
-                if max_tdoc_size_bytes is not None
-                else self._max_tdoc_size_bytes
-            ),
+        max_bytes = (
+            max_tdoc_size_bytes
+            if max_tdoc_size_bytes is not None
+            else self._max_tdoc_size_bytes
         )
-        tdoc_id = extract_tdoc_id_from_filename(filename)
-        return DirectParseResult(
-            source_kind="local",
-            markdown=markdown,
-            details=parsed.cover,
-            extract_meta=None,
-            from_cache=False,
-            persisted=False,
-            tdoc_id=tdoc_id,
-            tdoc_id_in_tdocs=False,
-        )
+        owns_runner = runner is None
+        runtime: PipelineRuntime | None = None
+        if runner is None:
+            runtime = PipelineRuntime(prepare_workers=1)
+            runner = TDocPipeline(runtime)
+
+        def prepare_one(payload: bytes) -> DirectParseResult:
+            try:
+                markdown, _docx_filename, parsed = direct_parse_bytes(
+                    payload,
+                    filename=filename,
+                    full=full,
+                    max_bytes=max_bytes,
+                )
+                tdoc_id = extract_tdoc_id_from_filename(filename)
+                return DirectParseResult(
+                    source_kind="local",
+                    markdown=markdown,
+                    details=parsed.cover,
+                    extract_meta=None,
+                    from_cache=False,
+                    persisted=False,
+                    tdoc_id=tdoc_id,
+                    tdoc_id_in_tdocs=False,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                raise _DirectPipelineError(exc) from exc
+
+        try:
+            try:
+                outcomes = runner.run_sync(
+                    [PipelineItem(key=filename, value=docx_bytes)],
+                    prepare_one,
+                )
+            except _DirectPipelineError as exc:
+                raise exc.cause
+        finally:
+            if owns_runner and runtime is not None:
+                runtime.shutdown()
+
+        outcome = outcomes[0]
+        if outcome.status != "success":
+            raise RuntimeError(outcome.reason or "direct TDoc parse failed")
+        return cast(DirectParseResult, outcome.value)
 
     def _tdoc_in_tdocs(self, tdoc_id: str) -> bool:
         """Return ``True`` when ``tdoc_id`` has a matching row in ``tdocs``.

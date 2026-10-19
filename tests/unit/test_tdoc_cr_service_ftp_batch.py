@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -10,9 +11,19 @@ import httpx
 import pytest
 
 from doc3gpp.models.tdoc import TDoc
-from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult
+from doc3gpp.models.tdoc_cr import (
+    DirectParseBatchResult,
+    DirectParseResult,
+    TDocCRDetails,
+    TDocExtractMeta,
+)
 from doc3gpp.parsers.direct_extractor import NotAFolderError
-from doc3gpp.services.tdoc_cr_service import TDocCrService
+from doc3gpp.services.pipeline_runtime import PipelineRuntime
+from doc3gpp.services.tdoc_cr_service import (
+    PreparedDirectTDoc,
+    TDocCrService,
+)
+from doc3gpp.services.tdoc_pipeline import TDocPipeline
 
 
 class _FakeCache:
@@ -294,7 +305,7 @@ def test_extract_from_url_batch_delegates_per_file(service: TDocCrService) -> No
         }
     )
 
-    service.extract_from_url = MagicMock(  # type: ignore[method-assign]
+    service.prepare_from_url = MagicMock(  # type: ignore[method-assign]
         side_effect=lambda url, **_: _make_result(
             "R5s260001" if "R5s260001" in url else "R5s260002", url
         )
@@ -305,10 +316,10 @@ def test_extract_from_url_batch_delegates_per_file(service: TDocCrService) -> No
     assert isinstance(batch, DirectParseBatchResult)
     assert len(batch.results) == 2
     assert batch.failures == {}
-    service.extract_from_url.assert_any_call(
+    service.prepare_from_url.assert_any_call(
         file1, force=False, full=False, max_tdoc_size_bytes=None,
     )
-    service.extract_from_url.assert_any_call(
+    service.prepare_from_url.assert_any_call(
         file2, force=False, full=False, max_tdoc_size_bytes=None,
     )
 
@@ -331,7 +342,7 @@ def test_extract_from_url_batch_records_per_file_failures(service: TDocCrService
             raise ValueError("bad file")
         return _make_result("R5s260001", url)
 
-    service.extract_from_url = MagicMock(side_effect=side_effect)  # type: ignore[method-assign]
+    service.prepare_from_url = MagicMock(side_effect=side_effect)  # type: ignore[method-assign]
 
     batch = service.extract_from_url_batch(root, max_depth=0)
 
@@ -353,7 +364,7 @@ def test_extract_from_url_batch_reports_progress(service: TDocCrService) -> None
             ),
         }
     )
-    service.extract_from_url = MagicMock(  # type: ignore[method-assign]
+    service.prepare_from_url = MagicMock(  # type: ignore[method-assign]
         side_effect=lambda url, **_: _make_result(
             "R5s260001" if "R5s260001" in url else "R5s260002", url
         )
@@ -386,7 +397,7 @@ def test_extract_from_url_batch_reports_progress_on_failure(
             raise ValueError("bad file")
         return _make_result("R5s260001", url)
 
-    service.extract_from_url = MagicMock(side_effect=side_effect)  # type: ignore[method-assign]
+    service.prepare_from_url = MagicMock(side_effect=side_effect)  # type: ignore[method-assign]
 
     lines: list[str] = []
     batch = service.extract_from_url_batch(root, max_depth=0, on_progress=lines.append)
@@ -395,6 +406,120 @@ def test_extract_from_url_batch_reports_progress_on_failure(
     assert batch.failures == {file2: "ValueError: bad file"}
     assert lines == ["parsed 1/2 files", "parsed 2/2 files"]
 
+
+
+
+def test_extract_from_url_batch_prepares_concurrently_and_returns_bfs_order(
+    service: TDocCrService,
+) -> None:
+    root = "https://www.3gpp.org/ftp/Docs/"
+    file1 = f"{root}R5s260001-r1.zip"
+    file2 = f"{root}R5s260001-r2.zip"
+    service._scraper = _FakeScraper(
+        {
+            root: _folder_html(
+                f'<a class="file" href="{file1}">R5s260001-r1.zip</a>',
+                f'<a class="file" href="{file2}">R5s260001-r2.zip</a>',
+            ),
+        }
+    )
+    runtime = PipelineRuntime(prepare_workers=2, max_pending=4)
+    runner = TDocPipeline(runtime)
+    prepare_barrier = threading.Barrier(2)
+    first_release = threading.Event()
+    second_finished = threading.Event()
+    active_preparations = 0
+    max_active_preparations = 0
+    preparation_lock = threading.Lock()
+    persisted: list[str] = []
+    result_box: list[DirectParseBatchResult] = []
+    error_box: list[BaseException] = []
+
+    def make_prepared(url: str) -> PreparedDirectTDoc:
+        tdoc_id = url.rsplit("/", 1)[-1].removesuffix(".zip")
+        return PreparedDirectTDoc(
+            url=url,
+            markdown=f"markdown:{tdoc_id}",
+            details=TDocCRDetails(tdoc_id=tdoc_id, ftp_url=url),
+            ttcn=None,
+            changes=None,
+            extract_meta=TDocExtractMeta(
+                ftp_url=url,
+                tdoc_id=tdoc_id,
+                cache_file=f"{tdoc_id}.zip",
+                doc_filename=f"{tdoc_id}.docx",
+            ),
+            tdoc_id=tdoc_id,
+            cache_file=f"{tdoc_id}.zip",
+        )
+
+    def prepare(url: str, **_: Any) -> PreparedDirectTDoc:
+        nonlocal active_preparations, max_active_preparations
+        with preparation_lock:
+            active_preparations += 1
+            max_active_preparations = max(
+                max_active_preparations,
+                active_preparations,
+            )
+        try:
+            prepare_barrier.wait(timeout=2)
+            if url == file1:
+                assert first_release.wait(timeout=2)
+            else:
+                second_finished.set()
+            return make_prepared(url)
+        finally:
+            with preparation_lock:
+                active_preparations -= 1
+
+    def persist(prepared: PreparedDirectTDoc) -> DirectParseResult:
+        persisted.append(prepared.url)
+        return DirectParseResult(
+            source_kind="url-3gpp",
+            markdown=prepared.markdown,
+            details=prepared.details,
+            extract_meta=prepared.extract_meta,
+            from_cache=False,
+            persisted=True,
+            tdoc_id=prepared.tdoc_id,
+            tdoc_id_in_tdocs=True,
+            source_url=prepared.url,
+        )
+
+    service.prepare_from_url = prepare  # type: ignore[method-assign]
+    service.persist_prepared_url = persist  # type: ignore[method-assign]
+
+    def run() -> None:
+        try:
+            result_box.append(
+                service.extract_from_url_batch(
+                    root,
+                    max_depth=0,
+                    runner=runner,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - assertion aid
+            error_box.append(exc)
+
+    thread = threading.Thread(target=run)
+    try:
+        thread.start()
+        assert second_finished.wait(timeout=2)
+        assert max_active_preparations == 2
+        first_release.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert not error_box
+    finally:
+        first_release.set()
+        thread.join(timeout=2)
+        runtime.shutdown()
+
+    batch = result_box[0]
+    assert [result.source_url for result in batch.results] == [file1, file2]
+    assert set(persisted) == {file1, file2}
+    assert batch.failures == {}
+    assert batch.skipped == {}
 
 def test_extract_from_url_batch_rejects_non_3gpp_url(service: TDocCrService) -> None:
     with pytest.raises(ValueError, match="not a 3GPP FTP URL"):

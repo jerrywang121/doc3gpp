@@ -120,6 +120,8 @@ __all__ = [
     "BatchExtractResult",
     "CRHeaderMissingError",
     "ExtractResult",
+    "PreparedDirectTDoc",
+    "PreparedTDocExtract",
     "TDocCrService",
     "TDocNotFoundError",
     "TDocNotYetOnFTPError",
@@ -356,6 +358,30 @@ class ExtractResult:
 
 
 @dataclass(slots=True, frozen=True)
+class PreparedTDocExtract:
+    """Pure preparation output waiting for the serialized DB writer."""
+
+    details: TDocCRDetails
+    ttcn: TDocCRTTCNDetails | None
+    changes: TDocCRChangeDetails | None
+    extract_meta: TDocExtractMeta
+
+
+@dataclass(slots=True, frozen=True)
+class PreparedDirectTDoc:
+    """Direct-URL preparation output waiting for the serialized DB writer."""
+
+    url: str
+    markdown: str
+    details: TDocCRDetails
+    ttcn: TDocCRTTCNDetails | None
+    changes: TDocCRChangeDetails | None
+    extract_meta: TDocExtractMeta
+    tdoc_id: str
+    cache_file: str
+
+
+@dataclass(slots=True, frozen=True)
 class BatchExtractResult:
     """Outcome of a batch :meth:`TDocCrService.extract_many` call.
 
@@ -508,13 +534,13 @@ class TDocCrService:
     # Public API
     # ------------------------------------------------------------------
 
-    def extract(
+    def prepare_extract(
         self,
         tdoc_id: str,
         *,
         force: bool = False,
         full: bool = False,
-    ) -> ExtractResult:
+    ) -> PreparedTDocExtract | ExtractResult:
         """Return parsed CR details + extract metadata for ``tdoc_id``.
 
         Sequence:
@@ -701,26 +727,50 @@ class TDocCrService:
             cache_file=cache_file,
             doc_filename=doc_filename,
         )
-        self._repo.upsert(cover)
-        if ttcn is not None:
-            self._cr_ttcn_repo.upsert(ttcn)
-        if changes is not None:
-            self._change_details_repo.upsert(changes)
-        self._repo.upsert_extract_meta(meta)
-        self._index_after_parse(normalised)
-        self._embed_after_parse(normalised)
+        return PreparedTDocExtract(
+            details=cover,
+            ttcn=ttcn,
+            changes=changes,
+            extract_meta=meta,
+        )
+
+    def persist_prepared_extract(
+        self, prepared: PreparedTDocExtract
+    ) -> ExtractResult:
+        """Persist one prepared TDoc extract on the global writer thread."""
+        self._repo.upsert(prepared.details)
+        if prepared.ttcn is not None:
+            self._cr_ttcn_repo.upsert(prepared.ttcn)
+        if prepared.changes is not None:
+            self._change_details_repo.upsert(prepared.changes)
+        self._repo.upsert_extract_meta(prepared.extract_meta)
+        self._index_after_parse(prepared.details.tdoc_id)
+        self._embed_after_parse(prepared.details.tdoc_id)
         logger.info(
             "Persisted CR details for TDoc %s at ftp_url %s (spec=%s cr_num=%s)",
-            normalised,
-            stored_ftp_url,
-            cover.spec,
-            cover.cr_num,
+            prepared.details.tdoc_id,
+            prepared.extract_meta.ftp_url,
+            prepared.details.spec,
+            prepared.details.cr_num,
         )
         return ExtractResult(
-            details=cover,
-            extract_meta=meta,
+            details=prepared.details,
+            extract_meta=prepared.extract_meta,
             from_cache=False,
         )
+
+    def extract(
+        self,
+        tdoc_id: str,
+        *,
+        force: bool = False,
+        full: bool = False,
+    ) -> ExtractResult:
+        """Prepare and persist one TDoc synchronously for CLI callers."""
+        prepared = self.prepare_extract(tdoc_id, force=force, full=full)
+        if isinstance(prepared, ExtractResult):
+            return prepared
+        return self.persist_prepared_extract(prepared)
 
     def extract_many(
         self,
@@ -858,6 +908,25 @@ class TDocCrService:
             caller is expected to print the warning and emit the
             parsed record to stdout.
         """
+        prepared = self.prepare_from_url(
+            url,
+            force=force,
+            full=full,
+            max_tdoc_size_bytes=max_tdoc_size_bytes,
+        )
+        if isinstance(prepared, DirectParseResult):
+            return prepared
+        return self.persist_prepared_url(prepared)
+
+    def prepare_from_url(
+        self,
+        url: str,
+        *,
+        force: bool = False,
+        full: bool = False,
+        max_tdoc_size_bytes: int | None = None,
+    ) -> PreparedDirectTDoc | DirectParseResult:
+        """Prepare a direct URL parse without mutating repositories."""
         if is_3gpp_ftp_candidate_url(url):
             url = validate_tdoc_ftp_url(url)
         else:
@@ -930,7 +999,7 @@ class TDocCrService:
             )
 
         # 3GPP URL + tdoc_id ∈ tdocs: full happy path.
-        return self._extract_from_3gpp_url(
+        return self._prepare_from_3gpp_url(
             url=url,
             cache_file=cache_file,
             stored_ftp_url=stored_ftp_url,
@@ -942,6 +1011,33 @@ class TDocCrService:
                 if max_tdoc_size_bytes is not None
                 else self._max_tdoc_size_bytes
             ),
+        )
+
+    def persist_prepared_url(self, prepared: PreparedDirectTDoc) -> DirectParseResult:
+        """Persist one prepared direct URL result on the serialized writer."""
+        self._repo.upsert(prepared.details)
+        if prepared.ttcn is not None:
+            self._cr_ttcn_repo.upsert(prepared.ttcn)
+        if prepared.changes is not None:
+            self._change_details_repo.upsert(prepared.changes)
+        self._repo.upsert_extract_meta(prepared.extract_meta)
+        self._index_after_parse(prepared.tdoc_id)
+        self._embed_after_parse(prepared.tdoc_id)
+        logger.info(
+            "Persisted direct-parse CR details for tdoc_id %s at %s",
+            prepared.tdoc_id,
+            prepared.extract_meta.ftp_url,
+        )
+        return DirectParseResult(
+            source_kind="url-3gpp",
+            markdown=prepared.markdown,
+            details=prepared.details,
+            extract_meta=prepared.extract_meta,
+            from_cache=False,
+            persisted=True,
+            tdoc_id=prepared.tdoc_id,
+            tdoc_id_in_tdocs=True,
+            source_url=prepared.url,
         )
 
     def extract_from_url_batch(
@@ -1129,7 +1225,7 @@ class TDocCrService:
         """
         return self._tdoc_repo.get_by_id(tdoc_id) is not None
 
-    def _extract_from_3gpp_url(
+    def _prepare_from_3gpp_url(
         self,
         *,
         url: str,
@@ -1139,7 +1235,7 @@ class TDocCrService:
         force: bool,
         full: bool,
         max_bytes: int = 0,
-    ) -> DirectParseResult:
+    ) -> PreparedDirectTDoc | DirectParseResult:
         """Run the full extract pipeline for a 3GPP URL whose FK target exists.
 
         The 3GPP branch of :meth:`extract_from_url` delegates to this
@@ -1227,29 +1323,15 @@ class TDocCrService:
             cache_file=cache_file,
             doc_filename=doc_filename,
         )
-        self._repo.upsert(cover)
-        if ttcn is not None:
-            self._cr_ttcn_repo.upsert(ttcn)
-        if changes is not None:
-            self._change_details_repo.upsert(changes)
-        self._repo.upsert_extract_meta(meta)
-        self._index_after_parse(tdoc_id)
-        self._embed_after_parse(tdoc_id)
-        logger.info(
-            "Persisted direct-parse CR details for tdoc_id %s at %s",
-            tdoc_id,
-            stored_ftp_url,
-        )
-        return DirectParseResult(
-            source_kind="url-3gpp",
+        return PreparedDirectTDoc(
+            url=url,
             markdown=markdown,
             details=cover,
+            ttcn=ttcn,
+            changes=changes,
             extract_meta=meta,
-            from_cache=False,
-            persisted=True,
             tdoc_id=tdoc_id,
-            tdoc_id_in_tdocs=True,
-            source_url=url,
+            cache_file=cache_file,
         )
 
     # ------------------------------------------------------------------

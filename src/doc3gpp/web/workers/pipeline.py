@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Callable
 from threading import BoundedSemaphore
-from typing import Callable, Generic, TypeVar
+from typing import TypeVar
 
 
 T = TypeVar("T")

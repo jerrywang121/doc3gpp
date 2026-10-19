@@ -28,6 +28,7 @@ from doc3gpp.models.tdoc_cr import (
 from doc3gpp.parsers.cr_parser import extract_docx_from_zip
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.services.tdoc_cr_service import (
+    PreparedDirectTDoc,
     TDocCrService,
     _wrap_markdown_zip,
 )
@@ -304,6 +305,33 @@ def test_extract_from_url_db_cache_hit_populates_markdown_for_raw(
     assert cr_repo.upsert.call_count == 0
 
 
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_prepare_from_url_defers_repository_writes(tmp_path: Path) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    service, scraper, _cache, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=fixture.read_bytes()
+    )
+    tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
+
+    prepared = service.prepare_from_url(
+        "https://www.3gpp.org/ftp/.../R5s260009.zip",
+        force=True,
+        full=False,
+    )
+
+    assert isinstance(prepared, PreparedDirectTDoc)
+    assert prepared.tdoc_id == "R5s260009"
+    assert scraper.get_bytes.call_count == 1
+    cr_repo.upsert.assert_not_called()
+    cr_repo.upsert_extract_meta.assert_not_called()
+    cr_ttcn_repo.upsert.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Three-way upsert split: cover + optional TTCN sidecar + extract meta.
 # ---------------------------------------------------------------------------
@@ -406,6 +434,39 @@ def test_extract_calls_three_upserts_for_ttcn_tdoc(tmp_path: Path) -> None:
     assert result.details.cr_num == "3790"
     assert result.extract_meta.ftp_url == "stored/r5s260009.zip"
     assert result.from_cache is False
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_prepare_extract_defers_repository_writes_until_persist(tmp_path: Path) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    service, _, _, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=fixture.read_bytes(),
+    )
+    cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
+    service._parser = _FakeParser(  # type: ignore[attr-defined]
+        TDocCRParseResult(
+            cover=cover,
+            ttcn=TDocCRTTCNDetails(tdoc_id="R5s260009", testcase="7.1.3.5.3"),
+        )
+    )
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
+    )
+
+    prepared = service.prepare_extract("R5s260009")
+
+    assert cr_repo.upsert.call_count == 0
+    assert cr_ttcn_repo.upsert.call_count == 0
+    result = service.persist_prepared_extract(prepared)
+    assert result.details.tdoc_id == "R5s260009"
+    assert cr_repo.upsert.call_count == 1
+    assert cr_ttcn_repo.upsert.call_count == 1
+    assert cr_repo.upsert_extract_meta.call_count == 1
 
 
 @pytest.mark.skipif(

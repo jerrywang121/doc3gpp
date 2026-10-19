@@ -32,9 +32,9 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.services.tdoc_cr_service import ExtractResult
+from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
-from doc3gpp.web.workers.pipeline import PipelineRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -71,44 +71,6 @@ def _build_meeting_url(tsg: str) -> str:
 async def _await_future(future):
     """Await a concurrent future without blocking the event loop."""
     return await asyncio.wrap_future(future)
-
-
-async def _parse_tdoc_batch(
-    ids: list[str],
-    services: ServiceContainer,
-    *,
-    force: bool,
-    full: bool,
-    cancel_event: asyncio.Event,
-) -> tuple[dict[str, ExtractResult], dict[str, str], dict[str, str]]:
-    """Prepare TDocs concurrently and serialize each resulting write."""
-    pipeline: PipelineRuntime = services.pipeline  # type: ignore[assignment]
-    prepared = []
-    for tdoc_id in ids:
-        if cancel_event.is_set():
-            break
-        prepared.append((tdoc_id, pipeline.submit_prepare(
-            services.tdoc_cr.prepare_extract,
-            tdoc_id,
-            force=force,
-            full=full,
-        )))
-    successes: dict[str, ExtractResult] = {}
-    failures: dict[str, str] = {}
-    skipped: dict[str, str] = {}
-    for tdoc_id, future in prepared:
-        try:
-            item = await _await_future(future)
-            if isinstance(item, ExtractResult):
-                result = item
-            else:
-                result = await _await_future(
-                    pipeline.submit_persist(services.tdoc_cr.persist_prepared_extract, item)
-                )
-            successes[tdoc_id] = result
-        except Exception as exc:  # noqa: BLE001 - one item must not abort a batch
-            failures[tdoc_id] = f"{type(exc).__name__}: {exc}"
-    return successes, failures, skipped
 
 
 async def _sync_meetings(
@@ -376,18 +338,27 @@ async def _parse_tdocs(
     tdoc_ids = [t.tdoc_id for t in tdocs]
     if not tdoc_ids:
         progress("no TDocs matched the given filter")
-        return {"requested": 0, "successes": 0, "failures": 0, "skipped": 0}
+        return {
+            "requested": 0,
+            "successes": 0,
+            "failures": 0,
+            "skipped": 0,
+            "failure_details": {},
+            "skipped_details": {},
+        }
 
     progress(f"parsing {len(tdoc_ids)} TDocs in batches of {max_batch}")
     total_successes: dict[str, object] = {}
     total_failures: dict[str, str] = {}
     total_skipped: dict[str, str] = {}
+    runner = TDocPipeline(services.pipeline) if services.pipeline is not None else None
     for start in range(0, len(tdoc_ids), max_batch):
         if cancel_event.is_set():
             raise asyncio.CancelledError()
         batch = tdoc_ids[start : start + max_batch]
-        if services.pipeline is None:
-            result = services.tdoc_cr.extract_many(
+        if runner is None:
+            result = await asyncio.to_thread(
+                services.tdoc_cr.extract_many,
                 batch,
                 force=force,
                 full=full,
@@ -397,25 +368,37 @@ async def _parse_tdocs(
             total_failures.update(result.failures)
             total_skipped.update(result.skipped)
         else:
-            successes, failures, skipped = await _parse_tdoc_batch(
-                batch,
-                services,
-                force=force,
-                full=full,
-                cancel_event=cancel_event,
+            outcomes = await runner.run_async(
+                [PipelineItem(key=tdoc_id, value=tdoc_id) for tdoc_id in batch],
+                lambda tdoc_id: services.tdoc_cr.prepare_extract(
+                    tdoc_id,
+                    force=force,
+                    full=full,
+                ),
+                persist=services.tdoc_cr.persist_prepared_extract,
+                is_complete=lambda value: isinstance(value, ExtractResult),
+                is_cancelled=cancel_event.is_set,
             )
-            total_successes.update(successes)
-            total_failures.update(failures)
-            total_skipped.update(skipped)
-            progress(
-                f"batch {start // max_batch + 1}: {len(batch)} requested, "
-                f"{len(total_successes)} ok, {len(total_failures)} failed"
-            )
+            for outcome in outcomes:
+                reason = outcome.reason or ""
+                if outcome.status == "success":
+                    total_successes[outcome.key] = outcome.value
+                elif outcome.status == "skipped":
+                    total_skipped[outcome.key] = reason
+                else:
+                    total_failures[outcome.key] = reason
+        progress(
+            f"batch {start // max_batch + 1}: {len(batch)} requested, "
+            f"{len(total_successes)} ok, {len(total_failures)} failed, "
+            f"{len(total_skipped)} skipped"
+        )
     return {
         "requested": len(tdoc_ids),
         "successes": len(total_successes),
         "failures": len(total_failures),
         "skipped": len(total_skipped),
+        "failure_details": dict(total_failures),
+        "skipped_details": dict(total_skipped),
     }
 
 
@@ -475,10 +458,10 @@ async def _parse_tdoc_url(
 
     if cancel_event.is_set():
         raise asyncio.CancelledError()
-    if is_3gpp_file_url(url):
-        failures: dict[str, str] = {}
-        try:
-            if services.pipeline is None:
+    if services.pipeline is None:
+        if is_3gpp_file_url(url):
+            failures: dict[str, str] = {}
+            try:
                 result = await asyncio.to_thread(
                     services.tdoc_cr.extract_from_url,
                     url,
@@ -486,42 +469,79 @@ async def _parse_tdoc_url(
                     full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                 )
+            except Exception as exc:
+                logger.warning("Failed to parse %s: %s", url, exc, exc_info=True)
+                failures[url] = f"{type(exc).__name__}: {exc}"
+                batch = DirectParseBatchResult(
+                    results=[], failures=failures, skipped={}
+                )
             else:
-                prep = await _await_future(services.pipeline.submit_prepare(
-                    services.tdoc_cr.prepare_from_url,
-                    url,
-                    force=force,
-                    full=full,
-                    max_tdoc_size_bytes=max_tdoc_size_bytes or None,
-                ))
-                if isinstance(prep, DirectParseResult):
-                    result = prep
-                else:
-                    result = await _await_future(
-                        services.pipeline.submit_persist(
-                            services.tdoc_cr.persist_prepared_url, prep
-                        )
-                    )
-        except Exception as exc:
-            logger.warning("Failed to parse %s: %s", url, exc, exc_info=True)
-            failures[url] = f"{type(exc).__name__}: {exc}"
-            batch = DirectParseBatchResult(
-                results=[], failures=failures, skipped={}
-            )
+                batch = DirectParseBatchResult(
+                    results=[result], failures={}, skipped={}
+                )
         else:
-            batch = DirectParseBatchResult(
-                results=[result], failures={}, skipped={}
+            batch = await asyncio.to_thread(
+                services.tdoc_cr.extract_from_url_batch,
+                url,
+                max_depth=max_depth,
+                force=force,
+                full=full,
+                max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+                on_progress=progress,
+                is_cancelled=cancel_event.is_set,
             )
     else:
-        batch = await asyncio.to_thread(
-            services.tdoc_cr.extract_from_url_batch,
-            url,
-            max_depth=max_depth,
-            force=force,
-            full=full,
-            max_tdoc_size_bytes=max_tdoc_size_bytes or None,
-            on_progress=progress,
+        if is_3gpp_file_url(url):
+            file_urls = [url]
+        else:
+            # Discovery remains a synchronous, deterministic breadth-first
+            # operation. Run it off the event loop, then hand its source order
+            # to the shared async runner for preparation/persistence.
+            file_urls = await asyncio.to_thread(
+                services.tdoc_cr.collect_3gpp_file_urls,
+                url,
+                max_depth=max_depth,
+            )
+        runner = TDocPipeline(services.pipeline)
+
+        def report_pipeline(item_progress) -> None:
+            progress(
+                f"parsed {item_progress.completed}/{item_progress.total} files"
+            )
+
+        outcomes = await runner.run_async(
+            [PipelineItem(key=file_url, value=file_url) for file_url in file_urls],
+            lambda file_url: services.tdoc_cr.prepare_from_url(
+                file_url,
+                force=force,
+                full=full,
+                max_tdoc_size_bytes=max_tdoc_size_bytes or None,
+            ),
+            persist=services.tdoc_cr.persist_prepared_url,
+            is_complete=lambda value: isinstance(value, DirectParseResult),
             is_cancelled=cancel_event.is_set,
+            on_progress=(
+                report_pipeline
+                if not is_3gpp_file_url(url)
+                else None
+            ),
+        )
+        results: list[DirectParseResult] = []
+        failures: dict[str, str] = {}
+        skipped: dict[str, str] = {}
+        for outcome in outcomes:
+            reason = outcome.reason or ""
+            if outcome.status == "success":
+                if outcome.value is not None:
+                    results.append(outcome.value)
+            elif outcome.status == "skipped":
+                skipped[outcome.key] = reason
+            else:
+                failures[outcome.key] = reason
+        batch = DirectParseBatchResult(
+            results=results,
+            failures=failures,
+            skipped=skipped,
         )
     if cancel_event.is_set():
         raise asyncio.CancelledError()
@@ -596,23 +616,33 @@ async def _parse_spec_docs(
             on_progress=on_progress,
         )
     else:
+        permit = await services.pipeline.reserve_async()
         try:
-            prepared = await _await_future(services.pipeline.submit_prepare(
-                service.prepare_parse,
-                spec_id,
-                release=release,
-                version=version,
-                force=force,
-            ))
+            prepared = await _await_future(
+                services.pipeline.submit_prepare(
+                    permit,
+                    service.prepare_parse,
+                    spec_id,
+                    release=release,
+                    version=version,
+                    force=force,
+                )
+            )
             if isinstance(prepared, SpecDocSource):
                 source = prepared
             else:
                 source = await _await_future(
-                    services.pipeline.submit_persist(service.persist_prepared_parse, prepared)
+                    services.pipeline.submit_persist(
+                        permit,
+                        service.persist_prepared_parse,
+                        prepared,
+                    )
                 )
             result = SpecDocBatchResult(successes={spec_id: source})
         except Exception as exc:  # noqa: BLE001 - preserve batch failure envelope
             result = SpecDocBatchResult(failures={spec_id: f"{type(exc).__name__}: {exc}"})
+        finally:
+            permit.release()
     if cancel_event.is_set():
         raise asyncio.CancelledError()
     for sid, reason in result.failures.items():

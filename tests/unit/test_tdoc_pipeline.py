@@ -358,3 +358,168 @@ def test_tdoc_exception_classifier_uses_skip_and_failure_buckets() -> None:
         "failed",
         "LookupError: missing",
     )
+
+
+def test_final_writer_cancellation_propagates_after_drain() -> None:
+    asyncio.run(_run_final_writer_cancellation_test())
+
+
+async def _run_final_writer_cancellation_test() -> None:
+    runtime = PipelineRuntime(prepare_workers=1, max_pending=1)
+    runner = TDocPipeline(runtime)
+    cancellation = threading.Event()
+    writer_started = threading.Event()
+    release_writer = threading.Event()
+
+    def persist(value: int) -> int:
+        writer_started.set()
+        assert release_writer.wait(timeout=2)
+        return value
+
+    async def run() -> Any:
+        return await runner.run_async(
+            [PipelineItem(key="only", value=1)],
+            lambda value: value,
+            persist=persist,
+            is_cancelled=cancellation.is_set,
+        )
+
+    try:
+        task = asyncio.create_task(run())
+        await asyncio.wait_for(asyncio.to_thread(writer_started.wait), timeout=2)
+        cancellation.set()
+        release_writer.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+    finally:
+        cancellation.set()
+        release_writer.set()
+        await runtime.shutdown_async()
+
+
+def test_sync_capacity_cancellation_does_not_wait_forever() -> None:
+    runtime = PipelineRuntime(prepare_workers=1, max_pending=1)
+    runner = TDocPipeline(runtime)
+    held = runtime.reserve()
+    cancellation = threading.Event()
+    callback_called = threading.Event()
+    result_box: list[Any] = []
+    error_box: list[BaseException] = []
+
+    def is_cancelled() -> bool:
+        callback_called.set()
+        return cancellation.is_set()
+
+    def run() -> None:
+        try:
+            result_box.append(
+                runner.run_sync(
+                    [PipelineItem(key="blocked", value=1)],
+                    lambda value: value,
+                    is_cancelled=is_cancelled,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - assertion aid
+            error_box.append(exc)
+
+    thread = threading.Thread(target=run)
+    try:
+        thread.start()
+        assert callback_called.wait(timeout=2)
+        cancellation.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert not result_box
+        assert len(error_box) == 1
+        assert isinstance(error_box[0], asyncio.CancelledError)
+    finally:
+        cancellation.set()
+        held.release()
+        thread.join(timeout=2)
+        runtime.shutdown()
+
+
+def test_async_callback_cancellation_stops_pending_reservation() -> None:
+    asyncio.run(_run_async_callback_cancellation_test())
+
+
+async def _run_async_callback_cancellation_test() -> None:
+    runtime = PipelineRuntime(prepare_workers=1, max_pending=1)
+    runner = TDocPipeline(runtime)
+    held = runtime.reserve()
+    cancellation = threading.Event()
+    callback_called = threading.Event()
+    finished = asyncio.Event()
+    error_box: list[BaseException] = []
+
+    def is_cancelled() -> bool:
+        callback_called.set()
+        return cancellation.is_set()
+
+    async def run() -> None:
+        try:
+            await runner.run_async(
+                [PipelineItem(key="blocked", value=1)],
+                lambda value: value,
+                is_cancelled=is_cancelled,
+            )
+        except BaseException as exc:  # noqa: BLE001 - assertion aid
+            error_box.append(exc)
+        finally:
+            finished.set()
+
+    task = asyncio.create_task(run())
+    try:
+        await asyncio.wait_for(asyncio.to_thread(callback_called.wait), timeout=2)
+        cancellation.set()
+        await asyncio.wait_for(finished.wait(), timeout=2)
+        assert len(error_box) == 1
+        assert isinstance(error_box[0], asyncio.CancelledError)
+        assert not task.cancelled()
+    finally:
+        cancellation.set()
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        held.release()
+        await runtime.shutdown_async()
+
+
+def test_permit_is_reusable_after_runner_cancellation() -> None:
+    asyncio.run(_run_permit_reuse_after_cancellation_test())
+
+
+async def _run_permit_reuse_after_cancellation_test() -> None:
+    runtime = PipelineRuntime(prepare_workers=1, max_pending=1)
+    runner = TDocPipeline(runtime)
+    cancellation = threading.Event()
+    writer_started = threading.Event()
+    release_writer = threading.Event()
+
+    def persist(value: int) -> int:
+        writer_started.set()
+        assert release_writer.wait(timeout=2)
+        return value
+
+    try:
+        task = asyncio.create_task(
+            runner.run_async(
+                [PipelineItem(key="only", value=1)],
+                lambda value: value,
+                persist=persist,
+                is_cancelled=cancellation.is_set,
+            )
+        )
+        await asyncio.wait_for(asyncio.to_thread(writer_started.wait), timeout=2)
+        cancellation.set()
+        release_writer.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        permit = runtime.try_reserve()
+        assert permit is not None
+        permit.release()
+    finally:
+        cancellation.set()
+        release_writer.set()
+        await runtime.shutdown_async()

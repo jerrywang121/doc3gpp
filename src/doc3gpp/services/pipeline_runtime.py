@@ -1,4 +1,5 @@
 """Shared bounded preparation and serialized persistence runtime."""
+
 from __future__ import annotations
 
 import asyncio
@@ -112,6 +113,12 @@ class PipelineRuntime:
     def reserve(self) -> PipelinePermit:
         """Block the calling thread until one pipeline slot is available."""
         self._capacity.acquire()
+        return PipelinePermit(self._capacity)
+
+    def try_reserve(self) -> PipelinePermit | None:
+        """Return a permit immediately when capacity is available."""
+        if not self._capacity.acquire(blocking=False):
+            return None
         return PipelinePermit(self._capacity)
 
     async def reserve_async(self) -> PipelinePermit:

@@ -9,10 +9,10 @@ from concurrent.futures import (
 )
 from concurrent.futures import (
     Future,
-    ThreadPoolExecutor,
     wait,
 )
 from dataclasses import dataclass
+from threading import Event
 from typing import Any, Generic, Literal, TypeVar, cast
 
 from doc3gpp.services.pipeline_runtime import PipelinePermit, PipelineRuntime
@@ -108,10 +108,9 @@ class TDocPipeline:
     ) -> list[PipelineOutcome[R | P]]:
         """Run a batch from a synchronous caller.
 
-        Capacity acquisition is performed on a tiny coordinator executor so a
-        full preparation/persistence queue can be observed and drained while
-        the next permit waits.  Preparation and persistence themselves remain
-        owned by ``PipelineRuntime``.
+        Capacity is polled through the runtime's non-blocking reservation
+        helper so a synchronous caller can observe cancellation while another
+        owner holds the shared runtime capacity.
         """
         source = list(items)
         total = len(source)
@@ -120,12 +119,11 @@ class TDocPipeline:
 
         outcomes: list[PipelineOutcome[R | P] | None] = [None] * total
         pending: dict[Future[Any], _Pending] = {}
-        reservation_executor = ThreadPoolExecutor(max_workers=1)
-        reserve_future: Future[PipelinePermit] | None = None
         next_index = 0
         completed = 0
         cancellation: BaseException | None = None
         fatal: BaseException | None = None
+        poll_event = Event()
 
         def set_cancelled(exc: BaseException | None = None) -> None:
             nonlocal cancellation
@@ -204,7 +202,6 @@ class TDocPipeline:
             pending[future] = entry
 
         def process_preparation(entry: _Pending, prepared: P | R) -> None:
-            nonlocal fatal
             check_cancelled()
             if cancellation is not None or fatal is not None:
                 entry.permit.release()
@@ -251,52 +248,40 @@ class TDocPipeline:
             else:
                 entry.permit.release()
                 record(entry, "success", value, None)
-
-        try:
-            while reserve_future is not None or pending or next_index < total:
                 check_cancelled()
-                if (
-                    reserve_future is None
-                    and next_index < total
-                    and cancellation is None
-                    and fatal is None
-                ):
-                    try:
-                        reserve_future = reservation_executor.submit(self._runtime.reserve)
-                    except BaseException as exc:  # noqa: BLE001 - cancellation must be drained
-                        fatal = exc
-                        continue
 
-                waitables: set[Future[Any]] = set(pending)
-                if reserve_future is not None:
-                    waitables.add(reserve_future)
-                if not waitables:
-                    break
-                done, _ = wait(waitables, return_when="FIRST_COMPLETED")
-
-                if reserve_future is not None and reserve_future in done:
-                    completed_reservation = reserve_future
-                    reserve_future = None
-                    try:
-                        permit = completed_reservation.result()
-                    except BaseException as exc:  # noqa: BLE001 - cancellation must be drained
-                        if _is_cancellation(exc):
-                            set_cancelled(exc)
-                        elif fatal is None:
-                            fatal = exc
-                    else:
+        while pending or next_index < total:
+            check_cancelled()
+            if cancellation is None and fatal is None and next_index < total:
+                try:
+                    permit = self._runtime.try_reserve()
+                except BaseException as exc:  # noqa: BLE001 - cancellation must be drained
+                    fatal = exc
+                else:
+                    if permit is not None:
                         check_cancelled()
-                        if cancellation is not None or fatal is not None or next_index >= total:
+                        if cancellation is not None or fatal is not None:
                             permit.release()
                         else:
                             submit_preparation(permit)
+                        continue
 
-                for future in done:
-                    if future in pending:
-                        process_future(future)
-        finally:
-            reservation_executor.shutdown(wait=True)
+            if not pending:
+                if cancellation is not None or fatal is not None:
+                    break
+                poll_event.wait(0.05)
+                continue
 
+            done, _ = wait(
+                set(pending),
+                timeout=0.05,
+                return_when="FIRST_COMPLETED",
+            )
+            for future in done:
+                if future in pending:
+                    process_future(future)
+
+        check_cancelled()
         if cancellation is not None:
             raise cancellation
         if fatal is not None:
@@ -449,13 +434,18 @@ class TDocPipeline:
                 try:
                     done, _ = await asyncio.wait(
                         waitables,
+                        timeout=0.05,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                 except asyncio.CancelledError as exc:
                     set_cancelled(exc)
                     stop_reservation_wait()
                     continue
-                return done
+                if done:
+                    return done
+                check_cancelled()
+                if cancellation is not None or fatal is not None:
+                    stop_reservation_wait()
 
         while reserve_task is not None or pending or next_index < total:
             check_cancelled()
@@ -512,7 +502,9 @@ class TDocPipeline:
                 else:
                     entry.permit.release()
                     record(entry, "success", value, None)
+                    check_cancelled()
 
+        check_cancelled()
         if cancellation is not None:
             raise cancellation
         if fatal is not None:

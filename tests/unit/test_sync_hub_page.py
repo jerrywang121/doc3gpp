@@ -97,6 +97,12 @@ def test_sync_page_renders_wi_tsg_and_parse_meeting_id_inputs(client: Any) -> No
     assert 'value="' not in wi_form
 
 
+def test_sync_page_versions_sync_hub_script(client: Any) -> None:
+    """The page-local script URL changes when the application version changes."""
+    text = client.get("/sync").text
+    assert 'src="/static/js/sync_hub.js?v=' in text
+
+
 def test_sync_fragment_returns_partial_only(client: Any) -> None:
     """``GET /sync?format=fragment`` returns just the recent-jobs table fragment."""
     response = client.get("/sync?format=fragment")

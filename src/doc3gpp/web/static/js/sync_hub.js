@@ -59,6 +59,9 @@
         force: readCheckbox(form, "force"),
       });
     },
+    "sync-wis-form": function (form) {
+      return JSON.stringify({tsg: readText(form, "tsg")});
+    },
     "sync-tdocs-form": function (form) {
       var selector = readSelectedRadio(form, "selector") || "meeting_id";
       var value = readText(form, "value");
@@ -92,14 +95,21 @@
     "parse-tdocs-form": function (form) {
       var filter = {};
       var filterKeys = [
-        "tdoc_id", "meeting", "status", "spec", "wi",
+        "tdoc_id", "meeting_id", "meeting", "status", "spec", "wi",
         "release", "version", "source",
       ];
       for (var i = 0; i < filterKeys.length; i++) {
         var k = filterKeys[i];
         var v = readText(form, "filter_" + k);
         if (v) {
-          filter[k] = v;
+          if (k === "meeting_id") {
+            var meetingId = parseInt(v, 10);
+            if (!isNaN(meetingId)) {
+              filter[k] = meetingId;
+            }
+          } else {
+            filter[k] = v;
+          }
         }
       }
       var body = {

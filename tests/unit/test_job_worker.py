@@ -1912,3 +1912,61 @@ def test_worker_runs_testcase_sync_job() -> None:
         "synced_count": 2,
     }
     assert fake.calls == [{"force": True}]
+
+
+def test_worker_runs_wi_sync_job() -> None:
+    """A ``SYNC_WIS`` job validates the TSG and stores the WI count."""
+
+    class _FakeWiService:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def sync(self, tsg: str) -> int:
+            self.calls.append(tsg)
+            return 7
+
+    repo = _make_repo()
+    fake = _FakeWiService()
+    state = _make_state_with_services(
+        repo,
+        wi=fake,
+        tsg=_FakeTsgService({"R5"}),
+    )
+    job = repo.create(JobKind.SYNC_WIS, {"tsg": "r5"})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.result_summary == {
+        "status": "synced",
+        "reason": "WI sync complete: 7 rows stored for R5",
+        "synced_count": 7,
+    }
+    assert fake.calls == ["R5"]
+
+
+def test_worker_rejects_unknown_tsg_for_wi_sync() -> None:
+    """A ``SYNC_WIS`` job rejects an unknown TSG before calling the service."""
+
+    class _UnexpectedWiService:
+        def sync(self, _tsg: str) -> int:
+            raise AssertionError("unknown TSG must fail before WI sync")
+
+    repo = _make_repo()
+    state = _make_state_with_services(
+        repo,
+        wi=_UnexpectedWiService(),
+        tsg=_FakeTsgService({"R5"}),
+    )
+    job = repo.create(JobKind.SYNC_WIS, {"tsg": "R6"})
+    worker = JobWorker(state, repo=repo)
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert "R6" in (done.error or "")

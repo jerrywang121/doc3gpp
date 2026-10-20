@@ -98,6 +98,10 @@ class _SyncMeetingsBody(BaseModel):
     tsg: str
 
 
+class _SyncWIsBody(BaseModel):
+    tsg: str
+
+
 class _SyncTDocsBody(BaseModel):
     meeting_id: int | None = None
     meeting: str | None = None
@@ -165,6 +169,15 @@ async def post_sync_meetings(
         JobKind.SYNC_MEETINGS,
         {"tsg": body.tsg},
     )
+    return JSONResponse(status_code=202, content=_envelope(job, queued=True))
+
+
+@router.post("/sync/wis", status_code=202)
+async def post_sync_wis(
+    body: _SyncWIsBody,
+    job_repo: JobRepository = Depends(get_job_repo),
+) -> JSONResponse:
+    job = job_repo.create(JobKind.SYNC_WIS, {"tsg": body.tsg})
     return JSONResponse(status_code=202, content=_envelope(job, queued=True))
 
 

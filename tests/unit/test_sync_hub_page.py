@@ -49,6 +49,7 @@ def test_sync_page_returns_200_and_contains_all_panels(client: Any) -> None:
     text = client.get("/sync").text
     for heading in (
         "Meeting sync",
+        "WI sync",
         "TDoc sync",
         "Spec sync",
         "Parse TDocs (filter-driven)",
@@ -61,11 +62,12 @@ def test_sync_page_returns_200_and_contains_all_panels(client: Any) -> None:
         assert heading in text, f"missing heading: {heading}"
 
 
-def test_sync_page_renders_all_ten_forms(client: Any) -> None:
-    """Each of the ten enqueue panels has a unique form id."""
+def test_sync_page_renders_all_forms(client: Any) -> None:
+    """Each enqueue panel has a unique form id."""
     text = client.get("/sync").text
     for form_id in (
         "sync-meetings-form",
+        "sync-wis-form",
         "sync-tdocs-form",
         "sync-tdocs-all-form",
         "sync-specs-tsg-form",
@@ -82,6 +84,23 @@ def test_sync_page_renders_all_ten_forms(client: Any) -> None:
     assert 'action="/jobs/tdocs/search/rebuild"' not in text
     assert 'id="rebuild-search-form"' not in text
     assert "/sem" not in text
+
+
+def test_sync_page_renders_wi_tsg_and_parse_meeting_id_inputs(client: Any) -> None:
+    text = client.get("/sync").text
+    assert 'id="sync-wis-tsg"' in text
+    assert 'id="parse-tdocs-meeting-id"' in text
+    assert 'name="filter_meeting_id"' in text
+    wi_form = text[text.index('id="sync-wis-form"') : text.index("</form>", text.index('id="sync-wis-form"'))]
+    assert 'name="force"' not in wi_form
+    assert "required" in wi_form
+    assert 'value="' not in wi_form
+
+
+def test_sync_page_versions_sync_hub_script(client: Any) -> None:
+    """The page-local script URL changes when the application version changes."""
+    text = client.get("/sync").text
+    assert 'src="/static/js/sync_hub.js?v=' in text
 
 
 def test_sync_fragment_returns_partial_only(client: Any) -> None:

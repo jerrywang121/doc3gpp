@@ -100,6 +100,25 @@ def test_post_sync_meetings_requires_tsg(client: Any) -> None:
     assert r.status_code == 422
 
 
+def test_post_sync_wis_creates_job(client: Any) -> None:
+    c, repo, _ = client
+    r = c.post("/jobs/sync/wis", json={"tsg": "R5"})
+    assert r.status_code == 202
+    body = r.json()
+    assert body["status"] == "queued"
+    assert body["job_id"]
+    job = repo.get(body["job_id"])
+    assert job is not None
+    assert job.kind is JobKind.SYNC_WIS
+    assert job.params == {"tsg": "R5"}
+
+
+def test_post_sync_wis_requires_tsg(client: Any) -> None:
+    c, _, _ = client
+    r = c.post("/jobs/sync/wis", json={})
+    assert r.status_code == 422
+
+
 def test_post_sync_tdocs_by_meeting_id(client: Any) -> None:
     c, repo, _ = client
     r = c.post("/jobs/sync/tdocs", json={"meeting_id": 12})

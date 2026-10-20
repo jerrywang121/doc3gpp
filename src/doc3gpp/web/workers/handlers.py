@@ -116,6 +116,38 @@ async def _sync_meetings(
     }
 
 
+async def _sync_wis(
+    job: Job,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    progress: ProgressFn,
+    cancel_event: asyncio.Event,
+) -> Mapping[str, JSONValue]:
+    tsg = job.params.get("tsg")
+    if not tsg or not isinstance(tsg, str):
+        raise ValueError("sync_wis job requires a 'tsg' string parameter")
+    if not services.tsg.is_known_short_name(tsg):
+        raise ValueError(
+            f"Unknown TSG short name '{tsg}'. "
+            f"Run 'doc3gpp tsg list' for the full reference."
+        )
+    canonical_tsg = tsg.upper()
+    progress(f"syncing WIs for TSG {canonical_tsg}")
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    synced_count = await asyncio.to_thread(services.wi.sync, canonical_tsg)
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    reason = f"WI sync complete: {synced_count} rows stored for {canonical_tsg}"
+    progress(reason, force=True)
+    return {
+        "status": "synced",
+        "reason": reason,
+        "synced_count": synced_count,
+    }
+
+
 async def _sync_tdocs(
     job: Job,
     services: ServiceContainer,
@@ -836,6 +868,7 @@ class JobHandlers:
 
     KIND_TO_HANDLER: ClassVar[dict[JobKind, Handler]] = {
         JobKind.SYNC_MEETINGS: _sync_meetings,
+        JobKind.SYNC_WIS: _sync_wis,
         JobKind.SYNC_TDOCS: _sync_tdocs,
         JobKind.SYNC_TDOCS_ALL: _sync_tdocs_all,
         JobKind.SYNC_SPECS: _sync_specs,

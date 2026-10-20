@@ -29,6 +29,7 @@ def test_sync_page_renders_end_to_end(seeded_app: Any) -> None:
     assert html.status_code == 200
     for heading in (
         "Meeting sync",
+        "WI sync",
         "TDoc sync",
         "Spec sync",
         "Parse TDocs (filter-driven)",
@@ -68,6 +69,13 @@ def test_sync_page_forms_have_real_inputs(seeded_app: Any) -> None:
     assert 'id="sync-meetings-tsg"' in html
     assert 'id="sync-meetings-force"' in html
 
+    # WI sync: TSG text input
+    assert 'id="sync-wis-tsg"' in html
+
+    # Parse TDocs: exact numeric meeting-id filter
+    assert 'id="parse-tdocs-meeting-id"' in html
+    assert 'name="filter_meeting_id"' in html
+
     # TDoc sync: radio switch + a single value text input (C4: the template
     # uses one ``sync-tdocs-value`` input + a ``selector`` radio group).
     assert 'name="selector"' in html  # radio button group
@@ -95,6 +103,12 @@ def test_sync_page_forms_have_real_inputs(seeded_app: Any) -> None:
             {"tsg": "SA2", "force": False},
             "sync_meetings",
             {"tsg": "SA2"},
+        ),
+        (
+            "/jobs/sync/wis",
+            {"tsg": "R5"},
+            "sync_wis",
+            {"tsg": "R5"},
         ),
         (
             "/jobs/sync/tdocs",

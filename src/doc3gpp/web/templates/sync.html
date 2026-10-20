@@ -20,6 +20,19 @@
     </form>
   </section>
 
+  {# --- Panel 1b — WI sync --- #}
+  <section class="card">
+    <h2>WI sync</h2>
+    <form id="sync-wis-form" class="sync-form"
+          method="post" action="/jobs/sync/wis">
+      <label>TSG <input type="text" id="sync-wis-tsg" name="tsg"
+                         placeholder="e.g. R5" required></label>
+      <button type="submit" class="btn primary">Sync WIs</button>
+      <span class="sync-queued" style="display:none">Sync job queued</span>
+      <div id="sync-wis-form-job-target"></div>
+    </form>
+  </section>
+
   {# --- Panel 2 — TDoc sync (single meeting) --- #}
   <section class="card">
     <h2>TDoc sync</h2>
@@ -99,6 +112,8 @@
           method="post" action="/jobs/parse/tdocs">
       <div class="filters">
         <label>TDoc id <input type="text" name="filter_tdoc_id" placeholder="R5-26%"></label>
+        <label>Meeting ID <input type="number" id="parse-tdocs-meeting-id"
+                                name="filter_meeting_id" min="1" placeholder="156"></label>
         <label>Meeting <input type="text" name="filter_meeting" placeholder="%RAN%"></label>
         <label>Status <input type="text" name="filter_status" placeholder="Approved"></label>
         <label>Spec <input type="text" name="filter_spec" placeholder="38.300"></label>
@@ -231,5 +246,5 @@
     </div>
   </section>
   <script src="/static/js/job_poller.js" defer></script>
-  <script src="/static/js/sync_hub.js" defer></script>
+  <script src="/static/js/sync_hub.js?v={{ app_version }}" defer></script>
 {% endblock %}

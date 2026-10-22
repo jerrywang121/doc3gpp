@@ -152,9 +152,10 @@ doc3gpp testcase show --testcase TC_1      # header + per-path status rows
 
 The CLI ships twelve sub-apps. The most common
 entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
-(TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR cover
-pages), `tdoc show --format raw` (render the converted `.docx`
-markdown), `spec sync` (3GPP specification records with versions),
+(TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR covers
+and ZIP document content), `tdoc show --format raw` (render converted
+Markdown for supported `.docx` members), `spec sync` (3GPP specification
+records with versions),
 `spec doc parse` (specification document conversion and chunking), and
 `tdoc search` / `spec doc search` (unified FTS5, semantic, hybrid, and
 filter-only search).
@@ -218,13 +219,32 @@ doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --o
 
 # show — --tdoc and --ftp-url are mutually exclusive
 doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
-doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # converted .docx markdown
+doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # all converted ZIP documents
+doc3gpp tdoc show --tdoc R5s260009 --format raw --source-file 'Annex/Support.docx' -o support.md
 doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 
-# schema — describe every column of the six tdoc tables (70 rows, no filters)
+# schema — describe every column of the seven tdoc tables (79 rows, no filters)
 doc3gpp tdoc schema --format json
 ```
+
+TDoc ZIP parsing converts supported `.docx` members only. Exactly one document
+must contain the CR cover; it owns the cover and optional TTCN/body-change
+sidecars, while supporting documents are stored as content only. Use
+`--source-file` with `--format raw` to select one full member path; without it,
+multiple bodies are emitted as named blocks. `tdoc_files` remains the metadata
+for auxiliary files discovered in meeting FTP folders—it is not the inventory
+of files inside a ZIP.
+
+Markdown text and source identity are stored in `tdoc_documents` under the
+single `tdoc_extracts` parent for each ZIP URL. The on-disk Markdown ZIP and its
+manifest are derived cache artifacts: purging or evicting them does not remove
+stored content or prevent an FTS5 rebuild. Legacy plain-text, gzip, and
+single-member Markdown cache artifacts remain readable as incomplete version-1
+content; parse discovery treats those extractions as pending so the ordinary
+filtered parse workflow can upgrade them. A URL-anchored raw read is a snapshot
+and does not implicitly download or extract; the TDoc-ID raw path retains its
+existing extraction-on-read behavior.
 
 ### `wi` — Work items
 
@@ -359,6 +379,8 @@ hybrid RRF search, and neither input runs filter-only source SQL.
 # FTS5 text search
 doc3gpp tdoc search --text "NB-IoT scheduling" --tsg RAN1 --limit 10
 doc3gpp tdoc search --text "R5-1234567" --format json
+# FTS5 can find text present only in an extracted supporting document
+doc3gpp tdoc search --text "annex-specific handover parameter" --format json
 
 # vector search
 doc3gpp tdoc search --semantic "power saving for NB-IoT UEs" --limit 10
@@ -400,7 +422,14 @@ score, vector distance, RRF score, or JSON `null` for filter mode.
 `previews` is an object only for FTS5 rows and JSON `null` for the other modes.
 TDoc rows also include `type`, `status`, and `best_chunk_id`. Public rows do
 not expose per-source rank fields, nested hits, or separate distance/RRF
-fields.
+fields. Every TDoc row also contains `matched_documents`: an array of
+`{document_id, ftp_url, source_file, score, previews}` source matches. FTS5 and
+hybrid results may include matches (hybrid preserves the FTS5 source list);
+semantic-only and filter-only rows always contain an empty array. Use each
+entry's exact `ftp_url` and full `source_file` for a source-specific content
+read; the top-level `ftp_url` retains its canonical-parent meaning. The
+existing TDoc-level vector index is unchanged, so semantic-only search does
+not promise supporting-document coverage.
 
 The request-level `--fts5-weight`, `--fts5-query`, and `--sem-query` flags
 were removed. Supply text with `--text`, semantic input with `--semantic`,
@@ -441,9 +470,10 @@ doc3gpp wi list --format markdown
 ```
 
 `tdoc show` accepts the same `--format` + `-o/--output` pair plus
-`--format raw` for the converted `.docx` markdown body. The direct-mode
-`tdoc parse --from-path` / `--from-url` also accepts `--format raw` for
-local-batch use.
+`--format raw` for the main converted `.docx` markdown body. Direct-mode
+`tdoc parse --from-path` / `--from-url` and folder batches also accept
+`--format raw`: one document is emitted unchanged; a multi-document ZIP
+emits named source blocks, with the CR-cover document first.
 
 - `--compact` — strip output formatting. JSON drops indent and operator
   space (single line, `separators=(",", ":")`); Markdown drops CommonMark
@@ -567,7 +597,8 @@ defaults — drop a TOML file at one of these locations (first hit wins):
 2. `./doc3gpp.toml` (project-local — check into git for team defaults).
 3. `~/.config/doc3gpp/config.toml` (user-wide; honors `$XDG_CONFIG_HOME`).
 
-See [`doc3gpp.toml.example`](./doc3gpp.toml.example) for the full schema.
+See the [packaged TOML template](src/doc3gpp/data/doc3gpp.toml.example) for
+the full schema.
 Highlights:
 
 ```toml
@@ -601,17 +632,23 @@ auto_embed_on_parse = true
 # Order: (text, sections, tables, spec_id, version, release)
 bm25_weights = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
 
+# TDoc ZIP archive limits are TOML-only. The byte cap is aggregate
+# uncompressed supported `.docx` content per archive; 0 disables either cap.
 [tdoc_parse]
 max_batch = 100
 max_ftp_depth = 2
+max_documents_per_zip = 100
+max_uncompressed_size_kb = 102400
 
 [search]
 enabled = true                       # sqlite-only FTS5 + BM25 search; off = no-op
 auto_index_on_parse = true           # keep the index in sync after every parse
 snippet_tokens = 8                   # FTS5 snippet() length; --snippet-tokens overrides
 # Per-column BM25 weights — drive FTS5 ranking and snippet selection.
-# Order matches the 8 indexed FTS5 columns.
-bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+# Existing eight-weight values are accepted with a ninth `document_text` weight of 1.0.
+# Order: title, ftp_url, meeting_title, meeting_location, wis,
+# cover_text, change_text, ttcn_text, document_text.
+bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0]
 
 [semantic_search]
 enabled = true                       # master switch for vector/hybrid search

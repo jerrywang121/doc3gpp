@@ -591,21 +591,37 @@ async def _parse_tdoc_url(
             "tdoc_id": r.tdoc_id,
             "ftp_url": r.source_url or "",
             "status": "ok" if r.persisted else "parsed-no-fk",
+            "main_source_file": r.main_source_file,
+            "documents": [
+                {
+                    "document_id": document.document_id,
+                    "source_file": document.source_file,
+                    "file_order": document.file_order,
+                }
+                for document in r.documents
+            ],
         })
 
+    document_count = sum(len(result.documents) for result in batch.results)
+    document_label = "document" if document_count == 1 else "documents"
     progress(
-        f"done: {len(batch.results)} parsed, {len(batch.failures)} failed, "
-        f"{len(batch.skipped)} skipped",
+        f"done: {len(batch.results)} parsed, {document_count} {document_label}, "
+        f"{len(batch.failures)} failed, {len(batch.skipped)} skipped",
         force=True,
     )
 
-    return {
+    summary: dict[str, JSONValue] = {
         "requested": len(batch.results) + len(batch.failures) + len(batch.skipped),
         "successes": len(batch.results),
         "failures": len(batch.failures),
         "skipped": len(batch.skipped),
         "files": files,
     }
+    if batch.failures:
+        # The pipeline's failure messages carry the failing DOCX member path;
+        # return them so queued jobs retain the same source-level detail as CLI.
+        summary["failure_details"] = dict(batch.failures)
+    return summary
 
 
 async def _parse_spec_docs(

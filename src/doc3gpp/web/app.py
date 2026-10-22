@@ -124,6 +124,7 @@ def build_state(settings: Settings) -> WebState:
         ),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
+        tdoc_content=factory.build_tdoc_content_service(settings=settings),
     )
     return WebState(
         settings=settings,

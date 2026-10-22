@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Select, distinct, not_, or_, select
+from sqlalchemy import ColumnElement, Select, distinct, func, not_, or_, select
 
 from doc3gpp.cli_filters import (
     DATE_FILTER_RE,
@@ -10,7 +10,13 @@ from doc3gpp.cli_filters import (
 )
 from doc3gpp.models.search import SearchFilters
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.storage.db.models import MeetingORM, TDocCrDetailOrm, TDocORM
+from doc3gpp.storage.db.models import (
+    MeetingORM,
+    TDocCrDetailOrm,
+    TDocDocumentOrm,
+    TDocExtractOrm,
+    TDocORM,
+)
 from doc3gpp.storage.db.session import get_session_factory
 
 
@@ -204,11 +210,77 @@ class SQLAlchemyTDocRepository:
             stmt = _apply_date_filter(stmt, TDocORM.uploaded_date, uploaded_date)
 
             if exclude_parsed:
-                stmt = stmt.where(
-                    ~select(TDocCrDetailOrm.tdoc_id)
-                    .where(TDocCrDetailOrm.tdoc_id == TDocORM.tdoc_id)
+                declared_count = TDocExtractOrm.document_count
+                child_count = (
+                    select(func.count(TDocDocumentOrm.document_id))
+                    .where(TDocDocumentOrm.ftp_url == TDocExtractOrm.ftp_url)
+                    .correlate(TDocExtractOrm)
+                    .scalar_subquery()
+                )
+                content_count = (
+                    select(func.count(TDocDocumentOrm.markdown_text))
+                    .where(TDocDocumentOrm.ftp_url == TDocExtractOrm.ftp_url)
+                    .correlate(TDocExtractOrm)
+                    .scalar_subquery()
+                )
+                content_hash_count = (
+                    select(func.count(TDocDocumentOrm.content_hash))
+                    .where(
+                        TDocDocumentOrm.ftp_url == TDocExtractOrm.ftp_url,
+                        func.length(TDocDocumentOrm.content_hash) == 64,
+                    )
+                    .correlate(TDocExtractOrm)
+                    .scalar_subquery()
+                )
+                min_file_order = (
+                    select(func.min(TDocDocumentOrm.file_order))
+                    .where(TDocDocumentOrm.ftp_url == TDocExtractOrm.ftp_url)
+                    .correlate(TDocExtractOrm)
+                    .scalar_subquery()
+                )
+                max_file_order = (
+                    select(func.max(TDocDocumentOrm.file_order))
+                    .where(TDocDocumentOrm.ftp_url == TDocExtractOrm.ftp_url)
+                    .correlate(TDocExtractOrm)
+                    .scalar_subquery()
+                )
+                main_document_exists = (
+                    select(TDocDocumentOrm.document_id)
+                    .where(
+                        TDocDocumentOrm.ftp_url == TDocExtractOrm.ftp_url,
+                        TDocDocumentOrm.source_file == TDocExtractOrm.doc_filename,
+                        TDocDocumentOrm.file_order == 0,
+                    )
+                    .correlate(TDocExtractOrm)
                     .exists()
                 )
+                cover_exists = (
+                    select(TDocCrDetailOrm.ftp_url)
+                    .where(
+                        TDocCrDetailOrm.ftp_url == TDocExtractOrm.ftp_url,
+                        TDocCrDetailOrm.tdoc_id == TDocExtractOrm.tdoc_id,
+                    )
+                    .correlate(TDocExtractOrm)
+                    .exists()
+                )
+                complete_extraction_exists = (
+                    select(TDocExtractOrm.ftp_url)
+                    .where(
+                        TDocExtractOrm.tdoc_id == TDocORM.tdoc_id,
+                        TDocExtractOrm.ftp_url == TDocORM.ftp_url,
+                        TDocExtractOrm.extraction_version == 2,
+                        declared_count > 0,
+                        child_count == declared_count,
+                        content_count == declared_count,
+                        content_hash_count == declared_count,
+                        min_file_order == 0,
+                        max_file_order == declared_count - 1,
+                        main_document_exists,
+                        cover_exists,
+                    )
+                    .exists()
+                )
+                stmt = stmt.where(~complete_extraction_exists)
 
             stmt = stmt.order_by(TDocORM.tdoc_id.desc()).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()

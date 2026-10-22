@@ -3,7 +3,14 @@ import io
 
 import pytest
 from docx import Document
-from doc3gpp.parsers.docx_converter import convert_document_to_blocks, HeadingBlock, ParagraphBlock, TableBlock
+
+from doc3gpp.parsers.docx_converter import (
+    HeadingBlock,
+    ParagraphBlock,
+    TableBlock,
+    convert_document_to_blocks,
+)
+
 
 def _make_docx():
     doc = Document()

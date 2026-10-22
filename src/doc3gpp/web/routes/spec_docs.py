@@ -16,7 +16,6 @@ HTTP 404 via :mod:`doc3gpp.web.errors`; oversize / no-docx failures
 map to 422 with the handler message.
 """
 # FastAPI dependency calls in route signatures are intentional.
-# ruff: noqa: B008
 from __future__ import annotations
 
 import asyncio

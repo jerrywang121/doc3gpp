@@ -6,7 +6,6 @@ from doc3gpp.cli import app
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.tsg_service import TsgService
 
-
 # Sample TSG records used by the CLI tests.
 _SAMPLE_TSGS = [
     Tsg(

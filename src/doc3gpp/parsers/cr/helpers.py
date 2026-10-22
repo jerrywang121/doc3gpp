@@ -8,6 +8,7 @@ import re
 import zipfile
 from collections.abc import Sequence
 
+from doc3gpp.parsers.tdoc_zip import _read_first_docx_member
 
 logger = logging.getLogger(__name__)
 
@@ -103,49 +104,47 @@ def _year_from_tdoc_id(tdoc_id: str) -> int | None:
 
 
 def extract_docx_from_zip(zip_bytes: bytes) -> tuple[str, bytes]:
-    """Pull a single ``(filename, bytes)`` pair out of a CR zip.
+    """Select one DOCX member using the shared safe ZIP metadata rules.
 
-    Mirrors the reference's behaviour:
-
-    * Skips ``__MACOSX/`` resource-fork entries (Apple drops them on
-      many macs; they are not real Word files).
-    * Prefers ``.docx`` over ``.doc`` when both are present
-      (only ``docx`` parses are supported).
-    * Falls back to the lexicographically smaller filename when
-      ``.docx`` is not present, matching the reference's stable
-      ordering.
+    This legacy single-file API remains available to existing callers. It
+    reads only the first normalized DOCX path selected by the shared metadata
+    enumerator; when an archive has no DOCX member it retains the historical
+    ``.doc`` byte fallback, although only DOCX files are converted by the new
+    multi-document extraction flow.
 
     Args:
         zip_bytes: Raw bytes of the CR zip.
 
     Returns:
-        ``(filename_in_zip, bytes_of_word_doc)``.
+        ``(normalized_filename_in_zip, bytes_of_word_doc)``.
 
     Raises:
         zipfile.BadZipFile: If the input is not a valid zip archive.
-        ValueError: If the zip contains no ``.docx`` / ``.doc`` entry
-            (only ``__MACOSX/``-style entries were present, or the
-            archive was empty).
+        ValueError: If the zip contains no ``.docx`` / ``.doc`` entry or the
+            input bytes are empty.
     """
     if not zip_bytes:
         raise ValueError("Cannot extract from empty zip bytes")
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        word_docs = [
-            name
-            for name in zf.namelist()
-            if name.lower().endswith((".docx", ".doc"))
-            and not name.lower().startswith("__macosx/")
+
+    docx_member = _read_first_docx_member(zip_bytes)
+    if docx_member is not None:
+        return docx_member
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        legacy_docs = [
+            info.filename
+            for info in archive.infolist()
+            if not info.is_dir()
+            and info.filename.lower().endswith(".doc")
+            and not info.filename.lower().startswith("__macosx/")
         ]
-        if not word_docs:
+        if not legacy_docs:
             raise ValueError(
                 "No .docx or .doc entries found in CR zip "
                 "(after skipping __MACOSX/ resource fork)"
             )
-        word_docs.sort(
-            key=lambda n: (0 if n.lower().endswith(".docx") else 1, n.lower())
-        )
-        target = word_docs[0]
-        return target, zf.read(target)
+        target = min(legacy_docs, key=lambda name: (name.lower(), name))
+        return target, archive.read(target)
 
 
 def _search_pattern_in_lines(

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 
 from doc3gpp.models.search import RebuildProgress, SearchIndexStatus
 from doc3gpp.models.spec_doc import SpecDocHit, SpecDocSearchFilters
@@ -132,5 +132,5 @@ class SpecDocSearchService:
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value
                     """
                 ),
-                {"ts": datetime.utcnow().isoformat(timespec="seconds")},
+                {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds")},
             )

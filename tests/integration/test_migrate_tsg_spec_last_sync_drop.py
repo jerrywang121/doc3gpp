@@ -10,6 +10,7 @@ genuinely present, and is a no-op when it is already absent.
 from __future__ import annotations
 
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
@@ -30,7 +31,7 @@ def test_create_schema_drops_tsg_spec_last_sync(sqlite_env) -> None:
         )
         try:
             conn.execute(text("ALTER TABLE tsgs ADD COLUMN spec_last_sync DATETIME"))
-        except Exception:
+        except SQLAlchemyError:
             pass
 
     create_schema()

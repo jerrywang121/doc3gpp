@@ -1,48 +1,25 @@
 from __future__ import annotations
 
-import re
 from urllib.parse import urljoin
 
+from doc3gpp.models.tdoc_identity import normalize_ftp_path
 
 #: Canonical 3GPP FTP root. Used as the join point when rebuilding full
 #: URLs from relative paths stored in the database (see
 #: :func:`build_ftp_url`).
 FTP_BASE_URL = "https://www.3gpp.org/ftp/"
+__all__ = [
+    "FTP_BASE_URL",
+    "build_ftp_url",
+    "clean_whitespace",
+    "normalize_ftp_path",
+]
 
 
 def clean_whitespace(value: str) -> str:
     """Normalize repeated whitespace in extracted text."""
 
     return " ".join(value.split())
-
-
-def normalize_ftp_path(path: str) -> str:
-    """Normalize a meeting FTP path to a canonical relative path.
-
-    Strips any leading ``ftp://`` / ``ftp:/`` prefix, the
-    ``https://www.3gpp.org/ftp/`` (and ``http://``) variant of the FTP
-    root, leading slashes, and collapses repeated slashes. Backslashes
-    are converted to forward slashes. The result is the path the
-    database stores as ``ftp_url`` (matching the ``meetings.ftp_url``
-    convention).
-
-    The 3GPP FTP server is case-insensitive across the whole path
-    (probed: upper/lower root, deep dirs, filename, and
-    ``Joint_Meetings`` all serve identical bytes), but the DB joins
-    sidecars to ``tdocs`` on exact ``ftp_url`` equality — so the whole
-    relative path is lowercased. Without this, the ``tdocs`` row
-    (XLSX hyperlink spelling, e.g. ``TSG_RAN/WG5_...``) and the
-    parsed sidecar rows (serving-URL spelling, e.g.
-    ``tsg_ran/wg5_...``) diverge and ``tdoc show --tdoc`` misses the
-    cover/TTCN/extract rows.
-    """
-    normalized = path.strip().replace("\\", "/")
-    normalized = re.sub(r"^https?://www\.3gpp\.org/ftp/", "", normalized, flags=re.IGNORECASE)
-    normalized = re.sub(r"^ftp:/+", "", normalized, flags=re.IGNORECASE)
-    normalized = normalized.lstrip("/")
-    normalized = re.sub(r"/{2,}", "/", normalized)
-    normalized = normalized.lower()
-    return normalized
 
 
 def build_ftp_url(relative: str) -> str:

@@ -281,8 +281,8 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
         ]
         sql = [
             "SELECT spec_doc_search.chunk_id,",
-            "       bm25(spec_doc_search, :w0, :w1, :w2, :w3, :w4, :w5)"
-            " AS score,",
+            ("       bm25(spec_doc_search, :w0, :w1, :w2, :w3, :w4, :w5)"
+            " AS score,"),
         ]
         params: dict[str, Any] = {
             "query": match_expr,
@@ -302,8 +302,8 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
             "       c.sections, c.tables,",
             "       c.chunk_index, c.text",
             "  FROM spec_doc_search",
-            "  JOIN spec_doc_chunks c"
-            "    ON c.chunk_id = spec_doc_search.chunk_id",
+            ("  JOIN spec_doc_chunks c"
+            "    ON c.chunk_id = spec_doc_search.chunk_id"),
             " WHERE spec_doc_search MATCH :query",
         ])
         for attr, column, param in (

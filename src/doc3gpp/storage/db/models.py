@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Date,
@@ -13,7 +12,9 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -305,12 +306,10 @@ class TDocCrChangeDetailOrm(Base):
 class TDocExtractOrm(Base):
     """Metadata-only sidecar recording that a TDoc has been extracted.
 
-    The "expensive" payload (the cached zip and the rendered markdown)
-    lives on disk under the cache directory — these columns only hold
-    *paths*. A row here means ``scraping.tdoc_zip_source`` and
-    ``parsers.docx_converter`` have already produced artefacts
-    on disk, so the next extract call can short-circuit the network
-    and the python-docx render.
+    The cached ZIP and derived Markdown archive remain on disk under the
+    cache directory. The authoritative converted Markdown bodies live in
+    :class:`TDocDocumentOrm` rows keyed by this immutable ZIP URL; this parent
+    carries cache paths, provenance, and extraction completeness.
 
     Mirrors the URL-PK scheme of :class:`TDocCrDetailOrm`: identity
     is the immutable download URL (stored relative to the 3GPP FTP
@@ -336,6 +335,42 @@ class TDocExtractOrm(Base):
     parser_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="1.0.0"
     )
+    extraction_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    document_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+
+
+class TDocDocumentOrm(Base):
+    """Authoritative Markdown and source provenance for one ZIP member."""
+
+    __tablename__ = "tdoc_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "ftp_url",
+            "source_file",
+            name="uq_tdoc_documents_ftp_url_source_file",
+        ),
+        UniqueConstraint(
+            "ftp_url",
+            "file_order",
+            name="uq_tdoc_documents_ftp_url_file_order",
+        ),
+    )
+
+    document_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ftp_url: Mapped[str] = mapped_column(
+        String(1024),
+        ForeignKey("tdoc_extracts.ftp_url", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_file: Mapped[str] = mapped_column(String(1024), nullable=False)
+    markdown_file: Mapped[str] = mapped_column(String(1024), nullable=False)
+    file_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    markdown_text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class JobORM(Base):

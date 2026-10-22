@@ -10,11 +10,11 @@ instance.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import threading
 import zipfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -29,6 +29,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_document import TDocDocument, TDocParseBundle
 from doc3gpp.parsers.cr_parser import CRHeaderMissingError
 from doc3gpp.parsers.direct_extractor import (
     build_missing_tdoc_id_warning_message,
@@ -38,6 +39,12 @@ from doc3gpp.parsers.direct_extractor import (
     extract_tdoc_id_from_filename,
     is_3gpp_ftp_url,
     read_source_bytes,
+)
+from doc3gpp.parsers.tdoc_zip import (
+    TDocZipLimitError,
+    TDocZipValidationError,
+    document_id_for,
+    ephemeral_document_id_for,
 )
 from doc3gpp.scraping.tdoc_zip_source import download_tdoc_zip
 from doc3gpp.services.tdoc_cr_service import TDocCrService
@@ -65,6 +72,79 @@ def _make_dummy_zip(entries: dict[str, bytes]) -> bytes:
         for name, payload in entries.items():
             zf.writestr(name, payload)
     return buf.getvalue()
+
+
+def _make_docx(text: str) -> bytes:
+    from docx import Document
+
+    document = Document()
+    for line in text.splitlines() or [text]:
+        document.add_paragraph(line)
+    payload = io.BytesIO()
+    document.save(payload)
+    return payload.getvalue()
+
+
+def _test_document(
+    markdown_text: str, *, source_file: str = "main.docx", file_order: int = 0,
+) -> TDocDocument:
+    document_id = ephemeral_document_id_for(
+        hashlib.sha256(b"direct-result-test-payload").hexdigest(),
+        source_file,
+    )
+    markdown_file = (
+        f"documents/{document_id}/{Path(source_file).stem or 'document'}.md"
+    )
+    return TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=markdown_file,
+        file_order=file_order,
+        markdown_text=markdown_text,
+        content_hash=hashlib.sha256(markdown_text.encode("utf-8")).hexdigest(),
+    )
+
+
+def _stored_document(
+    markdown_text: str, *, ftp_url: str, source_file: str,
+) -> TDocDocument:
+    document_id = document_id_for(ftp_url, source_file)
+    markdown_name = Path(source_file).stem or "document"
+    return TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=f"documents/{document_id}/{markdown_name}.md",
+        file_order=0,
+        markdown_text=markdown_text,
+        content_hash=hashlib.sha256(markdown_text.encode("utf-8")).hexdigest(),
+    )
+
+
+def _direct_result(
+    *,
+    source_kind: str = "local",
+    markdown: str = "3GPP TSG- blah",
+    details: Any = None,
+    extract_meta: Any = None,
+    from_cache: bool = False,
+    persisted: bool = False,
+    tdoc_id: str | None = None,
+    tdoc_id_in_tdocs: bool = False,
+    source_url: str | None = None,
+) -> DirectParseResult:
+    document = _test_document(markdown)
+    return DirectParseResult(
+        source_kind=source_kind,
+        documents=(document,),
+        main_source_file=document.source_file,
+        details=details,
+        extract_meta=extract_meta,
+        from_cache=from_cache,
+        persisted=persisted,
+        tdoc_id=tdoc_id,
+        tdoc_id_in_tdocs=tdoc_id_in_tdocs,
+        source_url=source_url,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +383,7 @@ def test_download_tdoc_zip_without_ftp_url_uses_template_url() -> None:
     template URL as the download source (and the cache key is derived
     from that template)."""
     client = MagicMock()
-    client.get_text.return_value = ""  # noqa: F841 - placeholder
+    client.get_text.return_value = ""
     client.get_bytes.return_value = b"payload"
     cache = _StubCache()
     result = download_tdoc_zip(
@@ -367,16 +447,11 @@ def test_download_tdoc_zip_distinct_ftp_urls_never_collide() -> None:
 def test_direct_parse_bytes_with_bare_docx_returns_synthetic_id(
     tmp_path: Path,
 ) -> None:
-    """A bare ``.docx`` payload with no 3GPP id in the filename gets a ``LOCAL-`` synthetic id.
-
-    The docx body must still be a valid 3GPP CR cover sheet (so the
-    parser accepts it) — only the *filename* lacks a 3GPP id, which
-    is what triggers the ``_synthetic_tdoc_id`` fallback in
-    :func:`direct_parse_bytes`.
-    """
+    """A bare DOCX returns a one-document bundle with its synthetic CR ID."""
     if not _docx_available():
         pytest.skip("python-docx not installed")
     from docx import Document
+
     doc = Document()
     doc.add_heading("3GPP TSG-RAN WG5 Meeting #1234-TTCN email", level=1)
     doc.add_paragraph("CR-Form-v12.4")
@@ -386,33 +461,151 @@ def test_direct_parse_bytes_with_bare_docx_returns_synthetic_id(
     )
     buf = io.BytesIO()
     doc.save(buf)
-    docx_bytes = buf.getvalue()
-    markdown, doc_filename, parsed = direct_parse_bytes(
-        docx_bytes, filename="random.docx", full=False,
-    )
-    assert parsed.cover.tdoc_id.startswith("LOCAL-")
-    assert doc_filename == "random.docx"
+
+    bundle = direct_parse_bytes(buf.getvalue(), filename="random.docx", full=False)
+
+    assert isinstance(bundle, TDocParseBundle)
+    assert len(bundle.documents) == 1
+    assert bundle.main_source_file == "random.docx"
+    assert bundle.main_parse_result.cover.tdoc_id.startswith("LOCAL-")
 
 
-def test_direct_parse_bytes_with_zip_picks_inner_docx(
+def test_direct_parse_bytes_with_zip_returns_bundle_with_inner_source(
     tmp_path: Path,
 ) -> None:
-    """A zip payload dispatches to ``extract_docx_from_zip`` and returns the inner name."""
+    """A single-member ZIP produces a bundle whose main source is the DOCX path."""
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists() or not _docx_available():
         pytest.skip("python-docx or fixture missing")
-    zip_bytes = fixture.read_bytes()
-    markdown, doc_filename, parsed = direct_parse_bytes(
-        zip_bytes, filename="R5s260009.zip", full=False,
+
+    bundle = direct_parse_bytes(
+        fixture.read_bytes(), filename="R5s260009.zip", full=False,
     )
-    assert doc_filename == "R5s260009.docx"
-    assert parsed.cover.tdoc_id == "R5s260009"
+
+    assert isinstance(bundle, TDocParseBundle)
+    assert len(bundle.documents) == 1
+    assert bundle.main_source_file == bundle.documents[0].source_file
+    assert bundle.main_parse_result.cover.tdoc_id == "R5s260009"
 
 
 def test_direct_parse_bytes_rejects_malformed_zip() -> None:
     """A zip-shaped but malformed payload raises ``ValueError``."""
     with pytest.raises((ValueError, zipfile.BadZipFile)):
         direct_parse_bytes(b"PK\x03\x04 corrupt", filename="x.zip", full=False)
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_converts_every_member_and_selects_cr_main() -> None:
+    """The CR cover, not ZIP path order, identifies the main document."""
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    with zipfile.ZipFile(io.BytesIO(fixture.read_bytes())) as archive:
+        main_docx = archive.read(next(
+            name for name in archive.namelist() if name.lower().endswith(".docx")
+        ))
+    payload = _make_dummy_zip({
+        "a/support-alpha.docx": _make_docx("support alpha distinctive body"),
+        "b/support-beta.docx": _make_docx("support beta distinctive body"),
+        "z/R5s260009.docx": main_docx,
+    })
+
+    bundle = direct_parse_bytes(payload, filename="R5s260009.zip", full=True)
+
+    assert isinstance(bundle, TDocParseBundle)
+    assert bundle.main_source_file == "z/R5s260009.docx"
+    assert [document.source_file for document in bundle.documents] == [
+        "z/R5s260009.docx",
+        "a/support-alpha.docx",
+        "b/support-beta.docx",
+    ]
+    assert [document.file_order for document in bundle.documents] == [0, 1, 2]
+    assert "support alpha distinctive body" in bundle.documents[1].markdown_text
+    assert "support beta distinctive body" in bundle.documents[2].markdown_text
+    assert bundle.documents[0].markdown_text
+    assert bundle.main_parse_result.cover.tdoc_id == "R5s260009"
+    assert len({document.document_id for document in bundle.documents}) == 3
+    assert tuple(document.document_id for document in bundle.documents) == tuple(
+        document.document_id
+        for document in direct_parse_bytes(payload, filename="R5s260009.zip").documents
+    )
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_rejects_multiple_cr_cover_candidates() -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    with zipfile.ZipFile(io.BytesIO(fixture.read_bytes())) as archive:
+        main_docx = archive.read(next(
+            name for name in archive.namelist() if name.lower().endswith(".docx")
+        ))
+    payload = _make_dummy_zip({
+        "a/one.docx": main_docx,
+        "b/two.docx": main_docx,
+    })
+
+    with pytest.raises(ValueError, match="exactly one"):
+        direct_parse_bytes(payload, filename="R5s260009.zip")
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_applies_document_and_expanded_size_limits() -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    with zipfile.ZipFile(io.BytesIO(fixture.read_bytes())) as archive:
+        main_docx = archive.read(next(
+            name for name in archive.namelist() if name.lower().endswith(".docx")
+        ))
+    payload = _make_dummy_zip({
+        "a/support.docx": _make_docx("support text"),
+        "z/main.docx": main_docx,
+    })
+
+    with pytest.raises(TDocZipLimitError, match="document-count limit"):
+        direct_parse_bytes(payload, filename="R5s260009.zip", max_documents=1)
+    with pytest.raises(TDocZipLimitError, match="uncompressed byte limit"):
+        direct_parse_bytes(
+            payload,
+            filename="R5s260009.zip",
+            max_uncompressed_bytes=32,
+        )
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_rejects_unsafe_supported_member() -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    with zipfile.ZipFile(io.BytesIO(fixture.read_bytes())) as archive:
+        main_docx = archive.read(next(
+            name for name in archive.namelist() if name.lower().endswith(".docx")
+        ))
+
+    with pytest.raises(TDocZipValidationError):
+        direct_parse_bytes(
+            _make_dummy_zip({"../unsafe.docx": main_docx}),
+            filename="R5s260009.zip",
+        )
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_fails_if_any_supported_member_is_corrupt() -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    with zipfile.ZipFile(io.BytesIO(fixture.read_bytes())) as archive:
+        main_docx = archive.read(next(
+            name for name in archive.namelist() if name.lower().endswith(".docx")
+        ))
+    payload = _make_dummy_zip({
+        "a/broken.docx": b"not a Word document",
+        "z/R5s260009.docx": main_docx,
+    })
+
+    with pytest.raises(ValueError, match="broken.docx"):
+        direct_parse_bytes(payload, filename="R5s260009.zip")
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +640,8 @@ def _build_service_with_fake_repos(
     cr_ttcn_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = None
+    extraction_repo = MagicMock()
+    extraction_repo.list_documents.return_value = ()
     service = TDocCrService(
         cache=cache,
         scraper_client=scraper,
@@ -454,6 +649,7 @@ def _build_service_with_fake_repos(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
+        extraction_repository=extraction_repo,
     )
     return service, scraper, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
@@ -481,7 +677,7 @@ def test_extract_from_bytes_never_touches_cache_or_db(tmp_path: Path) -> None:
     doc.save(buf)
     payload = buf.getvalue()
 
-    service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
+    service, _scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
     result = service.extract_from_bytes(payload, "local.docx", full=False)
@@ -565,6 +761,10 @@ def test_extract_from_url_other_url_skips_cache_and_db(tmp_path: Path) -> None:
     assert result.source_kind == "url-other"
     assert result.from_cache is False
     assert result.persisted is False
+    assert result.extract_meta is None
+    assert len(result.documents) == 1
+    assert result.main_source_file == result.documents[0].source_file
+    assert result.details is not None and result.details.ftp_url is None
     assert cache.put_calls == []
     assert cr_repo.upsert.call_count == 0
 
@@ -572,11 +772,15 @@ def test_extract_from_url_other_url_skips_cache_and_db(tmp_path: Path) -> None:
 def test_extract_from_url_3gpp_with_tdoc_in_tdocs_writes_cache_and_db(
     tmp_path: Path,
 ) -> None:
-    """3GPP URL + ``tdoc_id ∈ tdocs`` is the full happy path."""
+    """A stored 3GPP URL atomically persists all documents and one parent."""
     if not _docx_available():
         pytest.skip("python-docx not installed")
     fixture = FIXTURES_DIR / "R5s260009.zip"
-    zip_bytes = fixture.read_bytes()
+    _, main_docx = _read_zip(fixture)
+    zip_bytes = _make_dummy_zip({
+        "a/support.docx": _make_docx("URL support body"),
+        "z/R5s260009.docx": main_docx,
+    })
     service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=zip_bytes,
     )
@@ -586,15 +790,23 @@ def test_extract_from_url_3gpp_with_tdoc_in_tdocs_writes_cache_and_db(
 
     url = "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
     result = service.extract_from_url(url, force=False, full=False)
+
     assert result.source_kind == "url-3gpp"
     assert result.persisted is True
     assert result.from_cache is False
     assert result.details is not None
     assert result.extract_meta is not None
-    assert cr_repo.upsert.call_count == 1
-    # The zip cache key is derived from the URL the service fetched.
+    assert result.extract_meta.extraction_version == 2
+    assert result.extract_meta.document_count == 2
+    assert [document.source_file for document in result.documents] == [
+        "z/R5s260009.docx",
+        "a/support.docx",
+    ]
+    service._extraction_repo.replace_bundle.assert_called_once()  # type: ignore[attr-defined]
+    cr_repo.upsert.assert_not_called()
     expected_key = derive_cache_file(url)
     assert any(call[0] == expected_key for call in cache.put_calls)
+    assert scraper.get_bytes.call_count == 1
 
 
 def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
@@ -631,6 +843,10 @@ def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
     assert result.tdoc_id_in_tdocs is False
     assert result.persisted is False
     assert result.extract_meta is None
+    assert len(result.documents) == 1
+    assert result.main_source_file == result.documents[0].source_file
+    assert result.details is not None and result.details.ftp_url is None
+    assert service._extraction_repo.replace_bundle.call_count == 0  # type: ignore[attr-defined]
     assert cr_repo.upsert.call_count == 0
     assert cache.put_calls == []
 
@@ -672,7 +888,7 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_is_rejected(
 def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
     tmp_path: Path,
 ) -> None:
-    """A pre-existing ``tdoc_cr_cover_page`` row means ``from_cache=True`` and no new network call."""
+    """A complete version-2 SQL bundle short-circuits download and conversion."""
     if not _docx_available():
         pytest.skip("python-docx not installed")
     fixture = FIXTURES_DIR / "R5s260009.zip"
@@ -680,20 +896,32 @@ def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
     service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=zip_bytes,
     )
+    ftp_url = (
+        "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
+    )
     tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip",
+        tdoc_id="R5s260009", type="CR", ftp_url=ftp_url
     )
     cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
-    cr_repo.get_extract_meta_by_url.return_value = _make_meta("R5s260009")
+    meta = _make_meta("R5s260009")
+    cr_repo.get_extract_meta_by_url.return_value = meta
+    document = _stored_document(
+        "stored SQL markdown",
+        ftp_url=meta.ftp_url,
+        source_file=meta.doc_filename,
+    )
+    service._extraction_repo.list_documents.return_value = (document,)  # type: ignore[attr-defined]
 
     result = service.extract_from_url(
-        "https://www.3gpp.org/ftp/.../R5s260009.zip", force=False, full=False,
+        "https://www.3gpp.org/ftp/" + ftp_url, force=False, full=False,
     )
+
     assert result.from_cache is True
     assert result.persisted is False
+    assert result.documents == (document,)
+    assert result.main_source_file == meta.doc_filename
     assert scraper.get_bytes.call_count == 0
+    assert cache.put_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -711,19 +939,9 @@ def _make_meta(tdoc_id: str) -> TDocExtractMeta:
         tdoc_id=tdoc_id,
         cache_file=f"{tdoc_id}.zip",
         doc_filename=tdoc_id + ".docx",
+        extraction_version=2,
+        document_count=1,
     )
-
-
-@dataclass
-class _FakeDirectResult:
-    source_kind: str = "local"
-    markdown: str = "3GPP TSG- blah"
-    details: Any = None
-    extract_meta: Any = None
-    from_cache: bool = False
-    persisted: bool = False
-    tdoc_id: str | None = None
-    tdoc_id_in_tdocs: bool = False
 
 
 class _FakeService:
@@ -779,7 +997,7 @@ def test_cli_from_path_file_table_format_emits_single_row(tmp_path: Path, monkey
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out.tsv"
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -815,7 +1033,7 @@ def test_cli_from_path_file_uses_shared_runner(
     """A direct local file passes the invocation runner to the service."""
     source = tmp_path / "R5s260009.docx"
     source.write_bytes(b"dummy")
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -841,7 +1059,7 @@ def test_cli_from_path_file_markdown_format_emits_gfm_table(tmp_path: Path, monk
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out.md"
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -876,7 +1094,7 @@ def test_cli_from_path_file_json_format_emits_object(tmp_path: Path, monkeypatch
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out.json"
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -911,7 +1129,7 @@ def test_cli_from_path_file_raw_format_writes_markdown_verbatim(
     """``--format raw`` writes the converted markdown and never calls the parser."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- raw markdown body\n\n",
         details=None,
@@ -933,6 +1151,43 @@ def test_cli_from_path_file_raw_format_writes_markdown_verbatim(
     )
     assert result.exit_code == 0, result.output
     assert "raw markdown body" in result.output
+
+
+def test_cli_multi_document_raw_escapes_source_comment_terminators(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    source = tmp_path / "R5s260009.zip"
+    source.write_bytes(b"fake ZIP bytes")
+    main = _test_document("main body", source_file="z/main.docx", file_order=0)
+    support = _test_document(
+        "support body", source_file="annex/close-->comment.docx", file_order=1
+    )
+    result_value = DirectParseResult(
+        source_kind="local",
+        documents=(main, support),
+        main_source_file=main.source_file,
+        details=None,
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id=None,
+        tdoc_id_in_tdocs=False,
+    )
+    _build_service_factory(monkeypatch, _FakeService(result_value))
+
+    result = CliRunner().invoke(
+        app,
+        ["tdoc", "parse", "--from-path", str(source), "--format", "raw"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert '<!-- doc3gpp-source: "z/main.docx" -->' in result.output
+    assert (
+        r'<!-- doc3gpp-source: "annex/close--\u003ecomment.docx" -->'
+        in result.output
+    )
+    assert "main body" in result.output
+    assert "support body" in result.output
 
 
 def test_cli_from_path_file_and_from_url_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
@@ -957,7 +1212,7 @@ def test_cli_from_path_file_with_filter_flag_warns_and_proceeds(
     """A filter flag set with ``--from-path`` warns on stderr and continues."""
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1079,7 +1334,7 @@ def test_cli_from_url_uses_shared_runner(
     monkeypatch,
 ) -> None:
     """A direct URL passes the invocation runner to the service."""
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="url-other",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260001"),
@@ -1125,11 +1380,52 @@ def test_cli_from_path_size_skip_keeps_exit_and_runner_contract(
     assert fake.bytes_runner_calls and fake.bytes_runner_calls[0] is not None
 
 
+def test_cli_single_file_archive_limit_is_reported_as_skip(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    source = tmp_path / "R5s260009.zip"
+    source.write_bytes(b"zip bytes")
+    fake = _FakeService(TDocZipLimitError("TDoc ZIP document-count limit exceeded"))
+    _build_service_factory(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app, ["tdoc", "parse", "--from-path", str(source), "--format", "raw"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "SKIPPED - TDocZipLimitError" in result.output
+
+
+def test_cli_local_folder_archive_limit_uses_skip_summary(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "R5s260009.zip").write_bytes(b"zip bytes")
+    output_dir = tmp_path / "output"
+    fake = _FakeService(TDocZipLimitError("aggregate uncompressed byte limit exceeded"))
+    _build_service_factory(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(input_dir),
+            "--output", str(output_dir),
+            "--format", "raw",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Skipped (archive member limits): 1" in result.output
+    assert "Failures:                        0" in result.output
+
+
 def test_cli_from_url_3gpp_missing_tdoc_emits_warning(
     tmp_path: Path, monkeypatch,
 ) -> None:
     """A 3GPP URL with the tdoc_id missing from ``tdocs`` warns on stderr + still emits output."""
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="url-3gpp",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260043"),
@@ -1162,7 +1458,7 @@ def test_cli_from_url_3gpp_no_pattern_emits_warning(
     tmp_path: Path, monkeypatch,
 ) -> None:
     """A 3GPP URL whose filename has no tdoc_id pattern warns on stderr + still emits output."""
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="url-3gpp",
         markdown="3GPP TSG- blah",
         details=_dummy_details("LOCAL-x"),
@@ -1260,7 +1556,7 @@ def test_cli_from_path_single_file_writes_output(
     source.write_bytes(b"dummy")
     out = tmp_path / "out"
 
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1302,7 +1598,7 @@ def test_cli_from_path_respects_format_extension(
     source.write_bytes(b"dummy")
     out = tmp_path / "out"
 
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1344,7 +1640,7 @@ def test_cli_from_path_skips_existing_without_force(
     existing = out / "R5s260009.tsv"
     existing.write_text("stay")
 
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1384,7 +1680,7 @@ def test_cli_from_path_force_overwrites_existing(
     existing = out / "R5s260009.tsv"
     existing.write_text("stay")
 
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1431,7 +1727,7 @@ def test_cli_from_path_recursive_mirrors_subfolders(
         ) -> DirectParseResult:
             call_count["n"] += 1
             tdoc_id = extract_tdoc_id_from_filename(filename) or "R5s260009"
-            return DirectParseResult(
+            return _direct_result(
                 source_kind="local",
                 markdown="3GPP TSG- blah",
                 details=_dummy_details(tdoc_id),
@@ -1499,7 +1795,7 @@ def test_cli_from_path_folder_prepares_in_parallel_and_emits_sorted(
                     first_can_finish.set()
                 tdoc_id = extract_tdoc_id_from_filename(filename)
                 assert tdoc_id is not None
-                return DirectParseResult(
+                return _direct_result(
                     source_kind="local",
                     markdown=f"markdown-{tdoc_id}",
                     details=_dummy_details(tdoc_id),
@@ -1548,7 +1844,7 @@ def test_cli_from_path_folder_preserves_output_collision_skip(
     (in_dir / "R5s260009.zip").write_bytes(b"zip")
     out = tmp_path / "out"
 
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="first markdown",
         details=_dummy_details("R5s260009"),
@@ -1613,7 +1909,7 @@ def test_cli_from_path_skips_files_without_tdoc_pattern(
     (in_dir / "R5s260009.docx").write_bytes(b"dummy")
     out = tmp_path / "out"
 
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1669,7 +1965,7 @@ def test_cli_from_path_ignores_filter_flags_with_warning(
     (in_dir / "R5s260009.docx").write_bytes(b"dummy")
     out = tmp_path / "out"
 
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1706,7 +2002,7 @@ def test_cli_from_path_auto_detects_file_routes_to_single_parse(
     source = tmp_path / "R5s260009.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out.tsv"
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1755,7 +2051,7 @@ def test_cli_from_path_file_silently_ignores_recursive(
     """``--recursive`` is ignored when ``--from-path`` points to a single file."""
     source = tmp_path / "R5s260009.docx"
     source.write_bytes(b"dummy")
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1808,7 +2104,7 @@ def test_cli_from_path_file_json_compact_emits_single_line(
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out.json"
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1847,7 +2143,7 @@ def test_cli_from_path_file_markdown_compact_drops_gfm_decorators(
     source = tmp_path / "in.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out.md"
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1888,7 +2184,7 @@ def test_cli_from_path_directory_json_compact_emits_single_line(
     source = in_dir / "R5s260009.docx"
     source.write_bytes(b"dummy")
     out = tmp_path / "out"
-    fake = _FakeService(DirectParseResult(
+    fake = _FakeService(_direct_result(
         source_kind="local",
         markdown="3GPP TSG- blah",
         details=_dummy_details("R5s260009"),
@@ -1942,21 +2238,8 @@ def test_direct_parse_bytes_raises_when_payload_too_large() -> None:
 
 
 def test_direct_parse_bytes_max_bytes_zero_is_noop() -> None:
-    """``max_bytes=0`` disables the guard — no TDocTooLargeError raised.
-
-    Uses a clearly-invalid payload (one byte, with a ``.zip``
-    extension) to assert that *only* the size guard is bypassed —
-    other parser errors (zipfile.BadZipFile, CRHeaderMissingError)
-    may still surface.
-    """
+    """A zero source-size cap reaches ZIP validation instead of size skipping."""
     from doc3gpp.parsers.direct_extractor import direct_parse_bytes
-    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
 
-    try:
+    with pytest.raises(zipfile.BadZipFile):
         direct_parse_bytes(b"x", filename="R5-260100.zip", max_bytes=0)
-    except TDocTooLargeError as exc:
-        pytest.fail(f"max_bytes=0 must disable the guard; got {exc}")
-    except Exception:
-        # Any other exception is acceptable — we only assert the
-        # size guard did not fire on a tiny payload.
-        pass

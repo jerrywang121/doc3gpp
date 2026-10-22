@@ -33,7 +33,7 @@ DETAIL_FIXTURE = Path(__file__).parent.parent / "fixtures" / "spec_pages" / "R5_
 
 def test_parse_spec_detail_header_fields() -> None:
     html = DETAIL_FIXTURE.read_text(encoding="utf-8")
-    header, versions = parse_spec_detail(html, "36.579-5", "R5")
+    header, _versions = parse_spec_detail(html, "36.579-5", "R5")
     assert header.status == "Under change control"
     assert header.initial_release == "Rel-20"
     assert header.radio_tech == "2G,3G,LTE,5G"
@@ -59,7 +59,7 @@ def test_parse_spec_detail_header_wis_telerik_grid() -> None:
 
 def test_parse_spec_detail_versions() -> None:
     html = DETAIL_FIXTURE.read_text(encoding="utf-8")
-    header, versions = parse_spec_detail(html, "36.579-5", "R5")
+    _header, versions = parse_spec_detail(html, "36.579-5", "R5")
     assert len(versions) == 2
     v0 = versions[0]
     assert v0.version == "18.3.0"

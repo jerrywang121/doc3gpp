@@ -199,14 +199,15 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/meetings/{id}` | Meeting detail (HTML or JSON). |
 | GET | `/tdocs` | List TDocs (`?format=json`; repeatable `fields` selects the HTML columns, see below). |
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
-| GET | `/tdocs/{id}/content` | Parsed markdown/HTML content (`?format=markdown\|html`). 404 `cache_miss` with a hint when unparsed. |
+| GET | `/tdocs/by-url/content` | Exact ZIP-URL content snapshot (`?ftp_url=<url>`, optional `source_file`, `format=html\|markdown\|json`; default `html`). Registered before parameterized content routes; no sync, download, or extraction. |
+| GET | `/tdocs/{id}/content` | Stored TDoc content (`?format=html\|markdown\|json`, default `html`; optional exact `source_file`). SQL-first; no implicit sync, download, or extraction. |
 | GET | `/tdocs/{id}/download` | Download the cached source zip (404 `cache_miss` with a hint when unparsed). |
 | GET | `/tdocs/by-url` | URL-anchored TDoc show (`?ftp_url=<url>`; HTML or JSON). 404 when the URL matches no row in any of the six URL-keyed tables. |
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/schema` | TSG field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp tsg schema --format json` payload verbatim). No DB access. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/meetings/schema` | Meeting field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp meeting schema --format json` payload verbatim). No DB access. |
-| GET | `/tdocs/schema` | TDoc field descriptors across the six `tdoc` tables (HTML grouped by table; `?format=json` is the `doc3gpp tdoc schema --format json` payload verbatim). No DB access. |
+| GET | `/tdocs/schema` | TDoc field descriptors across the seven `tdoc` tables (79 fields; HTML grouped by table; `?format=json` is the `doc3gpp tdoc schema --format json` payload verbatim). No DB access. |
 | GET | `/wis/schema` | WI field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp wi schema --format json` payload verbatim). No DB access. |
 | GET | `/specs/schema` | Spec field descriptors across `specs` + `spec_versions` (HTML grouped by table; `?format=json` is the `doc3gpp spec schema --format json` payload verbatim). No DB access. |
 | GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
@@ -232,12 +233,64 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/tdocs/index` | Enqueue unified TDoc FTS5/vector index maintenance. |
 | POST | `/jobs/spec-docs/index` | Enqueue unified spec-doc FTS5/vector index maintenance. |
 | POST | `/jobs/cache/purge` | Enqueue `cache_purge` (requires `yes: true`). |
-| POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single TDoc file or folder on the canonical 3GPP FTP site; accepts HTTPS `https://www.3gpp.org/ftp/...` or bare `www.3gpp.org/ftp/...`, normalizes the latter, rejects explicit HTTP and non-TDoc spec archives, and permits an optional folder trailing slash; `recursive` XOR `max_depth`). |
+| POST | `/jobs/parse/tdoc-url` | Enqueue `parse_tdoc_url` (a single TDoc file or folder on the canonical 3GPP FTP site; accepts HTTPS `https://www.3gpp.org/ftp/...` or bare `www.3gpp.org/ftp/...`, normalizes the latter, rejects explicit HTTP and non-TDoc spec archives, and permits an optional folder trailing slash; `recursive` XOR `max_depth`). Successful per-file summaries include `main_source_file` and ordered document IDs/source paths/file orders. |
 | POST | `/jobs/parse/spec-docs` | Enqueue `parse_spec_docs` for one spec id (`spec_id`, optional `release`, `version`, and `force`); progress is streamed through the normal job SSE endpoint. This job is intentionally not a panel on the twelve-form `/sync` hub. |
 | POST | `/jobs/{id}/cancel` | Cancel a queued/running job. Accepts `?format=html` to return the refreshed job row as an `outerHTML` swap target for the list page's per-row Cancel button. JSON otherwise. |
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
 | GET | `/sync` | Sync hub page: twelve enqueue forms (meetings, WIs, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, TDoc index maintenance, spec-document index maintenance, cache-purge, testcases) + a "Recent sync jobs" table. The WI form requires a blank-by-default TSG field and has no force option; the Parse TDocs form includes an exact numeric Meeting ID filter. |
 | GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
+
+### TDoc content and source selectors
+
+`GET /tdocs/{tdoc_id}/content` accepts `format=html|markdown|json` (default
+`html`) and an optional exact `source_file` query parameter. The
+URL-anchored sibling `GET /tdocs/by-url/content?ftp_url=<url>` has the same
+format/source options and is registered before parameterized TDoc routes.
+`source_file` is the full case-preserving member path inside that ZIP, not a
+local path; it is scoped to the selected TDoc or exact ZIP URL. An unknown
+source is a not-found response, never a fallback to the main document.
+
+The JSON envelope is shared with MCP and contains extraction metadata even
+when one source is selected:
+
+```json
+{
+  "tdoc_id": "R5-123456",
+  "ftp_url": "R5/26.001/R5-123456.zip",
+  "extraction_version": 2,
+  "complete": true,
+  "documents": [
+    {"document_id": "…", "source_file": "CR/Main.docx", "is_main": true, "markdown": "…"},
+    {"document_id": "…", "source_file": "Annex/Info.docx", "is_main": false, "markdown": "…"}
+  ]
+}
+```
+
+`complete` describes the stored extraction, not the number of documents in a
+source-filtered response. Markdown returns one body unchanged or multiple
+main-first blocks prefixed with `<!-- doc3gpp-source: <JSON source_file> -->`;
+HTML renders distinct Main/Supporting document sections and exact-source
+links. Content reads are SQL-first: the Markdown stored in `tdoc_documents`
+remains available after Markdown-cache purge/eviction, and cache eviction does
+not prevent an FTS5 rebuild. The ZIP and its manifest under the cache are
+derived artifacts, not the content source of truth.
+
+Legacy plain UTF-8, gzip, and single-member Markdown ZIP artifacts can be read
+when their source is known, but are returned as version 1 with `complete=false`
+and never upgraded to a complete version-2 extraction by cache decoding. HTTP
+HTML/Markdown responses mark incomplete text with
+`X-Doc3gpp-Extraction-Complete: false`; the JSON envelope carries
+`"complete": false`. Inconsistent version-2 parent/document rows return an
+incomplete-extraction error with a re-parse hint rather than falling back to a
+stale cache artifact.
+
+The MCP `get_tdoc_content` tool accepts exactly one of `tdoc_id` or `ftp_url`,
+plus optional `source_file` and `format=markdown|html|json` (default
+`markdown`). JSON uses the shared serializer and byte-matches the corresponding
+HTTP response. MCP text-only requests for incomplete legacy content return an
+explicit error directing the caller to JSON or re-parsing; warning text is not
+prepended to the Markdown body. Neither HTTP nor MCP content reads trigger
+sync, download, or conversion.
 
 `parse_spec_docs` records the spec error in `result.failure_details` and the
 job log. A failed parse job has a populated `error` and result; a successful or
@@ -397,6 +450,11 @@ select FTS5, vector, hybrid, and filter-only modes. The TDoc form also carries
 `[semantic_search].fts5_weight`; there is no request-level weight or alternate
 `/search/sem` route.
 
+FTS5 and hybrid TDoc search can match Markdown in supporting documents, and
+each source match links to its exact ZIP URL and URL-encoded `source_file`.
+The existing semantic/vector path remains TDoc-level and does not promise
+supporting-document coverage.
+
 Search results render one collapsible "Matching fields" block per hit
 (a single `<details>` element replacing the previous per-column
 folding), with an "Expand all matching fields" toggle above the table.
@@ -555,7 +613,11 @@ Every read tool returns exactly the bytes of the equivalent
 optional `text` and `semantic` arguments and use the same four mode-selection
 rules as the CLI and HTTP routes. Search rows are flattened, carry one
 `score`, `search_mode`, and FTS5-only `previews`, and are returned in final
-rank order. The job tools enqueue the same work as the HTTP `POST /jobs/...`
+rank order. Every TDoc search row includes `matched_documents` as an array of
+`{document_id, ftp_url, source_file, score, previews}` source matches. FTS5
+and hybrid may populate it; semantic-only and filter-only rows always contain
+`[]`. The top-level `ftp_url` remains the canonical parent URL. The job tools
+enqueue the same work as the HTTP `POST /jobs/...`
 routes, but the enqueue envelope adds a `message` key (the only parity
 exception).
 

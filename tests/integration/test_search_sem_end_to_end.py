@@ -355,4 +355,88 @@ def test_search_sem_with_fts5_query_returns_rrf_merged_results(semantic_service)
     )
 
 
+def test_search_sem_hybrid_preserves_grouped_document_sources(
+    semantic_service, semantic_search_corpus
+) -> None:
+    from sqlalchemy import text
+
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    tdoc_id = "SEM-NB-001"
+    ftp_url = "https://www.3gpp.org/ftp/SEM-NB-001-multifile.zip"
+    with semantic_search_corpus.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO tdoc_extracts (
+                    ftp_url, tdoc_id, cache_file, doc_filename, parser_version,
+                    extraction_version, document_count
+                ) VALUES (
+                    :ftp_url, :tdoc_id, 'source.zip', 'main.docx', '1.0.0',
+                    1, 2
+                )
+                """
+            ),
+            {"ftp_url": ftp_url, "tdoc_id": tdoc_id},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO tdoc_documents (
+                    document_id, ftp_url, source_file, markdown_file, file_order,
+                    markdown_text, content_hash
+                ) VALUES (
+                    :document_id, :ftp_url, :source_file, :markdown_file,
+                    :file_order, :markdown_text, :content_hash
+                )
+                """
+            ),
+            [
+                {
+                    "document_id": "SEM-NB-001-doc-main",
+                    "ftp_url": ftp_url,
+                    "source_file": "docs/main.docx",
+                    "markdown_file": "documents/main.md",
+                    "file_order": 0,
+                    "markdown_text": "NB-IoT main source proposal",
+                    "content_hash": "a" * 64,
+                },
+                {
+                    "document_id": "SEM-NB-001-doc-appendix",
+                    "ftp_url": ftp_url,
+                    "source_file": "support/appendix.docx",
+                    "markdown_file": "documents/appendix.md",
+                    "file_order": 1,
+                    "markdown_text": "NB-IoT appendix source notes",
+                    "content_hash": "b" * 64,
+                },
+            ],
+        )
+
+    SQLAlchemySearchIndexRepository().upsert(tdoc_id)
+    filters = SearchFilters(tdoc_id=tdoc_id, limit=10)
+    grouped_fts_hits = semantic_service._fts5.search("NB-IoT", filters)
+    assert len(grouped_fts_hits) == 1
+    assert len(grouped_fts_hits[0].matched_documents) == 2
+
+    hybrid_hits = semantic_service.search(
+        query="NB-IoT power saving",
+        fts5_query="NB-IoT",
+        filters=filters,
+        limit=10,
+        fts5_weight=0.5,
+    )
+
+    assert len(hybrid_hits) == 1
+    assert hybrid_hits[0].tdoc_id == tdoc_id
+    assert hybrid_hits[0].rank_fts5 == 0
+    assert hybrid_hits[0].hit.matched_documents == grouped_fts_hits[0].matched_documents
+    assert {
+        document.source_file for document in hybrid_hits[0].hit.matched_documents
+    } == {"docs/main.docx", "support/appendix.docx"}
+
+
 _ = np  # keep numpy import alive for type-checkers scanning fixtures

@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import re
 
-
 # Token sentinels for nullable columns. Stored lower-case; matching is
 # done case-insensitively on a stripped copy of the input.
 NULL_TOKEN = "null"

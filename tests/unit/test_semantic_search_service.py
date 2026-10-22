@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from doc3gpp.models.search import SearchFilters, SearchHit
-from doc3gpp.services.semantic_search_service import SemanticSearchService
+from doc3gpp.models.search import MatchedDocument, SearchFilters, SearchHit
+from doc3gpp.services.semantic_search_service import SemanticSearchService, rrf_merge
 
 
 def _hit(tdoc_id: str) -> SearchHit:
@@ -630,3 +630,53 @@ def test_search_without_fts5_query_empty_vector_returns_empty():
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=10, fts5_weight=0.5)
     assert out == []
+
+
+def test_rrf_merge_preserves_grouped_fts_document_provenance() -> None:
+    documents = (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
+            source_file="docs/main.docx",
+            score=-4.0,
+            previews={"document_text": "<<handover>>"},
+        ),
+        MatchedDocument(
+            document_id="doc-appendix",
+            ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
+            source_file="support/appendix.docx",
+            score=-2.0,
+            previews={"document_text": "<<handover>> appendix"},
+        ),
+    )
+    fts_hit = SearchHit(
+        tdoc_id="R5-1",
+        score=-3.0,
+        previews={},
+        title="Handover",
+        meeting=None,
+        tsg=None,
+        uploaded_date=None,
+        ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
+        wis=None,
+        matched_documents=documents,
+    )
+
+    merged = rrf_merge(
+        [fts_hit],
+        [
+            ("R5-1", "R5-1#1", 1, 0.25),
+            ("R5-1", "R5-1#0", 0, 0.1),
+        ],
+        vector_weight=0.3,
+        limit=10,
+    )
+
+    assert len(merged) == 1
+    assert merged[0].tdoc_id == "R5-1"
+    assert merged[0].rank_fts5 == 0
+    assert merged[0].rank_vec == 1
+    assert merged[0].best_chunk_id == "R5-1#0"
+    assert merged[0].min_chunk_distance == pytest.approx(0.1)
+    assert merged[0].hit is fts_hit
+    assert merged[0].hit.matched_documents == documents

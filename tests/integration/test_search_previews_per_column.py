@@ -1,8 +1,8 @@
 """Preview must include every column whose weight > 0.
 
-The FTS5 search subsystem declares 8 indexed columns
-(``title`` .. ``ttcn_text``). ``Settings.search.bm25_weights`` carries
-a length-8 weight tuple; a column with weight ``0.0`` is intentionally
+The FTS5 search subsystem declares 9 indexed columns
+(``title`` .. ``document_text``). ``Settings.search.bm25_weights`` carries
+a length-9 weight tuple; a column with weight ``0.0`` is intentionally
 silenced (the FTS5 scoring and snippet both skip it).
 
 The CLI used to print only the configured ``Settings.search.snippet_column``
@@ -38,9 +38,8 @@ from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 
-
-# 8 indexed columns, in DDL order. The default ``bm25_weights`` are
-# (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0) so:
+# 9 indexed columns, in DDL order. The default ``bm25_weights`` are
+# (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0) so:
 #   - title (cid 1)        weight 5.0  -> MUST be in previews
 #   - ftp_url (cid 2)      weight 0.0  -> MUST NOT be in previews
 #   - meeting_title (cid 3) weight 0.0 -> MUST NOT be in previews
@@ -49,7 +48,8 @@ from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 #   - cover_text (cid 6)   weight 5.0  -> MUST be in previews
 #   - change_text (cid 7)  weight 5.0  -> MUST be in previews
 #   - ttcn_text (cid 8)    weight 5.0  -> MUST be in previews
-_DEFAULT_WEIGHTS = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
+#   - document_text (cid 9) weight 1.0 -> MUST be in previews
+_DEFAULT_WEIGHTS = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0)
 
 
 def _restore_weights(original: tuple[float, ...]) -> None:
@@ -104,7 +104,8 @@ def test_search_returns_per_column_previews_for_weight_positive(
     Pinpoint: ``ftp_url`` (weight 0.0) and ``meeting_title`` (weight
     0.0) MUST be absent from the mapping. ``title``, ``wis``,
     ``cover_text``, ``change_text``, ``ttcn_text`` (all weight 5.0)
-    and ``meeting_location`` (weight 1.0) MUST be present.
+    and ``meeting_location`` (weight 1.0) and ``document_text`` (weight 1.0)
+    MUST be present when their snippets match.
     """
     from doc3gpp.storage.repositories.search_sql import (
         SQLAlchemySearchIndexRepository,
@@ -211,8 +212,8 @@ def test_search_sql_emits_one_snippet_per_weight_positive_column(
 ) -> None:
     """The generated SELECT contains N ``snippet()`` calls where N = #weight>0.
 
-    With the default weights, N = 6 (title, meeting_location, wis,
-    cover_text, change_text, ttcn_text). ftp_url (cid 2) and
+    With the default weights, N = 7 (title, meeting_location, wis,
+    cover_text, change_text, ttcn_text, document_text). ftp_url (cid 2) and
     meeting_title (cid 3) MUST NOT appear as ``snippet(..., 2, ...)``
     or ``snippet(..., 3, ...)`` calls.
     """
@@ -255,7 +256,7 @@ def test_search_sql_emits_one_snippet_per_weight_positive_column(
 
     snippet_calls = re.findall(r"snippet\(tdoc_search, \?", stmt)
     # SQLAlchemy binds named params in the order they appear in the
-    # SQL text. The bm25 block has 8 weight params, then each
+    # SQL text. The bm25 block has 9 weight params, then each
     # snippet() has 1 col param + 1 tok param. The params tuple is
     # therefore interleaved (col_0, tok, col_1, tok, ...). We just
     # count the snippet calls and inspect the named binding values
@@ -269,11 +270,11 @@ def test_search_sql_emits_one_snippet_per_weight_positive_column(
     # The named col_<n> params must be the cids of the weight>0
     # columns. Cids 2 (ftp_url) and 3 (meeting_title) MUST NOT be
     # bound. SQLAlchemy binds named params in SQL-text order; the
-    # bm25 block has 8 weights first, then each snippet() has a
+    # bm25 block has 9 weights first, then each snippet() has a
     # col + tok pair, then the WHERE :query + LIMIT :limit at the
-    # end. So the col values are at even positions starting at 8.
+    # end. So the col values are at even positions starting at 9.
     n = sum(1 for w in _DEFAULT_WEIGHTS if w > 0)
-    col_values = sorted(_params[8 + 2 * i] for i in range(n))
+    col_values = sorted(_params[9 + 2 * i] for i in range(n))
     weight_positive_cids = sorted(
         i + 1 for i, w in enumerate(_DEFAULT_WEIGHTS) if w > 0
     )

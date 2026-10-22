@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,9 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.parsers.direct_extractor import NotAFolderError
+from doc3gpp.parsers.tdoc_zip import ephemeral_document_id_for
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.services.tdoc_cr_service import (
     PreparedDirectTDoc,
@@ -154,6 +157,19 @@ class _FakeTDocRepo:
         return []
 
 
+def _test_document(markdown: str, source_file: str) -> TDocDocument:
+    payload_hash = hashlib.sha256(source_file.encode("utf-8")).hexdigest()
+    document_id = ephemeral_document_id_for(payload_hash, source_file)
+    return TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=f"documents/{document_id}/{Path(source_file).stem}.md",
+        file_order=0,
+        markdown_text=markdown,
+        content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    )
+
+
 @pytest.fixture()
 def service(tmp_path: Path) -> TDocCrService:
     return TDocCrService(
@@ -163,6 +179,7 @@ def service(tmp_path: Path) -> TDocCrService:
         cr_ttcn_repository=_FakeCrTtcnRepo(),
         cr_change_details_repository=_FakeCrChangeDetailsRepo(),
         tdoc_repository=_FakeTDocRepo(),
+        extraction_repository=MagicMock(),
     )
 
 
@@ -171,15 +188,19 @@ def _folder_html(*entries: str) -> str:
 
 
 def _make_result(tdoc_id: str, url: str) -> DirectParseResult:
+    source_file = f"{tdoc_id}.docx"
+    document = _test_document("", source_file)
     return DirectParseResult(
         source_kind="url-3gpp",
-        markdown="",
+        documents=(document,),
+        main_source_file=source_file,
         details=None,
         extract_meta=None,
         from_cache=False,
         persisted=False,
         tdoc_id=tdoc_id,
         tdoc_id_in_tdocs=True,
+        source_url=url,
     )
 
 
@@ -437,9 +458,12 @@ def test_extract_from_url_batch_prepares_concurrently_and_returns_bfs_order(
 
     def make_prepared(url: str) -> PreparedDirectTDoc:
         tdoc_id = url.rsplit("/", 1)[-1].removesuffix(".zip")
+        source_file = f"{tdoc_id}.docx"
+        document = _test_document(f"markdown:{tdoc_id}", source_file)
         return PreparedDirectTDoc(
             url=url,
-            markdown=f"markdown:{tdoc_id}",
+            documents=(document,),
+            main_source_file=source_file,
             details=TDocCRDetails(tdoc_id=tdoc_id, ftp_url=url),
             ttcn=None,
             changes=None,
@@ -476,7 +500,8 @@ def test_extract_from_url_batch_prepares_concurrently_and_returns_bfs_order(
         persisted.append(prepared.url)
         return DirectParseResult(
             source_kind="url-3gpp",
-            markdown=prepared.markdown,
+            documents=prepared.documents,
+            main_source_file=prepared.main_source_file,
             details=prepared.details,
             extract_meta=prepared.extract_meta,
             from_cache=False,

@@ -8,6 +8,7 @@ whose service methods are stubs. No network calls are made.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 
 import pytest
@@ -17,12 +18,45 @@ from sqlalchemy.orm import sessionmaker
 from doc3gpp.models.index import IndexRebuildResult, IndexRequest
 from doc3gpp.models.jobs import JobKind, JobStatus
 from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult
+from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.repositories.jobs_sql import SQLAlchemyJobRepository
 from doc3gpp.web.state import ServiceContainer, WebState
 from doc3gpp.web.workers.job_worker import JobWorker
+
+
+def _direct_parse_result(
+    *,
+    tdoc_id: str,
+    source_url: str,
+    persisted: bool,
+    tdoc_id_in_tdocs: bool,
+) -> DirectParseResult:
+    source_file = f"{tdoc_id}.docx"
+    markdown = ""
+    document_id = hashlib.sha256(source_url.encode("utf-8")).hexdigest()
+    document = TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=f"documents/{document_id}/{tdoc_id}.md",
+        file_order=0,
+        markdown_text=markdown,
+        content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    )
+    return DirectParseResult(
+        source_kind="url-3gpp",
+        documents=(document,),
+        main_source_file=source_file,
+        details=None,
+        extract_meta=None,
+        from_cache=False,
+        persisted=persisted,
+        tdoc_id=tdoc_id,
+        tdoc_id_in_tdocs=tdoc_id_in_tdocs,
+        source_url=source_url,
+    )
 
 
 class _FakeMeetingService:
@@ -1013,34 +1047,23 @@ def test_parse_tdoc_url_handler_rejects_non_3gpp_url() -> None:
 def test_parse_tdoc_url_handler_happy_path() -> None:
     """Happy path: results map to ``files[]`` with the right status labels."""
     from doc3gpp.models.jobs import JobKind
-    from doc3gpp.models.tdoc_cr import DirectParseResult
 
     repo = _make_repo()
     state = _make_state(
         repo,
         url_service=_FakeTDocCrServiceForUrl(
             results=[
-                DirectParseResult(
-                    source_kind="url-3gpp",
-                    markdown="",
-                    details=None,
-                    extract_meta=None,
-                    from_cache=False,
-                    persisted=True,
+                _direct_parse_result(
                     tdoc_id="R5-260001",
-                    tdoc_id_in_tdocs=True,
                     source_url="https://www.3gpp.org/ftp/R5s260001.zip",
+                    persisted=True,
+                    tdoc_id_in_tdocs=True,
                 ),
-                DirectParseResult(
-                    source_kind="url-3gpp",
-                    markdown="",
-                    details=None,
-                    extract_meta=None,
-                    from_cache=False,
-                    persisted=False,
+                _direct_parse_result(
                     tdoc_id="R5-260002",
-                    tdoc_id_in_tdocs=False,
                     source_url="https://www.3gpp.org/ftp/R5s260002.zip",
+                    persisted=False,
+                    tdoc_id_in_tdocs=False,
                 ),
             ],
             failures={"https://www.3gpp.org/ftp/R5s260003.zip": "ZipError: corrupt"},
@@ -1063,16 +1086,39 @@ def test_parse_tdoc_url_handler_happy_path() -> None:
         "successes": 2,
         "failures": 1,
         "skipped": 1,
+        "failure_details": {
+            "https://www.3gpp.org/ftp/R5s260003.zip": "ZipError: corrupt",
+        },
         "files": [
             {
                 "tdoc_id": "R5-260001",
                 "ftp_url": "https://www.3gpp.org/ftp/R5s260001.zip",
                 "status": "ok",
+                "main_source_file": "R5-260001.docx",
+                "documents": [
+                    {
+                        "document_id": hashlib.sha256(
+                            b"https://www.3gpp.org/ftp/R5s260001.zip"
+                        ).hexdigest(),
+                        "source_file": "R5-260001.docx",
+                        "file_order": 0,
+                    },
+                ],
             },
             {
                 "tdoc_id": "R5-260002",
                 "ftp_url": "https://www.3gpp.org/ftp/R5s260002.zip",
                 "status": "parsed-no-fk",
+                "main_source_file": "R5-260002.docx",
+                "documents": [
+                    {
+                        "document_id": hashlib.sha256(
+                            b"https://www.3gpp.org/ftp/R5s260002.zip"
+                        ).hexdigest(),
+                        "source_file": "R5-260002.docx",
+                        "file_order": 0,
+                    },
+                ],
             },
         ],
     }
@@ -1081,21 +1127,15 @@ def test_parse_tdoc_url_handler_happy_path() -> None:
 def test_parse_tdoc_url_handler_dispatches_single_file_directly() -> None:
     """A TDoc file URL uses ``extract_from_url``, not folder batch probing."""
     from doc3gpp.models.jobs import JobKind
-    from doc3gpp.models.tdoc_cr import DirectParseResult
 
     repo = _make_repo()
     fake = _FakeTDocCrServiceForUrl(
         results=[
-            DirectParseResult(
-                source_kind="url-3gpp",
-                markdown="",
-                details=None,
-                extract_meta=None,
-                from_cache=False,
-                persisted=True,
+            _direct_parse_result(
                 tdoc_id="RP-2601234",
-                tdoc_id_in_tdocs=True,
                 source_url="https://www.3gpp.org/ftp/RP-2601234.zip",
+                persisted=True,
+                tdoc_id_in_tdocs=True,
             )
         ]
     )

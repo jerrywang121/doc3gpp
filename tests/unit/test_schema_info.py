@@ -61,6 +61,7 @@ def test_tdoc_tables_and_counts() -> None:
         "tdoc_cr_change_details",
         "tdoc_files",
         "tdoc_extracts",
+        "tdoc_documents",
     ]
     counts = {t.table: len(t.fields) for t in tables}
     # Brief/plan claim 21 for tdoc_cr_cover_page, but the verbatim
@@ -72,8 +73,14 @@ def test_tdoc_tables_and_counts() -> None:
         "tdoc_cr_ttcn_details": 10,
         "tdoc_cr_change_details": 4,
         "tdoc_files": 6,
-        "tdoc_extracts": 6,
+        "tdoc_extracts": 8,
+        "tdoc_documents": 7,
     }
+    extract_fields = {field.name: field for field in tables[-2].fields}
+    assert extract_fields["extraction_version"].values == ("1", "2")
+    assert "main" in extract_fields["doc_filename"].description
+    document_fields = {field.name: field for field in tables[-1].fields}
+    assert "authoritative" in document_fields["markdown_text"].description
 
 
 def test_tdoc_categoricals() -> None:
@@ -88,6 +95,7 @@ def test_tdoc_categoricals() -> None:
 def test_registry_matches_orm_columns() -> None:
     """Every ORM column is described exactly once; no extras; nullability matches."""
     from doc3gpp.models.schema_info import RESOURCE_SCHEMAS
+    from doc3gpp.storage.db import models as db_models
     from doc3gpp.storage.db.models import (
         MeetingORM,
         SpecDocChunkORM,
@@ -108,6 +116,8 @@ def test_registry_matches_orm_columns() -> None:
         WiORM,
     )
 
+    tdoc_document_orm = getattr(db_models, "TDocDocumentOrm", None)
+    assert tdoc_document_orm is not None
     expected = {
         "tsgs": TsgORM,
         "meetings": MeetingORM,
@@ -117,6 +127,7 @@ def test_registry_matches_orm_columns() -> None:
         "tdoc_cr_change_details": TDocCrChangeDetailOrm,
         "tdoc_files": TDocFileORM,
         "tdoc_extracts": TDocExtractOrm,
+        "tdoc_documents": tdoc_document_orm,
         "wis": WiORM,
         "specs": SpecORM,
         "spec_versions": SpecVersionORM,
@@ -210,3 +221,31 @@ def test_cli_schema_table_nullable_yes_no() -> None:
     assert by_field["url"][3] == "yes"
     assert by_field["short_name"][5].startswith("RP,R1")
     assert by_field["description"][5] == "-"
+
+
+
+def test_packaged_template_exposes_multifile_and_search_defaults() -> None:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+        import tomli as tomllib
+
+    from doc3gpp.settings.config_writer import load_default_template
+    from doc3gpp.settings.schema import SearchSettings, TDocParseSettings
+
+    template = tomllib.loads(load_default_template())
+    tdoc_parse_data = template["tdoc_parse"]
+    search_data = template["search"]
+
+    assert tdoc_parse_data["max_documents_per_zip"] == 100
+    assert tdoc_parse_data["max_uncompressed_size_kb"] == 102400
+    tdoc_parse = TDocParseSettings.model_validate(tdoc_parse_data)
+    assert tdoc_parse.max_documents_per_zip == 100
+    assert tdoc_parse.max_uncompressed_size_kb == 102400
+
+    assert search_data["bm25_weights"] == [
+        5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0
+    ]
+    search = SearchSettings.model_validate(search_data)
+    assert len(search.bm25_weights) == 9
+    assert search.bm25_weights[-1] == 1.0

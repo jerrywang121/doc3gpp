@@ -267,7 +267,7 @@ def canonicalise_tdoc_id(tdoc: str) -> str | None:
 
 def download_tdoc_zip(
     tdoc: str,
-    client: "ScraperClient",
+    client: ScraperClient,
     cache: TDocCacheLike,
     primary_url: str | None = None,
     *,
@@ -287,7 +287,10 @@ def download_tdoc_zip(
       they exceed ``max_bytes``, :class:`TDocTooLargeError` is raised
       before returning.
 
-    ``max_bytes=0`` disables both checks (the historical behaviour).
+    ``max_bytes=0`` disables both checks (the historical behaviour). ZIP
+    member-count and aggregate expanded-size limits are applied by the shared
+    parser after these source bytes are returned; this transport layer does not
+    enumerate or convert DOCX members.
     """
     if not tdoc:
         raise ValueError("TDoc id is empty")

@@ -26,7 +26,10 @@ from collections.abc import Iterator
 
 from doc3gpp.cli_filters import SearchQueryBuilder
 from doc3gpp.models.search import (
-    RebuildProgress, SearchFilters, SearchHit, SearchIndexStatus,
+    RebuildProgress,
+    SearchFilters,
+    SearchHit,
+    SearchIndexStatus,
 )
 from doc3gpp.models.semantic_search import SemanticSearchHit
 from doc3gpp.services.embedding.chunker import _chunks
@@ -56,6 +59,8 @@ def rrf_merge(
     service synthesizes a minimal :class:`SearchHit` from the JOIN
     before returning to the CLI.
     """
+    # FTS5 hits are grouped by parent TDoc; keep the original hit intact so
+    # its matched_documents provenance survives fusion unchanged.
     fts5_rank: dict[str, int] = {h.tdoc_id: i for i, h in enumerate(fts5_hits)}
     fts5_by_id: dict[str, SearchHit] = {h.tdoc_id: h for h in fts5_hits}
     # Reduce vec chunks to min distance per tdoc_id, preserving chunk rank

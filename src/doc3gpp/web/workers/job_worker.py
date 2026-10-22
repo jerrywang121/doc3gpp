@@ -308,7 +308,7 @@ class JobWorker:
                 )
                 self._repo.mark_cancelled(job.id)
                 logger.info("job %s cancelled", job.id)
-            except Exception as exc:  # noqa: BLE001 - terminalise on any error
+            except Exception as exc:
                 logger.exception("job %s failed", job.id)
                 self._enqueue(
                     queue,

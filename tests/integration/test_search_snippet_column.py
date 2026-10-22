@@ -6,8 +6,8 @@ The read path binds one ``snippet(tdoc_search, ...)`` per column whose
 (``<<...>>`` markers). A weight-0 column produces no snippet() call
 and no entry in ``previews``.
 
-The 8 FTS5 columns of the ``tdoc_search`` virtual table occupy cids
-1..8 (cid 0 is the UNINDEXED ``tdoc_id``). The offset is the only
+The 9 FTS5 indexed columns of the ``tdoc_search`` virtual table occupy
+cids 1..9 (cid 0 is the UNINDEXED ``tdoc_id``). The offset is the only
 piece of FTS5-specific knowledge in the repo; the helper
 ``_snippet_column_cid(name)`` computes it from
 ``_SNIPPET_COLUMN_NAMES.index(name) + 1``.
@@ -33,10 +33,9 @@ from doc3gpp.storage.repositories.search_sql import (
     _snippet_column_cid,
 )
 
-
 # FTS5 column indices of the ``tdoc_search`` virtual table. The
 # first declared column (``tdoc_id``) is UNINDEXED and starts at
-# cid 0; the eight indexed columns then occupy cids 1..8. Pinning
+# cid 0; the nine indexed columns then occupy cids 1..9. Pinning
 # this layout here keeps the regression test honest even if the
 # DDL in ``_create_search_schema`` ever drifts.
 _EXPECTED_FTS5_COLUMNS: dict[str, int] = {
@@ -48,6 +47,7 @@ _EXPECTED_FTS5_COLUMNS: dict[str, int] = {
     "cover_text": 6,
     "change_text": 7,
     "ttcn_text": 8,
+    "document_text": 9,
 }
 
 

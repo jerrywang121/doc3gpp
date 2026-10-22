@@ -11,17 +11,16 @@ change set so the docs stay honest.
 
 ## Schema
 
-- **No Alembic migrations.** `Base.metadata.create_all` via
-  `storage/db/migrate.py` (invoked by `db init`) is the only schema
-  bootstrap. `db_auto_migrate` is a TOML-only field (see
-  `doc3gpp.settings.schema.ALLOWED_ENV_VARS`) that does **not** run
-  migrations. After pulling an ORM shape change, **existing SQLite
-  installs must run `doc3gpp db reset --yes`** — otherwise the live
-  schema stays out of sync and SQL repos raise `OperationalError`.
-  The single exception is `src/doc3gpp/storage/db/migrate.py::_migrate_rename_tdoc_cr_details`,
-  a one-shot idempotent rename that bridges legacy `tdoc_cr_details`
-  callers to the current `tdoc_cr_cover_page` table; nothing else
-  in the bootstrap is allowed to mutate an existing table in place.
+- **No general Alembic migration framework.** `Base.metadata.create_all`
+  via `storage/db/migrate.py` is the schema bootstrap; `db_auto_migrate`
+  is TOML-only and does not run migrations. The bootstrap does contain
+  explicit, idempotent compatibility migrations: the legacy
+  `tdoc_cr_details` rename, the TDoc extraction completeness columns, and
+  recreation of the TDoc FTS5 virtual table when its indexed/provenance
+  layout changes. `tdoc_documents` is created from the ORM metadata.
+  Other ORM shape changes without a dedicated migration may still require
+  a destructive `doc3gpp db reset`; do not reset a database to upgrade the
+  multi-file TDoc extraction layout.
 - **Orphan testcase tables on upgrade.** After the testcase-DB split,
   pre-existing main DB files keep `testcases` / `testcase_status` /
   `testcase_sources` tables as orphans (harmless — nothing reads
@@ -33,12 +32,19 @@ change set so the docs stay honest.
   for fresh-database ergonomics. Idempotent but blurs the `db init`
   boundary; `tdoc sync` and `tdoc parse` already dropped the call.
   See [`docs/conventions.md`](conventions.md) for the canonical list.
-- **Cache schema break.** `tdoc_extracts` v2: hard schema break; dropped
-  `zip_path` + `markdown_path` columns in favour of `cache_file`
-  (String(255), indexed). Existing rows from older versions must be
-  re-extracted with `--force` to repopulate the new column. Legacy
-  on-disk files (`zips/<tdoc_lower>`, `markdown/<sha256>`) are orphaned
-  and will be cleaned up by `cache purge` or FIFO eviction.
+- **TDoc multi-file completeness is not inferred from old cover/cache rows.**
+  Existing `tdoc_extracts` rows migrate to `extraction_version=1` and
+  `document_count=0`; normal `tdoc parse` discovery treats them as pending,
+  and a successful reparse creates the version-2 `tdoc_documents` collection.
+  Reparse the original ZIP (using its cache copy when available); an old
+  single-member Markdown artifact cannot reveal which supporting members were
+  present. No whole-corpus reset or standalone repair command is required.
+- **Older cache-key schemas are a separate compatibility break.** The
+  historical `tdoc_extracts` migration from `zip_path` / `markdown_path` to
+  indexed `cache_file` is not backfilled by the multi-file completeness
+  migration. Installs that predate `cache_file` still need to follow the
+  existing schema-upgrade guidance; orphaned legacy `zips/<tdoc_lower>` and
+  `markdown/<sha256>` files can be reclaimed with cache purge or FIFO eviction.
 
 ## Settings caching
 
@@ -144,23 +150,30 @@ change set so the docs stay honest.
     `LIKE '%.'` finds module-only entries, `LIKE '.%'` finds
     function-only entries, and the joined dot inside the full-match
     form remains inert.
-- **Markdown cache format changed.** `cache/markdown/<cache_file>`
-  files are now real ZIP archives (single `<docx stem>.md` entry) so a
-  plain `.zip` extension maps to a format `unzip` / 7z / WinZip can
-  open. Pre-change files (gzip blob with `.zip` extension or plain
-  UTF-8) stay readable via the magic-byte sniff in
-  `tdoc_cr_service._decompress_markdown`; a re-extract via
-  `doc3gpp tdoc parse --force` is only required if an operator wants
-  the cache rewritten in the new shape.
-- **`direct_parse_bytes` returns a loosely-typed tuple.**
-  The helper exposes the third element of its return tuple as
-  `object` (`tuple[str, str, object]`) to keep `parsers/`
-  independent of the `models/` import cycle; the call sites that
-  assign to `DirectParseResult.details` rely on a runtime
-  `isinstance` check rather than a typed assignment. Pyright will
-  flag the assignment as a soft error (`reportArgumentType` /
-  `reportAssignmentType`) until the return type is tightened. The
-  trade-off is intentional today — the wider fix is a follow-up.
+- **Only `.docx` ZIP members are converted.** `.doc`, PDF, spreadsheet,
+  and nested-ZIP converters are out of scope. A ZIP must have exactly
+  one converted member with the CR cover; that main document alone
+  produces cover/TTCN/body-change metadata. Supporting members are
+  valid content without CR headers, but do not get per-document
+  semantic embeddings.
+- **TDoc ZIP resource caps are TOML-only.** `[tdoc_parse]`
+  `max_documents_per_zip` defaults to `100` and
+  `max_uncompressed_size_kb` defaults to `102400` aggregate supported
+  member bytes; `0` disables either. Limit violations are skips, while
+  zero/multiple main candidates and supported-member conversion errors
+  fail the archive.
+- **Markdown cache is a derived multi-member ZIP.**
+  `cache/markdown/<cache_file>` contains one `.md` entry per stored
+  document plus a versioned manifest. `tdoc_documents.markdown_text`
+  is authoritative for retrieval and FTS5 rebuilds, so cache purge or
+  FIFO eviction does not delete SQL content or change completeness.
+  Legacy plain UTF-8, gzip, and single-member Markdown ZIPs remain
+  readable as incomplete version-1 content only; they never prove a
+  complete version-2 extraction.
+- **Semantic search remains TDoc-level.** Supporting-document text is
+  covered by FTS5 source rows and may flow through hybrid results, but
+  the existing vector index is unchanged and does not promise semantic
+  supporting-document matches.
 
 ## Test surface
 
@@ -171,6 +184,16 @@ change set so the docs stay honest.
 - **No CI pipeline exists.** The project relies on local
   `scripts/test_sqlite.sh` runs. There is no `.github/workflows/`,
   no Makefile, no Dockerfile.
+
+## Recorded pre-existing baseline issue
+
+- A pre-feature baseline run reported 2,666 passed, 1 skipped, and one
+  failure in `tests/integration/test_auto_sync_sqlite.py::test_tdoc_list_auto_sync_triggers_tdoc_sync`.
+  The test leaves the calendar module's imported `ScraperClient` unmocked
+  and received a live HTTP 403 in that environment. A one-off in-memory
+  mock-binding correction made the individual test pass without repository
+  edits. This unrelated test was intentionally recorded, not repaired as
+  part of the TDoc multi-file feature.
 
 ## Configuration writer
 

@@ -224,7 +224,7 @@ def test_render_tdoc_show_json_compact_round_trips() -> None:
     import json
     from datetime import date
 
-    from doc3gpp.cli import _render_tdoc_show_json, TDocShowRecord
+    from doc3gpp.cli import TDocShowRecord, _render_tdoc_show_json
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails
 
@@ -274,7 +274,7 @@ def test_render_tdoc_show_markdown_compact_strips_decorators() -> None:
     CommonMark decorator and uses blank-line section separators."""
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_markdown, TDocShowRecord
+    from doc3gpp.cli import TDocShowRecord, _render_tdoc_show_markdown
     from doc3gpp.models.tdoc import TDoc
 
     tdoc = TDoc(
@@ -310,7 +310,7 @@ def test_render_tdoc_show_table_compact_is_noop() -> None:
     already line-oriented)."""
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_table, TDocShowRecord
+    from doc3gpp.cli import TDocShowRecord, _render_tdoc_show_table
     from doc3gpp.models.tdoc import TDoc
 
     tdoc = TDoc(tdoc_id="R5s260001", title="X", ftp_url="x/1")
@@ -326,23 +326,34 @@ def test_render_tdoc_show_raw_compact_is_noop(monkeypatch) -> None:
     """``_render_tdoc_show_raw`` ignores ``compact`` (raw is already
     maximally compact by construction)."""
     from doc3gpp.cli import _render_tdoc_show_raw
+    from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
 
-    def fake_read_cached_markdown_path(*args, **kwargs):
-        return "# hello"
+    content = TDocContent(
+        tdoc_id="R5s260001",
+        ftp_url="archive/R5s260001.zip",
+        extraction_version=2,
+        complete=True,
+        documents=(
+            TDocContentDocument(
+                document_id="doc-1",
+                source_file="R5s260001.docx",
+                is_main=True,
+                markdown="# hello",
+            ),
+        ),
+    )
+
+    class _ContentService:
+        def get(self, **_kwargs):
+            return content
 
     monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path", fake_read_cached_markdown_path
+        "doc3gpp.cli.build_tdoc_content_service", lambda: _ContentService()
     )
-    monkeypatch.setattr("doc3gpp.cli._build_cache", lambda: type("C", (), {"root": "."})())
 
     class _Stub:
         def extract(self, _tdoc_id):
-            from types import SimpleNamespace
-
-            return SimpleNamespace(
-                extract_meta=SimpleNamespace(cache_file="x.zip"),
-                tdoc_id=_tdoc_id,
-            )
+            return None
 
     monkeypatch.setattr("doc3gpp.cli.build_tdoc_cr_service", lambda: _Stub())
 
@@ -366,7 +377,7 @@ def test_render_tdoc_show_by_url_json_compact_round_trips() -> None:
     import io
     import json
 
-    from doc3gpp.cli import _render_tdoc_show_by_url_json, TDocShowRecordByUrl
+    from doc3gpp.cli import TDocShowRecordByUrl, _render_tdoc_show_by_url_json
     from doc3gpp.models.tdoc import TDoc
 
     tdoc = TDoc(tdoc_id="R5s260001", title="CR on 5G NR", ftp_url="x/1")
@@ -388,7 +399,7 @@ def test_render_tdoc_show_by_url_markdown_compact_strips_decorators() -> None:
     every CommonMark decorator."""
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_by_url_markdown, TDocShowRecordByUrl
+    from doc3gpp.cli import TDocShowRecordByUrl, _render_tdoc_show_by_url_markdown
     from doc3gpp.models.tdoc import TDoc
 
     tdoc = TDoc(tdoc_id="R5s260001", title="X", ftp_url="x/1")
@@ -418,7 +429,7 @@ def test_render_tdoc_show_markdown_compact_emits_changes_when_only_changes_popul
     """
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_markdown, TDocShowRecord
+    from doc3gpp.cli import TDocShowRecord, _render_tdoc_show_markdown
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 
@@ -472,7 +483,7 @@ def test_render_tdoc_show_by_url_markdown_compact_emits_changes_when_only_change
     """
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_by_url_markdown, TDocShowRecordByUrl
+    from doc3gpp.cli import TDocShowRecordByUrl, _render_tdoc_show_by_url_markdown
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 
@@ -532,7 +543,7 @@ def test_render_tdoc_show_markdown_full_emits_changes_when_only_changes_populate
     """
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_markdown, TDocShowRecord
+    from doc3gpp.cli import TDocShowRecord, _render_tdoc_show_markdown
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 
@@ -589,7 +600,7 @@ def test_render_tdoc_show_by_url_markdown_full_emits_changes_when_only_changes_p
     """
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_by_url_markdown, TDocShowRecordByUrl
+    from doc3gpp.cli import TDocShowRecordByUrl, _render_tdoc_show_by_url_markdown
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 
@@ -633,7 +644,7 @@ def test_render_tdoc_show_by_url_table_compact_is_noop() -> None:
     """``_render_tdoc_show_by_url_table`` ignores ``compact``."""
     import io
 
-    from doc3gpp.cli import _render_tdoc_show_by_url_table, TDocShowRecordByUrl
+    from doc3gpp.cli import TDocShowRecordByUrl, _render_tdoc_show_by_url_table
     from doc3gpp.models.tdoc import TDoc
 
     tdoc = TDoc(tdoc_id="R5s260001", title="X", ftp_url="x/1")
@@ -651,14 +662,33 @@ def test_render_tdoc_show_by_url_table_compact_is_noop() -> None:
 def test_render_tdoc_show_raw_by_url_compact_is_noop(monkeypatch) -> None:
     """``_render_tdoc_show_raw_by_url`` ignores ``compact``."""
     from doc3gpp.cli import _render_tdoc_show_raw_by_url
+    from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
 
-    def fake_read_cached_markdown_path(*args, **kwargs):
-        return "# hello"
+    content = TDocContent(
+        tdoc_id="R5s260001",
+        ftp_url="archive/R5s260001.zip",
+        extraction_version=2,
+        complete=True,
+        documents=(
+            TDocContentDocument(
+                document_id="doc-1",
+                source_file="R5s260001.docx",
+                is_main=True,
+                markdown="# hello",
+            ),
+        ),
+    )
 
-    monkeypatch.setattr("doc3gpp.cli._read_cached_markdown_path", fake_read_cached_markdown_path)
-    monkeypatch.setattr("doc3gpp.cli._build_cache", lambda: type("C", (), {"root": "."})())
+    class _ContentService:
+        def get(self, **_kwargs):
+            return content
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_content_service", lambda: _ContentService()
+    )
 
     import io
+
     plain = io.StringIO()
     compact = io.StringIO()
     _render_tdoc_show_raw_by_url("https://x/1", plain)
@@ -942,8 +972,8 @@ def test_show_json_includes_summary_of_change() -> None:
     """``_render_tdoc_show_json`` includes ``summary_of_change`` in
     the ``cover`` block (null when absent, matching the existing
     reason_for_change / clauses_affected contract)."""
-    from io import StringIO
     import json
+    from io import StringIO
 
     from doc3gpp.cli import _render_tdoc_show_json
     from doc3gpp.models.tdoc import TDoc

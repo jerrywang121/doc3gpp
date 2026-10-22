@@ -105,8 +105,8 @@ def spec_doc_semantic_hit_to_json(hit: Any) -> dict[str, Any]:
     """
     inner = getattr(hit, "hit", None)
     return {
-        "chunk_id": getattr(hit, "chunk_id"),
-        "rrf_score": getattr(hit, "rrf_score"),
+        "chunk_id": hit.chunk_id,
+        "rrf_score": hit.rrf_score,
         "rank_fts5": getattr(hit, "rank_fts5", None),
         "rank_vec": getattr(hit, "rank_vec", None),
         "min_chunk_distance": getattr(hit, "min_chunk_distance", None),

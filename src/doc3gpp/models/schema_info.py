@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 FIELD_TYPES: tuple[str, ...] = ("str", "int", "date", "datetime", "text", "gzip-json")
 
 SCHEMA_FIELDS: list[str] = ["table", "field", "type", "nullable", "description", "values"]
@@ -230,9 +229,23 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("ftp_url", "str", False, "Relative download path under https://www.3gpp.org/ftp/; primary key."),
                 FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id."),
                 FieldInfo("cache_file", "str", False, "Cache basename; paths rebuild as cache/zips/<file> and cache/markdown/<file>."),
-                FieldInfo("doc_filename", "str", False, "Word document name inside the zip, e.g. R5s260009.docx."),
+                FieldInfo("doc_filename", "str", False, "Full source path of the main Word document inside the ZIP."),
                 FieldInfo("extracted_at", "datetime", False, "UTC timestamp of the extract."),
                 FieldInfo("parser_version", "str", False, "Parser version, e.g. 1.0.0."),
+                FieldInfo("extraction_version", "int", False, "Document-layout version: 1 is legacy/incomplete; 2 stores the full document set.", ("1", "2")),
+                FieldInfo("document_count", "int", False, "Number of child document rows persisted for this extraction."),
+            ),
+        ),
+        TableSchema(
+            table="tdoc_documents",
+            fields=(
+                FieldInfo("document_id", "str", False, "SHA-256 identity of the normalized ZIP URL and full source path; primary key."),
+                FieldInfo("ftp_url", "str", False, "FK to tdoc_extracts.ftp_url, the immutable source ZIP URL."),
+                FieldInfo("source_file", "str", False, "Full, case-preserving member path within the source ZIP."),
+                FieldInfo("markdown_file", "str", False, "Relative member path for this document in the derived Markdown ZIP."),
+                FieldInfo("file_order", "int", False, "Main document first, then supporting files in deterministic order."),
+                FieldInfo("markdown_text", "text", False, "Complete converted Markdown body; authoritative SQL content for retrieval and index rebuilding."),
+                FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown body."),
             ),
         ),
     ),

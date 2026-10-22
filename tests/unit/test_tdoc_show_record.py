@@ -14,7 +14,7 @@ repos, so a fake repo set is sufficient.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -85,7 +85,7 @@ def test_from_tdoc_id_round_trip_matches_cli_renderer() -> None:
         spec="38.523-3",
         release="Rel-18",
     )
-    extracted_at = datetime(2026, 5, 5, 12, 30, 0)
+    extracted_at = datetime(2026, 5, 5, 12, 30, 0, tzinfo=timezone.utc)
     cover = TDocCRDetails(
         tdoc_id="R5-260001",
         spec="38.523-3",
@@ -227,7 +227,7 @@ def test_from_ftp_url_round_trip() -> None:
     url = "R5/26.001/R5-260001.zip"
     tdoc = TDoc(tdoc_id="R5-260001", ftp_url=url)
     cover = TDocCRDetails(tdoc_id="R5-260001", spec="38.523-3")
-    extracted_at = datetime(2026, 5, 5, 12, 30, 0)
+    extracted_at = datetime(2026, 5, 5, 12, 30, 0, tzinfo=timezone.utc)
     file = TDocFile(tdoc_id="R5-260001", type="revision", file="R5s260001r1.zip",
                      ftp_url=f"{url}_r1")
     repos = _make_fake_repos(

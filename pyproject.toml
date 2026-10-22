@@ -115,6 +115,11 @@ markers = [
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI dependency injection intentionally uses Depends/Query calls in
+# endpoint defaults; this is the framework's route declaration syntax.
+"src/doc3gpp/web/routes/*.py" = ["B008"]
+
 [tool.hatch.build.targets.wheel.force-include]
 "src/doc3gpp/data/doc3gpp.toml.example" = "doc3gpp/data/doc3gpp.toml.example"
 "src/doc3gpp/data/skills/doc3gpp/SKILL.md" = "doc3gpp/data/skills/doc3gpp/SKILL.md"

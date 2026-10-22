@@ -358,9 +358,10 @@ def test_parse_tdoc_url_enqueues_explicit_max_depth(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_prefers_url_when_both_supplied(sqlite_env) -> None:
     """Both ``tdoc_id`` and ``ftp_url`` → URL wins, tdoc_id ignored (human ruling)."""
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
     import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     url = "r5/26.001/r5s260001.zip"
@@ -412,9 +413,10 @@ def test_mcp_get_tdoc_by_url_404_on_no_rows(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_url_normalisation(sqlite_env) -> None:
     """A full https URL and a bare relative path resolve the same record."""
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
     import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     bare = "r5/26.001/r5s260001.zip"
@@ -430,13 +432,14 @@ def test_mcp_get_tdoc_url_normalisation(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
     """The URL-mode JSON envelope mirrors the CLI ``--format json`` shape."""
-    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
-    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    import json
+
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.models.tdoc_file import TDocFile
-    import json
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     url = "r5/26.001/r5s260001.zip"
@@ -467,9 +470,10 @@ def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_existing_tdoc_id_path_unchanged(sqlite_env) -> None:
     """Regression: the ``tdoc_id`` path still works (no behavioural change)."""
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
     import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url="x.zip"))

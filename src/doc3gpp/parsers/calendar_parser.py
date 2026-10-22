@@ -8,7 +8,6 @@ from bs4 import BeautifulSoup
 
 from doc3gpp.models.meeting import Meeting
 
-
 logger = logging.getLogger(__name__)
 
 _DATE_PATTERN = "%Y-%m-%d"
@@ -91,13 +90,13 @@ def _row_to_meeting(cells) -> Meeting | None:
 
     try:
         ftp_url = _extract_ftp_path(_first_href(cells[5]))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - malformed upstream row fallback
         logger.debug("Failed to extract ftp_url from cell 5 (%s); trying cell 8", exc)
         ftp_url = None
     if ftp_url is None and len(cells) > 8:
         try:
             ftp_url = _extract_ftp_path(_first_href(cells[8]))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - malformed upstream row fallback
             logger.debug("Failed to extract ftp_url from cell 8 (%s)", exc)
             ftp_url = None
 

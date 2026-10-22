@@ -12,8 +12,8 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from doc3gpp.web.install import (
-    InstallNotManagedError,
     LAUNCHD_LABEL,
+    InstallNotManagedError,
     install_launchd,
     install_systemd,
     render_launchd_plist,

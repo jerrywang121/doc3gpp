@@ -80,7 +80,7 @@ def test_full_lifecycle(sqlite_env, app_with_deps) -> None:
     from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
-    app, handle = app_with_deps
+    app, _handle = app_with_deps
     create_schema()
 
     with TestClient(app) as client:
@@ -472,22 +472,22 @@ def test_get_tdoc_by_url_byte_parity_with_cli(sqlite_env, app_with_deps) -> None
     ``TDocShowRecordByUrl`` DTO via ``render.to_jsonable``; the HTTP
     route does the same. Both must emit identical bytes.
     """
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.models.tdoc_show import TDocShowRecordByUrl, TDocShowRepos
     from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+        SQLAlchemyTDocCrChangeDetailsRepository,
+    )
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
     from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
         SQLAlchemyTDocCrTtcnRepository,
-    )
-    from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
-        SQLAlchemyTDocCrChangeDetailsRepository,
     )
     from doc3gpp.storage.repositories.tdoc_file_sql import (
         SQLAlchemyTDocFileRepository,
     )
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
-    from doc3gpp.models.tdoc_file import TDocFile
-    from doc3gpp.models.tdoc_show import TDocShowRepos, TDocShowRecordByUrl
     from doc3gpp.web.render import to_jsonable
 
     app, _ = app_with_deps
@@ -612,3 +612,184 @@ def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
     assert missing.status_code == 404
     assert missing.json()["error"] == "testcase_not_found"
     get_engine.cache_clear()
+
+
+
+def _seed_tdoc_content_sql(tdoc_id: str, ftp_url: str) -> tuple[str, str]:
+    import hashlib
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+    from doc3gpp.models.tdoc_document import TDocDocument
+    from doc3gpp.parsers.tdoc_zip import document_id_for
+    from doc3gpp.storage.repositories.tdoc_extraction_sql import (
+        SQLAlchemyTDocExtractionRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    main_source = "CR/Main.docx"
+    support_source = "Annex/Support & café.docx"
+    sources = (
+        (main_source, "# Main body\n\nMain document marker.\n"),
+        (support_source, "# Support body\n\nSupporting document marker.\n"),
+    )
+    documents = tuple(
+        TDocDocument(
+            document_id=document_id_for(ftp_url, source_file),
+            source_file=source_file,
+            markdown_file=f"documents/{file_order}.md",
+            file_order=file_order,
+            markdown_text=markdown,
+            content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        )
+        for file_order, (source_file, markdown) in enumerate(sources)
+    )
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url)
+    )
+    SQLAlchemyTDocExtractionRepository().replace_bundle(
+        TDocCRDetails(tdoc_id=tdoc_id, ftp_url=ftp_url, title="Stored CR"),
+        None,
+        None,
+        TDocExtractMeta(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            cache_file=f"{tdoc_id}.zip",
+            doc_filename=main_source,
+        ),
+        documents,
+    )
+    return main_source, support_source
+
+
+def test_tdoc_content_by_url_uses_sql_sources_without_side_effects(
+    sqlite_env, app_with_deps, monkeypatch,
+) -> None:
+    import json
+    from urllib.parse import parse_qs, urlsplit
+
+    from bs4 import BeautifulSoup
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.services.tdoc_cr_service import TDocCrService
+    from doc3gpp.services.tdoc_sync_coordinator import TDocSyncCoordinator
+    from doc3gpp.storage.db.migrate import create_schema
+
+    app, _ = app_with_deps
+    create_schema()
+    tdoc_id = "R5-260013"
+    ftp_url = "R5/26.001/R5-260013.zip"
+    main_source, support_source = _seed_tdoc_content_sql(tdoc_id, ftp_url)
+
+    def unexpected_call(*_args, **_kwargs):
+        raise AssertionError("URL content read invoked download, extraction, or sync")
+
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.download_tdoc_zip", unexpected_call
+    )
+    monkeypatch.setattr(TDocCrService, "extract", unexpected_call)
+    monkeypatch.setattr(
+        TDocSyncCoordinator, "sync_for_meeting_id", unexpected_call
+    )
+
+    with TestClient(app) as client:
+        markdown_response = client.get(
+            "/tdocs/by-url/content",
+            params={"ftp_url": ftp_url, "format": "markdown"},
+        )
+        assert markdown_response.status_code == 200, markdown_response.text
+        markdown = markdown_response.text
+        assert f'<!-- doc3gpp-source: {json.dumps(main_source, ensure_ascii=False)} -->' in markdown
+        assert f'<!-- doc3gpp-source: {json.dumps(support_source, ensure_ascii=False)} -->' in markdown
+        assert markdown.index(main_source) < markdown.index(support_source)
+
+        all_json_response = client.get(
+            "/tdocs/by-url/content",
+            params={"ftp_url": ftp_url, "format": "json"},
+        )
+        assert all_json_response.status_code == 200, all_json_response.text
+        all_payload = all_json_response.json()
+        assert all_payload["extraction_version"] == 2
+        assert all_payload["complete"] is True
+        assert [
+            (document["source_file"], document["is_main"])
+            for document in all_payload["documents"]
+        ] == [(main_source, True), (support_source, False)]
+        assert [document["markdown"] for document in all_payload["documents"]] == [
+            "# Main body\n\nMain document marker.\n",
+            "# Support body\n\nSupporting document marker.\n",
+        ]
+
+        selected_response = client.get(
+            "/tdocs/by-url/content",
+            params={
+                "ftp_url": ftp_url,
+                "source_file": support_source,
+                "format": "json",
+            },
+        )
+        assert selected_response.status_code == 200, selected_response.text
+        selected_payload = selected_response.json()
+        assert len(selected_payload["documents"]) == 1
+        assert selected_payload["documents"][0]["source_file"] == support_source
+        assert selected_payload["documents"][0]["is_main"] is False
+
+        html_response = client.get(
+            "/tdocs/by-url/content", params={"ftp_url": ftp_url}
+        )
+        assert html_response.status_code == 200, html_response.text
+        soup = BeautifulSoup(html_response.text, "html.parser")
+        sections = soup.select("section.tdoc-document")
+        assert len(sections) == 2
+        assert "Main document" in sections[0].get_text(" ", strip=True)
+        assert "Supporting document" in sections[1].get_text(" ", strip=True)
+        source_links = soup.select("a.tdoc-source-link")
+        assert len(source_links) == 2
+        support_link = next(
+            link for link in source_links if link.get_text(strip=True) == support_source
+        )
+        assert parse_qs(urlsplit(support_link["href"]).query) == {
+            "ftp_url": [ftp_url.lower()],
+            "source_file": [support_source],
+        }
+
+
+def test_tdoc_content_by_url_legacy_text_marks_incomplete(
+    sqlite_env, app_with_deps,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocExtractMeta
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    app, _ = app_with_deps
+    create_schema()
+    tdoc_id = "R5-LEGACY-260014"
+    ftp_url = "R5/26.001/R5-LEGACY-260014.zip"
+    cache_file = "legacy-content.zip"
+    markdown = "Legacy single-source Markdown.\n"
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, ftp_url=ftp_url))
+    SQLAlchemyTDocCrRepository().upsert_extract_meta(
+        TDocExtractMeta(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            cache_file=cache_file,
+            doc_filename="CR/legacy.docx",
+        )
+    )
+
+    with TestClient(app) as client:
+        cache_path = app.state.web.settings.cache.dir / "markdown" / cache_file
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(markdown, encoding="utf-8")
+        response = client.get(
+            "/tdocs/by-url/content",
+            params={"ftp_url": ftp_url, "format": "markdown"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.text == markdown
+    assert response.headers["x-doc3gpp-extraction-complete"] == "false"

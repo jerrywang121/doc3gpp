@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi import Path as PathParam
-from fastapi import Query, Request
 from fastapi.responses import JSONResponse
 
 from doc3gpp.models.schema_info import RESOURCE_SCHEMAS, schema_payload
@@ -22,7 +21,6 @@ from doc3gpp.web.errors import TSGNotFoundError
 from doc3gpp.web.filters import is_htmx_request
 from doc3gpp.web.render import to_jsonable, tsg_rows
 from doc3gpp.web.templates_setup import templates
-
 
 router = APIRouter(prefix="/tsgs", tags=["tsgs"])
 

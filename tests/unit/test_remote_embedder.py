@@ -8,6 +8,7 @@ def _fake_response(payload):
 
 def test_encode_posts_openai_shape_and_returns_float32(monkeypatch):
     import httpx
+
     from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
     seen = {}
 
@@ -31,6 +32,7 @@ def test_encode_posts_openai_shape_and_returns_float32(monkeypatch):
 
 def test_encode_empty_returns_empty_without_http(monkeypatch):
     import httpx
+
     from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
 
     def boom(*a, **kw):
@@ -44,6 +46,7 @@ def test_encode_empty_returns_empty_without_http(monkeypatch):
 
 def test_bearer_header_and_batching(monkeypatch):
     import httpx
+
     from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
     calls = []
 
@@ -62,6 +65,7 @@ def test_bearer_header_and_batching(monkeypatch):
 
 def test_dim_probes_once_and_caches(monkeypatch):
     import httpx
+
     from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
     calls = []
 
@@ -78,9 +82,10 @@ def test_dim_probes_once_and_caches(monkeypatch):
 
 def test_http_error_maps_to_embedder_unavailable(monkeypatch):
     import httpx
+    import pytest
+
     from doc3gpp.models.semantic_search import EmbedderUnavailableError
     from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
-    import pytest
 
     def fake_post(self, url, json=None, headers=None):
         return httpx.Response(401, json={"error": "bad key"})
@@ -93,9 +98,10 @@ def test_http_error_maps_to_embedder_unavailable(monkeypatch):
 
 def test_ragged_dimensions_map_to_embedder_unavailable(monkeypatch):
     import httpx
+    import pytest
+
     from doc3gpp.models.semantic_search import EmbedderUnavailableError
     from doc3gpp.services.embedding.remote_embedder import OpenAICompatibleEmbedder
-    import pytest
 
     def fake_post(self, url, json=None, headers=None):
         return _fake_response({"data": [

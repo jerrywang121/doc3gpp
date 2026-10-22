@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 
 from doc3gpp.models.search import (
     RebuildProgress,
@@ -79,7 +79,7 @@ class SearchService:
         self._quiet = quiet
 
     def upsert_for_tdoc(self, tdoc_id: str) -> None:
-        """Rebuild the FTS5 row for ``tdoc_id``.
+        """Rebuild the metadata and SQL-backed document FTS rows for ``tdoc_id``.
 
         Best-effort: a single bad row logs a warning and does not
         abort the caller. The CLI / service layers that invoke this
@@ -89,7 +89,7 @@ class SearchService:
         """
         try:
             self._repo.upsert(tdoc_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - optional search index is best-effort
             logger.warning(
                 "search upsert failed for tdoc_id=%s: %s", tdoc_id, exc
             )
@@ -97,7 +97,7 @@ class SearchService:
     def remove_for_tdoc(self, tdoc_id: str) -> None:
         try:
             self._repo.remove(tdoc_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - optional search index is best-effort
             logger.warning(
                 "search remove failed for tdoc_id=%s: %s", tdoc_id, exc
             )
@@ -167,8 +167,9 @@ class SearchService:
     ) -> Iterator[RebuildProgress]:
         """Yield per-1%-of-progress updates during an index rebuild.
 
-        For a corpus of ``N`` TDocs, yields ~100 times (one per 1%
-        boundary crossed), plus a guaranteed final yield at 100%.
+        For a corpus of ``N`` TDocs, progress counts logical parents and yields
+        ~100 times (one per 1% boundary crossed), plus a guaranteed final
+        yield at 100%. Each processed parent refreshes its complete source set.
         The CLI renders this as a tqdm bar with `bar.update(delta)`.
         Cursor is persisted to ``tdoc_search_meta`` per batch so a
         crashed rebuild can resume.
@@ -225,6 +226,7 @@ class SearchService:
 
     def _touch_rebuild_at(self) -> None:
         from sqlalchemy import text
+
         from doc3gpp.storage.db.session import get_engine
 
         engine = get_engine()
@@ -239,11 +241,12 @@ class SearchService:
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value
                     """
                 ),
-                {"ts": datetime.utcnow().isoformat(timespec="seconds")},
+                {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds")},
             )
 
     def _touch_indexed_uploaded_date(self) -> None:
         from sqlalchemy import text
+
         from doc3gpp.storage.db.session import get_engine
 
         engine = get_engine()

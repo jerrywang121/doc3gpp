@@ -18,8 +18,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Callable, Literal, Mapping
+from typing import Literal
 
 from doc3gpp.config import get_settings
 from doc3gpp.settings.config_source import find_config_file

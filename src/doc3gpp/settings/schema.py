@@ -291,9 +291,12 @@ class TDocParseSettings(BaseModel):
     pre-read stat). Oversized files are routed to the existing skip
     bucket (``BatchExtractResult.skipped``) rather than the failure
     bucket — they represent a budget decision, not an upstream-side
-    error. ``0`` disables the limit. TOML-only (the
-    ``DOC3GPP_TDOC_PARSE__*`` env vars are outside the
-    ``ALLOWED_ENV_VARS`` allowlist, matching the sibling knobs).
+    error. ``0`` disables the limit.
+
+    :attr:`max_documents_per_zip` caps supported ``.docx`` members in
+    one ZIP. :attr:`max_uncompressed_size_kb` caps their aggregate
+    uncompressed bytes. Both are TOML-only and ``0`` disables the
+    respective limit.
     """
 
     max_batch: int = Field(default=100, ge=1)
@@ -305,6 +308,22 @@ class TDocParseSettings(BaseModel):
             "Per-file cap in KB for TDoc sources (.zip or .docx). "
             "Files larger than this are skipped (size-limit skip "
             "bucket). 0 disables the limit."
+        ),
+    )
+    max_documents_per_zip: int = Field(
+        default=100,
+        ge=0,
+        description=(
+            "Maximum supported DOCX members in one TDoc ZIP. "
+            "0 disables the limit."
+        ),
+    )
+    max_uncompressed_size_kb: int = Field(
+        default=102400,
+        ge=0,
+        description=(
+            "Maximum aggregate uncompressed bytes of supported DOCX members, "
+            "in KB. 0 disables the limit."
         ),
     )
     body_change_enabled: bool = Field(
@@ -410,10 +429,10 @@ class CacheSettings(BaseModel):
     purge_confirm: bool = Field(default=True)  # CLI guard for `cache purge`
 
 
-#: The 8 FTS5 indexed columns of the ``tdoc_search`` virtual table, in
+#: The 9 FTS5 indexed columns of the ``tdoc_search`` virtual table, in
 #: DDL order. Single source of truth for ``bm25_weights`` validation
 #: and the per-column snippet selection in the search repo. Keep in
-#: sync with the DDL in ``storage/db/create_schema.py``.
+#: sync with the DDL in ``storage/db/migrate.py``.
 _SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
     "title",
     "ftp_url",
@@ -423,6 +442,7 @@ _SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
     "cover_text",
     "change_text",
     "ttcn_text",
+    "document_text",
 )
 
 
@@ -584,10 +604,10 @@ class SearchSettings(BaseModel):
         ),
     )
     bm25_weights: tuple[float, ...] = Field(
-        default=(5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0),
+        default=(5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0),
         description=(
             "Per-column BM25 weights applied via FTS5's "
-            "bm25() function. Order MUST match the 8 indexed "
+            "bm25() function. Order MUST match the 9 indexed "
             "columns of the tdoc_search virtual table "
             "(see :data:`_SNIPPET_COLUMN_NAMES`). Columns with "
             "weight 0 are skipped in both ranking and snippet "
@@ -599,11 +619,14 @@ class SearchSettings(BaseModel):
     @field_validator("bm25_weights", mode="before")
     @classmethod
     def _validate_bm25_weights_length(cls, value: object) -> object:
-        if isinstance(value, (tuple, list)) and len(value) != 8:
-            raise ValueError(
-                f"bm25_weights must have exactly 8 entries (one per FTS5 "
-                f"column), got {len(value)}"
-            )
+        if isinstance(value, (tuple, list)):
+            if len(value) == 8:
+                return (*value, 1.0)
+            if len(value) != 9:
+                raise ValueError(
+                    "bm25_weights must have exactly 9 entries (one per FTS5 "
+                    f"indexed column), got {len(value)}"
+                )
         return value
 
     search_fanout_factor: int = Field(
@@ -810,7 +833,7 @@ class ServerSettings(BaseModel):
     @classmethod
     def _validate_log_retention(cls, value: object) -> str:
         if not isinstance(value, str):
-            raise ValueError(f"log_retention must be a string, got {type(value).__name__}")
+            raise TypeError(f"log_retention must be a string, got {type(value).__name__}")
         text = value.strip()
         if not text:
             raise ValueError("log_retention must not be empty")
@@ -967,7 +990,7 @@ class Settings(BaseSettings):
         (:data:`ALLOWED_ENV_VARS`) is the single source of truth for
         which env vars are honoured.
         """
-        _ = env_settings  # noqa: F841 - replaced by the filtered source below
+        _ = env_settings
         filtered_env = FilteredEnvSettingsSource(
             settings_cls,
             case_sensitive=cls.model_config.get("case_sensitive"),

@@ -11,7 +11,6 @@ from typing import Protocol, TypeVar, runtime_checkable
 
 from doc3gpp.models.tdoc_cr import TDocCRParseResult
 
-
 T = TypeVar("T")
 
 

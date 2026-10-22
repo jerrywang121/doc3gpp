@@ -89,7 +89,7 @@ def test_upsert_many_updates_existing_row_in_place() -> None:
 
 def test_upsert_many_persists_tsg_and_round_trips() -> None:
     """Inserting with ``tsg`` writes the FK and listing surfaces it on the domain."""
-    repo, Session = _make_repo()
+    repo, _Session = _make_repo()
     repo.upsert_many(
         [
             Meeting(

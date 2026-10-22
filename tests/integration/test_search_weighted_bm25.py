@@ -112,7 +112,7 @@ def _seed_two_alpha_rows() -> None:
 def test_title_weight_outranks_meeting_title(sqlite_env) -> None:
     """Sanity check that bm25 returns both rows for a two-column match.
 
-    With the spec defaults ``(5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)``
+    With the spec defaults ``(5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0)``
     a ``title`` (weight 5) match and a ``meeting_location`` (weight 1)
     match both contribute to the score, so both rows surface from
     FTS5. We use ``meeting_location`` (weight 1) as the low-weight
@@ -139,7 +139,7 @@ def test_default_weights_applied_when_settings_unchanged(sqlite_env) -> None:
     Verifies:
 
     1. The default :class:`Settings.search.bm25_weights` matches the
-       spec tuple ``(5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)`` (so
+       spec tuple ``(5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0)`` (so
        downstream FTS5 calls get the expected column weights).
     2. A match in ``title`` (weight 5) and a match in
        ``meeting_location`` (weight 1) both surface from the
@@ -162,7 +162,7 @@ def test_default_weights_applied_when_settings_unchanged(sqlite_env) -> None:
 
     settings = get_settings()
     assert settings.search.bm25_weights == (
-        5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0,
+        5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0,
     ), "default weight tuple must match the spec"
 
     hits = repo.search("alpha", SearchFilters(limit=10))
@@ -209,25 +209,29 @@ def test_explicit_order_by_bm25_used(sqlite_env) -> None:
         f"all events:\n{captured}"
     )
     stmt, params = matched[-1]
-    # SQLAlchemy has already substituted :w0..:w7 with ``?``
+    # SQLAlchemy has already substituted :w0..:w8 with ``?``
     # placeholders by the time ``before_cursor_execute`` fires; the
-    # 8 weight values land as the first 8 entries of ``params`` in
-    # w0..w7 order (the SELECT bm25 call). Verify the SQL shape
+    # 9 weight values land as the first 9 entries of ``params`` in
+    # w0..w8 order (the SELECT bm25 call). Verify the SQL shape
     # (explicit ORDER BY + snippet with placeholders) and the
     # bound param tuple directly.
-    assert "ORDER BY bm25(tdoc_search" in stmt, (
-        f"expected explicit ORDER BY bm25(tdoc_search, ...); got:\n{stmt}"
+    assert "ORDER BY selected.parent_rank ASC" in stmt, (
+        f"expected parent-rank ordering before source rows; got:\n{stmt}"
+    )
+    order_clause = stmt.rsplit("ORDER BY", 1)[-1]
+    assert "bm25(tdoc_search" in order_clause, (
+        f"expected explicit BM25 source ordering; got:\n{stmt}"
     )
     assert "snippet(tdoc_search, " in stmt, (
         f"expected snippet() invocation; got:\n{stmt}"
     )
-    weight_params = params[:8]
-    assert weight_params == (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0), (
-        f"expected 8 weight params in w0..w7 order; got {weight_params!r}"
+    weight_params = params[:9]
+    assert weight_params == (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0), (
+        f"expected 9 weight params in w0..w8 order; got {weight_params!r}"
     )
-    assert params[8] == 1, (
-        f"expected col_idx=1 (title) at params[8]; got {params[8]!r}"
+    assert params[9] == 1, (
+        f"expected col_idx=1 (title) at params[9]; got {params[9]!r}"
     )
-    assert params[9] == 8, (
-        f"expected snippet_tokens=8 at params[9]; got {params[9]!r}"
+    assert params[10] == 8, (
+        f"expected snippet_tokens=8 at params[10]; got {params[10]!r}"
     )

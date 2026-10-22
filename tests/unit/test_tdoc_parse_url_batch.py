@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,8 +10,10 @@ import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
-from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult
+from doc3gpp.models.tdoc_cr import DirectParseBatchResult, DirectParseResult, TDocCRDetails
+from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.parsers.direct_extractor import NotAFolderError
+from doc3gpp.parsers.tdoc_zip import ephemeral_document_id_for
 
 Runner = CliRunner
 
@@ -69,11 +72,23 @@ def _build_service_factory(monkeypatch: pytest.MonkeyPatch, service: _FakeBatchS
 
 
 def _dummy_details(tdoc_id: str) -> DirectParseResult:
-    from doc3gpp.models.tdoc_cr import TDocCRDetails
-
+    source_file = f"{tdoc_id}.docx"
+    markdown = f"markdown for {tdoc_id}"
+    document_id = ephemeral_document_id_for(
+        hashlib.sha256(tdoc_id.encode("utf-8")).hexdigest(), source_file
+    )
+    document = TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=f"documents/{document_id}/{tdoc_id}.md",
+        file_order=0,
+        markdown_text=markdown,
+        content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    )
     return DirectParseResult(
         source_kind="url-3gpp",
-        markdown="",
+        documents=(document,),
+        main_source_file=source_file,
         details=TDocCRDetails(tdoc_id=tdoc_id),
         extract_meta=None,
         from_cache=False,

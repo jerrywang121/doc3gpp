@@ -1,6 +1,9 @@
 from doc3gpp.scraping.testcase_source import (
-    HISTORY_URL, parse_status_filename, select_latest,
+    HISTORY_URL,
+    parse_status_filename,
+    select_latest,
 )
+
 
 def test_grammar_and_ordering():
     assert HISTORY_URL.endswith("/History/")

@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from doc3gpp.models.spec_doc import ChunkDraft, SpecDocChunk, SpecDocSource
-from doc3gpp.settings.schema import Settings, SpecDocSettings
 from doc3gpp.services.spec_doc_service import SpecDocService
+from doc3gpp.settings.schema import Settings, SpecDocSettings
 
 
 def test_get_source_delegates_to_specdata_repo() -> None:

@@ -23,7 +23,6 @@ from doc3gpp.repository.protocols import JobRepository
 from doc3gpp.web.deps import get_job_repo, get_pending_jobs
 from doc3gpp.web.templates_setup import templates
 
-
 router = APIRouter(prefix="/sync", tags=["sync"])
 
 

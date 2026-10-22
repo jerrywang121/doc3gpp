@@ -1,4 +1,6 @@
 """CLI tests for the `spec doc` sub-app (Task 11)."""
+from typing import ClassVar
+
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -40,9 +42,9 @@ def test_spec_doc_parse_forwards_force(monkeypatch):
     calls = []
 
     class FakeResult:
-        successes = {}
-        skipped = {}
-        failures = {}
+        successes: ClassVar[dict] = {}
+        skipped: ClassVar[dict] = {}
+        failures: ClassVar[dict] = {}
 
     class FakeService:
         def parse_many(self, spec_ids, *, release, version, force):
@@ -65,9 +67,9 @@ def test_spec_doc_parse_rejects_repeated_spec(monkeypatch):
     calls = []
 
     class FakeResult:
-        successes = {}
-        skipped = {}
-        failures = {}
+        successes: ClassVar[dict] = {}
+        skipped: ClassVar[dict] = {}
+        failures: ClassVar[dict] = {}
 
     class FakeService:
         def parse_many(self, spec_ids, *, release, version, force):
@@ -90,9 +92,9 @@ def test_spec_doc_parse_rejects_misaligned_release_and_version(monkeypatch):
     calls = []
 
     class FakeResult:
-        successes = {}
-        skipped = {}
-        failures = {}
+        successes: ClassVar[dict] = {}
+        skipped: ClassVar[dict] = {}
+        failures: ClassVar[dict] = {}
 
     class FakeService:
         def parse_many(self, spec_ids, *, release, version, force):

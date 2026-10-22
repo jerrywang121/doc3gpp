@@ -34,6 +34,7 @@ from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.services.spec_doc_index_service import SpecDocIndexService
 from doc3gpp.services.spec_doc_search_facade import SpecDocSearchFacade
 from doc3gpp.services.spec_service import SpecService
+from doc3gpp.services.tdoc_content_service import TDocContentService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_file_service import TDocFileService
 from doc3gpp.services.tdoc_index_service import TDocIndexService
@@ -63,6 +64,9 @@ from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
 )
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
+from doc3gpp.storage.repositories.tdoc_extraction_sql import (
+    SQLAlchemyTDocExtractionRepository,
+)
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
@@ -285,6 +289,24 @@ def build_tdoc_cr_repository() -> SQLAlchemyTDocCrRepository:
     ``TDoc`` without going through the full extraction service.
     """
     return SQLAlchemyTDocCrRepository()
+
+
+def build_tdoc_extraction_repository() -> SQLAlchemyTDocExtractionRepository:
+    """Construct the atomic document-bundle repository for service builds."""
+    return SQLAlchemyTDocExtractionRepository()
+
+
+def build_tdoc_content_service(
+    settings: Settings | None = None,
+) -> TDocContentService:
+    """Construct the SQL-first Markdown retrieval service."""
+    settings = settings or get_settings()
+    return TDocContentService(
+        tdoc_repository=build_tdoc_repository(),
+        cr_repository=build_tdoc_cr_repository(),
+        extraction_repository=build_tdoc_extraction_repository(),
+        cache_root=settings.cache.dir,
+    )
 
 
 def build_tdoc_cr_ttcn_repository() -> SQLAlchemyTDocCrTtcnRepository:
@@ -654,7 +676,12 @@ def build_tdoc_cr_service(
             or build_tdoc_cr_change_details_repository()  # type: ignore[call-arg]
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
+        extraction_repository=build_tdoc_extraction_repository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
+        max_documents_per_zip=settings.tdoc_parse.max_documents_per_zip,
+        max_uncompressed_size_bytes=(
+            settings.tdoc_parse.max_uncompressed_size_kb * 1024
+        ),
         search_service=(
             search_service
             if search_service is not None

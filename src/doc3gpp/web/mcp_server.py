@@ -49,11 +49,11 @@ from doc3gpp.web.errors import (
     MeetingNotFoundError,
     SettingsDisabledError,
     SpecNotFoundError,
-    TDocNotFoundError,
     TDocUrlNotFoundError,
     TestcaseNotFoundError,
     TSGNotFoundError,
     map_mcp_error,
+    map_tdoc_content_error,
 )
 from doc3gpp.web.filters import parse_date_query, parse_text_query
 
@@ -268,6 +268,10 @@ def build_mcp_server(state: WebState) -> MCPServer:
         website_url="https://github.com/jerrywang121/doc3gpp",
     )
     services = state.services
+    if services.tdoc_content is None:
+        from doc3gpp.services.factory import build_tdoc_content_service
+
+        services.tdoc_content = build_tdoc_content_service(settings=state.settings)
 
     # ---- Meetings -------------------------------------------------
     @server.tool(name="list_meetings", description="List meetings, optionally filtered by TSG, name, location or year. The tsg, name and location filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
@@ -441,41 +445,94 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
         return _to_json(render.to_jsonable(record))
 
-    @server.tool(name="get_tdoc_content", description="Return the cached markdown body for a tdoc id.")
+    @server.tool(
+        name="get_tdoc_content",
+        description="Return all or one stored Markdown source for a TDoc ID or ZIP URL.",
+    )
     @_mcp_error_guard
     def get_tdoc_content(
-        tdoc_id: Annotated[str, Field(description="Canonical tdoc id (e.g. 'R5-260013').")],
-        format: Annotated[str, Field(description="Output format: 'markdown' (default) or 'html'.")] = "markdown",
+        tdoc_id: Annotated[
+            str | None,
+            Field(description="Canonical TDoc id (for example, 'R5-260013')."),
+        ] = None,
+        ftp_url: Annotated[
+            str | None,
+            Field(description="Exact stored ZIP URL for URL-anchored content lookup."),
+        ] = None,
+        source_file: Annotated[
+            str | None,
+            Field(description="Exact full source member path within the ZIP."),
+        ] = None,
+        format: Annotated[
+            str,
+            Field(description="Output format: markdown (default), html, or json."),
+        ] = "markdown",
     ) -> str:
-        if format not in ("markdown", "html"):
-            raise InvalidFilterError("format must be one of 'markdown'|'html'")
-        from pathlib import Path
+        from html import escape
+        from urllib.parse import urlencode
 
-        from doc3gpp.services.tdoc_cr_service import _read_cached_markdown_path
-        from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-        from doc3gpp.web.routes.tdocs import _MD_RENDERER, _resolve_cache_file
-
-        tdoc = SQLAlchemyTDocRepository().get_by_id(tdoc_id)
-        if tdoc is None or not tdoc.ftp_url:
-            raise TDocNotFoundError(tdoc_id)
-        cache_file = _resolve_cache_file(tdoc)
-        markdown_path = Path(state.settings.cache.dir) / "markdown" / cache_file
-        if not markdown_path.exists():
-            raise CacheMissError(
-                f"No cached markdown for TDoc {tdoc_id}.",
-                hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id}",
-            )
-        text = _read_cached_markdown_path(
-            cache_file, Path(state.settings.cache.dir)
+        from doc3gpp.services.tdoc_content_service import (
+            render_tdoc_documents_markdown,
+            tdoc_content_to_dict,
         )
-        if not text:
-            raise CacheMissError(
-                f"Failed to decode cached markdown for TDoc {tdoc_id}.",
-                hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id} --force",
+
+        if (tdoc_id is None) == (ftp_url is None):
+            raise InvalidFilterError(
+                "exactly one of 'tdoc_id' or 'ftp_url' is required"
             )
-        if format == "html":
-            return _MD_RENDERER.render(text)
-        return text
+        if format not in ("markdown", "html", "json"):
+            raise InvalidFilterError(
+                "format must be one of 'markdown'|'html'|'json'"
+            )
+
+        try:
+            content = services.tdoc_content.get(
+                tdoc_id=tdoc_id,
+                ftp_url=ftp_url,
+                source_file=source_file,
+            )
+        except ValueError as exc:
+            raise map_tdoc_content_error(
+                exc, tdoc_id=tdoc_id, ftp_url=ftp_url
+            ) from exc
+
+        if format == "json":
+            return _to_json(tdoc_content_to_dict(content))
+
+        if not content.complete:
+            command = (
+                f"doc3gpp tdoc parse --tdoc {tdoc_id} --force"
+                if tdoc_id
+                else f"doc3gpp tdoc parse --from-url {ftp_url} --force"
+            )
+            raise CacheMissError(
+                "This legacy TDoc extraction is incomplete; use format='json' "
+                "to inspect the completion flag, or re-parse before consuming text.",
+                hint=f"run: {command}",
+            )
+
+        if format == "markdown":
+            return render_tdoc_documents_markdown(
+                content.documents, include_source_headers=True
+            )
+
+        from doc3gpp.web.routes.tdocs import _MD_RENDERER
+
+        sections: list[str] = []
+        for document in content.documents:
+            label = "Main document" if document.is_main else "Supporting document"
+            href = "/tdocs/by-url/content?" + urlencode(
+                {"ftp_url": content.ftp_url, "source_file": document.source_file}
+            )
+            sections.append(
+                f'<section class="tdoc-document"><h2>{label}: '
+                f'<code>{escape(document.source_file)}</code></h2>'
+                f'<p><a class="tdoc-source-link" href="{escape(href, quote=True)}">'
+                f"View only this source</a></p>"
+                f'<div class="tdoc-content">{_MD_RENDERER.render(document.markdown)}</div>'
+                "</section>"
+            )
+        return "\n".join(sections)
 
     # ---- TSGs -----------------------------------------------------
     @server.tool(name="list_tsgs", description="List all standardisation groups (TSGs).")

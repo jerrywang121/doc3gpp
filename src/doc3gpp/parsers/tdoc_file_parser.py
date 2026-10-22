@@ -31,8 +31,8 @@ from bs4 import BeautifulSoup
 
 from doc3gpp.models.tdoc_file import (
     TDocFile,
-    TDocFileTypeRevision,
     TDocFileTypeReview,
+    TDocFileTypeRevision,
     TDocFileTypeSupport,
 )
 from doc3gpp.parsers.normalizers import normalize_ftp_path
@@ -185,7 +185,7 @@ def _extract_uploaded_date(anchor) -> date | None:
     if not text:
         return None
     try:
-        return datetime.strptime(text, _FTP_DATE_FORMAT).date()
+        return datetime.strptime(text, _FTP_DATE_FORMAT).date()  # noqa: DTZ007
     except ValueError:
         logger.debug("Could not parse uploaded_date %r from FTP listing", text)
         return None

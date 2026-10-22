@@ -122,6 +122,13 @@
 # Plain context lines captured before and after each change block.
 # 0 = no context, only marker lines + bridge.
 # body_change_context_padding = 2
+
+# Archive limits for `.docx` members inside each TDoc ZIP. The size cap is
+# aggregate uncompressed bytes across supported members; 0 disables either cap.
+[tdoc_parse]
+max_documents_per_zip = 100
+max_uncompressed_size_kb = 102400
+
 # Direct-parse flags (`--from-path`, `--from-url`, `--format`, `--output`)
 # are CLI-only — no TOML equivalent is exposed for the
 # `tdoc parse --from-*` direct mode.
@@ -164,14 +171,14 @@ rebuild_batch_size = 100
 snippet_tokens = 8
 
 # Per-column BM25 weights passed to FTS5's bm25() ranking function
-# and snippet() selection. Order MUST match the 8 indexed columns of
+# and snippet() selection. Order MUST match the 9 indexed columns of
 # the tdoc_search virtual table: (title, ftp_url, meeting_title,
-# meeting_location, wis, cover_text, change_text, ttcn_text). A
-# column with weight 0 is excluded from both ranking and previews; a
-# column with weight > 0 gets its own highlighted snippet in query
-# results (one per column, only when the snippet actually contains
-# a match). Tune interactively via `doc3gpp tdoc search --text ... --explain`.
-bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+# meeting_location, wis, cover_text, change_text, ttcn_text,
+# document_text). Existing eight-value configurations append a 1.0
+# document_text weight. A column with weight 0 is excluded from both
+# ranking and previews; a column with weight > 0 gets its own highlighted
+# snippet when the column matches the query.
+bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0]
 
 # Candidate multiplier used by the unified semantic/hybrid search path.
 # Higher values give RRF more candidates at the cost of more vector lookups.

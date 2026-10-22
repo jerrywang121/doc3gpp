@@ -1,6 +1,5 @@
 """Unified TDoc search and index-status routes."""
 # FastAPI dependency calls in route signatures are intentional.
-# ruff: noqa: B008
 from __future__ import annotations
 
 import asyncio

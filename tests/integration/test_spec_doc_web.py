@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
+
+from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.web.app import build_app
-from doc3gpp.settings.loader import get_settings
 
 
 def test_spec_doc_schema_route(sqlite_env):

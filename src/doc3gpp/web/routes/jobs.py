@@ -8,7 +8,7 @@ error so the caller can inspect the result without a separate
 as a 404 when the ``job_id`` is unknown.
 """
 # FastAPI dependency calls in route signatures are intentional.
-# ruff: noqa: B008, BLE001
+# ruff: noqa: BLE001
 from __future__ import annotations
 
 import asyncio

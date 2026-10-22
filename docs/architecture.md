@@ -14,8 +14,9 @@ Current scope:
   (`GenerateDocumentList.aspx?meetingId={meeting_id}`); auxiliary TDoc
   files still come from the per-meeting FTP folders.
 - Work-item (WI) scraping from the per-TSG DynaReport WI pages.
-- TDoc CR extraction pipeline (download zip → on-disk cache → python-docx
-  render → markdown cache → cover-page parser → persist).
+- Multi-file TDoc CR extraction (download ZIP → enumerate supported DOCX
+  members → convert each member → select one CR-cover main document → atomically
+  persist one extraction parent and all Markdown source rows).
 - Calendar / TDoc / WI / TDoc-CR persistence in SQLAlchemy.
 - RAN5 testcase status snapshots (History zip → workbook → `testcases` /
   `testcase_status` / `testcase_sources` rows; `testcase sync` / `list`
@@ -72,7 +73,8 @@ Per-layer modules:
 - `settings/` — schema and loader for environment-driven and TOML config;
   exposes `get_settings()` (cached) with `Settings` (root) +
   `SyncSettings` / `OutputSettings` / `OutputFieldsSettings` /
-  `CacheSettings` / `TDocParseSettings` / `SpecDocSettings` (TOML
+  `CacheSettings` / `TDocParseSettings` (including TOML-only ZIP limits) /
+  `SearchSettings` (nine FTS5 BM25 weights) / `SpecDocSettings` (TOML
   `[spec_doc]` block: dedicated `cache_dir = ~/.cache/doc3gpp/specs`,
   `max_zip_size_kb = 0`, `max_chunk_chars = 1500`,
   `chunk_overlap = null` → reuse `semantic_search.chunk_overlap`,
@@ -134,6 +136,11 @@ Per-layer modules:
       `convert_document_to_blocks` (`.docx` → `HeadingBlock` /
       `ParagraphBlock` / `TableBlock` list) consumed by the spec-doc
       parse pipeline.
+    - `parsers/tdoc_zip.py` — enumerate and validate supported `.docx`
+      members, compute stable source identities, and build/read the
+      versioned multi-member Markdown ZIP plus manifest. It never extracts
+      member paths to disk or converts `.doc`, PDF, spreadsheets, or nested
+      ZIPs.
     - `parsers/spec_doc.py` — spec-zip parsing (no network):
       `list_spec_docx` (`.docx` members; `.doc` entries warn-skip),
       `order_spec_files` (front-matter TOC file first, then
@@ -162,7 +169,10 @@ Per-layer modules:
       `models/wi.py`, `models/tdoc_file.py`, `models/tdoc_cr.py`
       (`TDocCRDetails` slim cover-page dataclass, `TDocCRTTCNDetails`
       sidecar, `TDocCRParseResult` parser bundle, `TDocExtractMeta`
-      cache-pointer sidecar, `DirectParseResult` direct-mode outcome)
+      URL-keyed extraction metadata/completeness, and `DirectParseResult`
+      document-collection direct-mode outcome), plus `models/tdoc_document.py`
+      (`TDocDocument`, `TDocParseBundle`) and `models/tdoc_content.py`
+      (`TDocContent`, `TDocContentDocument` response DTOs)
     - `models/testcase.py` — `TestCase` header, `TestCaseStatus`
       `(testcase_id, group, path)` triple, `TestCaseWithStatuses` list-view DTO
       (`statuses: list[TestCaseStatus]`), `TestCaseDetail` detail-view
@@ -183,9 +193,10 @@ Per-layer modules:
     - `repository/protocols.py` — `MeetingRepository`,
       `TDocRepository` (+ `get_by_id`), `TsgRepository`,
       `WiRepository`, `TDocFileRepository`,
-      `TDocCrDetailRepository` (slim cover-page repo + the
-      `tdoc_extracts` sidecar, written through a separate
-      `upsert_extract_meta` method),
+      `TDocCrDetailRepository` (slim cover-page repo and extraction-metadata
+      reads), `TDocDocumentRepository` (SQL document reads), and
+      `TDocExtractionRepository` (atomic replacement of cover, optional
+      sidecars, one extraction parent, and every document row),
       `TDocCrTTCNDetailRepository` (TTCN sidecar),
       `TestCaseRepository` (`upsert_many` / `replace_statuses` (delete
       + insert per id) / `list` with text filters + any-path
@@ -208,10 +219,12 @@ Per-layer modules:
     - `services/tdoc_file_service.py` — auxiliary FTP files
     - `services/tdoc_sync_coordinator.py` — cross-service orchestration
       for `tdoc sync`
-    - `services/tdoc_cr_service.py` — end-to-end CR extraction pipeline
-      (accepts `cr_ttcn_repository` in its constructor; fans the
-      parser's `TDocCRParseResult` out across the cover-page repo,
-      the TTCN sidecar repo, and the extract-metadata repo)
+    - `services/tdoc_cr_service.py` — end-to-end multi-DOCX CR extraction
+      pipeline; converts supported members, runs cover/TTCN/body-change
+      parsing only for the unique main document, and persists one bundle
+    - `services/tdoc_content_service.py` — SQL-first all-source or exact-source
+      lookup by TDoc ID / ZIP URL, legacy incomplete-content fallback, and
+      shared JSON / named-Markdown renderers
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
       `build_tdoc_sync_coordinator`, `build_tdoc_cr_service`,
@@ -225,11 +238,11 @@ Per-layer modules:
        `build_spec_doc_search_facade` (unified search facades), and
         `build_tdoc_index_service` / `build_spec_doc_index_service`
         (independent FTS5/vector index maintenance)
-     - `services/tdoc_search_facade.py` — `TDocSearchFacade` selects
-       FTS5, semantic, hybrid, or filter-only mode and serializes the
-       flattened public TDoc result row.
-     - `services/tdoc_index_service.py` — `TDocIndexService` coordinates
-       independent TDoc FTS5/vector status and rebuild operations.
+    - `services/tdoc_search_facade.py` — `TDocSearchFacade` selects
+      FTS5, semantic, hybrid, or filter-only mode and serializes flattened
+      TDoc rows with `matched_documents` provenance from FTS5/hybrid search.
+    - `services/tdoc_index_service.py` — `TDocIndexService` coordinates
+      independent TDoc FTS5/vector status and rebuild operations.
     - `services/testcase_service.py` — `TestCaseService.sync(*,
       force=False, on_progress=None)` (latest-History-zip →
       `upsert_many` + per-`(id, group)` `replace_statuses`, with the
@@ -259,9 +272,10 @@ Per-layer modules:
        — underlying FTS5 and vector orchestration used by the facade.
 - `storage/` — SQLAlchemy ORM models, engine / session factory,
   backend-specific options, concrete Protocol implementations.
-    - `storage/db/models.py` — ORM classes (including
-      `TDocCrDetailOrm` slim cover-page, `TDocCrTtcnDetailOrm`
-      TTCN sidecar, `TDocExtractOrm` cache-pointer sidecar)
+     - `storage/db/models.py` — ORM classes (including
+       `TDocCrDetailOrm` slim cover-page, `TDocCrTtcnDetailOrm`
+       TTCN sidecar, `TDocExtractOrm` extraction parent with version/count,
+       and `TDocDocumentOrm` durable per-member content)
     - `storage/compression.py` — shared gzip JSON helpers
       (`compress_json` / `decompress_json`) used by the cover-page
       repo and the TTCN sidecar repo for any binary JSON column
@@ -281,8 +295,9 @@ Per-layer modules:
     - `storage/db/specdata_base.py` — declarative `SpecDataBase`
       (owns the three spec-doc ORMs in `storage/db/models.py`:
       `spec_doc_sources`, `spec_doc_tocs`, `spec_doc_chunks`)
-    - `storage/db/migrate.py` — `create_schema(scope)` (calls
-      `Base.metadata.create_all` for `"main"`,
+     - `storage/db/migrate.py` — `create_schema(scope)` (calls
+       the idempotent TDoc extraction-completeness and FTS5-layout migrations,
+       then `Base.metadata.create_all` for `"main"`,
       `TestCaseBase.metadata.create_all` for `"testcase"`,
       `SpecDataBase.metadata.create_all` + `_create_specdata_search_schema`
       (`spec_doc_search` + `spec_doc_search_meta`) +
@@ -290,10 +305,11 @@ Per-layer modules:
       `vec_spec_doc_meta`) for `"specdata"`, all three for `"all"`)
     - `storage/db/migrations/` — placeholder for future Alembic
     - `storage/backends/sqlite.py` — engine kwargs
-    - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`
-      and `storage/repositories/tdoc_cr_ttcn_sql.py` — concrete
-      `SQLAlchemy*Repository` classes (the cover-page repo also
-      owns `tdoc_extracts` writes via `upsert_extract_meta`)
+     - `storage/repositories/{meeting,tdoc,tsg,wi,tdoc_file,tdoc_cr}_sql.py`,
+       `tdoc_cr_ttcn_sql.py`, and `tdoc_extraction_sql.py` — concrete
+       repository implementations. The extraction repository owns atomic
+       writes to `tdoc_extracts` and `tdoc_documents` with the main cover and
+       optional sidecars.
     - `storage/repositories/testcase_sql.py` —
       `SQLAlchemyTestCaseRepository` (owns `testcases` +
       `testcase_status` + `testcase_sources`; text cols via
@@ -335,7 +351,7 @@ main factory (`get_session_factory()` → `get_engine()` →
 
 | `services/search_service.py` | orchestration; injected with a `SearchIndexRepository` impl + `EmbeddingReranker` via `services/factory.build_search_service` |
 | `storage/db/fts5_query.py` | `normalize_query` index-time pre-processor (T3); applies TDoc-ID base+full duplication + spec-id `dot→underscore` rejoin |
-| `storage/repositories/search_sql.py` | SQL impl of `SearchIndexRepository`; FTS5 DDL/DML; gzip decompression at index time |
+| `storage/repositories/search_sql.py` | SQL impl of `SearchIndexRepository`; metadata/document FTS5 rows, grouped parent ranking, source previews, SQL document freshness, and gzip decompression at index time |
 
 ## Runtime Data Flow
 
@@ -435,118 +451,53 @@ and the TDoc CR extraction is the deepest.
 
 ### TDoc CR extraction
 
-1. `doc3gpp tdoc parse` is filter-driven. At least one filter must be
-   supplied (`--tdoc` as a LIKE pattern, `--meeting-id`, `--meeting`, or
-   any text/date filter); the CLI validates `--meeting-id` when present,
-   applies `type == "CR"` by default when no explicit `--type` is
-   supplied, and in normal mode the SQL query excludes rows already
-   present in `tdoc_cr_cover_page` before applying the batch cap, so the
-   preview and confirmation list only pending TDocs. With `--force`, the
-   exclusion is disabled and every match (including already-parsed rows)
-   becomes a candidate. If the pending set is empty, the CLI prints
-   `Nothing to extract — every match is already parsed.` and exits `0`
-   (successful no-op).
-2. `TDocCrService.extract(tdoc_id, *, force=False)`:
-    - Pre-resolves the candidate download URL(s) via
-      `resolve_download_url(tdoc_id, build_ftp_url(tdocs.ftp_url))`
-      (combining the stored `tdocs.ftp_url` rebuilt to an absolute URL
-      via `build_ftp_url`, and the template URL), then probes
-      `TDocCrRepository.get_by_url` (normalised via `normalize_ftp_path`)
-      per candidate. A hit short-circuits with
-      `ExtractResult.from_cache = True` and skips the network.
-    - Else, `download_tdoc_zip` first checks the on-disk zip cache via
-      the `ftp_url`-derived cache key (regardless of `force`) and
-      returns the cached path on a hit. On a miss, it resolves the
-      TDoc id to its 3GPP URL via the template table (`R5s` → TTCN
-      email CR, `R5w` → workshop CR), hits `ScraperClient.get_bytes`,
-      and stages the zip in `TDocCache.put_bytes(key, payload, "zips")`.
-      The function tries the stored `tdocs.ftp_url` (rebuilt to an
-      absolute URL) first, falling back to the template on a terminal
-      HTTP error.
-    - `extract_docx_from_zip` returns `(filename, docx_bytes)`.
-    - The markdown for that exact `docx_bytes` is looked up by the
-      shared `cache_file` (URL-derived via
-      `scraping.cache_keys.derive_cache_file`) in
-      `TDocCache.get_bytes(cache_file, "markdown")`; on miss,
-      `convert_document_to_markdown` runs (raises
-      `PythonDocxNotInstalledError` if `python-docx` is not installed)
-      and the result is written to `markdown/<cache_file>` as a **real
-      ZIP archive** (single entry named `<docx stem>.md`,
-      `zipfile.ZIP_DEFLATED`) — so the `.zip` extension matches a
-      format that `unzip` / 7z / WinZip understand directly. The
-      writer is `_wrap_markdown_zip`; the reader
-      (`_decompress_markdown`) magic-byte-sniffs the on-disk bytes
-      (`PK\x03\x04` for the new format, `\x1f\x8b` for the legacy
-      gzip blob, plain UTF-8 for the pre-gzip era) so previously
-      written cache files still decode transparently. The same gzip
-      JSON convention continues to apply to the SQL-side
-      `tdoc_cr_ttcn_details.required_changes` blob via the shared
-      helpers in `storage/compression.py` (`compress_json` /
-      `decompress_json`) — same `compresslevel=9`, same tolerant
-      fallback (`None` / empty / gzip / JSON / Unicode errors all
-      resolve to `None` plus a warning, and legacy uncompressed
-      blobs decode transparently).
-    - `parse_cr_details(markdown, tdoc_id=...)` returns a typed
-      `TDocCRParseResult(cover, ttcn)` — the slim cover-page fields
-      bundled with an optional `TDocCRTTCNDetails` sidecar (populated
-      only when `tdoc_id` matches `R5s\d{6}` and the parser ran the
-      TTCN overview + corrections sub-parsers; non-TTCN CRs get
-      `ttcn=None`). The sidecar is built with the derived
-      `changed_functions` aggregate via
-      `parsers/cr/ttcn_functions.py::extract_changed_functions` at the
-      `TDocCRTTCNDetails(...)` construction site in
-      `parsers/cr/cr_parsers.py:161`, so every successful TTCN
-      parse persists the sorted + deduped `<module>.<function>`
-      list alongside `required_changes`. Partial-extraction markers
-      apply: when only the module basename is recoverable the entry is
-      recorded as `'<module>.'` (trailing-dot sentinel); when only the
-      function name is recoverable it is recorded as `'.<function>'`
-      (leading-dot sentinel); when neither is recoverable the
-      correction is dropped.
-    - The service fans the result out across THREE independent
-      upserts in `TDocCrService.extract_many` /
-      `TDocCrService.extract_from_url`: the slim cover-page row in
-      `tdoc_cr_cover_page` (`cr_repo.upsert(cover)`), the optional
-      TTCN sidecar in `tdoc_cr_ttcn_details`
-      (`cr_ttcn_repo.upsert(ttcn)` — only when `ttcn is not None`),
-      and the cache metadata row in `tdoc_extracts`
-      (`cr_repo.upsert_extract_meta(extract_meta)`). All three are
-      keyed by the relative `ftp_url`; multiple extracts at distinct
-      URLs for the same `tdoc_id` write distinct rows, one per
-      revision. The fan-out replaces the previous
-      `TDocCrRepository.upsert(details, extract_meta)` two-table
-      transaction; partial failure is now possible across the three
-      tables, but the unbuffered HTTP fetch we already trust keeps
-      that window negligible.
-    - Writes a `tdoc_cr_change_details` row when the parser detects
-      `<ins>`/`<del>` revision marks in the body (non-TTCN CRs only).
-    - Returns `ExtractResult(details, extract_meta, from_cache=False)`.
-  3. `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row
-    via `TDocRepository.get_by_id` (PK lookup on `tdocs.tdoc_id`),
-    then performs THREE URL-keyed reads against the immutable
-    `tdoc.ftp_url`:
-    1. `SQLAlchemyTDocCrRepository.get_by_url(tdoc.ftp_url)` — the
-       slim cover-page row from `tdoc_cr_cover_page`.
-    2. `SQLAlchemyTDocCrRepository.get_extract_meta_by_url(tdoc.ftp_url)`
-       — the cache metadata row from `tdoc_extracts`. The
-       `extracted_at` display value is sourced from this row
-       (both `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details` no longer
-       carry their own timestamps after the slimming).
-    3. `SQLAlchemyTDocCrTtcnRepository.get_by_url(tdoc.ftp_url)` —
-       the TTCN sidecar from `tdoc_cr_ttcn_details`, gated on
-       `is_ttcn_tdoc(tdoc.tdoc_id)` so non-TTCN CRs never hit the
-       sidecar table.
+1. `doc3gpp tdoc parse` remains filter-driven in database mode. Its normal
+   candidate query treats only complete version-2 extractions as parsed; legacy
+   version-1 rows remain pending even when a cover-page row exists. `--force`
+   includes complete rows for replacement. The CLI cap applies after pending
+   filtering.
+2. `TDocCrService` resolves the ZIP URL and obtains its bytes using the existing
+   source-ZIP cache/download path (`--force` reprocesses the ZIP but does not
+   itself purge the source cache). It enumerates supported `.docx` members (not
+   `.doc`, PDF, spreadsheets, or nested ZIPs), rejects unsafe or duplicate
+   member identities, and converts each supported member sequentially.
+   The TOML-only limits are `max_documents_per_zip = 100` and
+   `max_uncompressed_size_kb = 102400` aggregate uncompressed member bytes;
+   `0` disables either. Limit violations use the skipped bucket.
+3. The existing structural CR-cover detector must find exactly one main member.
+   Supporting members need no CR header and are content-only. Only the main
+   member is passed to `parse_cr_details` and can produce the cover, optional
+   TTCN sidecar, or optional body-change sidecar. Zero/multiple candidates or a
+   failure converting any supported member fail the archive; no partial bundle
+   is marked complete.
+4. Preparation produces one ordered `TDocParseBundle`. The serialized writer
+   calls `TDocExtractionRepository.replace_bundle` once to atomically replace
+   the main cover and optional sidecars, one `tdoc_extracts` parent row, and
+   all `tdoc_documents` rows. The parent is keyed by immutable `ftp_url`,
+   stores `extraction_version = 2` and `document_count`, and uses `doc_filename`
+   for the full path of the main member. Each document row carries its full
+   `source_file`, order, stable ID, complete `markdown_text`, and content hash.
+   These rows are content/provenance, not extra TDoc or CR metadata;
+   `tdoc_files` remains the separate FTP auxiliary-file inventory.
+5. The real ZIP at `markdown/<cache_file>` is a derived artifact with one
+   Markdown entry per document plus a versioned manifest. SQL Markdown is the
+   source of truth for retrieval and FTS5 rebuilding, so purging or evicting
+   the derived Markdown ZIP does not delete content or make an extraction
+   incomplete. Legacy plain UTF-8, gzip, and single-member Markdown ZIPs remain
+   readable as incomplete version-1 content only. Parse discovery keeps those
+   rows pending so a normal filtered parse can upgrade them; no corpus reset or
+   standalone repair command is needed. `--force` replaces the SQL bundle and
+   may reuse the cached source ZIP.
+6. `tdoc show --format raw --tdoc <id>` retains its extraction-on-read path,
+   then reads Markdown SQL-first. `--source-file <full-member-path>` selects
+   exactly one source and is valid only with `--format raw`; without it, one
+   body is emitted unchanged and multiple bodies are emitted as main-first
+   named blocks. Exact URL content reads (`tdoc show --ftp-url`, HTTP, and MCP)
+   are snapshots: they do not trigger sync, download, or conversion.
 
-    The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at)`
-    is rendered by `table` / `json` / `markdown` to three separate
-    sections: `cover`, the optional `ttcn` block, and the standalone
-    `extracted_at` line. Optional keys are **omitted** (not emitted
-    as `null`) in the JSON payload when the corresponding row is
-    absent. The legacy `details` / `parser_version` fields no longer
-    appear in any output. The `raw` format delegates to
-    `TDocCrService.extract()` and writes the converted `.docx`
-    markdown (DB-cache short-circuit, otherwise download + render +
-    persist).
+`tdoc_extracts` owns extraction version/count and the shared cache pointer;
+`tdoc_documents` owns inner ZIP content. The CR cover, TTCN, and body-change
+sidecars remain URL-keyed and are produced only from the main document.
 
 ### Spec sync (list + detail)
 
@@ -915,9 +866,24 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `extracted_at` or `parser_version` — the sidecar is purely the
       parsed payload; timestamps and parser versioning live in
       `tdoc_extracts`.
-- `tdoc_search`: FTS5 virtual table keyed on `tdoc_id`; uses stock sqlite `unicode61` tokenizer + Python-side `normalize_query` (T3); indexes title, ftp_url, meeting context, related WIs, and the concatenated text of `tdoc_cr_cover_page` / `tdoc_cr_change_details` / `tdoc_cr_ttcn_details` (gzip blobs decompressed in Python). Filter push-down is supported by three composite indexes that back the `search` / `tdoc list` predicate columns: `idx_tdocs_release_spec` (`tdocs.release`, `tdocs.spec`), `idx_tdocs_uploaded_date` (`tdocs.uploaded_date`), and `idx_meetings_name_tsg` (`meetings.name`, `meetings.tsg`).
-- `tdoc_search_meta`: Sidecar for rebuild resume + staleness tracking (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`).
-- `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`; one row per embedding chunk produced by the remote OpenAI-compatible embeddings API. Schema is gated on the sqlite + sqlite-vec support matrix (created by `_create_vector_schema` in `storage/db/migrate.py`; silently skipped when the sqlite-vec extension is unavailable). Dimensions match the live embedder dim at rebuild time; `vec_meta` tracks `embedding_dim` + `embedding_model` (a missing model row on a legacy DB counts as a mismatch — rebuild is the upgrade path).
+- `tdoc_search`: FTS5 has one `metadata` row per logical TDoc plus one
+  `document` row per stored Markdown source. Its nine indexed columns are
+  `(title, ftp_url, meeting_title, meeting_location, wis, cover_text,
+  change_text, ttcn_text, document_text)`; `tdoc_id`, `row_kind`, document ID,
+  source path, extraction version, and content hash are unindexed provenance.
+  Search groups physical matches by TDoc before parent pagination, ranks a
+  parent by its best matching row, and returns matching source details without
+  duplicate logical parents. Metadata-only TDocs remain searchable.
+- `tdoc_search_meta`: Sidecar for rebuild resume and reporting. Freshness checks
+  expected SQL document IDs/content hashes/extraction versions as well as
+  metadata rows; unchanged `uploaded_date` alone is not proof of currentness.
+  `row_count` reports logical indexed TDocs, not physical FTS rows.
+- `vec_tdoc_embeddings`: sqlite-vec virtual table keyed on `(tdoc_id, chunk_id)`;
+  one row per existing TDoc-level embedding chunk produced by the remote
+  OpenAI-compatible embeddings API. Supporting-document Markdown is not added
+  to this vector index, so semantic-only search does not imply supporting-file
+  coverage. Schema creation is gated on the sqlite + sqlite-vec support matrix;
+  dimensions match the live embedder dim at rebuild time.
 - `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`) plus the `embedding_dim` / `embedding_model` identity rows stamped on every non-resume rebuild.
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity
@@ -943,19 +909,22 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       leaves no `tdoc_cr_change_details` row because the TTCN
       sidecar already carries the per-function change aggregate.
 - `tdoc_extracts`:
-    - `ftp_url` (PK, matches `tdoc_cr_cover_page.ftp_url`) + `tdoc_id`
-      (non-PK FK → `tdocs.tdoc_id` with `ondelete="CASCADE"`, indexed
-      for the per-tdoc lookup), `cache_file` (String(255), indexed),
-      `doc_filename`, `extracted_at`, `parser_version`. Cache-pointer
-      sidecar — the two child tables share the URL as their identity
-      but have **no FK between themselves**: the on-disk cache can be
-      purged (deleting every `tdoc_extracts` row) without dropping the
-      parsed `tdoc_cr_cover_page` history, and the parsed record can be
-      rebuilt (deleting `tdoc_cr_cover_page`) without invalidating the
-      cached zip/markdown. The `cache_file` column stores the unified
-      basename (derived from `ftp_url` via `derive_cache_file()`); the
-      on-disk paths are reconstructed as `{cache.dir}/zips/<cache_file>`
-      and `{cache.dir}/markdown/<cache_file>`.
+    - One parent row per immutable ZIP `ftp_url`: `ftp_url` (PK), `tdoc_id`
+      (FK → `tdocs.tdoc_id`, `ondelete=CASCADE`), `cache_file`,
+      `doc_filename` (full main-member path), `extracted_at`, `parser_version`,
+      `extraction_version`, and `document_count`. Legacy rows migrate to version
+      1/count 0; only a successful complete replacement stores version 2 and its
+      document count. The `cache_file` key reconstructs the derived ZIP and
+      Markdown cache paths; purging/eviction of those files does not delete this
+      SQL parent or its document text.
+- `tdoc_documents`:
+    - One content/provenance row per ZIP member: `document_id` (stable SHA-256
+      identity, PK), `ftp_url` (FK → `tdoc_extracts.ftp_url`, cascade delete),
+      `source_file` (full member path), `markdown_file` (derived ZIP member),
+      `file_order`, `markdown_text` (authoritative stored content), and
+      `content_hash`. Unique constraints on `(ftp_url, source_file)` and
+      `(ftp_url, file_order)` preserve source identity/order. These rows are not
+      TDoc metadata and do not add inner-member records to `tdoc_files`.
 - `meetings`:
     - `meeting_id` (PK), `name`, `title`, `location`, `start_date`,
       `end_date`, `ftp_url`, `start_doc`, `end_doc`, `tsg` (nullable
@@ -1019,20 +988,15 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `meetings` — `meeting_id` is a snapshot of the upstream page
       and the meeting row may not exist in our database yet.
 
-Cascading FK deletes are deliberately inconsistent across the schema:
-`tdoc_cr_cover_page` / `tdoc_cr_ttcn_details` / `tdoc_extracts` cascade
-on `tdocs.tdoc_id` deletion (they are derived artefacts of the parent
-TDoc and are safe to wipe with it), while `tdoc_files` does not
-(revision files survive a TDoc re-sync). The `tdoc_cr_cover_page`,
-`tdoc_cr_ttcn_details`, and `tdoc_extracts` tables have **no FK
-between each other**: the cache sidecar can be purged without
-dropping parsed detail history, the parsed detail can be rebuilt
-without invalidating the cached zip/markdown, and the TTCN sidecar
-lives independently of the cover-page row at the same URL (a
-non-TTCN extract leaves no `tdoc_cr_ttcn_details` row). The
-`test_cascade_delete_via_fk` ORM test exercises the cascade
-end-to-end via a `PRAGMA foreign_keys=ON` connect listener (SQLite
-default is OFF).
+Cascading FK deletes differ by ownership. `tdoc_cr_cover_page`,
+`tdoc_cr_ttcn_details`, `tdoc_cr_change_details`, and `tdoc_extracts` cascade
+directly with `tdocs.tdoc_id`; `tdoc_documents` cascades through its
+`tdoc_extracts.ftp_url` parent. `tdoc_files` does not cascade, so FTP auxiliary
+file metadata survives a TDoc re-sync. The cover, TTCN, body-change, and
+extraction-parent tables have no FKs between one another; only the document
+content rows are owned by the extraction parent. On-disk ZIP/Markdown cache
+artifacts are independent of SQL rows, so cache purge or FIFO eviction never
+removes stored Markdown.
 
 ## Backend Selection
 
@@ -1198,12 +1162,13 @@ and `-o/--output PATH`. `meeting list`, `tdoc list`, `tsg list`, and
 accept `--fields`; `wi list` and `spec list` use their configured
 `output.fields.wi` / `output.fields.spec` lists without a per-command
 `--fields` override. `tdoc show` additionally
-accepts `--format {table,json,markdown,raw}` (the `raw` mode reads the
-converted `.docx` markdown body straight from the cache, bypassing the
-DB-row render — `--format raw` on the `--ftp-url` path is a
-deterministic cache read because the URL is the row identity), and
-the direct-mode `tdoc parse --from-path/--from-url` also accepts
-`--format raw` for local-batch use.
+accepts `--format {table,json,markdown,raw}`. Raw TDoc-ID reads run extraction
+first and then load Markdown SQL-first; `--source-file <full-member-path>`
+selects one exact document and is valid only for `raw`. Multiple available
+documents render as main-first named blocks. The `--ftp-url` raw path is an
+exact URL snapshot and does not sync, download, or extract. Direct-mode
+`tdoc parse --from-path/--from-url` also accepts `--format raw` and uses the
+same named-block renderer for multi-document output.
 
 The `--compact` flag threads a `compact: bool` through four renderer
 seams — `_emit_records` (list commands), `_emit_record` (direct-mode

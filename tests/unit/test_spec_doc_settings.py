@@ -48,8 +48,8 @@ def test_spec_doc_output_fields_use_combined_metadata():
 
 
 def test_resolve_specdata_sibling(tmp_path, monkeypatch):
-    from doc3gpp.storage.db.session import resolve_specdata_database_url
     from doc3gpp.settings.loader import get_settings
+    from doc3gpp.storage.db.session import resolve_specdata_database_url
 
     monkeypatch.setenv(
         "DOC3GPP_DATABASE_URL", f"sqlite+pysqlite:///{tmp_path}/doc3gpp.db"
@@ -63,9 +63,9 @@ def test_resolve_specdata_sibling(tmp_path, monkeypatch):
 
 
 def test_create_schema_specdata_scope(sqlite_env):
-    from doc3gpp.storage.db.migrate import create_schema
     from sqlalchemy import inspect
 
+    from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_specdata_engine
 
     create_schema("specdata")

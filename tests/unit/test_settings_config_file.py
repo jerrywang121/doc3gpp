@@ -22,6 +22,7 @@ import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
+from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.settings.config_source import (
     DEFAULT_PROJECT_CONFIG,
     DEFAULT_USER_CONFIG,
@@ -29,7 +30,6 @@ from doc3gpp.settings.config_source import (
     load_config_data,
 )
 from doc3gpp.settings.loader import get_settings
-from doc3gpp.models.sync import SyncOutcome
 from doc3gpp.settings.schema import (
     OutputFieldsSettings,
     OutputSettings,
@@ -37,7 +37,6 @@ from doc3gpp.settings.schema import (
     SyncSettings,
     TDocParseSettings,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -144,7 +143,7 @@ def test_output_format_is_literal(clean_settings) -> None:
     OutputSettings(format="json")  # no raise
     OutputSettings(format="markdown")  # no raise
     with pytest.raises(ValidationError):
-        OutputSettings(format="yaml")  # noqa: S604 - intentionally invalid
+        OutputSettings(format="yaml")
 
 
 def test_settings_nested_default_factories(clean_settings) -> None:

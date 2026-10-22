@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from sqlalchemy import text
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
@@ -19,7 +20,6 @@ from doc3gpp.services.tsg_service import TsgService
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
-from sqlalchemy import text
 
 
 def _row_count(table: str) -> int:

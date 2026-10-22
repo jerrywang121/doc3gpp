@@ -43,8 +43,10 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRParseResult,
     TDocCRTTCNDetails,
 )
+from doc3gpp.parsers.cr.helpers import _year_from_tdoc_id
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
+    TDocZipValidationError,
     _collapse_whitespace,
     _remove_markdown_formatting,
     _search_pattern_in_lines,
@@ -52,8 +54,6 @@ from doc3gpp.parsers.cr_parser import (
     extract_docx_from_zip,
     parse_cr_details,
 )
-from doc3gpp.parsers.cr.helpers import _year_from_tdoc_id
-
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
@@ -663,6 +663,41 @@ def _make_zip(files: dict[str, bytes]) -> bytes:
     return bio.getvalue()
 
 
+def _tamper_uncompressed_size(
+    zip_bytes: bytes,
+    *,
+    member_name: str,
+    declared_size: int,
+) -> bytes:
+    """Change local/central ZIP size declarations while preserving data and CRC."""
+    tampered = bytearray(zip_bytes)
+    local_header = tampered.find(b"PK\x03\x04")
+    central_header = tampered.find(b"PK\x01\x02")
+    assert local_header >= 0
+    assert central_header >= 0
+
+    local_name_length = int.from_bytes(
+        tampered[local_header + 26 : local_header + 28],
+        "little",
+    )
+    local_name = bytes(
+        tampered[local_header + 30 : local_header + 30 + local_name_length]
+    )
+    central_name_length = int.from_bytes(
+        tampered[central_header + 28 : central_header + 30],
+        "little",
+    )
+    central_name = bytes(
+        tampered[central_header + 46 : central_header + 46 + central_name_length]
+    )
+    assert local_name == member_name.encode("utf-8")
+    assert central_name == member_name.encode("utf-8")
+
+    tampered[local_header + 22 : local_header + 26] = declared_size.to_bytes(4, "little")
+    tampered[central_header + 24 : central_header + 28] = declared_size.to_bytes(4, "little")
+    return bytes(tampered)
+
+
 def test_extract_docx_from_zip_picks_docx_over_doc() -> None:
     """When both ``.docx`` and ``.doc`` are present, ``.docx`` wins."""
     payload = _make_zip(
@@ -687,6 +722,60 @@ def test_extract_docx_from_zip_skips_macosx_resource_fork() -> None:
     name, body = extract_docx_from_zip(payload)
     assert name == "real.docx"
     assert body == b"REAL"
+
+
+def test_extract_docx_from_zip_normalizes_backslash_member_path() -> None:
+    """The legacy selector returns the normalized source path."""
+    payload = _make_zip({r"folder\main.docx": b"DOCX"})
+
+    name, body = extract_docx_from_zip(payload)
+
+    assert name == "folder/main.docx"
+    assert body == b"DOCX"
+
+
+def test_extract_docx_from_zip_reads_only_selected_docx(monkeypatch) -> None:
+    """Legacy selection does not read supported members it will discard."""
+    payload = _make_zip(
+        {
+            "a-main.docx": b"main",
+            "z-support.docx": b"support",
+        }
+    )
+    read_names: list[str] = []
+    original_open = zipfile.ZipFile.open
+
+    def tracked_open(archive, member, *args, **kwargs):
+        read_names.append(
+            member.filename if isinstance(member, zipfile.ZipInfo) else member
+        )
+        return original_open(archive, member, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", tracked_open)
+
+    name, body = extract_docx_from_zip(payload)
+
+    assert name == "a-main.docx"
+    assert body == b"main"
+    assert read_names == ["a-main.docx"]
+
+
+def test_extract_docx_from_zip_rejects_declared_size_larger_than_payload() -> None:
+    """A short DOCX payload cannot pass with a larger declared ZIP size."""
+    member_name = "main.docx"
+    payload = b"short but CRC-valid payload"
+    raw_zip = _make_zip({member_name: payload})
+    malformed_zip = _tamper_uncompressed_size(
+        raw_zip,
+        member_name=member_name,
+        declared_size=len(payload) + 5,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(malformed_zip)) as archive:
+        assert archive.read(member_name) == payload
+
+    with pytest.raises(TDocZipValidationError, match="declared"):
+        extract_docx_from_zip(malformed_zip)
 
 
 def test_extract_docx_from_zip_only_macosx_raises_value_error() -> None:

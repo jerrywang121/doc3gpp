@@ -20,7 +20,6 @@ from doc3gpp.models.semantic_search import VectorIndexUnavailableError
 from doc3gpp.services.factory import build_semantic_search_service
 from doc3gpp.settings.schema import SemanticSearchSettings, Settings
 
-
 pytestmark = pytest.mark.semantic
 
 

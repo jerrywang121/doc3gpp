@@ -19,7 +19,6 @@ from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
-
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -206,8 +205,8 @@ def test_unique_url_constraint_is_enforced(sqlite_env) -> None:
     # ``upsert_many`` itself is idempotent and refreshes in place, so the
     # unique constraint fires only on a direct ORM insert that bypasses
     # the upsert path.
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.db.models import TDocFileORM
+    from doc3gpp.storage.db.session import get_session_factory
 
     with get_session_factory()() as session:
         session.add(

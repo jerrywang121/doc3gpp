@@ -5,15 +5,14 @@ from __future__ import annotations
 from datetime import date
 
 from doc3gpp.models.tdoc_file import (
-    TDocFileTypeRevision,
     TDocFileTypeReview,
+    TDocFileTypeRevision,
     TDocFileTypeSupport,
 )
 from doc3gpp.parsers.tdoc_file_parser import (
     classify_tdoc_filename,
     parse_tdoc_files_from_listing,
 )
-
 
 _TDOC_IDS = [
     "R5s260001",

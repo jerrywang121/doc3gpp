@@ -11,7 +11,8 @@ from datetime import date
 
 from sqlalchemy import text
 
-from doc3gpp.config import Settings, get_settings as config_get_settings
+from doc3gpp.config import Settings
+from doc3gpp.config import get_settings as config_get_settings
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tsg import Tsg

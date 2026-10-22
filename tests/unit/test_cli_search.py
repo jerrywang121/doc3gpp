@@ -16,6 +16,7 @@ from doc3gpp.models.index import (
     IndexStatus,
 )
 from doc3gpp.models.search import (
+    MatchedDocument,
     SearchError,
     SearchFilters,
     SearchIndexCorruptError,
@@ -49,6 +50,7 @@ TDOC_KEYS = [
     "type",
     "status",
     "best_chunk_id",
+    "matched_documents",
 ]
 
 SPEC_DOC_KEYS = [
@@ -92,7 +94,12 @@ def _settings() -> SimpleNamespace:
     )
 
 
-def _tdoc_result(mode: SearchMode, *, previews: dict[str, str] | None) -> TDocSearchResult:
+def _tdoc_result(
+    mode: SearchMode,
+    *,
+    previews: dict[str, str] | None,
+    matched_documents: tuple[MatchedDocument, ...] = (),
+) -> TDocSearchResult:
     return TDocSearchResult(
         tdoc_id="R5-000001",
         score=1.25 if mode is not SearchMode.FILTER else None,
@@ -107,6 +114,26 @@ def _tdoc_result(mode: SearchMode, *, previews: dict[str, str] | None) -> TDocSe
         type="CR",
         status="Agreed",
         best_chunk_id="R5-000001#0" if mode in {SearchMode.SEMANTIC, SearchMode.HYBRID} else None,
+        matched_documents=matched_documents,
+    )
+
+
+def _matched_documents() -> tuple[MatchedDocument, ...]:
+    return (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="docs/main.docx",
+            score=-4.5,
+            previews={"document_text": "<<handover>> procedure"},
+        ),
+        MatchedDocument(
+            document_id="doc-appendix",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="support/appendix.docx",
+            score=-2.25,
+            previews={"document_text": "<<handover>> appendix"},
+        ),
     )
 
 
@@ -155,7 +182,11 @@ def test_top_level_search_invocation_is_rejected() -> None:
 def test_tdoc_search_direct_uses_facade_and_emits_exact_fts5_payload(monkeypatch) -> None:
     facade = MagicMock()
     facade.search.return_value = [
-        _tdoc_result(SearchMode.FTS5, previews={"title": "<<handover>> procedure"})
+        _tdoc_result(
+            SearchMode.FTS5,
+            previews={"title": "<<handover>> procedure"},
+            matched_documents=_matched_documents(),
+        )
     ]
     facade.status.return_value = SimpleNamespace(is_stale=False)
     settings = _settings()
@@ -179,6 +210,22 @@ def test_tdoc_search_direct_uses_facade_and_emits_exact_fts5_payload(monkeypatch
     assert payload[0]["type"] == "CR"
     assert payload[0]["status"] == "Agreed"
     assert payload[0]["best_chunk_id"] is None
+    assert payload[0]["matched_documents"] == [
+        {
+            "document_id": "doc-main",
+            "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
+            "source_file": "docs/main.docx",
+            "score": -4.5,
+            "previews": {"document_text": "<<handover>> procedure"},
+        },
+        {
+            "document_id": "doc-appendix",
+            "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
+            "source_file": "support/appendix.docx",
+            "score": -2.25,
+            "previews": {"document_text": "<<handover>> appendix"},
+        },
+    ]
     call = facade.search.call_args.kwargs
     assert call["text"] == "handover"
     assert call["semantic"] is None
@@ -382,6 +429,7 @@ def test_tdoc_search_dispatches_semantic_hybrid_and_filter_modes(monkeypatch) ->
         assert list(payload) == TDOC_KEYS
         assert payload["search_mode"] == mode.value
         assert payload["previews"] is None
+        assert payload["matched_documents"] == []
         assert payload["score"] is None if mode is SearchMode.FILTER else payload["score"] == 1.25
         assert facade.search.call_args.kwargs["text"] == (
             "handover" if "--text" in options else None
@@ -393,7 +441,11 @@ def test_tdoc_search_table_and_markdown_show_score_mode_metadata_and_previews(mo
     monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
     facade = MagicMock()
     facade.search.return_value = [
-        _tdoc_result(SearchMode.FTS5, previews={"title": "<<handover>>"})
+        _tdoc_result(
+            SearchMode.FTS5,
+            previews={"title": "<<handover>>"},
+            matched_documents=_matched_documents(),
+        )
     ]
     monkeypatch.setattr(
         "doc3gpp.services.factory.build_tdoc_search_facade",
@@ -411,10 +463,16 @@ def test_tdoc_search_table_and_markdown_show_score_mode_metadata_and_previews(mo
     assert "fts5" in table.output
     assert "CR" in table.output and "Agreed" in table.output
     assert "<<handover>>" in table.output
+    assert "docs/main.docx" in table.output
+    assert "support/appendix.docx" in table.output
+    assert "document_text: <<handover>> procedure" in table.output
     assert markdown.exit_code == 0, markdown.output
     assert "| search_mode |" in markdown.output
     assert "| 1.25 |" in markdown.output
     assert "title: <<handover>>" in markdown.output
+    assert "docs/main.docx" in markdown.output
+    assert "support/appendix.docx" in markdown.output
+    assert "document_text: <<handover>> appendix" in markdown.output
 
 
 def test_tdoc_search_errors_keep_query_and_rebuild_paths(monkeypatch) -> None:

@@ -15,10 +15,14 @@ HTTP 400 rather than a 500.
 from __future__ import annotations
 
 import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 
+from doc3gpp.models.search import MatchedDocument
+from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
 from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
@@ -171,3 +175,62 @@ def test_search_query_with_spec_like_filter(search_app) -> None:
     assert response.status_code == 200
     assert "No matches" in response.text
     get_engine.cache_clear()
+
+
+def test_search_html_links_matched_source_with_encoded_identity(search_app) -> None:
+    ftp_url = (
+        "https://www.3gpp.org/ftp/R5-000001.zip?mirror=secondary&revision=2"
+    )
+    source_file = "docs/main & appendix.docx"
+    result = TDocSearchResult(
+        tdoc_id="R5-000001",
+        score=-3.5,
+        search_mode=SearchMode.FTS5,
+        previews={"title": "<<handover>>"},
+        title="Handover procedure",
+        meeting="RAN1#120",
+        tsg="RAN",
+        uploaded_date="2025-01-10",
+        ftp_url=ftp_url,
+        wis="38.331",
+        type="CR",
+        status="Agreed",
+        best_chunk_id=None,
+        matched_documents=(
+            MatchedDocument(
+                document_id="doc-main",
+                ftp_url=ftp_url,
+                source_file=source_file,
+                score=-4.25,
+                previews={"document_text": "<<handover>>"},
+            ),
+        ),
+    )
+
+    class SourceAwareFacade:
+        def search(self, **_kwargs):
+            return [result]
+
+    search_app.dependency_overrides[get_tdoc_search_facade] = (
+        lambda: SourceAwareFacade()
+    )
+    with TestClient(search_app) as client:
+        response = client.get("/tdocs/search", params={"text": "handover"})
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    parent_link = soup.select_one('a[href="/tdocs/R5-000001"]')
+    assert parent_link is not None
+
+    source_links = [
+        link
+        for link in soup.select('a[href^="/tdocs/by-url/content?"]')
+        if link.get_text(strip=True) == source_file
+    ]
+    assert len(source_links) == 1
+    href = source_links[0]["href"]
+    assert urlsplit(href).path == "/tdocs/by-url/content"
+    assert parse_qs(urlsplit(href).query) == {
+        "ftp_url": [ftp_url],
+        "source_file": [source_file],
+    }

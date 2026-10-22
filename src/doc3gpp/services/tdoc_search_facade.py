@@ -127,6 +127,7 @@ class TDocSearchFacade:
             type=hit.type,
             status=hit.status,
             best_chunk_id=None,
+            matched_documents=hit.matched_documents,
         )
 
     @staticmethod
@@ -154,6 +155,11 @@ class TDocSearchFacade:
             type=metadata.type if metadata is not None else None,
             status=metadata.status if metadata is not None else None,
             best_chunk_id=hit.best_chunk_id,
+            matched_documents=(
+                metadata.matched_documents
+                if mode is SearchMode.HYBRID and metadata is not None
+                else ()
+            ),
         )
 
     @staticmethod
@@ -173,6 +179,7 @@ class TDocSearchFacade:
             type=tdoc.type,
             status=tdoc.status,
             best_chunk_id=None,
+            matched_documents=(),
         )
 
 

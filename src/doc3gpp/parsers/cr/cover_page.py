@@ -11,7 +11,6 @@ from doc3gpp.parsers.cr.helpers import (
     _search_pattern_in_lines,
 )
 
-
 logger = logging.getLogger(__name__)
 
 

@@ -146,8 +146,10 @@ class SpecService:
             # pool: a worker blocked on ``future.result()`` held its slot
             # while the follow-up futures it was waiting on could never
             # get a free worker, deadlocking the sweep past ~15 specs.
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                with ThreadPoolExecutor(max_workers=workers) as followup_executor:
+            with (
+                ThreadPoolExecutor(max_workers=workers) as executor,
+                ThreadPoolExecutor(max_workers=workers) as followup_executor,
+            ):
                     futures = {
                         executor.submit(
                             self._sync_one_spec,
@@ -159,11 +161,10 @@ class SpecService:
                         ): spec
                         for spec in specs
                     }
-                    for future in futures:
-                        spec = futures[future]
+                    for future, spec in futures.items():
                         try:
                             version_count = future.result()
-                        except Exception:  # noqa: BLE001 - one spec failure must not abort the sweep
+                        except Exception:
                             logger.exception(
                                 "Spec sync failed for %s", spec.spec_id
                             )
@@ -465,7 +466,7 @@ class SpecService:
         for future in followup_futures:
             try:
                 future.result()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug(
                     "Follow-up task raised unexpectedly", exc_info=True
                 )
@@ -473,13 +474,13 @@ class SpecService:
     def _safe_fetch_etsi_pdf(self, v: SpecVersion, client: ScraperClient) -> None:
         try:
             self._maybe_fetch_etsi_pdf(v, client)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("ETSI PDF fetch failed for %s", v.version, exc_info=True)
 
     def _safe_fetch_crs(self, v: SpecVersion, client: ScraperClient) -> None:
         try:
             self._maybe_fetch_crs(v, client)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("CR list fetch failed for %s", v.version, exc_info=True)
 
     def _maybe_fetch_etsi_pdf(self, v: SpecVersion, client: ScraperClient) -> None:
@@ -500,7 +501,7 @@ class SpecService:
                 v.pdf_url = url
             else:
                 logger.debug("No ETSI PDF link for version %s (WKI %s)", v.version, v.wki_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("ETSI PDF fetch failed for version %s", v.version, exc_info=True)
 
     def _maybe_fetch_crs(self, v: SpecVersion, client: ScraperClient) -> None:
@@ -518,7 +519,7 @@ class SpecService:
             html = fetch_cr_list(v.version_id, client)
             ids = extract_cr_tdocs(html)
             v.crs = ",".join(ids)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("CR list fetch failed for version %s", v.version, exc_info=True)
 
     def list_recent(

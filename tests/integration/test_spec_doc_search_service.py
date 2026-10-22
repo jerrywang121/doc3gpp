@@ -1,8 +1,9 @@
 # tests/integration/test_spec_doc_search_service.py
 """Integration tests for the spec-doc search services (Task 10)."""
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
-from types import SimpleNamespace
 
 from doc3gpp.models.spec_doc import (
     ChunkDraft,

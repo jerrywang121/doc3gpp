@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from doc3gpp.settings.schema import SemanticSearchSettings, Settings
 
@@ -19,36 +20,36 @@ def test_defaults():
 
 
 def test_chunk_size_must_be_positive():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(chunk_size=0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(chunk_size=-1)
 
 
 def test_chunk_overlap_must_be_less_than_size():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(chunk_size=800, chunk_overlap=800)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(chunk_size=800, chunk_overlap=801)
 
 
 def test_fts5_weight_range():
     SemanticSearchSettings(fts5_weight=0.0)
     SemanticSearchSettings(fts5_weight=1.0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(fts5_weight=-0.1)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(fts5_weight=1.5)
 
 
 def test_fanout_multiplier_at_least_one():
     SemanticSearchSettings(fanout_multiplier=1)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(fanout_multiplier=0)
 
 
 def test_rrf_k_positive():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(rrf_k=0)
 
 

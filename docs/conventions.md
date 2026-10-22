@@ -168,7 +168,8 @@ doc3gpp config path   # which file is being read
 doc3gpp config show   # the fully-resolved settings, as JSON
 ```
 
-The full TOML schema lives in [`doc3gpp.toml.example`](../doc3gpp.toml.example).
+The full TOML schema lives in the packaged
+[`doc3gpp.toml.example`](../src/doc3gpp/data/doc3gpp.toml.example).
 
 Recognised env vars (closed allowlist; see
 `doc3gpp.settings.schema.ALLOWED_ENV_VARS` for the canonical list):
@@ -194,11 +195,15 @@ XDG_CONFIG_HOME            # XDG root for the user-wide config fallback
 ```
 
 The `tdoc_parse.*` knobs (`max_batch`, `max_ftp_depth`,
-`max_tdoc_size_kb`) are **TOML-only** by convention. None of them
+`max_tdoc_size_kb`, `max_documents_per_zip`,
+`max_uncompressed_size_kb`) are **TOML-only** by convention. None of them
 are added to `ALLOWED_ENV_VARS`, so `DOC3GPP_TDOC_PARSE__MAX_BATCH`
 / `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` / etc. are silently ignored
 at runtime. Configure them via `[tdoc_parse] <key> = <value>` in
 the TOML file, or via `doc3gpp config set tdoc_parse.<key> <value>`.
+The archive defaults are `max_documents_per_zip = 100` and
+`max_uncompressed_size_kb = 102400` aggregate supported-member bytes;
+`0` disables either limit.
 The corresponding CLI flag (e.g. `--max-tdoc-size-kb`) is a
 per-invocation override — the value is **not** written back to the
 TOML config.
@@ -328,16 +333,36 @@ basename:
   `zipfile.ZipFile`. Opening with `unzip` / 7z / WinZip yields the
   inner `.docx` straight away.
 - `cache.dir/markdown/<cache_file>` — **real ZIP** produced by
-  `_wrap_markdown_zip` in `services/tdoc_cr_service.py`. The archive
-  holds a single UTF-8 entry named `<docx stem>.md`
-  (`zipfile.ZIP_DEFLATED`); opening with `unzip` / 7z / WinZip
-  extracts that markdown file. The reader
-  (`_decompress_markdown`) magic-byte-sniffs on-disk bytes so legacy
-  gzip blobs (`\x1f\x8b`) and pre-gzip plain UTF-8 cache files remain
-  readable without forcing a re-extract.
+  `services/tdoc_cr_service.py`. The versioned archive contains one
+  UTF-8 Markdown member per supported ZIP source plus a JSON manifest
+  (mapping source paths to member names and content hashes); opening it
+  with `unzip` / 7z / WinZip exposes the derived artifact. SQL
+  `tdoc_documents.markdown_text` remains authoritative for retrieval and
+  FTS5 rebuilding. The reader also accepts legacy single-member Markdown
+  ZIPs, gzip blobs (`\x1f\x8b`), and pre-gzip plain UTF-8, but legacy
+  bodies are incomplete version-1 content and never make a version-2 SQL
+  extraction complete.
 
 Both formats are deliberate so a single `*.zip` extension maps to a
 single on-disk archive shape that standard archival tooling can open.
+
+## TDoc ZIP content ownership
+
+- `tdoc_files` remains the FTP-discovered auxiliary-file ledger
+  (revisions/reviews/support files); it is not populated with ZIP members.
+- `tdoc_extracts` owns one extraction parent per immutable ZIP `ftp_url`,
+  including the main member path, extraction version, document count, and
+  cache pointer.
+- `tdoc_documents` owns each inner member's stable source identity, full path,
+  deterministic order, Markdown text, and content hash. Exactly one main source
+  produces the cover, optional TTCN sidecar, and optional body-change sidecar.
+- Cache purge and FIFO eviction remove only derived files; they do not remove
+  SQL documents, change version-2 completeness, or prevent a search-index
+  rebuild. Version-1 rows remain pending until normal parse discovery
+  reprocesses the original ZIP (the source ZIP may still be cached).
+- FTS5 indexes each stored document as its own physical row but groups results
+  back to one logical TDoc before pagination. The semantic/vector index stays
+  TDoc-level; do not claim supporting-document semantic coverage.
 
 
 ## meeting list --tdoc flow

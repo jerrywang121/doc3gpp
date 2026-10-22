@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from doc3gpp.models.search import SearchError, SearchHit
@@ -26,7 +28,7 @@ def test_semantic_search_hit_is_frozen():
         tdoc_id="R5-1", rrf_score=0.5, rank_fts5=0, rank_vec=1,
         min_chunk_distance=0.2, best_chunk_id="R5-1#3", hit=_hit(),
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         h.tdoc_id = "R5-2"  # frozen dataclass
     assert h.rank_fts5 == 0
     assert h.hit.tdoc_id == "R5-1"

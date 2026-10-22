@@ -11,8 +11,7 @@ These tests exercise the full CLI path with local fixtures standing in for
 
 from __future__ import annotations
 
-from datetime import date
-from datetime import timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -44,7 +43,7 @@ def _disable_auto_sync_by_default(monkeypatch):
 
 def _future_date(days: int = 7) -> date:
     """Return a date far enough in the future to avoid the closed window."""
-    return date.today() + timedelta(days=days)
+    return datetime.now(timezone.utc).date() + timedelta(days=days)
 
 
 def _enable_auto_sync(monkeypatch) -> None:

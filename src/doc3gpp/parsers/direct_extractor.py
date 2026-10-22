@@ -34,8 +34,10 @@ codes without inspecting exception hierarchies.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import typing
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse, urlunparse
@@ -43,11 +45,17 @@ from urllib.parse import unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from doc3gpp.models.tdoc_cr import TDocCRParseResult
-from doc3gpp.parsers.cr_parser import (
-    _TDOC_HEADER_PATTERN,
-    extract_docx_from_zip,
-)
+from doc3gpp.models.tdoc_document import TDocDocument, TDocParseBundle
+from doc3gpp.parsers.cr.header import CRHeaderMissingError, is_cr_header_present
+from doc3gpp.parsers.cr_parser import _TDOC_HEADER_PATTERN
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
+from doc3gpp.parsers.tdoc_zip import (
+    TDocZipLimitError,
+    _path_sort_key,
+    _sanitized_source_stem,
+    enumerate_docx_members,
+    ephemeral_document_id_for,
+)
 
 if typing.TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
@@ -459,102 +467,165 @@ def derive_zip_cache_key(source: str | Path) -> str:
     return sanitised
 
 
-def direct_parse_bytes(
+def _source_file_from_filename(filename: str) -> str:
+    parsed = urlparse(filename)
+    source = parsed.path if parsed.scheme else filename
+    source = source.replace("\\", "/")
+    return source.rsplit("/", 1)[-1]
+
+
+def _direct_parse_payload(
     payload: bytes,
     *,
     filename: str,
-    full: bool = False,
-    max_bytes: int = 0,
-) -> tuple[str, str, TDocCRParseResult]:
-    """Parse ``payload`` (a ``.docx`` or a zip-wrapped ``.docx``) into markdown + parse result.
-
-    Dispatch is by ``filename`` extension (not magic bytes — a docx
-    is itself a zip, so the ``b"PK"`` prefix is not a reliable
-    differentiator):
-
-    - ``.zip`` (case-insensitive) → the payload is treated as a
-      3GPP-style zip; the inner ``.docx`` is extracted via
-      :func:`doc3gpp.parsers.cr_parser.extract_docx_from_zip`.
-    - ``.docx`` (or anything else) → the payload is treated as a
-      bare ``.docx``; the supplied ``filename`` is used to populate
-      the docx extension guard.
-
-    The conversion + parse steps reuse the existing
-    :func:`convert_document_to_markdown` and :func:`parse_cr_details`
-    helpers; this function only glues them together for the direct
-    path so a single source of truth stays in the parser module.
-
-    Args:
-        payload: Raw bytes of the document (``.docx`` or ``.zip``).
-        filename: The source filename — used to drive the docx/zip
-            dispatch, the docx extension guard, and the auto-extracted
-            ``tdoc_id`` (a ``LOCAL-<stem>`` synthetic id is used when
-            no 3GPP pattern matches).
-        full: Forwarded to :func:`parse_cr_details` as ``full=True``
-            for the TTCN corrections sub-parser.
-        max_bytes: When ``> 0``, the function raises
-            :class:`TDocTooLargeError` before any unzip /
-            ``python-docx`` work when ``len(payload) > max_bytes``.
-            ``0`` (default) disables the guard — callers that do not
-            want the size check simply omit the kwarg.
-
-    Returns:
-        ``(markdown, docx_filename, parsed)`` — the converted
-        markdown, the docx filename actually parsed (after the zip
-        unwrap, when applicable), and the
-        :class:`TDocCRParseResult` from the parser. Callers that need
-        the slim cover-page dataclass read ``parsed.cover``; TTCN-CR
-        callers read ``parsed.ttcn``.
-
-    Raises:
-        ValueError: the payload is a zip with no ``.docx`` entry
-            (``extract_docx_from_zip`` contract), or the filename has
-            a non-``.docx`` / non-``.zip`` extension.
-        zipfile.BadZipFile: the payload looks like a zip but is
-            malformed.
-        CRHeaderMissingError: the parsed markdown lacks a
-            ``| CHANGE REQUEST |`` line and the structural CR
-            cover-page row (forwarded from ``parse_cr_details``).
-        PythonDocxNotInstalledError: python-docx is not installed
-            (forwarded from :func:`convert_document_to_markdown`).
-        TDocTooLargeError: ``max_bytes > 0`` and ``len(payload)`` exceeds
-            the cap.
-    """
+    full: bool,
+    max_bytes: int,
+    max_documents: int,
+    max_uncompressed_bytes: int,
+    tdoc_id: str | None = None,
+    parse_main: Callable[[str, str], TDocCRParseResult] | None = None,
+) -> TDocParseBundle:
     if max_bytes > 0 and len(payload) > max_bytes:
-        # Deferred import — ``direct_extractor`` sits below the
-        # scraping layer where ``TDocTooLargeError`` is canonically
-        # defined, but the class is re-exported from
-        # ``doc3gpp.services.tdoc_cr_service`` for callers that don't
-        # want to depend on the scraping module directly.
         from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+
         raise TDocTooLargeError(
             source=filename,
             size=len(payload),
             limit=max_bytes,
         )
 
+    if (
+        isinstance(max_documents, bool)
+        or not isinstance(max_documents, int)
+        or max_documents < 0
+    ):
+        raise ValueError("max_documents must be a non-negative integer")
+    if (
+        isinstance(max_uncompressed_bytes, bool)
+        or not isinstance(max_uncompressed_bytes, int)
+        or max_uncompressed_bytes < 0
+    ):
+        raise ValueError("max_uncompressed_bytes must be a non-negative integer")
+
     suffix = Path(filename).suffix.lower()
     if suffix == ".zip":
-        docx_filename, docx_bytes = extract_docx_from_zip(payload)
+        members = enumerate_docx_members(
+            payload,
+            max_documents=max_documents,
+            max_uncompressed_bytes=max_uncompressed_bytes,
+        )
     elif suffix == ".docx":
-        docx_filename = filename
-        docx_bytes = payload
+        if max_uncompressed_bytes and len(payload) > max_uncompressed_bytes:
+            raise TDocZipLimitError(
+                "TDoc ZIP aggregate uncompressed byte limit exceeded by actual bytes: "
+                f"{len(payload)} bytes > {max_uncompressed_bytes}"
+            )
+        members = ((_source_file_from_filename(filename), payload),)
     else:
         raise ValueError(
             f"Unsupported extension {suffix!r} for direct-parse; "
             "expected .docx or .zip"
         )
 
-    # Deferred so importing this module (for URL classification, ZIP-cache
-    # helpers, etc.) does not require python-docx to be installed.
-    from doc3gpp.parsers.docx_converter import convert_document_to_markdown
+    from doc3gpp.parsers.docx_converter import (
+        PythonDocxNotInstalledError,
+        convert_document_to_markdown,
+    )
 
-    markdown = convert_document_to_markdown(docx_bytes, docx_filename)
+    converted: list[tuple[str, str]] = []
+    cover_candidates: list[str] = []
+    for source_file, docx_bytes in members:
+        try:
+            markdown = convert_document_to_markdown(docx_bytes, source_file)
+        except PythonDocxNotInstalledError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to convert supported DOCX member {source_file!r}: {exc}"
+            ) from exc
+        converted.append((source_file, markdown))
+        has_cover, _header = is_cr_header_present(markdown)
+        if has_cover:
+            cover_candidates.append(source_file)
 
-    tdoc_id = extract_tdoc_id_from_filename(filename) or _synthetic_tdoc_id(filename)
-    parser = build_default_registry().resolve(tdoc_id, tdoc_type="CR")
-    parsed = parser.parse(markdown, tdoc_id=tdoc_id, full=full)
-    return markdown, docx_filename, parsed
+    if len(cover_candidates) != 1:
+        if not cover_candidates:
+            raise CRHeaderMissingError(
+                f"No supported DOCX member in {filename!r} contains a structural CR cover page"
+            )
+        raise ValueError(
+            f"Expected exactly one DOCX member with a CR cover page in {filename!r}; "
+            f"found {len(cover_candidates)} candidates: {', '.join(cover_candidates)}"
+        )
+
+    main_source_file = cover_candidates[0]
+    main_markdown = next(
+        markdown for source_file, markdown in converted
+        if source_file == main_source_file
+    )
+    resolved_tdoc_id = (
+        tdoc_id
+        or extract_tdoc_id_from_filename(filename)
+        or _synthetic_tdoc_id(filename)
+    )
+    if parse_main is None:
+        parser = build_default_registry().resolve(resolved_tdoc_id, tdoc_type="CR")
+        parsed = parser.parse(main_markdown, tdoc_id=resolved_tdoc_id, full=full)
+    else:
+        parsed = parse_main(main_markdown, resolved_tdoc_id)
+
+    payload_hash = hashlib.sha256(payload).hexdigest()
+    support_documents = sorted(
+        (entry for entry in converted if entry[0] != main_source_file),
+        key=lambda entry: _path_sort_key(entry[0]),
+    )
+    ordered = [(main_source_file, main_markdown), *support_documents]
+    documents: list[TDocDocument] = []
+    for file_order, (source_file, markdown) in enumerate(ordered):
+        document_id = ephemeral_document_id_for(payload_hash, source_file)
+        documents.append(
+            TDocDocument(
+                document_id=document_id,
+                source_file=source_file,
+                markdown_file=(
+                    f"documents/{document_id}/{_sanitized_source_stem(source_file)}.md"
+                ),
+                file_order=file_order,
+                markdown_text=markdown,
+                content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+            )
+        )
+    return TDocParseBundle(
+        documents=tuple(documents),
+        main_source_file=main_source_file,
+        main_parse_result=parsed,
+    )
+
+
+def direct_parse_bytes(
+    payload: bytes,
+    *,
+    filename: str,
+    full: bool = False,
+    max_bytes: int = 0,
+    max_documents: int = 100,
+    max_uncompressed_bytes: int = 0,
+) -> TDocParseBundle:
+    """Convert every supported DOCX member and parse the unique CR cover.
+
+    ZIP members are enumerated and converted sequentially. The structural CR
+    detector selects exactly one main document; supporting documents remain
+    content-only and do not enter the CR parser. Standalone DOCX input follows
+    the same one-document bundle contract.
+    """
+    return _direct_parse_payload(
+        payload,
+        filename=filename,
+        full=full,
+        max_bytes=max_bytes,
+        max_documents=max_documents,
+        max_uncompressed_bytes=max_uncompressed_bytes,
+    )
 
 
 def _synthetic_tdoc_id(filename: str) -> str:

@@ -179,10 +179,10 @@ def _wait_healthy(url: str, timeout: float = 15.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1.0) as resp:  # noqa: S310
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
                 if resp.status == 200:
                     return True
-        except Exception:
+        except Exception:  # noqa: BLE001,S110 - health probes are best-effort
             pass
         time.sleep(0.2)
     return False
@@ -313,7 +313,7 @@ def _open_browser(url: str) -> None:
 
     try:
         webbrowser.open(url)
-    except Exception:  # pragma: no cover - best-effort
+    except Exception:  # noqa: BLE001 - opening a browser is best-effort
         click.echo(f"could not open a browser; visit {url} manually", err=True)
 
 
@@ -407,17 +407,22 @@ def _os_service_state() -> str | None:
     """
     try:
         if sys.platform == "darwin":
-            proc = subprocess.run(  # noqa: S603,S607
-                ["launchctl", "list"], capture_output=True, text=True, timeout=3
+            proc = subprocess.run(
+                ["launchctl", "list"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
             )
             if "org.doc3gpp.server" in proc.stdout:
                 return "loaded (launchd)"
             return None
-        proc = subprocess.run(  # noqa: S603,S607
+        proc = subprocess.run(
             ["systemctl", "--user", "is-active", "doc3gpp.service"],
             capture_output=True,
             text=True,
             timeout=3,
+            check=False,
         )
         state = proc.stdout.strip()
         if not state:
@@ -435,7 +440,7 @@ def _last_job_summary(settings: Settings) -> str:
 
         repo = SQLAlchemyJobRepository()
         jobs = repo.list(limit=1)
-    except Exception as exc:  # pragma: no cover - best-effort
+    except Exception as exc:  # noqa: BLE001 - status output is best-effort
         return f"unavailable ({exc})"
     if not jobs:
         return "none"
@@ -466,12 +471,12 @@ def server_logs(
 
     if follow:
         try:
-            subprocess.run(["tail", "-f", str(log_path)])  # noqa: S603,S607
+            subprocess.run(["tail", "-f", str(log_path)], check=False)
         except KeyboardInterrupt:
             pass
         return
 
-    subprocess.run(["tail", "-n", "50", str(log_path)])  # noqa: S603,S607
+    subprocess.run(["tail", "-n", "50", str(log_path)], check=False)
 
 
 def _print_job_logs(settings: Settings, job_id: str) -> None:

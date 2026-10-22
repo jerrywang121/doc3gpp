@@ -12,6 +12,7 @@ from sqlalchemy.engine import Engine
 
 from doc3gpp.models.jobs import JobStatus
 from doc3gpp.repository.protocols import JobRepository
+from doc3gpp.services.factory import build_tdoc_content_service
 from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.services.search_service import SearchService
 from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -21,6 +22,7 @@ from doc3gpp.services.spec_doc_search_service import SpecDocSearchService
 from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
 from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.services.spec_service import SpecService
+from doc3gpp.services.tdoc_content_service import TDocContentService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_index_service import TDocIndexService
 from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
@@ -63,6 +65,16 @@ def get_tdoc_service(request: Request) -> TDocService:
 
 def get_tdoc_cr_service(request: Request) -> TDocCrService:
     return get_services(request).tdoc_cr
+
+
+def get_tdoc_content_service(request: Request) -> TDocContentService:
+    """Return or lazily compose the app's shared TDoc content service."""
+    services = get_services(request)
+    content_service = services.tdoc_content
+    if content_service is None:
+        content_service = build_tdoc_content_service(settings=get_settings(request))
+        services.tdoc_content = content_service
+    return content_service
 
 
 def get_wi_service(request: Request) -> WiService:
@@ -185,6 +197,7 @@ __all__ = [
     "get_spec_doc_service",
     "get_spec_service",
     "get_state",
+    "get_tdoc_content_service",
     "get_tdoc_cr_service",
     "get_tdoc_file_repo",
     "get_tdoc_index_service",

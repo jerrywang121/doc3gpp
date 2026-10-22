@@ -12,18 +12,19 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi import Path as PathParam
-from fastapi import Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from markdown_it import MarkdownIt
 
 from doc3gpp.models.schema_info import RESOURCE_SCHEMAS, schema_payload
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_content import TDocContent
 from doc3gpp.models.tdoc_show import (
     TDocShowRecord,
     TDocShowRecordByUrl,
@@ -31,10 +32,14 @@ from doc3gpp.models.tdoc_show import (
 )
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.scraping.cache_keys import derive_cache_file
+from doc3gpp.services.tdoc_content_service import (
+    TDocContentService,
+    render_tdoc_documents_markdown,
+    tdoc_content_to_dict,
+)
 from doc3gpp.services.tdoc_cr_service import (
     TDocNotFoundError,
     TDocUrlNotFoundError,
-    _read_cached_markdown_path,
 )
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.settings.schema import Settings
@@ -46,17 +51,26 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-from doc3gpp.web.deps import get_pending_jobs, get_settings, get_tdoc_file_repo, get_tdoc_service
-from doc3gpp.web.errors import CacheMissError, InvalidFilterError
+from doc3gpp.web.deps import (
+    get_pending_jobs,
+    get_settings,
+    get_tdoc_content_service,
+    get_tdoc_file_repo,
+    get_tdoc_service,
+)
+from doc3gpp.web.errors import (
+    CacheMissError,
+    InvalidFilterError,
+    map_tdoc_content_error,
+)
 from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
 from doc3gpp.web.render import (
     TDOC_COLUMN_LABELS,
     TDOC_HTML_DEFAULT_FIELDS,
-    to_jsonable,
     tdoc_rows,
+    to_jsonable,
 )
 from doc3gpp.web.templates_setup import templates
-
 
 logger = logging.getLogger(__name__)
 
@@ -397,64 +411,117 @@ async def show_tdoc(
     )
 
 
-@router.get("/{tdoc_id}/content", include_in_schema=False)
-async def tdoc_content(
-    request: Request,
-    tdoc_id: str = PathParam(...),
-    format: str = Query(default="html"),
-    settings: Settings = Depends(get_settings),
-    pending_jobs: int = Depends(get_pending_jobs),
-) -> Response:
-    """Return cached markdown bytes or render them as HTML."""
-    tdoc_repo = SQLAlchemyTDocRepository()
-    tdoc: TDoc | None = tdoc_repo.get_by_id(tdoc_id)
-    if tdoc is None or not tdoc.ftp_url:
-        raise TDocNotFoundError(
-            f"TDoc '{tdoc_id}' is not stored or has no ftp_url"
+def _validate_tdoc_content_format(format: str) -> None:
+    if format not in ("html", "markdown", "json"):
+        raise InvalidFilterError(
+            f"format must be one of 'html'|'markdown'|'json', got: {format!r}"
         )
 
-    cache_file = _resolve_cache_file(tdoc)
-    markdown_path = Path(settings.cache.dir) / "markdown" / cache_file
-    if not markdown_path.exists():
-        raise CacheMissError(
-            f"No cached markdown for TDoc {tdoc_id}.",
-            hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id}",
-        )
-    # The on-disk cache file is a real ZIP archive (post-D10 fix:
-    # `_wrap_markdown_zip` in `tdoc_cr_service`) — _not_ a plain UTF-8
-    # text file. ``_read_cached_markdown_path`` decodes all three
-    # cache layouts (real ZIP, legacy gzip, legacy plain UTF-8) and
-    # returns ``""`` on any read/decode failure so the route degrades
-    # safely instead of 500-ing on a TTCN .docx with non-UTF8 chart
-    # bytes embedded in the markdown extract.
-    markdown_text = _read_cached_markdown_path(
-        cache_file, Path(settings.cache.dir)
+
+def _render_tdoc_content_response(
+    request: Request,
+    content: TDocContent,
+    *,
+    format: str,
+    pending_jobs: int,
+) -> Response:
+    _validate_tdoc_content_format(format)
+    completion_headers = (
+        {}
+        if content.complete
+        else {"X-Doc3gpp-Extraction-Complete": "false"}
     )
-    if not markdown_text:
-        raise CacheMissError(
-            f"Failed to decode cached markdown for TDoc {tdoc_id}.",
-            hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id} --force",
+
+    if format == "json":
+        return Response(
+            content=json.dumps(
+                tdoc_content_to_dict(content),
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ),
+            media_type="application/json; charset=utf-8",
         )
 
     if format == "markdown":
         return Response(
-            content=markdown_text,
+            content=render_tdoc_documents_markdown(
+                content.documents, include_source_headers=True
+            ),
             media_type="text/markdown; charset=utf-8",
+            headers=completion_headers,
         )
-    if format == "html":
-        html_content = _MD_RENDERER.render(markdown_text)
-        return templates.TemplateResponse(
-            request=request,
-            name="tdoc_content.html",
-            context={
-                "active_nav": "tdocs",
-                "tdoc_id": tdoc_id,
-                "html_content": html_content,
-                "pending_jobs": pending_jobs,
-            },
+
+    documents = [
+        {
+            "source_file": document.source_file,
+            "is_main": document.is_main,
+            "source_label": (
+                "Main document" if document.is_main else "Supporting document"
+            ),
+            "html_content": _MD_RENDERER.render(document.markdown),
+        }
+        for document in content.documents
+    ]
+    response = templates.TemplateResponse(
+        request=request,
+        name="tdoc_content.html",
+        context={
+            "active_nav": "tdocs",
+            "tdoc_id": content.tdoc_id,
+            "ftp_url": content.ftp_url,
+            "documents": documents,
+            "pending_jobs": pending_jobs,
+        },
+    )
+    for name, value in completion_headers.items():
+        response.headers[name] = value
+    return response
+
+
+@router.get("/by-url/content", include_in_schema=False)
+async def tdoc_content_by_url(
+    request: Request,
+    ftp_url: str | None = Query(default=None),
+    source_file: str | None = Query(default=None),
+    format: str = Query(default="html"),
+    content_service: TDocContentService = Depends(get_tdoc_content_service),
+    pending_jobs: int = Depends(get_pending_jobs),
+) -> Response:
+    """Return stored Markdown for an exact ZIP URL without extraction or sync."""
+    if not ftp_url or not ftp_url.strip():
+        raise InvalidFilterError("ftp_url query param is required")
+    _validate_tdoc_content_format(format)
+
+    try:
+        content = content_service.get(ftp_url=ftp_url, source_file=source_file)
+    except ValueError as exc:
+        raise map_tdoc_content_error(exc, ftp_url=ftp_url) from exc
+
+    return _render_tdoc_content_response(
+        request, content, format=format, pending_jobs=pending_jobs
+    )
+
+
+@router.get("/{tdoc_id}/content", include_in_schema=False)
+async def tdoc_content(
+    request: Request,
+    tdoc_id: str = PathParam(...),
+    source_file: str | None = Query(default=None),
+    format: str = Query(default="html"),
+    content_service: TDocContentService = Depends(get_tdoc_content_service),
+    pending_jobs: int = Depends(get_pending_jobs),
+) -> Response:
+    """Return stored TDoc Markdown as HTML, Markdown, or JSON."""
+    _validate_tdoc_content_format(format)
+    try:
+        content = content_service.get(
+            tdoc_id=tdoc_id, source_file=source_file
         )
-    raise InvalidFilterError(
-        f"format must be 'markdown' or 'html', got: {format!r}"
+    except ValueError as exc:
+        raise map_tdoc_content_error(exc, tdoc_id=tdoc_id) from exc
+
+    return _render_tdoc_content_response(
+        request, content, format=format, pending_jobs=pending_jobs
     )
 
 

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from doc3gpp.models.spec import Spec, SpecVersion  # noqa: F401  (spec contract)
+from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.sync import SyncOutcome  # noqa: F401  (spec contract)
 from doc3gpp.services.spec_service import (
     SpecService,
@@ -1070,8 +1070,6 @@ def test_sync_preserves_stored_crs_when_per_version_details_false(monkeypatch) -
     stale uploads). The combination of ``_backfill_followup_fields``
     + the new gate keeps the previously-resolved values intact.
     """
-    from datetime import date
-
     from doc3gpp.models.spec import Spec, SpecVersion
 
     monkeypatch.setattr(
@@ -1105,7 +1103,7 @@ def test_sync_preserves_stored_crs_when_per_version_details_false(monkeypatch) -
             spec_id="36.579-5",
             version="18.3.0",
             ftp_url="https://www.3gpp.org/ftp/Specs/archive/36_series/36.579-5/36579-5-i30.zip",
-            upload_date=date.today(),
+            upload_date=datetime.now(timezone.utc).date(),
             pdf_url="https://etsi.example/x.pdf",
             crs="R5-260001,R5-260002",
         ),

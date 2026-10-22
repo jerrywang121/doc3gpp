@@ -2,7 +2,15 @@
 {% block title %}doc3gpp · tdoc {{ tdoc_id }} · content{% endblock %}
 {% block content %}
   <h1>TDoc <code>{{ tdoc_id }}</code> · content</h1>
-  <div class="tdoc-content">
-    {{ html_content | safe }}
-  </div>
+  {% for document in documents %}
+    <section class="tdoc-document" data-source-file="{{ document.source_file }}" data-document-kind="{{ 'main' if document.is_main else 'supporting' }}">
+      <header class="tdoc-document-header">
+        <h2><span class="tdoc-source-kind">{{ document.source_label }}</span>: <code>{{ document.source_file }}</code></h2>
+        <a class="tdoc-source-link" title="View only this source" href="/tdocs/by-url/content?ftp_url={{ ftp_url | urlencode }}&amp;source_file={{ document.source_file | urlencode }}">{{ document.source_file }}</a>
+      </header>
+      <div class="tdoc-content">
+        {{ document.html_content | safe }}
+      </div>
+    </section>
+  {% endfor %}
 {% endblock %}

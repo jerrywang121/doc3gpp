@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from doc3gpp.models.search import SearchFilters, SearchHit, SearchUnavailableError
+from doc3gpp.models.search import (
+    MatchedDocument,
+    SearchFilters,
+    SearchHit,
+    SearchUnavailableError,
+)
 from doc3gpp.models.semantic_search import (
     SemanticSearchHit,
     SemanticSearchUnavailableError,
@@ -55,6 +60,25 @@ def _settings(weight: float = 0.35) -> SimpleNamespace:
     return SimpleNamespace(semantic_search=SimpleNamespace(fts5_weight=weight))
 
 
+def _matched_documents() -> tuple[MatchedDocument, ...]:
+    return (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="docs/main.docx",
+            score=-4.2,
+            previews={"document_text": "<<handover>> procedure"},
+        ),
+        MatchedDocument(
+            document_id="doc-appendix",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="support/appendix.docx",
+            score=-2.1,
+            previews={"document_text": "<<handover>> appendix"},
+        ),
+    )
+
+
 def _search_hit() -> SearchHit:
     return SearchHit(
         tdoc_id="R5-000001",
@@ -68,6 +92,7 @@ def _search_hit() -> SearchHit:
         wis="WI-1",
         type="CR",
         status="Agreed",
+        matched_documents=_matched_documents(),
     )
 
 
@@ -123,6 +148,7 @@ def test_fts5_search_normalizes_and_flattens_with_snippet_override() -> None:
             type="CR",
             status="Agreed",
             best_chunk_id=None,
+            matched_documents=_matched_documents(),
         )
     ]
 
@@ -164,6 +190,7 @@ def test_semantic_search_uses_semantic_query_and_distance_score() -> None:
             best_chunk_id="R5-000001#0",
         )
     ]
+    assert results[0].matched_documents == ()
 
 
 def test_hybrid_search_passes_both_queries_and_maps_rrf_score() -> None:
@@ -202,8 +229,37 @@ def test_hybrid_search_passes_both_queries_and_maps_rrf_score() -> None:
             type="CR",
             status="Agreed",
             best_chunk_id="R5-000001#0",
+            matched_documents=_matched_documents(),
         )
     ]
+
+
+def test_vector_only_hybrid_hit_serializes_empty_matched_documents() -> None:
+    from dataclasses import replace
+
+    from doc3gpp.models.unified_search import tdoc_search_result_to_dict
+
+    vector_only_hit = SemanticSearchHit(
+        tdoc_id="R5-000001",
+        rrf_score=0.31,
+        hit=replace(_search_hit(), matched_documents=()),
+        rank_fts5=None,
+        rank_vec=0,
+        min_chunk_distance=0.12,
+        best_chunk_id="R5-000001#0",
+    )
+    facade = _facade(
+        fts=RecordingFts(),
+        semantic=RecordingSemantic([vector_only_hit]),
+    )
+
+    results = facade.search(
+        text="no FTS hit",
+        semantic="vector match",
+        filters=SearchFilters(limit=1),
+    )
+
+    assert tdoc_search_result_to_dict(results[0])["matched_documents"] == []
 
 
 def test_filter_search_only_reads_source_repository() -> None:
@@ -235,6 +291,7 @@ def test_filter_search_only_reads_source_repository() -> None:
     assert results[0].tsg == "RAN"
     assert results[0].wis == "WI-2"
     assert results[0].best_chunk_id is None
+    assert results[0].matched_documents == ()
 
 
 @pytest.mark.parametrize(

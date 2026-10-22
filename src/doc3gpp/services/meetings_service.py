@@ -1,16 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
-import logging
+from datetime import datetime, timedelta, timezone
 
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.sync import SyncOutcome
-from doc3gpp.repository.protocols import MeetingRepository
-from doc3gpp.repository.protocols import TsgRepository
+from doc3gpp.repository.protocols import MeetingRepository, TsgRepository
 from doc3gpp.scraping.calendar_source import fetch_calendar
 from doc3gpp.services._duration import format_duration as _format_duration
 

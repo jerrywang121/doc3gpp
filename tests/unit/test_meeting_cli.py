@@ -1,8 +1,8 @@
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
-from doc3gpp.services.meetings_service import MeetingService
 from doc3gpp.models.meeting import Meeting
+from doc3gpp.services.meetings_service import MeetingService
 
 
 def test_cli_fields_and_filters(monkeypatch):

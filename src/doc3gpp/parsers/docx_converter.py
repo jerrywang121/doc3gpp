@@ -34,9 +34,9 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 logger = logging.getLogger(__name__)
 
@@ -321,13 +321,13 @@ def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
 
 
 __all__ = [
-    "PythonDocxNotInstalledError",
-    "convert_document_to_markdown",
-    "convert_document_to_blocks",
+    "Block",
     "HeadingBlock",
     "ParagraphBlock",
+    "PythonDocxNotInstalledError",
     "TableBlock",
-    "Block",
+    "convert_document_to_blocks",
+    "convert_document_to_markdown",
 ]
 
 
@@ -414,7 +414,7 @@ def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingB
             if not md:
                 continue
             style = _style_name(p).lower()
-            if style.startswith("heading") or style.startswith("title") or style.startswith("subtitle"):
+            if style.startswith(("heading", "title", "subtitle")):
                 level = 1
                 if style.startswith("heading"):
                     try:

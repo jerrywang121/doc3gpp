@@ -23,7 +23,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-
 # Allowed values for :attr:`TDocFile.type`. Centralised as module constants so
 # callers and the SQL column constraint can share one source of truth.
 TDocFileTypeRevision = "revision"

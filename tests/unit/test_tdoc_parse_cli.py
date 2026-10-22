@@ -9,6 +9,7 @@ resets the settings/engine caches via ``conftest.sqlite_env``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -28,6 +29,7 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.services.tdoc_cr_service import (
@@ -338,12 +340,78 @@ def _patch_service(monkeypatch, fake: _FakeCrService) -> None:
     )
 
 
+class _FakeContentDocument:
+    def __init__(
+        self,
+        source_file: str,
+        markdown: str,
+        *,
+        is_main: bool = False,
+    ) -> None:
+        self.document_id = "a" * 64
+        self.source_file = source_file
+        self.is_main = is_main
+        self.markdown = markdown
+
+
+class _FakeTDocContentService:
+    def __init__(self, documents: tuple[_FakeContentDocument, ...]) -> None:
+        self.documents = documents
+        self.calls: list[tuple[str | None, str | None, str | None]] = []
+
+    def get(
+        self,
+        *,
+        tdoc_id: str | None = None,
+        ftp_url: str | None = None,
+        source_file: str | None = None,
+    ):
+        self.calls.append((tdoc_id, ftp_url, source_file))
+        documents = self.documents
+        if source_file is not None:
+            documents = tuple(
+                document
+                for document in documents
+                if document.source_file == source_file
+            )
+        return type(
+            "FakeTDocContent",
+            (),
+            {
+                "tdoc_id": tdoc_id,
+                "ftp_url": ftp_url,
+                "extraction_version": 2,
+                "complete": True,
+                "documents": documents,
+            },
+        )()
+
+
+def _patch_content_service(monkeypatch, *documents: _FakeContentDocument):
+    service = _FakeTDocContentService(tuple(documents))
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_content_service",
+        lambda: service,
+        raising=False,
+    )
+    return service
+
+
+def _fake_content_document(
+    source_file: str,
+    markdown: str,
+    *,
+    is_main: bool = False,
+) -> _FakeContentDocument:
+    return _FakeContentDocument(source_file, markdown, is_main=is_main)
+
+
 def _patch_tdoc_repo_for_listing(
     monkeypatch,
     list_tdocs: list[TDoc],
     meeting_names: dict[int, str] | None = None,
     parsed_ids: set[str] | None = None,
-) -> "_FakeTDocRepoList":
+) -> _FakeTDocRepoList:
     """Stub ``build_tdoc_repository`` so ``tdoc parse`` can call ``list_with_meeting``.
 
     Records every ``list_with_meeting`` call so the test can assert
@@ -370,7 +438,7 @@ def _patch_tdoc_repo_for_listing(
 
 def _patch_meeting_service(
     monkeypatch, meetings: dict[int, Meeting | None]
-) -> "_FakeMeetingService":
+) -> _FakeMeetingService:
     """Stub ``build_meeting_service`` so ``--meeting-id`` validation has data.
 
     ``meetings`` maps meeting_id → :class:`Meeting` (or ``None`` to
@@ -391,7 +459,7 @@ def _patch_cr_repo(
     *,
     by_url: dict[str, TDocCRDetails] | None = None,
     extract_meta_by_url: dict[str, TDocExtractMeta] | None = None,
-) -> "_FakeCrDetailRepo":
+) -> _FakeCrDetailRepo:
     """Stub ``build_tdoc_cr_repository`` so ``tdoc parse`` can probe parsed status.
 
     ``parsed_ids`` is the set of TDoc ids considered already parsed
@@ -419,7 +487,7 @@ def _patch_cr_ttcn_repo(
     monkeypatch,
     *,
     by_url: dict[str, TDocCRTTCNDetails] | None = None,
-) -> "_FakeCrTtcnRepo":
+) -> _FakeCrTtcnRepo:
     """Stub ``build_tdoc_cr_ttcn_repository`` so ``tdoc show`` can probe the sidecar.
 
     Pass ``by_url`` to seed TTCN detail rows keyed by ``ftp_url``.
@@ -2723,46 +2791,125 @@ def test_tdoc_show_format_json_output_writes_to_file(sqlite_env, tmp_path) -> No
 def test_tdoc_show_format_raw_emits_cached_markdown(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--format raw`` writes the converted markdown from the cache."""
+    """Raw format writes the selected content-service Markdown."""
     create_schema()
     _seed_full_crdetail_row("R5s260009")
-
-    cached_md = "# Heading\n\nbody paragraph\n"
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: cached_md,
-    )
+    markdown = "# Heading\n\nbody paragraph\n"
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
     }))
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260009.docx", markdown, is_main=True),
+    )
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
     )
+
     assert result.exit_code == 0, result.output
-    assert result.output == cached_md
+    assert result.output == markdown
+    assert content_service.calls == [("R5s260009", None, None)]
+
+
+
+def test_tdoc_show_raw_selects_the_exact_requested_source_file(
+    sqlite_env, monkeypatch
+) -> None:
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+    cr_service = _FakeCrService(results={
+        "R5s260009": _make_result("R5s260009"),
+    })
+    _patch_service(monkeypatch, cr_service)
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260009.docx", "main body\n", is_main=True),
+        _fake_content_document("Annex/support.docx", "selected support body"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--tdoc", "R5s260009", "--format", "raw",
+            "--source-file", "Annex/support.docx",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "selected support body\n"
+    assert cr_service.extract_calls == ["R5s260009"]
+    assert content_service.calls == [
+        ("R5s260009", None, "Annex/support.docx"),
+    ]
+
+
+def test_tdoc_show_url_raw_source_is_a_side_effect_free_snapshot(
+    sqlite_env, monkeypatch
+) -> None:
+    create_schema()
+    _seed_ftp_url_target("R5s260109", _FTP_URL)
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260109.docx", "main body\n", is_main=True),
+        _fake_content_document("Annex/support.docx", "URL support body"),
+    )
+    auto_sync = MagicMock(return_value=(0, 0))
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", auto_sync)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: pytest.fail("URL content must not extract"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw",
+            "--source-file", "Annex/support.docx",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "URL support body\n"
+    assert content_service.calls == [
+        (None, _FTP_URL.lower(), "Annex/support.docx"),
+    ]
+    auto_sync.assert_not_called()
+
+
+def test_tdoc_show_rejects_source_file_on_non_raw_formats(sqlite_env) -> None:
+    create_schema()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--tdoc", "R5s260009", "--format", "json",
+            "--source-file", "Annex/support.docx",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--source-file" in result.output
+    assert "raw" in result.output.lower()
 
 
 def test_tdoc_show_format_raw_output_writes_to_file(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--format raw --output PATH`` writes the converted markdown to a file."""
+    """Raw output written to PATH contains the converted Markdown."""
     create_schema()
     _seed_full_crdetail_row("R5s260009")
-
-    cached_md = "raw body\n"
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: cached_md,
-    )
+    markdown = "raw body\n"
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
     }))
+    _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260009.docx", markdown, is_main=True),
+    )
 
     out_path = tmp_path / "raw.md"
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app,
         [
             "tdoc", "show",
@@ -2771,8 +2918,9 @@ def test_tdoc_show_format_raw_output_writes_to_file(
             "--output", str(out_path),
         ],
     )
+
     assert result.exit_code == 0, result.output
-    assert out_path.read_text() == cached_md
+    assert out_path.read_text() == markdown
 
 
 def test_tdoc_show_format_raw_non_cr_tdoc_raises_bad_parameter(
@@ -2847,24 +2995,23 @@ def test_tdoc_show_format_raw_zip_download_failure_raises_bad_parameter(
 def test_tdoc_show_format_raw_empty_cache_raises_bad_parameter(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """A non-empty extract_meta path that reads to empty raises BadParameter."""
+    """An unavailable legacy cache becomes a friendly parse hint."""
     create_schema()
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
-
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: "",
-    )
+    _seed_full_crdetail_row("R5s260009")
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    from doc3gpp.settings.loader import get_settings
+    get_settings.cache_clear()
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
     }))
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
     )
+
     assert result.exit_code != 0
     assert "empty or unreadable" in result.output
+    assert "tdoc parse" in result.output
 
 
 def test_tdoc_show_format_invalid_raises_bad_parameter(sqlite_env) -> None:
@@ -3195,44 +3342,40 @@ def test_tdoc_show_ftp_url_markdown_omits_tdoc_section_when_no_match(
 def test_tdoc_show_ftp_url_raw_emits_cached_markdown(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--ftp-url --format raw`` reads the cache file derived from the
-    URL directly and writes its content to stdout."""
+    """The URL raw format reads the content-service snapshot."""
     create_schema()
     _seed_ftp_url_target("R5s260106", _FTP_URL)
-
-    cached_md = "# Heading\n\nbody from URL-keyed cache\n"
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: cached_md,
+    markdown = "# Heading\n\nbody from URL-keyed SQL\n"
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260106.docx", markdown, is_main=True),
     )
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw"]
     )
+
     assert result.exit_code == 0, result.output
-    assert result.output == cached_md
+    assert result.output == markdown
+    assert content_service.calls == [(None, _FTP_URL.lower(), None)]
 
 
 def test_tdoc_show_ftp_url_raw_cache_miss_raises_bad_parameter(
-    sqlite_env, monkeypatch
+    sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--ftp-url --format raw`` with no cached markdown raises
-    ``BadParameter`` pointing at the parse command."""
+    """A URL cache miss remains a parse hint without triggering extraction."""
     create_schema()
     _seed_ftp_url_target("R5s260107", _FTP_URL)
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    from doc3gpp.settings.loader import get_settings
+    get_settings.cache_clear()
 
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: "",
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw"]
     )
+
     assert result.exit_code != 0
-    assert "cached markdown" in result.output.lower() or "cache" in result.output
+    assert "cache" in result.output.lower()
     assert "tdoc parse" in result.output
 
 
@@ -3282,7 +3425,7 @@ class _RecordingCrService:
     def extract_from_url_batch(
         self, url: str, *, max_depth: int, force: bool, full: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
-    ) -> "_RecordingBatchResult":
+    ) -> _RecordingBatchResult:
         self.extract_batch_calls.append((url, max_depth))
         self.extract_batch_runner_calls.append(runner)
         return _RecordingBatchResult(results=[], failures={})
@@ -3290,12 +3433,23 @@ class _RecordingCrService:
     def extract_from_url(
         self, url: str, *, force: bool, full: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
-    ) -> "_RecordingSingleResult":
+    ) -> _RecordingSingleResult:
         self.extract_url_calls.append(url)
         self.extract_url_runner_calls.append(runner)
+        source_file = "R5s260009.docx"
+        document_id = "0" * 64
+        document = TDocDocument(
+            document_id=document_id,
+            source_file=source_file,
+            markdown_file=f"documents/{document_id}/R5s260009.md",
+            file_order=0,
+            markdown_text="",
+            content_hash=hashlib.sha256(b"").hexdigest(),
+        )
         return _RecordingSingleResult(
             source_kind="url-3gpp",
-            markdown="",
+            documents=(document,),
+            main_source_file=source_file,
             details=None,
             extract_meta=None,
             from_cache=False,
@@ -3314,7 +3468,8 @@ class _RecordingBatchResult:
 @dataclass
 class _RecordingSingleResult:
     source_kind: str
-    markdown: str
+    documents: tuple[TDocDocument, ...]
+    main_source_file: str
     details: object
     extract_meta: object
     from_cache: bool
@@ -3614,3 +3769,82 @@ def test_tdoc_parse_cli_renders_real_service_skip_and_failure_maps(
         if ln.startswith("Skipped (exceeds max_tdoc_size_kb")
     )
     assert size_line.endswith(" 1"), size_line
+
+
+def test_tdoc_parse_local_folder_raw_keeps_duplicate_member_basenames(
+    sqlite_env, monkeypatch, tmp_path,
+) -> None:
+    """A local-folder raw result keeps both same-basename sources distinct."""
+    from doc3gpp.models.tdoc_cr import DirectParseResult
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "R5s260009.zip").write_bytes(b"fake ZIP payload")
+    output_dir = tmp_path / "output"
+
+    def document(source_file: str, order: int, markdown: str) -> TDocDocument:
+        document_id = hashlib.sha256(source_file.encode("utf-8")).hexdigest()
+        stem = source_file.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        return TDocDocument(
+            document_id=document_id,
+            source_file=source_file,
+            markdown_file=f"documents/{document_id}/{stem}.md",
+            file_order=order,
+            markdown_text=markdown,
+            content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        )
+
+    main_source = "z/R5s260009.docx"
+    parsed = DirectParseResult(
+        source_kind="local",
+        documents=(
+            document(main_source, 0, "main document text"),
+            document("a/shared.docx", 1, "alpha support text"),
+            document("b/shared.docx", 2, "beta support text"),
+        ),
+        main_source_file=main_source,
+        details=None,
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    )
+
+    class FakeCrService:
+        def prepare_from_bytes(self, payload, filename, **_kwargs):
+            assert payload == b"fake ZIP payload"
+            assert Path(filename).name == "R5s260009.zip"
+            return parsed
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: FakeCrService(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(input_dir),
+            "--output", str(output_dir),
+            "--format", "raw",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    outputs = [path for path in output_dir.rglob("*") if path.is_file()]
+    assert len(outputs) == 1
+    raw = outputs[0].read_text(encoding="utf-8")
+    source_markers = (
+        '<!-- doc3gpp-source: "z/R5s260009.docx" -->',
+        '<!-- doc3gpp-source: "a/shared.docx" -->',
+        '<!-- doc3gpp-source: "b/shared.docx" -->',
+    )
+    assert all(marker in raw for marker in source_markers)
+    assert [raw.index(marker) for marker in source_markers] == sorted(
+        raw.index(marker) for marker in source_markers
+    )
+    assert "alpha support text" in raw
+    assert "beta support text" in raw

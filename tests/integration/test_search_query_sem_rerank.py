@@ -35,7 +35,6 @@ from doc3gpp.services import factory
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
-
 pytestmark = pytest.mark.semantic
 
 

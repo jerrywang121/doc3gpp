@@ -9,7 +9,6 @@ import pytest
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.scraping.portal_source import fetch_tdocs_from_portal
 
-
 PORTAL_TEMPLATE = "https://portal.3gpp.org/ngppapp/GenerateDocumentList.aspx?meetingId={meeting_id}"
 FIXTURE_PATH = Path("tests/fixtures/tdoc_xlsx/TDoc_List_Meeting_85434_portal.xlsx")
 

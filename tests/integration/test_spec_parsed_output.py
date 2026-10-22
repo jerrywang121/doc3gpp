@@ -11,8 +11,7 @@ from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
-from doc3gpp.web.app import build_app
-from doc3gpp.web.app import build_state
+from doc3gpp.web.app import build_app, build_state
 from doc3gpp.web.mcp_server import build_mcp_server
 
 

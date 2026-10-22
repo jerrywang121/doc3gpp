@@ -69,23 +69,18 @@ def _is_cancellation(exc: BaseException) -> bool:
 def classify_tdoc_exception(
     exc: Exception,
 ) -> tuple[PipelineErrorStatus, str]:
-    """Classify one TDoc exception without importing the TDoc service eagerly.
-
-    ``TDocNotYetOnFTPError`` lives in ``tdoc_cr_service`` while this module is
-    used by that service's callers.  Resolve both TDoc-specific classes only
-    when classification is requested so importing the runner cannot create a
-    service-layer cycle.
-    """
+    """Classify expected TDoc budget decisions as skips, other errors as failures."""
     if _is_cancellation(exc):
         raise exc
 
+    from doc3gpp.parsers.tdoc_zip import TDocZipLimitError
     from doc3gpp.services.tdoc_cr_service import (
         TDocNotYetOnFTPError,
         TDocTooLargeError,
     )
 
     reason = f"{type(exc).__name__}: {exc}"
-    if isinstance(exc, (TDocNotYetOnFTPError, TDocTooLargeError)):
+    if isinstance(exc, (TDocNotYetOnFTPError, TDocTooLargeError, TDocZipLimitError)):
         return "skipped", reason
     return "failed", reason
 

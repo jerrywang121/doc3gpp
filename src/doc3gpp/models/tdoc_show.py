@@ -76,8 +76,8 @@ class TDocShowRecord:
     def from_tdoc_id(
         cls,
         tdoc_id: str,
-        repos: "TDocShowRepos",
-    ) -> "TDocShowRecord":
+        repos: TDocShowRepos,
+    ) -> TDocShowRecord:
         """Compose a :class:`TDocShowRecord` by resolving ``tdoc_id`` across all 5 repos.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_command`
@@ -163,8 +163,8 @@ class TDocShowRecordByUrl:
     def from_ftp_url(
         cls,
         ftp_url: str,
-        repos: "TDocShowRepos",
-    ) -> "TDocShowRecordByUrl":
+        repos: TDocShowRepos,
+    ) -> TDocShowRecordByUrl:
         """Compose a :class:`TDocShowRecordByUrl` by URL across all 5 repos.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_by_ftp_url`
@@ -206,11 +206,11 @@ class TDocShowRepos:
     directly to assert the composition round-trip.
     """
 
-    tdoc: "object"  # TDocRepository
-    cr: "object"  # TDocCrDetailRepository
-    cr_ttcn: "object"  # TDocCrTTCNDetailRepository
-    cr_change_details: "object"  # TDocCrChangeDetailsRepository
-    file: "object"  # TDocFileRepository
+    tdoc: object  # TDocRepository
+    cr: object  # TDocCrDetailRepository
+    cr_ttcn: object  # TDocCrTTCNDetailRepository
+    cr_change_details: object  # TDocCrChangeDetailsRepository
+    file: object  # TDocFileRepository
 
 
 __all__ = [

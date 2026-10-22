@@ -26,7 +26,6 @@ from doc3gpp.settings.config_writer import (
 )
 from doc3gpp.settings.loader import get_settings
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

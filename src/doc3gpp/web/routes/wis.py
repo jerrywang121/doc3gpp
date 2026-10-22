@@ -17,7 +17,6 @@ from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_que
 from doc3gpp.web.render import wi_rows
 from doc3gpp.web.templates_setup import templates
 
-
 router = APIRouter(prefix="/wis", tags=["wis"])
 
 

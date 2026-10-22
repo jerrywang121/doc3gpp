@@ -26,7 +26,6 @@ from doc3gpp.parsers.docx_converter import (
     convert_document_to_markdown,
 )
 
-
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
 

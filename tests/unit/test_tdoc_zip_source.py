@@ -282,7 +282,7 @@ def test_download_tdoc_zip_rejects_bad_shape(
 
     assert fake_client.calls == []
     # Nothing should have been written to the cache.
-    assert not any(cache._root.glob("zips/*"))  # noqa: SLF001 — test-only access
+    assert not any(cache._root.glob("zips/*"))
 
 
 # ---------------------------------------------------------------------------

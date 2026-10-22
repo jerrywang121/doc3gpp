@@ -73,14 +73,13 @@ class SQLAlchemyTDocCrTtcnRepository:
         except OperationalError as exc:
             msg = str(exc).lower()
             if "no such column" in msg:
-                with self._session_factory() as session:
-                    with session.begin():
-                        session.execute(
-                            text(
-                                "ALTER TABLE tdoc_cr_ttcn_details "
-                                "ADD COLUMN changed_functions TEXT"
-                            )
+                with self._session_factory() as session, session.begin():
+                    session.execute(
+                        text(
+                            "ALTER TABLE tdoc_cr_ttcn_details "
+                            "ADD COLUMN changed_functions TEXT"
                         )
+                    )
             else:
                 raise
         self._ensured = True

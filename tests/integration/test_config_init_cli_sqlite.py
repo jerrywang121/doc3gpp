@@ -29,7 +29,6 @@ from doc3gpp.settings.config_source import load_config_data
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import Settings
 
-
 Runner = CliRunner
 
 
@@ -109,8 +108,12 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
             "auto_index_on_parse": True,
             "rebuild_batch_size": 100,
             "snippet_tokens": 8,
-            "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
+            "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0],
             "search_fanout_factor": 4,
+        },
+        "tdoc_parse": {
+            "max_documents_per_zip": 100,
+            "max_uncompressed_size_kb": 102400,
         },
         "server": {
             "enabled": True,
@@ -236,8 +239,12 @@ def test_config_init_force_overwrites(sqlite_env, tmp_path, monkeypatch) -> None
             "auto_index_on_parse": True,
             "rebuild_batch_size": 100,
             "snippet_tokens": 8,
-            "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0],
+            "bm25_weights": [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0],
             "search_fanout_factor": 4,
+        },
+        "tdoc_parse": {
+            "max_documents_per_zip": 100,
+            "max_uncompressed_size_kb": 102400,
         },
         "server": {
             "enabled": True,

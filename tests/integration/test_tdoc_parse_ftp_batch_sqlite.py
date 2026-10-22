@@ -9,12 +9,16 @@ from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+from typing_extensions import Self
 
 from doc3gpp.cli import app
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_extraction_sql import (
+    SQLAlchemyTDocExtractionRepository,
+)
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
@@ -40,7 +44,7 @@ class _DummyScraperClient:
             return self.payloads[url]
         raise RuntimeError(f"No canned payload for {url}")
 
-    def __enter__(self) -> "_DummyScraperClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -59,6 +63,28 @@ def _zip_payload(fixture: Path, inner_name: str) -> bytes:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(inner_name, fixture.read_bytes())
     return buf.getvalue()
+
+
+def _build_multifile_zip(main_zip: bytes) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(main_zip)) as source:
+        main_docx = source.read(next(
+            name for name in source.namelist() if name.lower().endswith(".docx")
+        ))
+    from docx import Document
+
+    def support_docx(text: str) -> bytes:
+        document = Document()
+        document.add_paragraph(text)
+        payload = io.BytesIO()
+        document.save(payload)
+        return payload.getvalue()
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("a/support-alpha.docx", support_docx("FTP support alpha"))
+        archive.writestr("b/support-beta.docx", support_docx("FTP support beta"))
+        archive.writestr("z/R5s260009.docx", main_docx)
+    return payload.getvalue()
 
 
 @pytest.mark.skipif(
@@ -86,7 +112,9 @@ def test_url_batch_persists_fk_hits_and_warns_on_miss(
         f'<a class="file" href="{root}R5s260009.zip">R5s260009.zip</a>',
         f'<a class="file" href="{root}R5s260043.zip">R5s260043.zip</a>',
     )
-    dummy.payloads[f"{root}R5s260009.zip"] = fixture.read_bytes()
+    dummy.payloads[f"{root}R5s260009.zip"] = _build_multifile_zip(
+        fixture.read_bytes()
+    )
     dummy.payloads[f"{root}R5s260043.zip"] = fixture.read_bytes()
     monkeypatch.setattr("doc3gpp.services.factory.ScraperClient", lambda: dummy)
 
@@ -96,7 +124,20 @@ def test_url_batch_persists_fk_hits_and_warns_on_miss(
 
     cr_repo = SQLAlchemyTDocCrRepository()
     assert len(cr_repo.get("R5s260009")) == 1
-    assert len(cr_repo.get_extract_meta("R5s260009")) == 1
+    metadata = cr_repo.get_extract_meta("R5s260009")
+    assert len(metadata) == 1
+    assert metadata[0].extraction_version == 2
+    assert metadata[0].document_count == 3
+    documents = SQLAlchemyTDocExtractionRepository().list_documents(
+        metadata[0].ftp_url
+    )
+    assert [document.source_file for document in documents] == [
+        "z/R5s260009.docx",
+        "a/support-alpha.docx",
+        "b/support-beta.docx",
+    ]
+    assert "FTP support alpha" in documents[1].markdown_text
+    assert "FTP support beta" in documents[2].markdown_text
     assert len(cr_repo.get("R5s260043")) == 0
 
     combined = (result.stdout or "") + (result.stderr or "")

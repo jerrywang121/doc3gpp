@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import re
 
-
 # TDoc ID with optional revision. Broader than the existing ``CR_ID_RE``
 # in ``parsers/tdoc_parser.py:15`` / ``scraping/tdoc_zip_source.py:35``
 # (which excludes ``P`` for plenary TDocs). The user explicitly scoped

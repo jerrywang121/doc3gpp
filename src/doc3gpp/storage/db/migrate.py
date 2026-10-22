@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
@@ -13,6 +13,7 @@ from doc3gpp.storage.db.models import (
     TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrTtcnDetailOrm,  # noqa: F401 - ensures model metadata is loaded
+    TDocDocumentOrm,  # noqa: F401 - registers URL-owned document content
     TDocExtractOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocFileORM,  # noqa: F401 - ensures model metadata is loaded
     TDocORM,  # noqa: F401 - ensures model metadata is loaded
@@ -207,38 +208,65 @@ def _migrate_spec_versions_drop_comment() -> None:
 
 
 def _create_search_schema() -> None:
-    """Create the FTS5 virtual table + meta sidecar.
+    """Create or migrate the FTS5 table, metadata sidecar, and filter indexes.
 
-    Gated on the runtime availability of FTS5 — when missing this is
-    a no-op. The check uses ``PRAGMA compile_options`` (FTS5 is
-    reported as
-    ``ENABLE_FTS5`` when compiled in) and is wrapped in a
-    ``try/except`` so an older sqlite without FTS5 (very rare) does
-    not block the rest of ``create_schema``.
-
-    The DDL itself matches
-    ``docs/superpowers/specs/2026-07-29-fts5-search-design.md`` §"FTS5
-    schema". We use stock sqlite's ``unicode61`` tokenizer (no
-    ``tokenize=`` directive) — Python's bundled sqlite lacks
-    ``ENABLE_FTS5_TOKENIZER`` so a custom Python tokenizer
-    registered via ``fts5_tokenizer()`` is unavailable. The
-    index-time normalization that fills the gap lives in
-    :mod:`doc3gpp.storage.db.fts5_query`.
-
-    Idempotent: ``IF NOT EXISTS`` makes a second ``create_schema``
-    call a no-op.
+    FTS5 creation is gated on the runtime compile options so a sqlite build
+    without FTS5 does not block the rest of schema creation. Existing virtual
+    tables are recreated when their ordered column/indexing layout differs;
+    the metadata sidecar and regular-table filter indexes are left intact.
     """
     engine = get_engine()
+    expected_layout = (
+        ("tdoc_id", True),
+        ("title", False),
+        ("ftp_url", False),
+        ("meeting_title", False),
+        ("meeting_location", False),
+        ("wis", False),
+        ("cover_text", False),
+        ("change_text", False),
+        ("ttcn_text", False),
+        ("document_text", False),
+        ("row_kind", True),
+        ("document_id", True),
+        ("source_file", True),
+        ("extraction_version", True),
+        ("content_hash", True),
+    )
     with engine.begin() as conn:
         try:
             opts = conn.execute(text("PRAGMA compile_options")).all()
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
-        fts5_available = any(
-            row[0] == "ENABLE_FTS5" for row in opts
-        )
-        if not fts5_available:
+        if not any(row[0] == "ENABLE_FTS5" for row in opts):
             return
+
+        existing_sql = conn.execute(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'tdoc_search'"
+            )
+        ).scalar()
+        if existing_sql is not None:
+            try:
+                columns_sql = (
+                    existing_sql.lower()
+                    .split("fts5(", 1)[1]
+                    .rsplit(")", 1)[0]
+                )
+                actual_layout = tuple(
+                    (
+                        parts[0],
+                        len(parts) > 1 and parts[1] == "unindexed",
+                    )
+                    for declaration in columns_sql.split(",")
+                    if (parts := declaration.strip().split())
+                )
+            except IndexError:
+                actual_layout = ()
+            if actual_layout != expected_layout:
+                conn.execute(text("DROP TABLE tdoc_search"))
+
         conn.execute(
             text(
                 """
@@ -251,7 +279,13 @@ def _create_search_schema() -> None:
                     wis,
                     cover_text,
                     change_text,
-                    ttcn_text
+                    ttcn_text,
+                    document_text,
+                    row_kind UNINDEXED,
+                    document_id UNINDEXED,
+                    source_file UNINDEXED,
+                    extraction_version UNINDEXED,
+                    content_hash UNINDEXED
                 )
                 """
             )
@@ -266,15 +300,8 @@ def _create_search_schema() -> None:
                 """
             )
         )
-        # Composite indexes for filter push-down on the regular
-        # ``tdocs`` and ``meetings`` tables. These complement both the
-        # FTS5 virtual table and the sqlite-vec KNN path by accelerating
-        # the structured WHERE clauses issued alongside vector/FTS5
-        # queries: release/spec/date on tdocs and name/tsg on meetings.
-        # Plain CREATE INDEX works cross-dialect, but the surrounding
-        # FTS5 gate narrows this to sqlite — FTS5 is sqlite-only by
-        # convention. Locked down by
-        # ``tests/integration/test_search_indexes.py``.
+        # Composite indexes for filter push-down on the regular tdocs and
+        # meetings tables. FTS5 is sqlite-only by convention.
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS idx_tdocs_release_spec "
@@ -458,6 +485,34 @@ def _create_specdata_vector_schema(dim: int | None = None) -> None:
             )
 
 
+def _migrate_tdoc_extract_completeness() -> None:
+    """Add extraction layout/count columns while preserving legacy rows.
+
+    Existing databases receive version 1 and a zero document count. SQLAlchemy's
+    inspector keeps the table/column probes dialect-safe, while a missing table
+    is left for Base.metadata.create_all to create with both columns.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        if not inspector.has_table("tdoc_extracts"):
+            return
+
+        column_names = {
+            column["name"] for column in inspector.get_columns("tdoc_extracts")
+        }
+        additions = (
+            ("extraction_version", "INTEGER NOT NULL DEFAULT 1"),
+            ("document_count", "INTEGER NOT NULL DEFAULT 0"),
+        )
+        for name, ddl in additions:
+            if name in column_names:
+                continue
+            conn.execute(
+                text(f"ALTER TABLE tdoc_extracts ADD COLUMN {name} {ddl}")
+            )
+
+
 def create_schema(scope: str = "all") -> None:
     """Create database tables for configured backend(s).
 
@@ -484,6 +539,7 @@ def create_schema(scope: str = "all") -> None:
         _migrate_tdoc_cr_cover_page_summary_of_change()
         _migrate_tdocs_xlsx_metadata()
         _migrate_spec_versions_drop_comment()
+        _migrate_tdoc_extract_completeness()
         Base.metadata.create_all(bind=engine)
         _create_search_schema()
         _create_vector_schema()

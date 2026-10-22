@@ -8,7 +8,6 @@ from collections.abc import Sequence
 
 from doc3gpp.parsers.cr.header import _TDOC_HEADER_PATTERN
 
-
 logger = logging.getLogger(__name__)
 
 

@@ -20,15 +20,14 @@ network or non-sqlite backend, and carry no ``online`` marker.
 
 from __future__ import annotations
 
-import tomllib
 from datetime import timedelta
 from pathlib import Path
 
+import tomllib
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
 from doc3gpp.settings.loader import get_settings
-
 
 Runner = CliRunner
 

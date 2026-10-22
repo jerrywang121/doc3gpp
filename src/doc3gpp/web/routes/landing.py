@@ -16,7 +16,6 @@ from doc3gpp.web.deps import get_pending_jobs
 from doc3gpp.web.render import to_jsonable
 from doc3gpp.web.templates_setup import templates
 
-
 router = APIRouter(tags=["landing"])
 
 

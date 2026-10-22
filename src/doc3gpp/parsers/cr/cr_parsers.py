@@ -25,13 +25,12 @@ from doc3gpp.parsers.cr.header import (
 )
 from doc3gpp.parsers.cr.helpers import _COVER_FIELDS
 from doc3gpp.parsers.cr.ttcn_functions import extract_changed_functions
-from doc3gpp.parsers.tdoc_parsers import SectionParser, TDocParser
 from doc3gpp.parsers.cr.ttcn_sections import (
     TTCNCorrectionsParser,
     TTCNOverviewParser,
 )
+from doc3gpp.parsers.tdoc_parsers import SectionParser, TDocParser
 from doc3gpp.settings.loader import get_settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,9 @@ def _parse_cover_date(raw: str) -> _date | None:
         "%d-%b-%Y",
     ):
         try:
-            return _datetime.strptime(text, fmt).date()
+            # The upstream field is a date-only value; discard the temporary
+            # naive datetime immediately after parsing it.
+            return _datetime.strptime(text, fmt).date()  # noqa: DTZ007
         except ValueError:
             continue
     logger.warning(
@@ -119,13 +120,12 @@ class CRParserBase(TDocParser):
             r"3GPP\s+TSG-\w+\s+Meeting\s+#\d{4}-TTCN\s+email",
             header_blob,
             re.IGNORECASE,
-        ):
-            if is_ttcn_tdoc(tdoc_id):
-                logger.warning(
-                    "CR header does not match the expected "
-                    "'3GPP TSG-<WG> Meeting #<YEAR>-TTCN email' layout; "
-                    "extraction may be incomplete"
-                )
+        ) and is_ttcn_tdoc(tdoc_id):
+            logger.warning(
+                "CR header does not match the expected "
+                "'3GPP TSG-<WG> Meeting #<YEAR>-TTCN email' layout; "
+                "extraction may be incomplete"
+            )
 
         _ok, cover_details, _adv = self._cover.parse(
             lines, max_text_length=max_text_length

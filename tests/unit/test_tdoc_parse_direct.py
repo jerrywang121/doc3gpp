@@ -2367,3 +2367,42 @@ def test_direct_parse_bytes_max_bytes_zero_is_noop() -> None:
 
     with pytest.raises(zipfile.BadZipFile):
         direct_parse_bytes(b"x", filename="R5-260100.zip", max_bytes=0)
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_multi_cover_zip_uses_the_tdoc_named_member_as_main() -> None:
+    """With two CR covers, the one named <tdoc_id>.docx is main; the other is an annex."""
+    with zipfile.ZipFile(io.BytesIO((FIXTURES_DIR / "R5s260009.zip").read_bytes())) as archive:
+        main_docx = archive.read(next(
+            name for name in archive.namelist() if name.lower().endswith(".docx")
+        ))
+    payload = _make_dummy_zip({
+        "a/alt-cover.docx": main_docx,
+        "b/broken.docx": b"not a Word document",
+        "z/R5s260009.docx": main_docx,
+    })
+
+    bundle = direct_parse_bytes(payload, filename="R5s260009.zip")
+
+    assert bundle.main_source_file == "z/R5s260009.docx"
+    assert bundle.main_parse_result.cover.tdoc_id == "R5s260009"
+    assert [document.source_file for document in bundle.documents] == [
+        "z/R5s260009.docx",
+        "a/alt-cover.docx",
+    ]
+    assert bundle.skipped_sources == ("b/broken.docx",)
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_multi_cover_zip_with_two_tdoc_named_members_still_fails() -> None:
+    with zipfile.ZipFile(io.BytesIO((FIXTURES_DIR / "R5s260009.zip").read_bytes())) as archive:
+        main_docx = archive.read(next(
+            name for name in archive.namelist() if name.lower().endswith(".docx")
+        ))
+    payload = _make_dummy_zip({
+        "a/R5s260009.docx": main_docx,
+        "b/R5s260009.docx": main_docx,
+    })
+
+    with pytest.raises(ValueError, match="exactly one"):
+        direct_parse_bytes(payload, filename="R5s260009.zip")

@@ -567,10 +567,17 @@ def _direct_parse_payload(
             f"No supported DOCX member in {filename!r} contains a structural CR cover page"
         )
     if len(cover_candidates) != 1:
-        raise ValueError(
-            f"Expected exactly one DOCX member with a CR cover page in {filename!r}; "
-            f"found {len(cover_candidates)} candidates: {', '.join(cover_candidates)}"
-        )
+        tdoc_named = [
+            source_file for source_file in cover_candidates
+            if source_file.rsplit("/", 1)[-1].casefold()
+            == f"{resolved_tdoc_id}.docx".casefold()
+        ]
+        if len(tdoc_named) != 1:
+            raise ValueError(
+                f"Expected exactly one DOCX member with a CR cover page in {filename!r}; "
+                f"found {len(cover_candidates)} candidates: {', '.join(cover_candidates)}"
+            )
+        cover_candidates = tdoc_named
 
     main_source_file = cover_candidates[0]
     for source_file, exc in failures:

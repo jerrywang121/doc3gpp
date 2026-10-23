@@ -4,13 +4,20 @@ import json
 import re
 import zipfile
 from collections.abc import Sequence
+from dataclasses import replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
+from doc3gpp.models.tdoc_content_families import (
+    TDocContentStore,
+    is_complete_cr_extraction,
+    is_complete_family_extraction,
+    store_for_type,
+)
 from doc3gpp.models.tdoc_cr import TDocExtractMeta
-from doc3gpp.models.tdoc_document import TDocDocument
+from doc3gpp.models.tdoc_document import MarkdownArchive, TDocDocument
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.parsers.tdoc_zip import document_id_for, read_markdown_archive
 from doc3gpp.repository.protocols import (
@@ -59,6 +66,18 @@ class TDocContentIncompleteError(TDocContentError):
     """Stored version-2 metadata and document rows are inconsistent."""
 
 
+class TDocContentIneligibleError(TDocContentError):
+    """The TDoc's stored type has no raw Markdown content family."""
+
+    def __init__(self, tdoc_id: str, observed_type: str | None) -> None:
+        self.tdoc_id = tdoc_id
+        self.observed_type = observed_type
+        super().__init__(
+            f"TDoc {tdoc_id!r} has type {observed_type!r}; raw Markdown is available "
+            "for CR, WID, LS, and discussion TDocs"
+        )
+
+
 class TDocContentService:
     """Retrieve TDoc Markdown from SQL, with constrained version-1 cache fallback."""
 
@@ -67,12 +86,12 @@ class TDocContentService:
         *,
         tdoc_repository: TDocRepository,
         cr_repository: TDocCrDetailRepository,
-        extraction_repository: TDocContentRepository,
+        content_repository: TDocContentRepository,
         cache_root: Path,
     ) -> None:
         self._tdoc_repository = tdoc_repository
         self._cr_repository = cr_repository
-        self._extraction_repository = extraction_repository
+        self._content_repository = content_repository
         self._cache_root = Path(cache_root)
 
     def get(
@@ -86,11 +105,15 @@ class TDocContentService:
         if (tdoc_id is None) == (ftp_url is None):
             raise ValueError("exactly one of tdoc_id or ftp_url is required")
 
-        resolved_tdoc_id, resolved_url = self._resolve_parent(
+        resolved_tdoc_id, resolved_url, observed_type = self._resolve_parent(
             tdoc_id=tdoc_id,
             ftp_url=ftp_url,
         )
-        meta = self._cr_repository.get_extract_meta_by_url(resolved_url)
+        store = store_for_type(observed_type)
+        if store is None:
+            raise TDocContentIneligibleError(resolved_tdoc_id, observed_type)
+
+        meta = self._content_repository.get_extract_meta(resolved_url)
         if meta is None:
             raise self._content_not_found(
                 resolved_tdoc_id,
@@ -100,74 +123,29 @@ class TDocContentService:
             )
         self._validate_meta_identity(meta, resolved_tdoc_id, resolved_url)
 
-        try:
-            documents = tuple(
-                self._extraction_repository.list_documents(resolved_url)
-            )
-        except (TypeError, ValueError) as exc:
-            raise self._incomplete(
-                resolved_tdoc_id,
-                f"stored SQL document rows failed validation: {exc}",
-            ) from exc
-        if documents:
-            content = self._content_from_sql(
-                meta,
-                documents,
-                resolved_tdoc_id,
-                resolved_url,
-            )
-        elif meta.extraction_version == 2:
-            raise self._incomplete(
-                resolved_tdoc_id,
-                "version-2 metadata declares documents but no SQL child rows exist",
-            )
+        if store.includes_main:
+            content = self._family_content(store, meta, resolved_tdoc_id, resolved_url)
         elif meta.extraction_version == 1:
-            legacy_document = self._legacy_document(
+            content = self._legacy_cr_content(meta, resolved_tdoc_id, resolved_url)
+        else:
+            content = self._cr_content(
+                store,
                 meta,
                 resolved_tdoc_id,
                 resolved_url,
-            )
-            content = TDocContent(
-                tdoc_id=resolved_tdoc_id,
-                ftp_url=resolved_url,
-                extraction_version=1,
-                complete=False,
-                documents=(legacy_document,),
-            )
-        else:
-            raise self._incomplete(
-                resolved_tdoc_id,
-                f"unsupported extraction version {meta.extraction_version}",
+                source_file,
             )
 
         if source_file is None:
             return content
-        selected = tuple(
-            document
-            for document in content.documents
-            if document.source_file == source_file
-        )
-        if not selected:
-            raise self._content_not_found(
-                resolved_tdoc_id,
-                resolved_url,
-                f"source {source_file!r} is not present in this ZIP",
-                category=TDocContentNotFoundReason.SOURCE_NOT_FOUND,
-            )
-        return TDocContent(
-            tdoc_id=content.tdoc_id,
-            ftp_url=content.ftp_url,
-            extraction_version=content.extraction_version,
-            complete=content.complete,
-            documents=selected,
-        )
+        return self._select_source(content, source_file, resolved_tdoc_id, resolved_url)
 
     def _resolve_parent(
         self,
         *,
         tdoc_id: str | None,
         ftp_url: str | None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str | None]:
         if tdoc_id is not None:
             normalized_id = tdoc_id.strip()
             if not normalized_id:
@@ -188,21 +166,22 @@ class TDocContentService:
                     "the TDoc has no stored ftp_url",
                     category=TDocContentNotFoundReason.TDOC_NOT_FOUND,
                 )
-            return parent.tdoc_id, resolved_url
+            return parent.tdoc_id, resolved_url, parent.type
 
         normalized_url = normalize_ftp_path(ftp_url or "")
         if not normalized_url:
             raise ValueError("ftp_url must be a non-empty ZIP URL")
         parent = self._tdoc_repository.get_by_ftp_url(normalized_url)
         if parent is not None:
-            return parent.tdoc_id, normalized_url
+            return parent.tdoc_id, normalized_url, parent.type
 
         # A TDoc's canonical URL can change over time while extraction rows stay
         # keyed by their immutable source URL. Resolve historical URLs through
         # that persisted metadata instead of treating them as an unknown TDoc.
         meta = self._cr_repository.get_extract_meta_by_url(normalized_url)
         if meta is not None:
-            return meta.tdoc_id, normalized_url
+            owner = self._tdoc_repository.get_by_id(meta.tdoc_id)
+            return meta.tdoc_id, normalized_url, None if owner is None else owner.type
 
         raise self._content_not_found(
             "",
@@ -226,58 +205,188 @@ class TDocContentService:
                 f"re-parse with 'doc3gpp tdoc parse --tdoc {tdoc_id} --force'"
             )
 
-    def _content_from_sql(
+    def _family_content(
         self,
+        store: TDocContentStore,
         meta: TDocExtractMeta,
-        documents: tuple[TDocDocument, ...],
         tdoc_id: str,
         ftp_url: str,
     ) -> TDocContent:
+        """Family content comes only from SQL rows, main first; the cache is never read."""
+        documents = self._stored_documents(store, meta, tdoc_id, ftp_url)
+        return TDocContent(
+            tdoc_id=tdoc_id,
+            ftp_url=ftp_url,
+            extraction_version=meta.extraction_version,
+            complete=is_complete_family_extraction(meta, documents),
+            documents=tuple(
+                self._content_document(
+                    document,
+                    is_main=document.source_file == meta.doc_filename,
+                )
+                for document in documents
+            ),
+            skipped_sources=meta.skipped_sources,
+        )
+
+    def _cr_content(
+        self,
+        store: TDocContentStore,
+        meta: TDocExtractMeta,
+        tdoc_id: str,
+        ftp_url: str,
+        source_file: str | None,
+    ) -> TDocContent:
+        """CR content is the archive main followed by SQL annexes, or fails closed."""
         if meta.extraction_version != 2:
             raise self._incomplete(
                 tdoc_id,
-                "SQL document rows exist without version-2 extraction metadata",
+                f"unsupported extraction version {meta.extraction_version}",
             )
-        ordered = tuple(sorted(documents, key=lambda document: document.file_order))
-        file_orders = tuple(document.file_order for document in ordered)
-        source_files = tuple(document.source_file for document in ordered)
-        document_ids = tuple(document.document_id for document in ordered)
-        main_documents = tuple(
-            document
-            for document in ordered
-            if document.source_file == meta.doc_filename
+        annexes = self._stored_documents(store, meta, tdoc_id, ftp_url)
+        annex_documents = tuple(
+            self._content_document(annex, is_main=False) for annex in annexes
         )
-        if (
-            not meta.complete
-            or meta.document_count != len(ordered)
-            or file_orders != tuple(range(len(ordered)))
-            or len(set(source_files)) != len(source_files)
-            or len(set(document_ids)) != len(document_ids)
-            or len(main_documents) != 1
-            or not ordered
-            or ordered[0].source_file != meta.doc_filename
-        ):
-            raise self._incomplete(
-                tdoc_id,
-                "version-2 document count, ordering, or main-source invariants do not match",
+        if source_file is not None and source_file != meta.doc_filename:
+            # Annexes are SQL-authoritative, so a single annex needs no archive.
+            documents = annex_documents
+        else:
+            documents = (
+                self._cr_main_document(meta, tdoc_id, ftp_url),
+                *annex_documents,
             )
-
-        content_documents = tuple(
-            TDocContentDocument(
-                document_id=document.document_id,
-                source_file=document.source_file,
-                is_main=document.source_file == meta.doc_filename,
-                markdown=document.markdown_text,
-            )
-            for document in ordered
-        )
+        has_cover = self._cr_repository.get_by_url(ftp_url) is not None
         return TDocContent(
             tdoc_id=tdoc_id,
             ftp_url=ftp_url,
             extraction_version=2,
-            complete=True,
-            documents=content_documents,
+            complete=is_complete_cr_extraction(meta, annexes, has_cover=has_cover),
+            documents=documents,
+            skipped_sources=meta.skipped_sources,
         )
+
+    def _legacy_cr_content(
+        self,
+        meta: TDocExtractMeta,
+        tdoc_id: str,
+        ftp_url: str,
+    ) -> TDocContent:
+        return TDocContent(
+            tdoc_id=tdoc_id,
+            ftp_url=ftp_url,
+            extraction_version=1,
+            complete=False,
+            documents=(self._legacy_document(meta, tdoc_id, ftp_url),),
+            skipped_sources=meta.skipped_sources,
+        )
+
+    def _stored_documents(
+        self,
+        store: TDocContentStore,
+        meta: TDocExtractMeta,
+        tdoc_id: str,
+        ftp_url: str,
+    ) -> tuple[TDocDocument, ...]:
+        try:
+            documents = tuple(self._content_repository.list_documents(store, ftp_url))
+        except (TypeError, ValueError) as exc:
+            raise self._incomplete(
+                tdoc_id,
+                f"stored SQL document rows failed validation: {exc}",
+            ) from exc
+        if meta.document_count != len(documents):
+            raise self._incomplete(
+                tdoc_id,
+                "stored SQL document rows do not match the declared document_count",
+            )
+        return documents
+
+    def _cr_main_document(
+        self,
+        meta: TDocExtractMeta,
+        tdoc_id: str,
+        ftp_url: str,
+    ) -> TDocContentDocument:
+        archive = self._read_cache_archive(meta, tdoc_id, ftp_url)
+        if (
+            archive.is_legacy
+            or normalize_ftp_path(archive.ftp_url or "") != ftp_url
+            or archive.main_source_file != meta.doc_filename
+        ):
+            raise self._cache_not_found(tdoc_id, ftp_url, meta)
+        main = next(
+            (
+                document
+                for document in archive.documents
+                if document.source_file == meta.doc_filename
+            ),
+            None,
+        )
+        if main is None:
+            raise self._cache_not_found(tdoc_id, ftp_url, meta)
+        return TDocContentDocument(
+            document_id=main.document_id,
+            source_file=main.source_file,
+            is_main=True,
+            markdown=main.markdown_text,
+        )
+
+    def _read_cache_archive(
+        self,
+        meta: TDocExtractMeta,
+        tdoc_id: str,
+        ftp_url: str,
+    ) -> MarkdownArchive:
+        if not _CACHE_FILE_RE.fullmatch(meta.cache_file):
+            raise self._cache_not_found(tdoc_id, ftp_url, meta)
+
+        # The cache key is a validated basename. ZIP member names are never
+        # joined to this local cache path.
+        cache_path = self._cache_root / "markdown" / meta.cache_file
+        try:
+            raw = cache_path.read_bytes()
+        except OSError as exc:
+            raise self._cache_not_found(tdoc_id, ftp_url, meta) from exc
+        if not raw:
+            raise self._cache_not_found(tdoc_id, ftp_url, meta)
+        try:
+            return read_markdown_archive(raw)
+        except (OSError, EOFError, UnicodeDecodeError, ValueError, zipfile.BadZipFile) as exc:
+            raise self._cache_not_found(tdoc_id, ftp_url, meta) from exc
+
+    @staticmethod
+    def _content_document(
+        document: TDocDocument,
+        *,
+        is_main: bool,
+    ) -> TDocContentDocument:
+        return TDocContentDocument(
+            document_id=document.document_id,
+            source_file=document.source_file,
+            is_main=is_main,
+            markdown=document.markdown_text,
+        )
+
+    def _select_source(
+        self,
+        content: TDocContent,
+        source_file: str,
+        tdoc_id: str,
+        ftp_url: str,
+    ) -> TDocContent:
+        selected = tuple(
+            document
+            for document in content.documents
+            if document.source_file == source_file
+        )
+        if not selected:
+            raise self._content_not_found(
+                tdoc_id,
+                ftp_url,
+                f"source {source_file!r} is not present in this ZIP",
+                category=TDocContentNotFoundReason.SOURCE_NOT_FOUND,
+            )
+        return replace(content, documents=selected)
 
     def _legacy_document(
         self,
@@ -301,20 +410,7 @@ class TDocContentService:
                 category=TDocContentNotFoundReason.LEGACY_METADATA_INVALID,
             )
 
-        # The cache key is a validated basename. source_file remains a ZIP-member
-        # label and is never joined to this local cache path.
-        cache_path = self._cache_root / "markdown" / meta.cache_file
-        try:
-            raw = cache_path.read_bytes()
-        except OSError as exc:
-            raise self._cache_not_found(tdoc_id, ftp_url, meta) from exc
-        if not raw:
-            raise self._cache_not_found(tdoc_id, ftp_url, meta)
-        try:
-            archive = read_markdown_archive(raw)
-        except (OSError, EOFError, UnicodeDecodeError, ValueError, zipfile.BadZipFile) as exc:
-            raise self._cache_not_found(tdoc_id, ftp_url, meta) from exc
-
+        archive = self._read_cache_archive(meta, tdoc_id, ftp_url)
         if archive.is_legacy:
             markdown = archive.legacy_markdown or ""
             try:
@@ -377,7 +473,7 @@ class TDocContentService:
         return TDocContentNotFoundError(
             f"Markdown cache for TDoc {tdoc_id!r} is empty or unreadable "
             f"(cache_file: {meta.cache_file}, cache_dir: the configured cache). "
-            f"Run 'doc3gpp tdoc parse --tdoc {tdoc_id}' or "
+            f"Run 'doc3gpp tdoc parse --tdoc {tdoc_id} --force' to rebuild it, or "
             f"'doc3gpp tdoc parse --from-url {ftp_url}' first.",
             reason=TDocContentNotFoundReason.CACHE_UNAVAILABLE,
         )
@@ -423,6 +519,7 @@ def tdoc_content_to_dict(content: TDocContent) -> dict[str, Any]:
         "ftp_url": content.ftp_url,
         "extraction_version": content.extraction_version,
         "complete": content.complete,
+        "skipped_sources": list(content.skipped_sources),
         "documents": [
             {
                 "document_id": document.document_id,

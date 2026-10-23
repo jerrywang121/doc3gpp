@@ -12,24 +12,30 @@ from sqlalchemy import delete
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
-from doc3gpp.models.tdoc_document import TDocDocument
+from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.parsers.tdoc_zip import build_markdown_archive, document_id_for
 from doc3gpp.services.tdoc_content_service import (
     TDocContentIncompleteError,
     TDocContentNotFoundError,
+    TDocContentNotFoundReason,
     TDocContentService,
     render_tdoc_documents_markdown,
     tdoc_content_to_dict,
 )
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.models import TDocDocumentOrm
+from doc3gpp.storage.db.models import TDocCrAnnexOrm
 from doc3gpp.storage.db.session import get_session_factory
-from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
-from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-    SQLAlchemyTDocExtractionRepository,
+from doc3gpp.storage.repositories.tdoc_content_sql import (
+    SQLAlchemyTDocContentRepository,
 )
+from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+MAIN_SOURCE = "CR/main.docx"
+ANNEX_SOURCE = "Annex/support.docx"
+MAIN_MARKDOWN = "main archive Markdown" + chr(10)
+ANNEX_MARKDOWN = "support SQL Markdown" + chr(10)
 
 
 def _make_document(
@@ -39,12 +45,11 @@ def _make_document(
     markdown: str,
 ) -> TDocDocument:
     document_id = document_id_for(ftp_url, source_file)
-    markdown_file = f"documents/{file_order}.md"
     content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
     return TDocDocument(
         document_id=document_id,
         source_file=source_file,
-        markdown_file=markdown_file,
+        markdown_file=markdown_member_name(document_id, source_file),
         file_order=file_order,
         markdown_text=markdown,
         content_hash=content_hash,
@@ -54,42 +59,45 @@ def _make_document(
 def _seed_sql_bundle(
     tdoc_id: str,
     ftp_url: str,
+    cache_root: Path,
     *,
     cache_file: str = "bundle.zip",
 ) -> tuple[TDocExtractMeta, tuple[TDocDocument, ...]]:
+    """Seed a CR parent with one SQL annex and its archive holding the main."""
     normalized_url = normalize_ftp_path(ftp_url)
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url)
     )
-    sources = (
-        ("CR/main.docx", "main SQL Markdown" + chr(10)),
-        ("Annex/support.docx", "support SQL Markdown" + chr(10)),
-    )
-    documents = tuple(
-        _make_document(normalized_url, source_file, order, markdown)
-        for order, (source_file, markdown) in enumerate(sources)
-    )
+    main = _make_document(normalized_url, MAIN_SOURCE, 0, MAIN_MARKDOWN)
+    annex = _make_document(normalized_url, ANNEX_SOURCE, 1, ANNEX_MARKDOWN)
     meta = TDocExtractMeta(
         ftp_url=ftp_url,
         tdoc_id=tdoc_id,
         cache_file=cache_file,
-        doc_filename="CR/main.docx",
+        doc_filename=MAIN_SOURCE,
+        document_count=1,
     )
-    SQLAlchemyTDocExtractionRepository().replace_bundle(
+    SQLAlchemyTDocContentRepository().replace_cr_bundle(
         TDocCRDetails(tdoc_id=tdoc_id, ftp_url=ftp_url, title="Stored CR"),
         None,
         None,
         meta,
-        documents,
+        (annex,),
     )
-    return meta, documents
+    payload = build_markdown_archive(
+        (main, annex),
+        ftp_url=normalized_url,
+        main_source_file=MAIN_SOURCE,
+    )
+    _write_legacy_cache(cache_root, cache_file, payload)
+    return meta, (main, annex)
 
 
 def _make_service(cache_root: Path):
     return TDocContentService(
         tdoc_repository=SQLAlchemyTDocRepository(),
         cr_repository=SQLAlchemyTDocCrRepository(),
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repository=SQLAlchemyTDocContentRepository(),
         cache_root=cache_root,
     )
 
@@ -124,7 +132,7 @@ def test_tdoc_and_exact_url_selectors_return_all_documents_in_order(
     create_schema("main")
     tdoc_id = "R5-CONTENT-1"
     ftp_url = "TSG_RAN/WG5/R5-CONTENT-1.zip"
-    meta, stored_documents = _seed_sql_bundle(tdoc_id, ftp_url)
+    meta, stored_documents = _seed_sql_bundle(tdoc_id, ftp_url, tmp_path / "cache")
     service = _make_service(tmp_path / "cache")
 
     by_id = service.get(tdoc_id=tdoc_id)
@@ -137,13 +145,14 @@ def test_tdoc_and_exact_url_selectors_return_all_documents_in_order(
         assert content.ftp_url == normalize_ftp_path(ftp_url)
         assert content.extraction_version == 2
         assert content.complete is True
+        assert content.skipped_sources == ()
         assert [document.source_file for document in content.documents] == [
             "CR/main.docx",
             "Annex/support.docx",
         ]
         assert [document.markdown for document in content.documents] == [
-            "main SQL Markdown" + chr(10),
-            "support SQL Markdown" + chr(10),
+            MAIN_MARKDOWN,
+            ANNEX_MARKDOWN,
         ]
         assert [document.is_main for document in content.documents] == [True, False]
         assert [document.document_id for document in content.documents] == [
@@ -160,10 +169,11 @@ def test_exact_url_selector_reads_historical_bundle_and_exact_source(
     tdoc_id = "R5-CONTENT-HISTORICAL"
     historical_url = "archive/historical.zip"
     current_url = "archive/current.zip"
-    _seed_sql_bundle(tdoc_id, historical_url)
-    _seed_sql_bundle(tdoc_id, current_url)
+    cache_root = tmp_path / "cache"
+    _seed_sql_bundle(tdoc_id, historical_url, cache_root, cache_file="historical.zip")
+    _seed_sql_bundle(tdoc_id, current_url, cache_root, cache_file="current.zip")
 
-    content = _make_service(tmp_path / "cache").get(
+    content = _make_service(cache_root).get(
         ftp_url=historical_url,
         source_file="Annex/support.docx",
     )
@@ -174,7 +184,7 @@ def test_exact_url_selector_reads_historical_bundle_and_exact_source(
     assert [document.source_file for document in content.documents] == [
         "Annex/support.docx"
     ]
-    assert content.documents[0].markdown == "support SQL Markdown" + chr(10)
+    assert content.documents[0].markdown == ANNEX_MARKDOWN
 
 
 def test_source_selection_is_exact_and_unknown_source_never_falls_back(
@@ -184,8 +194,8 @@ def test_source_selection_is_exact_and_unknown_source_never_falls_back(
     create_schema("main")
     tdoc_id = "R5-CONTENT-2"
     ftp_url = "archive/R5-CONTENT-2.zip"
-    meta, _ = _seed_sql_bundle(tdoc_id, ftp_url)
     cache_root = tmp_path / "cache"
+    meta, _ = _seed_sql_bundle(tdoc_id, ftp_url, cache_root)
     _write_legacy_cache(cache_root, meta.cache_file, b"stale cached main body")
     service = _make_service(cache_root)
 
@@ -193,30 +203,34 @@ def test_source_selection_is_exact_and_unknown_source_never_falls_back(
 
     assert len(selected.documents) == 1
     assert selected.documents[0].source_file == "Annex/support.docx"
-    assert selected.documents[0].markdown == "support SQL Markdown" + chr(10)
+    assert selected.documents[0].markdown == ANNEX_MARKDOWN
     assert selected.complete is True
     with pytest.raises(TDocContentNotFoundError, match="source"):
         service.get(tdoc_id=tdoc_id, source_file="../../outside.docx")
+    with pytest.raises(TDocContentNotFoundError) as exc_info:
+        service.get(tdoc_id=tdoc_id)
+    assert exc_info.value.reason is TDocContentNotFoundReason.CACHE_UNAVAILABLE
 
 
-def test_sql_content_wins_when_markdown_cache_is_missing(
+def test_missing_archive_fails_full_content_but_annex_stays_in_sql(
     sqlite_env,
     tmp_path,
 ) -> None:
     create_schema("main")
     tdoc_id = "R5-CONTENT-3"
     ftp_url = "archive/R5-CONTENT-3.zip"
-    meta, _ = _seed_sql_bundle(tdoc_id, ftp_url)
     cache_root = tmp_path / "cache"
-    assert not (cache_root / "markdown" / meta.cache_file).exists()
+    meta, _ = _seed_sql_bundle(tdoc_id, ftp_url, cache_root)
+    (cache_root / "markdown" / meta.cache_file).unlink()
+    service = _make_service(cache_root)
 
-    content = _make_service(cache_root).get(tdoc_id=tdoc_id)
+    with pytest.raises(TDocContentNotFoundError) as exc_info:
+        service.get(tdoc_id=tdoc_id)
+    assert exc_info.value.reason is TDocContentNotFoundReason.CACHE_UNAVAILABLE
 
-    assert [document.markdown for document in content.documents] == [
-        "main SQL Markdown" + chr(10),
-        "support SQL Markdown" + chr(10),
-    ]
-    assert content.complete is True
+    annex = service.get(tdoc_id=tdoc_id, source_file="Annex/support.docx")
+    assert [document.markdown for document in annex.documents] == [ANNEX_MARKDOWN]
+    assert annex.complete is True
 
 
 @pytest.mark.parametrize(
@@ -317,16 +331,16 @@ def test_inconsistent_version_two_sql_is_not_hidden_by_stale_cache(
     create_schema("main")
     tdoc_id = "R5-CONTENT-INCOMPLETE"
     ftp_url = "archive/R5-CONTENT-INCOMPLETE.zip"
-    meta, _ = _seed_sql_bundle(tdoc_id, ftp_url)
+    cache_root = tmp_path / "cache"
+    meta, _ = _seed_sql_bundle(tdoc_id, ftp_url, cache_root)
     with get_session_factory()() as session:
         session.execute(
-            delete(TDocDocumentOrm).where(
-                TDocDocumentOrm.ftp_url == normalize_ftp_path(ftp_url),
-                TDocDocumentOrm.source_file == "Annex/support.docx",
+            delete(TDocCrAnnexOrm).where(
+                TDocCrAnnexOrm.ftp_url == normalize_ftp_path(ftp_url),
+                TDocCrAnnexOrm.doc_filename == ANNEX_SOURCE,
             )
         )
         session.commit()
-    cache_root = tmp_path / "cache"
     _write_legacy_cache(cache_root, meta.cache_file, b"stale legacy cache")
 
     with pytest.raises(
@@ -347,20 +361,21 @@ def test_corrupt_sql_document_hash_raises_incomplete_reparse_error(
     create_schema("main")
     tdoc_id = "R5-CONTENT-CORRUPT"
     ftp_url = "archive/R5-CONTENT-CORRUPT.zip"
-    _seed_sql_bundle(tdoc_id, ftp_url)
+    cache_root = tmp_path / "cache"
+    _seed_sql_bundle(tdoc_id, ftp_url, cache_root)
     with get_session_factory()() as session:
         session.execute(
-            update(TDocDocumentOrm)
+            update(TDocCrAnnexOrm)
             .where(
-                TDocDocumentOrm.ftp_url == normalize_ftp_path(ftp_url),
-                TDocDocumentOrm.source_file == "CR/main.docx",
+                TDocCrAnnexOrm.ftp_url == normalize_ftp_path(ftp_url),
+                TDocCrAnnexOrm.doc_filename == ANNEX_SOURCE,
             )
             .values(content_hash="not-a-sha256")
         )
         session.commit()
 
     with pytest.raises(TDocContentIncompleteError, match="re-parse") as exc_info:
-        _make_service(tmp_path / "cache").get(tdoc_id=tdoc_id)
+        _make_service(cache_root).get(tdoc_id=tdoc_id)
 
     assert f"doc3gpp tdoc parse --tdoc {tdoc_id} --force" in str(exc_info.value)
 
@@ -373,14 +388,14 @@ def test_document_model_type_error_raises_incomplete_reparse_error(
     create_schema("main")
     tdoc_id = "R5-CONTENT-BAD-MODEL"
     ftp_url = "archive/R5-CONTENT-BAD-MODEL.zip"
-    _seed_sql_bundle(tdoc_id, ftp_url)
+    _seed_sql_bundle(tdoc_id, ftp_url, tmp_path / "cache")
     service = _make_service(tmp_path / "cache")
 
-    def invalid_row(_ftp_url: str):
+    def invalid_row(*_args: object):
         raise TypeError("file_order must be an integer")
 
     monkeypatch.setattr(
-        service._extraction_repository, "list_documents", invalid_row
+        service._content_repository, "list_documents", invalid_row
     )
     with pytest.raises(TDocContentIncompleteError, match="re-parse") as exc_info:
         service.get(tdoc_id=tdoc_id)
@@ -437,6 +452,7 @@ def test_tdoc_content_json_shape_is_shared_and_stable() -> None:
         "ftp_url": "archive/R5-CONTENT-JSON.zip",
         "extraction_version": 2,
         "complete": True,
+        "skipped_sources": [],
         "documents": [
             {
                 "document_id": "a" * 64,

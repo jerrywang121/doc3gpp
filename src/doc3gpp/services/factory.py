@@ -304,7 +304,7 @@ def build_tdoc_content_service(
     return TDocContentService(
         tdoc_repository=build_tdoc_repository(),
         cr_repository=build_tdoc_cr_repository(),
-        extraction_repository=build_tdoc_content_repository(),
+        content_repository=build_tdoc_content_repository(),
         cache_root=settings.cache.dir,
     )
 

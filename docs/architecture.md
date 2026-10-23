@@ -189,8 +189,8 @@ Per-layer modules:
      - `models/tdoc_identity.py` — `document_id_for` (the document identity
        shared by content rows, FTS, and chunk IDs)
      - `models/semantic_chunking.py` — pure chunk planning for semantic indexing
-       (`plan_content_chunks`, `_chunks`); `services/embedding/chunker.py` re-exports
-       the helpers
+       (`plan_content_chunks`, `_chunks`, `chunk_count`, `planned_document_keys`);
+       `services/embedding/chunker.py` re-exports `plan_content_chunks` and `_chunks`
     - `models/testcase.py` — `TestCase` header, `TestCaseStatus`
       `(testcase_id, group, path)` triple, `TestCaseWithStatuses` list-view DTO
       (`statuses: list[TestCaseStatus]`), `TestCaseDetail` detail-view
@@ -520,8 +520,8 @@ and the TDoc CR extraction is the deepest.
    `document_count`, `skipped_sources`, and `doc_filename` for the main path), and,
    for CR, the cover and sidecars. CR writes annexes only; a family store's first row
    is the main. Each row carries `doc_filename`, `document_id`, `tdoc_id`, compressed
-   `content`, and `content_hash`. `tdoc_files` remains the separate FTP auxiliary-file
-   inventory.
+   `content`, `content_hash`, and `token_count`. `tdoc_files` remains the separate FTP
+   auxiliary-file inventory.
 5. The real ZIP at `markdown/<cache_file>` is a derived artifact with one Markdown
    entry per converted member, including the CR main, plus a versioned manifest. SQL
    is the source of truth for every document except the CR main. Purging the archive
@@ -978,8 +978,10 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       case-preserving member path), `document_id` (SHA-256 identity of `ftp_url`
       and `doc_filename`), `tdoc_id` (FK → `tdocs.tdoc_id`, cascade delete,
       indexed), `content` (gzip JSON of the Markdown, via `compress_json`), and
-      `content_hash` (SHA-256 of the UTF-8 Markdown). No `file_order` or
-      `markdown_file` column: order and archive names are derived on read.
+      `content_hash` (SHA-256 of the UTF-8 Markdown), and `token_count` (whitespace tokens
+      of the stored Markdown, `len(markdown.split())`; NULL until computed or when the
+      content cannot be decoded; vector status reads it without decompressing `content`).
+      No `file_order` or `markdown_file` column: order and archive names are derived on read.
     - `tdoc_cr_annexes` holds CR annexes only; the CR main is never stored here.
       The family tables hold the main (the row whose `doc_filename` equals the
       parent's) and every annex. Replacement is atomic per URL and clears the

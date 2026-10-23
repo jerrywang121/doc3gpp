@@ -25,7 +25,7 @@ table below is for navigation only.
 | `TDocContent` / `TDocContentDocument` | dataclasses | `models/tdoc_content.py` | SQL-first content envelope and one source body; carries extraction version/completeness without exposing ORM objects. |
 | `TDOC_CONTENT_STORES` / `TDocContentStore` / `store_for_type` / `is_eligible_type` | registry | `models/tdoc_content_families.py` | Eligible `tdocs.type` values, each store's content table, and whether the store holds the main document (CR annexes only). The single source for parse selection, the pipeline, content reads, search, and the schema. |
 | `is_complete_cr_extraction` / `is_complete_family_extraction` / `validate_content_bundle` | functions | `models/tdoc_content_families.py` | The Python completeness rule per store (its SQL mirror is in `storage/repositories/tdoc_sql.py`) and the pre-write bundle validation. |
-| `plan_content_chunks` / `_chunks` | functions | `models/semantic_chunking.py` | Pure chunk planning for CR annex and family content (labelled chunks, per-document cap). `services/embedding/chunker.py` re-exports the helpers. |
+| `plan_content_chunks` / `_chunks` / `chunk_count` / `planned_document_keys` | functions | `models/semantic_chunking.py` | Pure chunk planning for CR annex and family content (labelled chunks, per-document cap). `chunk_count` and `planned_document_keys` plan the same chunks from stored `token_count`, without decoding Markdown, for vector status. `services/embedding/chunker.py` re-exports `plan_content_chunks` and `_chunks`. |
 | `document_id_for` | function | `models/tdoc_identity.py` | SHA-256 identity of `ftp_url` and `doc_filename`, shared by content rows, FTS, and chunk IDs. |
 | `SyncOutcome` | dataclass | `models/sync.py` | Result of `meeting sync` / `tdoc sync`: synced/skipped status, reason, and counts. |
 | `BulkSyncOutcome` | dataclass | `models/sync.py` | Result of `tdoc sync` bulk mode: per-meeting outcomes plus typed failures. |
@@ -33,7 +33,7 @@ table below is for navigation only.
 | `Tsg` | dataclass | `models/tsg.py` | Domain model for 3GPP TSG reference records. |
 | `FieldInfo` | dataclass | `models/schema_info.py` | One DB column descriptor (`name`, `type`, `nullable`, `description`, `values`). |
 | `TableSchema` | dataclass | `models/schema_info.py` | All columns of one DB table (`table`, `fields`). |
-| `RESOURCE_SCHEMAS` | dict | `models/schema_info.py` | Static field registry keyed `tsg \| meeting \| tdoc \| wi \| spec \| spec_doc \| testcase` (21 tables, 186 fields); includes `tdoc_extracts` completeness and the four content tables (`tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, `tdoc_discussion_contents`). Single source of truth for CLI, HTTP, and MCP schema output. |
+| `RESOURCE_SCHEMAS` | dict | `models/schema_info.py` | Static field registry keyed `tsg \| meeting \| tdoc \| wi \| spec \| spec_doc \| testcase` (21 tables, 190 fields); includes `tdoc_extracts` completeness and the four content tables (`tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, `tdoc_discussion_contents`). Single source of truth for CLI, HTTP, and MCP schema output. |
 | `SCHEMA_FIELDS` | list | `models/schema_info.py` | Flat row key order (`table`, `field`, `type`, `nullable`, `description`, `values`). |
 | `schema_payload` | function | `models/schema_info.py` | Flat JSON-ready rows for a resource (`nullable` bool, `values` comma-joined / `"-"`). |
 | `Wi` | dataclass | `models/wi.py` | Domain model for 3GPP Work Items (FK to `tsg_short`). |

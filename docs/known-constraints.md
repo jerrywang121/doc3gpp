@@ -204,12 +204,19 @@ change set so the docs stay honest.
   so the cost is embedding requests only, and `IndexStatus.is_stale` ignores them. A TDoc
   with empty embed text is never indexed, so the same cutoff re-selects it on each run.
 - **Vector status cost grows linearly with the corpus.** `status()`, the `--stale-only`
-  count, and the stale check decompress and chunk every stored content document to build
-  the expected signatures. Measured on WSL2 with 800 TDocs (three documents each, about
-  8000 words per document): `status()` median 2.06 s and `count_tdocs_to_index(stale_only=True)`
-  1.71 s, about 2.6 ms per TDoc at 50, 200, and 800 TDocs. Decompression is about 43% of the
-  status time and chunking about 22%. A stored planned-chunk count or blank flag per content
-  row would remove both, but it needs a schema change and migration, which is not done.
+  count, and the stale check no longer decompress or chunk content. Each content row
+  stores `token_count` (whitespace tokens of its Markdown), and the expected signatures
+  are planned from those counts, so status decompresses nothing. The cost is still
+  linear in the number of stored chunks. Medians on WSL2 (22 cores), three documents per
+  TDoc of about 8000 words each, measured with a scratch script that is not in the repo:
+  N=50 status 0.033 s and stale-only count 0.010 s; N=200 status 0.096 s and count 0.050 s;
+  N=800 status 0.41 s and count 0.15 s. Before the `token_count` change the same script
+  gave 0.080 s / 0.066 s, 0.30 s / 0.26 s, and 1.35 s / 1.09 s. What remains is SQLite
+  work: the stale check reads every `vec_tdoc_embeddings` row (about 0.12 s at N=800), and
+  `status()` also runs a snapshot-day `NOT EXISTS` against that table (about 0.23 s at N=800
+  with 10 TDocs on the snapshot day). A NULL `token_count`, from a row written without one or
+  one the migration could not decode, marks its TDoc stale. A blob corrupted after its write
+  with `token_count` still set is not detected by status; indexing still fails on it.
 - A rebuild started before this change has no persisted snapshot, so its `--resume` takes the newest upload date seen at resume time until the next fresh `--rebuild-embeddings`.
 - **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
   row cannot be decoded, `upsert_for_tdoc` logs a warning and the rebuild loop

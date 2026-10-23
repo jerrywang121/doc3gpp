@@ -26,7 +26,6 @@ The review was read-only; the findings below have not been implemented.
 - [ ] **Close the shared remote embedder during application shutdown.** References: `src/doc3gpp/web/app.py:49-58`, `:217-222`; `src/doc3gpp/services/embedding/remote_embedder.py:96-97`. Store the embedder in `WebState` or register an explicit shutdown callback that calls `close()`.
 - [ ] **Avoid writing embedding bearer tokens into project TOML by default.** References: `src/doc3gpp/cli.py:5914-5977`; `src/doc3gpp/settings/config_writer.py:77-81`. Prefer environment or secret-file configuration, warn when writing sensitive settings, and use restrictive permissions for user configuration files.
 - [ ] **Make `config set` writes atomic.** Reference: `src/doc3gpp/settings/config_writer.py:77-81`. Use a temporary file, flush/fsync, and `os.replace`, matching the safer `config init` implementation at `src/doc3gpp/cli.py:5841-5853`.
-- [ ] **Make vector status cheap.** References: `src/doc3gpp/storage/repositories/vector_sql.py` `_expected_content_signatures` and `_stale_content_tdoc_ids`. `status()` and stale-only counts decompress and chunk every stored content document (about 2.6 ms per TDoc on WSL2; see `docs/known-constraints.md`). Options: store a planned-chunk count or blank flag per content row (schema change and migration), or cache expected signatures keyed by `content_hash` and the chunk settings.
 
 ## Test And CI Follow-Up
 

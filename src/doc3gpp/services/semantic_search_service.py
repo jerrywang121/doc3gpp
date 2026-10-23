@@ -370,11 +370,15 @@ class SemanticSearchService:
         ``embedding_model`` in ``vec_meta`` first — the vec0 dim is a
         schema-level property fixed at ``CREATE VIRTUAL TABLE`` time,
         so a dim change needs a fresh table rather than in-place
-        row writes. The resume path instead fails fast when the
-        live embedder's dim/model no longer matches the stored
-        values (no silent cross-model mixing). Duck-typed embedders
-        without a ``model_name`` attribute (e.g. test doubles) stamp
-        / check dim only.
+        row writes. The exception is ``stale_only=True``: when the
+        table exists at the live dim and model, its rows are kept and
+        only stale TDocs are re-embedded (each upsert replaces that
+        TDoc's own rows). Any other reset re-embeds every TDoc. The
+        resume path instead fails fast when the live embedder's
+        dim/model no longer matches the stored values (no silent
+        cross-model mixing). Duck-typed embedders without a
+        ``model_name`` attribute (e.g. test doubles) stamp / check
+        dim only.
         """
         model = getattr(self._embedder, "model_name", None)
         live_dim = getattr(self._embedder, "dim", None)
@@ -386,7 +390,15 @@ class SemanticSearchService:
             # Force a fresh start regardless of any stale cursor.
             self._vec.clear_resume_cursor()
             if hasattr(self._vec, "reset_for_rebuild") and live_dim is not None:
-                self._vec.reset_for_rebuild(live_dim, model)
+                keep = (
+                    stale_only
+                    and hasattr(self._vec, "keeps_index")
+                    and self._vec.keeps_index(live_dim, model)
+                )
+                if not keep:
+                    self._vec.reset_for_rebuild(live_dim, model)
+                    # The reset empties the table, so every TDoc must be re-embedded.
+                    stale_only = False
             after_id = None
         total = self._vec.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,

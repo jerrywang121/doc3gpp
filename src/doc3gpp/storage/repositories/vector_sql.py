@@ -276,6 +276,28 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 f"`doc3gpp tdoc index --rebuild-embeddings`"
             )
 
+    def keeps_index(self, dim: int, model: str | None) -> bool:
+        """Return True when the ``vec0`` table exists at ``dim`` and ``model``.
+
+        The non-raising form of :meth:`verify_compatible`, used by a
+        ``stale_only`` rebuild to keep the existing rows. A missing table or
+        ``model=None`` (duck-typed embedders) returns False, so the caller
+        falls back to :meth:`reset_for_rebuild`.
+        """
+        if model is None:
+            return False
+        try:
+            self.verify_compatible(dim, model)
+        except VectorIndexUnavailableError:
+            return False
+        with self._engine.begin() as conn:
+            return conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'vec_tdoc_embeddings'"
+                )
+            ).first() is not None
+
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec0`` at ``dim`` and stamp ``vec_meta``.
 

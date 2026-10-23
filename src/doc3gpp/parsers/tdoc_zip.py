@@ -16,6 +16,8 @@ from doc3gpp.models.tdoc_document import (
     MarkdownArchive,
     TDocDocument,
     _normalize_safe_relative_path,
+    markdown_member_name,
+    source_sort_key,
 )
 from doc3gpp.models.tdoc_identity import (
     document_id_for as _domain_document_id_for,
@@ -56,11 +58,6 @@ def _is_directory(info: zipfile.ZipInfo, normalized_name: str) -> bool:
     return stat.S_ISDIR(mode)
 
 
-def _path_sort_key(source_file: str) -> tuple[str, str]:
-    """Provide stable case-insensitive path ordering with a case tie-breaker."""
-    return source_file.casefold(), source_file
-
-
 def _docx_member_infos(
     archive: zipfile.ZipFile,
 ) -> tuple[tuple[str, zipfile.ZipInfo], ...]:
@@ -96,7 +93,7 @@ def _docx_member_infos(
             continue
         candidates.append((source_file, info))
 
-    return tuple(sorted(candidates, key=lambda item: _path_sort_key(item[0])))
+    return tuple(sorted(candidates, key=lambda item: source_sort_key(item[0])))
 
 
 def _sha256_json(values: list[str]) -> str:
@@ -231,18 +228,8 @@ def enumerate_docx_members(
     return tuple(members)
 
 
-def _sanitized_source_stem(source_file: str) -> str:
-    basename = source_file.rsplit("/", 1)[-1]
-    stem = basename[:-5] if basename.casefold().endswith(".docx") else basename
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
-    return sanitized or "document"
-
-
 def _markdown_member_for(document: TDocDocument) -> str:
-    return (
-        f"documents/{document.document_id}/"
-        f"{_sanitized_source_stem(document.source_file)}.md"
-    )
+    return markdown_member_name(document.document_id, document.source_file)
 
 
 def _ordered_documents(
@@ -267,7 +254,7 @@ def _ordered_documents(
 
     if source_files[0] != main_source_file:
         raise TDocZipValidationError("main_source_file must be the first ordered document")
-    if source_files[1:] != tuple(sorted(source_files[1:], key=_path_sort_key)):
+    if source_files[1:] != tuple(sorted(source_files[1:], key=source_sort_key)):
         raise TDocZipValidationError("supporting documents must be ordered by source path")
 
     for document in ordered:
@@ -391,9 +378,7 @@ def _read_versioned_archive(
             raise TDocZipValidationError(
                 f"document_id does not match ftp_url/source_file for {source_file!r}"
             )
-        if markdown_file != (
-            f"documents/{document_id}/{_sanitized_source_stem(source_file)}.md"
-        ):
+        if markdown_file != markdown_member_name(document_id, source_file):
             raise TDocZipValidationError(
                 f"invalid Markdown member path for source {source_file!r}"
             )
@@ -433,7 +418,7 @@ def _read_versioned_archive(
     if documents[0].source_file != main_source_file:
         raise TDocZipValidationError("Markdown archive main source is not first in the manifest")
     if tuple(document.source_file for document in documents[1:]) != tuple(
-        sorted((document.source_file for document in documents[1:]), key=_path_sort_key)
+        sorted((document.source_file for document in documents[1:]), key=source_sort_key)
     ):
         raise TDocZipValidationError("Markdown archive supporting sources are not path-sorted")
 

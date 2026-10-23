@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -37,9 +38,30 @@ def _validate_sha256(value: str, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a lowercase SHA-256 hex digest")
 
 
-def _source_file_sort_key(source_file: str) -> tuple[str, str]:
+def sanitized_source_stem(source_file: str) -> str:
+    """Return the archive-safe stem of a source DOCX basename."""
+    basename = source_file.rsplit("/", 1)[-1]
+    stem = basename[:-5] if basename.casefold().endswith(".docx") else basename
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    return sanitized or "document"
+
+
+def source_sort_key(source_file: str) -> tuple[str, str]:
     """Match the archive enumerator's stable case-insensitive path ordering."""
     return source_file.casefold(), source_file
+
+
+def markdown_member_name(document_id: str, source_file: str) -> str:
+    """Return the derived Markdown ZIP member path for one source document."""
+    return f"documents/{document_id}/{sanitized_source_stem(source_file)}.md"
+
+
+def ordered_sources(sources: Sequence[str], main: str | None) -> tuple[str, ...]:
+    """Return the main source first when present, then the rest path-sorted."""
+    supporting = sorted((source for source in sources if source != main), key=source_sort_key)
+    if main is not None and main in sources:
+        return (main, *supporting)
+    return tuple(supporting)
 
 
 @dataclass(slots=True, frozen=True)
@@ -121,7 +143,7 @@ class TDocParseBundle:
             raise ValueError("TDocParseBundle contains duplicate source_file values")
         if source_files[0] != main_source_file:
             raise ValueError("TDocParseBundle must order the main source first")
-        if source_files[1:] != tuple(sorted(source_files[1:], key=_source_file_sort_key)):
+        if source_files[1:] != tuple(sorted(source_files[1:], key=source_sort_key)):
             raise ValueError("TDocParseBundle support sources must be path-sorted")
         if tuple(document.file_order for document in documents) != tuple(
             range(len(documents))
@@ -174,7 +196,7 @@ class MarkdownArchive:
         source_files = tuple(document.source_file for document in documents)
         if source_files[0] != main_source_file:
             raise ValueError("Markdown archive must order the main source first")
-        if source_files[1:] != tuple(sorted(source_files[1:], key=_source_file_sort_key)):
+        if source_files[1:] != tuple(sorted(source_files[1:], key=source_sort_key)):
             raise ValueError("Markdown archive support sources must be path-sorted")
         if tuple(document.file_order for document in documents) != tuple(
             range(len(documents))

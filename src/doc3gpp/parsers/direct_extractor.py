@@ -45,14 +45,17 @@ from urllib.parse import unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from doc3gpp.models.tdoc_cr import TDocCRParseResult
-from doc3gpp.models.tdoc_document import TDocDocument, TDocParseBundle
+from doc3gpp.models.tdoc_document import (
+    TDocDocument,
+    TDocParseBundle,
+    markdown_member_name,
+    source_sort_key,
+)
 from doc3gpp.parsers.cr.header import CRHeaderMissingError, is_cr_header_present
 from doc3gpp.parsers.cr_parser import _TDOC_HEADER_PATTERN
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
 from doc3gpp.parsers.tdoc_zip import (
     TDocZipLimitError,
-    _path_sort_key,
-    _sanitized_source_stem,
     enumerate_docx_members,
     ephemeral_document_id_for,
 )
@@ -577,7 +580,7 @@ def _direct_parse_payload(
     payload_hash = hashlib.sha256(payload).hexdigest()
     support_documents = sorted(
         (entry for entry in converted if entry[0] != main_source_file),
-        key=lambda entry: _path_sort_key(entry[0]),
+        key=lambda entry: source_sort_key(entry[0]),
     )
     ordered = [(main_source_file, main_markdown), *support_documents]
     documents: list[TDocDocument] = []
@@ -587,9 +590,7 @@ def _direct_parse_payload(
             TDocDocument(
                 document_id=document_id,
                 source_file=source_file,
-                markdown_file=(
-                    f"documents/{document_id}/{_sanitized_source_stem(source_file)}.md"
-                ),
+                markdown_file=markdown_member_name(document_id, source_file),
                 file_order=file_order,
                 markdown_text=markdown,
                 content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),

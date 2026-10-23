@@ -50,13 +50,11 @@ transaction commits.
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import re
 import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from doc3gpp.models.tdoc import TDoc
@@ -179,62 +177,6 @@ _CR_STORE = next(store for store in TDOC_CONTENT_STORES if store.key == "cr")
 # enforces a stricter regex internally; this is a *fast-fail* so a
 # garbage id never touches the cache root, the network, or the DB.
 _TDOC_ID_RE = re.compile(r"[A-Za-z0-9-]{1,32}")
-
-
-def _wrap_markdown_zip(text: str, *, inner_name: str) -> bytes:
-    """Wrap ``text`` in a real ``zipfile.ZipFile`` archive for on-disk storage.
-
-    The ``.zip`` extension on the cache key matches the on-disk format, so
-    operators can ``unzip`` / 7z / WinZip-open the cached markdown straight
-    from disk — and ``7z -t zip cache/markdown/...zip`` lists the inner
-    ``<inner_name>`` entry without any custom decoder.
-
-    The single entry is named ``inner_name`` (a ``.md`` basename derived
-    from the source docx filename) so an extracted copy from the archive
-    has a recognisable filename.
-
-    Args:
-        text: UTF-8 markdown text to wrap.
-        inner_name: Entry name inside the archive (e.g.
-            ``"R5s260009.md"``).
-
-    Returns:
-        The ZIP archive bytes ready to be handed to ``cache.put_bytes``.
-    """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(inner_name, text.encode("utf-8"))
-    return buf.getvalue()
-
-
-def _decompress_markdown(raw: bytes) -> str:
-    """Read the explicit main Markdown member or decode a legacy body."""
-    if not raw:
-        return ""
-    archive = read_markdown_archive(raw)
-    if archive.is_legacy:
-        return archive.legacy_markdown or ""
-    for document in archive.documents:
-        if document.source_file == archive.main_source_file:
-            return document.markdown_text
-    raise ValueError("Markdown archive manifest does not identify a main source")
-
-
-def _read_cached_markdown_path(cache_file: str, cache_root: Path) -> str:
-    """Load the main document body from a versioned or legacy cache artifact."""
-    path = cache_root / "markdown" / cache_file
-    try:
-        raw = path.read_bytes()
-    except FileNotFoundError:
-        return ""
-    except OSError as exc:
-        logger.warning("Failed to read cached markdown at %s: %s", path, exc)
-        return ""
-    try:
-        return _decompress_markdown(raw)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        logger.warning("Failed to decode cached markdown at %s: %s", path, exc)
-        return ""
 
 
 # ---------------------------------------------------------------------------

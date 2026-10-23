@@ -226,10 +226,9 @@ change set so the docs stay honest.
 - **LIKE-based vector filters run after the knn window.** Meeting name and title,
   release, and spec filters are applied after the vector window, because the vector
   index rejects LIKE on metadata columns. Only `tdoc_id`, `tsg`, `meeting_id`, and the
-  `since` and `until` date range are applied inside the window. Semantic-only search
-  widens the window until enough TDocs match or the 4096-row cap is reached, so a
-  very selective LIKE filter can still return fewer results. Hybrid search does not
-  widen, so the same filter can return fewer results there.
+  `since` and `until` date range are applied inside the window. Semantic-only and hybrid
+  search both widen the window until enough TDocs match or the 4096-row cap is reached,
+  so a very selective LIKE filter can still return fewer results.
 
 ## Test surface
 

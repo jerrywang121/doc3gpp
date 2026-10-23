@@ -203,6 +203,7 @@ change set so the docs stay honest.
   on every run, until a later upload date appears in `tdocs`. Their vectors are unchanged,
   so the cost is embedding requests only, and `IndexStatus.is_stale` ignores them. A TDoc
   with empty embed text is never indexed, so the same cutoff re-selects it on each run.
+- A rebuild started before this change has no persisted snapshot, so its `--resume` takes the newest upload date seen at resume time until the next fresh `--rebuild-embeddings`.
 - **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
   row cannot be decoded, `upsert_for_tdoc` logs a warning and the rebuild loop
   continues. The TDoc's old FTS rows remain and its stored hash still matches, so

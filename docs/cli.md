@@ -1156,9 +1156,11 @@ After filters resolve, the CLI:
 
 1. In normal mode, the SQL query selects **pending** TDocs: a TDoc is parsed only
    when its extraction is complete for its type (see
-   [Parse completeness](#parse-completeness)). A version-1 extraction, or a CR
-   without its archive, is pending. With `--force`, every matching row,
-   including complete extractions, becomes a candidate.
+   [Parse completeness](#parse-completeness)). A version-1 extraction is
+   pending. Selection is SQL-only, so a complete CR whose cache archive was purged
+   is not re-selected by a normal parse; recover it with `tdoc parse --tdoc <id>
+   --force` or a `tdoc show --tdoc <id> --format raw` read. With `--force`, every
+   matching row, including complete extractions, becomes a candidate.
 2. Prints the candidate table with the column set above. If the
    candidate set is empty, prints `Nothing to extract — every match is
    already parsed.` and exits `0` (successful no-op).
@@ -1189,8 +1191,8 @@ filters; Python and SQL implement it (`is_complete_cr_extraction` and
 - CR: the `tdoc_extracts` parent is version 2, `skipped_sources` is empty, the
   cover row exists, `document_count` equals the number of annex rows, and no
   annex has the CR main's name. A CR with zero annexes is complete. A cache hit
-  also needs the archive `markdown/<cache_file>`; without it a normal parse
-  downloads and rewrites the archive.
+  also needs the archive `markdown/<cache_file>`; without it, a parse that runs
+  (for example `--force`) downloads and rewrites the archive.
 - WID, LS, and discussion: the parent is version 2, `skipped_sources` is empty,
   `document_count` equals the number of content rows, and the first row is the
   main document named by `tdoc_extracts.doc_filename`.

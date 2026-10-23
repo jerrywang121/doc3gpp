@@ -178,6 +178,7 @@ change set so the docs stay honest.
   Legacy plain UTF-8, gzip, and single-member Markdown ZIPs remain
   readable as incomplete version-1 content only; they never prove a
   complete version-2 extraction.
+- **A complete CR whose cache archive was purged is not re-selected by a normal `tdoc parse`,** because pending selection is SQL-only; recover it with `doc3gpp tdoc parse --tdoc <id> --force` or a `doc3gpp tdoc show --tdoc <id> --format raw` read, which re-runs extraction and rewrites the archive.
 - **Semantic content chunks are capped.** Chunks for CR annexes and family
   documents are labelled per document.
   Chunks are re-derived from the stored Markdown. `semantic_search.max_content_chunks_per_tdoc`

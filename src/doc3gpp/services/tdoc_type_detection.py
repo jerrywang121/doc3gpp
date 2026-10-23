@@ -75,7 +75,7 @@ def decide_direct_type(
     A known ``tdoc_type`` decides without calling ``main_markdown``. Otherwise
     the main document is sniffed for family markers, then for the CR cover.
     """
-    if tdoc_type is not None and tdoc_type.strip():
+    if tdoc_type is not None and tdoc_type.strip(" \t\r\n"):
         store = store_for_type(tdoc_type)
         if store is None:
             return DirectTypeDecision(

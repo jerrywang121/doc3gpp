@@ -51,6 +51,27 @@ def test_unmatched_types_have_no_store():
         assert store_for_type(value) is None
 
 
+def test_nbsp_padded_type_is_not_eligible_like_sql():
+    assert store_for_type("\u00a0CR\u00a0") is None
+    assert is_eligible_type("\u00a0CR") is False
+
+
+def test_ideographic_space_padded_type_is_not_eligible():
+    assert store_for_type("\u3000WID new\u3000") is None
+
+
+def test_vertical_tab_padded_type_is_not_eligible():
+    assert store_for_type("\x0bLS in\x0c") is None
+
+
+def test_ordinary_padding_and_case_still_match():
+    assert store_for_type(" cr\t").table_name == "tdoc_cr_annexes"
+    assert store_for_type("\nDiscussion\r\n").table_name == "tdoc_discussion_contents"
+    assert store_for_type("\tLS out\n").table_name == "tdoc_ls_contents"
+    assert store_for_type(" wid revised ").key == "wid"
+    assert store_for_type("wid  new") is None
+
+
 def test_eligibility_and_exact_value_tuple():
     assert is_eligible_type("cr") and is_eligible_type("LS in")
     assert not is_eligible_type("other")

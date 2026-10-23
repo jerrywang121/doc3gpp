@@ -157,6 +157,17 @@ def test_eligibility_strips_tab_and_newline_padding(sqlite_env) -> None:
     assert _ids(eligible) == {"R5s260014", "R5s260015"}
 
 
+def test_eligibility_does_not_strip_nbsp_padding(sqlite_env) -> None:
+    create_schema()
+    _seed_tdoc("R5s260016", "\u00a0CR\u00a0")
+
+    eligible = SQLAlchemyTDocRepository().list(
+        limit=50, eligible_types=eligible_type_values()
+    )
+
+    assert _ids(eligible) == set()
+
+
 def test_explicit_type_intersects_with_eligibility(sqlite_env) -> None:
     create_schema()
     _seed_tdoc("R5s260021", "pCR")

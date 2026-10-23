@@ -4415,7 +4415,7 @@ def _emit_url_batch_results(
     )
     typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {size_skipped}")
     typer.echo(f"Skipped (archive member limits): {archive_skipped}")
-    typer.echo(f"{'Skipped:':<32}{len(batch.skipped) - size_skipped - archive_skipped}")
+    typer.echo(f"{'Skipped:':<33}{len(batch.skipped) - size_skipped - archive_skipped}")
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Cache hits:                      {cache_hits}")
     typer.echo(f"Failures:                        {failures}")

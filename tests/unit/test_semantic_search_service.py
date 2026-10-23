@@ -550,15 +550,15 @@ def test_search_without_fts5_query_skips_fts5_service(monkeypatch):
 
 
 def test_search_without_fts5_query_truncates_to_limit(monkeypatch):
-    """The pure-vector path must still respect --limit (no internal fanout)."""
+    """The pure-vector path over-fetches chunk rows, then returns --limit TDocs."""
     vec = MagicMock()
     vec.knn.return_value = [
         (f"R5-{i}", f"R5-{i}#0", i, 0.1 * (i + 1)) for i in range(5)
     ]
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=3, fts5_weight=0.5)
-    # vec.knn called with limit=3 (no internal fanout when FTS5 is skipped).
-    assert vec.knn.call_args[1]["limit"] == 3
+    # vec.knn is asked for limit * fanout chunk rows (fanout is 2 in _settings).
+    assert vec.knn.call_args[1]["limit"] == 6
     assert len(out) == 3
 
 
@@ -689,3 +689,49 @@ def test_rrf_merge_preserves_grouped_fts_document_provenance() -> None:
     assert merged[0].min_chunk_distance == pytest.approx(0.1)
     assert merged[0].hit is fts_hit
     assert merged[0].hit.matched_documents == documents
+
+
+class _ChunkPoolRepo:
+    """Chunk-row KNN over a fixed pool, nearest first, like sqlite-vec with ``k``."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.fetches = []
+
+    def knn(self, qv, limit, filters):
+        self.fetches.append(limit)
+        return self._rows[:limit]
+
+    def get_tdocs_metadata(self, tdoc_ids):
+        return {}
+
+
+def test_semantic_only_search_returns_distinct_tdocs_past_a_crowded_chunk_pool():
+    """One TDoc with 20 near chunks must not use up the five distinct-TDoc slots."""
+    rows = [("R5-A", f"R5-A#{i}", i, 0.01 * (i + 1)) for i in range(20)]
+    rows += [
+        (f"R5-{letter}", f"R5-{letter}#0", 0, 0.5 + 0.01 * index)
+        for index, letter in enumerate("BCDEF")
+    ]
+    svc = SemanticSearchService(
+        MagicMock(), _mock_embedder(), _ChunkPoolRepo(rows), _settings(),
+    )
+
+    out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5)
+
+    assert [hit.tdoc_id for hit in out] == ["R5-A", "R5-B", "R5-C", "R5-D", "R5-E"]
+
+
+def test_semantic_only_search_returns_what_exists_when_pool_has_fewer_tdocs():
+    rows = [
+        ("R5-A", "R5-A#0", 0, 0.1),
+        ("R5-A", "R5-A#1", 1, 0.2),
+        ("R5-B", "R5-B#0", 0, 0.3),
+    ]
+    svc = SemanticSearchService(
+        MagicMock(), _mock_embedder(), _ChunkPoolRepo(rows), _settings(),
+    )
+
+    out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5)
+
+    assert [hit.tdoc_id for hit in out] == ["R5-A", "R5-B"]

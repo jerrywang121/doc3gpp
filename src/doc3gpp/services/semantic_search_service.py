@@ -198,8 +198,8 @@ class SemanticSearchService:
         """
         query_vec = self._embedder.encode([query])[0]
         if fts5_query is None:
-            vec_hits = self._vec.knn(query_vec, limit=limit, filters=filters)
-            if not vec_hits:
+            grouped = self._distinct_tdoc_knn(query_vec, limit=limit, filters=filters)
+            if not grouped:
                 return []
             # Rank TDocs by their closest chunk, dress as SemanticSearchHit with
             # rank_fts5=None, rrf_score=-distance. Same DTO so the CLI
@@ -215,7 +215,7 @@ class SemanticSearchService:
                     hit=None,  # populated below
                     document_hits=entry.document_hits(),
                 )
-                for tdoc_id, entry in _group_vec_hits(vec_hits).items()
+                for tdoc_id, entry in grouped.items()
             ]
             hits.sort(key=lambda h: h.rrf_score, reverse=True)  # least-negative = best
             hits = hits[:limit]
@@ -240,6 +240,28 @@ class SemanticSearchService:
             limit=limit,
         )
         return self._populate_metadata_stubs(merged)
+
+    def _distinct_tdoc_knn(
+        self,
+        query_vec,
+        *,
+        limit: int,
+        filters: SearchFilters,
+    ) -> dict[str, _VecTdoc]:
+        """Return up to ``limit`` distinct TDocs from the chunk KNN, in knn order.
+
+        The knn limit counts chunk rows, so one TDoc with many near chunks can use
+        every slot. Fetch ``limit * fanout_multiplier`` rows, and double the fetch
+        while fewer than ``limit`` distinct TDocs were seen and the pool still
+        returns a full page (a shorter page means the pool is exhausted).
+        """
+        fetch = max(limit * self._settings.semantic_search.fanout_multiplier, limit)
+        while True:
+            vec_hits = self._vec.knn(query_vec, limit=fetch, filters=filters)
+            grouped = _group_vec_hits(vec_hits)
+            if len(grouped) >= limit or len(vec_hits) < fetch:
+                return grouped
+            fetch *= 2
 
     def _populate_metadata_stubs(
         self,

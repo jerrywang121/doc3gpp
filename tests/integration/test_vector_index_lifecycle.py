@@ -452,3 +452,54 @@ def test_expected_dim_mismatch_raises_on_upsert(sqlite_env):
         VectorIndexUnavailableError, match="rebuild-embeddings",
     ):
         repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
+
+
+def test_semantic_only_search_collapses_crowded_chunk_pool_on_real_index(repo):
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.services.semantic_search_service import SemanticSearchService
+
+    query = np.zeros(384, dtype=np.float32)
+    query[0] = 1.0
+    from datetime import date
+
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    SQLAlchemyMeetingRepository().upsert_many([
+        Meeting(
+            meeting_id=300, name="RAN5#300", title="m", location="Online",
+            start_date=date(2026, 1, 1), end_date=date(2026, 1, 2),
+        ),
+    ])
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id=f"R5-{letter}", meeting_id=300) for letter in "ABCDEF"],
+    )
+    crowded = []
+    for i in range(20):
+        vec = np.zeros(384, dtype=np.float32)
+        vec[0], vec[1] = 1.0, 0.01 * (i + 1)
+        crowded.append(vec)
+    repo.upsert_chunks("R5-A", _labelled("R5-A", crowded))
+    for index, letter in enumerate("BCDEF"):
+        vec = np.zeros(384, dtype=np.float32)
+        vec[0], vec[2] = 1.0, 0.5 + 0.1 * index
+        repo.upsert_chunks(f"R5-{letter}", _labelled(f"R5-{letter}", [vec]))
+
+    settings = MagicMock()
+    settings.semantic_search.fanout_multiplier = 1
+    settings.semantic_search.rrf_k = 60
+    embedder = MagicMock()
+    embedder.encode.return_value = np.stack([query])
+    svc = SemanticSearchService(MagicMock(), embedder, repo, settings)
+
+    out = svc.search(
+        "q", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5,
+    )
+
+    assert [hit.tdoc_id for hit in out] == ["R5-A", "R5-B", "R5-C", "R5-D", "R5-E"]

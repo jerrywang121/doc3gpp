@@ -579,11 +579,12 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             )
 
     def get_resume_snapshot(self) -> str | None:
-        """Return the snapshot a resumed rebuild stamps.
+        """Return the snapshot a cursor-set resumed rebuild stamps.
 
         The persisted fresh-run value, with the ``''`` marker read back as ``None``. A
         missing key (a rebuild started before snapshots were persisted) falls back to the
-        current :meth:`latest_uploaded_date`, as before.
+        current :meth:`latest_uploaded_date`. A cursorless resume does not call this; it
+        takes :meth:`latest_uploaded_date` directly.
         """
         with self._engine.begin() as conn:
             stored = conn.execute(

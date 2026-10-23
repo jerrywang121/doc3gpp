@@ -27,6 +27,7 @@ from doc3gpp.parsers.tdoc_zip import (
     document_id_for,
 )
 from doc3gpp.scraping.cache_keys import derive_cache_file
+from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
 from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import (
@@ -489,8 +490,9 @@ def test_mcp_ineligible_type_maps_to_not_found(sqlite_env, mcp_server) -> None:
         TDocZipLimitError("TDoc ZIP holds 150 documents, above the 100 limit"),
         TDocZipValidationError("TDoc ZIP member path is not safe: ../x.docx"),
         TDocNotYetOnFTPError("R5-260104"),
+        TDocTooLargeError(source="R5-260104.zip", size=2000, limit=1000),
     ],
-    ids=["zip-limit", "zip-validation", "not-yet-on-ftp"],
+    ids=["zip-limit", "zip-validation", "not-yet-on-ftp", "too-large"],
 )
 def test_cli_raw_extraction_errors_are_bad_parameters_not_tracebacks(
     sqlite_env, cache_dir, monkeypatch, error,

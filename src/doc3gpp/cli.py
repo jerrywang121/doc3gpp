@@ -63,7 +63,7 @@ from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, TDocZipValidationError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
-from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
+from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError, canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
     build_spec_doc_service,
@@ -3790,7 +3790,12 @@ def _render_tdoc_show_raw(
         raise typer.BadParameter(
             str(TDocContentIneligibleError(tdoc_id, exc.observed_type))
         ) from None
-    except (TDocZipLimitError, TDocZipValidationError, TDocNotYetOnFTPError) as exc:
+    except (
+        TDocZipLimitError,
+        TDocZipValidationError,
+        TDocNotYetOnFTPError,
+        TDocTooLargeError,
+    ) as exc:
         raise typer.BadParameter(str(exc)) from None
     except TDocZipDownloadError as exc:
         raise typer.BadParameter(

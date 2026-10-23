@@ -174,8 +174,8 @@ snippet_tokens = 8
 # and snippet() selection. Order MUST match the 9 indexed columns of
 # the tdoc_search virtual table: (title, ftp_url, meeting_title,
 # meeting_location, wis, cover_text, change_text, ttcn_text,
-# document_text). Existing eight-value configurations append a 1.0
-# document_text weight. A column with weight 0 is excluded from both
+# content_text). Existing eight-value configurations append a 1.0
+# content_text weight. A column with weight 0 is excluded from both
 # ranking and previews; a column with weight > 0 gets its own highlighted
 # snippet when the column matches the query.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0]

@@ -639,14 +639,14 @@ def test_rrf_merge_preserves_grouped_fts_document_provenance() -> None:
             ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
             source_file="docs/main.docx",
             score=-4.0,
-            previews={"document_text": "<<handover>>"},
+            previews={"content_text": "<<handover>>"},
         ),
         MatchedDocument(
             document_id="doc-appendix",
             ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
             source_file="support/appendix.docx",
             score=-2.0,
-            previews={"document_text": "<<handover>> appendix"},
+            previews={"content_text": "<<handover>> appendix"},
         ),
     )
     fts_hit = SearchHit(

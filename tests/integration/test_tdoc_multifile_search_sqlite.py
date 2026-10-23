@@ -8,6 +8,7 @@ import json
 from sqlalchemy import text
 
 from doc3gpp.models.search import SearchFilters
+from doc3gpp.storage.compression import compress_json
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
@@ -72,7 +73,7 @@ def _insert_extraction(
         },
     )
     document_ids: dict[str, str] = {}
-    for file_order, (source_file, markdown_text) in enumerate(documents):
+    for source_file, markdown_text in documents:
         document_id = hashlib.sha256(
             json.dumps(
                 [ftp_url, source_file],
@@ -84,22 +85,21 @@ def _insert_extraction(
         connection.execute(
             text(
                 """
-                INSERT INTO tdoc_documents (
-                    document_id, ftp_url, source_file, markdown_file,
-                    file_order, markdown_text, content_hash
+                INSERT INTO tdoc_cr_annexes (
+                    ftp_url, doc_filename, document_id, tdoc_id, content,
+                    content_hash
                 ) VALUES (
-                    :document_id, :ftp_url, :source_file, :markdown_file,
-                    :file_order, :markdown_text, :content_hash
+                    :ftp_url, :doc_filename, :document_id, :tdoc_id, :content,
+                    :content_hash
                 )
                 """
             ),
             {
-                "document_id": document_id,
                 "ftp_url": ftp_url,
-                "source_file": source_file,
-                "markdown_file": f"documents/{document_id}.md",
-                "file_order": file_order,
-                "markdown_text": markdown_text,
+                "doc_filename": source_file,
+                "document_id": document_id,
+                "tdoc_id": tdoc_id,
+                "content": compress_json(markdown_text),
                 "content_hash": content_hash,
             },
         )
@@ -197,9 +197,9 @@ def test_attachment_search_returns_matching_document_source_and_snippet(
     assert type(matched).__name__ == "MatchedDocument"
     assert matched.ftp_url == _DOCUMENT_SOURCE_A
     assert matched.source_file == "docs/alpha.docx"
-    assert "document_text" in matched.previews
-    assert "<<" in matched.previews["document_text"]
-    assert ">>" in matched.previews["document_text"]
+    assert "content_text" in matched.previews
+    assert "<<" in matched.previews["content_text"]
+    assert ">>" in matched.previews["content_text"]
 
 
 def test_metadata_match_stays_one_parent_hit_without_document_matches(
@@ -300,7 +300,7 @@ def test_status_and_stale_rebuild_detect_document_hash_and_version_changes(
     with engine.begin() as connection:
         connection.execute(
             text(
-                "UPDATE tdoc_documents SET content_hash = :content_hash "
+                "UPDATE tdoc_cr_annexes SET content_hash = :content_hash "
                 "WHERE document_id = :document_id"
             ),
             {

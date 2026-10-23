@@ -47,7 +47,7 @@ _EXPECTED_FTS5_COLUMNS: dict[str, int] = {
     "cover_text": 6,
     "change_text": 7,
     "ttcn_text": 8,
-    "document_text": 9,
+    "content_text": 9,
 }
 
 

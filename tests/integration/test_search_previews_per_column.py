@@ -1,7 +1,7 @@
 """Preview must include every column whose weight > 0.
 
 The FTS5 search subsystem declares 9 indexed columns
-(``title`` .. ``document_text``). ``Settings.search.bm25_weights`` carries
+(``title`` .. ``content_text``). ``Settings.search.bm25_weights`` carries
 a length-9 weight tuple; a column with weight ``0.0`` is intentionally
 silenced (the FTS5 scoring and snippet both skip it).
 
@@ -48,7 +48,7 @@ from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 #   - cover_text (cid 6)   weight 5.0  -> MUST be in previews
 #   - change_text (cid 7)  weight 5.0  -> MUST be in previews
 #   - ttcn_text (cid 8)    weight 5.0  -> MUST be in previews
-#   - document_text (cid 9) weight 1.0 -> MUST be in previews
+#   - content_text (cid 9) weight 1.0 -> MUST be in previews
 _DEFAULT_WEIGHTS = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0)
 
 
@@ -104,7 +104,7 @@ def test_search_returns_per_column_previews_for_weight_positive(
     Pinpoint: ``ftp_url`` (weight 0.0) and ``meeting_title`` (weight
     0.0) MUST be absent from the mapping. ``title``, ``wis``,
     ``cover_text``, ``change_text``, ``ttcn_text`` (all weight 5.0)
-    and ``meeting_location`` (weight 1.0) and ``document_text`` (weight 1.0)
+    and ``meeting_location`` (weight 1.0) and ``content_text`` (weight 1.0)
     MUST be present when their snippets match.
     """
     from doc3gpp.storage.repositories.search_sql import (
@@ -213,7 +213,7 @@ def test_search_sql_emits_one_snippet_per_weight_positive_column(
     """The generated SELECT contains N ``snippet()`` calls where N = #weight>0.
 
     With the default weights, N = 7 (title, meeting_location, wis,
-    cover_text, change_text, ttcn_text, document_text). ftp_url (cid 2) and
+    cover_text, change_text, ttcn_text, content_text). ftp_url (cid 2) and
     meeting_title (cid 3) MUST NOT appear as ``snippet(..., 2, ...)``
     or ``snippet(..., 3, ...)`` calls.
     """

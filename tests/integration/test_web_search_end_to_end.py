@@ -202,7 +202,7 @@ def test_search_html_links_matched_source_with_encoded_identity(search_app) -> N
                 ftp_url=ftp_url,
                 source_file=source_file,
                 score=-4.25,
-                previews={"document_text": "<<handover>>"},
+                previews={"content_text": "<<handover>>"},
             ),
         ),
     )

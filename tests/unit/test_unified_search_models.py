@@ -154,14 +154,14 @@ def test_tdoc_serializer_preserves_matched_document_provenance_as_json() -> None
             ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
             source_file="docs/main.docx",
             score=-4.25,
-            previews={"document_text": "<<handover>> procedure"},
+            previews={"content_text": "<<handover>> procedure"},
         ),
         MatchedDocument(
             document_id="doc-appendix",
             ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
             source_file="support/appendix.docx",
             score=-2.0,
-            previews={"document_text": "<<handover>> appendix"},
+            previews={"content_text": "<<handover>> appendix"},
         ),
     )
     result = _tdoc_result(
@@ -178,14 +178,14 @@ def test_tdoc_serializer_preserves_matched_document_provenance_as_json() -> None
             "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
             "source_file": "docs/main.docx",
             "score": -4.25,
-            "previews": {"document_text": "<<handover>> procedure"},
+            "previews": {"content_text": "<<handover>> procedure"},
         },
         {
             "document_id": "doc-appendix",
             "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
             "source_file": "support/appendix.docx",
             "score": -2.0,
-            "previews": {"document_text": "<<handover>> appendix"},
+            "previews": {"content_text": "<<handover>> appendix"},
         },
     ]
 

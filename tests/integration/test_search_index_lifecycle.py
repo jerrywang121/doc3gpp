@@ -11,6 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from doc3gpp.models.search import SearchFilters
+from doc3gpp.storage.compression import compress_json
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.search_sql import (
@@ -167,22 +168,21 @@ def test_status_reports_row_count(sqlite_env) -> None:
             conn.execute(
                 text(
                     """
-                    INSERT INTO tdoc_documents (
-                        document_id, ftp_url, source_file, markdown_file,
-                        file_order, markdown_text, content_hash
+                    INSERT INTO tdoc_cr_annexes (
+                        ftp_url, doc_filename, document_id, tdoc_id, content,
+                        content_hash
                     ) VALUES (
-                        :document_id, :ftp_url, :source_file, :markdown_file,
-                        :file_order, :markdown_text, :content_hash
+                        :ftp_url, :doc_filename, :document_id, :tdoc_id,
+                        :content, :content_hash
                     )
                     """
                 ),
                 {
                     "document_id": str(index + 1) * 64,
                     "ftp_url": extraction_url,
-                    "source_file": f"support/{index}.docx",
-                    "markdown_file": f"support/{index}.md",
-                    "file_order": index,
-                    "markdown_text": content,
+                    "doc_filename": f"support/{index}.docx",
+                    "tdoc_id": seeded_ids[0],
+                    "content": compress_json(content),
                     "content_hash": "a" * 64,
                 },
             )

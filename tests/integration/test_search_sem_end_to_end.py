@@ -361,6 +361,7 @@ def test_search_sem_hybrid_preserves_grouped_document_sources(
     from sqlalchemy import text
 
     from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.compression import compress_json
     from doc3gpp.storage.repositories.search_sql import (
         SQLAlchemySearchIndexRepository,
     )
@@ -385,12 +386,12 @@ def test_search_sem_hybrid_preserves_grouped_document_sources(
         connection.execute(
             text(
                 """
-                INSERT INTO tdoc_documents (
-                    document_id, ftp_url, source_file, markdown_file, file_order,
-                    markdown_text, content_hash
+                INSERT INTO tdoc_cr_annexes (
+                    ftp_url, doc_filename, document_id, tdoc_id, content,
+                    content_hash
                 ) VALUES (
-                    :document_id, :ftp_url, :source_file, :markdown_file,
-                    :file_order, :markdown_text, :content_hash
+                    :ftp_url, :doc_filename, :document_id, :tdoc_id, :content,
+                    :content_hash
                 )
                 """
             ),
@@ -398,19 +399,17 @@ def test_search_sem_hybrid_preserves_grouped_document_sources(
                 {
                     "document_id": "SEM-NB-001-doc-main",
                     "ftp_url": ftp_url,
-                    "source_file": "docs/main.docx",
-                    "markdown_file": "documents/main.md",
-                    "file_order": 0,
-                    "markdown_text": "NB-IoT main source proposal",
+                    "doc_filename": "docs/main.docx",
+                    "tdoc_id": tdoc_id,
+                    "content": compress_json("NB-IoT main source proposal"),
                     "content_hash": "a" * 64,
                 },
                 {
                     "document_id": "SEM-NB-001-doc-appendix",
                     "ftp_url": ftp_url,
-                    "source_file": "support/appendix.docx",
-                    "markdown_file": "documents/appendix.md",
-                    "file_order": 1,
-                    "markdown_text": "NB-IoT appendix source notes",
+                    "doc_filename": "support/appendix.docx",
+                    "tdoc_id": tdoc_id,
+                    "content": compress_json("NB-IoT appendix source notes"),
                     "content_hash": "b" * 64,
                 },
             ],

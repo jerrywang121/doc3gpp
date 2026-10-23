@@ -39,7 +39,7 @@ def test_create_schema_creates_search_objects(sqlite_env) -> None:
         "cover_text",
         "change_text",
         "ttcn_text",
-        "document_text",
+        "content_text",
         "row_kind",
         "document_id",
         "source_file",
@@ -64,7 +64,7 @@ def test_create_schema_creates_search_objects(sqlite_env) -> None:
         "cover_text",
         "change_text",
         "ttcn_text",
-        "document_text",
+        "content_text",
     ]
     assert unindexed_columns == [
         "tdoc_id",
@@ -144,7 +144,7 @@ def test_create_schema_recreates_legacy_fts_table_preserving_sidecars(
                 text("SELECT name FROM sqlite_master WHERE type = 'index'")
             )
         }
-    assert "document_text" in columns
+    assert "content_text" in columns
     assert "row_kind" in columns
     assert preserved == "preserve-me"
     assert {

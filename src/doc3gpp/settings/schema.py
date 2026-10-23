@@ -443,7 +443,7 @@ _SNIPPET_COLUMN_NAMES: tuple[str, ...] = (
     "cover_text",
     "change_text",
     "ttcn_text",
-    "document_text",
+    "content_text",
 )
 
 

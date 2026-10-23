@@ -283,6 +283,7 @@ def test_document_matches_respect_parent_tdoc_filter(sqlite_env) -> None:
     import hashlib
 
     from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.compression import compress_json
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.storage.repositories.search_sql import (
         SQLAlchemySearchIndexRepository,
@@ -303,7 +304,7 @@ def test_document_matches_respect_parent_tdoc_filter(sqlite_env) -> None:
                     ftp_url, tdoc_id, cache_file, doc_filename, parser_version,
                     extraction_version, document_count
                 ) VALUES (
-                    :ftp_url, 'R5-1000000', 'review.zip', 'review.docx', '1.0.0', 1, 1
+                    :ftp_url, 'R5-1000000', 'review.zip', 'main.docx', '1.0.0', 1, 1
                 )
                 """
             ),
@@ -312,19 +313,19 @@ def test_document_matches_respect_parent_tdoc_filter(sqlite_env) -> None:
         connection.execute(
             text(
                 """
-                INSERT INTO tdoc_documents (
-                    document_id, ftp_url, source_file, markdown_file,
-                    file_order, markdown_text, content_hash
+                INSERT INTO tdoc_cr_annexes (
+                    ftp_url, doc_filename, document_id, tdoc_id, content,
+                    content_hash
                 ) VALUES (
-                    :document_id, :ftp_url, 'review.docx', 'review.md',
-                    0, :markdown, :content_hash
+                    :ftp_url, 'review.docx', :document_id, 'R5-1000000',
+                    :content, :content_hash
                 )
                 """
             ),
             {
                 "document_id": document_id,
                 "ftp_url": source_url,
-                "markdown": markdown,
+                "content": compress_json(markdown),
                 "content_hash": content_hash,
             },
         )

@@ -24,7 +24,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
@@ -35,15 +35,20 @@ from doc3gpp.models.search import (
     SearchHit,
     SearchIndexStatus,
 )
+from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.repository.protocols import SearchIndexRepository
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.fts5_query import normalize_query
+from doc3gpp.storage.db.models import CONTENT_ORM_BY_STORE_KEY, TDocExtractOrm
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.rich_filters import (
     build_text_filter_or_params,
     build_text_filter_sql,
+)
+from doc3gpp.storage.repositories.tdoc_document_sources import (
+    tdoc_document_sources_sql,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,12 +119,16 @@ def _classify_search_error(exc: OperationalError) -> SearchError:
     return SearchIndexCorruptError(msg)
 
 
-_TDOC_FRESHNESS_CTES_SQL = """
-WITH expected_documents AS (
+_DOCUMENT_SOURCES_SQL = tdoc_document_sources_sql()
+
+_TDOC_FRESHNESS_CTES_SQL = f"""
+WITH document_sources AS (
+{_DOCUMENT_SOURCES_SQL}
+), expected_documents AS (
     SELECT e.tdoc_id, d.document_id, d.source_file, d.content_hash,
            e.extraction_version
     FROM tdoc_extracts e
-    JOIN tdoc_documents d ON d.ftp_url = e.ftp_url
+    JOIN document_sources d ON d.ftp_url = e.ftp_url
 ), declared_counts AS (
     SELECT tdoc_id, SUM(document_count) AS declared_document_count
     FROM tdoc_extracts
@@ -127,7 +136,7 @@ WITH expected_documents AS (
 ), actual_counts AS (
     SELECT e.tdoc_id, COUNT(d.document_id) AS actual_document_count
     FROM tdoc_extracts e
-    LEFT JOIN tdoc_documents d ON d.ftp_url = e.ftp_url
+    LEFT JOIN document_sources d ON d.ftp_url = e.ftp_url
     GROUP BY e.tdoc_id
 ), expected_counts AS (
     SELECT declared.tdoc_id,
@@ -211,12 +220,12 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             """
             INSERT INTO tdoc_search (
                 tdoc_id, title, ftp_url, meeting_title, meeting_location,
-                wis, cover_text, change_text, ttcn_text, document_text,
+                wis, cover_text, change_text, ttcn_text, content_text,
                 row_kind, document_id, source_file, extraction_version,
                 content_hash
             ) VALUES (
                 :tdoc_id, :title, :ftp_url, :meeting_title, :meeting_location,
-                :wis, :cover_text, :change_text, :ttcn_text, :document_text,
+                :wis, :cover_text, :change_text, :ttcn_text, :content_text,
                 :row_kind, :document_id, :source_file, :extraction_version,
                 :content_hash
             )
@@ -247,7 +256,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                 source_file,
                 extraction_version,
                 content_hash,
-                document_text,
+                content_text,
             ) in document_rows:
                 document_values: dict[str, Any] = {
                     column: "" for column in _SNIPPET_COLUMN_NAMES
@@ -255,7 +264,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                 document_values.update(
                     {
                         "tdoc_id": tdoc_id,
-                        "document_text": document_text,
+                        "content_text": content_text,
                         "row_kind": "document",
                         "document_id": document_id,
                         "source_file": source_file,
@@ -433,7 +442,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                         f"  {from_sql}",
                         "  JOIN temp._doc3gpp_search_selected_tdocs selected",
                         "    ON selected.tdoc_id = tdoc_search.tdoc_id",
-                        "  LEFT JOIN tdoc_documents doc",
+                        f"  LEFT JOIN ({_DOCUMENT_SOURCES_SQL}) doc",
                         "    ON doc.document_id = tdoc_search.document_id",
                         f" WHERE {where_sql}",
                         " ORDER BY selected.parent_rank ASC,",
@@ -710,21 +719,24 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             ).first()
             if row is None:
                 return None
-            document_rows = conn.execute(
-                text(
-                    """
-                    SELECT d.document_id, d.source_file,
-                           e.extraction_version, d.content_hash,
-                           d.markdown_text
-                      FROM tdoc_extracts e
-                      JOIN tdoc_documents d ON d.ftp_url = e.ftp_url
-                     WHERE e.tdoc_id = :id
-                     ORDER BY e.ftp_url ASC, d.file_order ASC,
-                              d.source_file ASC
-                    """
-                ),
-                {"id": tdoc_id},
-            ).all()
+            document_rows = []
+            for store in TDOC_CONTENT_STORES:
+                orm = CONTENT_ORM_BY_STORE_KEY[store.key]
+                document_rows.extend(
+                    conn.execute(
+                        select(
+                            orm.doc_filename,
+                            orm.document_id,
+                            TDocExtractOrm.extraction_version,
+                            orm.content_hash,
+                            orm.content,
+                        )
+                        .select_from(orm)
+                        .join(TDocExtractOrm, TDocExtractOrm.ftp_url == orm.ftp_url)
+                        .where(TDocExtractOrm.tdoc_id == tdoc_id)
+                        .order_by(orm.ftp_url, orm.doc_filename)
+                    ).all()
+                )
         title, ftp_url, related_wis, meeting_title, meeting_location = row
 
         wis_text = _wis_to_text(related_wis)
@@ -733,19 +745,15 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         ttcn_text = _ttcn_text(conn=self._engine, tdoc_id=tdoc_id)
         documents = [
             (
-                document_id,
-                source_file,
-                int(extraction_version),
-                content_hash,
-                normalize_query(markdown_text or ""),
+                document_row.document_id,
+                document_row.doc_filename,
+                int(document_row.extraction_version),
+                document_row.content_hash,
+                normalize_query(
+                    _content_markdown(document_row.doc_filename, document_row.content)
+                ),
             )
-            for (
-                document_id,
-                source_file,
-                extraction_version,
-                content_hash,
-                markdown_text,
-            ) in document_rows
+            for document_row in document_rows
         ]
 
         metadata_text = {
@@ -759,6 +767,14 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             "ttcn_text": normalize_query(ttcn_text),
         }
         return metadata_text, documents
+
+
+def _content_markdown(source_file: str, content: bytes) -> str:
+    """Decode one stored content row with the same rule as the content repo."""
+    markdown = decompress_json(content)
+    if markdown is None:
+        raise ValueError(f"stored content for {source_file!r} cannot be decoded")
+    return markdown
 
 
 def _wis_to_text(related_wis: str | None) -> str:

@@ -67,14 +67,14 @@ def _matched_documents() -> tuple[MatchedDocument, ...]:
             ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
             source_file="docs/main.docx",
             score=-4.2,
-            previews={"document_text": "<<handover>> procedure"},
+            previews={"content_text": "<<handover>> procedure"},
         ),
         MatchedDocument(
             document_id="doc-appendix",
             ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
             source_file="support/appendix.docx",
             score=-2.1,
-            previews={"document_text": "<<handover>> appendix"},
+            previews={"content_text": "<<handover>> appendix"},
         ),
     )
 

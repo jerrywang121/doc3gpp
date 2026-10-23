@@ -1293,6 +1293,10 @@ class SpecDocVectorRepository(Protocol):
         """Raise on live-vs-stored dim/model mismatch without writing."""
         ...
 
+    def keeps_index(self, dim: int, model: str | None) -> bool:
+        """Return True when the existing vector table matches ``dim`` and ``model``."""
+        ...
+
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec_spec_doc_embeddings`` at ``dim``."""
         ...

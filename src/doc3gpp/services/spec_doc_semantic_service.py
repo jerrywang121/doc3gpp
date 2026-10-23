@@ -249,7 +249,15 @@ class SpecDocSemanticService:
         else:
             self._vec.clear_resume_cursor()
             if hasattr(self._vec, "reset_for_rebuild") and live_dim is not None:
-                self._vec.reset_for_rebuild(live_dim, model)
+                keep = (
+                    stale_only
+                    and hasattr(self._vec, "keeps_index")
+                    and self._vec.keeps_index(live_dim, model)
+                )
+                if not keep:
+                    self._vec.reset_for_rebuild(live_dim, model)
+                    # The reset empties the table, so every pair must be re-embedded.
+                    stale_only = False
             after_id = None
 
         total = self._vec.count_versions_to_index(

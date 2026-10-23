@@ -384,9 +384,10 @@ class SemanticSearchService:
         A completed rebuild stamps ``last_rebuild_at`` and the
         ``MAX(uploaded_date)`` snapshot taken before the first batch of the
         fresh run, so a TDoc uploaded during the rebuild stays stale. A resume
-        stamps the snapshot that run persisted, not a new maximum. An
-        interrupted rebuild is not stamped, and a full reset clears the old
-        stamps.
+        with a cursor stamps the snapshot that fresh run persisted. A resume
+        without a cursor takes a new maximum, because it re-embeds every TDoc
+        present at resume time. An interrupted rebuild is not stamped, and a
+        full reset clears the old stamps.
         """
         model = getattr(self._embedder, "model_name", None)
         live_dim = getattr(self._embedder, "dim", None)
@@ -394,10 +395,16 @@ class SemanticSearchService:
             if hasattr(self._vec, "verify_compatible") and live_dim is not None:
                 self._vec.verify_compatible(live_dim, model)
             after_id = self._vec.get_resume_cursor()
-            latest = (
-                self._vec.get_resume_snapshot()
-                if hasattr(self._vec, "get_resume_snapshot") else None
-            )
+            if after_id is None:
+                latest = (
+                    self._vec.latest_uploaded_date()
+                    if hasattr(self._vec, "latest_uploaded_date") else None
+                )
+            else:
+                latest = (
+                    self._vec.get_resume_snapshot()
+                    if hasattr(self._vec, "get_resume_snapshot") else None
+                )
         else:
             # Force a fresh start regardless of any stale cursor.
             self._vec.clear_resume_cursor()

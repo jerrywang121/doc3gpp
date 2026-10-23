@@ -1,29 +1,25 @@
 import sqlite3
+from contextlib import closing
 
 
 def test_reader_returns_while_wal_writer_transaction_is_open(tmp_path):
     path = tmp_path / "search.db"
-    setup = sqlite3.connect(path)
-    setup.execute("PRAGMA journal_mode=WAL")
-    setup.execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT)")
-    setup.execute("INSERT INTO docs VALUES (1, 'searchable')")
-    setup.commit()
-    setup.close()
+    with closing(sqlite3.connect(path)) as setup:
+        setup.execute("PRAGMA journal_mode=WAL")
+        setup.execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT)")
+        setup.execute("INSERT INTO docs VALUES (1, 'searchable')")
+        setup.commit()
 
-    writer = sqlite3.connect(path, timeout=0.1)
-    writer.execute("BEGIN IMMEDIATE")
-    writer.execute("UPDATE docs SET body = 'updated' WHERE id = 1")
-    try:
-        reader = sqlite3.connect(path, timeout=0.1)
+    with closing(sqlite3.connect(path, timeout=0.1)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("UPDATE docs SET body = 'updated' WHERE id = 1")
         try:
-            assert reader.execute("SELECT body FROM docs WHERE body LIKE '%search%'").fetchone() == (
-                "searchable",
-            )
+            with closing(sqlite3.connect(path, timeout=0.1)) as reader:
+                assert reader.execute(
+                    "SELECT body FROM docs WHERE body LIKE '%search%'"
+                ).fetchone() == ("searchable",)
         finally:
-            reader.close()
-    finally:
-        writer.rollback()
-        writer.close()
+            writer.rollback()
 
 
 def test_search_read_completes_while_serialized_write_is_delayed(tmp_path):
@@ -35,12 +31,11 @@ def test_search_read_completes_while_serialized_write_is_delayed(tmp_path):
     from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 
     path = tmp_path / "pipeline.db"
-    setup = sqlite3.connect(path)
-    setup.execute("PRAGMA journal_mode=WAL")
-    setup.execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT)")
-    setup.execute("INSERT INTO docs VALUES (1, 'searchable')")
-    setup.commit()
-    setup.close()
+    with closing(sqlite3.connect(path)) as setup:
+        setup.execute("PRAGMA journal_mode=WAL")
+        setup.execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT)")
+        setup.execute("INSERT INTO docs VALUES (1, 'searchable')")
+        setup.commit()
 
     runtime = PipelineRuntime(prepare_workers=1)
     runner = TDocPipeline(runtime)
@@ -48,23 +43,17 @@ def test_search_read_completes_while_serialized_write_is_delayed(tmp_path):
     release_write = threading.Event()
 
     def persist(value):
-        conn = sqlite3.connect(path, timeout=0.1)
-        try:
+        with closing(sqlite3.connect(path, timeout=0.1)) as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("UPDATE docs SET body = 'updated' WHERE id = 1")
             write_open.set()
             assert release_write.wait(timeout=5)
             conn.commit()
-        finally:
-            conn.close()
         return value
 
     def search():
-        reader = sqlite3.connect(path, timeout=0.1)
-        try:
+        with closing(sqlite3.connect(path, timeout=0.1)) as reader:
             return reader.execute("SELECT body FROM docs").fetchone()
-        finally:
-            reader.close()
 
     async def main():
         run = asyncio.create_task(

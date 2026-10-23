@@ -16,15 +16,27 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from sqlalchemy import func, select
 from typer.testing import CliRunner
 from typing_extensions import Self
 
 from doc3gpp.cli import app
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.parsers.tdoc_zip import read_markdown_archive
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.services.tdoc_cr_service import PreparedDirectTDoc, TDocCrService
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.db.models import (
+    TDocCrAnnexOrm,
+    TDocDiscussionContentOrm,
+    TDocLsContentOrm,
+    TDocWidContentOrm,
+)
+from doc3gpp.storage.db.session import get_session_factory
+from doc3gpp.storage.repositories.tdoc_content_sql import (
+    SQLAlchemyTDocContentRepository,
+)
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
@@ -32,12 +44,10 @@ from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
-from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-    SQLAlchemyTDocExtractionRepository,
-)
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
+CR_STORE = next(store for store in TDOC_CONTENT_STORES if store.key == "cr")
 
 
 def _docx_available() -> bool:
@@ -158,17 +168,16 @@ def test_direct_3gpp_url_happy_path_writes_cache_and_db(
     assert len(meta_list) == 1
     meta = meta_list[0]
     assert meta.extraction_version == 2
-    assert meta.document_count == 3
+    assert meta.document_count == 2
     assert meta.doc_filename == "z/R5s260009.docx"
 
-    documents = SQLAlchemyTDocExtractionRepository().list_documents(meta.ftp_url)
+    documents = SQLAlchemyTDocContentRepository().list_documents(CR_STORE, meta.ftp_url)
     assert [document.source_file for document in documents] == [
-        "z/R5s260009.docx",
         "a/support-alpha.docx",
         "b/support-beta.docx",
     ]
-    assert "support alpha distinctive body" in documents[1].markdown_text
-    assert "support beta distinctive body" in documents[2].markdown_text
+    assert "support alpha distinctive body" in documents[0].markdown_text
+    assert "support beta distinctive body" in documents[1].markdown_text
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
     assert (cache.root / "zips" / meta.cache_file).exists()
@@ -185,7 +194,7 @@ def test_direct_3gpp_url_happy_path_writes_cache_and_db(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_failed_forced_support_conversion_preserves_previous_sql_bundle(
+def test_forced_support_conversion_failure_is_tolerated_and_recorded(
     sqlite_env, tmp_path,
 ) -> None:
     create_schema()
@@ -202,16 +211,17 @@ def test_failed_forced_support_conversion_preserves_previous_sql_bundle(
             name for name in source.namelist() if name.lower().endswith(".docx")
         ))
     good_payload = _build_multifile_zip(fixture.read_bytes())
-    bad_stream = io.BytesIO()
-    with zipfile.ZipFile(bad_stream, "w") as archive:
+    partial_stream = io.BytesIO()
+    with zipfile.ZipFile(partial_stream, "w") as archive:
         archive.writestr("a/broken-support.docx", b"not a Word document")
+        archive.writestr("b/support-beta.docx", _make_docx("support beta distinctive body"))
         archive.writestr("z/R5s260009.docx", main_docx)
 
     dummy = _DummyScraperClient()
     dummy.payloads[url] = good_payload
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
-    extraction_repo = SQLAlchemyTDocExtractionRepository()
+    content_repo = SQLAlchemyTDocContentRepository()
     service = TDocCrService(
         cache=TDocCache(root=tmp_path / "cache", size_limit_bytes=0),
         scraper_client=dummy,
@@ -219,22 +229,30 @@ def test_failed_forced_support_conversion_preserves_previous_sql_bundle(
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
-        extraction_repository=extraction_repo,
+        content_repo=content_repo,
     )
 
     prepared = service.prepare_from_url(url, force=True, full=False)
     assert isinstance(prepared, PreparedDirectTDoc)
     service.persist_prepared_url(prepared)
-    documents_before = extraction_repo.list_documents(prepared.extract_meta.ftp_url)
-    metadata_before = cr_repo.get_extract_meta_by_url(prepared.extract_meta.ftp_url)
-    assert len(documents_before) == 3
+    url_key = prepared.extract_meta.ftp_url
+    assert [
+        document.source_file for document in content_repo.list_documents(CR_STORE, url_key)
+    ] == ["a/support-alpha.docx", "b/support-beta.docx"]
 
-    dummy.payloads[url] = bad_stream.getvalue()
-    with pytest.raises(ValueError, match="broken-support.docx"):
-        service.prepare_from_url(url, force=True, full=False)
+    dummy.payloads[url] = partial_stream.getvalue()
+    partial = service.prepare_from_url(url, force=True, full=False)
+    assert isinstance(partial, PreparedDirectTDoc)
+    assert partial.extract_meta.skipped_sources == ("a/broken-support.docx",)
+    service.persist_prepared_url(partial)
 
-    assert extraction_repo.list_documents(prepared.extract_meta.ftp_url) == documents_before
-    assert cr_repo.get_extract_meta_by_url(prepared.extract_meta.ftp_url) == metadata_before
+    assert [
+        document.source_file for document in content_repo.list_documents(CR_STORE, url_key)
+    ] == ["b/support-beta.docx"]
+    stored = cr_repo.get_extract_meta_by_url(url_key)
+    assert stored is not None
+    assert stored.skipped_sources == ("a/broken-support.docx",)
+
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +450,19 @@ def test_direct_from_local_file_emits_all_document_markdown_without_db(
     cr_repo = SQLAlchemyTDocCrRepository()
     assert cr_repo.get("R5s260009") == []
     assert cr_repo.get_extract_meta("R5s260009") == []
-    assert SQLAlchemyTDocExtractionRepository().get_documents_for_tdoc("R5s260009") == ()
+    with get_session_factory()() as session:
+        content_rows = [
+            session.scalar(
+                select(func.count()).select_from(orm).where(orm.tdoc_id == "R5s260009")
+            )
+            for orm in (
+                TDocCrAnnexOrm,
+                TDocWidContentOrm,
+                TDocLsContentOrm,
+                TDocDiscussionContentOrm,
+            )
+        ]
+    assert content_rows == [0, 0, 0, 0]
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
     snapshot = cache.status()

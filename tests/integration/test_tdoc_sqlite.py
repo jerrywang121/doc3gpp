@@ -603,21 +603,14 @@ def test_list_with_meeting_exclude_parsed_filters_before_limit(sqlite_env) -> No
         TDoc(tdoc_id="R5-260008", meeting_id=300, ftp_url="x/08"),
         TDoc(tdoc_id="R5-260007", meeting_id=300, ftp_url="x/07"),
     ])
-    import hashlib
-
     from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
-    from doc3gpp.models.tdoc_document import TDocDocument
-    from doc3gpp.parsers.tdoc_zip import document_id_for
-    from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-        SQLAlchemyTDocExtractionRepository,
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
     )
 
-    extraction_repo = SQLAlchemyTDocExtractionRepository()
+    content_repo = SQLAlchemyTDocContentRepository()
     for tdoc_id, ftp_url in (("R5-260010", "x/10"), ("R5-260009", "x/09")):
-        source_file = f"{tdoc_id}.docx"
-        markdown = f"complete extraction for {tdoc_id}"
-        document_id = document_id_for(ftp_url, source_file)
-        extraction_repo.replace_bundle(
+        content_repo.replace_cr_bundle(
             TDocCRDetails(tdoc_id=tdoc_id, ftp_url=ftp_url),
             None,
             None,
@@ -625,20 +618,11 @@ def test_list_with_meeting_exclude_parsed_filters_before_limit(sqlite_env) -> No
                 ftp_url=ftp_url,
                 tdoc_id=tdoc_id,
                 cache_file=f"{tdoc_id}.zip",
-                doc_filename=source_file,
+                doc_filename=f"{tdoc_id}.docx",
                 extraction_version=2,
-                document_count=1,
+                document_count=0,
             ),
-            (
-                TDocDocument(
-                    document_id=document_id,
-                    source_file=source_file,
-                    markdown_file=f"documents/{document_id}/{tdoc_id}.md",
-                    file_order=0,
-                    markdown_text=markdown,
-                    content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
-                ),
-            ),
+            (),
         )
 
     pending = repo.list_with_meeting(limit=2, meeting_id=300, exclude_parsed=True)

@@ -36,14 +36,14 @@ from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.settings.schema import SemanticSearchSettings, Settings
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.repositories.tdoc_content_sql import (
+    SQLAlchemyTDocContentRepository,
+)
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
-from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-    SQLAlchemyTDocExtractionRepository,
-)
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
@@ -196,7 +196,7 @@ def test_web_job_path_parse_auto_indexes_fts5_and_embeddings(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
         parser=parser,
         search_service=search_service,
         semantic_service=semantic_service,

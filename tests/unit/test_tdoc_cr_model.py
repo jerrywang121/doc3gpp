@@ -23,6 +23,7 @@ on the immutable download ``url`` so multiple revisions of the same
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import FrozenInstanceError
 from datetime import date
 
@@ -30,6 +31,7 @@ import pytest
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import sessionmaker
 
+from doc3gpp.models.tdoc_content_families import is_complete_cr_extraction
 from doc3gpp.models.tdoc_cr import (
     DirectParseResult,
     TDocCRDetails,
@@ -37,6 +39,8 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
+from doc3gpp.models.tdoc_identity import document_id_for
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocExtractOrm, TDocORM
 
@@ -350,6 +354,19 @@ def test_extract_meta_defaults_to_legacy_incomplete_version() -> None:
 
 
 
+def _annex(ftp_url: str, source_file: str, file_order: int) -> TDocDocument:
+    markdown = f"annex {source_file}"
+    document_id = document_id_for(ftp_url, source_file)
+    return TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=markdown_member_name(document_id, source_file),
+        file_order=file_order,
+        markdown_text=markdown,
+        content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    )
+
+
 def test_extract_meta_completeness_tracks_versioned_document_count() -> None:
     legacy = TDocExtractMeta(
         ftp_url="legacy.zip",
@@ -373,10 +390,15 @@ def test_extract_meta_completeness_tracks_versioned_document_count() -> None:
         extraction_version=2,
         document_count=2,
     )
+    annexes = tuple(
+        _annex(complete.ftp_url, source_file, order)
+        for order, source_file in enumerate(("a/one.docx", "b/two.docx"))
+    )
 
-    assert getattr(legacy, "complete", None) is False
-    assert getattr(empty_v2, "complete", None) is True
-    assert getattr(complete, "complete", None) is True
+    assert not is_complete_cr_extraction(legacy, (), has_cover=True)
+    assert is_complete_cr_extraction(empty_v2, (), has_cover=True)
+    assert is_complete_cr_extraction(complete, annexes, has_cover=True)
+    assert not is_complete_cr_extraction(complete, annexes[:1], has_cover=True)
 
 
 def test_direct_parse_result_uses_document_collection_contract() -> None:

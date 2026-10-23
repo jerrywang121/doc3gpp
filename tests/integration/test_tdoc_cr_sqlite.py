@@ -39,15 +39,15 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocTypeUnsupportedError,
 )
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.repositories.tdoc_content_sql import (
+    SQLAlchemyTDocContentRepository,
+)
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
-)
-from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-    SQLAlchemyTDocExtractionRepository,
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -125,7 +125,7 @@ def _build_service(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     return service, scraper_mock, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
@@ -734,7 +734,7 @@ def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -793,7 +793,7 @@ def test_extract_falls_back_to_template_when_primary_url_fails(
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -842,7 +842,7 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     # Seed the parent TDoc row. Under the post-T3 contract every row
     # carries an ftp_url; for an ``R5s`` id we pre-populate it with the
@@ -904,7 +904,7 @@ def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> No
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -965,7 +965,7 @@ def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> N
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -1209,20 +1209,13 @@ def test_parse_with_combined_filters_against_sqlite(
     # Mark R5s260001 as parsed with a complete version-2 bundle attached to
     # its current TDoc URL. In normal mode the SQL filter excludes it before
     # the limit, so it never reaches the dispatch.
-    import hashlib
-
-    from doc3gpp.models.tdoc_document import TDocDocument
-    from doc3gpp.parsers.tdoc_zip import document_id_for
-    from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-        SQLAlchemyTDocExtractionRepository,
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
     )
 
     cr_repo = SQLAlchemyTDocCrRepository()
     current_ftp_url = cr_tdocs[0].ftp_url
-    source_file = "R5s260001.docx"
-    markdown = "pre-existing complete extraction"
-    document_id = document_id_for(current_ftp_url, source_file)
-    SQLAlchemyTDocExtractionRepository().replace_bundle(
+    SQLAlchemyTDocContentRepository().replace_cr_bundle(
         TDocCRDetails(
             tdoc_id="R5s260001",
             spec="38.523-3",
@@ -1235,20 +1228,11 @@ def test_parse_with_combined_filters_against_sqlite(
             ftp_url=current_ftp_url,
             tdoc_id="R5s260001",
             cache_file="R5s260001.zip",
-            doc_filename=source_file,
+            doc_filename="R5s260001.docx",
             extraction_version=2,
-            document_count=1,
+            document_count=0,
         ),
-        (
-            TDocDocument(
-                document_id=document_id,
-                source_file=source_file,
-                markdown_file=f"documents/{document_id}/R5s260001.md",
-                file_order=0,
-                markdown_text=markdown,
-                content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
-            ),
-        ),
+        (),
     )
 
     # Swap the production ScraperClient class for our dummy.
@@ -1370,7 +1354,19 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
                         tid: type(
                             "R",
                             (),
-                            {"details": TDocCRDetails(tdoc_id=tid, spec=None, cr_num=None, title=None)},
+                            {
+                                "details": TDocCRDetails(
+                                    tdoc_id=tid, spec=None, cr_num=None, title=None
+                                ),
+                                "extract_meta": TDocExtractMeta(
+                                    ftp_url=f"docs/{tid}.zip",
+                                    tdoc_id=tid,
+                                    cache_file=f"{tid}.zip",
+                                    doc_filename=f"{tid}.docx",
+                                    extraction_version=2,
+                                    document_count=0,
+                                ),
+                            },
                         )()
                         for tid in ids
                     },

@@ -126,15 +126,15 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.models import TDocORM
     from doc3gpp.storage.db.session import get_session_factory
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
+    )
     from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
         SQLAlchemyTDocCrChangeDetailsRepository,
     )
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
     from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
         SQLAlchemyTDocCrTtcnRepository,
-    )
-    from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-        SQLAlchemyTDocExtractionRepository,
     )
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -198,7 +198,7 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=SQLAlchemyTDocRepository(),
-        extraction_repository=SQLAlchemyTDocExtractionRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
         parser=_StubParser(),  # type: ignore[arg-type]
     )
 

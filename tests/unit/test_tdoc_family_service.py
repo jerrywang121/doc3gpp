@@ -387,6 +387,36 @@ def test_archive_contains_every_converted_member(family_db, downloads) -> None:
     ]
 
 
+def test_prepare_writes_no_sql_until_persist(family_db, downloads) -> None:
+    service = _service(_FakeCache())
+    downloads.serve(
+        _make_zip(
+            [
+                (MAIN, _make_docx("main body")),
+                ("annex/a.docx", _make_docx("annex a body")),
+            ]
+        )
+    )
+
+    prepared = service.prepare_extract(_tdoc(), WID)
+
+    assert isinstance(prepared, PreparedFamilyExtract)
+    assert _repo().list_documents(WID, CANONICAL) == ()
+    assert _repo().get_extract_meta(CANONICAL) is None
+
+    result = service.persist_prepared_extract(prepared)
+
+    assert _repo().list_documents(WID, CANONICAL) == result.documents
+    assert [document.source_file for document in result.documents] == [
+        MAIN,
+        "annex/a.docx",
+    ]
+    meta = _repo().get_extract_meta(CANONICAL)
+    assert meta is not None
+    assert meta.doc_filename == MAIN
+    assert meta.document_count == 2
+
+
 def test_zip_document_limit_raises_limit_error(family_db, downloads) -> None:
     downloads.serve(
         _make_zip(

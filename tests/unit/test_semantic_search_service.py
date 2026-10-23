@@ -530,6 +530,7 @@ def test_search_without_fts5_query_skips_fts5_service(monkeypatch):
     ]
     fts5 = MagicMock()
     emb = _mock_embedder()
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     svc = SemanticSearchService(fts5, emb, vec, _settings())
     out = svc.search(
         "natural prose",
@@ -555,6 +556,7 @@ def test_search_without_fts5_query_truncates_to_limit(monkeypatch):
     vec.knn.return_value = [
         (f"R5-{i}", f"R5-{i}#0", i, 0.1 * (i + 1)) for i in range(5)
     ]
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=3, fts5_weight=0.5)
     # vec.knn is asked for limit * fanout chunk rows (fanout is 2 in _settings).
@@ -580,8 +582,11 @@ def test_search_without_fts5_query_vector_only_populates_metadata():
         status: str | None
 
     class _VecRepo:
-        def knn(self, qv, limit, filters):
+        def knn(self, qv, limit, filters=None):
             return [("R5-1", "R5-1#0", 0, 0.1)]
+
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
 
         def get_tdocs_metadata(self, tdoc_ids):
             return {
@@ -698,9 +703,12 @@ class _ChunkPoolRepo:
         self._rows = rows
         self.fetches = []
 
-    def knn(self, qv, limit, filters):
+    def knn(self, qv, limit, filters=None):
         self.fetches.append(limit)
         return self._rows[:limit]
+
+    def matching_tdoc_ids(self, tdoc_ids, filters):
+        return frozenset(tdoc_ids)
 
     def get_tdocs_metadata(self, tdoc_ids):
         return {}

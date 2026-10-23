@@ -114,6 +114,7 @@ def _knn_rows() -> list[tuple[str, str, int, float]]:
 def test_semantic_only_returns_one_hit_per_tdoc():
     vec = MagicMock()
     vec.knn.return_value = _knn_rows()
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     vec.get_tdocs_metadata.return_value = {}
     service = SemanticSearchService(MagicMock(), _Embedder(), vec, _settings())
 

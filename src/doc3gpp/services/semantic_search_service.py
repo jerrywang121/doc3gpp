@@ -24,6 +24,7 @@ import dataclasses
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from doc3gpp.cli_filters import SearchQueryBuilder
 from doc3gpp.models.search import (
@@ -379,6 +380,11 @@ class SemanticSearchService:
         cross-model mixing). Duck-typed embedders without a
         ``model_name`` attribute (e.g. test doubles) stamp / check
         dim only.
+
+        A completed rebuild stamps ``last_rebuild_at`` and the
+        ``MAX(uploaded_date)`` snapshot taken before the first batch, so a
+        TDoc uploaded during the rebuild stays stale. An interrupted rebuild
+        is not stamped, and a full reset clears the old stamps.
         """
         model = getattr(self._embedder, "model_name", None)
         live_dim = getattr(self._embedder, "dim", None)
@@ -400,6 +406,10 @@ class SemanticSearchService:
                     # The reset empties the table, so every TDoc must be re-embedded.
                     stale_only = False
             after_id = None
+        latest = (
+            self._vec.latest_uploaded_date()
+            if hasattr(self._vec, "latest_uploaded_date") else None
+        )
         total = self._vec.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,
         )
@@ -429,6 +439,10 @@ class SemanticSearchService:
                     )
                     last_yielded_pct = pct
             self._vec.set_resume_cursor(batch[-1])
+        if hasattr(self._vec, "mark_rebuilt"):
+            self._vec.mark_rebuilt(
+                latest, datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
 
     def status(self) -> SearchIndexStatus:
         return self._vec.status()

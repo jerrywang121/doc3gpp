@@ -1009,6 +1009,18 @@ class VectorIndexRepository(Protocol):
 
     def clear_resume_cursor(self) -> None: ...
 
+    def latest_uploaded_date(self) -> str | None:
+        """Return the raw ``MAX(tdocs.uploaded_date)``, or ``None`` for an empty corpus."""
+        ...
+
+    def mark_rebuilt(self, latest_uploaded_date: str | None, rebuilt_at: str) -> None:
+        """Stamp a completed rebuild: ``last_rebuild_at`` and the pre-rebuild snapshot.
+
+        ``latest_uploaded_date`` is the value :meth:`latest_uploaded_date` returned
+        before the rebuild began; ``None`` clears ``last_indexed_uploaded_date``.
+        """
+        ...
+
     def status(self) -> SearchIndexStatus: ...
 
     def get_tdocs_metadata(

@@ -302,7 +302,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         """Drop + recreate ``vec0`` at ``dim`` and stamp ``vec_meta``.
 
         A dimension change requires rebuilding the virtual table because
-        its dimension is fixed at CREATE time. Refreshes cached dimension
+        its dimension is fixed at CREATE time. Clears the rebuild stamps so
+        an interrupted rebuild reads as stale. Refreshes cached dimension
         and model metadata after recreating the index.
         """
         width = int(dim)
@@ -321,6 +322,12 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 raise VectorIndexUnavailableError(
                     f"sqlite-vec extension load failed: {exc}"
                 ) from exc
+            conn.execute(
+                text(
+                    "DELETE FROM vec_meta "
+                    "WHERE key IN ('last_rebuild_at', 'last_indexed_uploaded_date')"
+                )
+            )
             conn.execute(text("DROP TABLE IF EXISTS vec_tdoc_embeddings"))
             conn.execute(
                 text(
@@ -553,6 +560,34 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                     "WHERE key = 'last_rebuild_last_tdoc_id'"
                 ),
             )
+
+    def latest_uploaded_date(self) -> str | None:
+        with self._engine.begin() as conn:
+            latest = conn.execute(text("SELECT MAX(uploaded_date) FROM tdocs")).scalar()
+        return None if latest is None else str(latest)
+
+    def mark_rebuilt(self, latest_uploaded_date: str | None, rebuilt_at: str) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO vec_meta (key, value) VALUES ('last_rebuild_at', :v) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                ),
+                {"v": rebuilt_at},
+            )
+            if latest_uploaded_date is None:
+                conn.execute(
+                    text("DELETE FROM vec_meta WHERE key = 'last_indexed_uploaded_date'")
+                )
+            else:
+                conn.execute(
+                    text(
+                        "INSERT INTO vec_meta (key, value) "
+                        "VALUES ('last_indexed_uploaded_date', :v) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                    ),
+                    {"v": latest_uploaded_date},
+                )
 
     def status(self) -> SearchIndexStatus:
         with self._engine.begin() as conn:

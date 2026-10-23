@@ -351,7 +351,7 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                     sections=row[base + 3],
                     tables=row[base + 4],
                     chunk_index=int(row[base + 5]),
-                    text=decode_chunk_text(row[base + 6]),
+                    text=decode_chunk_text(row[0], row[base + 6]),
                     score=row[1],
                     previews=previews,
                 )

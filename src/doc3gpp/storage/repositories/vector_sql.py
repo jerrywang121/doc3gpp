@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import json as _json
 import logging
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from itertools import groupby
 
 import numpy as np
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine, Row
 from sqlalchemy.exc import OperationalError
 
@@ -76,6 +76,55 @@ def _check_sqlite_vec(engine: Engine) -> None:
             raise VectorIndexUnavailableError(
                 f"sqlite-vec extension load failed: {exc}"
             ) from exc
+
+
+def _filter_predicates(filters: SearchFilters) -> tuple[list[str], dict]:
+    """Return the ``AND`` clauses and bound params for ``filters``.
+
+    The clauses reference ``tdocs t`` and ``meetings m``; callers join both
+    tables before applying them. ``tdoc_id`` overrides the other predicates.
+    """
+    clauses: list[str] = []
+    params: dict = {}
+    if filters.tdoc_id:
+        clauses.append("t.tdoc_id = :tdoc_id")
+        params["tdoc_id"] = filters.tdoc_id
+        return clauses, params
+    if filters.tsg:
+        # meetings.tsg is stored upper-case by sync, so callers
+        # may pass any case (mirrors meeting_sql / wi_sql).
+        clauses.append("m.tsg = :tsg")
+        params["tsg"] = filters.tsg.upper()
+    if filters.meeting:
+        # Rich-filter grammar over name OR title: the results
+        # page shows m.title, but the CLI convention (meeting
+        # list --name, tdoc list text filters) is LIKE on the
+        # stored field.
+        meeting_clauses, meeting_params = build_text_filter_or_params(
+            ("m.name", "m.title"), filters.meeting, param="meeting",
+        )
+        clauses.append(f"({meeting_clauses})")
+        params.update(meeting_params)
+    if filters.meeting_id is not None:
+        clauses.append("m.meeting_id = :meeting_id")
+        params["meeting_id"] = filters.meeting_id
+    if filters.release:
+        clause, bound = build_text_filter_sql("t.release", filters.release, param="release")
+        if bound is not None:
+            params["release"] = bound
+        clauses.append(clause)
+    if filters.spec:
+        clause, bound = build_text_filter_sql("t.spec", filters.spec, param="spec")
+        if bound is not None:
+            params["spec"] = bound
+        clauses.append(clause)
+    if filters.since:
+        clauses.append("t.uploaded_date >= :since")
+        params["since"] = filters.since
+    if filters.until:
+        clauses.append("t.uploaded_date <= :until")
+        params["until"] = filters.until
+    return clauses, params
 
 
 class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
@@ -274,53 +323,38 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             "q": np.asarray(query_vec, dtype=np.float32).tobytes(),
             "k": limit,
         }
+        clauses: list[str] = []
         if filters is not None:
             sql.append("  JOIN tdocs t   ON t.tdoc_id = vec_tdoc_embeddings.tdoc_id")
             sql.append("  JOIN meetings m ON t.meeting_id = m.meeting_id")
-            if filters.tdoc_id:
-                sql.append("   AND t.tdoc_id = :tdoc_id")
-                params["tdoc_id"] = filters.tdoc_id
-            else:
-                if filters.tsg:
-                    # meetings.tsg is stored upper-case by sync, so callers
-                    # may pass any case (mirrors meeting_sql / wi_sql).
-                    sql.append("   AND m.tsg = :tsg")
-                    params["tsg"] = filters.tsg.upper()
-                if filters.meeting:
-                    # Rich-filter grammar over name OR title: the results
-                    # page shows m.title, but the CLI convention (meeting
-                    # list --name, tdoc list text filters) is LIKE on the
-                    # stored field.
-                    meeting_clauses, meeting_params = build_text_filter_or_params(
-                        ("m.name", "m.title"), filters.meeting, param="meeting",
-                    )
-                    sql.append(f"   AND ({meeting_clauses})")
-                    params.update(meeting_params)
-                if filters.meeting_id is not None:
-                    sql.append("   AND m.meeting_id = :meeting_id")
-                    params["meeting_id"] = filters.meeting_id
-                if filters.release:
-                    clause, bound = build_text_filter_sql("t.release", filters.release, param="release")
-                    if bound is not None:
-                        params["release"] = bound
-                    sql.append(f"   AND {clause}")
-                if filters.spec:
-                    clause, bound = build_text_filter_sql("t.spec", filters.spec, param="spec")
-                    if bound is not None:
-                        params["spec"] = bound
-                    sql.append(f"   AND {clause}")
-                if filters.since:
-                    sql.append("   AND t.uploaded_date >= :since")
-                    params["since"] = filters.since
-                if filters.until:
-                    sql.append("   AND t.uploaded_date <= :until")
-                    params["until"] = filters.until
+            clauses, filter_params = _filter_predicates(filters)
+            params.update(filter_params)
         sql.append(" WHERE embedding MATCH :q AND k = :k")
+        sql.extend(f"   AND {clause}" for clause in clauses)
         # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:q).
         sql.append("  ORDER BY distance IS NULL, distance ASC, chunk_id ASC")
         with self._engine.begin() as conn:
             rows = conn.execute(text("\n".join(sql)), params).all()
         return [(r[1], r[0], int(r[2]), float(r[3]) if r[3] is not None else float("inf")) for r in rows]
+
+    def matching_tdoc_ids(
+        self, tdoc_ids: Collection[str], filters: SearchFilters,
+    ) -> frozenset[str]:
+        ids = list(tdoc_ids)
+        if not ids:
+            return frozenset()
+        clauses, params = _filter_predicates(filters)
+        sql = [
+            "SELECT t.tdoc_id",
+            "  FROM tdocs t",
+            "  JOIN meetings m ON t.meeting_id = m.meeting_id",
+            " WHERE t.tdoc_id IN :tdoc_ids",
+        ]
+        sql.extend(f"   AND {clause}" for clause in clauses)
+        stmt = text("\n".join(sql)).bindparams(bindparam("tdoc_ids", expanding=True))
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt, {**params, "tdoc_ids": ids}).all()
+        return frozenset(row[0] for row in rows)
 
     def rebuild_batch(
         self, batch_size: int, after_id: str | None, stale_only: bool,

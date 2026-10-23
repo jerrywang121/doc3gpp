@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
@@ -978,6 +978,17 @@ class VectorIndexRepository(Protocol):
         Joins to ``tdocs`` / ``meetings`` for filters. ``limit`` caps
         the chunk count (NOT the tdoc count — the service reduces
         chunks to tdocs via ``min(distance)``).
+        """
+        ...
+
+    def matching_tdoc_ids(
+        self, tdoc_ids: Collection[str], filters: SearchFilters,
+    ) -> frozenset[str]:
+        """Return the subset of ``tdoc_ids`` whose TDoc passes ``filters``.
+
+        Uses the same join and predicates as the filtered :meth:`knn`
+        path, so a TDoc without a meeting does not match. Empty
+        ``tdoc_ids`` returns an empty frozenset without a query.
         """
         ...
 

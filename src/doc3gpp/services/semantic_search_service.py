@@ -47,6 +47,9 @@ from doc3gpp.storage.repositories.vector_sql import (
 
 logger = logging.getLogger(__name__)
 
+# sqlite-vec rejects a knn ``k`` above this, so the distinct-TDoc widening stops here.
+_KNN_MAX_K = 4096
+
 
 @dataclass(slots=True)
 class _VecTdoc:
@@ -251,17 +254,20 @@ class SemanticSearchService:
         """Return up to ``limit`` distinct TDocs from the chunk KNN, in knn order.
 
         The knn limit counts chunk rows, so one TDoc with many near chunks can use
-        every slot. Fetch ``limit * fanout_multiplier`` rows, and double the fetch
-        while fewer than ``limit`` distinct TDocs were seen and the pool still
-        returns a full page (a shorter page means the pool is exhausted).
+        every slot. Fetch ``limit * fanout_multiplier`` rows of the unfiltered
+        window, keep the TDocs that pass ``filters``, and double the window while
+        fewer than ``limit`` distinct TDocs were kept. The window is exhausted when
+        it returns fewer rows than requested.
         """
-        fetch = max(limit * self._settings.semantic_search.fanout_multiplier, limit)
+        fetch = min(max(limit * self._settings.semantic_search.fanout_multiplier, limit), _KNN_MAX_K)
         while True:
-            vec_hits = self._vec.knn(query_vec, limit=fetch, filters=filters)
-            grouped = _group_vec_hits(vec_hits)
-            if len(grouped) >= limit or len(vec_hits) < fetch:
+            window = self._vec.knn(query_vec, limit=fetch)
+            allowed = self._vec.matching_tdoc_ids({row[0] for row in window}, filters)
+            kept = [row for row in window if row[0] in allowed]
+            grouped = _group_vec_hits(kept)
+            if len(grouped) >= limit or len(window) < fetch or fetch >= _KNN_MAX_K:
                 return grouped
-            fetch *= 2
+            fetch = min(fetch * 2, _KNN_MAX_K)
 
     def _populate_metadata_stubs(
         self,

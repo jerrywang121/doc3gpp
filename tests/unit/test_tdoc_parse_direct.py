@@ -748,6 +748,54 @@ def test_local_cr_file_without_cover_tdoc_id_uses_filename_id(tmp_path: Path) ->
     assert result.details.tdoc_id == "R5s260998"
 
 
+def test_nameless_local_cr_takes_cover_tdoc_id(tmp_path: Path) -> None:
+    """A local CR with no TDoc id in its name is identified by its cover's id."""
+    if not _docx_available():
+        pytest.skip("python-docx not installed")
+    with zipfile.ZipFile(FIXTURES_DIR / "R5s260009.zip") as zf:
+        main_docx = zf.read(next(name for name in zf.namelist() if name.lower().endswith(".docx")))
+    cover_docx = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(main_docx)) as src, zipfile.ZipFile(cover_docx, "w") as dst:
+        for info in src.infolist():
+            body = src.read(info.filename)
+            if info.filename.endswith(".xml"):
+                body = body.replace(b"R5s260009", b"R5-000042")
+            dst.writestr(info.filename, body)
+
+    service, _scraper, _cache, _cr_repo, _, _tdoc_repo = _build_service_with_fake_repos(
+        tmp_path, zip_bytes=b"unused",
+    )
+    result = service.extract_from_bytes(cover_docx.getvalue(), "local-cr.docx", full=False)
+
+    assert result.tdoc_id == "R5-000042"
+    assert result.details.tdoc_id == "R5-000042"
+
+
+def test_nameless_local_cr_without_cover_id_uses_local_stem(tmp_path: Path) -> None:
+    """A local CR with no TDoc id in its name or cover gets its LOCAL-<stem> id."""
+    if not _docx_available():
+        pytest.skip("python-docx not installed")
+    from docx import Document
+
+    doc = Document()
+    doc.add_heading("3GPP TSG-RAN WG5 Meeting #1234-TTCN email", level=1)
+    doc.add_paragraph("CR-Form-v12.4")
+    doc.add_paragraph("| CHANGE REQUEST |")
+    doc.add_paragraph(
+        "|  | 38.523-3 | CR | 3790 | rev | - | Current version: | 18.4.0 |  |"
+    )
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    service, _scraper, _cache, _cr_repo, _, _tdoc_repo = _build_service_with_fake_repos(
+        tmp_path, zip_bytes=b"unused",
+    )
+    result = service.extract_from_bytes(buf.getvalue(), "local-cr.docx", full=False)
+
+    assert result.tdoc_id == "LOCAL-local-cr"
+    assert result.details.tdoc_id == "LOCAL-local-cr"
+
+
 def test_cli_local_batch_uses_cli_runner_without_service_runtime(
     tmp_path: Path, monkeypatch,
 ) -> None:

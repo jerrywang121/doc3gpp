@@ -1513,6 +1513,10 @@ class TDocCrService:
             sniffed=tdoc_type is None,
         )
         cover = bundle.main_parse_result.cover
+        tdoc_id = source.tdoc_id
+        if tdoc_id is None and source.kind != "url-3gpp":
+            tdoc_id = extract_tdoc_id_from_filename(cover.extracted_tdoc_id or "") or cover.tdoc_id
+            cover = replace(cover, tdoc_id=tdoc_id)
         return DirectParseResult(
             source_kind=source.kind,
             documents=bundle.documents,
@@ -1521,7 +1525,7 @@ class TDocCrService:
             extract_meta=None,
             from_cache=False,
             persisted=False,
-            tdoc_id=cover.tdoc_id if source.kind == "url-other" else source.tdoc_id,
+            tdoc_id=tdoc_id,
             tdoc_id_in_tdocs=False,
             source_url=source.source_url,
         )

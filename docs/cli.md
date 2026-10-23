@@ -1009,9 +1009,10 @@ Purpose:
   to describe auxiliary files discovered on FTP.
 
 Eligible types are matched case-insensitively and exactly after trimming
-whitespace on `tdocs.type`: `CR` (CR annexes), `WID new` and `WID revised`
-(WID), `LS in` and `LS out` (LS), and `discussion` (discussion). Every other type,
-including `other`, is never downloaded or stored.
+spaces, tabs, carriage returns, and line feeds on `tdocs.type`: `CR` (CR
+annexes), `WID new` and `WID revised` (WID), `LS in` and `LS out` (LS), and
+`discussion` (discussion). Every other type, including `other`, is never
+downloaded or stored.
 
 Every flag is a **filter** — the candidate set is the intersection of
 every supplied predicate. With no `--type`, the default selects CR plus the

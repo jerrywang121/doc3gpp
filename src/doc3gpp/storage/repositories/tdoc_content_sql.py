@@ -274,6 +274,7 @@ def _content_rows(
             tdoc_id=tdoc_id,
             content=compress_json(document.markdown_text),
             content_hash=document.content_hash,
+            token_count=len(document.markdown_text.split()),
         )
         for document in documents
     ]

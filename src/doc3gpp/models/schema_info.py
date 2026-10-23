@@ -248,6 +248,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
                 FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
                 FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
+                FieldInfo("token_count", "int", True, "Whitespace tokens (len(markdown.split())) of the stored Markdown; NULL until computed or when the content cannot be decoded. Vector status reads it without decompressing content."),
             ),
         ),
         TableSchema(
@@ -259,6 +260,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
                 FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
                 FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
+                FieldInfo("token_count", "int", True, "Whitespace tokens (len(markdown.split())) of the stored Markdown; NULL until computed or when the content cannot be decoded. Vector status reads it without decompressing content."),
             ),
         ),
         TableSchema(
@@ -270,6 +272,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
                 FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
                 FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
+                FieldInfo("token_count", "int", True, "Whitespace tokens (len(markdown.split())) of the stored Markdown; NULL until computed or when the content cannot be decoded. Vector status reads it without decompressing content."),
             ),
         ),
         TableSchema(
@@ -281,6 +284,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
                 FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
                 FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
+                FieldInfo("token_count", "int", True, "Whitespace tokens (len(markdown.split())) of the stored Markdown; NULL until computed or when the content cannot be decoded. Vector status reads it without decompressing content."),
             ),
         ),
     ),

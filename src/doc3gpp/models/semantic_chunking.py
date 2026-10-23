@@ -51,6 +51,27 @@ def _chunks(text: str, size: int, overlap: int) -> list[str]:
     return chunks
 
 
+def chunk_count(token_count: int, size: int, overlap: int) -> int:
+    """Return how many chunks ``_chunks`` yields for ``token_count`` whitespace tokens.
+
+    Computed without splitting text, so vector status can plan content chunks from
+    a stored token count. Validates ``size`` and ``overlap`` like ``_chunks``.
+
+    Raises:
+        ValueError: if ``size <= 0`` or ``overlap >= size``.
+    """
+    if size <= 0:
+        raise ValueError(f"size must be > 0, got {size}")
+    if overlap >= size:
+        raise ValueError(f"overlap must be < size, got overlap={overlap} size={size}")
+    if token_count <= 0:
+        return 0
+    if token_count <= size:
+        return 1
+    step = size - overlap
+    return 1 + (token_count - size + step - 1) // step
+
+
 def plan_content_chunks(
     documents: Iterable[tuple[str, str, str]],
     size: int,
@@ -72,3 +93,28 @@ def plan_content_chunks(
             continue
         remaining -= len(chunks)
         yield document_id, content_hash, chunks
+
+
+def planned_document_keys(
+    documents: Iterable[tuple[str, str, int]],
+    size: int,
+    overlap: int,
+    max_chunks: int,
+) -> list[tuple[str, str]]:
+    """Return ``(document_id, content_hash)`` for each document ``plan_content_chunks`` yields.
+
+    ``documents`` holds ``(document_id, content_hash, token_count)`` in indexing
+    order. Applies the same cap as :func:`plan_content_chunks` without decoding
+    the Markdown.
+    """
+    remaining = max_chunks
+    keys: list[tuple[str, str]] = []
+    for document_id, content_hash, token_count in documents:
+        if remaining <= 0:
+            break
+        count = min(chunk_count(token_count, size, overlap), remaining)
+        if count == 0:
+            continue
+        remaining -= count
+        keys.append((document_id, content_hash))
+    return keys

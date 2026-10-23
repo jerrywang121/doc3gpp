@@ -4,7 +4,7 @@ import re
 
 from sqlalchemy import inspect, text
 
-from doc3gpp.storage.compression import compress_json
+from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
@@ -552,7 +552,7 @@ def _migrate_tdoc_extract_completeness() -> None:
             )
 
 
-_CONTENT_DOCUMENT_ID_TABLES = (
+_CONTENT_TABLES = (
     "tdoc_cr_annexes",
     "tdoc_wid_contents",
     "tdoc_ls_contents",
@@ -572,7 +572,7 @@ def _migrate_content_document_id_index() -> None:
     engine = get_engine()
     with engine.begin() as conn:
         inspector = inspect(conn)
-        for table in _CONTENT_DOCUMENT_ID_TABLES:
+        for table in _CONTENT_TABLES:
             if not inspector.has_table(table):
                 continue
             if any(
@@ -586,6 +586,77 @@ def _migrate_content_document_id_index() -> None:
                     f"ON {table} (document_id)"
                 )
             )
+
+
+_CONTENT_TOKEN_COUNT_BATCH = 500
+
+
+def _migrate_content_token_count() -> None:
+    """Add ``token_count`` to the four TDoc content tables and backfill it.
+
+    ``create_all`` does not add columns to existing tables, so a database created
+    before the column gets it here. A missing table is left for ``create_all``.
+    Each NULL row is decompressed and its ``len(markdown.split())`` stored.
+
+    Idempotent. A row whose content does not decode to text stays NULL and is
+    examined again on each run, so a rerun changes nothing once every decodable
+    row is filled.
+    """
+    engine = get_engine()
+    for table in _CONTENT_TABLES:
+        with engine.begin() as conn:
+            inspector = inspect(conn)
+            if not inspector.has_table(table):
+                continue
+            column_names = {column["name"] for column in inspector.get_columns(table)}
+            if "token_count" not in column_names:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN token_count INTEGER"))
+        _backfill_content_token_count(table)
+
+
+def _backfill_content_token_count(table: str) -> None:
+    """Fill NULL ``token_count`` rows of ``table`` in keyset batches.
+
+    The cursor advances past the last row each batch selects, including rows
+    that cannot be decoded. Advancing past only the updated rows would
+    re-select an undecodable row forever. One transaction per batch.
+    """
+    engine = get_engine()
+    after_url = ""
+    after_doc = ""
+    while True:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT ftp_url, doc_filename, content FROM {table} "
+                    "WHERE token_count IS NULL "
+                    "AND (ftp_url, doc_filename) > (:after_url, :after_doc) "
+                    "ORDER BY ftp_url, doc_filename LIMIT :limit"
+                ),
+                {
+                    "after_url": after_url,
+                    "after_doc": after_doc,
+                    "limit": _CONTENT_TOKEN_COUNT_BATCH,
+                },
+            ).all()
+            if not rows:
+                return
+            for ftp_url, doc_filename, content in rows:
+                markdown = decompress_json(content)
+                if not isinstance(markdown, str):
+                    continue
+                conn.execute(
+                    text(
+                        f"UPDATE {table} SET token_count = :token_count "
+                        "WHERE ftp_url = :ftp_url AND doc_filename = :doc_filename"
+                    ),
+                    {
+                        "token_count": len(markdown.split()),
+                        "ftp_url": ftp_url,
+                        "doc_filename": doc_filename,
+                    },
+                )
+        after_url, after_doc = rows[-1][0], rows[-1][1]
 
 
 _SPEC_DOC_CHUNK_TEXT_BATCH = 500
@@ -657,6 +728,7 @@ def create_schema(scope: str = "all") -> None:
         _migrate_spec_versions_drop_comment()
         _migrate_tdoc_extract_completeness()
         _migrate_content_document_id_index()
+        _migrate_content_token_count()
         Base.metadata.create_all(bind=engine)
         _create_search_schema()
         _create_vector_schema()

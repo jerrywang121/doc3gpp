@@ -354,7 +354,9 @@ class _TDocContentRowMixin:
     from :class:`TDocExtractOrm` and ``tdoc_id`` cascades from
     :class:`TDocORM`, so deleting either parent removes the content.
     ``content`` holds the :func:`doc3gpp.storage.compression.compress_json`
-    payload of the converted Markdown.
+    payload of the converted Markdown. ``token_count`` is the whitespace token
+    count of that Markdown; it is NULL until computed or when the content cannot
+    be decoded, and vector status reads it instead of decompressing ``content``.
     """
 
     ftp_url: Mapped[str] = mapped_column(
@@ -374,6 +376,7 @@ class _TDocContentRowMixin:
         LargeBinary(length=16 * 1024 * 1024), nullable=False,
     )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class TDocCrAnnexOrm(_TDocContentRowMixin, Base):

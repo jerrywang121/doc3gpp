@@ -94,10 +94,10 @@ def test_tdoc_tables_and_counts() -> None:
         "tdoc_cr_change_details": 4,
         "tdoc_files": 6,
         "tdoc_extracts": 9,
-        "tdoc_cr_annexes": 6,
-        "tdoc_wid_contents": 6,
-        "tdoc_ls_contents": 6,
-        "tdoc_discussion_contents": 6,
+        "tdoc_cr_annexes": 7,
+        "tdoc_wid_contents": 7,
+        "tdoc_ls_contents": 7,
+        "tdoc_discussion_contents": 7,
     }
     by_name = {t.table: t for t in tables}
     extract_fields = {field.name: field for field in by_name["tdoc_extracts"].fields}
@@ -129,6 +129,7 @@ def test_schema_payload_lists_content_tables() -> None:
             "tdoc_id",
             "content",
             "content_hash",
+            "token_count",
         ], table
     by_table_field = {(r["table"], r["field"]): r for r in payload}
     assert by_table_field[("tdoc_wid_contents", "content")]["type"] == "gzip-json"

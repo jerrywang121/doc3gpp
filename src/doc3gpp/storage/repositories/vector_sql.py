@@ -31,7 +31,7 @@ from sqlalchemy.engine import Engine, Row
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
-from doc3gpp.models.semantic_chunking import plan_content_chunks
+from doc3gpp.models.semantic_chunking import planned_document_keys
 from doc3gpp.models.semantic_search import (
     EmbeddedChunk,
     VectorIndexUnavailableError,
@@ -705,8 +705,9 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         Metadata is copied into the vec table at index time and no hook updates
         it, so a TDoc whose stored ``meeting_id`` / ``tsg`` / ``uploaded_date``
         no longer matches its ``tdocs`` and ``meetings`` rows is stale. A TDoc with
-        undecodable stored content is always stale, so one corrupt row
-        is reported for its own TDoc and does not abort the other TDocs.
+        a NULL ``token_count`` (not yet computed, or stored content that cannot be
+        decoded) is always stale, so one such row is reported for its own TDoc and
+        does not abort the other TDocs.
         """
         expected = self._expected_content_signatures()
         actual, indexed_metadata = self._indexed_state()
@@ -730,26 +731,29 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
 
         Uses the same plan as :meth:`SemanticSearchService.index_for_tdoc`, so a
         blank document or one past the content cap has no expected signature.
-        A ``None`` value marks a TDoc whose stored content cannot be decoded.
+        The plan reads each row's stored ``token_count`` and never decompresses
+        ``content``. A ``None`` value marks a TDoc with any NULL ``token_count``.
         """
         settings = self._chunk_settings
         expected: dict[str, frozenset[tuple[str, str]] | None] = {}
         with self._engine.begin() as conn:
-            rows = conn.execute(text(_CONTENT_ROWS_SQL))
+            rows = conn.execute(text(_STATUS_CONTENT_ROWS_SQL))
             for tdoc_id, group in groupby(rows, key=lambda row: row.tdoc_id):
-                try:
-                    planned = plan_content_chunks(
-                        _ordered_documents(list(group)),
+                ordered = list(_ordered_rows(list(group)))
+                if any(row.token_count is None for row in ordered):
+                    expected[tdoc_id] = None
+                    continue
+                expected[tdoc_id] = frozenset(
+                    planned_document_keys(
+                        (
+                            (row.document_id, row.content_hash, row.token_count)
+                            for row in ordered
+                        ),
                         settings.chunk_size,
                         settings.chunk_overlap,
                         settings.max_content_chunks_per_tdoc,
                     )
-                    expected[tdoc_id] = frozenset(
-                        (document_id, content_hash)
-                        for document_id, content_hash, _chunk_texts in planned
-                    )
-                except UndecodableContentError:
-                    expected[tdoc_id] = None
+                )
         return expected
 
     def get_tdocs_metadata(
@@ -941,13 +945,14 @@ def _build_embed_text(tdoc_id: str) -> str | None:
     return " :: ".join(p for p in parts if p)
 
 
-def _content_rows_sql(*, single_tdoc: bool) -> str:
+def _content_rows_sql(*, single_tdoc: bool, status_only: bool = False) -> str:
     where = " WHERE e.tdoc_id = :tdoc_id" if single_tdoc else ""
+    payload = "c.token_count AS token_count" if status_only else "c.content AS content"
     selects = [
         "SELECT e.tdoc_id AS tdoc_id, c.ftp_url AS ftp_url, "
         "e.doc_filename AS main, c.doc_filename AS source_file, "
         "c.document_id AS document_id, c.content_hash AS content_hash, "
-        "c.content AS content "
+        f"{payload} "
         f"FROM {store.table_name} c "
         f"JOIN tdoc_extracts e ON e.ftp_url = c.ftp_url{where}"
         for store in TDOC_CONTENT_STORES
@@ -957,14 +962,15 @@ def _content_rows_sql(*, single_tdoc: bool) -> str:
 
 _CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False)
 _CONTENT_ROWS_FOR_TDOC_SQL = _content_rows_sql(single_tdoc=True)
+_STATUS_CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False, status_only=True)
 
 
 class UndecodableContentError(ValueError):
     """A stored content row cannot be decoded into Markdown."""
 
 
-def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
-    """Yield ``(document_id, content_hash, markdown)`` in indexing order.
+def _ordered_rows(rows: Sequence[Row]) -> Iterator[Row]:
+    """Yield content rows in indexing order without decoding their content.
 
     Rows are grouped by ZIP URL. Each URL's main document comes first and the
     other sources follow in path order. The CR main is never a row, so a CR
@@ -977,13 +983,18 @@ def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
         mains[row.ftp_url] = row.main
     for ftp_url, rows_by_source in by_url.items():
         for source in ordered_sources(tuple(rows_by_source), main=mains[ftp_url]):
-            row = rows_by_source[source]
-            markdown = decompress_json(row.content)
-            if markdown is None:
-                raise UndecodableContentError(
-                    f"stored content for {source!r} cannot be decoded"
-                )
-            yield row.document_id, row.content_hash, markdown
+            yield rows_by_source[source]
+
+
+def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
+    """Yield ``(document_id, content_hash, markdown)`` in indexing order."""
+    for row in _ordered_rows(rows):
+        markdown = decompress_json(row.content)
+        if markdown is None:
+            raise UndecodableContentError(
+                f"stored content for {row.source_file!r} cannot be decoded"
+            )
+        yield row.document_id, row.content_hash, markdown
 
 
 def _build_content_documents(tdoc_id: str) -> list[tuple[str, str, str]]:

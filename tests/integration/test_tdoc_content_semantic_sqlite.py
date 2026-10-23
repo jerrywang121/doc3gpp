@@ -264,7 +264,8 @@ def test_corrupt_content_marks_only_its_tdoc_stale(sqlite_env) -> None:
     with get_engine().begin() as connection:
         connection.execute(
             text(
-                "UPDATE tdoc_wid_contents SET content = :blob WHERE tdoc_id = :tdoc_id"
+                "UPDATE tdoc_wid_contents SET content = :blob, token_count = NULL "
+                "WHERE tdoc_id = :tdoc_id"
             ),
             {"blob": b"not a json payload", "tdoc_id": _WID_ID},
         )

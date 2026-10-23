@@ -29,6 +29,7 @@ CONTENT_COLUMNS = {
     "tdoc_id",
     "content",
     "content_hash",
+    "token_count",
 }
 NEW_PARENT_COLUMNS = {"extraction_version", "document_count", "skipped_sources"}
 URL = "r5/docs/r5s260009.zip"

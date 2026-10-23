@@ -145,6 +145,18 @@ def test_eligibility_is_case_insensitive(sqlite_env) -> None:
     assert _ids(eligible) == {"R5s260011", "R5s260012"}
 
 
+def test_eligibility_strips_tab_and_newline_padding(sqlite_env) -> None:
+    create_schema()
+    _seed_tdoc("R5s260014", "CR\t")
+    _seed_tdoc("R5s260015", "\nLS in\r\n")
+
+    eligible = SQLAlchemyTDocRepository().list(
+        limit=50, eligible_types=eligible_type_values()
+    )
+
+    assert _ids(eligible) == {"R5s260014", "R5s260015"}
+
+
 def test_explicit_type_intersects_with_eligibility(sqlite_env) -> None:
     create_schema()
     _seed_tdoc("R5s260021", "pCR")

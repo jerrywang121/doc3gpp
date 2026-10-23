@@ -228,7 +228,7 @@ class SQLAlchemyTDocRepository:
 
             if eligible_types is not None:
                 casefolded = [value.casefold() for value in eligible_types]
-                stmt = stmt.where(func.lower(func.trim(TDocORM.type)).in_(casefolded))
+                stmt = stmt.where(func.lower(func.trim(TDocORM.type, " \t\r\n")).in_(casefolded))
 
             complete = complete_extraction_predicate()
             if parsed is not None:

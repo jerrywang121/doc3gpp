@@ -674,7 +674,7 @@ embedding_model = "embeddinggemma:300m"
 chunk_size = 512
 chunk_overlap = 24
 rrf_k = 60
-fanout_multiplier = 4
+fanout_multiplier = 8
 max_chunks_per_tdoc = 8              # cap on metadata chunks per TDoc
 max_content_chunks_per_tdoc = 16     # TOML-only cap on content chunks per TDoc (CR annexes, family documents)
 

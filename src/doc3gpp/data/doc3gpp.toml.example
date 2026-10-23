@@ -297,7 +297,7 @@ search_fanout_factor = 4
 
 # Fan-out multiplier for the hybrid FTS5 + vector path. Each side retrieves
 # `fanout_multiplier * --limit` candidates before RRF merge and truncation.
-# fanout_multiplier = 4
+# fanout_multiplier = 8
 
 # Hard cap on the number of chunks indexed per TDoc. Prevents
 # pathological TDoc bodies from dominating the index.

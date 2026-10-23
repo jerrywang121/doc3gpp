@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
-from functools import partial
 
 from sqlalchemy import ColumnElement, Select, and_, distinct, func, not_, or_, select
 from sqlalchemy.orm import Session
@@ -477,27 +476,14 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
 def complete_extraction_predicate() -> ColumnElement[bool]:
     """Return the SQL mirror of the completeness rules, correlated to ``TDocORM``.
 
-    True when some ``tdoc_extracts`` row of the TDoc satisfies
-    :func:`doc3gpp.models.tdoc_content_families.is_complete_cr_extraction`
+    True when the TDoc's current-URL ``tdoc_extracts`` row (``tdocs.ftp_url``)
+    satisfies :func:`doc3gpp.models.tdoc_content_families.is_complete_cr_extraction`
     or :func:`doc3gpp.models.tdoc_content_families.is_complete_family_extraction`.
     """
-    cr_complete = _tdoc_has_complete_extract(_cr_complete)
-    family_complete = or_(
-        *(
-            _tdoc_has_complete_extract(partial(_family_complete, orm))
-            for orm in _FAMILY_ORMS
-        )
-    )
-    return or_(cr_complete, family_complete)
-
-
-def _tdoc_has_complete_extract(
-    row_predicate: Callable[[type[TDocExtractOrm]], ColumnElement[bool]],
-) -> ColumnElement[bool]:
     extract = TDocExtractOrm
     return (
         select(extract.ftp_url)
-        .where(extract.tdoc_id == TDocORM.tdoc_id, row_predicate(extract))
+        .where(_current_complete_extract(extract))
         .correlate(TDocORM)
         .exists()
     )
@@ -566,6 +552,19 @@ def _complete_extract(extract: type[TDocExtractOrm]) -> ColumnElement[bool]:
     )
 
 
+def _current_complete_extract(extract: type[TDocExtractOrm]) -> ColumnElement[bool]:
+    """Match the parent row at the TDoc's current URL and require completeness.
+
+    ``parsed``, ``exclude_parsed``, ``--parsed``, and ``document_count`` all use
+    this one composition, so they cannot drift apart.
+    """
+    return and_(
+        extract.tdoc_id == TDocORM.tdoc_id,
+        extract.ftp_url == TDocORM.ftp_url,
+        _complete_extract(extract),
+    )
+
+
 def _stored_content_count(extract: type[TDocExtractOrm]) -> ColumnElement[int]:
     counts = [_content_count(orm, extract) for orm in _CONTENT_ORMS]
     return sum(counts[1:], counts[0])
@@ -576,13 +575,13 @@ def _parse_state(
 ) -> dict[str, tuple[bool, int | None]]:
     """Return ``(parsed, document_count)`` per TDoc in one query.
 
-    ``document_count`` is the largest stored content-row count among the
-    TDoc's complete extractions, and ``None`` when the TDoc is not complete.
+    ``document_count`` is the stored content-row count of the TDoc's current-URL
+    extraction, and ``None`` when that extraction is not complete.
     """
     extract = TDocExtractOrm
     document_count = (
         select(func.max(_stored_content_count(extract)))
-        .where(extract.tdoc_id == TDocORM.tdoc_id, _complete_extract(extract))
+        .where(_current_complete_extract(extract))
         .correlate(TDocORM)
         .scalar_subquery()
     )

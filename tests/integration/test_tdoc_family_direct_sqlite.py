@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from typer.testing import CliRunner
 
+from doc3gpp.cli import app
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.parsers.normalizers import normalize_ftp_path
@@ -16,6 +18,7 @@ from doc3gpp.parsers.tdoc_zip import read_markdown_archive
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 from doc3gpp.services.tdoc_errors import TDocTypeSkippedError
+from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.models import TDocExtractOrm
 from doc3gpp.storage.db.session import get_session_factory
@@ -88,6 +91,17 @@ class _Scraper:
     def get_bytes(self, url: str) -> bytes:
         self.calls.append(url)
         return self.payloads[url]
+
+
+class _Offline:
+    """Fails the test if the direct path reaches the network."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def get_bytes(self, url: str) -> bytes:
+        self.calls.append(url)
+        raise AssertionError(f"network used for {url}")
 
 
 def _service(tmp_path: Path, scraper: _Scraper) -> TDocCrService:
@@ -261,4 +275,116 @@ def test_from_url_cr_persists_annexes_only(sqlite_env, tmp_path: Path) -> None:
     assert sorted(document.source_file for document in archive.documents) == [
         "R5s260009.docx",
         "annex/info.docx",
+    ]
+
+
+def _auto_sync_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+
+
+def _zip_with_bad_annex() -> bytes:
+    return _make_zip({
+        "R5-123456.docx": _make_docx(WID_MARKER, "Title: Work item on widgets"),
+        "annex/bad.docx": b"not a word document",
+    })
+
+
+def test_from_url_null_type_complete_family_cache_hit_makes_no_download(
+    sqlite_env, tmp_path: Path,
+) -> None:
+    _seed_tdoc("R5-123456", "WID revised", FAMILY_FTP_URL)
+    scraper = _Scraper()
+    scraper.payloads[FAMILY_URL] = _wid_zip()
+    _service(tmp_path, scraper).extract_from_url(FAMILY_URL)
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-123456", type=None, ftp_url=FAMILY_FTP_URL),
+    )
+    offline = _Offline()
+
+    result = _service(tmp_path, offline).extract_from_url(FAMILY_URL)
+
+    assert offline.calls == []
+    assert result.from_cache is True
+    assert result.persisted is False
+    assert result.content_store is not None
+    assert result.content_store.key == "wid"
+
+
+def test_from_url_null_type_complete_cr_cache_hit_makes_no_download(
+    sqlite_env, tmp_path: Path,
+) -> None:
+    _seed_tdoc("R5s260009", "CR", CR_FTP_URL)
+    scraper = _Scraper()
+    scraper.payloads[CR_URL] = _cr_zip()
+    _service(tmp_path, scraper).extract_from_url(CR_URL)
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260009", type=None, ftp_url=CR_FTP_URL),
+    )
+    offline = _Offline()
+
+    result = _service(tmp_path, offline).extract_from_url(CR_URL)
+
+    assert offline.calls == []
+    assert result.from_cache is True
+    assert result.tdoc_id == "R5s260009"
+
+
+def test_from_url_known_unparsed_type_is_never_downloaded(
+    sqlite_env, tmp_path: Path,
+) -> None:
+    _seed_tdoc("R5-123456", "other", FAMILY_FTP_URL)
+    offline = _Offline()
+
+    with pytest.raises(TDocTypeSkippedError, match="type 'other' is not parsed"):
+        _service(tmp_path, offline).extract_from_url(FAMILY_URL)
+
+    assert offline.calls == []
+
+
+def test_cli_from_url_skipped_type_prints_skipped_and_exits_zero(
+    sqlite_env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _auto_sync_off(monkeypatch)
+    _seed_tdoc("R5-123456", "other", FAMILY_FTP_URL)
+    offline = _Offline()
+    monkeypatch.setattr("doc3gpp.services.factory.ScraperClient", lambda: offline)
+
+    result = CliRunner().invoke(app, ["tdoc", "parse", "--from-url", FAMILY_URL])
+
+    assert result.exit_code == 0, result.output
+    assert "SKIPPED - type 'other' is not parsed" in result.output
+    assert offline.calls == []
+
+
+def test_cli_from_path_family_prints_tdoc_parse_summary_line(
+    sqlite_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    create_schema()
+    _auto_sync_off(monkeypatch)
+    source = tmp_path / "R5-123456.zip"
+    source.write_bytes(_wid_zip())
+
+    result = CliRunner().invoke(app, ["tdoc", "parse", "--from-path", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        "TDoc R5-123456: wid, 2 documents, extraction_version 2",
+    ]
+
+
+def test_cli_from_path_family_prints_warning_for_skipped_annex(
+    sqlite_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    create_schema()
+    _auto_sync_off(monkeypatch)
+    source = tmp_path / "R5-123456.zip"
+    source.write_bytes(_zip_with_bad_annex())
+
+    result = CliRunner().invoke(app, ["tdoc", "parse", "--from-path", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        "TDoc R5-123456: wid, 1 documents, extraction_version 2",
+        "warning: skipped annex/bad.docx",
     ]

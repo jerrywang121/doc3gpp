@@ -3581,10 +3581,10 @@ def test_tdoc_parse_from_url_3gpp_folder_skips_sync_when_no_candidates(
     assert batch_mock.call_args.kwargs["from_url"] == "https://www.3gpp.org/ftp/Docs/"
 
 
-def test_tdoc_parse_from_url_non_3gpp_skips_auto_sync(
+def test_tdoc_parse_from_url_non_3gpp_triggers_auto_sync_for_derived_id(
     sqlite_env, monkeypatch,
 ) -> None:
-    """Non-3GPP URLs never trigger auto-sync."""
+    """Non-3GPP URLs collect no FTP candidates, but the id in the file name still syncs (R57)."""
     _enable_auto_sync(monkeypatch)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: _RecordingCrService(),
@@ -3610,11 +3610,11 @@ def test_tdoc_parse_from_url_non_3gpp_skips_auto_sync(
 
     assert result.exit_code == 0, result.output
     # Non-3GPP URL short-circuits the ``is_3gpp_ftp_url`` gate in the
-    # CLI before the collect helper is invoked — so ``collect`` is NOT
-    # called and the sync is skipped, but the direct-mode parse still
-    # dispatches.
+    # CLI before the collect helper is invoked, so ``collect`` is NOT
+    # called. The TDoc id derived from the file name still drives sync.
     candidates_mock.assert_not_called()
-    sync_mock.assert_not_called()
+    sync_mock.assert_called_once()
+    assert sync_mock.call_args.kwargs["tdoc_ids"] == {"R5s260009"}
     direct_mock.assert_called_once()
 
 

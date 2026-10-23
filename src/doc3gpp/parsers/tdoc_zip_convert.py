@@ -66,6 +66,29 @@ class TDocZipConversion:
     skipped_sources: tuple[str, ...]
 
 
+def _select_zip_main(
+    zip_bytes: bytes,
+    *,
+    tdoc_id: str,
+    max_documents: int,
+    max_uncompressed_bytes: int,
+) -> tuple[str, dict[str, bytes]]:
+    """Return the main member's name and the payload of every ``.docx`` member."""
+    payloads = dict(
+        enumerate_docx_members(
+            zip_bytes,
+            max_documents=max_documents,
+            max_uncompressed_bytes=max_uncompressed_bytes,
+        )
+    )
+    other = tuple(
+        name.rsplit("/", 1)[-1]
+        for name in member_names(zip_bytes)
+        if not name.casefold().endswith(".docx")
+    )
+    return select_main_member(tdoc_id, tuple(payloads), other), payloads
+
+
 def convert_tdoc_zip(
     zip_bytes: bytes,
     *,
@@ -80,19 +103,12 @@ def convert_tdoc_zip(
     A main conversion failure propagates. An annex conversion failure is logged
     as a warning and recorded in ``skipped_sources``.
     """
-    payloads = dict(
-        enumerate_docx_members(
-            zip_bytes,
-            max_documents=max_documents,
-            max_uncompressed_bytes=max_uncompressed_bytes,
-        )
+    main, payloads = _select_zip_main(
+        zip_bytes,
+        tdoc_id=tdoc_id,
+        max_documents=max_documents,
+        max_uncompressed_bytes=max_uncompressed_bytes,
     )
-    other = tuple(
-        name.rsplit("/", 1)[-1]
-        for name in member_names(zip_bytes)
-        if not name.casefold().endswith(".docx")
-    )
-    main = select_main_member(tdoc_id, tuple(payloads), other)
 
     converted: list[tuple[str, str]] = [(main, _convert_member(convert, payloads[main], main))]
     skipped: list[str] = []
@@ -123,6 +139,25 @@ def _source_name(filename: str) -> str:
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
+def _direct_source(filename: str) -> tuple[str, str]:
+    """Return the source basename and its lower-case extension, rejecting other types."""
+    source = _source_name(filename)
+    suffix = PurePosixPath(source).suffix.lower()
+    if suffix not in (".zip", ".docx"):
+        raise ValueError(
+            f"Unsupported extension {suffix!r} for direct-parse; expected .docx or .zip"
+        )
+    return source, suffix
+
+
+def _check_docx_limit(payload: bytes, max_uncompressed_bytes: int) -> None:
+    if max_uncompressed_bytes and len(payload) > max_uncompressed_bytes:
+        raise TDocZipLimitError(
+            "TDoc ZIP aggregate uncompressed byte limit exceeded by actual bytes: "
+            f"{len(payload)} bytes > {max_uncompressed_bytes}"
+        )
+
+
 def convert_direct_payload(
     payload: bytes,
     *,
@@ -138,8 +173,7 @@ def convert_direct_payload(
     A ZIP follows :func:`convert_tdoc_zip`. A standalone ``.docx`` is its own
     main document and has no annexes.
     """
-    source = _source_name(filename)
-    suffix = PurePosixPath(source).suffix.lower()
+    source, suffix = _direct_source(filename)
     if suffix == ".zip":
         return convert_tdoc_zip(
             payload,
@@ -149,18 +183,37 @@ def convert_direct_payload(
             max_uncompressed_bytes=max_uncompressed_bytes,
             convert=convert,
         )
-    if suffix != ".docx":
-        raise ValueError(
-            f"Unsupported extension {suffix!r} for direct-parse; expected .docx or .zip"
-        )
-    if max_uncompressed_bytes and len(payload) > max_uncompressed_bytes:
-        raise TDocZipLimitError(
-            "TDoc ZIP aggregate uncompressed byte limit exceeded by actual bytes: "
-            f"{len(payload)} bytes > {max_uncompressed_bytes}"
-        )
+    _check_docx_limit(payload, max_uncompressed_bytes)
     markdown_text = _convert_member(convert, payload, source)
     return TDocZipConversion(
         main_source_file=source,
         documents=(_document(identity, source, markdown_text, 0),),
         skipped_sources=(),
     )
+
+
+def convert_direct_main_markdown(
+    payload: bytes,
+    *,
+    filename: str,
+    tdoc_id: str,
+    max_documents: int,
+    max_uncompressed_bytes: int,
+    convert: Callable[[bytes, str], str] = convert_document_to_markdown,
+) -> str:
+    """Return only the main document's Markdown, for TDoc type sniffing.
+
+    Annexes are never converted here. A ZIP's main is selected by name exactly
+    as in :func:`convert_tdoc_zip`; a standalone ``.docx`` is its own main.
+    """
+    source, suffix = _direct_source(filename)
+    if suffix == ".zip":
+        main, payloads = _select_zip_main(
+            payload,
+            tdoc_id=tdoc_id,
+            max_documents=max_documents,
+            max_uncompressed_bytes=max_uncompressed_bytes,
+        )
+        return _convert_member(convert, payloads[main], main)
+    _check_docx_limit(payload, max_uncompressed_bytes)
+    return _convert_member(convert, payload, source)

@@ -2358,13 +2358,14 @@ def tdoc_parse(
                     tdoc_service=tdoc_service,
                     max_depth=effective_depth,
                 )
-                if candidates:
-                    trigger_auto_sync(
-                        auto_sync_enabled=get_settings().sync.auto_sync,
-                        meeting_service=build_meeting_service(),
-                        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
-                        tdoc_ids=candidates,
-                    )
+            else:
+                candidates = {
+                    tdoc_id
+                    for tdoc_id in [extract_tdoc_id_from_filename(from_url)]
+                    if tdoc_id
+                }
+            if candidates:
+                _auto_sync_direct_tdoc_ids(candidates)
             with _tdoc_parse_pipeline(get_settings()) as pipeline:
                 if not is_3gpp_ftp_url(from_url) or _looks_like_3gpp_file_url(from_url):
                     _tdoc_parse_direct(
@@ -2974,7 +2975,7 @@ def _tdoc_parse_direct(
     if resolved_format == "raw":
         _emit_record_raw(_render_direct_documents_raw(result), output, compact=compact)
     elif result.content_store is not None:
-        _emit_family_summary(result, resolved_format, output, compact=compact)
+        _emit_family_summary(result, output)
     elif result.details is None:
         typer.echo(
             f"FAILED - ValueError: --format {resolved_format!r} requires parsed fields; "
@@ -3003,59 +3004,18 @@ def _render_direct_documents_raw(result: DirectParseResult) -> str:
     )
 
 
-def _family_summary_row(result: DirectParseResult) -> dict[str, object]:
+def _emit_family_summary(result: DirectParseResult, output: str | None) -> None:
+    """Emit a WID, LS, or discussion direct result in the ``tdoc parse`` line format."""
     store = result.content_store
-    return {
-        "tdoc_id": result.tdoc_id,
-        "store": store.key if store is not None else None,
-        "documents": len(result.documents),
-        "main_source_file": result.main_source_file,
-        "skipped_sources": list(result.skipped_sources),
-        "persisted": result.persisted,
-        "from_cache": result.from_cache,
-    }
-
-
-def _family_summary_cell(value: object) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, list):
-        return ",".join(str(item) for item in value) or "-"
-    if value is None:
-        return "-"
-    return str(value)
-
-
-def _emit_family_summary(
-    result: DirectParseResult,
-    fmt: str,
-    output: str | None,
-    *,
-    compact: bool = False,
-) -> None:
-    """Emit a WID, LS, or discussion direct result as a one-row summary."""
-    row = _family_summary_row(result)
+    assert store is not None
+    lines = [
+        f"TDoc {result.tdoc_id}: {store.key}, {len(result.documents)} documents, extraction_version 2",
+    ]
+    lines.extend(f"warning: skipped {source}" for source in result.skipped_sources)
     stream, close_after = _open_output(output)
     try:
-        if fmt == "json":
-            if compact:
-                json.dump(row, stream, ensure_ascii=False, separators=(",", ":"))
-                return
-            json.dump(row, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-            return
-        cells = [_family_summary_cell(row[name]) for name in row]
-        if fmt == "markdown" and compact:
-            for name, cell in zip(row, cells, strict=True):
-                stream.write(f"{name}: {cell}\n")
-            return
-        if fmt == "markdown":
-            stream.write("| " + " | ".join(_md_cell(name) for name in row) + " |\n")
-            stream.write("|" + "|".join(["---"] * len(row)) + "|\n")
-            stream.write("| " + " | ".join(_md_cell(cell) for cell in cells) + " |\n")
-            return
-        stream.write("\t".join(row) + "\n")
-        stream.write("\t".join(cells) + "\n")
+        for line in lines:
+            stream.write(line + "\n")
     finally:
         if close_after:
             stream.close()
@@ -4263,7 +4223,7 @@ def _tdoc_parse_local_batch(
             if resolved_format == "raw":
                 _emit_record_raw(_render_direct_documents_raw(result), str(out_path), compact=compact)
             elif result.content_store is not None:
-                _emit_family_summary(result, resolved_format, str(out_path), compact=compact)
+                _emit_family_summary(result, str(out_path))
             else:
                 if result.details is None:
                     logger.warning(
@@ -4415,7 +4375,7 @@ def _emit_url_batch_results(
                 if fmt == "raw":
                     _emit_record_raw(_render_direct_documents_raw(result), str(out_path), compact=compact)
                 elif result.content_store is not None:
-                    _emit_family_summary(result, fmt, str(out_path), compact=compact)
+                    _emit_family_summary(result, str(out_path))
                 else:
                     if result.details is None:
                         logger.warning(

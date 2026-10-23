@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,6 +19,14 @@ from doc3gpp.services.tdoc_type_detection import (
 from doc3gpp.settings.loader import get_settings
 
 WID_MARKER = "3GPP™ Work Item Description"
+
+
+def _make_zip(files: dict[str, bytes]) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    return payload.getvalue()
 
 
 def _no_sniff() -> str:
@@ -230,3 +240,92 @@ def test_auto_sync_on_collects_ids_for_local_batch(
     assert result.exit_code == 0, result.output
     sync.assert_called_once()
     assert sync.call_args.kwargs["tdoc_ids"] == {"R5-123456", "R5-123457"}
+
+
+def test_auto_sync_on_triggers_sync_for_non_3gpp_from_url(
+    sqlite_env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-3GPP URL whose file name carries a TDoc id runs the sync steps (R57)."""
+    _set_auto_sync(monkeypatch, True)
+    parse = MagicMock()
+    monkeypatch.setattr("doc3gpp.cli._tdoc_parse_direct", parse)
+    sync = MagicMock(return_value=(0, 0))
+    _stub_sync_services(monkeypatch, sync)
+
+    result = CliRunner().invoke(
+        app, ["tdoc", "parse", "--from-url", "https://example.com/R5-123456.zip"],
+    )
+
+    assert result.exit_code == 0, result.output
+    sync.assert_called_once()
+    assert sync.call_args.kwargs["auto_sync_enabled"] is True
+    assert sync.call_args.kwargs["tdoc_ids"] == {"R5-123456"}
+    parse.assert_called_once()
+
+
+def test_sniff_converts_only_the_main_member() -> None:
+    from doc3gpp.parsers.tdoc_zip_convert import convert_direct_main_markdown
+
+    converted: list[str] = []
+
+    def recording_convert(doc_bytes: bytes, filename: str) -> str:
+        converted.append(filename)
+        if filename != "R5-123456.docx":
+            raise AssertionError(f"annex converted while sniffing: {filename}")
+        return f"{WID_MARKER}\n"
+
+    archive = _make_zip({
+        "R5-123456.docx": b"main document bytes",
+        "annex/bad.docx": b"not a word document",
+    })
+
+    markdown = convert_direct_main_markdown(
+        archive,
+        filename="R5-123456.zip",
+        tdoc_id="R5-123456",
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        convert=recording_convert,
+    )
+
+    assert converted == ["R5-123456.docx"]
+    assert WID_MARKER in markdown
+
+
+def test_sniff_standalone_docx_converts_the_file() -> None:
+    from doc3gpp.parsers.tdoc_zip_convert import convert_direct_main_markdown
+
+    converted: list[str] = []
+
+    def recording_convert(doc_bytes: bytes, filename: str) -> str:
+        converted.append(filename)
+        return f"{WID_MARKER}\n"
+
+    markdown = convert_direct_main_markdown(
+        b"docx bytes",
+        filename="https://www.3gpp.org/ftp/x/R5-123456.docx",
+        tdoc_id="R5-123456",
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        convert=recording_convert,
+    )
+
+    assert converted == ["R5-123456.docx"]
+    assert WID_MARKER in markdown
+
+
+def test_sniff_zip_without_named_main_raises_main_error() -> None:
+    from doc3gpp.parsers.tdoc_family_main import TDocMainDocumentError
+    from doc3gpp.parsers.tdoc_zip_convert import convert_direct_main_markdown
+
+    archive = _make_zip({"annex.docx": b"no main here"})
+
+    with pytest.raises(TDocMainDocumentError):
+        convert_direct_main_markdown(
+            archive,
+            filename="R5-123456.zip",
+            tdoc_id="R5-123456",
+            max_documents=100,
+            max_uncompressed_bytes=0,
+            convert=lambda doc_bytes, filename: "",
+        )

@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class _VecTdoc:
-    """Best knn evidence for one TDoc: its 1-based rank, best chunk, and content documents."""
+    """Best knn evidence for one TDoc: its 0-based rank, best chunk, and content documents."""
 
     rank: int
     best_chunk_id: str
@@ -64,7 +64,7 @@ class _VecTdoc:
 def _group_vec_hits(vec_hits: list[tuple[str, str, int, float]]) -> dict[str, _VecTdoc]:
     """Group knn rows per TDoc, keeping the closest chunk and the best chunk per document.
 
-    ``rank`` is the 1-based position of the TDoc among distinct tdoc_ids in knn
+    ``rank`` is the 0-based position of the TDoc among distinct tdoc_ids in knn
     order, so sibling chunks of one TDoc do not push other TDocs down the ranking.
     """
     grouped: dict[str, _VecTdoc] = {}
@@ -72,7 +72,7 @@ def _group_vec_hits(vec_hits: list[tuple[str, str, int, float]]) -> dict[str, _V
         entry = grouped.get(tdoc_id)
         if entry is None:
             entry = grouped[tdoc_id] = _VecTdoc(
-                rank=len(grouped) + 1, best_chunk_id=chunk_id, distance=dist,
+                rank=len(grouped), best_chunk_id=chunk_id, distance=dist,
             )
         elif dist < entry.distance:
             entry.best_chunk_id, entry.distance = chunk_id, dist

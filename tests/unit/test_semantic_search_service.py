@@ -544,7 +544,7 @@ def test_search_without_fts5_query_skips_fts5_service(monkeypatch):
     assert emb.encode.call_args[0][0] == ["natural prose"]
     # All hits have rank_fts5=None, rank_vec set, rrf_score = -distance.
     assert all(h.rank_fts5 is None for h in out)
-    assert [h.rank_vec for h in out] == [1, 2, 3]
+    assert [h.rank_vec for h in out] == [0, 1, 2]
     assert [h.min_chunk_distance for h in out] == [0.1, 0.4, 0.9]
     assert [h.rrf_score for h in out] == [-0.1, -0.4, -0.9]
 
@@ -684,7 +684,7 @@ def test_rrf_merge_preserves_grouped_fts_document_provenance() -> None:
     assert len(merged) == 1
     assert merged[0].tdoc_id == "R5-1"
     assert merged[0].rank_fts5 == 0
-    assert merged[0].rank_vec == 1
+    assert merged[0].rank_vec == 0
     assert merged[0].best_chunk_id == "R5-1#0"
     assert merged[0].min_chunk_distance == pytest.approx(0.1)
     assert merged[0].hit is fts_hit

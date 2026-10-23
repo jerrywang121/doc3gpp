@@ -46,7 +46,10 @@ def _sha(text: str) -> str:
 
 
 def _seed_tdoc(tdoc_id: str, tdoc_type: str | None) -> None:
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type=tdoc_type))
+    # The current URL is the TDoc's extract URL, as the portal sync stores it.
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type=tdoc_type, ftp_url=_url(tdoc_id))
+    )
 
 
 def _seed_extract(
@@ -469,3 +472,45 @@ def test_parity_with_python_rules(sqlite_env) -> None:
     assert _ids(SQLAlchemyTDocRepository().list(limit=100, parsed=False)) == (
         set(expected) - complete_ids
     )
+
+
+def test_document_count_and_parsed_follow_the_current_url_only(sqlite_env) -> None:
+    create_schema()
+    repo = SQLAlchemyTDocContentRepository()
+    tdoc_id = "R5s260095"
+    old_url = "docs/r5s260095_rev1.zip"
+    current_url = "docs/r5s260095_rev2.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="WID new", ftp_url=current_url)
+    )
+    repo.replace_family_bundle(
+        WID_STORE,
+        TDocExtractMeta(
+            ftp_url=old_url,
+            tdoc_id=tdoc_id,
+            cache_file="r5s260095_rev1.zip",
+            doc_filename="main.docx",
+            document_count=2,
+        ),
+        (_document(old_url, "main.docx"), _document(old_url, "annex.docx")),
+    )
+
+    row = _by_id(SQLAlchemyTDocRepository().list(limit=10))[tdoc_id]
+    assert row.parsed is False
+    assert row.document_count is None
+
+    repo.replace_family_bundle(
+        WID_STORE,
+        TDocExtractMeta(
+            ftp_url=current_url,
+            tdoc_id=tdoc_id,
+            cache_file="r5s260095_rev2.zip",
+            doc_filename="main.docx",
+            document_count=1,
+        ),
+        (_document(current_url, "main.docx"),),
+    )
+
+    row = _by_id(SQLAlchemyTDocRepository().list(limit=10))[tdoc_id]
+    assert row.parsed is True
+    assert row.document_count == 1

@@ -89,7 +89,9 @@ def _sha(text: str) -> str:
 
 
 def _seed_tdoc(tdoc_id: str, tdoc_type: str | None) -> None:
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type=tdoc_type))
+    # The current URL is the TDoc's extract URL, as the portal sync stores it.
+    url = f"docs/{tdoc_id.lower()}.zip"
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type=tdoc_type, ftp_url=url))
 
 
 def _seed_complete_cr(tdoc_id: str) -> None:

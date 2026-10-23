@@ -254,14 +254,18 @@ class SemanticSearchService:
         """Return up to ``limit`` distinct TDocs from the chunk KNN, in knn order.
 
         The knn limit counts chunk rows, so one TDoc with many near chunks can use
-        every slot. Fetch ``limit * fanout_multiplier`` rows of the unfiltered
-        window, keep the TDocs that pass ``filters``, and double the window while
-        fewer than ``limit`` distinct TDocs were kept. The window is exhausted when
-        it returns fewer rows than requested.
+        every slot. The knn gets only the pushed filters (tdoc, TSG, meeting id, and
+        date range), which vec0 applies before ``k``, so each window is exact. LIKE
+        filters (meeting, release, spec) run on the window through
+        ``matching_tdoc_ids``. Fetch ``limit * fanout_multiplier`` rows, keep the
+        TDocs that pass ``filters``, and double the window while fewer than ``limit``
+        distinct TDocs were kept. The window is exhausted when it returns fewer rows
+        than requested.
         """
+        pushed = dataclasses.replace(filters, meeting=None, release=None, spec=None)
         fetch = min(max(limit * self._settings.semantic_search.fanout_multiplier, limit), _KNN_MAX_K)
         while True:
-            window = self._vec.knn(query_vec, limit=fetch)
+            window = self._vec.knn(query_vec, limit=fetch, filters=pushed)
             allowed = self._vec.matching_tdoc_ids({row[0] for row in window}, filters)
             kept = [row for row in window if row[0] in allowed]
             grouped = _group_vec_hits(kept)

@@ -975,9 +975,12 @@ class VectorIndexRepository(Protocol):
     ) -> list[tuple[str, str, int, float]]:
         """KNN by cosine distance; returns ``(tdoc_id, chunk_id, chunk_index, distance)``.
 
-        Joins to ``tdocs`` / ``meetings`` for filters. ``limit`` caps
-        the chunk count (NOT the tdoc count — the service reduces
-        chunks to tdocs via ``min(distance)``).
+        Metadata filters (``tdoc_id``, ``tsg``, ``meeting_id``, ``since``/``until``)
+        run inside the vec0 scan before ``limit``, so the window is exact. A
+        filtered call excludes meetingless TDocs. LIKE filters (``meeting``,
+        ``release``, ``spec``) join ``tdocs``/``meetings`` and apply after the
+        window. ``limit`` caps the chunk count (NOT the tdoc count — the service
+        reduces chunks to tdocs via ``min(distance)``).
         """
         ...
 
@@ -986,9 +989,9 @@ class VectorIndexRepository(Protocol):
     ) -> frozenset[str]:
         """Return the subset of ``tdoc_ids`` whose TDoc passes ``filters``.
 
-        Uses the same join and predicates as the filtered :meth:`knn`
-        path, so a TDoc without a meeting does not match. Empty
-        ``tdoc_ids`` returns an empty frozenset without a query.
+        Applies the same predicates as the filtered :meth:`knn` path, so a
+        TDoc without a meeting does not match. Empty ``tdoc_ids`` returns an
+        empty frozenset without a query.
         """
         ...
 

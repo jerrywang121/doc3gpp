@@ -924,7 +924,16 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
   capped per TDoc by `max_content_chunks_per_tdoc`; the CR main gets no content chunks.
   Semantic-only search therefore reaches annex and family text, but not the CR main
   body (see [`known-constraints.md`](known-constraints.md)). Schema creation is gated on the sqlite + sqlite-vec support matrix;
-  dimensions match the live embedder dim at rebuild time.
+  dimensions match the live embedder dim at rebuild time. Each row also carries
+  `meeting_id`, `tsg`, and `uploaded_date`, copied from `tdocs` / `meetings` at index
+  time, so `tdoc` filters on those fields run inside the KNN before `k`. vec0 cannot
+  store NULL, so a meetingless TDoc is stored with `meeting_id = -1` (filtered KNN
+  excludes it) and a missing TSG or upload date as `''`. A metadata change in SQL marks
+  the TDoc stale for `tdoc index --stale-only`; no hook updates the vector rows. When an
+  existing table lacks these columns, schema creation drops and recreates it empty at
+  its current width (this runs from `db init` and from sync commands); run
+  `doc3gpp tdoc index --rebuild-embeddings` afterwards. LIKE filters (meeting name/title,
+  release, spec) still apply after the window, because vec0 rejects LIKE in a KNN query.
 - `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`) plus the `embedding_dim` / `embedding_model` identity rows stamped on every non-resume rebuild.
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity

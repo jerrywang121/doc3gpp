@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import inspect, text
 
 from doc3gpp.storage.db.base import Base
@@ -325,6 +327,9 @@ def _create_search_schema() -> None:
         )
 
 
+_VEC_METADATA_COLUMNS = frozenset({"meeting_id", "tsg", "uploaded_date"})
+
+
 def _create_vector_schema(dim: int | None = None) -> None:
     """Create the sqlite-vec virtual table + meta sidecar.
 
@@ -349,13 +354,31 @@ def _create_vector_schema(dim: int | None = None) -> None:
             load_sqlite_vec(conn.connection.driver_connection)
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
-        width = int(dim) if dim is not None else 384
+        existing_width = None
+        columns = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(vec_tdoc_embeddings)")).all()
+        }
+        if columns and not _VEC_METADATA_COLUMNS <= columns:
+            # vec0 cannot add columns in place, so the old layout is dropped and
+            # recreated empty at its existing width. Rebuild with
+            # `doc3gpp tdoc index --rebuild-embeddings` (SQL only, no download).
+            existing_sql = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE name = 'vec_tdoc_embeddings'")
+            ).scalar_one()
+            width_match = re.search(r"FLOAT\[(\d+)\]", existing_sql)
+            if width_match is not None:
+                existing_width = int(width_match.group(1))
+            conn.execute(text("DROP TABLE vec_tdoc_embeddings"))
+        width = int(dim) if dim is not None else (existing_width or 384)
         conn.execute(
             text(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS vec_tdoc_embeddings USING vec0(\n"
                 "    chunk_id TEXT PRIMARY KEY,\n"
                 "    tdoc_id TEXT,\n"
                 "    chunk_index INTEGER,\n"
+                "    meeting_id INTEGER,\n"
+                "    tsg TEXT,\n"
+                "    uploaded_date TEXT,\n"
                 f"    embedding FLOAT[{width}] distance_metric=cosine\n"
                 ")"
             )

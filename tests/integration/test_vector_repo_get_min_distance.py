@@ -27,33 +27,32 @@ pytestmark = pytest.mark.semantic
 def repo_and_seeded_db(sqlite_env):
     """Build a sqlite-vec ``vec0``-backed repo with dim=4.
 
-    Replicates :func:`doc3gpp.storage.db.migrate._create_vector_schema`
-    inline so the dimension can be overridden to 4 — production schema
-    is hardcoded to ``FLOAT[384]``; this fixture mirrors the loading
-    sequence without depending on the production DDL.
+    Runs the production schema, then replaces ``vec_tdoc_embeddings`` with
+    a FLOAT[4] table: production is hardcoded to ``FLOAT[384]``.
     """
     from sqlalchemy import text
 
+    from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+    from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.storage.repositories.vector_sql import (
         SQLAlchemyVectorIndexRepository,
     )
 
+    create_schema()
     engine = get_engine()
     with engine.begin() as conn:
-        # vec_meta must be seeded BEFORE constructing the repo so its
+        # vec_meta must be pinned BEFORE constructing the repo so its
         # ``_read_or_init_dim`` probe resolves to the test dim (4)
         # rather than the DEFAULT_DIM (384) in vector_sql.py.
-        conn.execute(text("CREATE TABLE vec_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"))
         conn.execute(
             text(
-                "INSERT INTO vec_meta (key, value) "
-                "VALUES ('embedding_dim', '4')"
+                "INSERT INTO vec_meta (key, value) VALUES ('embedding_dim', '4') "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
             )
         )
-        from doc3gpp.storage.backends.sqlite import load_sqlite_vec
-
         load_sqlite_vec(conn.connection.driver_connection)
+        conn.execute(text("DROP TABLE vec_tdoc_embeddings"))
         conn.execute(
             text(
                 """
@@ -61,6 +60,9 @@ def repo_and_seeded_db(sqlite_env):
                     chunk_id TEXT PRIMARY KEY,
                     tdoc_id TEXT,
                     chunk_index INTEGER,
+                    meeting_id INTEGER,
+                    tsg TEXT,
+                    uploaded_date TEXT,
                     embedding FLOAT[4] distance_metric=cosine
                 )
                 """

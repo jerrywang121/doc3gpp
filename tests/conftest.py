@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.pool import Pool
 
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.session import (
@@ -8,6 +10,25 @@ from doc3gpp.storage.db.session import (
     get_specdata_engine,
     get_testcase_engine,
 )
+
+_opened_records = []
+
+
+def _track_connection(_dbapi_connection, connection_record) -> None:
+    _opened_records.append(connection_record)
+
+
+event.listen(Pool, "connect", _track_connection)
+
+
+@pytest.fixture(autouse=True)
+def _close_opened_connections():
+    """Invalidate pooled connections a test opened, so GC never closes them late."""
+    _opened_records.clear()
+    yield
+    for connection_record in _opened_records:
+        connection_record.invalidate()
+    _opened_records.clear()
 
 
 def _dispose_cached_engines() -> None:

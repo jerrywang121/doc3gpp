@@ -125,14 +125,14 @@ def _matched_documents() -> tuple[MatchedDocument, ...]:
             ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
             source_file="docs/main.docx",
             score=-4.5,
-            previews={"document_text": "<<handover>> procedure"},
+            previews={"content_text": "<<handover>> procedure"},
         ),
         MatchedDocument(
             document_id="doc-appendix",
             ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
             source_file="support/appendix.docx",
             score=-2.25,
-            previews={"document_text": "<<handover>> appendix"},
+            previews={"content_text": "<<handover>> appendix"},
         ),
     )
 
@@ -216,14 +216,14 @@ def test_tdoc_search_direct_uses_facade_and_emits_exact_fts5_payload(monkeypatch
             "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
             "source_file": "docs/main.docx",
             "score": -4.5,
-            "previews": {"document_text": "<<handover>> procedure"},
+            "previews": {"content_text": "<<handover>> procedure"},
         },
         {
             "document_id": "doc-appendix",
             "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
             "source_file": "support/appendix.docx",
             "score": -2.25,
-            "previews": {"document_text": "<<handover>> appendix"},
+            "previews": {"content_text": "<<handover>> appendix"},
         },
     ]
     call = facade.search.call_args.kwargs
@@ -236,6 +236,8 @@ def test_tdoc_search_stale_hint_uses_real_facade_status_boundary(monkeypatch) ->
     from doc3gpp.models.search import SearchIndexStatus
     from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
     from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
+
+    monkeypatch.setattr("doc3gpp.cli._stale_index_hint_emitted", False)
 
     class Source:
         def list_for_search(self, _filters):
@@ -465,14 +467,14 @@ def test_tdoc_search_table_and_markdown_show_score_mode_metadata_and_previews(mo
     assert "<<handover>>" in table.output
     assert "docs/main.docx" in table.output
     assert "support/appendix.docx" in table.output
-    assert "document_text: <<handover>> procedure" in table.output
+    assert "content_text: <<handover>> procedure" in table.output
     assert markdown.exit_code == 0, markdown.output
     assert "| search_mode |" in markdown.output
     assert "| 1.25 |" in markdown.output
     assert "title: <<handover>>" in markdown.output
     assert "docs/main.docx" in markdown.output
     assert "support/appendix.docx" in markdown.output
-    assert "document_text: <<handover>> appendix" in markdown.output
+    assert "content_text: <<handover>> appendix" in markdown.output
 
 
 def test_tdoc_search_errors_keep_query_and_rebuild_paths(monkeypatch) -> None:

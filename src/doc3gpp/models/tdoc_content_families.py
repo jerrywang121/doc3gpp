@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from doc3gpp.models.tdoc_identity import document_id_for
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -102,3 +104,32 @@ def is_complete_family_extraction(
     if len(set(sources)) != len(sources):
         return False
     return sources.count(meta.doc_filename) == 1 and sources[0] == meta.doc_filename
+
+
+def validate_content_bundle(
+    store: TDocContentStore,
+    meta: TDocExtractMeta,
+    documents: Sequence[TDocDocument],
+) -> None:
+    """Reject a content bundle that cannot be written to ``store`` for ``meta``."""
+    if store.includes_main:
+        if not documents:
+            raise ValueError(f"{store.key} bundle must contain a main document")
+        if documents[0].source_file != meta.doc_filename:
+            raise ValueError(
+                "the first document must be the main document named by doc_filename"
+            )
+    elif any(document.source_file == meta.doc_filename for document in documents):
+        raise ValueError("CR annexes must not include the main document")
+
+    sources = [document.source_file for document in documents]
+    if len(set(sources)) != len(sources):
+        raise ValueError("content bundle contains duplicate source_file values")
+    for document in documents:
+        if document.document_id != document_id_for(meta.ftp_url, document.source_file):
+            raise ValueError(
+                "document_id does not match ftp_url and source_file for "
+                f"{document.source_file!r}"
+            )
+    if meta.document_count != len(documents):
+        raise ValueError("document_count must equal the number of documents")

@@ -40,7 +40,7 @@ class SQLAlchemyTDocCrRepository:
     and ``tdoc_extracts`` (paths to cached zip / markdown) — both keyed
     by the immutable download ``ftp_url``. Cover-page and extract-metadata upserts remain available for legacy
     callers; atomic multi-table extraction writes belong to
-    SQLAlchemyTDocExtractionRepository.
+    SQLAlchemyTDocContentRepository.
     """
 
     def __init__(self, session_factory=None) -> None:

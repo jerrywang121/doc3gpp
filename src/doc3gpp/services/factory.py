@@ -59,14 +59,14 @@ from doc3gpp.storage.repositories.spec_doc_vector_sql import (
     SQLAlchemySpecDocVectorRepository,
 )
 from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
+from doc3gpp.storage.repositories.tdoc_content_sql import (
+    SQLAlchemyTDocContentRepository,
+)
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
-from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-    SQLAlchemyTDocExtractionRepository,
-)
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
@@ -291,9 +291,9 @@ def build_tdoc_cr_repository() -> SQLAlchemyTDocCrRepository:
     return SQLAlchemyTDocCrRepository()
 
 
-def build_tdoc_extraction_repository() -> SQLAlchemyTDocExtractionRepository:
-    """Construct the atomic document-bundle repository for service builds."""
-    return SQLAlchemyTDocExtractionRepository()
+def build_tdoc_content_repository() -> SQLAlchemyTDocContentRepository:
+    """Construct the atomic per-type content repository for service builds."""
+    return SQLAlchemyTDocContentRepository()
 
 
 def build_tdoc_content_service(
@@ -304,7 +304,7 @@ def build_tdoc_content_service(
     return TDocContentService(
         tdoc_repository=build_tdoc_repository(),
         cr_repository=build_tdoc_cr_repository(),
-        extraction_repository=build_tdoc_extraction_repository(),
+        extraction_repository=build_tdoc_content_repository(),
         cache_root=settings.cache.dir,
     )
 
@@ -676,7 +676,7 @@ def build_tdoc_cr_service(
             or build_tdoc_cr_change_details_repository()  # type: ignore[call-arg]
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
-        extraction_repository=build_tdoc_extraction_repository(),
+        extraction_repository=build_tdoc_content_repository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
         max_documents_per_zip=settings.tdoc_parse.max_documents_per_zip,
         max_uncompressed_size_bytes=(

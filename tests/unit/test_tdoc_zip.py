@@ -197,7 +197,7 @@ def test_domain_identity_matches_parser_compatibility_api() -> None:
     )
 
 
-def test_tdoc_extraction_repository_does_not_import_parser_layer() -> None:
+def test_tdoc_content_repository_does_not_import_parser_layer() -> None:
     import ast
     from pathlib import Path
 
@@ -207,7 +207,7 @@ def test_tdoc_extraction_repository_does_not_import_parser_layer() -> None:
         / "doc3gpp"
         / "storage"
         / "repositories"
-        / "tdoc_extraction_sql.py"
+        / "tdoc_content_sql.py"
     )
     module = ast.parse(repository_path.read_text(encoding="utf-8"))
     parser_imports: set[str] = set()

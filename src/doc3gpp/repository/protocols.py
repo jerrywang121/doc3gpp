@@ -26,6 +26,7 @@ from doc3gpp.models.spec_doc import (
     SpecDocToc,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_content_families import TDocContentStore
 from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocCRTTCNDetails,
@@ -607,7 +608,7 @@ class TDocCrDetailRepository(Protocol):
     companion ``tdoc_extracts`` table (cache paths + provenance) is still
     queried through this repository for read convenience. Legacy single-table
     writes remain available, while atomic cover/sidecar/document replacement is
-    owned by :class:`TDocExtractionRepository`.
+    owned by :class:`TDocContentRepository`.
 
     Identity is the immutable download ``url`` — 3GPP zip assets are
     byte-for-byte identical for the lifetime of a URL, while the logical
@@ -665,38 +666,53 @@ class TDocCrDetailRepository(Protocol):
         ...
 
 
-class TDocDocumentRepository(Protocol):
-    """Read URL-owned Markdown documents without exposing ORM rows."""
+class TDocContentRepository(Protocol):
+    """Atomic persistence and URL-keyed reads for per-type TDoc content rows.
 
-    def list_documents(self, ftp_url: str) -> tuple[TDocDocument, ...]:
-        """Return one extraction's documents in their stored file order."""
+    ``store`` selects one content table from ``TDOC_CONTENT_STORES``. Both
+    replace methods are atomic and clear the URL's rows from every content
+    table. The CR main document is never stored in SQL.
+    """
+
+    def get_extract_meta(self, ftp_url: str) -> TDocExtractMeta | None:
+        """Return the ``tdoc_extracts`` parent row for an immutable ``ftp_url``."""
         ...
 
-    def get_document(
-        self,
-        ftp_url: str,
-        source_file: str,
-    ) -> TDocDocument | None:
-        """Return one exact source member from an immutable ZIP URL."""
-        ...
-
-    def get_documents_for_tdoc(self, tdoc_id: str) -> tuple[TDocDocument, ...]:
-        """Return documents for every stored extraction URL of a TDoc."""
-        ...
-
-
-class TDocExtractionRepository(TDocDocumentRepository, Protocol):
-    """Atomic persistence boundary for one parsed TDoc ZIP bundle."""
-
-    def replace_bundle(
+    def replace_cr_bundle(
         self,
         details: TDocCRDetails,
         ttcn: TDocCRTTCNDetails | None,
         changes: TDocCRChangeDetails | None,
         meta: TDocExtractMeta,
+        annexes: Sequence[TDocDocument],
+    ) -> None:
+        """Atomically replace a CR's sidecars, parent row, and annex rows."""
+        ...
+
+    def replace_family_bundle(
+        self,
+        store: TDocContentStore,
+        meta: TDocExtractMeta,
         documents: Sequence[TDocDocument],
     ) -> None:
-        """Atomically replace cover, sidecars, extraction, and child content."""
+        """Atomically replace the parent and content rows; ``documents[0]`` is the main."""
+        ...
+
+    def list_documents(
+        self,
+        store: TDocContentStore,
+        ftp_url: str,
+    ) -> tuple[TDocDocument, ...]:
+        """Return one URL's documents from ``store`` in derived file order."""
+        ...
+
+    def get_document(
+        self,
+        store: TDocContentStore,
+        ftp_url: str,
+        source_file: str,
+    ) -> TDocDocument | None:
+        """Return one exact source member from an immutable ZIP URL."""
         ...
 
 

@@ -18,11 +18,10 @@ gets updated alongside the fix.
   pool unless they need network or the `[semantic]` extra.
 - Online tests hit live 3gpp.org + FTP and are flaky — run with
   `pytest -m online -rs` to surface skip reasons.
-- The dev extras pull in `pytest-xdist`; `scripts/test_sqlite.sh`
-  auto-uses `-n auto` when xdist is importable, otherwise it
-  falls back to sequential. Locally you can also pass
-  `pytest -n auto` (or `-n 4`) directly for a ~3× speedup on
-  4+ core machines.
+- `scripts/test_sqlite.sh` runs sequentially. Do not pass `-n` to
+  pytest: parallel runs fail on shared engine and settings state
+  (see `docs/TODO.md`), even though the dev extras install
+  `pytest-xdist`.
 
 ## Lint / static analysis
 

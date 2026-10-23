@@ -2135,6 +2135,11 @@ Rebuild notes:
   and extraction versions. The semantic check compares content hashes only, so a
   change to `semantic_search.chunk_size` or `chunk_overlap` is not detected; run
   `--rebuild-embeddings` after such a change.
+- `--stale-only` with `--rebuild-embeddings` keeps the existing vector table when
+  its stored dimension and model match the live embedder, and re-embeds only the
+  stale TDocs; fresh TDocs keep their vectors. A dimension or model change, or a
+  missing table, drops the table and re-embeds every TDoc. Without `--stale-only`,
+  `--rebuild-embeddings` always drops and rebuilds the table.
 - A stored document that cannot be decoded is logged and skipped by the rebuild
   loop. Its old FTS rows remain, and its stored hash still matches, so
   `--stale-only` does not retry it. Only a full `--rebuild` repairs it.

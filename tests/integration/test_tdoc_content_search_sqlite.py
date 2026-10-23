@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import zipfile
 from datetime import date
+from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from doc3gpp.models.search import SearchFilters
 from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES, TDocContentStore
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
 from doc3gpp.models.tdoc_identity import document_id_for
+from doc3gpp.parsers.tdoc_zip import build_markdown_archive
 from doc3gpp.settings.loader import get_settings
+from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.models import TDocORM
+from doc3gpp.storage.db.models import CONTENT_ORM_BY_STORE_KEY, TDocORM
 from doc3gpp.storage.db.session import get_engine, get_session_factory
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
 from doc3gpp.storage.repositories.tdoc_content_sql import (
@@ -23,7 +27,6 @@ from doc3gpp.storage.repositories.tdoc_content_sql import (
 )
 
 STORES = {store.key: store for store in TDOC_CONTENT_STORES}
-CR = STORES["cr"]
 WID = STORES["wid"]
 LS = STORES["ls"]
 
@@ -126,7 +129,7 @@ def _write_family(
 def _write_cr(
     tdoc_id: str,
     ftp_url: str,
-    main: str,
+    main_filename: str,
     annexes: tuple[tuple[str, str], ...],
     cover_title: str,
 ) -> None:
@@ -139,9 +142,46 @@ def _write_cr(
         details,
         None,
         None,
-        _meta(tdoc_id, ftp_url, main, len(bundle)),
+        _meta(tdoc_id, ftp_url, main_filename, len(bundle)),
         bundle,
     )
+
+
+def _write_cr_archive(
+    cache_dir: Path,
+    tdoc_id: str,
+    ftp_url: str,
+    main_filename: str,
+    main_markdown: str,
+    annexes: tuple[tuple[str, str], ...],
+) -> Path:
+    """Write the derived Markdown archive, the only copy of the CR main body."""
+    documents = (
+        _document(ftp_url, main_filename, main_markdown, 0),
+        *(
+            _document(ftp_url, source, markdown, order)
+            for order, (source, markdown) in enumerate(annexes, start=1)
+        ),
+    )
+    archive = build_markdown_archive(
+        documents,
+        ftp_url=ftp_url,
+        main_source_file=main_filename,
+    )
+    path = cache_dir / "markdown" / f"{tdoc_id.lower()}.zip"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(archive)
+    return path
+
+
+def _stored_content_texts() -> list[str]:
+    texts: list[str] = []
+    with get_session_factory()() as session:
+        for store in TDOC_CONTENT_STORES:
+            orm = CONTENT_ORM_BY_STORE_KEY[store.key]
+            for blob in session.scalars(select(orm.content)).all():
+                texts.append(decompress_json(blob))
+    return texts
 
 
 def _document_sources(tdoc_id: str) -> list[str]:
@@ -271,16 +311,33 @@ def test_cr_annex_term_is_indexed(sqlite_env) -> None:
     ]
 
 
-def test_cr_main_only_term_not_indexed(sqlite_env) -> None:
+def test_cr_main_only_term_not_indexed(sqlite_env, tmp_path, monkeypatch) -> None:
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(cache_dir))
+    get_settings.cache_clear()
     _seed_meeting()
     _seed_tdoc(_CR_ID, "CR parent title", "CR")
+    annexes = ((_CR_ANNEX, "# Annex\n\nannex text only"),)
     _write_cr(
         _CR_ID,
         _CR_URL,
         _CR_MAIN,
-        ((_CR_ANNEX, "# Annex\n\nannex text only"),),
+        annexes,
         cover_title="Coverfieldzyxq reason for change",
     )
+    archive_path = _write_cr_archive(
+        cache_dir,
+        _CR_ID,
+        _CR_URL,
+        _CR_MAIN,
+        f"# Main body\n\n{_MAIN_TERM} appears only in the CR main body",
+        annexes,
+    )
+    main_member = markdown_member_name(document_id_for(_CR_URL, _CR_MAIN), _CR_MAIN)
+    with zipfile.ZipFile(archive_path) as archive:
+        assert _MAIN_TERM in archive.read(main_member).decode("utf-8")
+    assert not any(_MAIN_TERM in text for text in _stored_content_texts())
+
     repo = SQLAlchemySearchIndexRepository()
     repo.upsert(_CR_ID)
 

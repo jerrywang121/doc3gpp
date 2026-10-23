@@ -15,6 +15,9 @@ from doc3gpp.repository.protocols import SpecDocRepository
 
 logger = logging.getLogger(__name__)
 
+# sqlite-vec rejects a knn ``k`` above this, so the hybrid fan-out is clamped to it.
+_KNN_MAX_K = 4096
+
 
 def rrf_merge(
     fts5_hits: list[SpecDocHit],
@@ -139,7 +142,7 @@ class SpecDocSemanticService:
             ][:limit]
             return self._populate_chunk_metadata(hits)
         fanout = self._settings.semantic_search.fanout_multiplier
-        n = max(limit * fanout, 0)
+        n = min(max(limit * fanout, 0), _KNN_MAX_K)
         f = SpecDocSearchFilters(
             spec_id=filters.spec_id,
             release=filters.release,

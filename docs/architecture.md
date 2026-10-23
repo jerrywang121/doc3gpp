@@ -937,7 +937,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
   its current width (this runs from `db init` and from sync commands); run
   `doc3gpp tdoc index --rebuild-embeddings` afterwards. LIKE filters (meeting name/title,
   release, spec) still apply after the window, because vec0 rejects LIKE in a KNN query.
-- `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_indexed_at`) plus the `embedding_dim` / `embedding_model` identity rows stamped on every non-resume rebuild.
+- `vec_meta`: Sidecar for vector-index rebuild resume + staleness tracking — single row, mirrors the `tdoc_search_meta` contract for the vector table (`last_rebuild_at`, `last_indexed_uploaded_date`, `last_rebuild_last_tdoc_id`, `last_rebuild_snapshot_uploaded_date`, `last_indexed_at`) plus the `embedding_dim` / `embedding_model` identity rows stamped on every non-resume rebuild.
 - `tdoc_cr_change_details`:
     - `ftp_url` (PK, immutable download URL — same identity
       convention as `tdoc_cr_cover_page` and `tdoc_cr_ttcn_details`)

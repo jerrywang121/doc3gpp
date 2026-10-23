@@ -1523,7 +1523,10 @@ Directory (batch) behaviour (local or 3GPP URL folder):
   [Size limit](#size-limit) above), an additional
   `Skipped (exceeds max_tdoc_size_kb): N` line is appended — the
   local path is gated by a pre-read `Path.stat().st_size` check, so
-  the oversized file never reaches the parser.
+  the oversized file never reaches the parser. Two more skip lines
+  follow it: `Skipped (archive member limits): N` counts ZIPs refused by
+  `max_documents_per_zip` or `max_uncompressed_size_kb`, and `Skipped:` counts
+  every other skip (the summary total is the sum of the three).
 - DB/cache writes happen automatically for 3GPP URL folder batches
   when the extracted TDoc id exists in `tdocs`; missing ids are parsed
   in-memory and warned per file.

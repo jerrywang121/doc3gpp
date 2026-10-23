@@ -219,6 +219,17 @@ change set so the docs stay honest.
 - **CR raw reads re-run extraction.** `tdoc show --format raw --tdoc <id>` runs
   extraction first, so an incomplete TDoc is re-downloaded on each raw read when its
   ZIP is not cached. URL reads never extract.
+- **Superseded ZIP URLs stay indexed.** Full-text and semantic indexes read content from
+  every ZIP URL stored for a TDoc. When `tdocs.ftp_url` changes, the text from the old URL
+  stays searchable until its rows are removed. A `tdoc index --rebuild` does not remove
+  them, because rebuilds read every stored URL.
+- **LIKE-based vector filters run after the knn window.** Meeting name and title,
+  release, and spec filters are applied after the vector window, because the vector
+  index rejects LIKE on metadata columns. Only `tdoc_id`, `tsg`, `meeting_id`, and the
+  `since` and `until` date range are applied inside the window. Semantic-only search
+  widens the window until enough TDocs match or the 4096-row cap is reached, so a
+  very selective LIKE filter can still return fewer results. Hybrid search does not
+  widen, so the same filter can return fewer results there.
 
 ## Test surface
 

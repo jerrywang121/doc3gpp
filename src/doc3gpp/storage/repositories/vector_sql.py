@@ -31,6 +31,7 @@ from sqlalchemy.engine import Engine, Row
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
+from doc3gpp.models.semantic_chunking import plan_content_chunks
 from doc3gpp.models.semantic_search import (
     EmbeddedChunk,
     VectorIndexUnavailableError,
@@ -39,7 +40,6 @@ from doc3gpp.models.semantic_search import (
 from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.models.tdoc_document import ordered_sources
 from doc3gpp.repository.protocols import VectorIndexRepository
-from doc3gpp.services.embedding.chunker import plan_content_chunks
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.session import get_engine

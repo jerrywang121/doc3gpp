@@ -691,7 +691,7 @@ class SemanticSearchSettings(BaseModel):
         ),
     )
     fanout_multiplier: int = Field(
-        default=4, ge=1,
+        default=8, ge=1,
         description=(
             "Internal fan-out factor for the unified hybrid search path. "
             "When both text and semantic inputs are supplied, each side "

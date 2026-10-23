@@ -252,3 +252,19 @@ def test_interrupted_before_first_batch_then_cursorless_resume_covers_later_tdoc
     assert _AHEAD_ID in _indexed_tdoc_ids()
     assert SQLAlchemyVectorIndexRepository().status().is_stale is False
 
+
+def test_cursorless_resume_then_stale_only_selects_tdoc_inserted_before_resume(
+    sqlite_env,
+) -> None:
+    _seed_schema()
+    _insert_tdoc(_A_ID, _UPLOADED)
+    _run(stale_only=False, resume=False)
+    _interrupt_before_first_batch()
+    _insert_tdoc(_AHEAD_ID, _GAP)
+
+    _run(stale_only=False, resume=True)
+
+    assert _AHEAD_ID in _indexed_tdoc_ids()
+    assert _stale_only_ids() == {_AHEAD_ID}
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is False
+

@@ -366,7 +366,7 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("chunk_index", "int", False, "Zero-based chunk position within the version."),
                 FieldInfo("sections", "text", True, "Newline-delimited combined section identifier/title entries represented in the chunk, one entry per line, e.g. 5.1 Handover."),
                 FieldInfo("tables", "text", True, "Newline-delimited combined table identifier/title entries represented in the chunk, one entry per line, e.g. 1 UE values."),
-                FieldInfo("text", "text", False, "Chunk body text (chunk-shaped, no further splitting applied)."),
+                FieldInfo("text", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the chunk body text (chunk-shaped, no further splitting applied)."),
             ),
         ),
     ),

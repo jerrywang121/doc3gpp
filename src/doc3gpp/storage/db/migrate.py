@@ -4,6 +4,7 @@ import re
 
 from sqlalchemy import inspect, text
 
+from doc3gpp.storage.compression import compress_json
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
@@ -541,6 +542,47 @@ def _migrate_tdoc_extract_completeness() -> None:
             )
 
 
+_SPEC_DOC_CHUNK_TEXT_BATCH = 500
+
+
+def _migrate_spec_doc_chunk_text_blob() -> None:
+    """Gzip-JSON compress legacy plain-text ``spec_doc_chunks.text`` rows.
+
+    Rows are selected by ``typeof(text) = 'text'`` in ``chunk_id`` keyset
+    batches, one transaction per batch. A rerun after an interruption
+    re-selects only the rows still in plain text, and a completed run selects
+    nothing. The column keeps its declared ``TEXT`` type on upgraded
+    databases because SQLite stores BLOB values unchanged under TEXT
+    affinity, so the table is not rebuilt.
+    """
+    engine = get_specdata_engine()
+    with engine.connect() as conn:
+        if not inspect(conn).has_table("spec_doc_chunks"):
+            return
+    after = ""
+    while True:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT chunk_id, text FROM spec_doc_chunks "
+                    "WHERE chunk_id > :after AND typeof(text) = 'text' "
+                    "ORDER BY chunk_id LIMIT :limit"
+                ),
+                {"after": after, "limit": _SPEC_DOC_CHUNK_TEXT_BATCH},
+            ).all()
+            if not rows:
+                return
+            for chunk_id, body in rows:
+                conn.execute(
+                    text(
+                        "UPDATE spec_doc_chunks SET text = :blob "
+                        "WHERE chunk_id = :chunk_id"
+                    ),
+                    {"blob": compress_json(body), "chunk_id": chunk_id},
+                )
+        after = rows[-1][0]
+
+
 def create_schema(scope: str = "all") -> None:
     """Create database tables for configured backend(s).
 
@@ -574,6 +616,7 @@ def create_schema(scope: str = "all") -> None:
     if scope in ("testcase", "all"):
         TestCaseBase.metadata.create_all(bind=get_testcase_engine())
     if scope in ("specdata", "all"):
+        _migrate_spec_doc_chunk_text_blob()
         _create_specdata_orm_tables()
         _create_specdata_search_schema()
         _create_specdata_vector_schema()

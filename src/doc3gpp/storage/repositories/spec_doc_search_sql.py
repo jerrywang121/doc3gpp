@@ -45,7 +45,10 @@ from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SPEC_DOC_SNIPPET_COLUMNS
 from doc3gpp.storage.db.fts5_query import normalize_query
 from doc3gpp.storage.db.session import get_specdata_engine
-from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
+from doc3gpp.storage.repositories.spec_doc_sql import (
+    SQLAlchemySpecDocRepository,
+    decode_chunk_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +351,7 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                     sections=row[base + 3],
                     tables=row[base + 4],
                     chunk_index=int(row[base + 5]),
-                    text=row[base + 6],
+                    text=decode_chunk_text(row[base + 6]),
                     score=row[1],
                     previews=previews,
                 )

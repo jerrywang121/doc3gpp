@@ -627,7 +627,12 @@ class SpecDocTocORM(SpecDataBase):
 
 
 class SpecDocChunkORM(SpecDataBase):
-    """One chunk row; PK is ``{spec_id}@{version}#{chunk_index}``."""
+    """One chunk row; PK is ``{spec_id}@{version}#{chunk_index}``.
+
+    ``text`` holds the gzip-JSON encoding of the chunk body (see
+    :func:`doc3gpp.storage.compression.compress_json`); readers decode it in
+    :mod:`doc3gpp.storage.repositories.spec_doc_sql`.
+    """
 
     __tablename__ = "spec_doc_chunks"
 
@@ -640,4 +645,6 @@ class SpecDocChunkORM(SpecDataBase):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sections: Mapped[str | None] = mapped_column(Text, nullable=True)
     tables: Mapped[str | None] = mapped_column(Text, nullable=True)
-    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    text: Mapped[bytes] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=False, default=b"",
+    )

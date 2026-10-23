@@ -215,7 +215,7 @@ class SQLAlchemySpecDocRepository:
                         chunk_index=index,
                         sections=draft.sections,
                         tables=draft.tables,
-                        text=draft.text,
+                        text=compress_json(draft.text),
                     )
                 )
             existing = session.get(SpecDocSourceORM, (spec_id, version))
@@ -398,13 +398,19 @@ def _orm_to_chunk(row: SpecDocChunkORM) -> SpecDocChunk:
         source_file=row.source_file,
         sections=row.sections,
         tables=row.tables,
-        text=row.text,
+        text=decode_chunk_text(row.text),
         chunk_id=row.chunk_id,
         spec_id=row.spec_id,
         version=row.version,
         release=row.release,
         chunk_index=row.chunk_index,
     )
+
+
+def decode_chunk_text(blob: bytes | None) -> str:
+    """Return the chunk body stored as gzip-JSON, or ``""`` when undecodable."""
+    value = decompress_json(blob)
+    return value if isinstance(value, str) else ""
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

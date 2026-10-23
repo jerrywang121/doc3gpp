@@ -17,6 +17,7 @@ from doc3gpp.parsers.tdoc_zip import build_markdown_archive
 from doc3gpp.parsers.tdoc_zip_convert import convert_tdoc_zip
 from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.tdoc_zip_source import download_tdoc_zip
+from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
 
 if TYPE_CHECKING:
     from doc3gpp.repository.protocols import TDocContentRepository
@@ -85,7 +86,7 @@ class TDocFamilyService:
         if not store.includes_main:
             raise ValueError(f"{store.key} is not a family store")
         if not tdoc.ftp_url:
-            raise ValueError(f"{tdoc.tdoc_id} has no ftp_url to download")
+            raise TDocNotYetOnFTPError(tdoc.tdoc_id)
         canonical = normalize_ftp_path(build_ftp_url(tdoc.ftp_url))
         cache_file = derive_cache_file(tdoc.ftp_url)
 

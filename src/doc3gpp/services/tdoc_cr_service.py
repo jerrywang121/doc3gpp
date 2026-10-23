@@ -103,6 +103,7 @@ from doc3gpp.scraping.tdoc_zip_source import (
     resolve_download_url,
 )
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
+from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
 from doc3gpp.services.tdoc_pipeline import PipelineItem, PipelineProgress, TDocPipeline
 
 # Re-exported so callers can catch ``TDocTooLargeError`` from a single
@@ -244,26 +245,6 @@ class TDocNotFoundError(LookupError):
         super().__init__(
             f"TDoc {tdoc_id!r} is not stored in the tdocs table; "
             "run `doc3gpp tdoc sync` first"
-        )
-
-
-class TDocNotYetOnFTPError(ValueError):
-    """The row is stored but its ``ftp_url`` is still NULL.
-
-    Surfaced by :meth:`TDocCrService.extract` when
-    :attr:`doc3gpp.models.tdoc.TDoc.ftp_url` is ``None`` — meaning
-    the 3GPP FTP pipeline has not propagated the upload yet, so there
-    is nothing to download. Distinct from :class:`TDocNotFoundError`
-    (the row exists) and :class:`TDocZipDownloadError` (we tried but
-    failed); the upstream pipeline state is the actionable cause.
-    """
-
-    def __init__(self, tdoc_id: str) -> None:
-        self.tdoc_id = tdoc_id
-        super().__init__(
-            f"TDoc {tdoc_id!r} has no ftp_url yet — the 3GPP upload "
-            "pipeline has not propagated a final URL; try again later "
-            "or run `doc3gpp tdoc sync` to refresh the tdocs table"
         )
 
 

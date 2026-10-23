@@ -18,6 +18,7 @@ from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, read_markdown_archive
 from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.tdoc_zip_source import DownloadedZip
 from doc3gpp.services import tdoc_family_service
+from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
 from doc3gpp.services.tdoc_family_service import (
     FamilyExtractResult,
     PreparedFamilyExtract,
@@ -416,8 +417,11 @@ def test_tdoc_without_ftp_url_is_rejected_before_download(family_db, monkeypatch
 
     monkeypatch.setattr(tdoc_family_service, "download_tdoc_zip", must_not_download)
 
-    with pytest.raises(ValueError, match="has no ftp_url"):
+    with pytest.raises(TDocNotYetOnFTPError) as excinfo:
         _service(_FakeCache()).prepare_extract(TDoc(tdoc_id=TDOC_ID), WID)
+
+    assert type(excinfo.value) is TDocNotYetOnFTPError
+    assert excinfo.value.tdoc_id == TDOC_ID
 
 
 def test_ls_store_persists_into_ls_table(family_db, downloads) -> None:

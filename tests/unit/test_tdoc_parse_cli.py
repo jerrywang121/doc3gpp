@@ -966,7 +966,7 @@ def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
     assert "R5s263432: SKIPPED - TDocNotYetOnFTPError:" in result.output
     # Generic summary line (matches the existing format: right-padded
     # to a column width with the bucket label + count).
-    assert "Skipped:" + " " * 34 + "2" in result.output
+    assert "Skipped:" + " " * 35 + "2" in result.output
     assert "Failures:                                  0" in result.output
     assert fake.runner_calls and fake.runner_calls[0] is not None
 
@@ -1975,7 +1975,7 @@ def test_tdoc_parse_db_mode_summary_splits_size_skip_from_ftp_skip(
          if ln.startswith("Skipped (exceeds max_tdoc_size_kb")),
     )
     assert size_line.endswith(" 2"), size_line
-    assert "Skipped:" + " " * 34 + "1" in result.output
+    assert "Skipped:" + " " * 35 + "1" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -3809,7 +3809,7 @@ def test_tdoc_parse_cli_renders_real_service_skip_and_failure_maps(
     assert f"R5s260002: SKIPPED - TDocNotYetOnFTPError: {ftp_exc}" in result.output
     assert f"R5s260003: SKIPPED - TDocTooLargeError: {big_exc}" in result.output
     assert "R5s260004: FAILED - ValueError: bad parse" in result.output
-    assert "Skipped:" + " " * 34 + "1" in result.output
+    assert "Skipped:" + " " * 35 + "1" in result.output
     size_line = next(
         ln for ln in result.output.splitlines()
         if ln.startswith("Skipped (exceeds max_tdoc_size_kb")

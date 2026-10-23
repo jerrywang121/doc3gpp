@@ -2659,7 +2659,7 @@ def tdoc_parse(
         f"Skipped (archive member limits):              {len(skipped_archive)}"
     )
     typer.echo(f"Skipped (already parsed before this run): {already_parsed}")
-    typer.echo(f"{'Skipped:':<42}{len(skipped_other)}")
+    typer.echo(f"{'Skipped:':<43}{len(skipped_other)}")
     typer.echo(f"Re-parsed (with --force):                  {re_parsed}")
     typer.echo(f"Newly parsed:                              {newly_parsed}")
     typer.echo(f"Failures:                                  {len(failures)}")

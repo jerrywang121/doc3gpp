@@ -48,6 +48,7 @@ from doc3gpp.services.spec_service import (
 )
 from doc3gpp.services.tdoc_content_service import (
     TDocContentIncompleteError,
+    TDocContentIneligibleError,
     TDocContentNotFoundError,
     TDocContentNotFoundReason,
 )
@@ -105,6 +106,9 @@ class TDocContentSourceNotFoundError(LookupError):
     """Raised when an exact source member is absent from the stored ZIP."""
 
 
+class TDocContentTypeIneligibleError(LookupError):
+    """Raised when a TDoc's stored type has no raw Markdown content family."""
+
 
 def map_tdoc_content_error(
     exc: Exception,
@@ -113,6 +117,8 @@ def map_tdoc_content_error(
     ftp_url: str | None = None,
 ) -> Exception:
     """Translate typed content-service errors into the shared envelopes."""
+    if isinstance(exc, TDocContentIneligibleError):
+        return TDocContentTypeIneligibleError(str(exc))
     if isinstance(exc, TDocContentIncompleteError):
         force = True
         detail = str(exc)
@@ -180,6 +186,7 @@ _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     TDocNotFoundError: ("tdoc", MCP_CODE_NOT_FOUND),
     TDocUrlNotFoundError: ("tdoc", MCP_CODE_NOT_FOUND),
     TDocContentSourceNotFoundError: ("tdoc_content", MCP_CODE_NOT_FOUND),
+    TDocContentTypeIneligibleError: ("tdoc_content", MCP_CODE_NOT_FOUND),
     MeetingNotFoundError: ("meeting", MCP_CODE_NOT_FOUND),
     TSGNotFoundError: ("tsg", MCP_CODE_NOT_FOUND),
     WINotFoundError: ("wi", MCP_CODE_NOT_FOUND),
@@ -229,6 +236,7 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
     TDocNotFoundError: "tdoc_not_found",
     TDocUrlNotFoundError: "tdoc_url_not_found",
     TDocContentSourceNotFoundError: "tdoc_content_source_not_found",
+    TDocContentTypeIneligibleError: "tdoc_content_type_ineligible",
     MeetingNotFoundError: "meeting_not_found",
     TSGNotFoundError: "tsg_not_found",
     WINotFoundError: "wi_not_found",
@@ -257,6 +265,7 @@ _STATUS_BY_EXC: dict[type[Exception], int] = {
     TDocNotFoundError: 404,
     TDocUrlNotFoundError: 404,
     TDocContentSourceNotFoundError: 404,
+    TDocContentTypeIneligibleError: 404,
     MeetingNotFoundError: 404,
     TSGNotFoundError: 404,
     WINotFoundError: 404,
@@ -365,6 +374,7 @@ __all__ = [
     "SpecDocUnknownVersionError",
     "SpecNotFoundError",
     "TDocContentSourceNotFoundError",
+    "TDocContentTypeIneligibleError",
     "TSGNotFoundError",
     "TestcaseNotFoundError",
     "WINotFoundError",

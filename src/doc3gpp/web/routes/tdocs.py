@@ -5,10 +5,11 @@
 * ``GET /tdocs/{tdoc_id}`` — detail page reusing the
   :class:`TDocShowRecord` composition (shared with the CLI so the
   JSON envelope is byte-identical).
-* ``GET /tdocs/{tdoc_id}/content?format=markdown`` — returns the raw
-  cached markdown bytes for ``tdoc.ftp_url``.
-* ``GET /tdocs/{tdoc_id}/content?format=html`` — renders the cached
-  markdown as HTML via ``markdown-it-py`` + Pygments.
+* ``GET /tdocs/{tdoc_id}/content?format=markdown`` — returns the stored
+  Markdown for the TDoc's ZIP, served from SQL through
+  :class:`TDocContentService`.
+* ``GET /tdocs/{tdoc_id}/content?format=html`` — renders the same
+  Markdown as HTML via ``markdown-it-py`` + Pygments.
 """
 from __future__ import annotations
 

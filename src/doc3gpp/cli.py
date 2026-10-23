@@ -43,7 +43,7 @@ from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.spec_doc import SpecDocSearchFilters, SpecDocSelectionError
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.models.tdoc_content import TDocContentDocument
+from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     DirectParseResult,
@@ -85,6 +85,7 @@ from doc3gpp.services.spec_service import (
 )
 from doc3gpp.services.tdoc_content_service import (
     TDocContentError,
+    TDocContentIneligibleError,
     render_tdoc_documents_markdown,
 )
 from doc3gpp.services.tdoc_cr_service import (
@@ -3741,8 +3742,7 @@ def _render_tdoc_show_raw(
         ) from None
     except TDocTypeUnsupportedError as exc:
         raise typer.BadParameter(
-            f"TDoc {tdoc_id!r} has type {exc.observed_type!r}; "
-            f"--format raw is only available for CR-type TDocs"
+            str(TDocContentIneligibleError(tdoc_id, exc.observed_type))
         ) from None
     except TDocZipDownloadError as exc:
         raise typer.BadParameter(
@@ -3758,6 +3758,24 @@ def _render_tdoc_show_raw(
         )
     except TDocContentError as exc:
         raise typer.BadParameter(str(exc)) from None
+    _emit_content_raw(content, output)
+
+
+def _emit_content_raw(
+    content: TDocContent,
+    output: str | TextIO | None,
+) -> None:
+    """Write the raw content body, warning on stderr when extraction is incomplete."""
+    if not content.complete:
+        if content.skipped_sources:
+            skipped = ", ".join(content.skipped_sources)
+            detail = f"; skipped sources: {skipped}"
+        else:
+            detail = ""
+        typer.echo(
+            f"Warning: extraction for TDoc {content.tdoc_id!r} is incomplete{detail}",
+            err=True,
+        )
     markdown = render_tdoc_documents_markdown(
         content.documents,
         include_source_headers=True,
@@ -3837,11 +3855,7 @@ def _render_tdoc_show_raw_by_url(
         )
     except TDocContentError as exc:
         raise typer.BadParameter(str(exc)) from None
-    markdown = render_tdoc_documents_markdown(
-        content.documents,
-        include_source_headers=True,
-    )
-    _emit_record_raw(markdown, output)
+    _emit_content_raw(content, output)
 
 
 def _render_tdoc_show_by_url_json(
@@ -4469,7 +4483,7 @@ def tdoc_show(
         "--format",
         help=(
             "Output format: table (default), json, markdown, or raw "
-            "(the converted .docx markdown for CR-type TDocs)."
+            "(the converted .docx markdown for CR, WID, LS, and discussion TDocs)."
         ),
     ),
     output: str | None = typer.Option(

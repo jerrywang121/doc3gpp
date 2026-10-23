@@ -15,6 +15,7 @@ SSE framing, JSON/HTML rendering — is the real implementation.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -185,7 +186,7 @@ def test_cache_miss_returns_hint(sqlite_env, app_with_deps, tmp_path) -> None:
     app, _ = app_with_deps
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="S2-260002", ftp_url="TSG_SA/WG2_Arch/S2-260002.zip"),
+        TDoc(tdoc_id="S2-260002", type="CR", ftp_url="TSG_SA/WG2_Arch/S2-260002.zip"),
     )
 
     with TestClient(app) as client:
@@ -615,15 +616,19 @@ def test_web_testcases_list_json_shape(sqlite_env, app_with_deps) -> None:
 
 
 
-def _seed_tdoc_content_sql(tdoc_id: str, ftp_url: str) -> tuple[str, str]:
+def _seed_tdoc_content_sql(
+    tdoc_id: str, ftp_url: str, cache_dir: Path,
+) -> tuple[str, str]:
+    """Seed a CR: the main lives in the archive, the annex in SQL."""
     import hashlib
 
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
-    from doc3gpp.models.tdoc_document import TDocDocument
-    from doc3gpp.parsers.tdoc_zip import document_id_for
-    from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-        SQLAlchemyTDocExtractionRepository,
+    from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
+    from doc3gpp.parsers.normalizers import normalize_ftp_path
+    from doc3gpp.parsers.tdoc_zip import build_markdown_archive, document_id_for
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
     )
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -637,7 +642,9 @@ def _seed_tdoc_content_sql(tdoc_id: str, ftp_url: str) -> tuple[str, str]:
         TDocDocument(
             document_id=document_id_for(ftp_url, source_file),
             source_file=source_file,
-            markdown_file=f"documents/{file_order}.md",
+            markdown_file=markdown_member_name(
+                document_id_for(ftp_url, source_file), source_file
+            ),
             file_order=file_order,
             markdown_text=markdown,
             content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
@@ -647,23 +654,33 @@ def _seed_tdoc_content_sql(tdoc_id: str, ftp_url: str) -> tuple[str, str]:
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url)
     )
-    SQLAlchemyTDocExtractionRepository().replace_bundle(
+    cache_file = f"{tdoc_id}.zip"
+    SQLAlchemyTDocContentRepository().replace_cr_bundle(
         TDocCRDetails(tdoc_id=tdoc_id, ftp_url=ftp_url, title="Stored CR"),
         None,
         None,
         TDocExtractMeta(
             ftp_url=ftp_url,
             tdoc_id=tdoc_id,
-            cache_file=f"{tdoc_id}.zip",
+            cache_file=cache_file,
             doc_filename=main_source,
+            document_count=1,
         ),
-        documents,
+        documents[1:],
     )
+    archive = build_markdown_archive(
+        documents,
+        ftp_url=normalize_ftp_path(ftp_url),
+        main_source_file=main_source,
+    )
+    markdown_path = cache_dir / "markdown" / cache_file
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_bytes(archive)
     return main_source, support_source
 
 
 def test_tdoc_content_by_url_uses_sql_sources_without_side_effects(
-    sqlite_env, app_with_deps, monkeypatch,
+    sqlite_env, app_with_deps, monkeypatch, tmp_path,
 ) -> None:
     import json
     from urllib.parse import parse_qs, urlsplit
@@ -679,7 +696,9 @@ def test_tdoc_content_by_url_uses_sql_sources_without_side_effects(
     create_schema()
     tdoc_id = "R5-260013"
     ftp_url = "R5/26.001/R5-260013.zip"
-    main_source, support_source = _seed_tdoc_content_sql(tdoc_id, ftp_url)
+    main_source, support_source = _seed_tdoc_content_sql(
+        tdoc_id, ftp_url, tmp_path / "cache"
+    )
 
     def unexpected_call(*_args, **_kwargs):
         raise AssertionError("URL content read invoked download, extraction, or sync")
@@ -771,7 +790,7 @@ def test_tdoc_content_by_url_legacy_text_marks_incomplete(
     ftp_url = "R5/26.001/R5-LEGACY-260014.zip"
     cache_file = "legacy-content.zip"
     markdown = "Legacy single-source Markdown.\n"
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, ftp_url=ftp_url))
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url))
     SQLAlchemyTDocCrRepository().upsert_extract_meta(
         TDocExtractMeta(
             ftp_url=ftp_url,

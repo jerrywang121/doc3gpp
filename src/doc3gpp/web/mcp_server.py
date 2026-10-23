@@ -507,8 +507,13 @@ def build_mcp_server(state: WebState) -> MCPServer:
                 if tdoc_id
                 else f"doc3gpp tdoc parse --from-url {ftp_url} --force"
             )
+            skipped = (
+                f" Skipped sources: {', '.join(content.skipped_sources)}."
+                if content.skipped_sources
+                else ""
+            )
             raise CacheMissError(
-                "This legacy TDoc extraction is incomplete; use format='json' "
+                f"This TDoc extraction is incomplete.{skipped} Use format='json' "
                 "to inspect the completion flag, or re-parse before consuming text.",
                 hint=f"run: {command}",
             )

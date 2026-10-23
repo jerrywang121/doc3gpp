@@ -1083,7 +1083,7 @@ def test_tdoc_content_markdown_cache_hit(
     create_schema()
     url = "r5/26.001/r5-260001.zip"
     tdoc_id = "R5-260001"
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, ftp_url=url))
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
     cache_file = derive_cache_file(url)
     SQLAlchemyTDocCrRepository().upsert_extract_meta(
         TDocExtractMeta(
@@ -1123,7 +1123,7 @@ def test_tdoc_content_uses_stored_cache_file_when_divergent(
     create_schema()
     url = "r5/26.001/r5-260001.zip"
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260001", ftp_url=url),
+        TDoc(tdoc_id="R5-260001", type="CR", ftp_url=url),
     )
     # A cache_file whose hash does NOT match derive_cache_file(relative url) —
     # e.g. one written by the direct-URL path keyed on the absolute URL.
@@ -1161,7 +1161,7 @@ def test_tdoc_content_markdown_cache_miss_404(
 
     create_schema()
     SQLAlchemyTDocRepository().upsert(
-        TDoc(tdoc_id="R5-260001", ftp_url="r5/missing.zip"),
+        TDoc(tdoc_id="R5-260001", type="CR", ftp_url="r5/missing.zip"),
     )
     new_app = _build_app_with_fakes(cache_dir=tmp_path)
     with TestClient(new_app) as new_client:
@@ -1427,7 +1427,7 @@ def test_tdoc_content_html(client: TestClient, sqlite_env: Any, tmp_path: Any) -
     create_schema()
     url = "r5/26.001/r5-260001.zip"
     tdoc_id = "R5-260001"
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, ftp_url=url))
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
     cache_file = derive_cache_file(url)
     SQLAlchemyTDocCrRepository().upsert_extract_meta(
         TDocExtractMeta(
@@ -1465,7 +1465,7 @@ def test_tdoc_content_markdown_zip_wrapped_cache(
     create_schema()
     url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260231.zip"
     tdoc_id = "R5s260231"
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, ftp_url=url))
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
     cache_file = derive_cache_file(url)
     SQLAlchemyTDocCrRepository().upsert_extract_meta(
         TDocExtractMeta(
@@ -1506,7 +1506,7 @@ def test_tdoc_content_html_zip_wrapped_cache(
     create_schema()
     url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260231.zip"
     tdoc_id = "R5s260231"
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, ftp_url=url))
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=url))
     cache_file = derive_cache_file(url)
     SQLAlchemyTDocCrRepository().upsert_extract_meta(
         TDocExtractMeta(
@@ -4781,15 +4781,19 @@ def test_show_tdoc_by_url_cover_placeholder_uses_from_url_hint(
 
 
 
-def _seed_tdoc_content_sql(tdoc_id: str, ftp_url: str) -> tuple[str, str]:
+def _seed_tdoc_content_sql(
+    tdoc_id: str, ftp_url: str, cache_dir: Any,
+) -> tuple[str, str]:
+    """Seed a CR: the main lives in the archive, the annex in SQL."""
     import hashlib
 
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
-    from doc3gpp.models.tdoc_document import TDocDocument
-    from doc3gpp.parsers.tdoc_zip import document_id_for
-    from doc3gpp.storage.repositories.tdoc_extraction_sql import (
-        SQLAlchemyTDocExtractionRepository,
+    from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
+    from doc3gpp.parsers.normalizers import normalize_ftp_path
+    from doc3gpp.parsers.tdoc_zip import build_markdown_archive, document_id_for
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
     )
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -4803,7 +4807,9 @@ def _seed_tdoc_content_sql(tdoc_id: str, ftp_url: str) -> tuple[str, str]:
         TDocDocument(
             document_id=document_id_for(ftp_url, source_file),
             source_file=source_file,
-            markdown_file=f"documents/{file_order}.md",
+            markdown_file=markdown_member_name(
+                document_id_for(ftp_url, source_file), source_file
+            ),
             file_order=file_order,
             markdown_text=markdown,
             content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
@@ -4813,18 +4819,28 @@ def _seed_tdoc_content_sql(tdoc_id: str, ftp_url: str) -> tuple[str, str]:
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url)
     )
-    SQLAlchemyTDocExtractionRepository().replace_bundle(
+    cache_file = f"{tdoc_id}.zip"
+    SQLAlchemyTDocContentRepository().replace_cr_bundle(
         TDocCRDetails(tdoc_id=tdoc_id, ftp_url=ftp_url, title="Stored CR"),
         None,
         None,
         TDocExtractMeta(
             ftp_url=ftp_url,
             tdoc_id=tdoc_id,
-            cache_file=f"{tdoc_id}.zip",
+            cache_file=cache_file,
             doc_filename=main_source,
+            document_count=1,
         ),
-        documents,
+        documents[1:],
     )
+    archive = build_markdown_archive(
+        documents,
+        ftp_url=normalize_ftp_path(ftp_url),
+        main_source_file=main_source,
+    )
+    markdown_path = Path(cache_dir) / "markdown" / cache_file
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_bytes(archive)
     return main_source, support_source
 
 
@@ -4836,7 +4852,7 @@ def test_tdoc_content_id_route_accepts_json_and_exact_source(
     create_schema()
     tdoc_id = "R5-260030"
     ftp_url = "R5/26.001/R5-260030.zip"
-    _, support_source = _seed_tdoc_content_sql(tdoc_id, ftp_url)
+    _, support_source = _seed_tdoc_content_sql(tdoc_id, ftp_url, tmp_path)
     app = _build_app_with_fakes(cache_dir=tmp_path)
     with TestClient(app) as new_client:
         response = new_client.get(f"/tdocs/{tdoc_id}/content?format=json")
@@ -4861,7 +4877,7 @@ def test_tdoc_content_url_route_returns_clear_selector_errors(
     create_schema()
     tdoc_id = "R5-260031"
     ftp_url = "R5/26.001/R5-260031.zip"
-    _seed_tdoc_content_sql(tdoc_id, ftp_url)
+    _seed_tdoc_content_sql(tdoc_id, ftp_url, tmp_path)
     app = _build_app_with_fakes(cache_dir=tmp_path)
     with TestClient(app) as new_client:
         unknown_source = new_client.get(
@@ -4905,19 +4921,19 @@ def test_tdoc_content_corrupt_sql_hash_returns_force_reparse_guidance(
     from sqlalchemy import update
 
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.models import TDocDocumentOrm
+    from doc3gpp.storage.db.models import TDocCrAnnexOrm
     from doc3gpp.storage.db.session import get_session_factory
 
     create_schema()
     tdoc_id = "R5-260032"
     ftp_url = "R5/26.001/R5-260032.zip"
-    _seed_tdoc_content_sql(tdoc_id, ftp_url)
+    _, support_source = _seed_tdoc_content_sql(tdoc_id, ftp_url, tmp_path)
     with get_session_factory()() as session:
         session.execute(
-            update(TDocDocumentOrm)
+            update(TDocCrAnnexOrm)
             .where(
-                TDocDocumentOrm.ftp_url == ftp_url.lower(),
-                TDocDocumentOrm.source_file == "CR/Main.docx",
+                TDocCrAnnexOrm.ftp_url == ftp_url.lower(),
+                TDocCrAnnexOrm.doc_filename == support_source,
             )
             .values(content_hash="not-a-sha256")
         )

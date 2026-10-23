@@ -215,6 +215,42 @@ def test_stale_only_resets_when_dim_differs(sqlite_env) -> None:
     assert _stored("embedding_dim") == "256"
 
 
+def test_stale_only_resets_when_table_is_missing(sqlite_env) -> None:
+    from doc3gpp.storage.backends.sqlite import load_sqlite_vec
+
+    _seed()
+    _write_family(_ANNEX_V1)
+    _rebuild(stale_only=False)
+    with get_engine().begin() as connection:
+        load_sqlite_vec(connection.connection.driver_connection)
+        connection.execute(text("DROP TABLE vec_tdoc_embeddings"))
+
+    _rebuild(stale_only=True)
+
+    assert _indexed_tdoc_ids() == {_A_ID, _B_ID}
+    assert _stored("embedding_model") == MODEL
+
+
+class _UntypedEmbedder:
+    dim = DIM
+
+    def encode(self, texts):
+        return _Embedder(MODEL).encode(texts)
+
+
+def test_stale_only_duck_typed_embedder_resets_and_reembeds_all(sqlite_env) -> None:
+    _seed()
+    _write_family(_ANNEX_V1)
+    _rebuild(stale_only=False)
+    service = SemanticSearchService(
+        MagicMock(), _UntypedEmbedder(), SQLAlchemyVectorIndexRepository(), get_settings(),
+    )
+
+    list(service.rebuild_embeddings(batch_size=10, stale_only=True, quiet=True, resume=False))
+
+    assert _indexed_tdoc_ids() == {_A_ID, _B_ID}
+
+
 def test_full_rebuild_still_drops_and_reembeds_all(sqlite_env) -> None:
     _seed()
     _write_family(_ANNEX_V1)

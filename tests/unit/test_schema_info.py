@@ -43,6 +43,13 @@ def test_spec_doc_schema_lists_combined_chunk_fields() -> None:
     ]
 
 
+def test_spec_doc_chunk_text_is_described_as_gzip_json() -> None:
+    payload = schema_payload("spec_doc")
+    by_table_field = {(r["table"], r["field"]): r for r in payload}
+    assert by_table_field[("spec_doc_chunks", "text")]["type"] == "gzip-json"
+    assert by_table_field[("spec_doc_chunks", "text")]["nullable"] is False
+
+
 def test_tsg_payload_shape() -> None:
     payload = schema_payload("tsg")
     assert payload[0] == {

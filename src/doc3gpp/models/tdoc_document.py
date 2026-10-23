@@ -153,9 +153,8 @@ class TDocParseBundle:
             range(len(documents))
         ):
             raise ValueError("TDocParseBundle file_order values must be contiguous")
-        if len(skipped_sources) != len(set(skipped_sources)) or set(
-            skipped_sources
-        ) & set(source_files):
+        undocumented = set(skipped_sources) & set(source_files)
+        if len(set(skipped_sources)) != len(skipped_sources) or undocumented:
             raise ValueError("TDocParseBundle skipped sources must be unique and undocumented")
 
 

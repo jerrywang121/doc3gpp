@@ -540,9 +540,7 @@ def _direct_parse_payload(
     )
 
     resolved_tdoc_id = (
-        tdoc_id
-        or extract_tdoc_id_from_filename(filename)
-        or _synthetic_tdoc_id(filename)
+        tdoc_id or extract_tdoc_id_from_filename(filename) or _synthetic_tdoc_id(filename)
     )
     converted: list[tuple[str, str]] = []
     failures: list[tuple[str, Exception]] = []
@@ -559,9 +557,7 @@ def _direct_parse_payload(
         converted.append((source_file, markdown))
 
     cover_candidates = [
-        source_file
-        for source_file, markdown in converted
-        if is_cr_header_present(markdown)[0]
+        source_file for source_file, markdown in converted if is_cr_header_present(markdown)[0]
     ]
     if not cover_candidates and failures:
         source_file, exc = failures[0]
@@ -581,9 +577,7 @@ def _direct_parse_payload(
         if is_tdoc_member(source_file, resolved_tdoc_id.casefold()):
             raise _failed_conversion(source_file, exc) from exc
     for source_file, exc in failures:
-        logger.warning(
-            "Skipping TDoc annex %r: conversion failed: %s", source_file, exc
-        )
+        logger.warning("Skipping TDoc annex %r: conversion failed: %s", source_file, exc)
     skipped_sources = tuple(
         sorted((source_file for source_file, _ in failures), key=source_sort_key)
     )
@@ -625,9 +619,7 @@ def _direct_parse_payload(
 
 
 def _failed_conversion(source_file: str, exc: Exception) -> ValueError:
-    return ValueError(
-        f"Failed to convert supported DOCX member {source_file!r}: {exc}"
-    )
+    return ValueError(f"Failed to convert supported DOCX member {source_file!r}: {exc}")
 
 
 def _is_empty_annex_error(exc: Exception, source_file: str, tdoc_id: str) -> bool:

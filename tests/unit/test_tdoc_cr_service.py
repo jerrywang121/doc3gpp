@@ -49,6 +49,7 @@ from doc3gpp.services.tdoc_cr_service import (
     PreparedTDocExtract,
     TDocCrService,
 )
+from doc3gpp.services.tdoc_family_service import TDocFamilyService
 from doc3gpp.services.tdoc_pipeline import TDocPipeline
 from doc3gpp.settings.schema import TDocParseSettings
 from doc3gpp.storage.db.migrate import create_schema
@@ -81,7 +82,7 @@ def _build_service(
     tmp_path: Path,
     *,
     zip_bytes: bytes | None = None,
-    family_service: object | None = None,
+    family_service: TDocFamilyService | None = None,
 ) -> tuple[
     TDocCrService, MagicMock, TDocCache, MagicMock, MagicMock, MagicMock,
 ]:
@@ -324,9 +325,7 @@ def test_extract_from_url_db_cache_hit_returns_sql_documents(
     assert result.documents == (main, annex)
     assert result.main_source_file == "z/R5s260009.docx"
     assert scraper.get_bytes.call_count == 0
-    service._content_repo.list_documents.assert_called_once_with(
-        CR_STORE, stored_ftp_url
-    )
+    service._content_repo.list_documents.assert_called_once_with(CR_STORE, stored_ftp_url)
 
 
 @pytest.mark.skipif(
@@ -761,7 +760,8 @@ def test_extract_atomic_bundle_uses_matching_ftp_url(tmp_path: Path) -> None:
     cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
     ttcn = TDocCRTTCNDetails(tdoc_id="R5s260009", testcase="7.1.3.5.3")
     service, _, _, _, _, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=_multifile_zip_with_main(fixture.read_bytes()),
+        tmp_path,
+        zip_bytes=_multifile_zip_with_main(fixture.read_bytes()),
     )
     service._parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=ttcn))  # type: ignore[attr-defined]
     tdoc_repo.get_by_id.return_value = TDoc(
@@ -776,9 +776,7 @@ def test_extract_atomic_bundle_uses_matching_ftp_url(tmp_path: Path) -> None:
     assert details_arg.ftp_url == ttcn_arg.ftp_url == meta_arg.ftp_url
     assert meta_arg.ftp_url == "stored/r5s260009.zip"
     assert documents[0].source_file == "a/support-alpha.docx"
-    assert documents[0].document_id == document_id_for(
-        meta_arg.ftp_url, "a/support-alpha.docx"
-    )
+    assert documents[0].document_id == document_id_for(meta_arg.ftp_url, "a/support-alpha.docx")
 
 
 # ---------------------------------------------------------------------------
@@ -1493,9 +1491,7 @@ def _make_empty_docx() -> bytes:
 
 
 def _tdoc_row() -> TDoc:
-    return TDoc(
-        tdoc_id="R5s260009", type="CR", ftp_url="tsg_ran/r5s260009.zip"
-    )
+    return TDoc(tdoc_id="R5s260009", type="CR", ftp_url="tsg_ran/r5s260009.zip")
 
 
 @pytest.fixture()
@@ -1512,9 +1508,7 @@ def cr_db(sqlite_env) -> None:
         session.commit()
 
 
-def _real_service(
-    tmp_path: Path, zip_bytes: bytes
-) -> tuple[TDocCrService, MagicMock, TDocCache]:
+def _real_service(tmp_path: Path, zip_bytes: bytes) -> tuple[TDocCrService, MagicMock, TDocCache]:
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
     scraper = MagicMock()
     scraper.get_bytes.return_value = zip_bytes
@@ -1550,9 +1544,7 @@ def test_cr_persist_writes_annexes_only(cr_db, tmp_path: Path) -> None:
     with get_session_factory()() as session:
         annex_sources = list(session.scalars(select(TDocCrAnnexOrm.doc_filename)))
     assert annex_sources == ["b/support-beta.docx"]
-    archive = read_markdown_archive(
-        cache.get_bytes(result.extract_meta.cache_file, "markdown")
-    )
+    archive = read_markdown_archive(cache.get_bytes(result.extract_meta.cache_file, "markdown"))
     assert [document.source_file for document in archive.documents] == [
         "R5s260009.docx",
         "b/support-beta.docx",
@@ -1599,18 +1591,15 @@ def test_cr_zero_annex_bundle_is_complete_with_cover(tmp_path: Path) -> None:
     assert prepared.annexes == ()
     assert prepared.extract_meta.document_count == 0
     assert prepared.extract_meta.complete is True
-    assert is_complete_cr_extraction(
-        prepared.extract_meta, prepared.annexes, has_cover=True
-    ) is True
+    complete = is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True)
+    assert complete is True
 
 
 @pytest.mark.skipif(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_cr_annex_failure_is_tolerant(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_cr_annex_failure_is_tolerant(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     payload = _cr_zip(
         ("a/support-alpha.docx", b"not a docx"),
         ("b/support-beta.docx", _make_docx("support beta text")),
@@ -1669,9 +1658,7 @@ def test_cr_zero_text_annex_is_stored_as_empty_document(tmp_path: Path) -> None:
 
     assert isinstance(prepared, PreparedTDocExtract)
     empty = next(
-        document
-        for document in prepared.annexes
-        if document.source_file == "b/support-empty.docx"
+        document for document in prepared.annexes if document.source_file == "b/support-empty.docx"
     )
     assert empty.markdown_text == ""
     assert prepared.extract_meta.skipped_sources == ()
@@ -1693,3 +1680,20 @@ def test_cr_zero_text_main_fails_tdoc(tmp_path: Path) -> None:
         match="Failed to convert supported DOCX member 'R5s260009.docx'",
     ):
         service.prepare_extract("R5s260009", force=True)
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_direct_parse_bytes_fails_when_no_main_and_an_annex_is_corrupt() -> None:
+    from doc3gpp.parsers.direct_extractor import direct_parse_bytes
+
+    with pytest.raises(
+        ValueError,
+        match="Failed to convert supported DOCX member 'a/x.docx'",
+    ):
+        direct_parse_bytes(
+            _zip_of(("a/x.docx", b"not a docx")),
+            filename="R5s260009.zip",
+        )

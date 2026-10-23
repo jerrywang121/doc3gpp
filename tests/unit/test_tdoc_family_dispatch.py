@@ -185,3 +185,13 @@ def test_family_without_ftp_url_is_skipped(tmp_path: Path) -> None:
     assert result.failures == {}
     assert result.skipped["R5-000003"].startswith("TDocNotYetOnFTPError")
     scraper.get_bytes.assert_not_called()
+
+
+def test_persist_rejects_unknown_prepared_type(tmp_path: Path) -> None:
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, _tdoc_repo = _build_service(
+        tmp_path,
+        family_service=_ForbiddenFamilyService(),
+    )
+
+    with pytest.raises(TypeError, match="cannot persist object"):
+        service.persist_prepared_extract(object())

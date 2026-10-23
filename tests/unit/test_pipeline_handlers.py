@@ -658,3 +658,48 @@ def test_shutdown_waits_for_blocked_submitted_writer_and_write_completes():
 
     assert future.result(timeout=1) == "A"
     assert log == ["write-done", "shutdown-returned"]
+
+
+def test_parse_tdocs_family_cache_hit_is_success_without_persist():
+    from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
+    from doc3gpp.services.tdoc_family_service import FamilyExtractResult
+
+    wid = next(store for store in TDOC_CONTENT_STORES if store.key == "wid")
+    cached = FamilyExtractResult(
+        tdoc_id="R5-000002",
+        store=wid,
+        extract_meta=None,
+        documents=(),
+        skipped_sources=(),
+        from_cache=True,
+    )
+    persisted: list[object] = []
+
+    def prepare(tdoc_id, **_kwargs):
+        return cached
+
+    def persist(prepared):
+        persisted.append(prepared)
+        return prepared
+
+    pipeline = PipelineRuntime(prepare_workers=1)
+    services = _gated_runtime_services(pipeline, ["R5-000002"], prepare, persist)
+
+    async def run():
+        return await _parse_tdocs(
+            _job(),
+            services,
+            Settings(),
+            progress=lambda *_a, **_k: None,
+            cancel_event=asyncio.Event(),
+        )
+
+    try:
+        result = asyncio.run(run())
+    finally:
+        pipeline.shutdown()
+
+    assert persisted == []
+    assert result["successes"] == 1
+    assert result["failures"] == 0
+    assert result["skipped"] == 0

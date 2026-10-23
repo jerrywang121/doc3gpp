@@ -37,6 +37,7 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.services.tdoc_cr_service import ExtractResult
+from doc3gpp.services.tdoc_family_service import FamilyExtractResult
 from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
@@ -413,7 +414,7 @@ async def _parse_tdocs(
                     full=full,
                 ),
                 persist=services.tdoc_cr.persist_prepared_extract,
-                is_complete=lambda value: isinstance(value, ExtractResult),
+                is_complete=lambda value: isinstance(value, (ExtractResult, FamilyExtractResult)),
                 is_cancelled=cancel_event.is_set,
             )
             for outcome in outcomes:

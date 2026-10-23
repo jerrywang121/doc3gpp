@@ -160,8 +160,6 @@ _CR_STORE = next(store for store in TDOC_CONTENT_STORES if store.key == "cr")
 _TDOC_ID_RE = re.compile(r"[A-Za-z0-9-]{1,32}")
 
 
-
-
 def _wrap_markdown_zip(text: str, *, inner_name: str) -> bytes:
     """Wrap ``text`` in a real ``zipfile.ZipFile`` archive for on-disk storage.
 
@@ -311,9 +309,7 @@ def _annexes_of(
     main_source_file: str,
 ) -> tuple[TDocDocument, ...]:
     """Return every converted document except the CR main, which SQL never stores."""
-    return tuple(
-        document for document in documents if document.source_file != main_source_file
-    )
+    return tuple(document for document in documents if document.source_file != main_source_file)
 
 
 @dataclass(slots=True, frozen=True)
@@ -668,12 +664,7 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = False,
-    ) -> (
-        PreparedTDocExtract
-        | PreparedFamilyExtract
-        | ExtractResult
-        | FamilyExtractResult
-    ):
+    ) -> PreparedTDocExtract | PreparedFamilyExtract | ExtractResult | FamilyExtractResult:
         """Prepare every supported DOCX in one TDoc ZIP without SQL writes."""
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
@@ -778,6 +769,8 @@ class TDocCrService:
             self._index_after_parse(family_result.tdoc_id)
             self._embed_after_parse(family_result.tdoc_id)
             return family_result
+        if not isinstance(prepared, PreparedTDocExtract):
+            raise TypeError(f"cannot persist {type(prepared).__name__}")
         self._content_repo.replace_cr_bundle(
             prepared.details,
             prepared.ttcn,

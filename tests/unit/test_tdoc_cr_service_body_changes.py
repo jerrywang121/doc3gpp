@@ -144,9 +144,7 @@ def test_extract_writes_change_details_in_atomic_bundle(tmp_path: Path) -> None:
     service.extract("R5s260009")
 
     service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
-    details, ttcn, written, meta, documents = (
-        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
-    )
+    details, ttcn, written, meta, documents = service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
     assert details.ftp_url == meta.ftp_url == "tsg_wg1/cr_r5s260009.zip"
     assert ttcn is None
     assert isinstance(written, TDocCRChangeDetails)

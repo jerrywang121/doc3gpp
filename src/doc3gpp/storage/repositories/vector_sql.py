@@ -448,37 +448,49 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         return sorted(set(date_stale) | self._stale_content_tdoc_ids())
 
     def _stale_content_tdoc_ids(self) -> set[str]:
-        """Return ``tdoc_id``s whose indexed content differs from the stored documents."""
+        """Return ``tdoc_id``s whose indexed content differs from the stored documents.
+
+        A TDoc with undecodable stored content is always stale, so one corrupt row
+        is reported for its own TDoc and does not abort the other TDocs.
+        """
         expected = self._expected_content_signatures()
         actual = self.content_signatures()
         with self._engine.begin() as conn:
             tdoc_ids = conn.execute(text("SELECT tdoc_id FROM tdocs")).scalars().all()
-        return {
-            tdoc_id for tdoc_id in tdoc_ids
-            if expected.get(tdoc_id, frozenset()) != actual.get(tdoc_id, frozenset())
-        }
+        stale: set[str] = set()
+        for tdoc_id in tdoc_ids:
+            signature = expected.get(tdoc_id, frozenset())
+            if signature is None or signature != actual.get(tdoc_id, frozenset()):
+                stale.add(tdoc_id)
+        return stale
 
-    def _expected_content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
+    def _expected_content_signatures(
+        self,
+    ) -> dict[str, frozenset[tuple[str, str]] | None]:
         """Return the content signatures a fresh index holds, per TDoc.
 
         Uses the same plan as :meth:`SemanticSearchService.index_for_tdoc`, so a
         blank document or one past the content cap has no expected signature.
+        A ``None`` value marks a TDoc whose stored content cannot be decoded.
         """
         settings = self._chunk_settings
-        expected: dict[str, frozenset[tuple[str, str]]] = {}
+        expected: dict[str, frozenset[tuple[str, str]] | None] = {}
         with self._engine.begin() as conn:
             rows = conn.execute(text(_CONTENT_ROWS_SQL))
             for tdoc_id, group in groupby(rows, key=lambda row: row.tdoc_id):
-                planned = plan_content_chunks(
-                    _ordered_documents(list(group)),
-                    settings.chunk_size,
-                    settings.chunk_overlap,
-                    settings.max_content_chunks_per_tdoc,
-                )
-                expected[tdoc_id] = frozenset(
-                    (document_id, content_hash)
-                    for document_id, content_hash, _chunk_texts in planned
-                )
+                try:
+                    planned = plan_content_chunks(
+                        _ordered_documents(list(group)),
+                        settings.chunk_size,
+                        settings.chunk_overlap,
+                        settings.max_content_chunks_per_tdoc,
+                    )
+                    expected[tdoc_id] = frozenset(
+                        (document_id, content_hash)
+                        for document_id, content_hash, _chunk_texts in planned
+                    )
+                except UndecodableContentError:
+                    expected[tdoc_id] = None
         return expected
 
     def get_tdocs_metadata(
@@ -688,6 +700,10 @@ _CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False)
 _CONTENT_ROWS_FOR_TDOC_SQL = _content_rows_sql(single_tdoc=True)
 
 
+class UndecodableContentError(ValueError):
+    """A stored content row cannot be decoded into Markdown."""
+
+
 def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
     """Yield ``(document_id, content_hash, markdown)`` in indexing order.
 
@@ -705,7 +721,9 @@ def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
             row = rows_by_source[source]
             markdown = decompress_json(row.content)
             if markdown is None:
-                raise ValueError(f"stored content for {source!r} cannot be decoded")
+                raise UndecodableContentError(
+                    f"stored content for {source!r} cannot be decoded"
+                )
             yield row.document_id, row.content_hash, markdown
 
 

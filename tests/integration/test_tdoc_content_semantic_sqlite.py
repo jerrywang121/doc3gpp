@@ -43,6 +43,9 @@ _WID_URL = "r5/docs/r5-2600101.zip"
 _WID_MAIN = "WID/main.docx"
 _WID_ANNEX = "WID/annex/support.docx"
 
+_OTHER_ID = "R5-2600103"
+_OTHER_URL = "r5/docs/r5-2600103.zip"
+
 _CR_ID = "R5-2600102"
 _CR_URL = "r5/docs/r5-2600102.zip"
 _CR_MAIN = "CRs/main.docx"
@@ -240,6 +243,42 @@ def test_cr_main_gets_no_content_chunks_and_cr_annex_does(sqlite_env) -> None:
     annex_id = document_id_for(_CR_URL, _CR_ANNEX)
     assert not any(main_id in chunk_id for chunk_id in chunk_ids)
     assert any(f"#{annex_id}#" in chunk_id for chunk_id in chunk_ids)
+
+
+def test_corrupt_content_marks_only_its_tdoc_stale(sqlite_env) -> None:
+    _seed_meeting()
+    _seed_tdoc(_WID_ID, "Metadata title for WID", "WID new")
+    _seed_tdoc(_OTHER_ID, "Metadata title for other WID", "WID new")
+    _write_family(
+        _WID_ID,
+        _WID_URL,
+        ((_WID_MAIN, _MAIN_TEXT), (_WID_ANNEX, "# Annex\n\nannex text")),
+    )
+    _write_family(_OTHER_ID, _OTHER_URL, ((_WID_MAIN, _MAIN_TEXT),))
+    _service().index_for_tdoc(_WID_ID)
+    _service().index_for_tdoc(_OTHER_ID)
+    _mark_date_checkpoint()
+    repo = SQLAlchemyVectorIndexRepository()
+    assert repo.count_tdocs_to_index(stale_only=True) == 0
+
+    with get_engine().begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE tdoc_wid_contents SET content = :blob WHERE tdoc_id = :tdoc_id"
+            ),
+            {"blob": b"not a json payload", "tdoc_id": _WID_ID},
+        )
+
+    assert repo.count_tdocs_to_index(stale_only=True) == 1
+    stale = [
+        tdoc_id
+        for batch in repo.rebuild_batch(batch_size=10, after_id=None, stale_only=True)
+        for tdoc_id in batch
+    ]
+    assert stale == [_WID_ID]
+    assert repo.status().is_stale is True
+    with pytest.raises(ValueError, match="cannot be decoded"):
+        _service().index_for_tdoc(_WID_ID)
 
 
 def test_content_documents_order_main_first_then_path(sqlite_env) -> None:

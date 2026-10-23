@@ -10,6 +10,18 @@ from doc3gpp.storage.db.session import (
 )
 
 
+def _dispose_cached_engines() -> None:
+    """Close pooled sqlite connections before dropping the cached engines.
+
+    ``cache_clear`` alone leaves the connections open until garbage collection,
+    which surfaces as ``ResourceWarning: unclosed database``.
+    """
+    for cached in (get_engine, get_testcase_engine, get_specdata_engine):
+        if cached.cache_info().currsize:
+            cached().dispose()
+        cached.cache_clear()
+
+
 @pytest.fixture()
 def sqlite_env(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
@@ -22,14 +34,10 @@ def sqlite_env(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "DOC3GPP_SPECDATA_DATABASE_URL", f"sqlite+pysqlite:///{specdata_db_path}"
     )
+    _dispose_cached_engines()
     get_settings.cache_clear()
-    get_engine.cache_clear()
-    get_testcase_engine.cache_clear()
-    get_specdata_engine.cache_clear()
     yield db_path
-    get_engine.cache_clear()
-    get_testcase_engine.cache_clear()
-    get_specdata_engine.cache_clear()
+    _dispose_cached_engines()
     get_settings.cache_clear()
 
 

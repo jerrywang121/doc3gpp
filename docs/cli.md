@@ -2037,7 +2037,7 @@ Filters (all optional, AND-combined):
 | `--spec TEXT` | Rich filter over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`; `!38.3%` for NOT LIKE; `null`/`not-null`) |
 | `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD) |
 | `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD) |
-| `--limit INT` | max results (default 20) |
+| `--limit INT` | max results (default 20, range 0-150) |
 | `--format table|json|markdown` | output format (default `table`) |
 | `--compact` | strip JSON / markdown decorators |
 | `--text TEXT` | FTS5 text or MATCH expression. Optional. |
@@ -2760,7 +2760,7 @@ Options:
 - --sections: rich filter over combined section identifier/title metadata.
   Optional.
 - --tables: rich filter over combined table identifier/title metadata. Optional.
-- --limit: max results. Default `20`, range `>= 0`.
+- --limit: max results. Default `20`, range `0`-`150`.
 - --offset: rows to skip before applying `--limit`. Default `0`, range `>= 0`.
 - --fields: comma-separated list of fields to include (or `all` for all fields).
 - --format: `table` (default, tab-separated), `json`, or `markdown`.

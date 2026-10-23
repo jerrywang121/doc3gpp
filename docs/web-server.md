@@ -216,10 +216,10 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
 | GET | `/specs/{spec_id}/docs` | Human-facing collapsed, version-first spec-document page (`?version=` required; optional `release`, `sections`, `tables`, `limit`, `offset`) with source state, parse/re-parse form, collapsed TOC, and paginated chunks (`spec_doc_show.html`; HTMX fragment `partials/spec_doc_show_results.html`). |
 | GET | `/specs/{spec_id}/docs/toc` | Spec-doc TOC for one `(spec_id, version)` pair (`?version=` required, `?release=` informational; `?format=json` is the `doc3gpp spec doc toc show --format json` envelope verbatim: `{spec_id, version, release, docx_count, entries, files}`; full page `spec_doc_toc.html`, HTMX fragment `partials/spec_doc_toc_results.html`). Miss → 404. |
-| GET | `/spec-docs/search` | Unified spec-doc search (`?text=`, `?semantic=`, filters `spec,release,version,sections,tables,limit,offset`; `?format=json` is the `doc3gpp spec doc search --format json` flattened result array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
+| GET | `/spec-docs/search` | Unified spec-doc search (`?text=`, `?semantic=`, filters `spec,release,version,sections,tables,limit,offset`; `limit` accepts 1 to 150, larger values return 400 `invalid_filter`; `?format=json` is the `doc3gpp spec doc search --format json` flattened result array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
 | GET | `/spec-docs/index` | Spec-doc FTS5/vector index status (`?format=json` returns the `IndexStatus` object). |
 | GET | `/spec-docs/schema` | Spec-doc field descriptors across the three spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
-| GET | `/tdocs/search` | Unified TDoc search (`?text=`, `?semantic=`, filters, `?format=json`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
+| GET | `/tdocs/search` | Unified TDoc search (`?text=`, `?semantic=`, filters, `limit` accepts 1 to 150 (larger values return 400 `invalid_filter`), `?format=json`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
 | GET | `/tdocs/index` | TDoc FTS5/vector index status (`?format=json` returns the `IndexStatus` object). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
@@ -617,7 +617,8 @@ output.
 Every read tool returns exactly the bytes of the equivalent
 `?format=json` HTTP route. `search_tdoc` and `search_spec_docs` accept
 optional `text` and `semantic` arguments and use the same four mode-selection
-rules as the CLI and HTTP routes. Search rows are flattened, carry one
+rules as the CLI and HTTP routes. Their `limit` accepts 1 to 150; larger values fail
+parameter validation. Search rows are flattened, carry one
 `score`, `search_mode`, and FTS5-only `previews`, and are returned in final
 rank order. Every TDoc search row includes `matched_documents` as an array of
 `{document_id, ftp_url, source_file, score, previews}` source matches. FTS5

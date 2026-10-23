@@ -60,6 +60,7 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.parsers.normalizers import normalize_ftp_path
+from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, TDocZipValidationError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
@@ -94,6 +95,7 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocTypeUnsupportedError,
     TDocZipDownloadError,
 )
+from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
 from doc3gpp.services.tdoc_family_service import FamilyExtractResult
 from doc3gpp.services.tdoc_parse_selection import (
     exact_tdoc_id as is_exact_tdoc_id,
@@ -3788,6 +3790,8 @@ def _render_tdoc_show_raw(
         raise typer.BadParameter(
             str(TDocContentIneligibleError(tdoc_id, exc.observed_type))
         ) from None
+    except (TDocZipLimitError, TDocZipValidationError, TDocNotYetOnFTPError) as exc:
+        raise typer.BadParameter(str(exc)) from None
     except TDocZipDownloadError as exc:
         raise typer.BadParameter(
             f"Failed to download TDoc '{tdoc_id}' for raw rendering: {exc}"

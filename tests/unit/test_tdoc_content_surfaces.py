@@ -20,8 +20,14 @@ from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
 from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
 from doc3gpp.parsers.normalizers import normalize_ftp_path
-from doc3gpp.parsers.tdoc_zip import build_markdown_archive, document_id_for
+from doc3gpp.parsers.tdoc_zip import (
+    TDocZipLimitError,
+    TDocZipValidationError,
+    build_markdown_archive,
+    document_id_for,
+)
 from doc3gpp.scraping.cache_keys import derive_cache_file
+from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import (
     CacheSettings,
@@ -475,3 +481,37 @@ def test_mcp_ineligible_type_maps_to_not_found(sqlite_env, mcp_server) -> None:
 
     assert exc_info.value.code == MCP_CODE_NOT_FOUND
     assert "has type 'other'" in exc_info.value.message
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TDocZipLimitError("TDoc ZIP holds 150 documents, above the 100 limit"),
+        TDocZipValidationError("TDoc ZIP member path is not safe: ../x.docx"),
+        TDocNotYetOnFTPError("R5-260104"),
+    ],
+    ids=["zip-limit", "zip-validation", "not-yet-on-ftp"],
+)
+def test_cli_raw_extraction_errors_are_bad_parameters_not_tracebacks(
+    sqlite_env, cache_dir, monkeypatch, error,
+) -> None:
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5-260104", type="CR", ftp_url="r5/docs/r5-260104.zip")
+    )
+
+    class _FailingExtraction:
+        def extract(self, tdoc_id: str, **_kwargs: object) -> None:
+            raise error
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: _FailingExtraction(),
+    )
+
+    result = CliRunner().invoke(
+        cli_app, ["tdoc", "show", "--tdoc", "R5-260104", "--format", "raw"]
+    )
+
+    assert result.exit_code == 2, result.output
+    assert str(error) in _plain(result.output)
+    assert "Traceback" not in result.output

@@ -1135,11 +1135,10 @@ def test_tdoc_parse_meeting_id_force_re_extracts_parsed(
     runner = CliRunner()
     meeting_id = 7
     cr_tdocs = [
-        TDoc(tdoc_id="R5s260009", type="CR", meeting_id=meeting_id),
-        TDoc(tdoc_id="R5s260010", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260009", type="CR", meeting_id=meeting_id, parsed=True),
+        TDoc(tdoc_id="R5s260010", type="CR", meeting_id=meeting_id, parsed=True),
     ]
-    # Both are "parsed" in the fake CR repo; --force must skip the check.
-    parsed = {"R5s260009", "R5s260010"}
+    # Both are complete extractions; --force must still re-extract them.
 
     _patch_meeting_service(
         monkeypatch,
@@ -1153,7 +1152,6 @@ def test_tdoc_parse_meeting_id_force_re_extracts_parsed(
         },
     )
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={
             "R5s260009": _make_result("R5s260009"),
@@ -1730,6 +1728,7 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
             cr_cat="F",
             status="Noted",
             spec="38.331",
+            parsed=True,
         ),
     ]
     _patch_meeting_service(
@@ -1744,7 +1743,6 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
         },
     )
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, {"R5s260010"})
     fake = _FakeCrService(results={"R5s260009": _make_result("R5s260009")})
     _patch_service(monkeypatch, fake)
 
@@ -1831,11 +1829,10 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
     runner = CliRunner()
     meeting_id = 77
     cr_tdocs = [
-        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id, parsed=True),
         TDoc(tdoc_id="R5s260002", type="CR", meeting_id=meeting_id),
         TDoc(tdoc_id="R5s260003", type="CR", meeting_id=meeting_id),
     ]
-    parsed = {"R5s260001"}  # only one pre-parsed
     _patch_meeting_service(
         monkeypatch,
         {meeting_id: Meeting(
@@ -1846,7 +1843,6 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
         )},
     )
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={
             "R5s260001": _make_result("R5s260001"),

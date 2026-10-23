@@ -2524,15 +2524,10 @@ def tdoc_parse(
         raise typer.Exit(code=1)
 
     columns = _BASE_PARSE_COLUMNS + _active_extra_columns(filter_args)
-    cr_repo = build_tdoc_cr_repository()
     if force:
-        # Force mode: SQL returns every match, so we probe parsed status
-        # per id to feed the reparse / newly-parsed summary math and to
-        # render the "Already parsed" preview group.
-        parsed_ids = {
-            m.tdoc.tdoc_id for m in matches if cr_repo.get(m.tdoc.tdoc_id)
-        }
-        already_parsed = [m for m in matches if m.tdoc.tdoc_id in parsed_ids]
+        # Force mode: every match is re-extracted; ``parsed`` is family-aware.
+        already_parsed = [m for m in matches if m.tdoc.parsed]
+        parsed_ids = {m.tdoc.tdoc_id for m in already_parsed}
         to_parse = list(matches)
     else:
         # Normal mode: SQL excluded already-parsed rows before the limit,

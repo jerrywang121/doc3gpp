@@ -317,14 +317,6 @@ class TDocExtractMeta:
             )
         object.__setattr__(self, "skipped_sources", tuple(self.skipped_sources))
 
-    @property
-    def complete(self) -> bool:
-        """Whether metadata declares a version-2 document set with no skips.
-
-        Readers must still compare this declaration with the stored child rows.
-        """
-        return self.extraction_version == 2 and not self.skipped_sources
-
 
 # Allowed values for ``DirectParseResult.source_kind``. Stored as a
 # module-level literal so callers (CLI, tests) can exhaustively match

@@ -1590,9 +1590,7 @@ def test_cr_zero_annex_bundle_is_complete_with_cover(tmp_path: Path) -> None:
     assert isinstance(prepared, PreparedTDocExtract)
     assert prepared.annexes == ()
     assert prepared.extract_meta.document_count == 0
-    assert prepared.extract_meta.complete is True
-    complete = is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True)
-    assert complete is True
+    assert is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True) is True
 
 
 @pytest.mark.skipif(
@@ -1614,7 +1612,7 @@ def test_cr_annex_failure_is_tolerant(tmp_path: Path, caplog: pytest.LogCaptureF
 
     assert isinstance(prepared, PreparedTDocExtract)
     assert prepared.extract_meta.skipped_sources == ("a/support-alpha.docx",)
-    assert prepared.extract_meta.complete is False
+    assert is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True) is False
     assert prepared.extract_meta.document_count == 1
     assert [document.source_file for document in prepared.documents] == [
         "R5s260009.docx",
@@ -1662,7 +1660,7 @@ def test_cr_zero_text_annex_is_stored_as_empty_document(tmp_path: Path) -> None:
     )
     assert empty.markdown_text == ""
     assert prepared.extract_meta.skipped_sources == ()
-    assert prepared.extract_meta.complete is True
+    assert is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True) is True
 
 
 @pytest.mark.skipif(

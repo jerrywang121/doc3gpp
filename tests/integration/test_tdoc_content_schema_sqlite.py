@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import delete, func, inspect, select, text
 
+from doc3gpp.models.tdoc_content_families import is_complete_cr_extraction
 from doc3gpp.models.tdoc_cr import TDocExtractMeta
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.models import (
@@ -185,7 +186,7 @@ def test_pre_branch_upgrade_adds_new_columns(sqlite_env) -> None:
     assert meta.extraction_version == 1
     assert meta.document_count == 0
     assert meta.skipped_sources == ()
-    assert meta.complete is False
+    assert not is_complete_cr_extraction(meta, (), has_cover=True)
 
     create_schema()
     inspector = inspect(engine)
@@ -247,3 +248,28 @@ def test_malformed_skipped_sources_raise_on_read(sqlite_env) -> None:
             )
         with pytest.raises(ValueError, match="skipped_sources"):
             repo.get_extract_meta_by_url(URL)
+
+
+@pytest.mark.parametrize(
+    ("extraction_version", "document_count"),
+    [(1, 0), (2, 3)],
+)
+def test_metadata_only_upsert_cannot_publish_complete_extraction(
+    sqlite_env,
+    extraction_version: int,
+    document_count: int,
+) -> None:
+    create_schema()
+    _seed_tdoc()
+    repo = SQLAlchemyTDocCrRepository()
+
+    repo.upsert_extract_meta(
+        _meta(extraction_version=extraction_version, document_count=document_count)
+    )
+
+    stored = repo.get_extract_meta_by_url(URL)
+    assert stored is not None
+    assert stored.extraction_version == 1
+    assert stored.document_count == 0
+    assert not is_complete_cr_extraction(stored, (), has_cover=True)
+

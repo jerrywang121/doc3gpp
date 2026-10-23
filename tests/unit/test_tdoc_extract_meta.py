@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from doc3gpp.models.tdoc_content_families import is_complete_cr_extraction
 from doc3gpp.models.tdoc_cr import TDocExtractMeta
 
 
@@ -48,14 +49,9 @@ def test_extract_meta_skipped_sources_list_is_stored_as_tuple() -> None:
 
 
 def test_extract_meta_complete_rule() -> None:
-    assert _meta(extraction_version=2, document_count=0).complete is True
-    assert _meta(extraction_version=2, document_count=3).complete is True
+    assert is_complete_cr_extraction(_meta(extraction_version=2), (), has_cover=True)
 
-    skipped = _meta(
-        extraction_version=2,
-        document_count=0,
-        skipped_sources=("annex/bad.docx",),
-    )
-    assert skipped.complete is False
+    skipped = _meta(extraction_version=2, skipped_sources=("annex/bad.docx",))
+    assert not is_complete_cr_extraction(skipped, (), has_cover=True)
 
-    assert _meta(extraction_version=1, document_count=2).complete is False
+    assert not is_complete_cr_extraction(_meta(extraction_version=1), (), has_cover=True)

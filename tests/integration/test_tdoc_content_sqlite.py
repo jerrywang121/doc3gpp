@@ -8,7 +8,11 @@ from dataclasses import replace
 import pytest
 from sqlalchemy import func, select, text
 
-from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
+from doc3gpp.models.tdoc_content_families import (
+    TDOC_CONTENT_STORES,
+    is_complete_cr_extraction,
+    is_complete_family_extraction,
+)
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocCRTTCNDetails, TDocExtractMeta
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
@@ -183,7 +187,7 @@ def test_cr_zero_annexes_bundle(sqlite_env) -> None:
     meta = _repo().get_extract_meta(URL)
     assert meta is not None
     assert meta.document_count == 0
-    assert meta.complete is True
+    assert is_complete_cr_extraction(meta, _repo().list_documents(CR, URL), has_cover=True)
 
 
 def test_cr_annexes_list_in_path_order_without_main(sqlite_env) -> None:
@@ -346,4 +350,4 @@ def test_skipped_sources_are_written_to_parent(sqlite_env) -> None:
     meta = _repo().get_extract_meta(URL)
     assert meta is not None
     assert meta.skipped_sources == ("annex/bad.doc",)
-    assert meta.complete is False
+    assert not is_complete_family_extraction(meta, _repo().list_documents(WID, URL))

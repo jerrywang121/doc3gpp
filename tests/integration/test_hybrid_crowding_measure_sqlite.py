@@ -31,15 +31,16 @@ ALL_MATCH_TERM = "zyxqall"
 FANOUTS = (1, 4, 8)
 FILTER_NAMES = ("none", "meeting_id", "release")
 EXPECTED: dict[tuple[int, str], tuple[int, int, int, int]] = {
-    (1, "none"): (3, 2, 3, 3),
+    # (semantic count, hybrid one-hit count, rows returned by hybrid knn calls, hybrid all-hit count)
+    (1, "none"): (3, 3, 45, 3),
     (1, "meeting_id"): (3, 3, 3, 3),
-    (1, "release"): (3, 1, 0, 3),
-    (4, "none"): (3, 3, 12, 3),
+    (1, "release"): (3, 3, 178, 3),
+    (4, "none"): (3, 3, 36, 3),
     (4, "meeting_id"): (3, 3, 5, 3),
-    (4, "release"): (3, 1, 0, 3),
+    (4, "release"): (3, 3, 169, 3),
     (8, "none"): (3, 3, 24, 3),
     (8, "meeting_id"): (3, 3, 5, 3),
-    (8, "release"): (3, 1, 0, 3),
+    (8, "release"): (3, 3, 157, 3),
 }
 
 

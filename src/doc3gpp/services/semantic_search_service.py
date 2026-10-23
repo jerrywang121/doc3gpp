@@ -232,7 +232,7 @@ class SemanticSearchService:
             limit=internal_limit,
         )
         fts5_hits = self._fts5.search(fts5_expr, fts5_filters)
-        vec_hits = self._vec.knn(query_vec, limit=internal_limit, filters=filters)
+        vec_hits = self._distinct_tdoc_rows(query_vec, limit=limit, filters=filters)
         merged = rrf_merge(
             fts5_hits, vec_hits,
             k=self._settings.semantic_search.rrf_k,
@@ -248,7 +248,17 @@ class SemanticSearchService:
         limit: int,
         filters: SearchFilters,
     ) -> dict[str, _VecTdoc]:
-        """Return up to ``limit`` distinct TDocs from the chunk KNN, in knn order.
+        """Group the distinct-TDoc knn window per TDoc (see :meth:`_distinct_tdoc_rows`)."""
+        return _group_vec_hits(self._distinct_tdoc_rows(query_vec, limit=limit, filters=filters))
+
+    def _distinct_tdoc_rows(
+        self,
+        query_vec,
+        *,
+        limit: int,
+        filters: SearchFilters,
+    ) -> list[tuple[str, str, int, float]]:
+        """Return the knn rows of up to ``limit`` distinct TDocs, in knn order.
 
         The knn limit counts chunk rows, so one TDoc with many near chunks can use
         every slot. The knn gets only the pushed filters (tdoc, TSG, meeting id, and
@@ -265,9 +275,8 @@ class SemanticSearchService:
             window = self._vec.knn(query_vec, limit=fetch, filters=pushed)
             allowed = self._vec.matching_tdoc_ids({row[0] for row in window}, filters)
             kept = [row for row in window if row[0] in allowed]
-            grouped = _group_vec_hits(kept)
-            if len(grouped) >= limit or len(window) < fetch or fetch >= _KNN_MAX_K:
-                return grouped
+            if len({row[0] for row in kept}) >= limit or len(window) < fetch or fetch >= _KNN_MAX_K:
+                return kept
             fetch = min(fetch * 2, _KNN_MAX_K)
 
     def _populate_metadata_stubs(

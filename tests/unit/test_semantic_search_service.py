@@ -91,6 +91,9 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs():
             self.knn_calls.append((qv, limit, filters))
             return [("R4-2605982", "R4-2605982#0", 0, 0.78)]
 
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
+
         def get_tdocs_metadata(self, tdoc_ids):
             self.metadata_calls.append(list(tdoc_ids))
             return {
@@ -168,6 +171,9 @@ def test_search_mixed_hits_only_looks_up_metadata_for_vector_only():
                 ("R4-2", "R4-2#0", 1, 0.2),
             ]
 
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
+
         def get_tdocs_metadata(self, tdoc_ids):
             self.metadata_calls.append(list(tdoc_ids))
             return {
@@ -206,6 +212,9 @@ def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty():
 
         def knn(self, qv, limit, filters):
             return [("GHOST-1", "GHOST-1#0", 0, 0.5)]
+
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
 
         def get_tdocs_metadata(self, tdoc_ids):
             self.metadata_calls.append(list(tdoc_ids))
@@ -287,6 +296,7 @@ def test_search_synthesizes_fts5_hit_for_vector_only_tdoc():
     fts5.search.return_value = []
     vec = MagicMock()
     vec.knn.return_value = [("R5-1", "R5-1#0", 0, 0.1)]
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
     out = svc.search(
         "valid",

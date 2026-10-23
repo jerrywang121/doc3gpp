@@ -1769,6 +1769,61 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
         assert header in result.output
 
 
+def test_tdoc_parse_force_already_parsed_header_is_family_neutral(
+    sqlite_env, monkeypatch
+) -> None:
+    """Under ``--force`` the already-parsed group header names no CR table,
+    even when the only parsed member is a complete WID family TDoc."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    runner = CliRunner()
+    meeting_id = 34
+    family_tdocs = [
+        TDoc(
+            tdoc_id="R5s260011",
+            type="CR",
+            meeting_id=meeting_id,
+            title="Pending CR title",
+            cr_cat="F",
+            status="Agreed",
+            spec="38.331",
+        ),
+        TDoc(
+            tdoc_id="R5s260012",
+            type="WID new",
+            meeting_id=meeting_id,
+            title="Complete WID title",
+            status="Agreed",
+            spec="38.331",
+            parsed=True,
+        ),
+    ]
+    _patch_meeting_service(
+        monkeypatch,
+        {
+            meeting_id: Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#112",
+                title="RAN WG5 #112",
+                location="Online",
+            ),
+        },
+    )
+    _patch_tdoc_repo_for_listing(monkeypatch, family_tdocs)
+    fake = _FakeCrService(results={"R5s260011": _make_result("R5s260011")})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--meeting-id", str(meeting_id), "--force", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    header = next(
+        (line for line in result.output.splitlines() if "Already parsed" in line),
+        "",
+    )
+    assert header == "Already parsed (with --force, these will be re-extracted) [count=1]:"
+
+
 def test_tdoc_parse_meeting_filter_adds_meeting_name_column(
     sqlite_env, monkeypatch
 ) -> None:

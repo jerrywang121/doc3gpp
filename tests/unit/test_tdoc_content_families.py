@@ -81,12 +81,19 @@ def test_family_rule_rejects_missing_or_unordered_main():
 
 
 def test_family_rule_rejects_duplicate_sources():
-    assert not is_complete_family_extraction(_meta(document_count=2), [_doc("main.docx"), _doc("main.docx")])
+    docs = [_doc("main.docx"), _doc("a.docx"), _doc("a.docx")]
+    assert not is_complete_family_extraction(_meta(document_count=3), docs)
 
 
 def test_cr_rule_zero_annexes_complete_with_cover():
     assert is_complete_cr_extraction(_meta(document_count=0), [], has_cover=True)
     assert not is_complete_cr_extraction(_meta(document_count=0), [], has_cover=False)
+
+
+def test_cr_rule_requires_extraction_version_two():
+    assert not is_complete_cr_extraction(
+        _meta(extraction_version=1, document_count=0), [], has_cover=True
+    )
 
 
 def test_cr_rule_rejects_main_among_annexes_and_count_mismatch():

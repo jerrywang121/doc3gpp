@@ -23,7 +23,7 @@ the ``[semantic]`` extra at test time.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -135,6 +135,7 @@ def test_reparse_with_vanished_embed_text_clears_vector_rows(sqlite_env) -> None
     orphan embeddings behind.
     """
     vec_repo = MagicMock()
+    vec_repo.embed_text_for_tdoc.return_value = None
     embedder = MagicMock()
     fts5 = SearchService(repo=MagicMock(), reranker=PassthroughReranker())
     semantic = SemanticSearchService(
@@ -144,11 +145,7 @@ def test_reparse_with_vanished_embed_text_clears_vector_rows(sqlite_env) -> None
         settings=Settings(),
     )
 
-    with patch(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        return_value=None,
-    ):
-        semantic.index_for_tdoc("R5-empty")
+    semantic.index_for_tdoc("R5-empty")
 
     vec_repo.remove_for_tdoc.assert_called_once_with("R5-empty")
     vec_repo.upsert_chunks.assert_not_called()

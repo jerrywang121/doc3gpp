@@ -41,10 +41,6 @@ from doc3gpp.models.semantic_search import (
 )
 from doc3gpp.services.embedding.chunker import _chunks, plan_content_chunks
 from doc3gpp.services.search_service import SearchService
-from doc3gpp.storage.repositories.vector_sql import (
-    _build_content_documents,
-    _build_embed_text,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +300,7 @@ class SemanticSearchService:
 
 
     def index_for_tdoc(self, tdoc_id: str) -> None:
-        embed_text = _build_embed_text(tdoc_id)
+        embed_text = self._vec.embed_text_for_tdoc(tdoc_id)
         if embed_text is None:
             self._vec.remove_for_tdoc(tdoc_id)
             return
@@ -313,7 +309,7 @@ class SemanticSearchService:
         max_chunks = getattr(semantic, "max_chunks_per_tdoc", 8)
         metadata_texts = metadata_texts[:max_chunks]
         content = list(plan_content_chunks(
-            _build_content_documents(tdoc_id),
+            self._vec.content_documents_for_tdoc(tdoc_id),
             semantic.chunk_size,
             semantic.chunk_overlap,
             semantic.max_content_chunks_per_tdoc,

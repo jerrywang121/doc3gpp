@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import replace
 
 from sqlalchemy import ColumnElement, Select, and_, distinct, func, not_, or_, select
@@ -24,6 +24,9 @@ from doc3gpp.storage.db.models import (
     TDocORM,
 )
 from doc3gpp.storage.db.session import get_session_factory
+from doc3gpp.storage.repositories.tdoc_document_sources import (
+    document_sources_by_id as _document_sources_by_id,
+)
 
 _FAMILY_ORMS = tuple(CONTENT_ORM_BY_STORE_KEY[store.key] for store in FAMILY_STORES)
 _CONTENT_ORMS = (TDocCrAnnexOrm, *_FAMILY_ORMS)
@@ -441,6 +444,12 @@ class SQLAlchemyTDocRepository:
             )
             for tdoc, meeting_name, meeting_tsg in rows
         ]
+
+    def document_sources_by_id(
+        self, document_ids: Collection[str],
+    ) -> dict[str, tuple[str, str]]:
+        """Map stored content ``document_id`` values to ``(ftp_url, source_file)``."""
+        return _document_sources_by_id(document_ids)
 
 
 def _orm_to_domain(row: TDocORM) -> TDoc:

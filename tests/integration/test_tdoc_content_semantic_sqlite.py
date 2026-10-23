@@ -24,10 +24,8 @@ from doc3gpp.storage.db.session import get_engine, get_session_factory
 from doc3gpp.storage.repositories.tdoc_content_sql import (
     SQLAlchemyTDocContentRepository,
 )
-from doc3gpp.storage.repositories.vector_sql import (
-    SQLAlchemyVectorIndexRepository,
-    _build_content_documents,
-)
+from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
 
 pytestmark = pytest.mark.semantic
 
@@ -303,11 +301,14 @@ def test_content_documents_order_main_first_then_path(sqlite_env) -> None:
         (("CRs/annex/zeta.docx", "zeta text"), ("CRs/annex/alpha.docx", "alpha text")),
     )
 
+    vec_repo = SQLAlchemyVectorIndexRepository()
     family_order = [
-        document_id for document_id, _hash, _markdown in _build_content_documents(_WID_ID)
+        document_id
+        for document_id, _hash, _markdown in vec_repo.content_documents_for_tdoc(_WID_ID)
     ]
     cr_order = [
-        document_id for document_id, _hash, _markdown in _build_content_documents(_CR_ID)
+        document_id
+        for document_id, _hash, _markdown in vec_repo.content_documents_for_tdoc(_CR_ID)
     ]
 
     assert family_order == [
@@ -410,7 +411,7 @@ def test_chunk_hit_matched_document_resolves_source_and_url(sqlite_env) -> None:
     facade = TDocSearchFacade(
         fts5_service=None,
         semantic_service=_service(),
-        source_repo=None,
+        source_repo=SQLAlchemyTDocRepository(),
         settings=get_settings(),
     )
 

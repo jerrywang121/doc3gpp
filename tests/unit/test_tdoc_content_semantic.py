@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from doc3gpp.models.search import SearchFilters
 from doc3gpp.models.semantic_search import SemanticDocumentHit
-from doc3gpp.services import semantic_search_service as svc_mod
 from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.settings.schema import SemanticSearchSettings
 from doc3gpp.storage.db.migrate import create_schema
@@ -43,12 +42,10 @@ def _settings(*, chunk_size: int = 5, chunk_overlap: int = 1, max_content: int =
     )
 
 
-def _index(monkeypatch, documents, *, embed_text: str = "meta title", settings=None):
-    monkeypatch.setattr(svc_mod, "_build_embed_text", lambda tid: embed_text)
-    monkeypatch.setattr(
-        svc_mod, "_build_content_documents", lambda tid: list(documents),
-    )
+def _index(documents, *, embed_text: str = "meta title", settings=None):
     vec = MagicMock()
+    vec.embed_text_for_tdoc.return_value = embed_text
+    vec.content_documents_for_tdoc.return_value = list(documents)
     service = SemanticSearchService(MagicMock(), _Embedder(), vec, settings or _settings())
     service.index_for_tdoc("R5-1")
     vec.upsert_chunks.assert_called_once()
@@ -59,9 +56,8 @@ def _content_ids(chunks) -> list[str]:
     return [c.chunk_id for c in chunks if c.chunk_id.count("#") == 3]
 
 
-def test_content_chunk_ids_embed_document_id_and_hash(monkeypatch):
+def test_content_chunk_ids_embed_document_id_and_hash():
     chunks = _index(
-        monkeypatch,
         [("doc-annex", "hash-annex", "one two three four five six")],
         embed_text="",
     )
@@ -72,20 +68,20 @@ def test_content_chunk_ids_embed_document_id_and_hash(monkeypatch):
     ]
 
 
-def test_metadata_chunk_ids_unchanged(monkeypatch):
+def test_metadata_chunk_ids_unchanged():
     chunks = _index(
-        monkeypatch, [], embed_text="one two three four five six",
+        [], embed_text="one two three four five six",
     )
 
     assert [c.chunk_id for c in chunks] == ["R5-1#0", "R5-1#1"]
 
 
-def test_content_chunks_capped(monkeypatch):
+def test_content_chunks_capped():
     long_text = " ".join(f"w{i}" for i in range(30))
     documents = [(f"doc-{n}", f"hash-{n}", long_text) for n in (1, 2, 3)]
 
     chunks = _index(
-        monkeypatch, documents, embed_text="", settings=_settings(max_content=16),
+        documents, embed_text="", settings=_settings(max_content=16),
     )
 
     content = _content_ids(chunks)
@@ -93,9 +89,8 @@ def test_content_chunks_capped(monkeypatch):
     assert {cid.split("#")[1] for cid in content} == {"doc-1", "doc-2"}
 
 
-def test_zero_text_document_adds_no_content_chunks(monkeypatch):
+def test_zero_text_document_adds_no_content_chunks():
     chunks = _index(
-        monkeypatch,
         [("doc-blank", "hash-blank", " \n\t "), ("doc-annex", "hash-annex", "annex text")],
         embed_text="",
     )

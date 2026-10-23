@@ -254,6 +254,16 @@ class TDocRepository(Protocol):
         """
         ...
 
+    def document_sources_by_id(
+        self, document_ids: Collection[str],
+    ) -> dict[str, tuple[str, str]]:
+        """Map stored content ``document_id`` values to ``(ftp_url, source_file)``.
+
+        Unknown IDs are omitted. Search uses this to attach source provenance
+        to chunk hits.
+        """
+        ...
+
 
 class MeetingRepository(Protocol):
     """Storage operations used by meetings sync service."""
@@ -962,6 +972,18 @@ class VectorIndexRepository(Protocol):
 
         Keyed by ``tdoc_id``. Metadata chunks contribute nothing, and a TDoc
         with no content chunks is absent from the mapping.
+        """
+        ...
+
+    def embed_text_for_tdoc(self, tdoc_id: str) -> str | None:
+        """Return the metadata embed text for ``tdoc_id``, or ``None`` when it is absent."""
+        ...
+
+    def content_documents_for_tdoc(self, tdoc_id: str) -> list[tuple[str, str, str]]:
+        """Return ``(document_id, content_hash, markdown)`` for each stored content document.
+
+        Documents come back in indexing order. A TDoc with no content rows
+        returns an empty list.
         """
         ...
 

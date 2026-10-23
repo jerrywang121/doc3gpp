@@ -17,7 +17,6 @@ from doc3gpp.models.semantic_search import (
 )
 from doc3gpp.models.tdoc import TDocWithMeeting
 from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
-from doc3gpp.storage.repositories.tdoc_document_sources import document_sources_by_id
 
 
 class TDocSearchFacade:
@@ -138,14 +137,16 @@ class TDocSearchFacade:
             matched_documents=hit.matched_documents,
         )
 
-    @staticmethod
     def _document_sources(
+        self,
         hits: list[SemanticSearchHit],
     ) -> Mapping[str, tuple[str, str]]:
         document_ids = {
             document.document_id for hit in hits for document in hit.document_hits
         }
-        return document_sources_by_id(document_ids) if document_ids else {}
+        if not document_ids or self._source is None:
+            return {}
+        return self._source.document_sources_by_id(document_ids)
 
     @staticmethod
     def _semantic_matched_documents(

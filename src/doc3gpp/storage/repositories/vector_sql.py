@@ -402,6 +402,12 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
         return self._indexed_state()[0]
 
+    def embed_text_for_tdoc(self, tdoc_id: str) -> str | None:
+        return _build_embed_text(tdoc_id)
+
+    def content_documents_for_tdoc(self, tdoc_id: str) -> list[tuple[str, str, str]]:
+        return _build_content_documents(tdoc_id)
+
     def _indexed_state(
         self,
     ) -> tuple[dict[str, frozenset[tuple[str, str]]], dict[str, set[tuple[int, str, str]]]]:

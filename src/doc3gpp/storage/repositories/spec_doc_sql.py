@@ -407,8 +407,10 @@ def _orm_to_chunk(row: SpecDocChunkORM) -> SpecDocChunk:
     )
 
 
-def decode_chunk_text(blob: bytes | None) -> str:
-    """Return the chunk body stored as gzip-JSON, or ``""`` when undecodable."""
+def decode_chunk_text(blob: bytes | str | None) -> str:
+    """Return the chunk body; a ``str`` is a legacy plain-text row not yet migrated."""
+    if isinstance(blob, str):
+        return blob
     value = decompress_json(blob)
     return value if isinstance(value, str) else ""
 

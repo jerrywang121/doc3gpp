@@ -676,7 +676,7 @@ def build_tdoc_cr_service(
             or build_tdoc_cr_change_details_repository()  # type: ignore[call-arg]
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
-        extraction_repository=build_tdoc_content_repository(),
+        content_repo=build_tdoc_content_repository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
         max_documents_per_zip=settings.tdoc_parse.max_documents_per_zip,
         max_uncompressed_size_bytes=(

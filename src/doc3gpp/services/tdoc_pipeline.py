@@ -74,11 +74,22 @@ def classify_tdoc_exception(
         raise exc
 
     from doc3gpp.parsers.tdoc_zip import TDocZipLimitError
-    from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
-    from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
+    from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
+    from doc3gpp.services.tdoc_errors import (
+        TDocNotYetOnFTPError,
+        TDocTypeUnsupportedError,
+    )
 
     reason = f"{type(exc).__name__}: {exc}"
-    if isinstance(exc, (TDocNotYetOnFTPError, TDocTooLargeError, TDocZipLimitError)):
+    if isinstance(
+        exc,
+        (
+            TDocNotYetOnFTPError,
+            TDocTooLargeError,
+            TDocZipLimitError,
+            TDocTypeUnsupportedError,
+        ),
+    ):
         return "skipped", reason
     return "failed", reason
 

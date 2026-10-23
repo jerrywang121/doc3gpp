@@ -179,7 +179,7 @@ def service(tmp_path: Path) -> TDocCrService:
         cr_ttcn_repository=_FakeCrTtcnRepo(),
         cr_change_details_repository=_FakeCrChangeDetailsRepo(),
         tdoc_repository=_FakeTDocRepo(),
-        extraction_repository=MagicMock(),
+        content_repo=MagicMock(),
     )
 
 

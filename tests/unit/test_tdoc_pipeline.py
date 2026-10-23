@@ -16,6 +16,7 @@ from doc3gpp.services.tdoc_cr_service import (
     PreparedDirectTDoc,
     TDocNotYetOnFTPError,
     TDocTooLargeError,
+    TDocTypeUnsupportedError,
 )
 from doc3gpp.services.tdoc_pipeline import (
     PipelineItem,
@@ -46,12 +47,12 @@ def test_direct_url_writer_persists_prepared_result(tmp_path: Path) -> None:
     result = service.persist_prepared_url(prepared)
 
     assert result.persisted is True
-    service._extraction_repo.replace_bundle.assert_called_once_with(
+    service._content_repo.replace_cr_bundle.assert_called_once_with(
         prepared.details,
         prepared.ttcn,
         prepared.changes,
         prepared.extract_meta,
-        prepared.documents,
+        prepared.annexes,
     )
     cr_repo.upsert.assert_not_called()
     cr_repo.upsert_extract_meta.assert_not_called()
@@ -363,6 +364,15 @@ def test_tdoc_exception_classifier_uses_skip_and_failure_buckets() -> None:
     assert classify_tdoc_exception(LookupError("missing")) == (
         "failed",
         "LookupError: missing",
+    )
+
+
+def test_classify_marks_unsupported_type_as_skipped() -> None:
+    unsupported = TDocTypeUnsupportedError("R5-000001", "other")
+
+    assert classify_tdoc_exception(unsupported) == (
+        "skipped",
+        f"TDocTypeUnsupportedError: {unsupported}",
     )
 
 

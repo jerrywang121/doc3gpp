@@ -21,3 +21,20 @@ class TDocNotYetOnFTPError(ValueError):
             "pipeline has not propagated a final URL; try again later "
             "or run `doc3gpp tdoc sync` to refresh the tdocs table"
         )
+
+
+class TDocTypeUnsupportedError(ValueError):
+    """The given tdoc_id's ``type`` has no content store.
+
+    Raised before any download. Inherits from :class:`ValueError` so callers
+    that catch the broad class still handle it. The CLI translates it into a
+    friendly ``typer.BadParameter`` with the observed ``type`` value.
+    """
+
+    def __init__(self, tdoc_id: str, observed_type: str | None) -> None:
+        self.tdoc_id = tdoc_id
+        self.observed_type = observed_type
+        super().__init__(
+            f"TDoc {tdoc_id!r} has type {observed_type!r}; "
+            "only CR, WID, LS, and discussion TDocs are parsed"
+        )

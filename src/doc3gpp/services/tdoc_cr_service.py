@@ -11,10 +11,14 @@ Glues the per-stage building blocks together:
 4. Enumerate every supported ``.docx`` member and convert members
    sequentially through the shared parser pipeline.
 5. Select exactly one main document with the structural CR-cover detector;
-   supporting documents remain content-only.
-6. Build a versioned Markdown archive and one URL-owned document collection.
-7. Persist the cover, optional sidecars, extraction metadata, and all content
-   rows atomically through ``TDocExtractionRepository`` before indexing.
+   supporting documents remain content-only. Annexes that fail to convert are
+   recorded in ``skipped_sources`` instead of failing the TDoc.
+6. Build a versioned Markdown archive that holds every converted document.
+7. Persist the cover, optional sidecars, extraction metadata, and the annex
+   rows atomically through ``TDocContentRepository`` before indexing.
+
+TDocs whose type has a family content store (WID, LS, discussion) are handed to
+:class:`doc3gpp.services.tdoc_family_service.TDocFamilyService` instead.
 
 The service owns three caching layers:
 
@@ -28,9 +32,9 @@ The service owns three caching layers:
   source path, document IDs, order, and content hashes are explicit in the
   manifest; legacy plain-UTF-8, gzip, and one-member ZIP artifacts remain
   readable for transitional cache consumers.
-* **Database cache** — a version-2 parent row plus its complete SQL document
-  collection; a hit requires the declared count and exactly one matching main
-  source, not merely a cover row or metadata declaration.
+* **Database cache** — a version-2 parent row, the cover row, and the complete
+  annex collection. The CR main is never stored in SQL. A hit also requires the
+  Markdown archive file, so a cached archive is the only source of the main.
 
 The ``from_cache`` flag on :class:`ExtractResult` refers to a complete SQL
 bundle hit. A cache artifact alone is not evidence of extraction completeness
@@ -38,8 +42,8 @@ and is never used to skip reprocessing of an incomplete SQL parent.
 
 The main document's :class:`TDocCRParseResult` owns the slim cover row and
 optional TTCN/body-change sidecars. Supporting documents never enter the CR
-parser. ``replace_bundle`` is the single repository write boundary; search and
-semantic indexing remain best-effort hooks that run only after the atomic
+parser. ``replace_cr_bundle`` is the single repository write boundary; search
+and semantic indexing remain best-effort hooks that run only after the atomic
 transaction commits.
 """
 
@@ -56,6 +60,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_content_families import (
+    TDOC_CONTENT_STORES,
+    is_complete_cr_extraction,
+    is_eligible_type,
+    store_for_type,
+)
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     DirectParseResult,
@@ -65,7 +75,11 @@ from doc3gpp.models.tdoc_cr import (
     TDocExtractMeta,
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
-from doc3gpp.models.tdoc_document import TDocDocument, TDocParseBundle
+from doc3gpp.models.tdoc_document import (
+    TDocDocument,
+    TDocParseBundle,
+    markdown_member_name,
+)
 from doc3gpp.parsers.cr_parser import CRHeaderMissingError
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
@@ -88,10 +102,10 @@ from doc3gpp.parsers.tdoc_zip import (
     read_markdown_archive,
 )
 from doc3gpp.repository.protocols import (
+    TDocContentRepository,
     TDocCrChangeDetailsRepository,
     TDocCrDetailRepository,
     TDocCrTTCNDetailRepository,
-    TDocExtractionRepository,
     TDocRepository,
 )
 from doc3gpp.scraping.cache_keys import derive_cache_file
@@ -103,7 +117,12 @@ from doc3gpp.scraping.tdoc_zip_source import (
     resolve_download_url,
 )
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
-from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
+from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError, TDocTypeUnsupportedError
+from doc3gpp.services.tdoc_family_service import (
+    FamilyExtractResult,
+    PreparedFamilyExtract,
+    TDocFamilyService,
+)
 from doc3gpp.services.tdoc_pipeline import PipelineItem, PipelineProgress, TDocPipeline
 
 # Re-exported so callers can catch ``TDocTooLargeError`` from a single
@@ -133,10 +152,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Public type alias for the type-check precondition. ``"CR"`` is the
-# only TDoc type whose zip layout we currently parse; the value is
-# normalised to upper-case so the comparison stays case-insensitive.
-_CR_TDOC_TYPE = "CR"
+_CR_STORE = next(store for store in TDOC_CONTENT_STORES if store.key == "cr")
 
 # Conservative shape guard for ``tdoc_id``. The CR/zip parser already
 # enforces a stricter regex internally; this is a *fast-fail* so a
@@ -215,24 +231,6 @@ class _DirectPipelineError(BaseException):
         super().__init__(str(cause))
 
 
-class TDocTypeUnsupportedError(ValueError):
-    """The given tdoc_id is known but its type is not ``"CR"``.
-
-    Inherits from :class:`ValueError` so callers that catch the broad
-    class still handle it correctly. The CLI translates this into a
-    friendly ``typer.BadParameter`` with the observed ``type`` value
-    surfaced for the operator.
-    """
-
-    def __init__(self, tdoc_id: str, observed_type: str | None) -> None:
-        self.tdoc_id = tdoc_id
-        self.observed_type = observed_type
-        super().__init__(
-            f"TDoc {tdoc_id!r} has type {observed_type!r}; "
-            "only CR-type TDocs are extractable"
-        )
-
-
 class TDocNotFoundError(LookupError):
     """The given tdoc_id is not present in the ``tdocs`` table.
 
@@ -303,6 +301,20 @@ class ExtractResult:
     extract_meta: TDocExtractMeta
     from_cache: bool
 
+    @property
+    def tdoc_id(self) -> str:
+        return self.details.tdoc_id
+
+
+def _annexes_of(
+    documents: tuple[TDocDocument, ...],
+    main_source_file: str,
+) -> tuple[TDocDocument, ...]:
+    """Return every converted document except the CR main, which SQL never stores."""
+    return tuple(
+        document for document in documents if document.source_file != main_source_file
+    )
+
 
 @dataclass(slots=True, frozen=True)
 class PreparedTDocExtract:
@@ -314,6 +326,10 @@ class PreparedTDocExtract:
     ttcn: TDocCRTTCNDetails | None
     changes: TDocCRChangeDetails | None
     extract_meta: TDocExtractMeta
+
+    @property
+    def annexes(self) -> tuple[TDocDocument, ...]:
+        return _annexes_of(self.documents, self.main_source_file)
 
 
 @dataclass(slots=True, frozen=True)
@@ -329,6 +345,10 @@ class PreparedDirectTDoc:
     extract_meta: TDocExtractMeta
     tdoc_id: str
     cache_file: str
+
+    @property
+    def annexes(self) -> tuple[TDocDocument, ...]:
+        return _annexes_of(self.documents, self.main_source_file)
 
 
 @dataclass(slots=True, frozen=True)
@@ -366,7 +386,7 @@ class BatchExtractResult:
             own "Skipped (not yet on FTP)" line.
     """
 
-    successes: dict[str, ExtractResult]
+    successes: dict[str, ExtractResult | FamilyExtractResult]
     failures: dict[str, str]
     skipped: dict[str, str] = field(default_factory=dict)
 
@@ -393,7 +413,7 @@ class TDocCrService:
         cr_ttcn_repository: TDocCrTTCNDetailRepository,
         cr_change_details_repository: TDocCrChangeDetailsRepository,
         tdoc_repository: TDocRepository,
-        extraction_repository: TDocExtractionRepository,
+        content_repo: TDocContentRepository,
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
         max_tdoc_size_bytes: int = 0,
@@ -401,6 +421,7 @@ class TDocCrService:
         max_uncompressed_size_bytes: int | None = None,
         search_service: SearchService | None = None,
         semantic_service: SemanticSearchService | None = None,
+        family_service: TDocFamilyService | None = None,
     ) -> None:
         from doc3gpp.settings.loader import get_settings
 
@@ -411,7 +432,7 @@ class TDocCrService:
         self._cr_ttcn_repo = cr_ttcn_repository
         self._change_details_repo = cr_change_details_repository
         self._tdoc_repo = tdoc_repository
-        self._extraction_repo = extraction_repository
+        self._content_repo = content_repo
         self._parser = parser
         self._parser_registry = parser_registry
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
@@ -427,6 +448,16 @@ class TDocCrService:
         )
         self._search_service = search_service
         self._semantic_service = semantic_service
+        if family_service is None:
+            family_service = TDocFamilyService(
+                scraper=scraper_client,
+                cache=cache,
+                content_repo=content_repo,
+                max_tdoc_size_bytes=max_tdoc_size_bytes,
+                max_documents_per_zip=self._max_documents_per_zip,
+                max_uncompressed_size_bytes=self._max_uncompressed_size_bytes,
+            )
+        self._family_service = family_service
 
     def _resolve_parser(self, tdoc_id: str) -> TDocParser:
         """Return the parser to use for ``tdoc_id``.
@@ -497,34 +528,14 @@ class TDocCrService:
         persistent: list[TDocDocument] = []
         for document in documents:
             document_id = document_id_for(ftp_url, document.source_file)
-            markdown_name = document.markdown_file.rsplit("/", 1)[-1]
             persistent.append(
                 replace(
                     document,
                     document_id=document_id,
-                    markdown_file=f"documents/{document_id}/{markdown_name}",
+                    markdown_file=markdown_member_name(document_id, document.source_file),
                 )
             )
         return tuple(persistent)
-
-    @staticmethod
-    def _is_complete_bundle(
-        meta: TDocExtractMeta,
-        documents: tuple[TDocDocument, ...],
-    ) -> bool:
-        """Validate the parent declaration against its SQL child rows."""
-        if not meta.complete or meta.document_count != len(documents) or not documents:
-            return False
-        source_files = tuple(document.source_file for document in documents)
-        if len(source_files) != len(set(source_files)):
-            return False
-        if source_files[0] != meta.doc_filename:
-            return False
-        if sum(source_file == meta.doc_filename for source_file in source_files) != 1:
-            return False
-        return tuple(document.file_order for document in documents) == tuple(
-            range(len(documents))
-        )
 
     def _write_markdown_archive(
         self,
@@ -595,6 +606,58 @@ class TDocCrService:
                 tdoc_id, exc,
             )
 
+    def _cached_cr_parts(
+        self,
+        stored_url: str,
+        tdoc_id: str,
+    ) -> tuple[TDocCRDetails, TDocExtractMeta, tuple[TDocDocument, ...]] | None:
+        """Return the stored CR cover, parent, and annexes when a complete bundle exists."""
+        cached_details = self._repo.get_by_url(stored_url)
+        cached_meta = self._content_repo.get_extract_meta(stored_url)
+        if (
+            cached_details is None
+            or cached_meta is None
+            or cached_meta.tdoc_id != tdoc_id
+            or normalize_ftp_path(cached_meta.ftp_url) != stored_url
+        ):
+            return None
+        annexes = self._content_repo.list_documents(_CR_STORE, stored_url)
+        if not is_complete_cr_extraction(cached_meta, annexes, has_cover=True):
+            return None
+        if not self._cache.path_for(cached_meta.cache_file, "markdown").is_file():
+            return None
+        return cached_details, cached_meta, annexes
+
+    def _cached_extract(self, stored_url: str, tdoc_id: str) -> ExtractResult | None:
+        cached = self._cached_cr_parts(stored_url, tdoc_id)
+        if cached is None:
+            return None
+        details, meta, _annexes = cached
+        logger.debug(
+            "Complete SQL extraction cache hit for TDoc %s at %s",
+            tdoc_id,
+            stored_url,
+        )
+        return ExtractResult(details=details, extract_meta=meta, from_cache=True)
+
+    def _cached_main_document(self, meta: TDocExtractMeta) -> TDocDocument | None:
+        """Return the CR main from its archive; SQL never stores it."""
+        raw = self._cache.get_bytes(meta.cache_file, "markdown")
+        if raw is None:
+            return None
+        try:
+            archive = read_markdown_archive(raw)
+        except (OSError, ValueError, zipfile.BadZipFile):
+            return None
+        return next(
+            (
+                document
+                for document in archive.documents
+                if document.source_file == meta.doc_filename
+            ),
+            None,
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -605,12 +668,20 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = False,
-    ) -> PreparedTDocExtract | ExtractResult:
+    ) -> (
+        PreparedTDocExtract
+        | PreparedFamilyExtract
+        | ExtractResult
+        | FamilyExtractResult
+    ):
         """Prepare every supported DOCX in one TDoc ZIP without SQL writes."""
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
         if not tdoc.ftp_url:
             raise TDocNotYetOnFTPError(normalised)
+        store = store_for_type(tdoc.type)
+        if store is not None and store.includes_main:
+            return self._family_service.prepare_extract(tdoc, store, force=force)
 
         primary_url = build_ftp_url(tdoc.ftp_url)
         cache_file = derive_cache_file(tdoc.ftp_url)
@@ -622,27 +693,9 @@ class TDocCrService:
                 stored_url = normalize_ftp_path(candidate)
                 if stored_url != canonical_url:
                     continue
-                cached_details = self._repo.get_by_url(stored_url)
-                cached_meta = self._repo.get_extract_meta_by_url(stored_url)
-                if (
-                    cached_details is None
-                    or cached_meta is None
-                    or cached_meta.tdoc_id != normalised
-                    or normalize_ftp_path(cached_meta.ftp_url) != stored_url
-                ):
-                    continue
-                cached_documents = self._extraction_repo.list_documents(stored_url)
-                if self._is_complete_bundle(cached_meta, cached_documents):
-                    logger.debug(
-                        "Complete SQL extraction cache hit for TDoc %s at %s",
-                        normalised,
-                        stored_url,
-                    )
-                    return ExtractResult(
-                        details=cached_details,
-                        extract_meta=cached_meta,
-                        from_cache=True,
-                    )
+                cached = self._cached_extract(stored_url, normalised)
+                if cached is not None:
+                    return cached
 
         downloaded = download_tdoc_zip(
             normalised,
@@ -658,27 +711,9 @@ class TDocCrService:
             and resolved_url
             and normalize_ftp_path(resolved_url) == canonical_url
         ):
-            stored_url = normalize_ftp_path(resolved_url)
-            cached_details = self._repo.get_by_url(stored_url)
-            cached_meta = self._repo.get_extract_meta_by_url(stored_url)
-            if (
-                cached_details is not None
-                and cached_meta is not None
-                and cached_meta.tdoc_id == normalised
-                and normalize_ftp_path(cached_meta.ftp_url) == stored_url
-            ):
-                cached_documents = self._extraction_repo.list_documents(stored_url)
-                if self._is_complete_bundle(cached_meta, cached_documents):
-                    logger.debug(
-                        "Complete SQL extraction cache hit for TDoc %s at %s",
-                        normalised,
-                        stored_url,
-                    )
-                    return ExtractResult(
-                        details=cached_details,
-                        extract_meta=cached_meta,
-                        from_cache=True,
-                    )
+            cached = self._cached_extract(normalize_ftp_path(resolved_url), normalised)
+            if cached is not None:
+                return cached
 
         stored_url = (
             normalize_ftp_path(resolved_url)
@@ -715,7 +750,8 @@ class TDocCrService:
             cache_file=cache_file,
             doc_filename=bundle.main_source_file,
             extraction_version=2,
-            document_count=len(documents),
+            document_count=len(_annexes_of(documents, bundle.main_source_file)),
+            skipped_sources=bundle.skipped_sources,
         )
         self._write_markdown_archive(
             cache_file=cache_file,
@@ -733,21 +769,27 @@ class TDocCrService:
         )
 
     def persist_prepared_extract(
-        self, prepared: PreparedTDocExtract
-    ) -> ExtractResult:
+        self,
+        prepared: PreparedTDocExtract | PreparedFamilyExtract,
+    ) -> ExtractResult | FamilyExtractResult:
         """Commit the complete bundle before running best-effort index hooks."""
-        self._extraction_repo.replace_bundle(
+        if isinstance(prepared, PreparedFamilyExtract):
+            family_result = self._family_service.persist_prepared_extract(prepared)
+            self._index_after_parse(family_result.tdoc_id)
+            self._embed_after_parse(family_result.tdoc_id)
+            return family_result
+        self._content_repo.replace_cr_bundle(
             prepared.details,
             prepared.ttcn,
             prepared.changes,
             prepared.extract_meta,
-            prepared.documents,
+            prepared.annexes,
         )
         self._index_after_parse(prepared.details.tdoc_id)
         self._embed_after_parse(prepared.details.tdoc_id)
         logger.info(
-            "Persisted %d CR documents for TDoc %s at ftp_url %s",
-            len(prepared.documents),
+            "Persisted %d CR annexes for TDoc %s at ftp_url %s",
+            len(prepared.annexes),
             prepared.details.tdoc_id,
             prepared.extract_meta.ftp_url,
         )
@@ -763,10 +805,10 @@ class TDocCrService:
         *,
         force: bool = False,
         full: bool = False,
-    ) -> ExtractResult:
+    ) -> ExtractResult | FamilyExtractResult:
         """Prepare and persist one TDoc synchronously for CLI callers."""
         prepared = self.prepare_extract(tdoc_id, force=force, full=full)
-        if isinstance(prepared, ExtractResult):
+        if isinstance(prepared, (ExtractResult, FamilyExtractResult)):
             return prepared
         return self.persist_prepared_extract(prepared)
 
@@ -832,7 +874,9 @@ class TDocCrService:
                         Callable[[object], object],
                         self.persist_prepared_extract,
                     ),
-                    is_complete=lambda value: isinstance(value, ExtractResult),
+                    is_complete=lambda value: isinstance(
+                        value, (ExtractResult, FamilyExtractResult)
+                    ),
                     is_cancelled=is_cancelled,
                     on_progress=report,
                 )
@@ -853,14 +897,14 @@ class TDocCrService:
             if owns_runner and runtime is not None:
                 runtime.shutdown()
 
-        successes: dict[str, ExtractResult] = {}
+        successes: dict[str, ExtractResult | FamilyExtractResult] = {}
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
         for outcome in outcomes:
             reason = outcome.reason or ""
             if outcome.status == "success":
-                result = cast(ExtractResult, outcome.value)
-                successes[result.details.tdoc_id] = result
+                result = cast(ExtractResult | FamilyExtractResult, outcome.value)
+                successes[result.tdoc_id] = result
             elif outcome.status == "skipped":
                 logger.info("Skipping TDoc %r: %s", outcome.key, reason)
                 skipped[outcome.key] = reason
@@ -1037,18 +1081,18 @@ class TDocCrService:
 
     def persist_prepared_url(self, prepared: PreparedDirectTDoc) -> DirectParseResult:
         """Commit a URL-owned bundle once on the serialized writer lane."""
-        self._extraction_repo.replace_bundle(
+        self._content_repo.replace_cr_bundle(
             prepared.details,
             prepared.ttcn,
             prepared.changes,
             prepared.extract_meta,
-            prepared.documents,
+            prepared.annexes,
         )
         self._index_after_parse(prepared.tdoc_id)
         self._embed_after_parse(prepared.tdoc_id)
         logger.info(
-            "Persisted %d direct-parse documents for TDoc %s at %s",
-            len(prepared.documents),
+            "Persisted %d direct-parse annexes for TDoc %s at %s",
+            len(prepared.annexes),
             prepared.tdoc_id,
             prepared.extract_meta.ftp_url,
         )
@@ -1291,26 +1335,18 @@ class TDocCrService:
     ) -> PreparedDirectTDoc | DirectParseResult:
         """Prepare a complete URL-keyed document bundle after the FK probe."""
         if not force:
-            cached_details = self._repo.get_by_url(stored_ftp_url)
-            cached_meta = self._repo.get_extract_meta_by_url(stored_ftp_url)
-            if (
-                cached_details is not None
-                and cached_meta is not None
-                and cached_meta.tdoc_id == tdoc_id
-                and normalize_ftp_path(cached_meta.ftp_url)
-                == normalize_ftp_path(stored_ftp_url)
-            ):
-                cached_documents = self._extraction_repo.list_documents(
-                    stored_ftp_url
-                )
-                if self._is_complete_bundle(cached_meta, cached_documents):
+            cached = self._cached_cr_parts(stored_ftp_url, tdoc_id)
+            if cached is not None:
+                cached_details, cached_meta, cached_annexes = cached
+                cached_main = self._cached_main_document(cached_meta)
+                if cached_main is not None:
                     logger.debug(
                         "Complete SQL extraction cache hit for direct URL %s",
                         url,
                     )
                     return DirectParseResult(
                         source_kind="url-3gpp",
-                        documents=cached_documents,
+                        documents=(cached_main, *cached_annexes),
                         main_source_file=cached_meta.doc_filename,
                         details=cached_details,
                         extract_meta=cached_meta,
@@ -1363,7 +1399,8 @@ class TDocCrService:
             cache_file=cache_file,
             doc_filename=bundle.main_source_file,
             extraction_version=2,
-            document_count=len(documents),
+            document_count=len(_annexes_of(documents, bundle.main_source_file)),
+            skipped_sources=bundle.skipped_sources,
         )
         self._write_markdown_archive(
             cache_file=cache_file,
@@ -1414,14 +1451,12 @@ class TDocCrService:
 
         Raises:
             TDocNotFoundError: The row is absent.
-            TDocTypeUnsupportedError: The row's ``type`` is not ``"CR"``
-                (case-insensitive).
+            TDocTypeUnsupportedError: The row's ``type`` has no content store.
         """
         tdoc = self._tdoc_repo.get_by_id(tdoc_id)
         if tdoc is None:
             raise TDocNotFoundError(tdoc_id)
-        observed = (tdoc.type or "").strip().upper()
-        if observed != _CR_TDOC_TYPE:
+        if not is_eligible_type(tdoc.type):
             raise TDocTypeUnsupportedError(tdoc_id, tdoc.type)
         return tdoc
 

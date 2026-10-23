@@ -35,6 +35,7 @@ codes without inspecting exception hierarchies.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import typing
 from collections.abc import Callable
@@ -53,6 +54,7 @@ from doc3gpp.models.tdoc_document import (
 )
 from doc3gpp.parsers.cr.header import CRHeaderMissingError, is_cr_header_present
 from doc3gpp.parsers.cr_parser import _TDOC_HEADER_PATTERN
+from doc3gpp.parsers.tdoc_family_main import is_tdoc_member
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
 from doc3gpp.parsers.tdoc_zip import (
     TDocZipLimitError,
@@ -62,6 +64,8 @@ from doc3gpp.parsers.tdoc_zip import (
 
 if typing.TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
+
+logger = logging.getLogger(__name__)
 
 
 #: Maximum filename length accepted for the zip-cache key. Matches
@@ -489,7 +493,7 @@ def _direct_parse_payload(
     parse_main: Callable[[str, str], TDocCRParseResult] | None = None,
 ) -> TDocParseBundle:
     if max_bytes > 0 and len(payload) > max_bytes:
-        from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+        from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
 
         raise TDocTooLargeError(
             source=filename,
@@ -535,41 +539,57 @@ def _direct_parse_payload(
         convert_document_to_markdown,
     )
 
+    resolved_tdoc_id = (
+        tdoc_id
+        or extract_tdoc_id_from_filename(filename)
+        or _synthetic_tdoc_id(filename)
+    )
     converted: list[tuple[str, str]] = []
-    cover_candidates: list[str] = []
+    failures: list[tuple[str, Exception]] = []
     for source_file, docx_bytes in members:
         try:
             markdown = convert_document_to_markdown(docx_bytes, source_file)
         except PythonDocxNotInstalledError:
             raise
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to convert supported DOCX member {source_file!r}: {exc}"
-            ) from exc
+        except Exception as exc:  # noqa: BLE001 - one bad annex is recorded, not raised
+            if not _is_empty_annex_error(exc, source_file, resolved_tdoc_id):
+                failures.append((source_file, exc))
+                continue
+            markdown = ""
         converted.append((source_file, markdown))
-        has_cover, _header = is_cr_header_present(markdown)
-        if has_cover:
-            cover_candidates.append(source_file)
 
+    cover_candidates = [
+        source_file
+        for source_file, markdown in converted
+        if is_cr_header_present(markdown)[0]
+    ]
+    if not cover_candidates and failures:
+        source_file, exc = failures[0]
+        raise _failed_conversion(source_file, exc) from exc
+    if not cover_candidates:
+        raise CRHeaderMissingError(
+            f"No supported DOCX member in {filename!r} contains a structural CR cover page"
+        )
     if len(cover_candidates) != 1:
-        if not cover_candidates:
-            raise CRHeaderMissingError(
-                f"No supported DOCX member in {filename!r} contains a structural CR cover page"
-            )
         raise ValueError(
             f"Expected exactly one DOCX member with a CR cover page in {filename!r}; "
             f"found {len(cover_candidates)} candidates: {', '.join(cover_candidates)}"
         )
 
     main_source_file = cover_candidates[0]
+    for source_file, exc in failures:
+        if is_tdoc_member(source_file, resolved_tdoc_id.casefold()):
+            raise _failed_conversion(source_file, exc) from exc
+    for source_file, exc in failures:
+        logger.warning(
+            "Skipping TDoc annex %r: conversion failed: %s", source_file, exc
+        )
+    skipped_sources = tuple(
+        sorted((source_file for source_file, _ in failures), key=source_sort_key)
+    )
     main_markdown = next(
         markdown for source_file, markdown in converted
         if source_file == main_source_file
-    )
-    resolved_tdoc_id = (
-        tdoc_id
-        or extract_tdoc_id_from_filename(filename)
-        or _synthetic_tdoc_id(filename)
     )
     if parse_main is None:
         parser = build_default_registry().resolve(resolved_tdoc_id, tdoc_type="CR")
@@ -600,6 +620,24 @@ def _direct_parse_payload(
         documents=tuple(documents),
         main_source_file=main_source_file,
         main_parse_result=parsed,
+        skipped_sources=skipped_sources,
+    )
+
+
+def _failed_conversion(source_file: str, exc: Exception) -> ValueError:
+    return ValueError(
+        f"Failed to convert supported DOCX member {source_file!r}: {exc}"
+    )
+
+
+def _is_empty_annex_error(exc: Exception, source_file: str, tdoc_id: str) -> bool:
+    """Return whether a zero-text member can only be an annex, never the TDoc main."""
+    from doc3gpp.parsers.tdoc_zip_convert import _EMPTY_TEXT_PREFIX
+
+    return (
+        isinstance(exc, RuntimeError)
+        and str(exc).startswith(_EMPTY_TEXT_PREFIX)
+        and not is_tdoc_member(source_file, tdoc_id.casefold())
     )
 
 
@@ -616,8 +654,9 @@ def direct_parse_bytes(
 
     ZIP members are enumerated and converted sequentially. The structural CR
     detector selects exactly one main document; supporting documents remain
-    content-only and do not enter the CR parser. Standalone DOCX input follows
-    the same one-document bundle contract.
+    content-only and do not enter the CR parser. An annex that fails to convert
+    is logged and listed in ``skipped_sources`` unless it is named for the TDoc.
+    Standalone DOCX input follows the same one-document bundle contract.
     """
     return _direct_parse_payload(
         payload,

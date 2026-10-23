@@ -89,14 +89,13 @@ def _build_service(
 
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
-    cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
     cr_change_details_repo = MagicMock()
     cr_change_details_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = None
-    extraction_repo = MagicMock()
+    content_repo = MagicMock()
 
     service = TDocCrService(
         cache=cache,
@@ -105,7 +104,7 @@ def _build_service(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
-        extraction_repository=extraction_repo,
+        content_repo=content_repo,
     )
     return service, cr_repo, cr_ttcn_repo, cr_change_details_repo, tdoc_repo
 
@@ -144,9 +143,9 @@ def test_extract_writes_change_details_in_atomic_bundle(tmp_path: Path) -> None:
 
     service.extract("R5s260009")
 
-    service._extraction_repo.replace_bundle.assert_called_once()  # type: ignore[attr-defined]
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
     details, ttcn, written, meta, documents = (
-        service._extraction_repo.replace_bundle.call_args.args  # type: ignore[attr-defined]
+        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
     )
     assert details.ftp_url == meta.ftp_url == "tsg_wg1/cr_r5s260009.zip"
     assert ttcn is None
@@ -155,7 +154,7 @@ def test_extract_writes_change_details_in_atomic_bundle(tmp_path: Path) -> None:
     assert written.tdoc_id == "R5s260009"
     assert written.clauses == ("5.2.3",)
     assert written.changes == ({"clauses": ["5.2.3"], "text": "line A\n<ins>X</ins>"},)
-    assert len(documents) == 1
+    assert documents == ()
     cr_repo.upsert.assert_not_called()
     cr_repo.upsert_extract_meta.assert_not_called()
     cr_ttcn_repo.upsert.assert_not_called()
@@ -191,9 +190,9 @@ def test_extract_atomic_bundle_carries_none_for_absent_changes(
 
     service.extract("R5s260009")
 
-    service._extraction_repo.replace_bundle.assert_called_once()  # type: ignore[attr-defined]
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
     _details, _ttcn, changes, _meta, _documents = (
-        service._extraction_repo.replace_bundle.call_args.args  # type: ignore[attr-defined]
+        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
     )
     assert changes is None
     cr_repo.upsert.assert_not_called()

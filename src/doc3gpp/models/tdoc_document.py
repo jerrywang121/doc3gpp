@@ -121,6 +121,7 @@ class TDocParseBundle:
     documents: tuple[TDocDocument, ...]
     main_source_file: str
     main_parse_result: TDocCRParseResult
+    skipped_sources: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         documents = tuple(self.documents)
@@ -128,6 +129,9 @@ class TDocParseBundle:
             raise ValueError("TDocParseBundle requires at least one document")
         if documents != self.documents:
             object.__setattr__(self, "documents", documents)
+        skipped_sources = tuple(self.skipped_sources)
+        if skipped_sources != self.skipped_sources:
+            object.__setattr__(self, "skipped_sources", skipped_sources)
 
         main_source_file = _normalize_safe_relative_path(
             self.main_source_file,
@@ -149,6 +153,10 @@ class TDocParseBundle:
             range(len(documents))
         ):
             raise ValueError("TDocParseBundle file_order values must be contiguous")
+        if len(skipped_sources) != len(set(skipped_sources)) or set(
+            skipped_sources
+        ) & set(source_files):
+            raise ValueError("TDocParseBundle skipped sources must be unique and undocumented")
 
 
 @dataclass(slots=True, frozen=True)

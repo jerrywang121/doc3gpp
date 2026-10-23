@@ -43,6 +43,7 @@ from doc3gpp.parsers.direct_extractor import (
 from doc3gpp.parsers.tdoc_zip import (
     TDocZipLimitError,
     TDocZipValidationError,
+    build_markdown_archive,
     document_id_for,
     ephemeral_document_id_for,
 )
@@ -591,7 +592,7 @@ def test_direct_parse_bytes_rejects_unsafe_supported_member() -> None:
 
 
 @pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
-def test_direct_parse_bytes_fails_if_any_supported_member_is_corrupt() -> None:
+def test_direct_parse_bytes_skips_corrupt_annex_and_keeps_main() -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
@@ -604,8 +605,13 @@ def test_direct_parse_bytes_fails_if_any_supported_member_is_corrupt() -> None:
         "z/R5s260009.docx": main_docx,
     })
 
-    with pytest.raises(ValueError, match="broken.docx"):
-        direct_parse_bytes(payload, filename="R5s260009.zip")
+    bundle = direct_parse_bytes(payload, filename="R5s260009.zip")
+
+    assert bundle.main_source_file == "z/R5s260009.docx"
+    assert bundle.skipped_sources == ("a/broken.docx",)
+    assert [document.source_file for document in bundle.documents] == [
+        "z/R5s260009.docx",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -635,13 +641,12 @@ def _build_service_with_fake_repos(
 
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
-    cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = None
-    extraction_repo = MagicMock()
-    extraction_repo.list_documents.return_value = ()
+    content_repo = MagicMock()
+    content_repo.list_documents.return_value = ()
     service = TDocCrService(
         cache=cache,
         scraper_client=scraper,
@@ -649,7 +654,7 @@ def _build_service_with_fake_repos(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
-        extraction_repository=extraction_repo,
+        content_repo=content_repo,
     )
     return service, scraper, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
@@ -797,12 +802,12 @@ def test_extract_from_url_3gpp_with_tdoc_in_tdocs_writes_cache_and_db(
     assert result.details is not None
     assert result.extract_meta is not None
     assert result.extract_meta.extraction_version == 2
-    assert result.extract_meta.document_count == 2
+    assert result.extract_meta.document_count == 1
     assert [document.source_file for document in result.documents] == [
         "z/R5s260009.docx",
         "a/support.docx",
     ]
-    service._extraction_repo.replace_bundle.assert_called_once()  # type: ignore[attr-defined]
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
     cr_repo.upsert.assert_not_called()
     expected_key = derive_cache_file(url)
     assert any(call[0] == expected_key for call in cache.put_calls)
@@ -846,7 +851,7 @@ def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
     assert len(result.documents) == 1
     assert result.main_source_file == result.documents[0].source_file
     assert result.details is not None and result.details.ftp_url is None
-    assert service._extraction_repo.replace_bundle.call_count == 0  # type: ignore[attr-defined]
+    assert service._content_repo.replace_cr_bundle.call_count == 0  # type: ignore[attr-defined]
     assert cr_repo.upsert.call_count == 0
     assert cache.put_calls == []
 
@@ -888,29 +893,50 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_is_rejected(
 def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
     tmp_path: Path,
 ) -> None:
-    """A complete version-2 SQL bundle short-circuits download and conversion."""
+    """A complete SQL parent with its archive short-circuits download and conversion."""
     if not _docx_available():
         pytest.skip("python-docx not installed")
+    from doc3gpp.scraping.cache import TDocCache
+
     fixture = FIXTURES_DIR / "R5s260009.zip"
     zip_bytes = fixture.read_bytes()
-    service, scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
+    service, scraper, _cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=zip_bytes,
     )
     ftp_url = (
         "tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
     )
+    stored_ftp_url = ftp_url.lower()
     tdoc_repo.get_by_id.return_value = TDoc(
         tdoc_id="R5s260009", type="CR", ftp_url=ftp_url
     )
-    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
-    meta = _make_meta("R5s260009")
-    cr_repo.get_extract_meta_by_url.return_value = meta
-    document = _stored_document(
-        "stored SQL markdown",
-        ftp_url=meta.ftp_url,
-        source_file=meta.doc_filename,
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    service._cache = cache  # type: ignore[attr-defined]
+    main = _stored_document(
+        "stored main markdown",
+        ftp_url=stored_ftp_url,
+        source_file="R5s260009.docx",
     )
-    service._extraction_repo.list_documents.return_value = (document,)  # type: ignore[attr-defined]
+    meta = TDocExtractMeta(
+        ftp_url=stored_ftp_url,
+        tdoc_id="R5s260009",
+        cache_file="R5s260009.zip",
+        doc_filename="R5s260009.docx",
+        extraction_version=2,
+        document_count=0,
+    )
+    cache.put_bytes(
+        meta.cache_file,
+        build_markdown_archive(
+            (main,),
+            ftp_url=stored_ftp_url,
+            main_source_file=main.source_file,
+        ),
+        "markdown",
+    )
+    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
+    service._content_repo.get_extract_meta.return_value = meta  # type: ignore[attr-defined]
+    service._content_repo.list_documents.return_value = ()  # type: ignore[attr-defined]
 
     result = service.extract_from_url(
         "https://www.3gpp.org/ftp/" + ftp_url, force=False, full=False,
@@ -918,10 +944,9 @@ def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
 
     assert result.from_cache is True
     assert result.persisted is False
-    assert result.documents == (document,)
+    assert result.documents == (main,)
     assert result.main_source_file == meta.doc_filename
     assert scraper.get_bytes.call_count == 0
-    assert cache.put_calls == []
 
 
 # ---------------------------------------------------------------------------

@@ -4398,7 +4398,15 @@ def _emit_url_batch_results(
     typer.echo(f"Scanned:                         {len(batch.results) + failures + len(batch.skipped)}")
     if output_dir is not None:
         typer.echo(f"Skipped (output already exists): {skipped}")
-    typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {len(batch.skipped)}")
+    size_skipped = sum(
+        1 for reason in batch.skipped.values() if reason.startswith("TDocTooLargeError:")
+    )
+    archive_skipped = sum(
+        1 for reason in batch.skipped.values() if reason.startswith("TDocZipLimitError:")
+    )
+    typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {size_skipped}")
+    typer.echo(f"Skipped (archive member limits): {archive_skipped}")
+    typer.echo(f"{'Skipped:':<32}{len(batch.skipped) - size_skipped - archive_skipped}")
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Cache hits:                      {cache_hits}")
     typer.echo(f"Failures:                        {failures}")

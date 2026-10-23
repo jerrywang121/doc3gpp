@@ -259,3 +259,32 @@ def test_batch_summary_without_output(
     assert "Scanned:                         2" in result.output
     assert "Newly parsed:                    1" in result.output
     assert "Failures:                        1" in result.output
+
+
+def test_batch_summary_splits_size_and_type_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = DirectParseBatchResult(
+        results=[],
+        failures={},
+        skipped={
+            "https://www.3gpp.org/ftp/Docs/R5s260003.zip": (
+                "TDocTooLargeError: 2048 KB exceeds the 1000 KB limit"
+            ),
+            "https://www.3gpp.org/ftp/Docs/R5s260004.zip": (
+                "TDocTypeSkippedError: type 'other' is not parsed"
+            ),
+        },
+    )
+    fake = _FakeBatchService(batch_result=batch)
+    _build_service_factory(monkeypatch, fake)
+
+    result = Runner().invoke(
+        app, ["tdoc", "parse", "--from-url", "https://www.3gpp.org/ftp/Docs/"]
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "Skipped (exceeds max_tdoc_size_kb): 1" in lines
+    generic = [line.split()[-1] for line in lines if line.startswith("Skipped:")]
+    assert generic == ["1"]

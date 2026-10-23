@@ -70,8 +70,9 @@ def parse_content_chunk_id(chunk_id: str) -> tuple[str, str] | None:
 class SemanticSearchHit:
     """A single merged hit from the RRF fusion of FTS5 + vector rankings.
 
-    ``rank_fts5`` / ``rank_vec`` are the 0-based positions in the
-    respective fan-out lists, or ``None`` when the ``tdoc_id`` was not
+    ``rank_fts5`` is the 0-based position in the FTS5 fan-out list and
+    ``rank_vec`` the 1-based position of the TDoc among distinct TDocs in the
+    vector fan-out (knn order). Either is ``None`` when the ``tdoc_id`` was not
     present in that side's fan-out. ``min_chunk_distance`` is the
     lowest cosine distance across all chunks for this ``tdoc_id``
     (``None`` when the tdoc had no vector rows). ``best_chunk_id`` is

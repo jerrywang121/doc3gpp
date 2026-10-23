@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from doc3gpp.models.search import SearchHit
 from doc3gpp.services.semantic_search_service import rrf_merge
 
@@ -25,7 +27,7 @@ def test_rrf_pure_vector_when_vector_weight_one():
     vec = [("A", "A#0", 0, 0.1), ("B", "B#0", 0, 0.2)]
     out = rrf_merge(fts5, vec, k=60, vector_weight=1.0, limit=10)
     assert [h.tdoc_id for h in out] == ["A", "B"]
-    assert out[0].rank_vec == 0
+    assert out[0].rank_vec == 1
     assert out[0].rank_fts5 is None
 
 
@@ -33,13 +35,13 @@ def test_rrf_blend_both_sides():
     fts5 = [_hit("A"), _hit("B")]
     vec = [("B", "B#0", 0, 0.1), ("C", "C#0", 0, 0.2)]
     # A: fts5 rank 0, no vec → score = 1/(60+0)*(1-W) = 1/60 * 0.3 = 0.005
-    # B: fts5 rank 1, vec rank 0 → 1/61*0.3 + 1/60*0.7 = 0.00492 + 0.01167 = 0.01658
-    # C: no fts5, vec rank 1 → 1/61*0.7 = 0.01148
+    # B: fts5 rank 1, vec rank 1 → 1/61*0.3 + 1/61*0.7 = 1/61 = 0.01639
+    # C: no fts5, vec rank 2 → 1/62*0.7 = 0.01129
     out = rrf_merge(fts5, vec, k=60, vector_weight=0.7, limit=10)
     # B should rank first (highest score)
     assert out[0].tdoc_id == "B"
     assert out[0].rank_fts5 == 1
-    assert out[0].rank_vec == 0
+    assert out[0].rank_vec == 1
 
 
 def test_rrf_min_distance_across_chunks():
@@ -77,3 +79,18 @@ def test_rrf_synthesizes_hit_for_vector_only_tdoc():
     assert out[0].tdoc_id == "A"
     # hit is None for vector-only; service fills it later
     assert out[0].hit is None
+
+
+def test_rrf_vector_rank_counts_tdocs_not_chunk_rows():
+    fts5: list = []
+    vec = [
+        ("A", "A#0", 0, 0.1),
+        ("A", "A#1", 1, 0.2),
+        ("A", "A#2", 2, 0.3),
+        ("B", "B#0", 3, 0.4),
+    ]
+    out = rrf_merge(fts5, vec, k=60, vector_weight=1.0, limit=10)
+    by_id = {h.tdoc_id: h for h in out}
+    assert by_id["A"].rank_vec == 1
+    assert by_id["B"].rank_vec == 2
+    assert by_id["B"].rrf_score == pytest.approx(1 / (60 + 2))

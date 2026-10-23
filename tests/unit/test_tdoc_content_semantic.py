@@ -132,6 +132,7 @@ def test_semantic_only_returns_one_hit_per_tdoc():
 def test_hybrid_carries_document_hits():
     vec = MagicMock()
     vec.knn.return_value = _knn_rows()
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     vec.get_tdocs_metadata.return_value = {}
     fts5 = MagicMock()
     fts5.search.return_value = []

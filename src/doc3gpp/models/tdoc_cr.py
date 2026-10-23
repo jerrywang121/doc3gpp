@@ -20,10 +20,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_document import TDocDocument
+
+if TYPE_CHECKING:
+    from doc3gpp.models.tdoc_content_families import TDocContentStore
 
 _PARSER_VERSION = "1.0.0"
 
@@ -377,6 +380,11 @@ class DirectParseResult:
         source_url: The original file or folder URL supplied to the
             direct-parse call. Populated for URL sources so batch
             emitters can mirror the upstream folder structure.
+        content_store: The family store (WID, LS, or discussion) that
+            holds this result. ``None`` for CR results, which carry
+            ``details`` instead.
+        skipped_sources: Family member paths whose conversion failed.
+            CR results report skipped annexes through ``extract_meta``.
     """
 
     source_kind: DirectSourceKind
@@ -389,6 +397,8 @@ class DirectParseResult:
     tdoc_id: str | None
     tdoc_id_in_tdocs: bool
     source_url: str | None = None
+    content_store: TDocContentStore | None = None
+    skipped_sources: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)

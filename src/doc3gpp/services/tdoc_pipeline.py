@@ -77,6 +77,7 @@ def classify_tdoc_exception(
     from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
     from doc3gpp.services.tdoc_errors import (
         TDocNotYetOnFTPError,
+        TDocTypeSkippedError,
         TDocTypeUnsupportedError,
     )
 
@@ -88,6 +89,7 @@ def classify_tdoc_exception(
             TDocTooLargeError,
             TDocZipLimitError,
             TDocTypeUnsupportedError,
+            TDocTypeSkippedError,
         ),
     ):
         return "skipped", reason

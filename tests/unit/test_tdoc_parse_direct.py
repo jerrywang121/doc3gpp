@@ -49,10 +49,20 @@ from doc3gpp.parsers.tdoc_zip import (
 )
 from doc3gpp.scraping.tdoc_zip_source import download_tdoc_zip
 from doc3gpp.services.tdoc_cr_service import TDocCrService
+from doc3gpp.settings.loader import get_settings
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _disable_auto_sync_by_default(monkeypatch):
+    """Keep these direct-mode tests hermetic: no TDoc type sync against the network."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"

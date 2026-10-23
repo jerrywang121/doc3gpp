@@ -69,6 +69,7 @@ from doc3gpp.models.tdoc_content_families import (
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     DirectParseResult,
+    DirectSourceKind,
     TDocCRDetails,
     TDocCRParseResult,
     TDocCRTTCNDetails,
@@ -91,6 +92,7 @@ from doc3gpp.parsers.direct_extractor import (
     validate_tdoc_ftp_url,
 )
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
+from doc3gpp.parsers.tdoc_family_main import TDocMainDocumentError
 from doc3gpp.parsers.tdoc_parsers import (
     TDocParser,
     TDocParserRegistry,
@@ -101,6 +103,7 @@ from doc3gpp.parsers.tdoc_zip import (
     document_id_for,
     read_markdown_archive,
 )
+from doc3gpp.parsers.tdoc_zip_convert import TDocZipConversion, convert_direct_payload
 from doc3gpp.repository.protocols import (
     TDocContentRepository,
     TDocCrChangeDetailsRepository,
@@ -117,13 +120,23 @@ from doc3gpp.scraping.tdoc_zip_source import (
     resolve_download_url,
 )
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
-from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError, TDocTypeUnsupportedError
+from doc3gpp.services.tdoc_errors import (
+    TDocNotYetOnFTPError,
+    TDocTypeSkippedError,
+    TDocTypeUnsupportedError,
+)
 from doc3gpp.services.tdoc_family_service import (
     FamilyExtractResult,
     PreparedFamilyExtract,
     TDocFamilyService,
 )
 from doc3gpp.services.tdoc_pipeline import PipelineItem, PipelineProgress, TDocPipeline
+from doc3gpp.services.tdoc_type_detection import (
+    TYPE_UNDETERMINED,
+    DirectTypeDecision,
+    decide_direct_type,
+    decide_known_type,
+)
 
 # Re-exported so callers can catch ``TDocTooLargeError`` from a single
 # import path (the service layer) without depending on the scraping
@@ -134,17 +147,20 @@ __all__ = [
     "BatchExtractResult",
     "CRHeaderMissingError",
     "ExtractResult",
+    "PreparedDirectFamily",
     "PreparedDirectTDoc",
     "PreparedTDocExtract",
     "TDocCrService",
     "TDocNotFoundError",
     "TDocNotYetOnFTPError",
     "TDocTooLargeError",
+    "TDocTypeSkippedError",
     "TDocTypeUnsupportedError",
     "TDocZipDownloadError",
 ]
 
 if TYPE_CHECKING:
+    from doc3gpp.models.tdoc_content_families import TDocContentStore
     from doc3gpp.scraping.client import ScraperClient
     from doc3gpp.services.search_service import SearchService
     from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -345,6 +361,53 @@ class PreparedDirectTDoc:
     @property
     def annexes(self) -> tuple[TDocDocument, ...]:
         return _annexes_of(self.documents, self.main_source_file)
+
+
+@dataclass(slots=True, frozen=True)
+class PreparedDirectFamily:
+    """Prepared family bundle from a direct URL, awaiting the serialized SQL writer."""
+
+    url: str
+    prepared: PreparedFamilyExtract
+
+    @property
+    def tdoc_id(self) -> str:
+        return self.prepared.tdoc_id
+
+
+def _check_direct_size(payload: bytes, source: str, max_bytes: int) -> None:
+    if max_bytes > 0 and len(payload) > max_bytes:
+        raise TDocTooLargeError(source=source, size=len(payload), limit=max_bytes)
+
+
+def _family_direct_result(
+    *,
+    source_kind: DirectSourceKind,
+    source_url: str | None,
+    tdoc_id: str | None,
+    tdoc_id_in_tdocs: bool,
+    store: TDocContentStore,
+    documents: tuple[TDocDocument, ...],
+    main_source_file: str,
+    extract_meta: TDocExtractMeta | None,
+    skipped_sources: tuple[str, ...],
+    from_cache: bool,
+    persisted: bool,
+) -> DirectParseResult:
+    return DirectParseResult(
+        source_kind=source_kind,
+        documents=documents,
+        main_source_file=main_source_file,
+        details=None,
+        extract_meta=extract_meta,
+        from_cache=from_cache,
+        persisted=persisted,
+        tdoc_id=tdoc_id,
+        tdoc_id_in_tdocs=tdoc_id_in_tdocs,
+        source_url=source_url,
+        content_store=store,
+        skipped_sources=skipped_sources,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -930,7 +993,9 @@ class TDocCrService:
             runtime = PipelineRuntime(prepare_workers=1)
             runner = TDocPipeline(runtime)
 
-        def prepare_one(value: str) -> PreparedDirectTDoc | DirectParseResult:
+        def prepare_one(
+            value: str,
+        ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
             try:
                 return self.prepare_from_url(
                     value,
@@ -981,7 +1046,7 @@ class TDocCrService:
         force: bool = False,
         full: bool = False,
         max_tdoc_size_bytes: int | None = None,
-    ) -> PreparedDirectTDoc | DirectParseResult:
+    ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
         """Prepare one direct URL bundle without mutating SQL repositories."""
         max_bytes = (
             self._max_tdoc_size_bytes
@@ -992,20 +1057,19 @@ class TDocCrService:
             url = validate_tdoc_ftp_url(url)
         else:
             payload = self._scraper.get_bytes(url)
-            bundle = self._parse_bundle(
-                payload, filename=url, full=full, max_bytes=max_bytes
-            )
-            return DirectParseResult(
+            return self._direct_in_memory(
+                payload,
+                filename=url,
+                full=full,
+                max_bytes=max_bytes,
                 source_kind="url-other",
-                documents=bundle.documents,
-                main_source_file=bundle.main_source_file,
-                details=bundle.main_parse_result.cover,
-                extract_meta=None,
-                from_cache=False,
-                persisted=False,
-                tdoc_id=bundle.main_parse_result.cover.tdoc_id,
-                tdoc_id_in_tdocs=False,
                 source_url=url,
+                routing_tdoc_id=extract_tdoc_id_from_filename(url),
+                parse_tdoc_id=None,
+                result_tdoc_id=None,
+                id_from_cover=True,
+                tdoc_id_in_tdocs=False,
+                identity=url,
             )
 
         cache_file = derive_cache_file(url)
@@ -1013,67 +1077,88 @@ class TDocCrService:
         extracted_id = extract_tdoc_id_from_filename(url)
 
         if extracted_id is None:
-            payload = self._scraper.get_bytes(url)
-            bundle = self._parse_bundle(
-                payload, filename=url, full=full, max_bytes=max_bytes
-            )
             logger.warning(
                 "Direct-parse URL %s has no TDoc id pattern; skipping cache and DB writes",
                 url,
             )
-            return DirectParseResult(
-                source_kind="url-3gpp",
-                documents=bundle.documents,
-                main_source_file=bundle.main_source_file,
-                details=bundle.main_parse_result.cover,
-                extract_meta=None,
-                from_cache=False,
-                persisted=False,
-                tdoc_id=None,
-                tdoc_id_in_tdocs=False,
-                source_url=url,
-            )
-
-        if not self._tdoc_in_tdocs(extracted_id):
             payload = self._scraper.get_bytes(url)
-            bundle = self._parse_bundle(
+            return self._direct_in_memory(
                 payload,
                 filename=url,
                 full=full,
                 max_bytes=max_bytes,
-                tdoc_id=extracted_id,
+                source_kind="url-3gpp",
+                source_url=url,
+                routing_tdoc_id=None,
+                parse_tdoc_id=None,
+                result_tdoc_id=None,
+                id_from_cover=False,
+                tdoc_id_in_tdocs=False,
+                identity=stored_ftp_url,
             )
+
+        tdoc = self._tdoc_repo.get_by_id(extracted_id)
+        if tdoc is None:
             logger.warning(
                 "Direct-parse URL %s has tdoc_id %s missing from tdocs; "
                 "skipping cache and DB writes",
                 url,
                 extracted_id,
             )
-            return DirectParseResult(
+            payload = self._scraper.get_bytes(url)
+            return self._direct_in_memory(
+                payload,
+                filename=url,
+                full=full,
+                max_bytes=max_bytes,
                 source_kind="url-3gpp",
-                documents=bundle.documents,
-                main_source_file=bundle.main_source_file,
-                details=bundle.main_parse_result.cover,
-                extract_meta=None,
-                from_cache=False,
-                persisted=False,
-                tdoc_id=extracted_id,
-                tdoc_id_in_tdocs=False,
                 source_url=url,
+                routing_tdoc_id=extracted_id,
+                parse_tdoc_id=extracted_id,
+                result_tdoc_id=extracted_id,
+                id_from_cover=False,
+                tdoc_id_in_tdocs=False,
+                identity=stored_ftp_url,
             )
 
         return self._prepare_from_3gpp_url(
             url=url,
             cache_file=cache_file,
             stored_ftp_url=stored_ftp_url,
-            tdoc_id=extracted_id,
+            tdoc=tdoc,
             force=force,
             full=full,
             max_bytes=max_bytes,
         )
 
-    def persist_prepared_url(self, prepared: PreparedDirectTDoc) -> DirectParseResult:
+    def persist_prepared_url(
+        self,
+        prepared: PreparedDirectTDoc | PreparedDirectFamily,
+    ) -> DirectParseResult:
         """Commit a URL-owned bundle once on the serialized writer lane."""
+        if isinstance(prepared, PreparedDirectFamily):
+            family_result = self._family_service.persist_prepared_extract(prepared.prepared)
+            self._index_after_parse(family_result.tdoc_id)
+            self._embed_after_parse(family_result.tdoc_id)
+            logger.info(
+                "Persisted %d family documents for TDoc %s at ftp_url %s",
+                len(family_result.documents),
+                family_result.tdoc_id,
+                prepared.prepared.extract_meta.ftp_url,
+            )
+            return _family_direct_result(
+                source_kind="url-3gpp",
+                source_url=prepared.url,
+                tdoc_id=family_result.tdoc_id,
+                tdoc_id_in_tdocs=True,
+                store=family_result.store,
+                documents=family_result.documents,
+                main_source_file=prepared.prepared.extract_meta.doc_filename,
+                extract_meta=family_result.extract_meta,
+                skipped_sources=family_result.skipped_sources,
+                from_cache=False,
+                persisted=True,
+            )
         self._content_repo.replace_cr_bundle(
             prepared.details,
             prepared.ttcn,
@@ -1234,22 +1319,20 @@ class TDocCrService:
             if max_tdoc_size_bytes is None
             else max_tdoc_size_bytes
         )
-        bundle = self._parse_bundle(
+        tdoc_id = extract_tdoc_id_from_filename(filename)
+        return self._direct_in_memory(
             docx_bytes,
             filename=filename,
             full=full,
             max_bytes=max_bytes,
-        )
-        return DirectParseResult(
             source_kind="local",
-            documents=bundle.documents,
-            main_source_file=bundle.main_source_file,
-            details=bundle.main_parse_result.cover,
-            extract_meta=None,
-            from_cache=False,
-            persisted=False,
-            tdoc_id=extract_tdoc_id_from_filename(filename),
+            source_url=None,
+            routing_tdoc_id=tdoc_id,
+            parse_tdoc_id=None,
+            result_tdoc_id=tdoc_id,
+            id_from_cover=False,
             tdoc_id_in_tdocs=False,
+            identity=f"local:{tdoc_id}:{filename}",
         )
 
     def extract_from_bytes(
@@ -1305,67 +1388,283 @@ class TDocCrService:
             raise RuntimeError(outcome.reason or "direct TDoc parse failed")
         return cast(DirectParseResult, outcome.value)
 
-    def _tdoc_in_tdocs(self, tdoc_id: str) -> bool:
-        """Return ``True`` when ``tdoc_id`` has a matching row in ``tdocs``.
+    def _direct_tdoc_type(self, tdoc_id: str | None) -> str | None:
+        if tdoc_id is None:
+            return None
+        tdoc = self._tdoc_repo.get_by_id(tdoc_id)
+        return None if tdoc is None else tdoc.type
 
-        Cheap single-row probe against the TDoc repository; the FK on
-        ``tdoc_extracts`` / ``tdoc_cr_cover_page`` is non-nullable, so
-        the service layer must consult this before either
-        :meth:`_repo.upsert` is called from the direct path.
+    def _convert_direct(
+        self,
+        payload: bytes,
+        *,
+        filename: str,
+        tdoc_id: str,
+        identity: str,
+    ) -> TDocZipConversion:
+        return convert_direct_payload(
+            payload,
+            filename=filename,
+            tdoc_id=tdoc_id,
+            identity=identity,
+            max_documents=self._max_documents_per_zip,
+            max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+        )
+
+    def _decide_direct(
+        self,
+        payload: bytes,
+        *,
+        filename: str,
+        tdoc_id: str | None,
+        tdoc_type: str | None,
+        identity: str,
+    ) -> tuple[DirectTypeDecision, TDocZipConversion | None]:
+        """Route a source by its TDoc type; sniff the main only when the type is unknown.
+
+        A sniffed conversion is returned so a family result does not convert twice.
+        With no name-matched main, only the structural CR check can identify the
+        document, so the decision falls back to CR.
         """
-        return self._tdoc_repo.get_by_id(tdoc_id) is not None
+        if tdoc_id is None:
+            return DirectTypeDecision("cr", _CR_STORE), None
+        sniffed: list[TDocZipConversion] = []
 
-    def _prepare_from_3gpp_url(
+        def main_markdown() -> str:
+            conversion = self._convert_direct(
+                payload, filename=filename, tdoc_id=tdoc_id, identity=identity,
+            )
+            sniffed.append(conversion)
+            return conversion.documents[0].markdown_text
+
+        try:
+            decision = decide_direct_type(
+                tdoc_id, tdoc_type=tdoc_type, main_markdown=main_markdown,
+            )
+        except TDocMainDocumentError:
+            return DirectTypeDecision("cr", _CR_STORE), None
+        return decision, (sniffed[0] if sniffed else None)
+
+    def _parse_cr_bundle(
+        self,
+        payload: bytes,
+        *,
+        filename: str,
+        full: bool,
+        max_bytes: int,
+        tdoc_id: str | None,
+        sniffed: bool,
+        skip_tdoc_id: str | None,
+    ) -> TDocParseBundle:
+        """Run the CR parse; a sniffed source with no CR cover is skipped, not failed."""
+        try:
+            return self._parse_bundle(
+                payload,
+                filename=filename,
+                full=full,
+                max_bytes=max_bytes,
+                tdoc_id=tdoc_id,
+            )
+        except CRHeaderMissingError as exc:
+            if sniffed:
+                raise TDocTypeSkippedError(skip_tdoc_id, TYPE_UNDETERMINED) from exc
+            raise
+
+    def _direct_in_memory(
+        self,
+        payload: bytes,
+        *,
+        filename: str,
+        full: bool,
+        max_bytes: int,
+        source_kind: DirectSourceKind,
+        source_url: str | None,
+        routing_tdoc_id: str | None,
+        parse_tdoc_id: str | None,
+        result_tdoc_id: str | None,
+        id_from_cover: bool,
+        tdoc_id_in_tdocs: bool,
+        identity: str,
+    ) -> DirectParseResult:
+        """Route an in-memory payload to the family or CR parse with no SQL writes."""
+        _check_direct_size(payload, filename, max_bytes)
+        tdoc_type = self._direct_tdoc_type(routing_tdoc_id)
+        decision, conversion = self._decide_direct(
+            payload,
+            filename=filename,
+            tdoc_id=routing_tdoc_id,
+            tdoc_type=tdoc_type,
+            identity=identity,
+        )
+        if decision.kind == "skipped":
+            raise TDocTypeSkippedError(
+                routing_tdoc_id, decision.reason or TYPE_UNDETERMINED,
+            )
+        if decision.kind == "family":
+            assert decision.store is not None and routing_tdoc_id is not None
+            if conversion is None:
+                conversion = self._convert_direct(
+                    payload,
+                    filename=filename,
+                    tdoc_id=routing_tdoc_id,
+                    identity=identity,
+                )
+            return _family_direct_result(
+                source_kind=source_kind,
+                source_url=source_url,
+                tdoc_id=routing_tdoc_id,
+                tdoc_id_in_tdocs=tdoc_id_in_tdocs,
+                store=decision.store,
+                documents=conversion.documents,
+                main_source_file=conversion.main_source_file,
+                extract_meta=None,
+                skipped_sources=conversion.skipped_sources,
+                from_cache=False,
+                persisted=False,
+            )
+        bundle = self._parse_cr_bundle(
+            payload,
+            filename=filename,
+            full=full,
+            max_bytes=max_bytes,
+            tdoc_id=parse_tdoc_id,
+            sniffed=tdoc_type is None,
+            skip_tdoc_id=routing_tdoc_id,
+        )
+        cover = bundle.main_parse_result.cover
+        return DirectParseResult(
+            source_kind=source_kind,
+            documents=bundle.documents,
+            main_source_file=bundle.main_source_file,
+            details=cover,
+            extract_meta=None,
+            from_cache=False,
+            persisted=False,
+            tdoc_id=cover.tdoc_id if id_from_cover else result_tdoc_id,
+            tdoc_id_in_tdocs=tdoc_id_in_tdocs,
+            source_url=source_url,
+        )
+
+    def _fetch_direct_zip(self, url: str, *, cache_file: str, max_bytes: int) -> bytes:
+        payload = self._scraper.get_bytes(url)
+        self._cache.put_bytes(cache_file, payload, "zips")
+        if max_bytes > 0 and len(payload) > max_bytes:
+            raise TDocTooLargeError(
+                source=f"download:{url}",
+                size=len(payload),
+                limit=max_bytes,
+            )
+        return payload
+
+    def _family_prepared(
         self,
         *,
         url: str,
         cache_file: str,
         stored_ftp_url: str,
         tdoc_id: str,
+        store: TDocContentStore,
+        conversion: TDocZipConversion,
+    ) -> PreparedDirectFamily:
+        prepared = self._family_service.prepare_conversion(
+            tdoc_id=tdoc_id,
+            store=store,
+            ftp_url=stored_ftp_url,
+            cache_file=cache_file,
+            conversion=conversion,
+        )
+        return PreparedDirectFamily(url=url, prepared=prepared)
+
+    def _prepare_family_from_url(
+        self,
+        *,
+        url: str,
+        cache_file: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+        store: TDocContentStore,
         force: bool,
-        full: bool,
-        max_bytes: int = 0,
-    ) -> PreparedDirectTDoc | DirectParseResult:
-        """Prepare a complete URL-keyed document bundle after the FK probe."""
+        max_bytes: int,
+    ) -> PreparedDirectFamily | DirectParseResult:
         if not force:
-            cached = self._cached_cr_parts(stored_ftp_url, tdoc_id)
-            if cached is not None:
-                cached_details, cached_meta, cached_annexes = cached
-                cached_main = self._cached_main_document(cached_meta)
-                if cached_main is not None:
-                    logger.debug(
-                        "Complete SQL extraction cache hit for direct URL %s",
-                        url,
-                    )
-                    return DirectParseResult(
-                        source_kind="url-3gpp",
-                        documents=(cached_main, *cached_annexes),
-                        main_source_file=cached_meta.doc_filename,
-                        details=cached_details,
-                        extract_meta=cached_meta,
-                        from_cache=True,
-                        persisted=False,
-                        tdoc_id=tdoc_id,
-                        tdoc_id_in_tdocs=True,
-                        source_url=url,
-                    )
+            cached = self._family_service.cached_extract(tdoc_id, store, stored_ftp_url)
+            if cached is not None and cached.extract_meta is not None:
+                return _family_direct_result(
+                    source_kind="url-3gpp",
+                    source_url=url,
+                    tdoc_id=tdoc_id,
+                    tdoc_id_in_tdocs=True,
+                    store=store,
+                    documents=cached.documents,
+                    main_source_file=cached.extract_meta.doc_filename,
+                    extract_meta=cached.extract_meta,
+                    skipped_sources=cached.skipped_sources,
+                    from_cache=True,
+                    persisted=False,
+                )
+        payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
+        conversion = self._convert_direct(
+            payload,
+            filename=url,
+            tdoc_id=tdoc_id,
+            identity=stored_ftp_url,
+        )
+        return self._family_prepared(
+            url=url,
+            cache_file=cache_file,
+            stored_ftp_url=stored_ftp_url,
+            tdoc_id=tdoc_id,
+            store=store,
+            conversion=conversion,
+        )
 
-        zip_payload = self._scraper.get_bytes(url)
-        if max_bytes > 0 and len(zip_payload) > max_bytes:
-            self._cache.put_bytes(cache_file, zip_payload, "zips")
-            raise TDocTooLargeError(
-                source=f"download:{url}",
-                size=len(zip_payload),
-                limit=max_bytes,
-            )
-        self._cache.put_bytes(cache_file, zip_payload, "zips")
+    def _prepare_cr_from_url(
+        self,
+        *,
+        url: str,
+        cache_file: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+        full: bool,
+        max_bytes: int,
+        force: bool,
+        payload: bytes | None,
+        sniffed: bool,
+    ) -> PreparedDirectTDoc | DirectParseResult:
+        """Prepare a URL-keyed CR bundle; ``payload`` is set once the type was sniffed."""
+        if payload is None:
+            if not force:
+                cached = self._cached_cr_parts(stored_ftp_url, tdoc_id)
+                if cached is not None:
+                    cached_details, cached_meta, cached_annexes = cached
+                    cached_main = self._cached_main_document(cached_meta)
+                    if cached_main is not None:
+                        logger.debug(
+                            "Complete SQL extraction cache hit for direct URL %s",
+                            url,
+                        )
+                        return DirectParseResult(
+                            source_kind="url-3gpp",
+                            documents=(cached_main, *cached_annexes),
+                            main_source_file=cached_meta.doc_filename,
+                            details=cached_details,
+                            extract_meta=cached_meta,
+                            from_cache=True,
+                            persisted=False,
+                            tdoc_id=tdoc_id,
+                            tdoc_id_in_tdocs=True,
+                            source_url=url,
+                        )
+            payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
 
-        bundle = self._parse_bundle(
-            zip_payload,
+        bundle = self._parse_cr_bundle(
+            payload,
             filename=url,
             full=full,
             max_bytes=max_bytes,
             tdoc_id=tdoc_id,
+            sniffed=sniffed,
+            skip_tdoc_id=tdoc_id,
         )
         documents = self._bind_documents_to_ftp_url(
             bundle.documents, stored_ftp_url
@@ -1411,6 +1710,85 @@ class TDocCrService:
             extract_meta=meta,
             tdoc_id=tdoc_id,
             cache_file=cache_file,
+        )
+
+    def _prepare_from_3gpp_url(
+        self,
+        *,
+        url: str,
+        cache_file: str,
+        stored_ftp_url: str,
+        tdoc: TDoc,
+        force: bool,
+        full: bool,
+        max_bytes: int,
+    ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
+        """Prepare a URL-keyed bundle for a TDoc whose ``tdocs`` row exists."""
+        tdoc_id = tdoc.tdoc_id
+        if tdoc.type is not None and tdoc.type.strip():
+            decision = decide_known_type(tdoc_id, tdoc.type)
+            if decision.kind == "skipped":
+                raise TDocTypeSkippedError(tdoc_id, decision.reason or TYPE_UNDETERMINED)
+            if decision.kind == "family":
+                assert decision.store is not None
+                return self._prepare_family_from_url(
+                    url=url,
+                    cache_file=cache_file,
+                    stored_ftp_url=stored_ftp_url,
+                    tdoc_id=tdoc_id,
+                    store=decision.store,
+                    force=force,
+                    max_bytes=max_bytes,
+                )
+            return self._prepare_cr_from_url(
+                url=url,
+                cache_file=cache_file,
+                stored_ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+                full=full,
+                max_bytes=max_bytes,
+                force=force,
+                payload=None,
+                sniffed=False,
+            )
+
+        payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
+        decision, conversion = self._decide_direct(
+            payload,
+            filename=url,
+            tdoc_id=tdoc_id,
+            tdoc_type=None,
+            identity=stored_ftp_url,
+        )
+        if decision.kind == "skipped":
+            raise TDocTypeSkippedError(tdoc_id, decision.reason or TYPE_UNDETERMINED)
+        if decision.kind == "family":
+            assert decision.store is not None
+            if conversion is None:
+                conversion = self._convert_direct(
+                    payload,
+                    filename=url,
+                    tdoc_id=tdoc_id,
+                    identity=stored_ftp_url,
+                )
+            return self._family_prepared(
+                url=url,
+                cache_file=cache_file,
+                stored_ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+                store=decision.store,
+                conversion=conversion,
+            )
+        return self._prepare_cr_from_url(
+            url=url,
+            cache_file=cache_file,
+            stored_ftp_url=stored_ftp_url,
+            tdoc_id=tdoc_id,
+            full=full,
+            max_bytes=max_bytes,
+            force=force,
+            payload=payload,
+            sniffed=True,
         )
 
     # ------------------------------------------------------------------

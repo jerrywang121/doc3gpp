@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import tempfile
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import fields as dataclass_fields
 from datetime import date, datetime
@@ -2306,6 +2307,7 @@ def tdoc_parse(
             if not input_path.exists():
                 raise typer.BadParameter(f"--from-path does not exist: {from_path}")
             if input_path.is_file():
+                _auto_sync_direct_tdoc_ids([extract_tdoc_id_from_filename(input_path.name)])
                 with _tdoc_parse_pipeline(get_settings()) as pipeline:
                     _tdoc_parse_direct(
                         from_path=str(input_path),
@@ -2834,6 +2836,24 @@ def _resolve_direct_format(fmt: str | None) -> str:
     return normalised
 
 
+def _auto_sync_direct_tdoc_ids(tdoc_ids: Iterable[str | None]) -> None:
+    """Run the direct-mode sync steps (type detection steps 2 to 4) for ``tdoc_ids``.
+
+    Uses the same skip rules as the other read commands. Does nothing when
+    ``sync.auto_sync`` is off or no id was extracted from the source names.
+    """
+    settings = get_settings()
+    ids = {tdoc_id for tdoc_id in tdoc_ids if tdoc_id}
+    if not settings.sync.auto_sync or not ids:
+        return
+    trigger_auto_sync(
+        auto_sync_enabled=settings.sync.auto_sync,
+        meeting_service=build_meeting_service(),
+        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+        tdoc_ids=ids,
+    )
+
+
 def _tdoc_parse_direct(
     *,
     from_path: str | None,
@@ -2869,6 +2889,7 @@ def _tdoc_parse_direct(
     from doc3gpp.parsers.tdoc_zip import TDocZipLimitError
     from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
     from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+    from doc3gpp.services.tdoc_errors import TDocTypeSkippedError
     resolved_format = _resolve_direct_format(fmt)
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     raw = from_path if from_path is not None else from_url
@@ -2913,6 +2934,9 @@ def _tdoc_parse_direct(
             err=True,
         )
         raise typer.Exit(code=0) from None
+    except TDocTypeSkippedError as exc:
+        typer.echo(f"SKIPPED - {exc}", err=True)
+        raise typer.Exit(code=0) from None
     except FileNotFoundError as exc:
         typer.echo(f"FAILED - FileNotFoundError: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -2949,6 +2973,8 @@ def _tdoc_parse_direct(
 
     if resolved_format == "raw":
         _emit_record_raw(_render_direct_documents_raw(result), output, compact=compact)
+    elif result.content_store is not None:
+        _emit_family_summary(result, resolved_format, output, compact=compact)
     elif result.details is None:
         typer.echo(
             f"FAILED - ValueError: --format {resolved_format!r} requires parsed fields; "
@@ -2975,6 +3001,64 @@ def _render_direct_documents_raw(result: DirectParseResult) -> str:
         documents,
         include_source_headers=True,
     )
+
+
+def _family_summary_row(result: DirectParseResult) -> dict[str, object]:
+    store = result.content_store
+    return {
+        "tdoc_id": result.tdoc_id,
+        "store": store.key if store is not None else None,
+        "documents": len(result.documents),
+        "main_source_file": result.main_source_file,
+        "skipped_sources": list(result.skipped_sources),
+        "persisted": result.persisted,
+        "from_cache": result.from_cache,
+    }
+
+
+def _family_summary_cell(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value) or "-"
+    if value is None:
+        return "-"
+    return str(value)
+
+
+def _emit_family_summary(
+    result: DirectParseResult,
+    fmt: str,
+    output: str | None,
+    *,
+    compact: bool = False,
+) -> None:
+    """Emit a WID, LS, or discussion direct result as a one-row summary."""
+    row = _family_summary_row(result)
+    stream, close_after = _open_output(output)
+    try:
+        if fmt == "json":
+            if compact:
+                json.dump(row, stream, ensure_ascii=False, separators=(",", ":"))
+                return
+            json.dump(row, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            return
+        cells = [_family_summary_cell(row[name]) for name in row]
+        if fmt == "markdown" and compact:
+            for name, cell in zip(row, cells, strict=True):
+                stream.write(f"{name}: {cell}\n")
+            return
+        if fmt == "markdown":
+            stream.write("| " + " | ".join(_md_cell(name) for name in row) + " |\n")
+            stream.write("|" + "|".join(["---"] * len(row)) + "|\n")
+            stream.write("| " + " | ".join(_md_cell(cell) for cell in cells) + " |\n")
+            return
+        stream.write("\t".join(row) + "\n")
+        stream.write("\t".join(cells) + "\n")
+    finally:
+        if close_after:
+            stream.close()
 
 
 def _emit_record(
@@ -4074,6 +4158,7 @@ def _tdoc_parse_local_batch(
     skipped = 0
     size_skipped = 0
     archive_skipped = 0
+    type_skipped = 0
     re_parsed = 0
     newly_parsed = 0
     failures = 0
@@ -4109,6 +4194,9 @@ def _tdoc_parse_local_batch(
         PipelineItem(key=str(input_path), value=(input_path, out_path))
         for input_path, out_path in pending
     ]
+    _auto_sync_direct_tdoc_ids(
+        extract_tdoc_id_from_filename(input_path.name) for input_path, _ in pending
+    )
 
     def prepare(item: tuple[Path, Path]):
         input_path, _out_path = item
@@ -4151,6 +4239,9 @@ def _tdoc_parse_local_batch(
             elif reason.startswith("TDocZipLimitError:"):
                 logger.warning("Skipping %s: %s", input_path, reason)
                 archive_skipped += 1
+            elif reason.startswith("TDocTypeSkippedError:"):
+                logger.warning("Skipping %s: %s", input_path, reason)
+                type_skipped += 1
             else:
                 logger.warning("Failed to parse %s: %s", input_path, reason)
                 failures += 1
@@ -4171,6 +4262,8 @@ def _tdoc_parse_local_batch(
         try:
             if resolved_format == "raw":
                 _emit_record_raw(_render_direct_documents_raw(result), str(out_path), compact=compact)
+            elif result.content_store is not None:
+                _emit_family_summary(result, resolved_format, str(out_path), compact=compact)
             else:
                 if result.details is None:
                     logger.warning(
@@ -4193,6 +4286,7 @@ def _tdoc_parse_local_batch(
     typer.echo(f"Skipped (output already exists): {skipped}")
     typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {size_skipped}")
     typer.echo(f"Skipped (archive member limits): {archive_skipped}")
+    typer.echo(f"Skipped (type not parsed or undetermined): {type_skipped}")
     typer.echo(f"Re-parsed (with --force):        {re_parsed}")
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Failures:                        {failures}")
@@ -4320,6 +4414,8 @@ def _emit_url_batch_results(
             try:
                 if fmt == "raw":
                     _emit_record_raw(_render_direct_documents_raw(result), str(out_path), compact=compact)
+                elif result.content_store is not None:
+                    _emit_family_summary(result, fmt, str(out_path), compact=compact)
                 else:
                     if result.details is None:
                         logger.warning(

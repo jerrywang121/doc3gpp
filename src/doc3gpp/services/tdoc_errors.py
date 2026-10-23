@@ -23,6 +23,19 @@ class TDocNotYetOnFTPError(ValueError):
         )
 
 
+class TDocTypeSkippedError(ValueError):
+    """A direct-mode source is skipped because its TDoc type is not parsed or unknown.
+
+    The message is the skip reason. Pipeline runners classify it as skipped,
+    not failed.
+    """
+
+    def __init__(self, tdoc_id: str | None, reason: str) -> None:
+        self.tdoc_id = tdoc_id
+        self.reason = reason
+        super().__init__(reason)
+
+
 class TDocTypeUnsupportedError(ValueError):
     """The given tdoc_id's ``type`` has no content store.
 

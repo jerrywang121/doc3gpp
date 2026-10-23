@@ -14,7 +14,7 @@ from doc3gpp.models.tdoc_cr import TDocExtractMeta
 from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.parsers.tdoc_zip import build_markdown_archive
-from doc3gpp.parsers.tdoc_zip_convert import convert_tdoc_zip
+from doc3gpp.parsers.tdoc_zip_convert import TDocZipConversion, convert_tdoc_zip
 from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.tdoc_zip_source import download_tdoc_zip
 from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
@@ -75,6 +75,29 @@ class TDocFamilyService:
         self._max_documents_per_zip = max_documents_per_zip
         self._max_uncompressed_size_bytes = max_uncompressed_size_bytes
 
+    def cached_extract(
+        self,
+        tdoc_id: str,
+        store: TDocContentStore,
+        ftp_url: str,
+    ) -> FamilyExtractResult | None:
+        """Return the complete stored bundle for ``ftp_url``, or ``None``."""
+        canonical = normalize_ftp_path(build_ftp_url(ftp_url))
+        cached_meta = self._content_repo.get_extract_meta(canonical)
+        cached_documents = self._content_repo.list_documents(store, canonical)
+        if cached_meta is None or not is_complete_family_extraction(
+            cached_meta, cached_documents
+        ):
+            return None
+        return FamilyExtractResult(
+            tdoc_id=tdoc_id,
+            store=store,
+            extract_meta=cached_meta,
+            documents=cached_documents,
+            skipped_sources=cached_meta.skipped_sources,
+            from_cache=True,
+        )
+
     def prepare_extract(
         self,
         tdoc: TDoc,
@@ -91,19 +114,9 @@ class TDocFamilyService:
         cache_file = derive_cache_file(tdoc.ftp_url)
 
         if not force:
-            cached_meta = self._content_repo.get_extract_meta(canonical)
-            cached_documents = self._content_repo.list_documents(store, canonical)
-            if cached_meta is not None and is_complete_family_extraction(
-                cached_meta, cached_documents
-            ):
-                return FamilyExtractResult(
-                    tdoc_id=tdoc.tdoc_id,
-                    store=store,
-                    extract_meta=cached_meta,
-                    documents=cached_documents,
-                    skipped_sources=cached_meta.skipped_sources,
-                    from_cache=True,
-                )
+            cached = self.cached_extract(tdoc.tdoc_id, store, tdoc.ftp_url)
+            if cached is not None:
+                return cached
 
         downloaded = download_tdoc_zip(
             tdoc.tdoc_id,
@@ -120,9 +133,30 @@ class TDocFamilyService:
             max_documents=self._max_documents_per_zip,
             max_uncompressed_bytes=self._max_uncompressed_size_bytes,
         )
+        return self.prepare_conversion(
+            tdoc_id=tdoc.tdoc_id,
+            store=store,
+            ftp_url=tdoc.ftp_url,
+            cache_file=cache_file,
+            conversion=conversion,
+        )
+
+    def prepare_conversion(
+        self,
+        *,
+        tdoc_id: str,
+        store: TDocContentStore,
+        ftp_url: str,
+        cache_file: str,
+        conversion: TDocZipConversion,
+    ) -> PreparedFamilyExtract:
+        """Build the parent row and write the archive for an already-converted bundle."""
+        if not store.includes_main:
+            raise ValueError(f"{store.key} is not a family store")
+        canonical = normalize_ftp_path(build_ftp_url(ftp_url))
         meta = TDocExtractMeta(
             ftp_url=canonical,
-            tdoc_id=tdoc.tdoc_id,
+            tdoc_id=tdoc_id,
             cache_file=cache_file,
             doc_filename=conversion.main_source_file,
             extraction_version=2,
@@ -139,7 +173,7 @@ class TDocFamilyService:
             "markdown",
         )
         return PreparedFamilyExtract(
-            tdoc_id=tdoc.tdoc_id,
+            tdoc_id=tdoc_id,
             store=store,
             extract_meta=meta,
             documents=conversion.documents,

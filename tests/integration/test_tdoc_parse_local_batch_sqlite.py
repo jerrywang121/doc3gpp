@@ -10,8 +10,18 @@ import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
+from doc3gpp.settings.loader import get_settings
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
+
+
+@pytest.fixture(autouse=True)
+def _disable_auto_sync_by_default(monkeypatch):
+    """Keep these direct-mode batch tests hermetic: no TDoc type sync against the network."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def _docx_available() -> bool:

@@ -62,11 +62,12 @@
 # tdoc = [
 #   "tdoc_id", "meeting_name", "title",
 #   "source", "type", "status",
-#   "cr_cat", "spec", "version", "related_wis",
+#   "cr_cat", "spec", "version", "related_wis", "parsed",
 #   # "ftp_url" — relative path to the TDoc zip on https://www.3gpp.org/ftp/
 #   # "abstract" — TL;DR pulled from the XLSX "Abstract" column
 #   # "secretary_remarks" — free-form secretary annotations from XLSX
 #   # "original_ls" — LS origin pointer from the XLSX "Original LS" column
+#   # "document_count" — stored content rows; not in the default list (use --fields)
 # ]
 # tsg = ["tsg_name", "short_name", "description"]
 # wi = ["wi_id", "acronym", "release", "name"]
@@ -301,6 +302,11 @@ search_fanout_factor = 4
 # Hard cap on the number of chunks indexed per TDoc. Prevents
 # pathological TDoc bodies from dominating the index.
 # max_chunks_per_tdoc = 8
+
+# TOML-only. Hard cap on content chunks per TDoc, counted across its CR
+# annexes or family documents in order (main first for a family). Text
+# past the cap is not embedded; full-text search still finds it.
+# max_content_chunks_per_tdoc = 16
 
 # ── HTTP server (`doc3gpp server`) ───────────────────────────────────────────
 # Knobs for the FastAPI/uvicorn HTTP surface mounted by the

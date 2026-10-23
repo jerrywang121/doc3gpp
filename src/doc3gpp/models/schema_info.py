@@ -7,18 +7,18 @@ MCP tools. Pure data by design: no DB reads, no imports from
 empty database.
 
 ``type`` vocabulary: ``str`` (String columns), ``int`` (Integer),
-``date`` (Date), ``datetime`` (DateTime), ``text`` (Text — long-form
-or unbounded content), ``gzip-json`` (LargeBinary holding
-gzip-compressed UTF-8 JSON). ``values`` is set only where code fixes
-the set; everything scraped verbatim is free-form with examples in
-``description``.
+``bool`` (derived flag, not a column), ``date`` (Date), ``datetime``
+(DateTime), ``text`` (Text — long-form or unbounded content),
+``gzip-json`` (LargeBinary holding gzip-compressed UTF-8 JSON).
+``values`` is set only where code fixes the set; everything scraped
+verbatim is free-form with examples in ``description``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-FIELD_TYPES: tuple[str, ...] = ("str", "int", "date", "datetime", "text", "gzip-json")
+FIELD_TYPES: tuple[str, ...] = ("str", "int", "bool", "date", "datetime", "text", "gzip-json")
 
 SCHEMA_FIELDS: list[str] = ["table", "field", "type", "nullable", "description", "values"]
 
@@ -161,6 +161,8 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("ls_to", "str", True, "liaison recipients."),
                 FieldInfo("ls_cc", "str", True, "liaison CC list."),
                 FieldInfo("original_ls", "text", True, "original liaison statement."),
+                FieldInfo("parsed", "bool", False, "True when the TDoc has a complete extraction for its type; derived by tdoc list, not stored."),
+                FieldInfo("document_count", "int", True, "Stored content rows of the TDoc's extraction; null when not parsed; derived by tdoc list, not stored."),
             ),
         ),
         TableSchema(
@@ -233,19 +235,52 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("extracted_at", "datetime", False, "UTC timestamp of the extract."),
                 FieldInfo("parser_version", "str", False, "Parser version, e.g. 1.0.0."),
                 FieldInfo("extraction_version", "int", False, "Document-layout version: 1 is legacy/incomplete; 2 stores the full document set.", ("1", "2")),
-                FieldInfo("document_count", "int", False, "Number of child document rows persisted for this extraction."),
+                FieldInfo("document_count", "int", False, "Number of content rows stored for this extraction: the CR annex count, or the main plus annex count for a family."),
+                FieldInfo("skipped_sources", "text", True, "JSON array of ZIP member paths whose conversion failed; null and [] both mean none. A non-empty value makes the extraction incomplete."),
             ),
         ),
         TableSchema(
-            table="tdoc_documents",
+            table="tdoc_cr_annexes",
             fields=(
-                FieldInfo("document_id", "str", False, "SHA-256 identity of the normalized ZIP URL and full source path; primary key."),
-                FieldInfo("ftp_url", "str", False, "FK to tdoc_extracts.ftp_url, the immutable source ZIP URL."),
-                FieldInfo("source_file", "str", False, "Full, case-preserving member path within the source ZIP."),
-                FieldInfo("markdown_file", "str", False, "Relative member path for this document in the derived Markdown ZIP."),
-                FieldInfo("file_order", "int", False, "Main document first, then supporting files in deterministic order."),
-                FieldInfo("markdown_text", "text", False, "Complete converted Markdown body; authoritative SQL content for retrieval and index rebuilding."),
-                FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown body."),
+                FieldInfo("ftp_url", "str", False, "Relative download path under https://www.3gpp.org/ftp/; part of the primary key; FK to tdoc_extracts.ftp_url, cascades on delete."),
+                FieldInfo("doc_filename", "str", False, "Full, case-preserving path of one CR annex inside the source ZIP, e.g. annex/info.docx; part of the primary key. The CR main is never stored here."),
+                FieldInfo("document_id", "str", False, "SHA-256 identity of ftp_url and doc_filename; used by FTS and chunk IDs."),
+                FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
+                FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
+                FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
+            ),
+        ),
+        TableSchema(
+            table="tdoc_wid_contents",
+            fields=(
+                FieldInfo("ftp_url", "str", False, "Relative download path under https://www.3gpp.org/ftp/; part of the primary key; FK to tdoc_extracts.ftp_url, cascades on delete."),
+                FieldInfo("doc_filename", "str", False, "Full, case-preserving member path inside the source ZIP, e.g. main.docx; part of the primary key. The main document equals tdoc_extracts.doc_filename."),
+                FieldInfo("document_id", "str", False, "SHA-256 identity of ftp_url and doc_filename; used by FTS and chunk IDs."),
+                FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
+                FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
+                FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
+            ),
+        ),
+        TableSchema(
+            table="tdoc_ls_contents",
+            fields=(
+                FieldInfo("ftp_url", "str", False, "Relative download path under https://www.3gpp.org/ftp/; part of the primary key; FK to tdoc_extracts.ftp_url, cascades on delete."),
+                FieldInfo("doc_filename", "str", False, "Full, case-preserving member path inside the source ZIP, e.g. main.docx; part of the primary key. The main document equals tdoc_extracts.doc_filename."),
+                FieldInfo("document_id", "str", False, "SHA-256 identity of ftp_url and doc_filename; used by FTS and chunk IDs."),
+                FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
+                FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
+                FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
+            ),
+        ),
+        TableSchema(
+            table="tdoc_discussion_contents",
+            fields=(
+                FieldInfo("ftp_url", "str", False, "Relative download path under https://www.3gpp.org/ftp/; part of the primary key; FK to tdoc_extracts.ftp_url, cascades on delete."),
+                FieldInfo("doc_filename", "str", False, "Full, case-preserving member path inside the source ZIP, e.g. main.docx; part of the primary key. The main document equals tdoc_extracts.doc_filename."),
+                FieldInfo("document_id", "str", False, "SHA-256 identity of ftp_url and doc_filename; used by FTS and chunk IDs."),
+                FieldInfo("tdoc_id", "str", False, "FK into tdocs.tdoc_id; cascades on delete."),
+                FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the converted Markdown; authoritative SQL content."),
+                FieldInfo("content_hash", "str", False, "SHA-256 digest of the UTF-8 Markdown; FTS and vector freshness compare it."),
             ),
         ),
     ),

@@ -704,7 +704,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
         return _to_json(schema_payload("meeting"))
 
-    @server.tool(name="get_tdoc_schema", description="Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files and tdoc_extracts tables.")
+    @server.tool(name="get_tdoc_schema", description="Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files, tdoc_extracts, and the four content tables (tdoc_cr_annexes, tdoc_wid_contents, tdoc_ls_contents, tdoc_discussion_contents).")
     @_mcp_error_guard
     def get_tdoc_schema() -> str:
         from doc3gpp.models.schema_info import schema_payload

@@ -707,9 +707,10 @@ def test_read_tools_parity_with_http_json(sqlite_env) -> None:
                 assert {
                     ("tdoc_extracts", "extraction_version"),
                     ("tdoc_extracts", "document_count"),
-                    ("tdoc_documents", "source_file"),
-                    ("tdoc_documents", "markdown_text"),
-                    ("tdoc_documents", "content_hash"),
+                    ("tdoc_extracts", "skipped_sources"),
+                    ("tdoc_cr_annexes", "doc_filename"),
+                    ("tdoc_wid_contents", "content"),
+                    ("tdoc_wid_contents", "content_hash"),
                 } <= schema_fields
 
         # get_meeting wraps in {"meeting": ...}

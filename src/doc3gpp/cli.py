@@ -1955,7 +1955,7 @@ def tdoc_schema(
         help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
     ),
 ) -> None:
-    """Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files and tdoc_extracts tables (meaning, format, possible values)."""
+    """Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files, tdoc_extracts, and the four content tables (tdoc_cr_annexes, tdoc_wid_contents, tdoc_ls_contents, tdoc_discussion_contents) (meaning, format, possible values)."""
     settings = get_settings()
     fmt = _resolve_format(fmt, default=settings.output.format)
     resolved_compact = _resolve_compact(compact)

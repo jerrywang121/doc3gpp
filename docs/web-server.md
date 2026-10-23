@@ -454,10 +454,11 @@ select FTS5, vector, hybrid, and filter-only modes. The TDoc form also carries
 `[semantic_search].fts5_weight`; there is no request-level weight or alternate
 `/search/sem` route.
 
-FTS5 and hybrid TDoc search can match Markdown in supporting documents, and
-each source match links to its exact ZIP URL and URL-encoded `source_file`.
-The existing semantic/vector path remains TDoc-level and does not promise
-supporting-document coverage.
+FTS5 and hybrid TDoc search can match Markdown in stored content documents (CR
+annexes, and the main and annexes of WID, LS, and discussion TDocs), and each source
+match links to its exact ZIP URL and URL-encoded `source_file`. Semantic content chunks
+cover the same documents, capped per TDoc by `max_content_chunks_per_tdoc`. The CR main
+body is not full-text indexed; its cover, change, and TTCN fields are.
 
 Search results render one collapsible "Matching fields" block per hit
 (a single `<details>` element replacing the previous per-column

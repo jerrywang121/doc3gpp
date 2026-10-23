@@ -238,7 +238,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `--parsed true|false` filters before pagination.
 - `doc3gpp <resource> schema` (`tsg`, `meeting`, `tdoc`, `wi`, `spec`,
   `testcase`, `spec doc`) describes every column of the resource's table(s) from the
-  static `models/schema_info.py` registry (18 tables, 166 fields; no
+  static `models/schema_info.py` registry (21 tables, 186 fields; no
   filters, no DB reads). Flat rows `table, field, type, nullable,
   description, values`; `nullable` is `yes`/`no` in table/markdown and a
   bool in JSON; `values` comma-joined, `"-"` when free-form. Same payload
@@ -312,8 +312,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
 - `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a
   direct-mode alternative that bypasses the database filters. ZIPs
   convert supported `.docx` members sequentially; a unique structural
-  CR cover selects the main source, and supporting documents need no CR
-  header. Raw direct/batch output preserves source identity with named
+  CR cover selects the main source, and the other members are CR annexes stored
+  as content (a family TDoc stores its main and every annex). Raw direct/batch
+  output preserves source identity with named
   blocks when multiple documents are present. The TOML-only
   `[tdoc_parse]` archive limits default to `max_documents_per_zip = 100`
   and `max_uncompressed_size_kb = 102400`; `0` disables either limit.

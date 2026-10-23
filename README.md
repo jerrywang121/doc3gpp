@@ -388,7 +388,7 @@ hybrid RRF search, and neither input runs filter-only source SQL.
 # FTS5 text search
 doc3gpp tdoc search --text "NB-IoT scheduling" --tsg RAN1 --limit 10
 doc3gpp tdoc search --text "R5-1234567" --format json
-# FTS5 can find text present only in an extracted supporting document
+# FTS5 can find text present only in a CR annex or family document
 doc3gpp tdoc search --text "annex-specific handover parameter" --format json
 
 # vector search
@@ -436,9 +436,10 @@ fields. Every TDoc row also contains `matched_documents`: an array of
 hybrid results may include matches (hybrid preserves the FTS5 source list);
 semantic-only and filter-only rows always contain an empty array. Use each
 entry's exact `ftp_url` and full `source_file` for a source-specific content
-read; the top-level `ftp_url` retains its canonical-parent meaning. The
-existing TDoc-level vector index is unchanged, so semantic-only search does
-not promise supporting-document coverage.
+read; the top-level `ftp_url` retains its canonical-parent meaning. Stored content
+documents (CR annexes, and the main and annexes of WID, LS, and discussion TDocs) are
+FTS5-searchable and semantically chunked, so semantic-only search can match them. The
+CR main body is not full-text indexed; its cover, change, and TTCN fields are.
 
 The request-level `--fts5-weight`, `--fts5-query`, and `--sem-query` flags
 were removed. Supply text with `--text`, semantic input with `--semantic`,

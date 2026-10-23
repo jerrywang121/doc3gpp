@@ -369,8 +369,10 @@ single on-disk archive shape that standard archival tooling can open.
   rebuild. Version-1 rows remain pending until normal parse discovery
   reprocesses the original ZIP (the source ZIP may still be cached).
 - FTS5 indexes each stored document as its own physical row but groups results
-  back to one logical TDoc before pagination. The semantic/vector index stays
-  TDoc-level; do not claim supporting-document semantic coverage.
+  back to one logical TDoc before pagination. Stored content documents (CR annexes,
+  and the main and annexes of WID, LS, and discussion TDocs) are also semantically
+  chunked, with the per-TDoc cap `max_content_chunks_per_tdoc`; the CR main gets no
+  content chunks and its body is not full-text indexed.
 
 
 ## meeting list --tdoc flow

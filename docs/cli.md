@@ -1038,7 +1038,7 @@ Options:
   — combining multiple `--tdoc` values is not supported; build the
   pattern instead. An exact id with no `--type` skips the eligibility filter,
   so an ineligible TDoc reaches the pipeline and is reported as
-  `SKIPPED - TDoc '<id>' has type '<type>'; only CR, WID, LS, and discussion TDocs are parsed`.
+  `<id>: SKIPPED - TDocTypeUnsupportedError: TDoc '<id>' has type '<type>'; only CR, WID, LS, and discussion TDocs are parsed`.
   It is counted under `Skipped:` and is never downloaded. Pattern selectors apply
   the eligibility filter, so ineligible rows are not selected.
 - `--meeting-id N`: exact integer match against `meetings.meeting_id`.
@@ -1417,7 +1417,9 @@ Options:
   For a WID, LS, or discussion TDoc, the direct-mode result is the summary line
   `TDoc <id>: <store>, <n> documents, extraction_version 2`, followed by
   `warning: skipped <member>` lines for tolerated annexes. That summary ignores
-  `--format` (as DB-mode `tdoc parse` does). CR output still honours `--format`.
+  `--format` (as DB-mode `tdoc parse` does), except `--format raw`, which prints the
+  documents instead as named source blocks, main first. CR output still honours
+  `--format`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Required when `--from-path` is a directory; optional when
   `--from-path` is a single file or `--from-url` is a folder. In batch
@@ -1574,7 +1576,7 @@ Sync failures and BFS failures stay warnings and never abort the parse.
 1. The sync steps above, when `sync.auto_sync` is on.
 2. A known `tdocs.type` routes the source. CR goes to the CR parse; WID, LS,
    and discussion go to the family parse; any other type is skipped with
-   `TDoc '<id>' has type '<type>'; only CR, WID, LS, and discussion TDocs are parsed`.
+   `SKIPPED - type '<type>' is not parsed` on stderr.
    A complete cached extraction for a 3GPP URL is used before any download.
 3. A blank or missing `tdocs.type` uses a complete cached extraction for the URL
    when one exists, without a download. Otherwise the ZIP is downloaded (or read

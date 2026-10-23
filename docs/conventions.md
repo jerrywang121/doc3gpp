@@ -272,9 +272,11 @@ text/date filter. The earlier `--tdoc-id` integer PK selector and the
 mutual exclusivity with `--meeting-id` are gone — pick the filter
 combination that targets the intended subset.
 
-In normal mode the SQL query excludes rows already present in
-`tdoc_cr_cover_page` before applying the batch cap, so the preview and
-confirmation list only **pending** TDocs. With `--force`, the exclusion
+In normal mode the SQL query excludes rows whose extraction is already
+complete before applying the batch cap, so the preview and confirmation
+list only **pending** TDocs. Completeness follows the TDoc's type: a CR
+TDoc needs its `tdoc_cr_cover_page` row plus complete annex rows, and a
+WID, LS, or discussion TDoc needs its complete content rows. With `--force`, the exclusion
 is disabled and every match (including already-parsed rows) becomes a
 candidate. If the pending set is empty, the CLI prints
 `Nothing to extract — every match is already parsed.` and exits `0`

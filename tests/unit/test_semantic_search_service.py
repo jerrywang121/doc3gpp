@@ -6,7 +6,11 @@ import numpy as np
 import pytest
 
 from doc3gpp.models.search import MatchedDocument, SearchFilters, SearchHit
-from doc3gpp.services.semantic_search_service import SemanticSearchService, rrf_merge
+from doc3gpp.services.semantic_search_service import (
+    _KNN_MAX_K,
+    SemanticSearchService,
+    rrf_merge,
+)
 
 
 def _hit(tdoc_id: str) -> SearchHit:
@@ -265,6 +269,24 @@ def test_search_uses_fanout_multiplier():
     # internal_limit = 20 * 2 = 40
     assert fts5.search.call_args[0][1].limit == 40
     assert vec.knn.call_args[1]["limit"] == 40
+
+
+def test_hybrid_internal_knn_limit_is_clamped_to_knn_max_k():
+    fts5 = MagicMock()
+    fts5.search.return_value = []
+    vec = MagicMock()
+    vec.knn.return_value = []
+    settings = _settings()
+    settings.semantic_search.fanout_multiplier = 100
+    svc = SemanticSearchService(fts5, _mock_embedder(), vec, settings)
+    svc.search(
+        "q",
+        fts5_query="q",
+        filters=SearchFilters(),
+        limit=150,
+        fts5_weight=0.5,
+    )
+    assert vec.knn.call_args[1]["limit"] == _KNN_MAX_K
 
 
 def test_search_synthesizes_fts5_hit_for_vector_only_tdoc():

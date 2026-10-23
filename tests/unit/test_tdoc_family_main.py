@@ -76,6 +76,26 @@ def test_no_main_at_all_reports_no_main() -> None:
     assert "no main .docx" in str(excinfo.value)
 
 
+def test_lone_longer_id_docx_is_not_a_candidate() -> None:
+    with pytest.raises(TDocMainDocumentError, match="^no main .docx for R5-123456"):
+        select_main_member("R5-123456", ["R5-1234567.docx"])
+
+
+def test_lone_non_digit_suffix_docx_is_main() -> None:
+    assert select_main_member("R5-123456", ["R5-123456a.docx"]) == "R5-123456a.docx"
+
+
+def test_longer_id_doc_is_not_reported_as_not_docx() -> None:
+    with pytest.raises(TDocMainDocumentError, match="^no main .docx for R5-123456"):
+        select_main_member("R5-123456", docx_members=(), other_members=("R5-1234567.doc",))
+
+
+@pytest.mark.parametrize("tdoc_id", ["", "   "])
+def test_blank_tdoc_id_is_rejected(tdoc_id: str) -> None:
+    with pytest.raises(ValueError, match="tdoc_id"):
+        select_main_member(tdoc_id, ["R5-123456.docx"])
+
+
 def test_member_names_skips_directories_and_macosx(tmp_path) -> None:
     archive_path = tmp_path / "tdoc.zip"
     archive_path.write_bytes(

@@ -17,6 +17,14 @@ def _basename(member: str) -> str:
     return member.rsplit("/", 1)[-1]
 
 
+def _is_tdoc_member(member: str, prefix: str) -> bool:
+    """True when the casefolded basename starts with the TDoc number and no digit follows."""
+    basename = _basename(member).casefold()
+    if not basename.startswith(prefix):
+        return False
+    return not basename[len(prefix) : len(prefix) + 1].isdigit()
+
+
 def select_main_member(
     tdoc_id: str,
     docx_members: Sequence[str],
@@ -24,15 +32,16 @@ def select_main_member(
 ) -> str:
     """Return the .docx member that holds the TDoc's main document.
 
-    Candidates are .docx members whose basename starts with ``tdoc_id``. A lone
+    Candidates are .docx members whose basename starts with ``tdoc_id`` and is
+    not continued by a digit, so ``R5-1234567`` is a different TDoc. A lone
     candidate is the main; among several, only the member named exactly
     ``<tdoc_id>.docx`` qualifies. Basenames are compared casefolded.
     """
+    if not tdoc_id.strip():
+        raise ValueError("tdoc_id must be a non-blank TDoc identifier")
     prefix = tdoc_id.casefold()
     exact_name = f"{prefix}.docx"
-    candidates = [
-        member for member in docx_members if _basename(member).casefold().startswith(prefix)
-    ]
+    candidates = [member for member in docx_members if _is_tdoc_member(member, prefix)]
     if len(candidates) == 1:
         return candidates[0]
     if candidates:
@@ -43,7 +52,7 @@ def select_main_member(
             f"ambiguous main document for {tdoc_id}: {', '.join(candidates)}"
         )
     for member in other_members:
-        if _basename(member).casefold().startswith(prefix):
+        if _is_tdoc_member(member, prefix):
             raise TDocMainDocumentError(f"main document for {tdoc_id} is not .docx: {member}")
     raise TDocMainDocumentError(f"no main .docx for {tdoc_id}")
 

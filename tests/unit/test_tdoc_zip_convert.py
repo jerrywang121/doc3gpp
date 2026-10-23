@@ -28,14 +28,24 @@ def _docx_available() -> bool:
     return True
 
 
+def _save_docx(document) -> bytes:
+    payload = io.BytesIO()
+    document.save(payload)
+    return payload.getvalue()
+
+
 def _make_docx(text: str) -> bytes:
     from docx import Document
 
     document = Document()
     document.add_paragraph(text)
-    payload = io.BytesIO()
-    document.save(payload)
-    return payload.getvalue()
+    return _save_docx(document)
+
+
+def _make_empty_docx() -> bytes:
+    from docx import Document
+
+    return _save_docx(Document())
 
 
 def _make_zip(files: list[tuple[str, bytes]]) -> bytes:
@@ -51,12 +61,12 @@ def _decode(payload: bytes, source_file: str) -> str:
     return payload.decode("utf-8")
 
 
-def _failing(*failing: str) -> Callable[[bytes, str], str]:
-    """Stub converter that raises for the named sources and decodes the rest."""
+def _failing(*failing: str, message: str = "cannot convert") -> Callable[[bytes, str], str]:
+    """Stub converter that raises ``message`` for the named sources and decodes the rest."""
 
     def convert(payload: bytes, source_file: str) -> str:
         if source_file in failing:
-            raise RuntimeError(f"cannot convert {source_file}")
+            raise RuntimeError(f"{message} {source_file}")
         return _decode(payload, source_file)
 
     return convert
@@ -166,6 +176,110 @@ def test_zero_text_documents_are_kept() -> None:
     empty_hash = hashlib.sha256(b"").hexdigest()
     assert [document.content_hash for document in result.documents] == [empty_hash, empty_hash]
     assert result.skipped_sources == ()
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_empty_text_main_is_kept_as_empty_markdown() -> None:
+    zip_bytes = _make_zip(
+        [
+            ("R5-123456.docx", _make_empty_docx()),
+            ("annex/a.docx", _make_docx("annex a body")),
+        ]
+    )
+
+    result = _convert(zip_bytes, convert=convert_document_to_markdown)
+
+    assert result.main_source_file == "R5-123456.docx"
+    assert [document.source_file for document in result.documents] == [
+        "R5-123456.docx",
+        "annex/a.docx",
+    ]
+    assert result.documents[0].markdown_text == ""
+    assert result.documents[0].content_hash == hashlib.sha256(b"").hexdigest()
+    assert result.skipped_sources == ()
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_empty_text_annex_is_kept_not_skipped() -> None:
+    zip_bytes = _make_zip(
+        [
+            ("R5-123456.docx", _make_docx("main body")),
+            ("annex/a.docx", _make_empty_docx()),
+        ]
+    )
+
+    result = _convert(zip_bytes, convert=convert_document_to_markdown)
+
+    assert [document.source_file for document in result.documents] == [
+        "R5-123456.docx",
+        "annex/a.docx",
+    ]
+    assert result.documents[1].file_order == 1
+    assert result.documents[1].markdown_text == ""
+    assert result.documents[1].content_hash == hashlib.sha256(b"").hexdigest()
+    assert result.skipped_sources == ()
+
+
+def test_empty_text_error_message_is_kept_as_empty_markdown(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    zip_bytes = _make_zip(
+        [
+            ("R5-123456.docx", b"unused"),
+            ("annex/a.docx", b"unused"),
+            ("annex/b.docx", b"annex b body"),
+        ]
+    )
+    convert = _failing(
+        "R5-123456.docx",
+        "annex/a.docx",
+        message="python-docx returned empty result for",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = _convert(zip_bytes, convert=convert)
+
+    assert [document.source_file for document in result.documents] == [
+        "R5-123456.docx",
+        "annex/a.docx",
+        "annex/b.docx",
+    ]
+    assert [document.markdown_text for document in result.documents] == ["", "", "annex b body"]
+    assert result.documents[0].content_hash == hashlib.sha256(b"").hexdigest()
+    assert result.skipped_sources == ()
+    assert [record for record in caplog.records if record.levelno >= logging.WARNING] == []
+
+
+def test_other_runtime_error_on_annex_is_still_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    zip_bytes = _make_zip(
+        [
+            ("R5-123456.docx", b"main body"),
+            ("annex/bad.docx", b"corrupt"),
+            ("annex/c.docx", b"annex c body"),
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = _convert(
+            zip_bytes,
+            convert=_failing("annex/bad.docx", message="python-docx failed on"),
+        )
+
+    assert result.skipped_sources == ("annex/bad.docx",)
+    assert [document.source_file for document in result.documents] == [
+        "R5-123456.docx",
+        "annex/c.docx",
+    ]
+    assert any(
+        record.levelno == logging.WARNING and "annex/bad.docx" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_zip_document_limit_raises() -> None:

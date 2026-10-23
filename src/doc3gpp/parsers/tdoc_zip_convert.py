@@ -15,6 +15,23 @@ from doc3gpp.parsers.tdoc_zip import enumerate_docx_members
 
 logger = logging.getLogger(__name__)
 
+# Raised by convert_document_to_markdown when a document has no extractable text.
+_EMPTY_TEXT_PREFIX = "python-docx returned empty result for "
+
+
+def _convert_member(
+    convert: Callable[[bytes, str], str],
+    payload: bytes,
+    source_file: str,
+) -> str:
+    """Return a member's Markdown, storing a document with no text as ``""``."""
+    try:
+        return convert(payload, source_file)
+    except RuntimeError as exc:
+        if str(exc).startswith(_EMPTY_TEXT_PREFIX):
+            return ""
+        raise
+
 
 @dataclass(frozen=True, slots=True)
 class TDocZipConversion:
@@ -58,11 +75,11 @@ def convert_tdoc_zip(
     )
     main = select_main_member(tdoc_id, tuple(payloads), other)
 
-    converted: list[tuple[str, str]] = [(main, convert(payloads[main], main))]
+    converted: list[tuple[str, str]] = [(main, _convert_member(convert, payloads[main], main))]
     skipped: list[str] = []
     for source_file in ordered_sources(tuple(payloads), main)[1:]:
         try:
-            markdown_text = convert(payloads[source_file], source_file)
+            markdown_text = _convert_member(convert, payloads[source_file], source_file)
         except Exception as exc:  # noqa: BLE001 - one unreadable annex must not fail the archive
             logger.warning("Skipping TDoc annex %r: conversion failed: %s", source_file, exc)
             skipped.append(source_file)

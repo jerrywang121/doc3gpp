@@ -10,13 +10,16 @@ from doc3gpp.storage.db.models import (
     SpecDocTocORM,  # noqa: F401 - registers specdata tables on SpecDataBase
     SpecORM,  # noqa: F401 - ensures model metadata is loaded
     SpecVersionORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocCrAnnexOrm,  # noqa: F401 - registers URL-owned CR annex content
     TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrTtcnDetailOrm,  # noqa: F401 - ensures model metadata is loaded
-    TDocDocumentOrm,  # noqa: F401 - registers URL-owned document content
+    TDocDiscussionContentOrm,  # noqa: F401 - registers URL-owned discussion content
     TDocExtractOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocFileORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocLsContentOrm,  # noqa: F401 - registers URL-owned LS content
     TDocORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocWidContentOrm,  # noqa: F401 - registers URL-owned WID content
     TestCaseORM,  # noqa: F401 - ensures model metadata is loaded
     TestCaseSourceORM,  # noqa: F401 - ensures model metadata is loaded
     TestCaseStatusORM,  # noqa: F401 - ensures model metadata is loaded
@@ -486,11 +489,12 @@ def _create_specdata_vector_schema(dim: int | None = None) -> None:
 
 
 def _migrate_tdoc_extract_completeness() -> None:
-    """Add extraction layout/count columns while preserving legacy rows.
+    """Add extraction layout/count/skip columns while preserving legacy rows.
 
-    Existing databases receive version 1 and a zero document count. SQLAlchemy's
-    inspector keeps the table/column probes dialect-safe, while a missing table
-    is left for Base.metadata.create_all to create with both columns.
+    Existing databases receive version 1, a zero document count, and a NULL
+    skipped-source list. SQLAlchemy's inspector keeps the table/column probes
+    dialect-safe, while a missing table is left for Base.metadata.create_all
+    to create with all columns.
     """
     engine = get_engine()
     with engine.begin() as conn:
@@ -504,6 +508,7 @@ def _migrate_tdoc_extract_completeness() -> None:
         additions = (
             ("extraction_version", "INTEGER NOT NULL DEFAULT 1"),
             ("document_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("skipped_sources", "TEXT"),
         )
         for name, ddl in additions:
             if name in column_names:

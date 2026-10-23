@@ -12,7 +12,6 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
-    UniqueConstraint,
     func,
     text,
 )
@@ -308,8 +307,11 @@ class TDocExtractOrm(Base):
 
     The cached ZIP and derived Markdown archive remain on disk under the
     cache directory. The authoritative converted Markdown bodies live in
-    :class:`TDocDocumentOrm` rows keyed by this immutable ZIP URL; this parent
-    carries cache paths, provenance, and extraction completeness.
+    the per-type content tables (:class:`TDocCrAnnexOrm`,
+    :class:`TDocWidContentOrm`, :class:`TDocLsContentOrm`,
+    :class:`TDocDiscussionContentOrm`) keyed by this immutable ZIP URL;
+    this parent carries cache paths, provenance, and extraction
+    completeness, including the ZIP members that were skipped.
 
     Mirrors the URL-PK scheme of :class:`TDocCrDetailOrm`: identity
     is the immutable download URL (stored relative to the 3GPP FTP
@@ -341,36 +343,61 @@ class TDocExtractOrm(Base):
     document_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    skipped_sources: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class TDocDocumentOrm(Base):
-    """Authoritative Markdown and source provenance for one ZIP member."""
+class _TDocContentRowMixin:
+    """Shared column shape for per-type TDoc content rows.
 
-    __tablename__ = "tdoc_documents"
-    __table_args__ = (
-        UniqueConstraint(
-            "ftp_url",
-            "source_file",
-            name="uq_tdoc_documents_ftp_url_source_file",
-        ),
-        UniqueConstraint(
-            "ftp_url",
-            "file_order",
-            name="uq_tdoc_documents_ftp_url_file_order",
-        ),
-    )
+    One row per document inside an immutable ZIP URL. ``ftp_url`` and
+    ``doc_filename`` form the composite primary key; ``ftp_url`` cascades
+    from :class:`TDocExtractOrm` and ``tdoc_id`` cascades from
+    :class:`TDocORM`, so deleting either parent removes the content.
+    ``content`` holds the :func:`doc3gpp.storage.compression.compress_json`
+    payload of the converted Markdown.
+    """
 
-    document_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     ftp_url: Mapped[str] = mapped_column(
         String(1024),
         ForeignKey("tdoc_extracts.ftp_url", ondelete="CASCADE"),
-        nullable=False,
+        primary_key=True,
     )
-    source_file: Mapped[str] = mapped_column(String(1024), nullable=False)
-    markdown_file: Mapped[str] = mapped_column(String(1024), nullable=False)
-    file_order: Mapped[int] = mapped_column(Integer, nullable=False)
-    markdown_text: Mapped[str] = mapped_column(Text, nullable=False)
+    doc_filename: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    document_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    content: Mapped[bytes] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=False,
+    )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class TDocCrAnnexOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents other than the main CR of a CR archive."""
+
+    __tablename__ = "tdoc_cr_annexes"
+
+
+class TDocWidContentOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents of a WID TDoc archive."""
+
+    __tablename__ = "tdoc_wid_contents"
+
+
+class TDocLsContentOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents of an LS TDoc archive."""
+
+    __tablename__ = "tdoc_ls_contents"
+
+
+class TDocDiscussionContentOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents of a discussion TDoc archive."""
+
+    __tablename__ = "tdoc_discussion_contents"
 
 
 class JobORM(Base):

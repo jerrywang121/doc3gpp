@@ -375,7 +375,7 @@ def test_extract_meta_completeness_tracks_versioned_document_count() -> None:
     )
 
     assert getattr(legacy, "complete", None) is False
-    assert getattr(empty_v2, "complete", None) is False
+    assert getattr(empty_v2, "complete", None) is True
     assert getattr(complete, "complete", None) is True
 
 

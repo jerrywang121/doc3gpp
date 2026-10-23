@@ -230,8 +230,9 @@ class TDocExtractMeta:
     Mirrors :class:`doc3gpp.storage.db.models.TDocExtractOrm` but stays
     a pure value object so the service layer can move the data around
     without leaking SQLAlchemy attributes. Cache paths are persisted here;
-    the authoritative converted Markdown text lives in ``tdoc_documents`` SQL
-    rows, while the source ZIP and derived Markdown archive remain in the cache.
+    the authoritative converted Markdown text lives in the per-type content
+    SQL rows (``tdoc_cr_annexes`` and the WID/LS/discussion content tables),
+    while the source ZIP and derived Markdown archive remain in the cache.
 
     Identity is the immutable URL — the same URL serves byte-for-byte
     identical 3GPP artefacts, while a TDoc id may map to multiple URLs
@@ -266,6 +267,9 @@ class TDocExtractMeta:
             extractions use version ``2``.
         document_count: Number of stored document rows. Legacy metadata
             defaults to ``0`` until a complete document collection is written.
+        skipped_sources: ZIP member paths that could not be converted and
+            were left out of the stored document collection. An empty tuple
+            means nothing was skipped.
     """
 
     ftp_url: str
@@ -276,6 +280,7 @@ class TDocExtractMeta:
     parser_version: str = _PARSER_VERSION
     extraction_version: int = 1
     document_count: int = 0
+    skipped_sources: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Mirror TDocCRDetails' invariant; the URL is the row identity.
@@ -301,14 +306,23 @@ class TDocExtractMeta:
             or self.document_count < 0
         ):
             raise ValueError("TDocExtractMeta document_count must be a non-negative integer")
+        if not isinstance(self.skipped_sources, tuple):
+            object.__setattr__(self, "skipped_sources", tuple(self.skipped_sources))
+        if not isinstance(self.skipped_sources, tuple):
+            object.__setattr__(self, "skipped_sources", tuple(self.skipped_sources))
+        for source in self.skipped_sources:
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError(
+                    "TDocExtractMeta skipped_sources entries must be non-empty strings"
+                )
 
     @property
     def complete(self) -> bool:
-        """Whether metadata declares a non-empty version-2 document set.
+        """Whether metadata declares a version-2 document set with no skips.
 
         Readers must still compare this declaration with the stored child rows.
         """
-        return self.extraction_version == 2 and self.document_count > 0
+        return self.extraction_version == 2 and not self.skipped_sources
 
 
 # Allowed values for ``DirectParseResult.source_kind``. Stored as a

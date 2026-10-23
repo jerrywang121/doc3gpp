@@ -19,6 +19,7 @@ revision's detail rows.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 
@@ -227,8 +228,23 @@ class SQLAlchemyTDocCrRepository:
         target.parser_version = meta.parser_version
         target.extraction_version = meta.extraction_version
         target.document_count = meta.document_count
+        target.skipped_sources = _encode_skipped_sources(meta.skipped_sources)
         if meta.extracted_at is not None:
             target.extracted_at = meta.extracted_at
+
+
+def _encode_skipped_sources(sources: tuple[str, ...]) -> str | None:
+    """Serialise skipped ZIP members; an empty tuple is stored as ``NULL``."""
+    if not sources:
+        return None
+    return json.dumps(list(sources), ensure_ascii=False)
+
+
+def _decode_skipped_sources(raw: str | None) -> tuple[str, ...]:
+    """Inverse of :func:`_encode_skipped_sources`; ``NULL`` and ``'[]'`` are empty."""
+    if not raw:
+        return ()
+    return tuple(json.loads(raw))
 
 
 def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
@@ -271,4 +287,5 @@ def _orm_to_meta(row: TDocExtractOrm) -> TDocExtractMeta:
         parser_version=row.parser_version,
         extraction_version=row.extraction_version,
         document_count=row.document_count,
+        skipped_sources=_decode_skipped_sources(row.skipped_sources),
     )

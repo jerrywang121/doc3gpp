@@ -73,4 +73,5 @@ def test_extract_completeness_migration_uses_dialect_safe_inspection(
             "ALTER TABLE tdoc_extracts ADD COLUMN document_count "
             "INTEGER NOT NULL DEFAULT 0"
         ),
+        "ALTER TABLE tdoc_extracts ADD COLUMN skipped_sources TEXT",
     ]

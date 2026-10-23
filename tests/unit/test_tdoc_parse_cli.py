@@ -971,6 +971,51 @@ def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
     assert fake.runner_calls and fake.runner_calls[0] is not None
 
 
+def test_tdoc_parse_db_summary_value_lines_share_one_column(
+    sqlite_env, monkeypatch,
+) -> None:
+    """The DB-mode summary value lines start at one column (43).
+
+    ``Skipped:`` was padded to width 42 while its siblings
+    (``Re-parsed``, ``Newly parsed``, ``Failures``) put the value at
+    column 43, so the value sat one column left of the rest.
+    """
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id=f"R5s26000{n}", type="CR") for n in (1, 2, 3, 4)]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, {"R5s260002"})
+    fake = _FakeCrService(
+        results={
+            "R5s260001": _make_result("R5s260001"),
+            "R5s260002": _make_result("R5s260002"),
+        },
+        failures={"R5s260003": "ValueError: bad parse"},
+        skipped={"R5s260004": "TDocNotYetOnFTPError: not on FTP"},
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s26000%", "--force", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    columns = {
+        label: next(
+            len(ln) - len(ln.split()[-1])
+            for ln in lines if ln.startswith(label)
+        )
+        for label in (
+            "Skipped:",
+            "Re-parsed (with --force):",
+            "Newly parsed:",
+            "Failures:",
+        )
+    }
+    assert columns == dict.fromkeys(columns, 43), columns
+
+
 def test_tdoc_parse_unexpected_internal_error_exits_cleanly(
     sqlite_env, monkeypatch, caplog,
 ) -> None:

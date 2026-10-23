@@ -192,11 +192,13 @@ change set so the docs stay honest.
 - **Semantic freshness ignores chunking settings.** The content-hash freshness check
   does not detect a change to `semantic_search.chunk_size` or `chunk_overlap`. After
   changing either, run `doc3gpp tdoc index --rebuild-embeddings`.
-- **`--rebuild-embeddings` followed by `--stale-only` does not re-embed metadata-only
-  TDocs.** The freshness checkpoint (`last_indexed_uploaded_date`) is written only by
-  the FTS5 path, and the vector component never writes its own, so `IndexStatus.is_stale`
-  is effectively always true. This predates the content tables; use
-  `--rebuild-embeddings` for vector repairs.
+- **`--stale-only` does not select a metadata-only TDoc that is missing from the vector
+  index and was uploaded on or before the last completed rebuild's newest upload date.**
+  A rebuild stamps `last_indexed_uploaded_date` with that date, and `--stale-only` selects
+  only TDocs uploaded strictly after it. A TDoc with no content documents has nothing for
+  the content check to compare, so it stays missing. `uploaded_date` has day granularity,
+  so a same-day upload that is synced after the rebuild is also missed. Use
+  `--rebuild-embeddings` to repair these rows.
 - **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
   row cannot be decoded, `upsert_for_tdoc` logs a warning and the rebuild loop
   continues. The TDoc's old FTS rows remain and its stored hash still matches, so

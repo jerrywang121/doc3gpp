@@ -2143,9 +2143,11 @@ Rebuild notes:
 - A stored document that cannot be decoded is logged and skipped by the rebuild
   loop. Its old FTS rows remain, and its stored hash still matches, so
   `--stale-only` does not retry it. Only a full `--rebuild` repairs it.
-- `IndexStatus.is_stale` is effectively always true, because the freshness
-  checkpoint is written only by the FTS5 path. Vector rebuilds never write their
-  own checkpoint. See [`known-constraints.md`](known-constraints.md).
+- `IndexStatus.is_stale` is true when a TDoc was uploaded after the last completed
+  vector rebuild, or when a TDoc's indexed content or metadata differs from SQL. A
+  completed rebuild stamps `last_rebuild_at` and the newest upload date it saw. A full
+  rebuild clears those stamps when it starts, so an interrupted run leaves the status
+  stale. See [`known-constraints.md`](known-constraints.md) for the metadata-only gap.
 
 ## tsg Commands
 

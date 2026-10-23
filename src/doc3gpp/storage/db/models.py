@@ -363,7 +363,7 @@ class _TDocContentRowMixin:
         primary_key=True,
     )
     doc_filename: Mapped[str] = mapped_column(String(1024), primary_key=True)
-    document_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    document_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     tdoc_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),

@@ -552,6 +552,42 @@ def _migrate_tdoc_extract_completeness() -> None:
             )
 
 
+_CONTENT_DOCUMENT_ID_TABLES = (
+    "tdoc_cr_annexes",
+    "tdoc_wid_contents",
+    "tdoc_ls_contents",
+    "tdoc_discussion_contents",
+)
+
+
+def _migrate_content_document_id_index() -> None:
+    """Index ``document_id`` on the four TDoc content tables.
+
+    ``Base.metadata.create_all`` adds indexes only to new tables, so content
+    tables created before ``document_id`` carried ``index=True`` would scan on
+    every FTS union and freshness join. Idempotent: a missing table is left for
+    ``create_all`` to create with the index, and a table that already indexes
+    ``document_id`` under any name is skipped.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        for table in _CONTENT_DOCUMENT_ID_TABLES:
+            if not inspector.has_table(table):
+                continue
+            if any(
+                index["column_names"] == ["document_id"]
+                for index in inspector.get_indexes(table)
+            ):
+                continue
+            conn.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_document_id "
+                    f"ON {table} (document_id)"
+                )
+            )
+
+
 _SPEC_DOC_CHUNK_TEXT_BATCH = 500
 
 
@@ -620,6 +656,7 @@ def create_schema(scope: str = "all") -> None:
         _migrate_tdocs_xlsx_metadata()
         _migrate_spec_versions_drop_comment()
         _migrate_tdoc_extract_completeness()
+        _migrate_content_document_id_index()
         Base.metadata.create_all(bind=engine)
         _create_search_schema()
         _create_vector_schema()

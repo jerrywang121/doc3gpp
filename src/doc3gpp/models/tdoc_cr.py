@@ -306,15 +306,13 @@ class TDocExtractMeta:
             or self.document_count < 0
         ):
             raise ValueError("TDocExtractMeta document_count must be a non-negative integer")
-        if not isinstance(self.skipped_sources, tuple):
-            object.__setattr__(self, "skipped_sources", tuple(self.skipped_sources))
-        if not isinstance(self.skipped_sources, tuple):
-            object.__setattr__(self, "skipped_sources", tuple(self.skipped_sources))
-        for source in self.skipped_sources:
-            if not isinstance(source, str) or not source.strip():
-                raise ValueError(
-                    "TDocExtractMeta skipped_sources entries must be non-empty strings"
-                )
+        if not isinstance(self.skipped_sources, (list, tuple)) or not all(
+            isinstance(source, str) and source.strip() for source in self.skipped_sources
+        ):
+            raise ValueError(
+                "TDocExtractMeta skipped_sources must be a list or tuple of non-empty strings"
+            )
+        object.__setattr__(self, "skipped_sources", tuple(self.skipped_sources))
 
     @property
     def complete(self) -> bool:

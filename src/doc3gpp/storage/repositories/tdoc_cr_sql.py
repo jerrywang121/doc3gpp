@@ -244,7 +244,14 @@ def _decode_skipped_sources(raw: str | None) -> tuple[str, ...]:
     """Inverse of :func:`_encode_skipped_sources`; ``NULL`` and ``'[]'`` are empty."""
     if not raw:
         return ()
-    return tuple(json.loads(raw))
+    decoded = json.loads(raw)
+    if not isinstance(decoded, list) or not all(
+        isinstance(item, str) and item.strip() for item in decoded
+    ):
+        raise ValueError(
+            f"tdoc_extracts.skipped_sources must be a JSON array of non-empty strings, got {raw!r}"
+        )
+    return tuple(decoded)
 
 
 def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:

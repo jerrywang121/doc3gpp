@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import delete, func, inspect, select, text
 
 from doc3gpp.models.tdoc_cr import TDocExtractMeta
@@ -215,3 +216,34 @@ def test_skipped_sources_roundtrip(sqlite_env) -> None:
             {"url": URL},
         ).scalar_one()
     assert raw is None
+
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE tdoc_extracts SET skipped_sources = '[]' WHERE ftp_url = :url"),
+            {"url": URL},
+        )
+    with get_engine().connect() as conn:
+        raw = conn.execute(
+            text("SELECT skipped_sources FROM tdoc_extracts WHERE ftp_url = :url"),
+            {"url": URL},
+        ).scalar_one()
+    assert raw == "[]"
+    stored = repo.get_extract_meta_by_url(URL)
+    assert stored is not None
+    assert stored.skipped_sources == ()
+
+
+def test_malformed_skipped_sources_raise_on_read(sqlite_env) -> None:
+    create_schema()
+    _seed_tdoc()
+    repo = SQLAlchemyTDocCrRepository()
+    repo.upsert_extract_meta(_meta())
+
+    for raw in ('{"annex": "bad.docx"}', "[1]", '[""]', '"annex/bad.docx"'):
+        with get_engine().begin() as conn:
+            conn.execute(
+                text("UPDATE tdoc_extracts SET skipped_sources = :raw WHERE ftp_url = :url"),
+                {"raw": raw, "url": URL},
+            )
+        with pytest.raises(ValueError, match="skipped_sources"):
+            repo.get_extract_meta_by_url(URL)

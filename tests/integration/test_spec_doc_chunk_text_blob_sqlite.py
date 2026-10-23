@@ -1,5 +1,6 @@
 """SQLite coverage for the gzip-JSON blob ``spec_doc_chunks.text`` column."""
 
+import logging
 from contextlib import contextmanager
 
 from sqlalchemy import event, inspect, text
@@ -244,3 +245,28 @@ def test_unmigrated_plain_text_rows_search_as_text(sqlite_env):
     )
 
     assert [hit.text for hit in hits] == ["legacy handover body"]
+
+
+def test_corrupt_blob_reads_as_empty_text_and_logs_chunk_id(sqlite_env, caplog):
+    create_schema("specdata")
+    repo = SQLAlchemySpecDocRepository()
+    repo.replace_chunks(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=[ChunkDraft(file_order=0, source_file="a.docx", text="body")],
+    )
+    with get_specdata_engine().begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE spec_doc_chunks SET text = :blob "
+                "WHERE chunk_id = '38.331@18.5.0#0'"
+            ),
+            {"blob": b"\x1f\x8b corrupt"},
+        )
+
+    with caplog.at_level(logging.WARNING):
+        chunks = repo.list_chunks("38.331", version="18.5.0", limit=10)
+
+    assert [chunk.text for chunk in chunks] == [""]
+    assert any("38.331@18.5.0#0" in record.getMessage() for record in caplog.records)

@@ -333,6 +333,8 @@ Per-layer modules:
        the idempotent TDoc extraction-completeness and FTS5-layout migrations,
        then `Base.metadata.create_all` for `"main"`,
       `TestCaseBase.metadata.create_all` for `"testcase"`,
+      `_migrate_spec_doc_chunk_text_blob` (gzip-JSON compresses legacy
+      plain-text `spec_doc_chunks.text` rows in place) +
       `SpecDataBase.metadata.create_all` + `_create_specdata_search_schema`
       (`spec_doc_search` + `spec_doc_search_meta`) +
       `_create_specdata_vector_schema` (`vec_spec_doc_embeddings` +
@@ -843,8 +845,9 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `version`, `release` (nullable), `file_order` / `chunk_index`
       (`Integer`), `source_file` (bare `.docx` name),
     `sections` / `tables` (nullable newline-delimited combined
-    identifier/title entries), `text` (chunk body, no further splitting
-    applied).
+    identifier/title entries), `text` (gzip-JSON `LargeBinary` of the chunk
+    body, no further splitting applied; decoded by the spec-doc repositories,
+    and upgraded databases keep the declared `TEXT` type holding BLOB values).
 - `spec_doc_search` (specdata DB, FTS5): 7-column virtual table —
   `chunk_id` (UNINDEXED cid 0) + 6 indexed columns `(text, sections,
   tables, spec_id, version, release)` (cids 1..6) holding the

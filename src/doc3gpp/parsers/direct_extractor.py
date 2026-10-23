@@ -61,6 +61,7 @@ from doc3gpp.parsers.tdoc_zip import (
     enumerate_docx_members,
     ephemeral_document_id_for,
 )
+from doc3gpp.parsers.tdoc_zip_convert import is_empty_text_error
 
 if typing.TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
@@ -631,13 +632,7 @@ def _failed_conversion(source_file: str, exc: Exception) -> ValueError:
 
 def _is_empty_annex_error(exc: Exception, source_file: str, tdoc_id: str) -> bool:
     """Return whether a zero-text member can only be an annex, never the TDoc main."""
-    from doc3gpp.parsers.tdoc_zip_convert import _EMPTY_TEXT_PREFIX
-
-    return (
-        isinstance(exc, RuntimeError)
-        and str(exc).startswith(_EMPTY_TEXT_PREFIX)
-        and not is_tdoc_member(source_file, tdoc_id.casefold())
-    )
+    return is_empty_text_error(exc) and not is_tdoc_member(source_file, tdoc_id.casefold())
 
 
 def direct_parse_bytes(

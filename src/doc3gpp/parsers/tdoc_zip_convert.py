@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 _EMPTY_TEXT_PREFIX = "python-docx returned empty result for "
 
 
+def is_empty_text_error(exc: Exception) -> bool:
+    """Return whether ``exc`` reports a document with no extractable text."""
+    return isinstance(exc, RuntimeError) and str(exc).startswith(_EMPTY_TEXT_PREFIX)
+
+
 def _convert_member(
     convert: Callable[[bytes, str], str],
     payload: bytes,
@@ -30,7 +35,7 @@ def _convert_member(
     try:
         return convert(payload, source_file)
     except RuntimeError as exc:
-        if str(exc).startswith(_EMPTY_TEXT_PREFIX):
+        if is_empty_text_error(exc):
             return ""
         raise
 

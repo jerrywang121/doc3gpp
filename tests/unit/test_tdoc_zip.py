@@ -370,6 +370,15 @@ def test_read_markdown_archive_preserves_legacy_decoding(raw: bytes, expected: s
     assert decoded.documents == ()
 
 
+def test_make_zip_bytes_do_not_depend_on_the_wall_clock(monkeypatch) -> None:
+    outputs = []
+    for now in (1_700_000_000.0, 1_800_000_000.0):
+        monkeypatch.setattr(zipfile.time, "time", lambda now=now: now)
+        outputs.append(_make_zip([("old-name.md", b"single zip markdown")]))
+
+    assert outputs[0] == outputs[1]
+
+
 def test_read_markdown_archive_never_returns_manifest_as_markdown() -> None:
     api = _tdoc_zip_module()
     model = _document_model()

@@ -111,6 +111,8 @@ class TDocRepository(Protocol):
         abstract: str | None = None,
         secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
+        eligible_types: Sequence[str] | None = None,
+        parsed: bool | None = None,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
 
@@ -151,12 +153,22 @@ class TDocRepository(Protocol):
           column above. Powers the matching CLI flags on
           ``tdoc list`` and the matching query parameters on the
           web ``/tdocs`` route / MCP ``list_tdocs``.
-        - ``exclude_parsed``: when ``True``, drop only TDocs with a
-          cover row and a complete version-2 extraction bundle (declared
-          child count, ordered main source, Markdown, and content hashes
-          are present). Version-1 and incomplete version-2 rows remain
-          pending. Applied in SQL before pagination so the limit reflects
-          the un-parsed candidate set. Default ``False`` keeps raw matches.
+        - ``eligible_types``: keep rows whose casefolded, stripped
+          ``tdocs.type`` is one of the given values. ``None`` means no
+          filter. Applied in SQL before pagination.
+        - ``parsed``: ``True`` keeps complete extractions and ``False``
+          keeps incomplete ones, including TDocs never extracted. ``None``
+          means no filter. Completeness follows the rule for the content
+          store of the stored extraction: a CR needs a v2 parent, a cover
+          row, and as many annex rows as ``document_count`` with no annex
+          named like the main; a family needs a v2 parent with
+          ``document_count > 0``, as many content rows as
+          ``document_count``, and the main row. Both need no skipped
+          sources. Applied in SQL before pagination.
+        - ``exclude_parsed``: when ``True``, drop complete extractions;
+          equivalent to ``parsed=False``. Applied in SQL before pagination
+          so the limit reflects the un-parsed candidate set. Default
+          ``False`` keeps raw matches.
 
         Pagination:
         - ``offset``: rows to skip before applying ``limit``. Combined
@@ -217,15 +229,18 @@ class TDocRepository(Protocol):
         abstract: str | None = None,
         secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
+        eligible_types: Sequence[str] | None = None,
+        parsed: bool | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its meeting's display name.
 
         Equivalent to ``list(...)`` plus a ``meetings`` lookup to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
         the meeting name alongside TDoc fields. Accepts the same filters
-        and pagination as :meth:`list` (including ``exclude_parsed`` and
-        the ``ls_to`` / ``ls_cc`` / ``original_ls`` / ``tdoc_for`` /
-        ``abstract`` / ``secretary_remarks`` rich-filter grammar).
+        and pagination as :meth:`list` (including ``exclude_parsed``,
+        ``eligible_types``, ``parsed``, and the ``ls_to`` / ``ls_cc`` /
+        ``original_ls`` / ``tdoc_for`` / ``abstract`` /
+        ``secretary_remarks`` rich-filter grammar).
         """
         ...
 

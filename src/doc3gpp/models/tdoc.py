@@ -55,6 +55,10 @@ class TDoc:
     ls_to: str | None = None
     ls_cc: str | None = None
     original_ls: str | None = None
+    # Derived by ``TDocRepository.list``; ``None`` when the row was not listed.
+    parsed: bool | None = None
+    # Stored content-row count for a complete extraction; ``None`` otherwise.
+    document_count: int | None = None
 
 
 @dataclass(slots=True)

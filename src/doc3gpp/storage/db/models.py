@@ -400,6 +400,14 @@ class TDocDiscussionContentOrm(_TDocContentRowMixin, Base):
     __tablename__ = "tdoc_discussion_contents"
 
 
+CONTENT_ORM_BY_STORE_KEY: dict[str, type[_TDocContentRowMixin]] = {
+    "cr": TDocCrAnnexOrm,
+    "wid": TDocWidContentOrm,
+    "ls": TDocLsContentOrm,
+    "discussion": TDocDiscussionContentOrm,
+}
+
+
 class JobORM(Base):
     """Persisted background-job record exposed by the HTTP / MCP server.
 

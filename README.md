@@ -46,7 +46,7 @@ SQLite is the sole storage backend.
 
 - **Meeting / TDoc / WI / Spec sync** — fetch the 3GPP Meetings, TDocs, Work Items List, and 3GPP specifications (TS/TR) with versions. Spec sync fans out across per-spec detail pages in a thread pool and caches the result for `spec list` / `spec show`.
 - **RAN5 testcase sync** — fetch the latest `TTCN CR Agreement Status` snapshot (`testcase sync`) and query it via `testcase list` / `testcase show` (per-path `ttcn_status` / `gcf_ptcrb`).
-- **TDoc CR extraction** — Download and parse TDoc CR into structured records.
+- **TDoc extraction** — Download and parse TDoc CRs into structured records, and store the Markdown of CR annexes and WID, LS, and discussion TDocs for raw retrieval and search.
 - **Unified search and indexing** — TDoc and spec-document search support FTS5, semantic, hybrid, and filter-only modes; companion index commands maintain the FTS5 and vector components.
 - **Hybrid semantic search (FTS5 + embeddings)** — vector KNN + FTS5 keyword search, merged via reciprocal-rank fusion.
 - **Web server + MCP** — a single-port HTTP server (FastAPI + HTMX + Jinja2) for browsing and searching 3GPP data in a browser, plus a Streamable-HTTP Model Context Protocol endpoint (`/mcp`) exposing the same data to AI clients with byte-for-byte JSON parity with the HTTP `?format=json` routes. Background jobs (sync, parse, unified search-index maintenance, cache purge) run on a shared asyncio worker with live SSE progress.
@@ -200,9 +200,10 @@ doc3gpp tdoc list --tdoc 'R5%'                   # LIKE pattern on tdoc_id
 doc3gpp tdoc list --meeting-id 85434 --cr-cat F
 doc3gpp tdoc list --tdoc 'R5%' --meeting "%RAN3%"
 doc3gpp tdoc list --title '!%Sidelink%'          # NOT LIKE
+doc3gpp tdoc list --parsed true                  # only TDocs with a complete extraction (parsed column)
 
 # parse (DB mode) — every flag is a filter
-doc3gpp tdoc parse --meeting-id 85434            # CR-type only; prompts before batch (pending only)
+doc3gpp tdoc parse --meeting-id 85434            # CR, WID, LS, and discussion TDocs (default); prompts before batch (pending only)
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes         # LIKE pattern; non-interactive
 doc3gpp tdoc parse --meeting-id 85434 --meeting '%RAN5%' --cr-cat F
 doc3gpp tdoc parse --meeting-id 85434 --release 'Rel-19' --cr-num not-null
@@ -224,27 +225,35 @@ doc3gpp tdoc show --tdoc R5s260009 --format raw --source-file 'Annex/Support.doc
 doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 
-# schema — describe every column of the seven tdoc tables (79 rows, no filters)
+# schema — describe every column of the ten tdoc tables (99 rows, no filters)
 doc3gpp tdoc schema --format json
 ```
 
-TDoc ZIP parsing converts supported `.docx` members only. Exactly one document
-must contain the CR cover; it owns the cover and optional TTCN/body-change
-sidecars, while supporting documents are stored as content only. Use
+TDoc ZIP parsing converts `.docx` members only; `.doc`, PDF, spreadsheets, and
+nested ZIPs are not converted, so a TDoc whose main document is only a `.doc`
+file fails. For a CR TDoc, the document that contains the CR cover is the main
+document: it owns the cover and optional TTCN/body-change sidecars, and every
+other `.docx` in the archive is a CR annex stored as content. WID, LS, and
+discussion TDocs store their main document and every annex. A failed annex is
+skipped with a warning that names it, is listed in `skipped_sources`, and leaves
+the extraction incomplete until a later normal parse converts it. Use
 `--source-file` with `--format raw` to select one full member path; without it,
 multiple bodies are emitted as named blocks. `tdoc_files` remains the metadata
 for auxiliary files discovered in meeting FTP folders—it is not the inventory
 of files inside a ZIP.
 
-Markdown text and source identity are stored in `tdoc_documents` under the
-single `tdoc_extracts` parent for each ZIP URL. The on-disk Markdown ZIP and its
-manifest are derived cache artifacts: purging or evicting them does not remove
-stored content or prevent an FTS5 rebuild. Legacy plain-text, gzip, and
-single-member Markdown cache artifacts remain readable as incomplete version-1
-content; parse discovery treats those extractions as pending so the ordinary
-filtered parse workflow can upgrade them. A URL-anchored raw read is a snapshot
-and does not implicitly download or extract; the TDoc-ID raw path retains its
-existing extraction-on-read behavior.
+Content is stored in SQL under the single `tdoc_extracts` parent for each ZIP
+URL, in one table per store: `tdoc_cr_annexes` for CR annexes, and
+`tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents` for family
+documents. The CR main Markdown is never stored in SQL; it lives only in the
+derived Markdown archive. That archive and its manifest are derived cache
+artifacts: purging or evicting them does not remove stored content or prevent an
+FTS5 rebuild, but raw CR main Markdown is unavailable until the TDoc is
+re-downloaded. Legacy plain-text, gzip, and single-member Markdown cache artifacts
+remain readable as incomplete version-1 content; parse discovery treats those
+extractions as pending so the ordinary filtered parse workflow can upgrade them.
+A URL-anchored raw read is a snapshot and does not implicitly download or extract;
+the TDoc-ID raw path retains its existing extraction-on-read behavior.
 
 ### `wi` — Work items
 
@@ -470,10 +479,10 @@ doc3gpp wi list --format markdown
 ```
 
 `tdoc show` accepts the same `--format` + `-o/--output` pair plus
-`--format raw` for the main converted `.docx` markdown body. Direct-mode
-`tdoc parse --from-path` / `--from-url` and folder batches also accept
-`--format raw`: one document is emitted unchanged; a multi-document ZIP
-emits named source blocks, with the CR-cover document first.
+`--format raw` for the converted Markdown. Raw output emits one document
+unchanged, or several documents as named source blocks with the main document
+first. Direct-mode `tdoc parse --from-path` / `--from-url` and folder batches
+also accept `--format raw` with the same rules.
 
 - `--compact` — strip output formatting. JSON drops indent and operator
   space (single line, `separators=(",", ":")`); Markdown drops CommonMark
@@ -503,8 +512,10 @@ doc3gpp server start                          # opens http://127.0.0.1:13999/
   `GET /tdocs/search` and `GET /spec-docs/search`; index status is available
   at `GET /tdocs/index` and `GET /spec-docs/index`. Index maintenance jobs
   are enqueued with `POST /jobs/tdocs/index` and
-  `POST /jobs/spec-docs/index`. Removed `/search/sem` routes are not current
-  APIs.
+  `POST /jobs/spec-docs/index`. Raw TDoc Markdown is served by
+  `GET /tdocs/{tdoc_id}/content` and `GET /tdocs/by-url/content?ftp_url=...`
+  (`format=markdown` by default, or `format=json`); these reads never download.
+  Removed `/search/sem` routes are not current APIs.
 - **MCP** — `http://127.0.0.1:13999/mcp` exposes the same reads and jobs.
   Search tools are `search_tdoc` and `search_spec_docs`; index tools are
   `get_tdoc_index`, `index_tdocs`, `get_spec_doc_index`, and
@@ -566,7 +577,7 @@ honoured), and the TOML config file (everything else).
 | `DOC3GPP_LOG_LEVEL` | Library log level |
 | `DOC3GPP_HTTP_VERIFY` | TLS verification toggle |
 | `DOC3GPP_CACHE__DIR` | TDoc extraction cache root |
-| `DOC3GPP_SYNC__AUTO_SYNC` | When true, `meeting list` / `tdoc list` / `tdoc show` / DB-mode `tdoc parse` internally trigger the same sync paths used by explicit `meeting sync` / `tdoc sync` |
+| `DOC3GPP_SYNC__AUTO_SYNC` | When true, `meeting list` / `tdoc list` / `tdoc show` / DB-mode `tdoc parse` internally trigger the same sync paths used by explicit `meeting sync` / `tdoc sync`; direct-mode `tdoc parse --from-path` / `--from-url` run the same steps for the TDoc id in the source name |
 
 Plus the bootstrap var `DOC3GPP_CONFIG` (path to a TOML config file
 or directory) — see the TOML section below. Any other `DOC3GPP_*`
@@ -645,9 +656,9 @@ enabled = true                       # sqlite-only FTS5 + BM25 search; off = no-
 auto_index_on_parse = true           # keep the index in sync after every parse
 snippet_tokens = 8                   # FTS5 snippet() length; --snippet-tokens overrides
 # Per-column BM25 weights — drive FTS5 ranking and snippet selection.
-# Existing eight-weight values are accepted with a ninth `document_text` weight of 1.0.
+# Existing eight-weight values are accepted with a ninth `content_text` weight of 1.0.
 # Order: title, ftp_url, meeting_title, meeting_location, wis,
-# cover_text, change_text, ttcn_text, document_text.
+# cover_text, change_text, ttcn_text, content_text.
 bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0]
 
 [semantic_search]
@@ -663,7 +674,8 @@ chunk_size = 512
 chunk_overlap = 24
 rrf_k = 60
 fanout_multiplier = 4
-max_chunks_per_tdoc = 8              # cap on chunks per TDoc
+max_chunks_per_tdoc = 8              # cap on metadata chunks per TDoc
+max_content_chunks_per_tdoc = 16     # TOML-only cap on content chunks per TDoc (CR annexes, family documents)
 
 # Web server + MCP — both TOML-only (no env overrides); only loaded
 # with the `doc3gpp[web]` extra installed.
@@ -699,7 +711,15 @@ doc3gpp config set sync.auto_sync true    # then edit individual keys
 `tdoc parse` batches (database IDs, FTP folders, local folders) and queued web
 jobs share one service-level pipeline: bounded parallel preparation
 (`[pipeline] prepare_workers`) plus a single serialized database writer, with
-deterministic discovery/output order. See `docs/architecture.md`.
+deterministic discovery/output order. TDoc content is routed by type through one
+registry (`models/tdoc_content_families.py`): `services/tdoc_cr_service.py` parses
+CR TDocs, `services/tdoc_family_service.py` parses WID, LS, and discussion TDocs,
+`services/tdoc_content_service.py` serves raw Markdown, and
+`services/tdoc_type_detection.py` detects the type for direct mode. Selection rules
+shared by the CLI, web, and MCP live in `services/tdoc_parse_selection.py`. Pure
+conversion lives in `parsers/tdoc_zip_convert.py` and `parsers/tdoc_family_main.py`,
+and content rows are written by `storage/repositories/tdoc_content_sql.py`. See
+`docs/architecture.md`.
 
 The codebase is split into strict layers to keep concerns separate:
 

@@ -277,7 +277,7 @@ class TDocParseSettings(BaseModel):
     the previous invocation stopped.
 
     The default of 100 is conservative — 3GPP meetings rarely exceed
-    that for CR-type TDocs and most ad-hoc runs are well under it.
+    that for CR TDocs and most ad-hoc runs are well under it.
     Operators can raise it for big-batch sweeps via the TOML
     ``[tdoc_parse] max_batch`` key.
 

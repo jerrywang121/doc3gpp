@@ -197,7 +197,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/` | Landing page. |
 | GET | `/meetings` | List meetings (`?format=json`); shows `start_doc`/`end_doc` and a coloured, clickable sync symbol (`↻`) per meeting. |
 | GET | `/meetings/{id}` | Meeting detail (HTML or JSON). |
-| GET | `/tdocs` | List TDocs (`?format=json`; repeatable `fields` selects the HTML columns, see below). |
+| GET | `/tdocs` | List TDocs (`?format=json`; repeatable `fields` selects the HTML columns, see below; `parsed=true|false` keeps complete or incomplete extractions for each TDoc's type). |
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
 | GET | `/tdocs/by-url/content` | Exact ZIP-URL content snapshot (`?ftp_url=<url>`, optional `source_file`, `format=html\|markdown\|json`; default `html`). Registered before parameterized content routes; no sync, download, or extraction. |
 | GET | `/tdocs/{id}/content` | Stored TDoc content (`?format=html\|markdown\|json`, default `html`; optional exact `source_file`). SQL-first; no implicit sync, download, or extraction. |
@@ -207,7 +207,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tsgs/schema` | TSG field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp tsg schema --format json` payload verbatim). No DB access. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/meetings/schema` | Meeting field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp meeting schema --format json` payload verbatim). No DB access. |
-| GET | `/tdocs/schema` | TDoc field descriptors across the seven `tdoc` tables (79 fields; HTML grouped by table; `?format=json` is the `doc3gpp tdoc schema --format json` payload verbatim). No DB access. |
+| GET | `/tdocs/schema` | TDoc field descriptors across the ten `tdoc` tables (99 fields; HTML grouped by table; `?format=json` is the `doc3gpp tdoc schema --format json` payload verbatim). No DB access. |
 | GET | `/wis/schema` | WI field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp wi schema --format json` payload verbatim). No DB access. |
 | GET | `/specs/schema` | Spec field descriptors across `specs` + `spec_versions` (HTML grouped by table; `?format=json` is the `doc3gpp spec schema --format json` payload verbatim). No DB access. |
 | GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
@@ -270,10 +270,14 @@ when one source is selected:
 source-filtered response. Markdown returns one body unchanged or multiple
 main-first blocks prefixed with `<!-- doc3gpp-source: <JSON source_file> -->`;
 HTML renders distinct Main/Supporting document sections and exact-source
-links. Content reads are SQL-first: the Markdown stored in `tdoc_documents`
-remains available after Markdown-cache purge/eviction, and cache eviction does
-not prevent an FTS5 rebuild. The ZIP and its manifest under the cache are
-derived artifacts, not the content source of truth.
+links. Content reads are SQL-first: the Markdown stored in the content tables
+(`tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and
+`tdoc_discussion_contents`) remains available after Markdown-cache purge/eviction,
+and cache eviction does not prevent an FTS5 rebuild. The one exception is the CR
+main, which is read from the derived archive; when that archive is missing the CR
+content read fails with the re-parse hint and no partial envelope. The ZIP and its
+manifest under the cache are derived artifacts, not the content source of truth
+for SQL-backed documents.
 
 Legacy plain UTF-8, gzip, and single-member Markdown ZIP artifacts can be read
 when their source is known, but are returned as version 1 with `complete=false`
@@ -487,9 +491,10 @@ partially → light green, agreed / approved → green, revised / reissued
 / merged → vanilla, rejected → red, withdrawn → grey, postponed →
 pink, noted / treated / endorsed → light blue; no match → no
 background. The color class applies to the whole row so it shows even
-when the Status column is hidden. `?format=json` and the MCP
-`list_tdocs` tool keep their fixed 10-field output regardless of the
-HTML column selection.
+when the Status column is hidden. `?format=json` returns the 11 default `tdoc list`
+fields (including `parsed`) unless `fields` names others, and the MCP `list_tdocs`
+tool always returns those 11. `document_count` is not in the default set; request
+it with `fields`.
 
 ## Jobs
 

@@ -69,7 +69,7 @@ def _parse_cover_date(raw: str) -> _date | None:
 
 
 class CRParserBase(TDocParser):
-    """Common orchestration for CR-type TDoc parsers.
+    """Common orchestration for CR TDoc parsers.
 
     Concrete subclasses register themselves by overriding :meth:`supports`.
     """

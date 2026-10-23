@@ -17,7 +17,11 @@ change set so the docs stay honest.
   explicit, idempotent compatibility migrations: the legacy
   `tdoc_cr_details` rename, the TDoc extraction completeness columns, and
   recreation of the TDoc FTS5 virtual table when its indexed/provenance
-  layout changes. `tdoc_documents` is created from the ORM metadata.
+  layout changes. The four content tables (`tdoc_cr_annexes`, `tdoc_wid_contents`,
+  `tdoc_ls_contents`, `tdoc_discussion_contents`) are created from the ORM metadata
+  and start empty. The intermediate branch schema (`tdoc_documents`,
+  `document_text`) was never deployed and has no migration; a local database
+  created from it must be recreated.
   Other ORM shape changes without a dedicated migration may still require
   a destructive `doc3gpp db reset`; do not reset a database to upgrade the
   multi-file TDoc extraction layout.
@@ -35,7 +39,7 @@ change set so the docs stay honest.
 - **TDoc multi-file completeness is not inferred from old cover/cache rows.**
   Existing `tdoc_extracts` rows migrate to `extraction_version=1` and
   `document_count=0`; normal `tdoc parse` discovery treats them as pending,
-  and a successful reparse creates the version-2 `tdoc_documents` collection.
+  and a successful reparse creates the version-2 content rows.
   Reparse the original ZIP (using its cache copy when available); an old
   single-member Markdown artifact cannot reveal which supporting members were
   present. No whole-corpus reset or standalone repair command is required.
@@ -89,7 +93,7 @@ change set so the docs stay honest.
   `DD/MM/YYYY HH:MM:SS` shape used upstream; both are stored as
   `Date`. Anything outside these shapes falls through to `NULL`.
 
-## TDoc CR extraction
+## TDoc extraction and content
 
 - **URL templates locked in for `R5s` (TTCN email CR) and `R5w`
   (TTCN workshop CR) branches** against offline fixtures. The `R5-`
@@ -99,9 +103,9 @@ change set so the docs stay honest.
   `src/doc3gpp/scraping/tdoc_zip_source.py:_build_tdoc_zip_url`.
 - **`python-docx` is an opt-in extra.** Without `doc3gpp[extract]`
   installed, the CLI prints a friendly install hint and exits 1.
-- **`TDoc` types other than CR (LS, DRAFT, BB, …) are not handled.**
-  The extractor's type guard raises `TDocTypeUnsupportedError` for
-  non-CR ids; future expansion is a separate change.
+- **Only CR, WID, LS, and discussion TDocs are parsed.**
+  Every other type, including `other`, DRAFT, and BB, is never downloaded or stored. The type guard raises `TDocTypeUnsupportedError` before any download for
+  an unsupported id. `--tdoc` reports it as skipped, and the raw read names the eligible types.
 - **`tdoc_cr_ttcn_details` is created lazily on first write, not on
   `doc3gpp db init`.** `TDocCrTtcnDetailOrm` is registered with
   `Base.metadata` so a fresh install picks it up via the standard
@@ -151,11 +155,13 @@ change set so the docs stay honest.
     function-only entries, and the joined dot inside the full-match
     form remains inert.
 - **Only `.docx` ZIP members are converted.** `.doc`, PDF, spreadsheet,
-  and nested-ZIP converters are out of scope. A ZIP must have exactly
+  and nested-ZIP members are never converted. A CR ZIP must have exactly
   one converted member with the CR cover; that main document alone
-  produces cover/TTCN/body-change metadata. Supporting members are
-  valid content without CR headers, but do not get per-document
-  semantic embeddings.
+  produces cover/TTCN/body-change metadata. Other members are CR annexes stored as
+  content in `tdoc_cr_annexes`. A TDoc whose only main-named member is a `.doc` fails
+  with `main document for <id> is not .docx`, so its main cannot be converted.
+  CR annexes and every family document are FTS5-searchable and semantically chunked.
+  The CR main body is not full-text indexed; see the CR full-text constraint below.
 - **TDoc ZIP resource caps are TOML-only.** `[tdoc_parse]`
   `max_documents_per_zip` defaults to `100` and
   `max_uncompressed_size_kb` defaults to `102400` aggregate supported
@@ -164,16 +170,47 @@ change set so the docs stay honest.
   fail the archive.
 - **Markdown cache is a derived multi-member ZIP.**
   `cache/markdown/<cache_file>` contains one `.md` entry per stored
-  document plus a versioned manifest. `tdoc_documents.markdown_text`
+  document plus a versioned manifest. SQL content in the four content tables
   is authoritative for retrieval and FTS5 rebuilds, so cache purge or
-  FIFO eviction does not delete SQL content or change completeness.
+  FIFO eviction does not delete SQL content or change completeness. The CR main
+  exists only in this archive, so purging it makes raw CR main Markdown unavailable
+  until the TDoc is re-downloaded.
   Legacy plain UTF-8, gzip, and single-member Markdown ZIPs remain
   readable as incomplete version-1 content only; they never prove a
   complete version-2 extraction.
-- **Semantic search remains TDoc-level.** Supporting-document text is
-  covered by FTS5 source rows and may flow through hybrid results, but
-  the existing vector index is unchanged and does not promise semantic
-  supporting-document matches.
+- **Semantic content chunks are capped.** Chunks for CR annexes and family
+  documents are labelled per document.
+  Chunks are re-derived from the stored Markdown. `semantic_search.max_content_chunks_per_tdoc`
+  (TOML-only, default `16`) counts across a TDoc's content in order, so text past the cap
+  is not embedded, but FTS5 still finds it. The CR main gets no content chunks. The
+  TDoc-level metadata chunks (`max_chunks_per_tdoc`, default `8`) are unchanged.
+- **CR main text is not full-text indexed.** A term that appears only in the CR main
+  body does not find the TDoc. Its cover, change, and TTCN fields are still indexed,
+  and CR annexes are indexed. This is the documented consequence of the content design
+  (spec §8, decision 24) and is an accepted trade-off.
+- **Semantic freshness ignores chunking settings.** The content-hash freshness check
+  does not detect a change to `semantic_search.chunk_size` or `chunk_overlap`. After
+  changing either, run `doc3gpp tdoc index --rebuild-embeddings`.
+- **`--rebuild-embeddings` followed by `--stale-only` does not re-embed metadata-only
+  TDocs.** The freshness checkpoint (`last_indexed_uploaded_date`) is written only by
+  the FTS5 path, and the vector component never writes its own, so `IndexStatus.is_stale`
+  is effectively always true. This predates the content tables; use
+  `--rebuild-embeddings` for vector repairs.
+- **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
+  row cannot be decoded, `upsert_for_tdoc` logs a warning and the rebuild loop
+  continues. The TDoc's old FTS rows remain and its stored hash still matches, so
+  `--stale-only` does not retry it; a full `doc3gpp tdoc index --rebuild` is needed.
+  Content is written only through the strict repository, so corruption is not expected.
+- **A failed annex keeps the extraction incomplete.** Each normal `tdoc parse` retries
+  it and prints the warning again, so an annex that always fails is retried on every run.
+- **Non-3GPP `--from-url` ids come from the whole URL.** The direct-mode id is the
+  first TDoc-shaped match in the whole URL string, so a directory segment can trigger the
+  TSG and meeting sync. The type-detection specification's step 1 reads the file name
+  instead. This is an open mismatch for review; the current behaviour is documented under
+  Direct-mode auto-sync in `docs/cli.md`.
+- **CR raw reads re-run extraction.** `tdoc show --format raw --tdoc <id>` runs
+  extraction first, so an incomplete TDoc is re-downloaded on each raw read when its
+  ZIP is not cached. URL reads never extract.
 
 ## Test surface
 

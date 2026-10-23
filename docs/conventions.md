@@ -333,12 +333,13 @@ basename:
   `zipfile.ZipFile`. Opening with `unzip` / 7z / WinZip yields the
   inner `.docx` straight away.
 - `cache.dir/markdown/<cache_file>` — **real ZIP** produced by
-  `services/tdoc_cr_service.py`. The versioned archive contains one
-  UTF-8 Markdown member per supported ZIP source plus a JSON manifest
+  `services/tdoc_cr_service.py` and `services/tdoc_family_service.py`. The versioned archive contains one
+  UTF-8 Markdown member per converted `.docx` (the CR main, every CR annex, and every family document) plus a JSON manifest
   (mapping source paths to member names and content hashes); opening it
   with `unzip` / 7z / WinZip exposes the derived artifact. SQL
-  `tdoc_documents.markdown_text` remains authoritative for retrieval and
-  FTS5 rebuilding. The reader also accepts legacy single-member Markdown
+  `tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`
+  remain authoritative for retrieval and FTS5 rebuilding, except for the CR main,
+  which is read only from this archive. The reader also accepts legacy single-member Markdown
   ZIPs, gzip blobs (`\x1f\x8b`), and pre-gzip plain UTF-8, but legacy
   bodies are incomplete version-1 content and never make a version-2 SQL
   extraction complete.
@@ -351,11 +352,18 @@ single on-disk archive shape that standard archival tooling can open.
 - `tdoc_files` remains the FTP-discovered auxiliary-file ledger
   (revisions/reviews/support files); it is not populated with ZIP members.
 - `tdoc_extracts` owns one extraction parent per immutable ZIP `ftp_url`,
-  including the main member path, extraction version, document count, and
-  cache pointer.
-- `tdoc_documents` owns each inner member's stable source identity, full path,
-  deterministic order, Markdown text, and content hash. Exactly one main source
-  produces the cover, optional TTCN sidecar, and optional body-change sidecar.
+  including the main member path, extraction version, document count, skipped
+  sources, and cache pointer.
+- The per-type content tables own inner-member content. `tdoc_cr_annexes` holds CR
+  annexes; `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`
+  hold family documents (main and annexes). Each row has the member's full path,
+  stable identity, compressed Markdown, and content hash. Order and archive names
+  are derived on read, main first. The CR main is never stored in SQL; the CR
+  cover, optional TTCN sidecar, and optional body-change sidecar come only from it.
+- Eligible `tdocs.type` values, their content tables, and the completeness rules
+  live only in `models/tdoc_content_families.py`. Parse selection, the pipeline,
+  content reads, search, and the schema registry read from there; do not hard-code
+  type lists or table names elsewhere.
 - Cache purge and FIFO eviction remove only derived files; they do not remove
   SQL documents, change version-2 completeness, or prevent a search-index
   rebuild. Version-1 rows remain pending until normal parse discovery

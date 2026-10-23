@@ -356,6 +356,7 @@ def _create_vector_schema(dim: int | None = None) -> None:
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
         existing_width = None
+        layout_dropped = False
         columns = {
             row[1] for row in conn.execute(text("PRAGMA table_info(vec_tdoc_embeddings)")).all()
         }
@@ -370,6 +371,7 @@ def _create_vector_schema(dim: int | None = None) -> None:
             if width_match is not None:
                 existing_width = int(width_match.group(1))
             conn.execute(text("DROP TABLE vec_tdoc_embeddings"))
+            layout_dropped = True
         width = int(dim) if dim is not None else (existing_width or 384)
         conn.execute(
             text(
@@ -394,6 +396,14 @@ def _create_vector_schema(dim: int | None = None) -> None:
                 """
             )
         )
+        if layout_dropped:
+            conn.execute(
+                text(
+                    "DELETE FROM vec_meta WHERE key IN "
+                    "('last_rebuild_at', 'last_indexed_uploaded_date', "
+                    "'last_rebuild_last_tdoc_id')"
+                )
+            )
         if dim is not None:
             conn.execute(
                 text(

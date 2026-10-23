@@ -24,6 +24,7 @@ _STAMPS = {
     "last_rebuild_at": "2026-01-02T03:04:05+00:00",
     "last_indexed_uploaded_date": "2026-01-02",
     "last_rebuild_last_tdoc_id": "R5-2600201",
+    "last_rebuild_snapshot_uploaded_date": "2026-01-02",
 }
 
 

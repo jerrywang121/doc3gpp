@@ -1,11 +1,12 @@
 """A TDoc vector rebuild resume stamps the snapshot of the fresh run that started it.
 
 A fresh rebuild persists ``MAX(tdocs.uploaded_date)`` taken before its first batch as
-``last_rebuild_snapshot_uploaded_date``. A resume reads that value instead of retaking the
-maximum, so a TDoc synced during an interrupted run, or after a completed run, with an id
-behind the cursor keeps an upload date at or above the stamp, and stale-only selects it.
-A rebuild started before the key existed has no snapshot, so its resume retakes the
-current maximum.
+``last_rebuild_snapshot_uploaded_date``. A resume that has a cursor reads that value instead
+of retaking the maximum, so a TDoc synced during an interrupted run, or after a completed run,
+with an id behind the cursor keeps an upload date at or above the stamp, and stale-only selects
+it. A resume without a cursor re-embeds every TDoc present at resume time, so it takes the
+current maximum. A rebuild started before the key existed has no snapshot, so its resume
+retakes the current maximum.
 
 Uses the real sqlite-vec index (``sqlite_env``) and a deterministic embedder fake so the
 rebuild paths run without a remote API.
@@ -80,6 +81,17 @@ def _interrupt_after_first_batch() -> None:
     next(generator)
     generator.close()
     assert _stored("last_rebuild_last_tdoc_id") == _A_ID
+
+
+def _interrupt_before_first_batch() -> None:
+    """Stop a fresh rebuild after its first TDoc, before any cursor is persisted."""
+    generator = _service().rebuild_embeddings(
+        batch_size=1, stale_only=False, quiet=True, resume=False,
+    )
+    next(generator)
+    generator.close()
+    assert _stored("last_rebuild_last_tdoc_id") is None
+    assert _stored(_SNAPSHOT_KEY) == str(_UPLOADED)
 
 
 def _insert_tdoc(tdoc_id: str, uploaded: date) -> None:
@@ -212,5 +224,31 @@ def test_fresh_empty_corpus_persists_marker_not_missing_key(sqlite_env) -> None:
     _run(stale_only=False, resume=True)
 
     assert _indexed_tdoc_ids() == {_A_ID}
-    assert _stored("last_indexed_uploaded_date") is None
+    assert _stored("last_indexed_uploaded_date") == str(_UPLOADED)
     assert _stored("last_rebuild_at") is not None
+
+
+def test_empty_fresh_run_then_cursorless_resume_is_not_stale(sqlite_env) -> None:
+    _seed_schema()
+    _run(stale_only=False, resume=False)
+    _insert_tdoc(_A_ID, _UPLOADED)
+
+    _run(stale_only=False, resume=True)
+
+    assert _indexed_tdoc_ids() == {_A_ID}
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is False
+    assert _stored("last_indexed_uploaded_date") == str(_UPLOADED)
+
+
+def test_interrupted_before_first_batch_then_cursorless_resume_covers_later_tdoc(
+    sqlite_env,
+) -> None:
+    _seed()
+    _interrupt_before_first_batch()
+    _insert_tdoc(_AHEAD_ID, _LATER)
+
+    _run(stale_only=False, resume=True)
+
+    assert _AHEAD_ID in _indexed_tdoc_ids()
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is False
+

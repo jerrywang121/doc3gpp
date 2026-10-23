@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -196,6 +197,9 @@ def test_cli_exact_ineligible_tdoc_reaches_skipped(cli_env) -> None:
 
     assert "R5s260041: SKIPPED" in result.output
     assert "has type 'other'" in result.output
+    summary = [line for line in result.output.splitlines() if line.startswith("Skipped:")]
+    assert [line.split()[-1] for line in summary] == ["1"]
+    assert "not yet on FTP" not in result.output
 
 
 def test_cli_family_success_reports_documents_and_skipped_sources(cli_env, monkeypatch) -> None:
@@ -325,10 +329,52 @@ def test_web_tdoc_list_parsed_filter(sqlite_env) -> None:
     assert invalid.status_code == 400
 
 
+class _RecordingTDocRepo:
+    """Delegates to the SQL TDoc repository and records each ``list`` call."""
+
+    def __init__(self) -> None:
+        self._repo = SQLAlchemyTDocRepository()
+        self.calls: list[dict] = []
+
+    def list(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._repo.list(**kwargs)
+
+
+def _run_enqueued_parse(state, server, filter_: dict) -> tuple[dict, list[str]]:
+    """Enqueue ``parse_tdocs`` through MCP, then run the queued job's handler.
+
+    Returns the list kwargs the handler sent to the repository and the ids
+    it handed to extraction.
+    """
+    enqueued = asyncio.run(server.call_tool("parse_tdocs", {"filter": filter_}))
+    job = state.services.job_repo.get(json.loads(enqueued.content[0].text)["job_id"])
+    assert job is not None
+    assert job.params["filter"] == filter_
+    repo = _RecordingTDocRepo()
+    cr = _RecordingCrService()
+    services = SimpleNamespace(pipeline=None, tdoc_repo=repo, tdoc_cr=cr)
+    asyncio.run(
+        _parse_tdocs(
+            job,
+            services,
+            Settings(),
+            progress=lambda *_args, **_kwargs: None,
+            cancel_event=asyncio.Event(),
+        )
+    )
+    assert len(repo.calls) == 1
+    return repo.calls[0], [tdoc_id for batch in cr.calls for tdoc_id in batch]
+
+
 def test_mcp_parse_and_list_defaults(sqlite_env) -> None:
     create_schema()
     _seed_complete_cr("R5s260101")
     _seed_tdoc("R5s260102", "WID new")
+    _seed_tdoc("R5s260211", "CR")
+    _seed_tdoc("R5s260212", "WID new")
+    _seed_tdoc("R5s260213", "other")
+    _seed_tdoc("R5s260214", "pCR")
     state = build_state(get_settings())
     server = build_mcp_server(state)
 
@@ -338,10 +384,45 @@ def test_mcp_parse_and_list_defaults(sqlite_env) -> None:
     assert list(rows[0]) == DEFAULT_TDOC_FIELDS
     assert rows[0]["parsed"] is True
 
-    enqueued = asyncio.run(
-        server.call_tool("parse_tdocs", {"filter": {"tdoc_id": "R5s2601%"}})
+    default_call, default_ids = _run_enqueued_parse(state, server, {"tdoc_id": "R5s2602%"})
+    assert default_call["tdoc_type"] is None
+    assert default_call["eligible_types"] == eligible_type_values()
+    assert sorted(default_ids) == ["R5s260211", "R5s260212"]
+
+    typed_call, typed_ids = _run_enqueued_parse(
+        state, server, {"tdoc_id": "R5s2602%", "tdoc_type": "WID%"}
     )
-    job_id = json.loads(enqueued.content[0].text)["job_id"]
-    job = state.services.job_repo.get(job_id)
-    assert job is not None
-    assert job.params["filter"] == {"tdoc_id": "R5s2601%"}
+    assert typed_call["tdoc_type"] == "WID%"
+    assert typed_call["eligible_types"] == eligible_type_values()
+    assert typed_ids == ["R5s260212"]
+
+    ineligible_call, ineligible_ids = _run_enqueued_parse(
+        state, server, {"tdoc_id": "R5s2602%", "tdoc_type": "pCR"}
+    )
+    assert ineligible_call["eligible_types"] == eligible_type_values()
+    assert ineligible_ids == []
+
+    exact_call, exact_ids = _run_enqueued_parse(state, server, {"tdoc_id": "R5s260213"})
+    assert exact_call["tdoc_type"] is None
+    assert exact_call["eligible_types"] == eligible_type_values()
+    assert exact_ids == []
+
+
+def test_web_tdoc_list_html_renders_parse_state_as_text(sqlite_env) -> None:
+    create_schema()
+    _seed_complete_cr("R5s260093")
+    _seed_tdoc("R5s260094", "WID new")
+
+    with TestClient(build_app()) as client:
+        response = client.get(
+            "/tdocs",
+            params=[("fields", "tdoc_id"), ("fields", "parsed"), ("fields", "document_count")],
+        )
+
+    assert response.status_code == 200, response.text
+    html = response.text
+    assert re.search(r"<td>\s*true\s*</td>", html)
+    assert re.search(r"<td>\s*false\s*</td>", html)
+    assert re.search(r"<td>\s*1\s*</td>", html)
+    assert re.search(r"<td>\s*-\s*</td>", html)
+    assert not re.search(r"<td>\s*(True|False|None)\s*</td>", html)

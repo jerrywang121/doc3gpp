@@ -74,6 +74,7 @@ from doc3gpp.web.render import (
     TDOC_COLUMN_LABELS,
     TDOC_HTML_DEFAULT_FIELDS,
     tdoc_rows,
+    tdoc_table_rows,
     to_jsonable,
 )
 from doc3gpp.web.templates_setup import templates
@@ -251,7 +252,7 @@ async def list_tdocs(
     next_offset = (
         parsed_offset + len(rows) if len(rows) == parsed_limit else None
     )
-    table_rows = tdoc_rows(rows, html_fields)
+    table_rows = tdoc_table_rows(rows, html_fields)
     for r, item in zip(table_rows, rows):
         r.setdefault("tdoc_id", item.tdoc.tdoc_id)
         r.setdefault("status", item.tdoc.status or "")

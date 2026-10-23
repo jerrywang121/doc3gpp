@@ -1115,7 +1115,7 @@ After filters resolve, the CLI:
 5. Prints a completion summary on seven counters:
     - `Skipped (exceeds max_tdoc_size_kb): N`
     - `Skipped (archive member limits): N`
-    - `Skipped (not yet on FTP): N`
+    - `Skipped: N` (not yet on FTP or an unsupported type; the per-row reason names the cause)
     - `Skipped (already parsed before this run): N`
    - `Re-parsed (with --force): N`
    - `Newly parsed: N`

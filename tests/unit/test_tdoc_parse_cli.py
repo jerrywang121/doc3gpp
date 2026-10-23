@@ -922,9 +922,9 @@ def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
 ) -> None:
     """Rows whose ``ftp_url`` is NULL (3GPP upload pipeline hasn't
     propagated yet) are routed to the ``skipped`` dict, NOT
-    ``failures`` — the CLI prints them under a dedicated
-    ``Skipped (not yet on FTP)`` summary line and exits 0 when the
-    batch has no real failures.
+    ``failures`` — the CLI counts them in the generic ``Skipped``
+    summary line (the per-row reason names the FTP cause) and exits 0
+    when the batch has no real failures.
     """
     # Pin ``auto_sync=false`` so the test doesn't depend on the
     # ``DOC3GPP_SYNC__AUTO_SYNC`` value any prior test left in
@@ -964,9 +964,9 @@ def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
     # Per-row inline prefix for the skip bucket.
     assert "R5s263431: SKIPPED - TDocNotYetOnFTPError:" in result.output
     assert "R5s263432: SKIPPED - TDocNotYetOnFTPError:" in result.output
-    # Dedicated summary line (matches the existing format: right-padded
+    # Generic summary line (matches the existing format: right-padded
     # to a column width with the bucket label + count).
-    assert "Skipped (not yet on FTP):" in result.output
+    assert "Skipped:" + " " * 34 + "2" in result.output
     assert "Failures:                                  0" in result.output
     assert fake.runner_calls and fake.runner_calls[0] is not None
 
@@ -1924,14 +1924,13 @@ def test_tdoc_parse_db_mode_summary_splits_size_skip_from_ftp_skip(
     )
     assert result.exit_code == 0, result.output
     assert "Skipped (exceeds max_tdoc_size_kb" in result.output
-    assert "Skipped (not yet on FTP):" in result.output
-    # Split counts: 2 size-skip, 1 FTP-skip.
+    # Split counts: 2 size-skip, 1 other skip (the FTP reason is per row).
     size_line = next(
         (ln for ln in result.output.splitlines()
          if ln.startswith("Skipped (exceeds max_tdoc_size_kb")),
     )
     assert size_line.endswith(" 2"), size_line
-    assert "Skipped (not yet on FTP):                 1" in result.output
+    assert "Skipped:" + " " * 34 + "1" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -3765,7 +3764,7 @@ def test_tdoc_parse_cli_renders_real_service_skip_and_failure_maps(
     assert f"R5s260002: SKIPPED - TDocNotYetOnFTPError: {ftp_exc}" in result.output
     assert f"R5s260003: SKIPPED - TDocTooLargeError: {big_exc}" in result.output
     assert "R5s260004: FAILED - ValueError: bad parse" in result.output
-    assert "Skipped (not yet on FTP):                 1" in result.output
+    assert "Skipped:" + " " * 34 + "1" in result.output
     size_line = next(
         ln for ln in result.output.splitlines()
         if ln.startswith("Skipped (exceeds max_tdoc_size_kb")

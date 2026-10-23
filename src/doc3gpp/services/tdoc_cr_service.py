@@ -378,8 +378,8 @@ class BatchExtractResult:
             :class:`TDocNotYetOnFTPError` only). Tracked separately
             from failures because the operator-facing meaning differs
             ("FTP hasn't published yet" is not an error from our
-            side) and the CLI summary table surfaces it under its
-            own "Skipped (not yet on FTP)" line.
+            side) and the CLI summary table counts it in its generic
+            "Skipped" line.
     """
 
     successes: dict[str, ExtractResult | FamilyExtractResult]

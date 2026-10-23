@@ -328,10 +328,31 @@ def tdoc_rows(
     return out
 
 
+def tdoc_table_rows(
+    rows: list[Any],
+    fields: list[str],
+) -> list[dict[str, str]]:
+    """Build HTML table cells for ``TDocWithMeeting`` rows.
+
+    Same rows as :func:`tdoc_rows`, with every cell rendered as text:
+    ``parsed`` reads ``true`` or ``false`` and a missing value reads ``-``.
+    """
+    return [
+        {field: _tdoc_table_cell(field, value) for field, value in row.items()}
+        for row in tdoc_rows(rows, fields)
+    ]
+
+
 def _tdoc_cell(field: str, value: Any) -> object:
     """Preserve the typed TDoc parse-state values; coerce every other cell."""
     if field in ("parsed", "document_count"):
         return value
+    return _coerce_cell(value)
+
+
+def _tdoc_table_cell(field: str, value: object) -> str:
+    if field == "parsed" and isinstance(value, bool):
+        return "true" if value else "false"
     return _coerce_cell(value)
 
 

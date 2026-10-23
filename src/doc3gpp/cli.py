@@ -93,7 +93,10 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocZipDownloadError,
 )
 from doc3gpp.services.tdoc_family_service import FamilyExtractResult
-from doc3gpp.services.tdoc_parse_selection import exact_tdoc_id, parse_selection_kwargs
+from doc3gpp.services.tdoc_parse_selection import (
+    exact_tdoc_id as is_exact_tdoc_id,
+)
+from doc3gpp.services.tdoc_parse_selection import parse_selection_kwargs
 from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
@@ -2477,7 +2480,7 @@ def tdoc_parse(
         "meeting_id": meeting_id,
         **parse_selection_kwargs(
             tdoc_type,
-            exact_tdoc_id=bool(tdoc) and exact_tdoc_id(tdoc),
+            exact_tdoc_id=bool(tdoc) and is_exact_tdoc_id(tdoc),
         ),
         "status": status,
         "cr_cat": cr_cat,
@@ -2600,9 +2603,9 @@ def tdoc_parse(
         raise typer.Exit(code=1) from None
 
     failures: list[str] = []
-    skipped_ftp: list[str] = []
     skipped_size: list[str] = []
     skipped_archive: list[str] = []
+    skipped_other: list[str] = []
     for raw_id in tdoc_ids:
         normalised = raw_id.strip()
         if normalised in batch.successes:
@@ -2630,7 +2633,7 @@ def tdoc_parse(
             elif reason.startswith("TDocZipLimitError:"):
                 skipped_archive.append(normalised)
             else:
-                skipped_ftp.append(normalised)
+                skipped_other.append(normalised)
         elif normalised in batch.failures:
             typer.echo(f"{normalised}: FAILED - {batch.failures[normalised]}")
             failures.append(normalised)
@@ -2650,7 +2653,7 @@ def tdoc_parse(
         f"Skipped (archive member limits):              {len(skipped_archive)}"
     )
     typer.echo(f"Skipped (already parsed before this run): {already_parsed}")
-    typer.echo(f"Skipped (not yet on FTP):                 {len(skipped_ftp)}")
+    typer.echo(f"{'Skipped:':<42}{len(skipped_other)}")
     typer.echo(f"Re-parsed (with --force):                  {re_parsed}")
     typer.echo(f"Newly parsed:                              {newly_parsed}")
     typer.echo(f"Failures:                                  {len(failures)}")

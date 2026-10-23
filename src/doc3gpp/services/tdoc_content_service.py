@@ -14,8 +14,8 @@ from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.parsers.tdoc_zip import document_id_for, read_markdown_archive
 from doc3gpp.repository.protocols import (
+    TDocContentRepository,
     TDocCrDetailRepository,
-    TDocDocumentRepository,
     TDocRepository,
 )
 
@@ -67,7 +67,7 @@ class TDocContentService:
         *,
         tdoc_repository: TDocRepository,
         cr_repository: TDocCrDetailRepository,
-        extraction_repository: TDocDocumentRepository,
+        extraction_repository: TDocContentRepository,
         cache_root: Path,
     ) -> None:
         self._tdoc_repository = tdoc_repository

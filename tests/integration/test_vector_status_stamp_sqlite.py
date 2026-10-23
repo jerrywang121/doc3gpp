@@ -181,7 +181,7 @@ def test_newer_tdoc_is_stale_and_stale_only_selects_it(sqlite_env) -> None:
     _insert_tdoc(_C_ID, _LATER)
     repo = SQLAlchemyVectorIndexRepository()
     assert repo.status().is_stale is True
-    assert repo.count_tdocs_to_index(stale_only=True) == 1
+    assert _stale_only_ids() == {_A_ID, _B_ID, _C_ID}  # >= cutoff: A and B share the snapshot day
 
     _rebuild(stale_only=True)
 
@@ -246,7 +246,7 @@ def test_tdoc_uploaded_during_rebuild_stays_stale(sqlite_env) -> None:
     repo = SQLAlchemyVectorIndexRepository()
     assert _stored("last_indexed_uploaded_date") == str(_UPLOADED)
     assert repo.status().is_stale is True
-    assert repo.count_tdocs_to_index(stale_only=True) == 1
+    assert _stale_only_ids() == {_A_ID, _B_ID, _C_ID}  # >= cutoff: A and B share the snapshot day
 
 
 def test_same_day_title_only_tdoc_synced_after_rebuild_is_stale_only_selected(

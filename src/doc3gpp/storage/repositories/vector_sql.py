@@ -610,6 +610,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 text("SELECT value FROM vec_meta WHERE key='embedding_model'")
             ).scalar()
         date_stale = bool(latest and (not last_indexed or str(latest) > last_indexed))
+        if not date_stale and last_indexed:
+            date_stale = self._has_unindexed_snapshot_day_tdoc(str(last_indexed))
         is_stale = date_stale or bool(self._stale_content_tdoc_ids())
         from datetime import datetime as _dt
         return SearchIndexStatus(
@@ -623,12 +625,35 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             embedding_model=stored_model,
         )
 
+    def _has_unindexed_snapshot_day_tdoc(self, snapshot: str) -> bool:
+        """Return True when a TDoc uploaded on the snapshot day is missing from the index.
+
+        Only a missing row makes the status stale. An indexed same-day TDoc is fresh,
+        although stale-only re-embeds it. A TDoc with empty embed text is never indexed,
+        so it is ignored, or the status would stay stale.
+        """
+        with self._engine.begin() as conn:
+            missing = conn.execute(
+                text(
+                    "SELECT t.tdoc_id FROM tdocs t "
+                    " WHERE t.uploaded_date = :day "
+                    "   AND NOT EXISTS ("
+                    "     SELECT 1 FROM vec_tdoc_embeddings v WHERE v.tdoc_id = t.tdoc_id)"
+                ),
+                {"day": snapshot},
+            ).scalars().all()
+        return any(_build_embed_text(tdoc_id) for tdoc_id in missing)
+
     def _stale_tdoc_ids(self) -> list[str]:
-        """Return sorted ``tdoc_id``s that are uploaded-date stale or content stale."""
+        """Return sorted ``tdoc_id``s that are uploaded-date stale or content stale.
+
+        The date part includes the snapshot day (``>=``), so a stale-only run re-embeds
+        TDocs already indexed on that day. That is the accepted cost of the same-day cutoff.
+        """
         with self._engine.begin() as conn:
             date_stale = conn.execute(
                 text(
-                    "SELECT tdoc_id FROM tdocs WHERE uploaded_date > ("
+                    "SELECT tdoc_id FROM tdocs WHERE uploaded_date >= ("
                     " SELECT value FROM vec_meta "
                     " WHERE key = 'last_indexed_uploaded_date')"
                 )

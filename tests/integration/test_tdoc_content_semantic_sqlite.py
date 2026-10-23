@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -175,20 +175,22 @@ def _write_cr(
 
 
 def _mark_date_checkpoint() -> None:
-    """Record the vector date checkpoint so only content freshness is under test.
+    """Record a date checkpoint past every seeded upload, so only content freshness is under test.
 
-    The vector index does not write ``last_indexed_uploaded_date`` itself, so
-    without this every seeded database reports the date part as stale.
+    The checkpoint is one day after the newest upload, so the ``>=`` date cutoff selects
+    nothing. A completed rebuild stamps the newest upload day instead, and that day is
+    re-selected by design; these tests index directly and do not exercise that case.
     """
     with get_engine().begin() as connection:
         latest = connection.execute(text("SELECT MAX(uploaded_date) FROM tdocs")).scalar()
+        checkpoint = date.fromisoformat(str(latest)) + timedelta(days=1)
         connection.execute(
             text(
                 "INSERT INTO vec_meta (key, value) "
                 "VALUES ('last_indexed_uploaded_date', :value) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
             ),
-            {"value": str(latest)},
+            {"value": checkpoint.isoformat()},
         )
 
 

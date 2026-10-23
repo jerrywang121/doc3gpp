@@ -14,23 +14,33 @@ blobs decompressed in Python via
 :func:`doc3gpp.storage.compression.decompress_json`. The ``wis`` join
 is a comma-separated LIKE match on ``tdocs.related_wis``; matched
 ``wis.name`` rows are joined with ``; `` and appended after the
-meeting title.
+meeting title. Content documents (CR annexes and family members) come
+from the four content tables, in indexing order.
 """
 
 from __future__ import annotations
 
 import json as _json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from itertools import groupby
 
 import numpy as np
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, Row
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
-from doc3gpp.models.semantic_search import VectorIndexUnavailableError
+from doc3gpp.models.semantic_search import (
+    EmbeddedChunk,
+    VectorIndexUnavailableError,
+    parse_content_chunk_id,
+)
+from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
+from doc3gpp.models.tdoc_document import ordered_sources
 from doc3gpp.repository.protocols import VectorIndexRepository
+from doc3gpp.services.embedding.chunker import plan_content_chunks
+from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.rich_filters import (
@@ -79,6 +89,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         self._dim, self._stored_model = self._read_or_init_dim_and_model()
         self._expected_model = expected_model
         self._expected_dim = expected_dim
+        self._chunk_settings = get_settings().semantic_search
 
     def _read_or_init_dim_and_model(self) -> tuple[int, str | None]:
         with self._engine.begin() as conn:
@@ -205,15 +216,15 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         for v in embeddings:
             self._check_compatible(v.shape[-1], what="upsert")
 
-    def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None:
-        self._check_dim(embeddings)
+    def upsert_chunks(self, tdoc_id: str, chunks: Sequence[EmbeddedChunk]) -> None:
+        self._check_dim([chunk.embedding for chunk in chunks])
         # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:emb).
         with self._engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM vec_tdoc_embeddings WHERE tdoc_id = :id"),
                 {"id": tdoc_id},
             )
-            for i, vec in enumerate(embeddings):
+            for chunk in chunks:
                 conn.execute(
                     text(
                         "INSERT INTO vec_tdoc_embeddings "
@@ -221,12 +232,24 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                         "VALUES (:cid, :tid, :ci, :emb)"
                     ),
                     {
-                        "cid": f"{tdoc_id}#{i}",
+                        "cid": chunk.chunk_id,
                         "tid": tdoc_id,
-                        "ci": i,
-                        "emb": np.asarray(vec, dtype=np.float32).tobytes(),
+                        "ci": chunk.chunk_index,
+                        "emb": np.asarray(chunk.embedding, dtype=np.float32).tobytes(),
                     },
                 )
+
+    def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text("SELECT tdoc_id, chunk_id FROM vec_tdoc_embeddings")
+            ).all()
+        signatures: dict[str, set[tuple[str, str]]] = {}
+        for tdoc_id, chunk_id in rows:
+            signature = parse_content_chunk_id(chunk_id)
+            if signature is not None:
+                signatures.setdefault(tdoc_id, set()).add(signature)
+        return {tdoc_id: frozenset(values) for tdoc_id, values in signatures.items()}
 
     def remove_for_tdoc(self, tdoc_id: str) -> None:
         with self._engine.begin() as conn:
@@ -302,19 +325,24 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     def rebuild_batch(
         self, batch_size: int, after_id: str | None, stale_only: bool,
     ) -> Iterable[list[str]]:
+        if batch_size < 1:
+            return
         last_id = after_id if after_id is not None else ""
+        if stale_only:
+            stale_ids = [tdoc_id for tdoc_id in self._stale_tdoc_ids() if tdoc_id > last_id]
+            for start in range(0, len(stale_ids), batch_size):
+                yield stale_ids[start:start + batch_size]
+            return
         while True:
-            sql = ["SELECT tdoc_id FROM tdocs WHERE tdoc_id > :last_id"]
             params: dict[str, object] = {"last_id": last_id, "limit": batch_size}
-            if stale_only:
-                sql.append(
-                    " AND uploaded_date > ("
-                    " SELECT value FROM vec_meta "
-                    " WHERE key = 'last_indexed_uploaded_date')"
-                )
-            sql.append(" ORDER BY tdoc_id ASC LIMIT :limit")
             with self._engine.begin() as conn:
-                rows = conn.execute(text(" ".join(sql)), params).all()
+                rows = conn.execute(
+                    text(
+                        "SELECT tdoc_id FROM tdocs WHERE tdoc_id > :last_id "
+                        "ORDER BY tdoc_id ASC LIMIT :limit"
+                    ),
+                    params,
+                ).all()
             ids = [r[0] for r in rows]
             if not ids:
                 return
@@ -324,20 +352,16 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     def count_tdocs_to_index(
         self, stale_only: bool, after_id: str | None = None,
     ) -> int:
+        if stale_only:
+            return sum(
+                1 for tdoc_id in self._stale_tdoc_ids()
+                if after_id is None or tdoc_id > after_id
+            )
         sql = ["SELECT COUNT(*) FROM tdocs"]
         params: dict[str, object] = {}
-        clauses: list[str] = []
         if after_id is not None:
-            clauses.append("tdoc_id > :after_id")
+            sql.append(" WHERE tdoc_id > :after_id")
             params["after_id"] = after_id
-        if stale_only:
-            clauses.append(
-                "uploaded_date > ("
-                "SELECT value FROM vec_meta "
-                " WHERE key = 'last_indexed_uploaded_date')"
-            )
-        if clauses:
-            sql.append(" WHERE " + " AND ".join(clauses))
         with self._engine.begin() as conn:
             return int(
                 conn.execute(text(" ".join(sql)), params).scalar() or 0,
@@ -397,6 +421,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             stored_model = conn.execute(
                 text("SELECT value FROM vec_meta WHERE key='embedding_model'")
             ).scalar()
+        date_stale = bool(latest and (not last_indexed or str(latest) > last_indexed))
+        is_stale = date_stale or bool(self._stale_content_tdoc_ids())
         from datetime import datetime as _dt
         return SearchIndexStatus(
             enabled=True,
@@ -404,10 +430,56 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             last_rebuild_at=_dt.fromisoformat(last_rebuild) if last_rebuild else None,
             last_indexed_uploaded_date=_dt.fromisoformat(last_indexed) if last_indexed else None,
             latest_tdocs_uploaded_date=_dt.fromisoformat(str(latest)) if latest else None,
-            is_stale=bool(latest and (not last_indexed or str(latest) > last_indexed)),
+            is_stale=is_stale,
             embedding_dim=int(stored_dim) if stored_dim is not None else None,
             embedding_model=stored_model,
         )
+
+    def _stale_tdoc_ids(self) -> list[str]:
+        """Return sorted ``tdoc_id``s that are uploaded-date stale or content stale."""
+        with self._engine.begin() as conn:
+            date_stale = conn.execute(
+                text(
+                    "SELECT tdoc_id FROM tdocs WHERE uploaded_date > ("
+                    " SELECT value FROM vec_meta "
+                    " WHERE key = 'last_indexed_uploaded_date')"
+                )
+            ).scalars().all()
+        return sorted(set(date_stale) | self._stale_content_tdoc_ids())
+
+    def _stale_content_tdoc_ids(self) -> set[str]:
+        """Return ``tdoc_id``s whose indexed content differs from the stored documents."""
+        expected = self._expected_content_signatures()
+        actual = self.content_signatures()
+        with self._engine.begin() as conn:
+            tdoc_ids = conn.execute(text("SELECT tdoc_id FROM tdocs")).scalars().all()
+        return {
+            tdoc_id for tdoc_id in tdoc_ids
+            if expected.get(tdoc_id, frozenset()) != actual.get(tdoc_id, frozenset())
+        }
+
+    def _expected_content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
+        """Return the content signatures a fresh index holds, per TDoc.
+
+        Uses the same plan as :meth:`SemanticSearchService.index_for_tdoc`, so a
+        blank document or one past the content cap has no expected signature.
+        """
+        settings = self._chunk_settings
+        expected: dict[str, frozenset[tuple[str, str]]] = {}
+        with self._engine.begin() as conn:
+            rows = conn.execute(text(_CONTENT_ROWS_SQL))
+            for tdoc_id, group in groupby(rows, key=lambda row: row.tdoc_id):
+                planned = plan_content_chunks(
+                    _ordered_documents(list(group)),
+                    settings.chunk_size,
+                    settings.chunk_overlap,
+                    settings.max_content_chunks_per_tdoc,
+                )
+                expected[tdoc_id] = frozenset(
+                    (document_id, content_hash)
+                    for document_id, content_hash, _chunk_texts in planned
+                )
+        return expected
 
     def get_tdocs_metadata(
         self, tdoc_ids: list[str],
@@ -596,3 +668,51 @@ def _build_embed_text(tdoc_id: str) -> str | None:
             elif decoded is not None:
                 parts.append(str(decoded)[:2000])
     return " :: ".join(p for p in parts if p)
+
+
+def _content_rows_sql(*, single_tdoc: bool) -> str:
+    where = " WHERE e.tdoc_id = :tdoc_id" if single_tdoc else ""
+    selects = [
+        "SELECT e.tdoc_id AS tdoc_id, c.ftp_url AS ftp_url, "
+        "e.doc_filename AS main, c.doc_filename AS source_file, "
+        "c.document_id AS document_id, c.content_hash AS content_hash, "
+        "c.content AS content "
+        f"FROM {store.table_name} c "
+        f"JOIN tdoc_extracts e ON e.ftp_url = c.ftp_url{where}"
+        for store in TDOC_CONTENT_STORES
+    ]
+    return "\nUNION ALL\n".join(selects) + "\nORDER BY tdoc_id, ftp_url, source_file"
+
+
+_CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False)
+_CONTENT_ROWS_FOR_TDOC_SQL = _content_rows_sql(single_tdoc=True)
+
+
+def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
+    """Yield ``(document_id, content_hash, markdown)`` in indexing order.
+
+    Rows are grouped by ZIP URL. Each URL's main document comes first and the
+    other sources follow in path order. The CR main is never a row, so a CR
+    yields its annexes in path order.
+    """
+    by_url: dict[str, dict[str, Row]] = {}
+    mains: dict[str, str] = {}
+    for row in rows:
+        by_url.setdefault(row.ftp_url, {})[row.source_file] = row
+        mains[row.ftp_url] = row.main
+    for ftp_url, rows_by_source in by_url.items():
+        for source in ordered_sources(tuple(rows_by_source), main=mains[ftp_url]):
+            row = rows_by_source[source]
+            markdown = decompress_json(row.content)
+            if markdown is None:
+                raise ValueError(f"stored content for {source!r} cannot be decoded")
+            yield row.document_id, row.content_hash, markdown
+
+
+def _build_content_documents(tdoc_id: str) -> list[tuple[str, str, str]]:
+    """Return one TDoc's stored content documents in indexing order."""
+    with get_engine().begin() as conn:
+        rows = conn.execute(
+            text(_CONTENT_ROWS_FOR_TDOC_SQL), {"tdoc_id": tdoc_id},
+        ).all()
+    return list(_ordered_documents(rows))

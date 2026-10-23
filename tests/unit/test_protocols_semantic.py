@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 
 from doc3gpp.models.search import SearchIndexStatus
+from doc3gpp.models.semantic_search import EmbeddedChunk
 from doc3gpp.repository.protocols import Embedder, VectorIndexRepository
 
 
@@ -22,7 +23,8 @@ def test_embedder_protocol_signature():
 
 def test_vector_index_repository_protocol_signature():
     class Impl:
-        def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None: ...
+        def upsert_chunks(self, tdoc_id: str, chunks: Sequence[EmbeddedChunk]) -> None: ...
+        def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]: return {}
         def remove_for_tdoc(self, tdoc_id: str) -> None: ...
         def knn(self, query_vec, limit, filters=None): return []
         def rebuild_batch(self, batch_size, after_id, stale_only) -> Iterable[list[str]]: return iter([])

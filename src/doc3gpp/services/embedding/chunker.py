@@ -11,6 +11,8 @@ further subdivide each chunk.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+
 CHUNK_SIZE_DEFAULT = 512
 CHUNK_OVERLAP_DEFAULT = 24
 
@@ -45,3 +47,26 @@ def _chunks(text: str, size: int, overlap: int) -> list[str]:
             break
         start = end - overlap
     return chunks
+
+
+def plan_content_chunks(
+    documents: Iterable[tuple[str, str, str]],
+    size: int,
+    overlap: int,
+    max_chunks: int,
+) -> Iterator[tuple[str, str, list[str]]]:
+    """Yield ``(document_id, content_hash, chunks)`` for each document in order.
+
+    ``documents`` holds ``(document_id, content_hash, markdown)`` in indexing
+    order. Chunks are taken until ``max_chunks`` is spent, so a document past
+    the cap yields nothing. A blank document yields nothing.
+    """
+    remaining = max_chunks
+    for document_id, content_hash, markdown in documents:
+        if remaining <= 0:
+            return
+        chunks = _chunks(markdown, size, overlap)[:remaining]
+        if not chunks:
+            continue
+        remaining -= len(chunks)
+        yield document_id, content_hash, chunks

@@ -70,6 +70,7 @@ def semantic_search_corpus(sqlite_env):
     Yields the sqlite engine so callers can layer more assertions on
     top.
     """
+    from doc3gpp.models.semantic_search import EmbeddedChunk
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.search_sql import (
         SQLAlchemySearchIndexRepository,
@@ -92,6 +93,12 @@ def semantic_search_corpus(sqlite_env):
 
     vec_repo = SQLAlchemyVectorIndexRepository()
     for tdoc_id in tdoc_ids:
-        vec_repo.upsert_chunks(tdoc_id, PRECOMPUTED_EMBEDDINGS[tdoc_id])
+        vec_repo.upsert_chunks(
+            tdoc_id,
+            [
+                EmbeddedChunk(chunk_id=f"{tdoc_id}#{i}", chunk_index=i, embedding=vec)
+                for i, vec in enumerate(PRECOMPUTED_EMBEDDINGS[tdoc_id])
+            ],
+        )
 
     yield engine

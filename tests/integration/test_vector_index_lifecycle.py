@@ -15,6 +15,15 @@ import pytest
 pytestmark = pytest.mark.semantic
 
 
+def _labelled(tdoc_id, vectors):
+    from doc3gpp.models.semantic_search import EmbeddedChunk
+
+    return [
+        EmbeddedChunk(chunk_id=f"{tdoc_id}#{i}", chunk_index=i, embedding=vec)
+        for i, vec in enumerate(vectors)
+    ]
+
+
 @pytest.fixture()
 def repo(sqlite_env):
     from doc3gpp.storage.db.migrate import create_schema
@@ -35,8 +44,8 @@ def test_upsert_then_knn_returns_expected_order(repo):
     a[0][0] = 1.0  # chunk 0 close to query
     b = [np.zeros(384, dtype=np.float32)]
     b[0][0] = 0.5
-    repo.upsert_chunks("R5-1", a)
-    repo.upsert_chunks("R5-2", b)
+    repo.upsert_chunks("R5-1", _labelled("R5-1", a))
+    repo.upsert_chunks("R5-2", _labelled("R5-2", b))
     query = np.zeros(384, dtype=np.float32)
     query[0] = 1.0
     hits = repo.knn(query, limit=10)
@@ -50,7 +59,7 @@ def test_upsert_then_knn_returns_expected_order(repo):
 def test_remove_for_tdoc(repo):
     import numpy as np
 
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
     repo.remove_for_tdoc("R5-1")
     hits = repo.knn(np.zeros(384, dtype=np.float32), limit=10)
     assert not any(h[0] == "R5-1" for h in hits)
@@ -59,9 +68,9 @@ def test_remove_for_tdoc(repo):
 def test_upsert_replaces_existing_chunks(repo):
     import numpy as np
 
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(8)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(8)]))
     # re-parse with fewer chunks -> surplus deleted
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(4)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(4)]))
     # only 4 chunk rows for R5-1 now
     hits = repo.knn(np.zeros(384, dtype=np.float32), limit=100)
     r5_1_chunks = [h for h in hits if h[0] == "R5-1"]
@@ -71,7 +80,7 @@ def test_upsert_replaces_existing_chunks(repo):
 def test_status_reports_row_count(repo):
     import numpy as np
 
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(3)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(3)]))
     status = repo.status()
     assert status.row_count >= 3
 
@@ -83,7 +92,7 @@ def test_dim_mismatch_raises(repo):
     from doc3gpp.models.semantic_search import VectorIndexUnavailableError
 
     with pytest.raises(VectorIndexUnavailableError):
-        repo.upsert_chunks("R5-1", bad)
+        repo.upsert_chunks("R5-1", _labelled("R5-1", bad))
 
 
 def test_constructor_raises_vector_index_unavailable_when_meta_missing(sqlite_env) -> None:
@@ -246,7 +255,7 @@ def test_model_mismatch_raises_even_when_dim_matches(sqlite_env):
         conn.execute(text("UPDATE vec_meta SET value='old-model' WHERE key='embedding_model'"))
     repo = SQLAlchemyVectorIndexRepository(expected_model="new-model")
     with pytest.raises(VectorIndexUnavailableError) as excinfo:
-        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+        repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
     message = str(excinfo.value)
     assert "doc3gpp tdoc index --rebuild-embeddings" in message
     assert "tdoc search index" not in message
@@ -267,7 +276,7 @@ def test_legacy_db_missing_model_treated_as_mismatch(sqlite_env):
         conn.execute(text("DELETE FROM vec_meta WHERE key='embedding_model'"))
     repo = SQLAlchemyVectorIndexRepository(expected_model="nomic-embed-text")
     with pytest.raises(VectorIndexUnavailableError, match="rebuild-embeddings"):
-        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+        repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
 
 
 def test_count_tdocs_to_index_respects_after_id(sqlite_env):
@@ -442,4 +451,4 @@ def test_expected_dim_mismatch_raises_on_upsert(sqlite_env):
     with pytest.raises(
         VectorIndexUnavailableError, match="rebuild-embeddings",
     ):
-        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+        repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))

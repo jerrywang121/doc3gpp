@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
-from doc3gpp.models.search import SearchFilters, SearchHit, SearchUnavailableError
+from doc3gpp.models.search import (
+    MatchedDocument,
+    SearchFilters,
+    SearchHit,
+    SearchUnavailableError,
+)
 from doc3gpp.models.semantic_search import (
     SemanticSearchHit,
     SemanticSearchUnavailableError,
 )
 from doc3gpp.models.tdoc import TDocWithMeeting
 from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
+from doc3gpp.storage.repositories.tdoc_document_sources import document_sources_by_id
 
 
 class TDocSearchFacade:
@@ -71,7 +77,8 @@ class TDocSearchFacade:
                 limit=filters.limit,
                 fts5_weight=self._settings.semantic_search.fts5_weight,
             )
-            return [self._from_semantic(hit, SearchMode.HYBRID) for hit in hits]
+            sources = self._document_sources(hits)
+            return [self._from_semantic(hit, SearchMode.HYBRID, sources) for hit in hits]
 
         if text_value:
             fts5_service = self._get_fts5()
@@ -97,7 +104,8 @@ class TDocSearchFacade:
                 limit=filters.limit,
                 fts5_weight=self._settings.semantic_search.fts5_weight,
             )
-            return [self._from_semantic(hit, SearchMode.SEMANTIC) for hit in hits]
+            sources = self._document_sources(hits)
+            return [self._from_semantic(hit, SearchMode.SEMANTIC, sources) for hit in hits]
 
         if self._source is None:
             raise SearchUnavailableError("TDoc source search is not available")
@@ -131,8 +139,42 @@ class TDocSearchFacade:
         )
 
     @staticmethod
+    def _document_sources(
+        hits: list[SemanticSearchHit],
+    ) -> Mapping[str, tuple[str, str]]:
+        document_ids = {
+            document.document_id for hit in hits for document in hit.document_hits
+        }
+        return document_sources_by_id(document_ids) if document_ids else {}
+
+    @staticmethod
+    def _semantic_matched_documents(
+        hit: SemanticSearchHit,
+        mode: SearchMode,
+        sources: Mapping[str, tuple[str, str]],
+    ) -> tuple[MatchedDocument, ...]:
+        """Chunk hits win; FTS matches are the hybrid fallback when no chunk hit exists."""
+        if hit.document_hits:
+            return tuple(
+                MatchedDocument(
+                    document_id=document.document_id,
+                    ftp_url=sources[document.document_id][0],
+                    source_file=sources[document.document_id][1],
+                    score=document.distance,
+                    previews={},
+                )
+                for document in hit.document_hits
+                if document.document_id in sources
+            )
+        if mode is SearchMode.HYBRID and hit.hit is not None:
+            return hit.hit.matched_documents
+        return ()
+
+    @staticmethod
     def _from_semantic(
-        hit: SemanticSearchHit, mode: SearchMode
+        hit: SemanticSearchHit,
+        mode: SearchMode,
+        sources: Mapping[str, tuple[str, str]],
     ) -> TDocSearchResult:
         metadata = hit.hit
         return TDocSearchResult(
@@ -155,10 +197,8 @@ class TDocSearchFacade:
             type=metadata.type if metadata is not None else None,
             status=metadata.status if metadata is not None else None,
             best_chunk_id=hit.best_chunk_id,
-            matched_documents=(
-                metadata.matched_documents
-                if mode is SearchMode.HYBRID and metadata is not None
-                else ()
+            matched_documents=TDocSearchFacade._semantic_matched_documents(
+                hit, mode, sources,
             ),
         )
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 
 from doc3gpp.cli_filters import SearchQueryBuilder
 from doc3gpp.models.search import (
@@ -31,12 +32,54 @@ from doc3gpp.models.search import (
     SearchHit,
     SearchIndexStatus,
 )
-from doc3gpp.models.semantic_search import SemanticSearchHit
-from doc3gpp.services.embedding.chunker import _chunks
+from doc3gpp.models.semantic_search import (
+    EmbeddedChunk,
+    SemanticDocumentHit,
+    SemanticSearchHit,
+    parse_content_chunk_id,
+)
+from doc3gpp.services.embedding.chunker import _chunks, plan_content_chunks
 from doc3gpp.services.search_service import SearchService
-from doc3gpp.storage.repositories.vector_sql import _build_embed_text
+from doc3gpp.storage.repositories.vector_sql import (
+    _build_content_documents,
+    _build_embed_text,
+)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _VecTdoc:
+    """Best knn evidence for one TDoc: its best row, chunk, and content documents."""
+
+    rank: int
+    best_chunk_id: str
+    distance: float
+    documents: dict[str, SemanticDocumentHit] = field(default_factory=dict)
+
+    def document_hits(self) -> tuple[SemanticDocumentHit, ...]:
+        return tuple(sorted(self.documents.values(), key=lambda h: (h.distance, h.document_id)))
+
+
+def _group_vec_hits(vec_hits: list[tuple[str, str, int, float]]) -> dict[str, _VecTdoc]:
+    """Group knn rows per TDoc, keeping the closest chunk and the best chunk per document."""
+    grouped: dict[str, _VecTdoc] = {}
+    for rank, (tdoc_id, chunk_id, _chunk_idx, dist) in enumerate(vec_hits):
+        entry = grouped.get(tdoc_id)
+        if entry is None:
+            entry = grouped[tdoc_id] = _VecTdoc(rank=rank, best_chunk_id=chunk_id, distance=dist)
+        elif dist < entry.distance:
+            entry.rank, entry.best_chunk_id, entry.distance = rank, chunk_id, dist
+        signature = parse_content_chunk_id(chunk_id)
+        if signature is None:
+            continue
+        document_id = signature[0]
+        previous = entry.documents.get(document_id)
+        if previous is None or dist < previous.distance:
+            entry.documents[document_id] = SemanticDocumentHit(
+                document_id=document_id, chunk_id=chunk_id, distance=dist,
+            )
+    return grouped
 
 
 def rrf_merge(
@@ -57,24 +100,20 @@ def rrf_merge(
     A tdoc_id present in only one side contributes 0 from the other
     side's rank. ``hit`` is ``None`` for vector-only tdogs; the
     service synthesizes a minimal :class:`SearchHit` from the JOIN
-    before returning to the CLI.
+    before returning to the CLI. ``document_hits`` carries the best
+    chunk of each content document from the vector side.
     """
     # FTS5 hits are grouped by parent TDoc; keep the original hit intact so
     # its matched_documents provenance survives fusion unchanged.
     fts5_rank: dict[str, int] = {h.tdoc_id: i for i, h in enumerate(fts5_hits)}
     fts5_by_id: dict[str, SearchHit] = {h.tdoc_id: h for h in fts5_hits}
-    # Reduce vec chunks to min distance per tdoc_id, preserving chunk rank
-    vec_best: dict[str, tuple[int, str, float]] = {}  # tdoc_id -> (rank, best_chunk_id, min_dist)
-    for rank, (tdoc_id, chunk_id, _chunk_idx, dist) in enumerate(vec_hits):
-        prev = vec_best.get(tdoc_id)
-        if prev is None or dist < prev[2]:
-            vec_best[tdoc_id] = (rank, chunk_id, dist)
+    vec_best = _group_vec_hits(vec_hits)
     all_ids = set(fts5_rank) | set(vec_best)
     scored: list[SemanticSearchHit] = []
     for tdoc_id in all_ids:
         r_fts = fts5_rank.get(tdoc_id)
-        r_vec_tup = vec_best.get(tdoc_id)
-        r_vec = r_vec_tup[0] if r_vec_tup is not None else None
+        vec_entry = vec_best.get(tdoc_id)
+        r_vec = vec_entry.rank if vec_entry is not None else None
         w = vector_weight
         fts5_term = (1.0 / (k + r_fts)) * (1.0 - w) if r_fts is not None else 0.0
         vec_term = (1.0 / (k + r_vec)) * w if r_vec is not None else 0.0
@@ -85,8 +124,9 @@ def rrf_merge(
             hit=fts5_by_id.get(tdoc_id),  # None for vector-only
             rank_fts5=r_fts,
             rank_vec=r_vec,
-            min_chunk_distance=r_vec_tup[2] if r_vec_tup else None,
-            best_chunk_id=r_vec_tup[1] if r_vec_tup else None,
+            min_chunk_distance=vec_entry.distance if vec_entry else None,
+            best_chunk_id=vec_entry.best_chunk_id if vec_entry else None,
+            document_hits=vec_entry.document_hits() if vec_entry else (),
         ))
     scored.sort(key=lambda h: h.rrf_score, reverse=True)
     return scored[:limit]
@@ -155,20 +195,21 @@ class SemanticSearchService:
             vec_hits = self._vec.knn(query_vec, limit=limit, filters=filters)
             if not vec_hits:
                 return []
-            # Rank vec hits by distance, dress as SemanticSearchHit with
+            # Rank TDocs by their closest chunk, dress as SemanticSearchHit with
             # rank_fts5=None, rrf_score=-distance. Same DTO so the CLI
             # renderer branches uniformly between the two paths.
             hits = [
                 SemanticSearchHit(
                     tdoc_id=tdoc_id,
-                    rrf_score=-distance,
+                    rrf_score=-entry.distance,
                     rank_fts5=None,
-                    rank_vec=rank,
-                    min_chunk_distance=distance,
-                    best_chunk_id=chunk_id,
+                    rank_vec=entry.rank,
+                    min_chunk_distance=entry.distance,
+                    best_chunk_id=entry.best_chunk_id,
                     hit=None,  # populated below
+                    document_hits=entry.document_hits(),
                 )
-                for rank, (tdoc_id, chunk_id, _idx, distance) in enumerate(vec_hits)
+                for tdoc_id, entry in _group_vec_hits(vec_hits).items()
             ]
             hits.sort(key=lambda h: h.rrf_score, reverse=True)  # least-negative = best
             hits = hits[:limit]
@@ -228,23 +269,41 @@ class SemanticSearchService:
         if embed_text is None:
             self._vec.remove_for_tdoc(tdoc_id)
             return
-        chunks = _chunks(
-            embed_text,
-            self._settings.semantic_search.chunk_size,
-            self._settings.semantic_search.chunk_overlap,
-        )
-        max_chunks = getattr(self._settings.semantic_search, "max_chunks_per_tdoc", 8)
-        if len(chunks) > max_chunks:
-            chunks = chunks[:max_chunks]
-        if not chunks:
+        semantic = self._settings.semantic_search
+        metadata_texts = _chunks(embed_text, semantic.chunk_size, semantic.chunk_overlap)
+        max_chunks = getattr(semantic, "max_chunks_per_tdoc", 8)
+        metadata_texts = metadata_texts[:max_chunks]
+        content = list(plan_content_chunks(
+            _build_content_documents(tdoc_id),
+            semantic.chunk_size,
+            semantic.chunk_overlap,
+            semantic.max_content_chunks_per_tdoc,
+        ))
+        texts = [
+            *metadata_texts,
+            *(chunk for _document_id, _content_hash, chunks in content for chunk in chunks),
+        ]
+        if not texts:
             self._vec.remove_for_tdoc(tdoc_id)
             return
         # Batch all chunks for one TDoc into a single embedder call.
         # The remote embeddings API charges per request, so calling
         # encode() per chunk would be O(chunks) HTTP round-trips per TDoc.
-        embeddings_array = self._embedder.encode(chunks)
-        embeddings = [embeddings_array[i] for i in range(len(chunks))]
-        self._vec.upsert_chunks(tdoc_id, embeddings)
+        embeddings = self._embedder.encode(texts)
+        labelled = [
+            EmbeddedChunk(chunk_id=f"{tdoc_id}#{i}", chunk_index=i, embedding=embeddings[i])
+            for i in range(len(metadata_texts))
+        ]
+        position = len(metadata_texts)
+        for document_id, content_hash, chunks in content:
+            for i in range(len(chunks)):
+                labelled.append(EmbeddedChunk(
+                    chunk_id=f"{tdoc_id}#{document_id}#{content_hash}#{i}",
+                    chunk_index=i,
+                    embedding=embeddings[position],
+                ))
+                position += 1
+        self._vec.upsert_chunks(tdoc_id, labelled)
 
     def remove_for_tdoc(self, tdoc_id: str) -> None:
         self._vec.remove_for_tdoc(tdoc_id)

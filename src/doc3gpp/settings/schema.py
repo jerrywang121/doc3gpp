@@ -702,6 +702,13 @@ class SemanticSearchSettings(BaseModel):
         default=8, ge=1,
         description="Cap on chunks per TDoc to bound parse latency on long covers.",
     )
+    max_content_chunks_per_tdoc: int = Field(
+        default=16, ge=1,
+        description=(
+            "Cap on content chunks per TDoc, counted across its CR annexes or "
+            "family documents in order (main first for a family)."
+        ),
+    )
 
     @field_validator("chunk_overlap")
     @classmethod

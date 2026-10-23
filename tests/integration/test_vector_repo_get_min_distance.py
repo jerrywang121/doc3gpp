@@ -70,18 +70,27 @@ def repo_and_seeded_db(sqlite_env):
     return SQLAlchemyVectorIndexRepository()
 
 
-def _insert(repo, tdoc_id, vec):
+def _labelled(tdoc_id, vecs):
     import numpy as np
 
-    repo.upsert_chunks(tdoc_id, [np.asarray(vec, dtype=np.float32)])
+    from doc3gpp.models.semantic_search import EmbeddedChunk
+
+    return [
+        EmbeddedChunk(
+            chunk_id=f"{tdoc_id}#{i}",
+            chunk_index=i,
+            embedding=np.asarray(vec, dtype=np.float32),
+        )
+        for i, vec in enumerate(vecs)
+    ]
+
+
+def _insert(repo, tdoc_id, vec):
+    repo.upsert_chunks(tdoc_id, _labelled(tdoc_id, [vec]))
 
 
 def _upsert(repo, tdoc_id, vecs):
-    import numpy as np
-
-    repo.upsert_chunks(
-        tdoc_id, [np.asarray(v, dtype=np.float32) for v in vecs],
-    )
+    repo.upsert_chunks(tdoc_id, _labelled(tdoc_id, vecs))
 
 
 def test_empty_input_returns_empty_dict(repo_and_seeded_db):

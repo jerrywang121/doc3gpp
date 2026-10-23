@@ -16,6 +16,7 @@ from doc3gpp.models.search import (
     SearchIndexStatus,
     TDocMeta,
 )
+from doc3gpp.models.semantic_search import EmbeddedChunk
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
@@ -938,7 +939,9 @@ class VectorIndexRepository(Protocol):
     """sqlite-vec backed vector index for ``tdocs``.
 
     All write paths are idempotent (``DELETE`` + ``INSERT``). One
-    ``tdoc_id`` maps to N chunk rows (``chunk_id = "{tdoc_id}#{i}"``).
+    ``tdoc_id`` maps to N chunk rows. Metadata chunks use
+    ``chunk_id = "{tdoc_id}#{i}"``; content chunks use
+    ``"{tdoc_id}#{document_id}#{content_hash}#{i}"``.
     Implementations are dialect-aware: on sqlite with sqlite-vec
     enabled everything works; on non-sqlite or sqlite-vec-less builds
     every method raises :class:`VectorIndexUnavailableError`. The
@@ -946,12 +949,19 @@ class VectorIndexRepository(Protocol):
     ``None`` so callers can degrade gracefully.
     """
 
-    def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None:
-        """Replace all chunk rows for ``tdoc_id`` with the new embeddings.
+    def upsert_chunks(self, tdoc_id: str, chunks: Sequence[EmbeddedChunk]) -> None:
+        """Replace all chunk rows for ``tdoc_id`` with the labelled chunks.
 
-        Deletes existing chunks for ``tdoc_id`` then inserts the new
-        chunk rows in a single transaction. ``chunk_id`` is
-        ``f"{tdoc_id}#{i}"`` for ``i`` in ``range(len(embeddings))``.
+        Deletes existing chunks for ``tdoc_id`` then inserts one row per
+        chunk in a single transaction, keeping each chunk's ``chunk_id``.
+        """
+        ...
+
+    def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
+        """Return ``(document_id, content_hash)`` pairs of indexed content chunks.
+
+        Keyed by ``tdoc_id``. Metadata chunks contribute nothing, and a TDoc
+        with no content chunks is absent from the mapping.
         """
         ...
 

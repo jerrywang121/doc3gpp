@@ -23,7 +23,16 @@ def _settings():
     s.semantic_search.chunk_size = 200
     s.semantic_search.chunk_overlap = 20
     s.semantic_search.max_chunks_per_tdoc = 8
+    s.semantic_search.max_content_chunks_per_tdoc = 16
     return s
+
+
+@pytest.fixture(autouse=True)
+def _no_stored_content(monkeypatch):
+    monkeypatch.setattr(
+        "doc3gpp.services.semantic_search_service._build_content_documents",
+        lambda tid: [],
+    )
 
 
 def _mock_embedder(n_chunks: int = 1):

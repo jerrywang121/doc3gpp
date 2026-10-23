@@ -154,6 +154,31 @@ def test_decide_unknown_is_skipped_with_reason() -> None:
     assert decision.reason == "type could not be determined"
 
 
+def test_nbsp_only_type_is_not_treated_as_unknown() -> None:
+    decision = decide_direct_type("R5-123456", tdoc_type="\u00a0", main_markdown=_no_sniff)
+
+    assert decision.kind == "skipped"
+    assert decision.store is None
+    assert decision.reason is not None
+    assert "is not parsed" in decision.reason
+
+
+@pytest.mark.parametrize("tdoc_type", ["", "   "])
+def test_ordinary_blank_type_still_sniffs(tdoc_type: str) -> None:
+    calls: list[str] = []
+
+    def sniffed_main() -> str:
+        calls.append("main")
+        return f"{WID_MARKER}\n"
+
+    decision = decide_direct_type("R5-123456", tdoc_type=tdoc_type, main_markdown=sniffed_main)
+
+    assert calls == ["main"]
+    assert decision.kind == "family"
+    assert decision.store is not None
+    assert decision.store.key == "wid"
+
+
 def test_skipped_error_carries_reason() -> None:
     error = TDocTypeSkippedError("R5-123456", "type 'other' is not parsed")
 

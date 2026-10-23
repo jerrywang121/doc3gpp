@@ -2813,6 +2813,8 @@ Options:
 - --stale-only: rebuild only stale rows.
 - --quiet: suppress progress messages.
 
+`--stale-only` with `--rebuild-embeddings` keeps the existing `vec_spec_doc_embeddings` table when its stored dimension and model match the live embedder, and re-embeds only the source-version pairs whose `parsed_at` is later than the stored `last_indexed_parsed_at` cutoff; pairs already embedded keep their vectors. A dimension or model change, or a missing table, drops the table and re-embeds every pair. Without `--stale-only`, `--rebuild-embeddings` always drops and rebuilds the table.
+
 ### doc3gpp spec doc schema
 
 Purpose:

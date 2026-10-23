@@ -1786,7 +1786,7 @@ def tdoc_search(
     until: str | None = typer.Option(
         None, "--until", help="Uploaded-date upper bound."
     ),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    limit: int = typer.Option(20, "--limit", min=0, max=150, help="Max results."),
     fmt: str | None = typer.Option(
         None, "--format", help="table | json | markdown"
     ),
@@ -5267,7 +5267,7 @@ def spec_doc_search(
     tables: str | None = typer.Option(
         None, "--tables", help="Rich filter over combined table metadata."
     ),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    limit: int = typer.Option(20, "--limit", min=0, max=150, help="Max results."),
     offset: int = typer.Option(
         0, "--offset", min=0, help="Number of rows to skip before applying --limit."
     ),

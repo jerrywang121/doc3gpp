@@ -44,7 +44,7 @@ from doc3gpp.web.templates_setup import templates
 
 router = APIRouter(tags=["search"])
 
-_LIMIT_CAP = 200
+_LIMIT_CAP = 150
 
 
 def _build_filters(

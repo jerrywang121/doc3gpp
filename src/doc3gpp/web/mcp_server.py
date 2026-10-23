@@ -179,8 +179,8 @@ def _enqueue(state: WebState, kind: JobKind, params: dict[str, Any], message: st
 def _validate_search_pagination(
     *, limit: int, offset: int = 0, snippet_tokens: int | None = None
 ) -> None:
-    if not 1 <= limit <= 200:
-        raise InvalidFilterError("limit must be between 1 and 200")
+    if not 1 <= limit <= 150:
+        raise InvalidFilterError("limit must be between 1 and 150")
     if offset < 0:
         raise InvalidFilterError("offset must be non-negative")
     if snippet_tokens is not None and not 1 <= snippet_tokens <= 64:

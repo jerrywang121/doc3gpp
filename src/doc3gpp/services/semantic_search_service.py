@@ -226,7 +226,7 @@ class SemanticSearchService:
 
         fts5_expr = SearchQueryBuilder(fts5_query).build()
         fanout = self._settings.semantic_search.fanout_multiplier
-        internal_limit = max(limit * fanout, 0)
+        internal_limit = min(max(limit * fanout, 0), _KNN_MAX_K)
         fts5_filters = SearchFilters(
             tsg=filters.tsg, meeting=filters.meeting,
             meeting_id=filters.meeting_id, tdoc_id=filters.tdoc_id,

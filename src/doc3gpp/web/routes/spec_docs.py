@@ -63,7 +63,7 @@ from doc3gpp.web.templates_setup import templates
 router = APIRouter(tags=["spec-docs"])
 
 
-_LIMIT_CAP = 200
+_LIMIT_CAP = 150
 _DOC_CHUNK_LIMIT_DEFAULT = 20
 _DOC_CHUNK_LIMIT_CAP = 100
 

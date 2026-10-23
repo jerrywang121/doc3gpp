@@ -1340,7 +1340,8 @@ constraint is lifted.
 
 Out-of-scope features that have not been implemented yet:
 
-- TDoc types other than CR (LS, DRAFT, BB, etc.).
+- CR, WID, LS, and discussion TDocs are parsed. Other TDoc types are skipped and never
+  downloaded or stored; the eligibility rules are in [`docs/cli.md`](cli.md).
 - Workplan / spec status extraction.
 - Alembic / versioned migrations (the schema bootstrap is
   `Base.metadata.create_all` via `db init`).

@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from doc3gpp.web.state import WebState
 
 _MEETING_FIELDS = ["meeting_id", "name", "location", "start_date", "end_date", "ftp_url", "start_doc", "end_doc"]
-_TDOC_FIELDS = ["tdoc_id", "meeting_name", "title", "source", "type", "status", "cr_cat", "spec", "version", "related_wis"]
+_TDOC_FIELDS = ["tdoc_id", "meeting_name", "title", "source", "type", "status", "cr_cat", "spec", "version", "related_wis", "parsed"]
 _TSG_FIELDS = ["tsg_name", "short_name", "description"]
 _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
 _SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs", "parsed"]
@@ -303,7 +303,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
         return _to_json({"meeting": render.to_jsonable(meeting)})
 
     # ---- TDocs ----------------------------------------------------
-    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, ls_to, ls_cc, original_ls, tdoc_for, abstract, secretary_remarks, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, ls_to, ls_cc, original_ls, tdoc_for, abstract, secretary_remarks, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly. The parsed filter keeps complete (true) or incomplete (false) extractions.")
     @_mcp_error_guard
     def list_tdocs(
         limit: Annotated[int, Field(description="Maximum number of tdocs to return.")] = 50,
@@ -330,6 +330,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
         tdoc_for: Annotated[str | None, Field(description="Rich filter on tdoc_for.")] = None,
         abstract: Annotated[str | None, Field(description="Rich filter on abstract.")] = None,
         secretary_remarks: Annotated[str | None, Field(description="Rich filter on secretary_remarks.")] = None,
+        parsed: Annotated[bool | None, Field(description="Filter by complete extraction state: true keeps parsed TDocs, false keeps the rest.")] = None,
     ) -> str:
         rows = services.tdoc.list_recent_with_meeting(
             limit=limit,
@@ -356,6 +357,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
             tdoc_for=tdoc_for,
             abstract=abstract,
             secretary_remarks=secretary_remarks,
+            parsed=parsed,
         )
         return _to_json(render.tdoc_rows(rows, _TDOC_FIELDS))
 
@@ -914,7 +916,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
             message = f"queued sync_specs for TSG {tsg}"
         return _enqueue(state, JobKind.SYNC_SPECS, params, message)
 
-    @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages + change details.")
+    @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages, change details, and content. With no tdoc_type, selects CR, WID, LS, and discussion TDocs; an explicit tdoc_type is intersected with those types.")
     @_mcp_error_guard
     def parse_tdocs(
         filter: Annotated[dict[str, Any] | None, Field(description="Filter dict selecting which tdocs to parse. Supported keys: tdoc_id, meeting, meeting_id, status, cr_cat, spec, wi, revision_of, revised_to, title, ftp_url, source, tdoc_type, uploaded_date, release, version, cr_num, cr_pack. Text fields (all except meeting_id) are SQL LIKE patterns: use % as a wildcard (e.g. {'tdoc_id': 'R5-26%', 'meeting': '%RAN%', 'title': '%handover%'}); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability; uploaded_date accepts '<op> YYYY-MM-DD'. A plain value with no wildcard still matches exactly.")] = None,

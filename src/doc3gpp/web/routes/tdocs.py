@@ -63,7 +63,13 @@ from doc3gpp.web.errors import (
     InvalidFilterError,
     map_tdoc_content_error,
 )
-from doc3gpp.web.filters import is_htmx_request, parse_date_query, parse_int_query, parse_text_query
+from doc3gpp.web.filters import (
+    is_htmx_request,
+    parse_bool_query,
+    parse_date_query,
+    parse_int_query,
+    parse_text_query,
+)
 from doc3gpp.web.render import (
     TDOC_COLUMN_LABELS,
     TDOC_HTML_DEFAULT_FIELDS,
@@ -93,6 +99,7 @@ _TDOC_DEFAULT_FIELDS = [
     "spec",
     "version",
     "related_wis",
+    "parsed",
 ]
 
 _TDOC_ALLOWED_FIELDS = frozenset(TDOC_COLUMN_LABELS)
@@ -167,6 +174,7 @@ async def list_tdocs(
     abstract: str | None = Query(default=None, alias="abstract"),
     secretary_remarks: str | None = Query(default=None, alias="secretary-remarks"),
     uploaded_date: str | None = Query(default=None, alias="uploaded-date"),
+    parsed: str | None = Query(default=None),
     limit: str | None = Query(default="50"),
     offset: str | None = Query(default="0"),
     fields: list[str] | None = Query(default=None),
@@ -191,6 +199,7 @@ async def list_tdocs(
     parsed_offset = parse_int_query(offset, min=0) or 0
     parsed_meeting_id = parse_int_query(meeting_id, min=1)
     parsed_uploaded_date = parse_date_query(uploaded_date)
+    parsed_state = parse_bool_query(parsed)
 
     if fields:
         unknown = [f for f in fields if f not in _TDOC_ALLOWED_FIELDS]
@@ -233,6 +242,7 @@ async def list_tdocs(
         abstract=parse_text_query(abstract),
         secretary_remarks=parse_text_query(secretary_remarks),
         uploaded_date=parsed_uploaded_date,
+        parsed=parsed_state,
     )
 
     if format == "json":

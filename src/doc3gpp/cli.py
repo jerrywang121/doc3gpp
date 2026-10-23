@@ -92,6 +92,8 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocTypeUnsupportedError,
     TDocZipDownloadError,
 )
+from doc3gpp.services.tdoc_family_service import FamilyExtractResult
+from doc3gpp.services.tdoc_parse_selection import exact_tdoc_id, parse_selection_kwargs
 from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
@@ -285,6 +287,26 @@ def _tdoc_field(item: TDocWithMeeting, name: str) -> object | None:
     if name == "meeting_name":
         return item.meeting_name
     return getattr(item.tdoc, name, None)
+
+
+def _tdoc_list_cell(item: TDocWithMeeting, name: str, *, typed: bool) -> object:
+    """Render one ``tdoc list`` cell.
+
+    ``typed`` keeps the parse state as JSON scalars (``parsed`` as a
+    boolean, ``document_count`` as an integer or ``null``). Every other
+    cell, and every cell in table and Markdown output, is a string with
+    ``-`` for a missing value.
+    """
+    value = _tdoc_field(item, name)
+    if typed and name in ("parsed", "document_count"):
+        return value
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if name in ("reservation_date", "uploaded_date"):
+        return value.isoformat()
+    return str(value)
 
 
 VALID_FORMATS: tuple[str, ...] = ("table", "json", "markdown")
@@ -1563,6 +1585,11 @@ def tdoc_list(
         "--uploaded-date",
         help="Filter on uploaded_date: null/not-null or '<op> YYYY-MM-DD'.",
     ),
+    parsed: str | None = typer.Option(
+        None,
+        "--parsed",
+        help="true|false: complete extraction state",
+    ),
     fields: str | None = typer.Option(
         None,
         "--fields",
@@ -1596,7 +1623,8 @@ def tdoc_list(
       --tdoc, --meeting-id, --meeting, --status, --cr-cat, --spec, --wi,
       --revision-of, --revised-to, --title, --ftp-url, --release, --version,
       --cr-num, --cr-pack, --source, --type, --uploaded-date,
-      --ls-to, --ls-cc, --original-ls, --for, --abstract, --secretary-remarks
+      --ls-to, --ls-cc, --original-ls, --for, --abstract, --secretary-remarks,
+      --parsed
     See docs/cli.md for full semantics and examples.
     """
 
@@ -1608,6 +1636,7 @@ def tdoc_list(
             validate_date_filter(uploaded_date)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from None
+    parsed_filter = _parse_bool_option(parsed, "--parsed")
 
     # ``meeting_name`` is a top-level attribute on ``TDocWithMeeting``; the
     # rest live on ``TDocWithMeeting.tdoc``.
@@ -1690,25 +1719,24 @@ def tdoc_list(
         tdoc_for=tdoc_for,
         abstract=abstract,
         secretary_remarks=secretary_remarks,
+        parsed=parsed_filter,
     )
 
-    rows: list[list[str]] = []
-    for item in records:
-        assert isinstance(item, TDocWithMeeting)
-        vals: list[str] = []
-        for f in out_fields:
-            v = _tdoc_field(item, f)
-            if v is None:
-                vals.append("-")
-                continue
+    if fmt == "json":
+        _dump_show_json(
+            [
+                {f: _tdoc_list_cell(item, f, typed=True) for f in out_fields}
+                for item in records
+            ],
+            output,
+            compact=resolved_compact,
+        )
+        return
 
-            if f in ("reservation_date", "uploaded_date") and v is not None:
-                vals.append(v.isoformat())
-            else:
-                vals.append(str(v))
-
-        rows.append(vals)
-
+    rows = [
+        [str(_tdoc_list_cell(item, f, typed=False)) for f in out_fields]
+        for item in records
+    ]
     _emit_records(
         rows=rows,
         fields=out_fields,
@@ -2124,7 +2152,11 @@ def tdoc_parse(
     tdoc_type: str | None = typer.Option(
         None,
         "--type",
-        help="SQL LIKE pattern on type (defaults to 'CR'; null/not-null/!pattern).",
+        help=(
+            "SQL LIKE pattern on type (null/not-null/!pattern). Defaults to "
+            "CR, WID, LS, and discussion TDocs; an explicit value is "
+            "intersected with those types."
+        ),
     ),
     uploaded_date: str | None = typer.Option(
         None,
@@ -2443,7 +2475,10 @@ def tdoc_parse(
         "tdoc_id": normalised_tdoc,
         "meeting_like": meeting,
         "meeting_id": meeting_id,
-        "tdoc_type": tdoc_type or "CR",
+        **parse_selection_kwargs(
+            tdoc_type,
+            exact_tdoc_id=bool(tdoc) and exact_tdoc_id(tdoc),
+        ),
         "status": status,
         "cr_cat": cr_cat,
         "spec": spec,
@@ -2572,11 +2607,21 @@ def tdoc_parse(
         normalised = raw_id.strip()
         if normalised in batch.successes:
             result = batch.successes[normalised]
-            typer.echo(
-                f"{normalised}: spec={result.details.spec} "
-                f"cr_num={result.details.cr_num} "
-                f"title={result.details.title}"
-            )
+            if isinstance(result, FamilyExtractResult):
+                typer.echo(
+                    f"TDoc {normalised}: {result.store.key}, "
+                    f"{len(result.documents)} documents, extraction_version 2"
+                )
+                skipped_sources = result.skipped_sources
+            else:
+                typer.echo(
+                    f"{normalised}: spec={result.details.spec} "
+                    f"cr_num={result.details.cr_num} "
+                    f"title={result.details.title}"
+                )
+                skipped_sources = result.extract_meta.skipped_sources
+            for skipped_source in skipped_sources:
+                typer.echo(f"warning: skipped {skipped_source}")
         elif normalised in batch.skipped:
             reason = batch.skipped[normalised]
             typer.echo(f"{normalised}: SKIPPED - {reason}")

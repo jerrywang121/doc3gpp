@@ -45,6 +45,7 @@ class TDocService:
         tdoc_for: str | None = None,
         abstract: str | None = None,
         secretary_remarks: str | None = None,
+        parsed: bool | None = None,
     ) -> list[TDocWithMeeting]:
         """Return recent TDoc records joined with their parent meeting name.
 
@@ -63,6 +64,9 @@ class TDocService:
 
         ``tdoc_id`` is the LIKE pattern against ``tdocs.tdoc_id`` and
         mirrors the ``--tdoc`` flag on ``tdoc parse`` / ``tdoc list``.
+
+        ``parsed`` keeps complete (``True``) or incomplete (``False``)
+        extractions; ``None`` applies no filter.
 
         ``offset`` is applied before ``limit`` to support CLI pagination.
         """
@@ -93,6 +97,7 @@ class TDocService:
             tdoc_for=tdoc_for,
             abstract=abstract,
             secretary_remarks=secretary_remarks,
+            parsed=parsed,
         )
 
     def sync_tdoc_list(

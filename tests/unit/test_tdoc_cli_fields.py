@@ -77,8 +77,9 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     lines = [line for line in result.output.splitlines() if line and not line.startswith("Listing")]
     assert lines
     parts = lines[0].split("\t")
-    # Expected default: tdoc_id, meeting_name, title, source, type, status, cr_cat, spec, version, related_wis
-    assert parts == ["R5s260001", "RAN5#111", "Example A", "Qualcomm", "CR", "Agreed", "F", "38.331", "18.1.0", "NR_ext"]
+    # Expected default: tdoc_id, meeting_name, title, source, type, status, cr_cat, spec, version, related_wis, parsed
+    # The fake service does not set the parse state, so ``parsed`` renders as "-".
+    assert parts == ["R5s260001", "RAN5#111", "Example A", "Qualcomm", "CR", "Agreed", "F", "38.331", "18.1.0", "NR_ext", "-"]
 
     # Text filters route through the un-suffixed (rich-filter) repo params so
     # the CLI surface is consistent with `tdoc parse`.

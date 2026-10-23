@@ -195,6 +195,7 @@ class OutputFieldsSettings(BaseModel):
             "spec",
             "version",
             "related_wis",
+            "parsed",
         ]
     )
     tsg: list[str] = Field(

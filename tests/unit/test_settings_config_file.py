@@ -109,6 +109,7 @@ def test_built_in_defaults_match_previously_hardcoded_values(
         "spec",
         "version",
         "related_wis",
+        "parsed",
     ]
     assert s.output.fields.tsg == ["tsg_name", "short_name", "description"]
     assert s.output.fields.wi == ["wi_id", "acronym", "release", "name"]

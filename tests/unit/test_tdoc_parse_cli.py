@@ -24,6 +24,7 @@ from typer.testing import CliRunner
 from doc3gpp.cli import app
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_content_families import eligible_type_values
 from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocCRTTCNDetails,
@@ -1052,7 +1053,8 @@ def test_tdoc_parse_meeting_id_parses_new_only(
         "tdoc_id": None,
         "meeting_like": None,
         "meeting_id": meeting_id,
-        "tdoc_type": "CR",
+        "tdoc_type": None,
+        "eligible_types": eligible_type_values(),
         "status": None,
         "cr_cat": None,
         "spec": None,

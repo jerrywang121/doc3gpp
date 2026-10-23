@@ -38,6 +38,7 @@ from doc3gpp.parsers.direct_extractor import (
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.services.tdoc_cr_service import ExtractResult
 from doc3gpp.services.tdoc_family_service import FamilyExtractResult
+from doc3gpp.services.tdoc_parse_selection import parse_selection_kwargs
 from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
@@ -363,8 +364,11 @@ async def _parse_tdocs(
         "cr_pack",
     }
     list_filters = {
-        k: v for k, v in filters.items() if k in _KNOWN_LIST_FILTERS
+        k: v
+        for k, v in filters.items()
+        if k in _KNOWN_LIST_FILTERS and k != "tdoc_type"
     }
+    list_filters.update(parse_selection_kwargs(filters.get("tdoc_type")))
     if "meeting" in list_filters:
         list_filters["meeting_like"] = list_filters.pop("meeting")
     tdocs = services.tdoc_repo.list(

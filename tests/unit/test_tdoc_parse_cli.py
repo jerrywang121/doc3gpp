@@ -1759,7 +1759,7 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
     assert result.exit_code == 0, result.output
     assert "To parse [count=2]:" in result.output
     assert (
-        "Already parsed in tdoc_cr_cover_page "
+        "Already parsed "
         "(with --force, these will be re-extracted) [count=1]:"
     ) in result.output
     assert "spec" in result.output

@@ -296,7 +296,7 @@ def test_cli_force_preview_lists_complete_family_as_already_parsed(cli_env, monk
 
     assert result.exit_code == 0, result.output
     assert (
-        "Already parsed in tdoc_cr_cover_page "
+        "Already parsed "
         "(with --force, these will be re-extracted) [count=1]:"
     ) in result.output
 
@@ -314,7 +314,7 @@ def test_cli_force_preview_lists_complete_cr_as_already_parsed(cli_env, monkeypa
 
     assert result.exit_code == 0, result.output
     assert (
-        "Already parsed in tdoc_cr_cover_page "
+        "Already parsed "
         "(with --force, these will be re-extracted) [count=1]:"
     ) in result.output
 

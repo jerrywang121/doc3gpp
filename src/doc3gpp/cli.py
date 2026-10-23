@@ -2552,7 +2552,7 @@ def tdoc_parse(
     if already_parsed:
         suffix = " (with --force, these will be re-extracted)" if force else ""
         _print_parse_group(
-            f"Already parsed in tdoc_cr_cover_page{suffix}",
+            f"Already parsed{suffix}",
             already_parsed,
             columns,
         )

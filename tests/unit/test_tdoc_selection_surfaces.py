@@ -125,6 +125,36 @@ def _seed_complete_cr(tdoc_id: str) -> None:
         session.commit()
 
 
+def _seed_complete_wid(tdoc_id: str) -> None:
+    """Store a v2 WID family extraction with one main document and no skips."""
+    url = f"docs/{tdoc_id.lower()}.zip"
+    _seed_tdoc(tdoc_id, "WID new")
+    with get_session_factory()() as session:
+        session.add(
+            TDocExtractOrm(
+                ftp_url=url,
+                tdoc_id=tdoc_id,
+                cache_file=f"{tdoc_id}.zip",
+                doc_filename="main.docx",
+                extraction_version=2,
+                document_count=1,
+                skipped_sources=None,
+            )
+        )
+        session.flush()
+        session.add(
+            CONTENT_ORM_BY_STORE_KEY["wid"](
+                ftp_url=url,
+                doc_filename="main.docx",
+                document_id=document_id_for(url, "main.docx"),
+                tdoc_id=tdoc_id,
+                content=compress_json("main text"),
+                content_hash=_sha("main text"),
+            )
+        )
+        session.commit()
+
+
 def _document(source_file: str, order: int) -> TDocDocument:
     text = f"text of {source_file}"
     return TDocDocument(
@@ -251,6 +281,42 @@ def test_cli_cr_success_reports_skipped_annex(cli_env, monkeypatch) -> None:
     assert result.exception is None, result.output
     assert "R5s260071: spec=38.523-3 cr_num=3790 title=Example CR" in result.output
     assert "warning: skipped bad.docx" in result.output
+
+
+def test_cli_force_preview_lists_complete_family_as_already_parsed(cli_env, monkeypatch) -> None:
+    _seed_complete_wid("R5s260101")
+    _patch_cr_service(
+        monkeypatch,
+        BatchExtractResult(
+            successes={}, failures={}, skipped={"R5s260101": "TDocNotYetOnFTPError: stub"},
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["tdoc", "parse", "--tdoc", "R5s260101", "--force", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Already parsed in tdoc_cr_cover_page "
+        "(with --force, these will be re-extracted) [count=1]:"
+    ) in result.output
+
+
+def test_cli_force_preview_lists_complete_cr_as_already_parsed(cli_env, monkeypatch) -> None:
+    _seed_complete_cr("R5s260102")
+    _patch_cr_service(
+        monkeypatch,
+        BatchExtractResult(
+            successes={}, failures={}, skipped={"R5s260102": "TDocNotYetOnFTPError: stub"},
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["tdoc", "parse", "--tdoc", "R5s260102", "--force", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Already parsed in tdoc_cr_cover_page "
+        "(with --force, these will be re-extracted) [count=1]:"
+    ) in result.output
 
 
 def test_cli_tdoc_list_parsed_filter_and_fields(cli_env) -> None:

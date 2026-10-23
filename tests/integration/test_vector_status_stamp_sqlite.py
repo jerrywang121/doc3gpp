@@ -33,8 +33,11 @@ _MEETING_ID = 100
 _A_ID = "R5-2600201"
 _B_ID = "R5-2600202"
 _C_ID = "R5-2600203"
+_EARLIER_ID = "R5-2600204"
+_BLANK_ID = "R5-2600205"
 _UPLOADED = date(2026, 1, 2)
 _LATER = date(2026, 2, 1)
+_EARLIER = date(2025, 12, 31)
 
 
 class _Embedder:
@@ -73,6 +76,24 @@ def _insert_tdoc(tdoc_id: str, uploaded: date) -> None:
                 tdoc_id=tdoc_id,
                 title=f"Metadata title for {tdoc_id}",
                 meeting_id=_MEETING_ID,
+                type="WID new",
+                status="Agreed",
+                uploaded_date=uploaded,
+                release="Rel-18",
+                spec="38.300",
+            )
+        )
+        session.commit()
+
+
+def _insert_blank_tdoc(tdoc_id: str, uploaded: date) -> None:
+    """Insert a TDoc with no title and no meeting, so its embed text is empty."""
+    with get_session_factory()() as session:
+        session.add(
+            TDocORM(
+                tdoc_id=tdoc_id,
+                title=None,
+                meeting_id=None,
                 type="WID new",
                 status="Agreed",
                 uploaded_date=uploaded,
@@ -131,6 +152,16 @@ def _stored(key: str) -> str | None:
         return connection.execute(
             text("SELECT value FROM vec_meta WHERE key = :key"), {"key": key},
         ).scalar()
+
+
+def _stale_only_ids() -> set[str]:
+    return {
+        tdoc_id
+        for batch in SQLAlchemyVectorIndexRepository().rebuild_batch(
+            batch_size=10, after_id=None, stale_only=True,
+        )
+        for tdoc_id in batch
+    }
 
 
 def test_full_rebuild_stamps_status_and_is_not_stale(sqlite_env) -> None:
@@ -216,3 +247,57 @@ def test_tdoc_uploaded_during_rebuild_stays_stale(sqlite_env) -> None:
     assert _stored("last_indexed_uploaded_date") == str(_UPLOADED)
     assert repo.status().is_stale is True
     assert repo.count_tdocs_to_index(stale_only=True) == 1
+
+
+def test_same_day_title_only_tdoc_synced_after_rebuild_is_stale_only_selected(
+    sqlite_env,
+) -> None:
+    _seed()
+    _rebuild(stale_only=False)
+    _insert_tdoc(_C_ID, _UPLOADED)
+    assert _C_ID in _stale_only_ids()
+
+    _rebuild(stale_only=True)
+
+    assert _C_ID in _indexed_tdoc_ids()
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is False
+
+
+def test_tdoc_before_snapshot_day_is_not_stale_only_selected(sqlite_env) -> None:
+    _seed()
+    _rebuild(stale_only=False)
+    _insert_tdoc(_EARLIER_ID, _EARLIER)
+    assert _EARLIER_ID not in _stale_only_ids()
+
+    _rebuild(stale_only=True)
+
+    assert _EARLIER_ID not in _indexed_tdoc_ids()
+
+
+def test_snapshot_day_embedded_tdoc_is_reselected_by_stale_only(sqlite_env) -> None:
+    """Accepted cost of the >= cutoff: embedded TDocs on the snapshot day are re-selected.
+
+    The status stays fresh, because only a missing same-day TDoc makes it stale.
+    """
+    _seed()
+    _rebuild(stale_only=False)
+
+    assert {_A_ID, _B_ID} <= _stale_only_ids()
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is False
+
+
+def test_same_day_title_only_tdoc_makes_status_stale(sqlite_env) -> None:
+    _seed()
+    _rebuild(stale_only=False)
+    _insert_tdoc(_C_ID, _UPLOADED)
+
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is True
+
+
+def test_same_day_blank_tdoc_without_embed_text_keeps_status_fresh(sqlite_env) -> None:
+    """A same-day TDoc that can never be embedded must not make the status stale forever."""
+    _seed()
+    _rebuild(stale_only=False)
+    _insert_blank_tdoc(_BLANK_ID, _UPLOADED)
+
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is False

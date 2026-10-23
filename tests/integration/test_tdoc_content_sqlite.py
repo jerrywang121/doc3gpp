@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import replace
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 
 from doc3gpp.models.tdoc_content_families import (
     TDOC_CONTENT_STORES,
@@ -21,6 +21,8 @@ from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.models import (
     TDocCrAnnexOrm,
+    TDocCrChangeDetailOrm,
+    TDocCrTtcnDetailOrm,
     TDocDiscussionContentOrm,
     TDocExtractOrm,
     TDocLsContentOrm,
@@ -59,8 +61,8 @@ def _seed_tdoc() -> None:
         session.commit()
 
 
-def _document(source_file: str, markdown: str) -> TDocDocument:
-    document_id = document_id_for(URL, source_file)
+def _document(source_file: str, markdown: str, url: str = URL) -> TDocDocument:
+    document_id = document_id_for(url, source_file)
     return TDocDocument(
         document_id=document_id,
         source_file=source_file,
@@ -351,3 +353,137 @@ def test_skipped_sources_are_written_to_parent(sqlite_env) -> None:
     assert meta is not None
     assert meta.skipped_sources == ("annex/bad.doc",)
     assert not is_complete_family_extraction(meta, _repo().list_documents(WID, URL))
+
+
+def _cr_sidecars() -> tuple[TDocCRTTCNDetails, TDocCRChangeDetails]:
+    ttcn = TDocCRTTCNDetails(
+        tdoc_id=TDOC_ID,
+        ftp_url=URL,
+        testcase="testcase one",
+        required_changes=[{"id": "change-1"}],
+    )
+    changes = TDocCRChangeDetails(
+        ftp_url=URL,
+        tdoc_id=TDOC_ID,
+        clauses=("5.1",),
+        changes=({"clauses": ["5.1"], "text": "body change"},),
+    )
+    return ttcn, changes
+
+
+def test_cr_replacement_without_sidecars_clears_stale_rows(sqlite_env) -> None:
+    create_schema("main")
+    _seed_tdoc()
+    ttcn, changes = _cr_sidecars()
+    _repo().replace_cr_bundle(
+        _cover(), ttcn, changes, _meta(MAIN, 1), (_document("a.docx", "# Annex"),)
+    )
+    assert _count(TDocCrTtcnDetailOrm) == 1
+    assert _count(TDocCrChangeDetailOrm) == 1
+
+    _repo().replace_cr_bundle(
+        _cover("Second cover"),
+        None,
+        None,
+        _meta(MAIN, 1),
+        (_document("b.docx", "# Second annex"),),
+    )
+
+    assert SQLAlchemyTDocCrTtcnRepository().get_by_url(URL) is None
+    assert SQLAlchemyTDocCrChangeDetailsRepository().get_by_url(URL) is None
+    assert _count(TDocCrTtcnDetailOrm) == 0
+    assert _count(TDocCrChangeDetailOrm) == 0
+    assert SQLAlchemyTDocCrRepository().get_by_url(URL).title == "Second cover"
+    assert [document.source_file for document in _repo().list_documents(CR, URL)] == [
+        "b.docx"
+    ]
+
+
+def _rejected_annexes(case: str) -> tuple[TDocDocument, ...]:
+    if case == "duplicate_source":
+        return (_document("a.docx", "# Replacement"), _document("a.docx", "# Duplicate"))
+    return (replace(_document("a.docx", "# Replacement"), document_id="0" * 64),)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("duplicate_source", "duplicate source_file"),
+        ("document_id_mismatch", "document_id does not match"),
+    ],
+)
+def test_failed_cr_replacement_keeps_cover_sidecars_and_annexes(
+    sqlite_env, case: str, message: str
+) -> None:
+    create_schema("main")
+    _seed_tdoc()
+    ttcn, changes = _cr_sidecars()
+    _repo().replace_cr_bundle(
+        _cover(), ttcn, changes, _meta(MAIN, 1), (_document("a.docx", "# Previous annex"),)
+    )
+    previous_annexes = _repo().list_documents(CR, URL)
+    previous_meta = _repo().get_extract_meta(URL)
+    rejected = _rejected_annexes(case)
+
+    with pytest.raises(ValueError, match=message):
+        _repo().replace_cr_bundle(
+            _cover("Rejected cover"),
+            None,
+            None,
+            _meta(MAIN, len(rejected)),
+            rejected,
+        )
+
+    assert SQLAlchemyTDocCrRepository().get_by_url(URL).title == "Initial cover"
+    assert SQLAlchemyTDocCrTtcnRepository().get_by_url(URL).testcase == "testcase one"
+    assert (
+        SQLAlchemyTDocCrChangeDetailsRepository().get_by_url(URL).changes
+        == changes.changes
+    )
+    assert _repo().list_documents(CR, URL) == previous_annexes
+    assert _repo().get_extract_meta(URL) == previous_meta
+
+
+OTHER_URL = "r5/docs/r5s260009_rev1.zip"
+
+
+def test_two_zip_urls_for_one_tdoc_keep_separate_content(sqlite_env) -> None:
+    create_schema("main")
+    _seed_tdoc()
+    _repo().replace_family_bundle(
+        WID,
+        _meta(MAIN, 2),
+        (
+            _document(MAIN, "# First URL main", url=URL),
+            _document("annex/info.docx", "# First URL annex", url=URL),
+        ),
+    )
+    _repo().replace_family_bundle(
+        WID,
+        _meta(MAIN, 2, ftp_url=OTHER_URL, cache_file="r5s260009_rev1.zip"),
+        (
+            _document(MAIN, "# Second URL main", url=OTHER_URL),
+            _document("annex/info.docx", "# Second URL annex", url=OTHER_URL),
+        ),
+    )
+
+    first = _repo().get_document(WID, URL, "annex/info.docx")
+    second = _repo().get_document(WID, OTHER_URL, "annex/info.docx")
+    assert first is not None and second is not None
+    assert first.markdown_text == "# First URL annex"
+    assert second.markdown_text == "# Second URL annex"
+    assert first.document_id != second.document_id
+    assert _repo().get_document(WID, OTHER_URL, MAIN).markdown_text == "# Second URL main"
+    assert [document.markdown_text for document in _repo().list_documents(WID, URL)] == [
+        "# First URL main",
+        "# First URL annex",
+    ]
+    assert _count(TDocWidContentOrm) == 4
+    assert _count(TDocExtractOrm) == 2
+
+    with get_session_factory()() as session:
+        session.execute(delete(TDocORM).where(TDocORM.tdoc_id == TDOC_ID))
+        session.commit()
+
+    assert _count(TDocExtractOrm) == 0
+    assert _count(TDocWidContentOrm) == 0

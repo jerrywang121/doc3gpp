@@ -1009,6 +1009,14 @@ class VectorIndexRepository(Protocol):
 
     def clear_resume_cursor(self) -> None: ...
 
+    def set_resume_snapshot(self, latest_uploaded_date: str | None) -> None:
+        """Persist the fresh run's pre-rebuild ``MAX(uploaded_date)`` snapshot."""
+        ...
+
+    def get_resume_snapshot(self) -> str | None:
+        """Return the snapshot a resumed rebuild stamps: the persisted value, else the current MAX."""
+        ...
+
     def latest_uploaded_date(self) -> str | None:
         """Return the raw ``MAX(tdocs.uploaded_date)``, or ``None`` for an empty corpus."""
         ...

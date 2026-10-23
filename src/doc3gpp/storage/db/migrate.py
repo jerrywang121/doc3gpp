@@ -401,7 +401,7 @@ def _create_vector_schema(dim: int | None = None) -> None:
                 text(
                     "DELETE FROM vec_meta WHERE key IN "
                     "('last_rebuild_at', 'last_indexed_uploaded_date', "
-                    "'last_rebuild_last_tdoc_id')"
+                    "'last_rebuild_last_tdoc_id', 'last_rebuild_snapshot_uploaded_date')"
                 )
             )
         if dim is not None:

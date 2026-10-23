@@ -561,6 +561,38 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 ),
             )
 
+    def set_resume_snapshot(self, latest_uploaded_date: str | None) -> None:
+        """Persist the fresh run's ``MAX(uploaded_date)`` snapshot beside the cursor.
+
+        An empty corpus (``None``) is stored as ``''``. No upload date is empty, so the
+        marker tells "snapshot was None" apart from a missing key, which means the rebuild
+        started before snapshots were persisted.
+        """
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO vec_meta (key, value) "
+                    "VALUES ('last_rebuild_snapshot_uploaded_date', :v) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                ),
+                {"v": "" if latest_uploaded_date is None else latest_uploaded_date},
+            )
+
+    def get_resume_snapshot(self) -> str | None:
+        """Return the snapshot a resumed rebuild stamps.
+
+        The persisted fresh-run value, with the ``''`` marker read back as ``None``. A
+        missing key (a rebuild started before snapshots were persisted) falls back to the
+        current :meth:`latest_uploaded_date`, as before.
+        """
+        with self._engine.begin() as conn:
+            stored = conn.execute(
+                text("SELECT value FROM vec_meta WHERE key = 'last_rebuild_snapshot_uploaded_date'")
+            ).scalar()
+        if stored is None:
+            return self.latest_uploaded_date()
+        return stored or None
+
     def latest_uploaded_date(self) -> str | None:
         with self._engine.begin() as conn:
             latest = conn.execute(text("SELECT MAX(uploaded_date) FROM tdocs")).scalar()

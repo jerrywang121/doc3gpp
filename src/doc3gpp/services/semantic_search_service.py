@@ -382,9 +382,11 @@ class SemanticSearchService:
         dim only.
 
         A completed rebuild stamps ``last_rebuild_at`` and the
-        ``MAX(uploaded_date)`` snapshot taken before the first batch, so a
-        TDoc uploaded during the rebuild stays stale. An interrupted rebuild
-        is not stamped, and a full reset clears the old stamps.
+        ``MAX(uploaded_date)`` snapshot taken before the first batch of the
+        fresh run, so a TDoc uploaded during the rebuild stays stale. A resume
+        stamps the snapshot that run persisted, not a new maximum. An
+        interrupted rebuild is not stamped, and a full reset clears the old
+        stamps.
         """
         model = getattr(self._embedder, "model_name", None)
         live_dim = getattr(self._embedder, "dim", None)
@@ -392,6 +394,10 @@ class SemanticSearchService:
             if hasattr(self._vec, "verify_compatible") and live_dim is not None:
                 self._vec.verify_compatible(live_dim, model)
             after_id = self._vec.get_resume_cursor()
+            latest = (
+                self._vec.get_resume_snapshot()
+                if hasattr(self._vec, "get_resume_snapshot") else None
+            )
         else:
             # Force a fresh start regardless of any stale cursor.
             self._vec.clear_resume_cursor()
@@ -406,10 +412,12 @@ class SemanticSearchService:
                     # The reset empties the table, so every TDoc must be re-embedded.
                     stale_only = False
             after_id = None
-        latest = (
-            self._vec.latest_uploaded_date()
-            if hasattr(self._vec, "latest_uploaded_date") else None
-        )
+            latest = (
+                self._vec.latest_uploaded_date()
+                if hasattr(self._vec, "latest_uploaded_date") else None
+            )
+            if hasattr(self._vec, "set_resume_snapshot"):
+                self._vec.set_resume_snapshot(latest)
         total = self._vec.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,
         )

@@ -68,7 +68,8 @@ _STORE_BY_TYPE: dict[str, TDocContentStore] = {
 def store_for_type(tdoc_type: str | None) -> TDocContentStore | None:
     if not tdoc_type:
         return None
-    return _STORE_BY_TYPE.get(tdoc_type.strip().casefold())
+    # Trim the same characters as the SQL eligibility filter in tdoc_sql.py.
+    return _STORE_BY_TYPE.get(tdoc_type.strip(" \t\r\n").casefold())
 
 
 def is_eligible_type(tdoc_type: str | None) -> bool:

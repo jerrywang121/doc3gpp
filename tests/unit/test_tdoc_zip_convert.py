@@ -7,6 +7,7 @@ import io
 import logging
 import zipfile
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -303,3 +304,35 @@ def test_main_inside_folder_keeps_full_path() -> None:
 
     assert result.main_source_file == "R5-123456/R5-123456.docx"
     assert result.documents[0].source_file == "R5-123456/R5-123456.docx"
+
+
+def test_is_empty_text_error_is_public() -> None:
+    from doc3gpp.parsers.tdoc_zip_convert import is_empty_text_error
+
+    assert callable(is_empty_text_error)
+
+
+def test_is_empty_text_error_matches_empty_text_runtime_error() -> None:
+    from doc3gpp.parsers.tdoc_zip_convert import is_empty_text_error
+
+    assert is_empty_text_error(RuntimeError("python-docx returned empty result for x.docx"))
+
+
+def test_is_empty_text_error_rejects_other_runtime_error() -> None:
+    from doc3gpp.parsers.tdoc_zip_convert import is_empty_text_error
+
+    assert not is_empty_text_error(RuntimeError("other failure"))
+
+
+def test_is_empty_text_error_rejects_non_runtime_error() -> None:
+    from doc3gpp.parsers.tdoc_zip_convert import is_empty_text_error
+
+    assert not is_empty_text_error(ValueError("python-docx returned empty result for x.docx"))
+
+
+def test_direct_extractor_does_not_import_private_empty_text_prefix() -> None:
+    from doc3gpp.parsers import direct_extractor
+
+    source = Path(direct_extractor.__file__).read_text(encoding="utf-8")
+
+    assert "_EMPTY_TEXT_PREFIX" not in source

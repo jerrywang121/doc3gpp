@@ -203,6 +203,13 @@ change set so the docs stay honest.
   on every run, until a later upload date appears in `tdocs`. Their vectors are unchanged,
   so the cost is embedding requests only, and `IndexStatus.is_stale` ignores them. A TDoc
   with empty embed text is never indexed, so the same cutoff re-selects it on each run.
+- **Vector status cost grows linearly with the corpus.** `status()`, the `--stale-only`
+  count, and the stale check decompress and chunk every stored content document to build
+  the expected signatures. Measured on WSL2 with 800 TDocs (three documents each, about
+  8000 words per document): `status()` median 2.06 s and `count_tdocs_to_index(stale_only=True)`
+  1.71 s, about 2.6 ms per TDoc at 50, 200, and 800 TDocs. Decompression is about 43% of the
+  status time and chunking about 22%. A stored planned-chunk count or blank flag per content
+  row would remove both, but it needs a schema change and migration, which is not done.
 - A rebuild started before this change has no persisted snapshot, so its `--resume` takes the newest upload date seen at resume time until the next fresh `--rebuild-embeddings`.
 - **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
   row cannot be decoded, `upsert_for_tdoc` logs a warning and the rebuild loop

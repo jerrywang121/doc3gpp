@@ -2137,17 +2137,21 @@ Rebuild notes:
   `--rebuild-embeddings` after such a change.
 - `--stale-only` with `--rebuild-embeddings` keeps the existing vector table when
   its stored dimension and model match the live embedder, and re-embeds only the
-  stale TDocs; fresh TDocs keep their vectors. A dimension or model change, or a
-  missing table, drops the table and re-embeds every TDoc. Without `--stale-only`,
-  `--rebuild-embeddings` always drops and rebuilds the table.
+  stale TDocs; fresh TDocs keep their vectors. TDocs uploaded on the last rebuild's
+  snapshot day are re-embedded on every run (the date cutoff is inclusive). A dimension
+  or model change, or a missing table, drops the table and re-embeds every TDoc. Without
+  `--stale-only`, `--rebuild-embeddings` always drops and rebuilds the table.
 - A stored document that cannot be decoded is logged and skipped by the rebuild
   loop. Its old FTS rows remain, and its stored hash still matches, so
   `--stale-only` does not retry it. Only a full `--rebuild` repairs it.
 - `IndexStatus.is_stale` is true when a TDoc was uploaded after the last completed
-  vector rebuild, or when a TDoc's indexed content or metadata differs from SQL. A
-  completed rebuild stamps `last_rebuild_at` and the newest upload date it saw. A full
-  rebuild clears those stamps when it starts, so an interrupted run leaves the status
-  stale. See [`known-constraints.md`](known-constraints.md) for the metadata-only gap.
+  vector rebuild's snapshot day, when a TDoc uploaded on that day is missing from the
+  index (a TDoc with no title or metadata text is never indexed and is ignored), or when
+  a TDoc's indexed content or metadata differs from SQL. An already-indexed TDoc on the
+  snapshot day does not make the status stale. A completed rebuild stamps
+  `last_rebuild_at` and the newest upload date it saw. A full rebuild clears those stamps
+  when it starts, so an interrupted run leaves the status stale. See
+  [`known-constraints.md`](known-constraints.md) for the metadata-only gap.
 
 ## tsg Commands
 

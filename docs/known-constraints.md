@@ -193,12 +193,16 @@ change set so the docs stay honest.
   does not detect a change to `semantic_search.chunk_size` or `chunk_overlap`. After
   changing either, run `doc3gpp tdoc index --rebuild-embeddings`.
 - **`--stale-only` does not select a metadata-only TDoc that is missing from the vector
-  index and was uploaded on or before the last completed rebuild's newest upload date.**
-  A rebuild stamps `last_indexed_uploaded_date` with that date, and `--stale-only` selects
-  only TDocs uploaded strictly after it. A TDoc with no content documents has nothing for
-  the content check to compare, so it stays missing. `uploaded_date` has day granularity,
-  so a same-day upload that is synced after the rebuild is also missed. Use
-  `--rebuild-embeddings` to repair these rows.
+  index and was uploaded before the last completed rebuild's snapshot day.** A rebuild
+  stamps `last_indexed_uploaded_date` with the newest upload date it saw. `--stale-only`
+  selects TDocs uploaded on or after that day, so an earlier-dated title-only TDoc that is
+  synced later stays missing. A TDoc with no content documents has nothing for the content
+  check to compare. Use `--rebuild-embeddings` to repair these rows.
+- **Each `--stale-only` run re-embeds the TDocs uploaded on the snapshot day.** The cutoff
+  is inclusive, so already-indexed TDocs uploaded on the newest upload day are re-embedded
+  on every run, until a later upload date appears in `tdocs`. Their vectors are unchanged,
+  so the cost is embedding requests only, and `IndexStatus.is_stale` ignores them. A TDoc
+  with empty embed text is never indexed, so the same cutoff re-selects it on each run.
 - **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
   row cannot be decoded, `upsert_for_tdoc` logs a warning and the rebuild loop
   continues. The TDoc's old FTS rows remain and its stored hash still matches, so

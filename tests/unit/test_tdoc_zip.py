@@ -28,11 +28,12 @@ def _document_model():
 
 
 def _make_zip(files: list[tuple[str, bytes]]) -> bytes:
-    """Build an in-memory ZIP, retaining insertion order for determinism checks."""
+    """Build an in-memory ZIP with fixed entry timestamps so its bytes are reproducible."""
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
         for name, payload in files:
-            archive.writestr(name, payload)
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            archive.writestr(info, payload)
     return output.getvalue()
 
 
@@ -357,7 +358,7 @@ def test_build_and_read_markdown_archive_round_trip_manifest_and_documents() -> 
     ("raw", "expected"),
     [
         (b"legacy markdown", "legacy markdown"),
-        (gzip.compress(b"gzip markdown"), "gzip markdown"),
+        (gzip.compress(b"gzip markdown", mtime=0), "gzip markdown"),
         (_make_zip([("old-name.md", b"single zip markdown")]), "single zip markdown"),
     ],
 )

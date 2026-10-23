@@ -12,12 +12,14 @@ from doc3gpp.models.search import (
     SearchUnavailableError,
 )
 from doc3gpp.models.semantic_search import (
+    SemanticDocumentHit,
     SemanticSearchHit,
     SemanticSearchUnavailableError,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
 from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
+from doc3gpp.storage.db.migrate import create_schema
 
 
 class RecordingFts:
@@ -47,13 +49,29 @@ class RecordingSemantic:
 
 
 class RecordingSource:
-    def __init__(self, rows: list[TDocWithMeeting]) -> None:
+    def __init__(
+        self,
+        rows: list[TDocWithMeeting],
+        documents: dict[str, tuple[str, str]] | None = None,
+    ) -> None:
         self.rows = rows
+        self.documents = documents or {}
         self.calls: list[SearchFilters] = []
+        self.document_source_calls: list[frozenset[str]] = []
 
     def list_for_search(self, filters: SearchFilters) -> list[TDocWithMeeting]:
         self.calls.append(filters)
         return self.rows
+
+    def document_sources_by_id(
+        self, document_ids: frozenset[str],
+    ) -> dict[str, tuple[str, str]]:
+        self.document_source_calls.append(frozenset(document_ids))
+        return {
+            document_id: self.documents[document_id]
+            for document_id in document_ids
+            if document_id in self.documents
+        }
 
 
 def _settings(weight: float = 0.35) -> SimpleNamespace:
@@ -260,6 +278,42 @@ def test_vector_only_hybrid_hit_serializes_empty_matched_documents() -> None:
     )
 
     assert tdoc_search_result_to_dict(results[0])["matched_documents"] == []
+
+
+def test_chunk_hit_provenance_resolves_through_source_repository(sqlite_env) -> None:
+    create_schema()
+    chunk_id = "R5-000001#doc-main#hash-main#0"
+    semantic = RecordingSemantic([
+        SemanticSearchHit(
+            tdoc_id="R5-000001",
+            rrf_score=0.25,
+            hit=_search_hit(),
+            min_chunk_distance=0.1,
+            best_chunk_id=chunk_id,
+            document_hits=(
+                SemanticDocumentHit(
+                    document_id="doc-main", chunk_id=chunk_id, distance=0.1,
+                ),
+            ),
+        ),
+    ])
+    source = RecordingSource(
+        [], documents={"doc-main": ("ran/doc.zip", "docs/main.docx")},
+    )
+    facade = _facade(fts=None, semantic=semantic, source=source)
+
+    results = facade.search(text=None, semantic="meaning", filters=SearchFilters(limit=3))
+
+    assert source.document_source_calls == [frozenset({"doc-main"})]
+    assert results[0].matched_documents == (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="ran/doc.zip",
+            source_file="docs/main.docx",
+            score=0.1,
+            previews={},
+        ),
+    )
 
 
 def test_filter_search_only_reads_source_repository() -> None:

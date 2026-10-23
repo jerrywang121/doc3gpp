@@ -14,6 +14,7 @@ from doc3gpp.models.semantic_search import SemanticDocumentHit
 from doc3gpp.services import semantic_search_service as svc_mod
 from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.settings.schema import SemanticSearchSettings
+from doc3gpp.storage.db.migrate import create_schema
 
 NEEDLE = "zyxqneedle"
 DIM = 384
@@ -159,3 +160,41 @@ def test_max_content_chunks_per_tdoc_defaults_to_16_and_rejects_zero():
     assert SemanticSearchSettings().max_content_chunks_per_tdoc == 16
     with pytest.raises(ValidationError):
         SemanticSearchSettings(max_content_chunks_per_tdoc=0)
+
+
+class _RecordingVec:
+    def __init__(self, embed_text, documents) -> None:
+        self._embed_text = embed_text
+        self._documents = documents
+        self.calls: list[tuple[str, str]] = []
+        self.upserted: list = []
+
+    def embed_text_for_tdoc(self, tdoc_id):
+        self.calls.append(("embed_text_for_tdoc", tdoc_id))
+        return self._embed_text
+
+    def content_documents_for_tdoc(self, tdoc_id):
+        self.calls.append(("content_documents_for_tdoc", tdoc_id))
+        return list(self._documents)
+
+    def upsert_chunks(self, tdoc_id, chunks):
+        self.calls.append(("upsert_chunks", tdoc_id))
+        self.upserted = list(chunks)
+
+    def remove_for_tdoc(self, tdoc_id):
+        self.calls.append(("remove_for_tdoc", tdoc_id))
+
+
+def test_index_reads_embed_text_and_content_through_vector_repository(sqlite_env):
+    create_schema()
+    vec = _RecordingVec("meta title", [("doc-annex", "hash-annex", "annex text")])
+    service = SemanticSearchService(MagicMock(), _Embedder(), vec, _settings())
+
+    service.index_for_tdoc("R5-1")
+
+    assert vec.calls == [
+        ("embed_text_for_tdoc", "R5-1"),
+        ("content_documents_for_tdoc", "R5-1"),
+        ("upsert_chunks", "R5-1"),
+    ]
+    assert _content_ids(vec.upserted) == ["R5-1#doc-annex#hash-annex#0"]

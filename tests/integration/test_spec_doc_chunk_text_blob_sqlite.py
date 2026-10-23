@@ -210,3 +210,37 @@ def test_migration_is_idempotent_and_handles_mixed_rows(sqlite_env):
     assert [chunk.text for chunk in listed] == ["fresh body"]
     legacy = repo.list_chunks("38.331", version="18.5.0", limit=1000)
     assert [chunk.text for chunk in legacy] == [*bodies, "late legacy body"]
+
+
+def test_unmigrated_plain_text_rows_list_as_text(sqlite_env):
+    create_schema("specdata")
+    engine = get_specdata_engine()
+    _rebuild_legacy_chunks_table(engine)
+    _insert_legacy_rows(engine, ["legacy handover body"])
+
+    chunks = SQLAlchemySpecDocRepository().list_chunks(
+        "38.331", version="18.5.0", limit=10
+    )
+
+    assert [chunk.text for chunk in chunks] == ["legacy handover body"]
+
+
+def test_unmigrated_plain_text_rows_search_as_text(sqlite_env):
+    create_schema("specdata")
+    engine = get_specdata_engine()
+    _rebuild_legacy_chunks_table(engine)
+    _insert_legacy_rows(engine, ["legacy handover body"])
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO spec_doc_search (chunk_id, text, sections, tables, "
+                "spec_id, version, release) VALUES ('38.331@18.5.0#0', "
+                "'legacy handover body', NULL, NULL, '38_331', '18_5_0', NULL)"
+            )
+        )
+
+    hits = SQLAlchemySpecDocSearchRepository().search(
+        "handover", SpecDocSearchFilters()
+    )
+
+    assert [hit.text for hit in hits] == ["legacy handover body"]

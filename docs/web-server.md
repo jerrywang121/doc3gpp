@@ -195,7 +195,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | --- | --- | --- |
 | GET | `/healthz` | Liveness probe → `{"ok": true}`. |
 | GET | `/` | Landing page. |
-| GET | `/meetings` | List meetings (`?format=json`); shows `start_doc`/`end_doc` and a coloured, clickable sync symbol (`↻`) per meeting. |
+| GET | `/meetings` | List meetings (`?format=json`); shows `start_doc`/`end_doc` and a coloured, clickable sync symbol (`↻`) per meeting. Clicking it enqueues a TDoc sync; while the job runs the row shows a one-word status (`pending`, `running`) in place of the symbol, then the symbol returns and the page reloads with the current filters kept in the URL. |
 | GET | `/meetings/{id}` | Meeting detail (HTML or JSON). |
 | GET | `/tdocs` | List TDocs (`?format=json`; repeatable `fields` selects the HTML columns, see below; `parsed=true|false` keeps complete or incomplete extractions for each TDoc's type). |
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
@@ -221,7 +221,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/spec-docs/schema` | Spec-doc field descriptors across the three spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
 | GET | `/tdocs/search` | Unified TDoc search (`?text=`, `?semantic=`, filters, `limit` accepts 1 to 150 (larger values return 400 `invalid_filter`), `?format=json`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
 | GET | `/tdocs/index` | TDoc FTS5/vector index status (`?format=json` returns the `IndexStatus` object). |
-| GET | `/jobs`, `/jobs/{id}` | List / show jobs. |
+| GET | `/jobs`, `/jobs/{id}` | List / show jobs. `?format=html` renders the full status panel; `?format=badge` renders the one-word status used by meeting rows (empty once the job is terminal). |
 | GET | `/jobs/{id}/events` | SSE stream for a job. |
 | POST | `/jobs/sync/meetings` | Enqueue `sync_meetings`. A `tsg` not present in the `tsgs` reference table is rejected (the job fails fast before any network work). |
 | POST | `/jobs/sync/wis` | Enqueue `sync_wis` (`{"tsg": "R5"}`). The worker validates the TSG against the reference table before fetching WIs and returns the number of stored rows. |

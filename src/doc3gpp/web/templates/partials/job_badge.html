@@ -1,0 +1,9 @@
+{% if job and job.status.value in ('queued', 'running') %}
+  <span
+    class="job-badge"
+    hx-get="/jobs/{{ job.id }}?format=badge"
+    hx-trigger="every 2s"
+    hx-target="this"
+    hx-swap="outerHTML"
+  >{{ 'pending' if job.status.value == 'queued' else 'running' }}</span>
+{% endif %}

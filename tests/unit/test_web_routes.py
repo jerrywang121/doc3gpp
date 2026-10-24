@@ -683,15 +683,23 @@ def test_meetings_list_name_links_to_portal(client: TestClient) -> None:
     )
 
 
-def test_meetings_list_sync_queued_indication(client: TestClient) -> None:
-    """The sync form shows a 'queued' hint that the poller toggles."""
+def test_meetings_list_rows_show_compact_job_status(client: TestClient) -> None:
+    """List rows opt into the one-word status badge and carry no queued hint.
+
+    The full job panel would blow up the table row, so the row sync form
+    declares ``data-status-format="badge"`` and the poller asks for the
+    compact partial. The legacy ``hx-on::after-request`` directive stays gone.
+    """
     html = client.get("/meetings").text
-    # The hint markup is preserved; the poller flips it on submit and
-    # off when the job reaches a terminal state.
-    assert '<span class="sync-queued" style="display:none">queued</span>' in html
-    # The legacy ``hx-on::after-request`` show-hint directive is gone —
-    # the poller owns the show/hide transitions.
+    assert 'data-status-format="badge"' in html
+    assert '<span class="sync-queued"' not in html
     assert 'hx-on::after-request' not in html
+
+
+def test_meetings_filter_form_pushes_url(client: TestClient) -> None:
+    """Applying a filter pushes it into the URL so a post-job reload keeps it."""
+    html = client.get("/meetings").text
+    assert 'hx-push-url="true"' in html
 
 
 def test_meeting_show_404(client: TestClient) -> None:
@@ -2757,6 +2765,10 @@ def test_job_poller_js_polls_and_reloads_on_terminal(
     assert "/jobs/" in body
     assert "hx-get" in body
     assert "hx-trigger" in body
+    # The busy state hides the list's trigger button while a job runs;
+    # ``statusFormat`` picks the compact badge for list rows.
+    assert "job-busy" in body
+    assert "statusFormat" in body
     # Sanity: no naive "reload on no-node" bug from the old tdoc
     # parse JS — the reload is gated on having seen the polling span.
     assert "if (!node) {" not in body

@@ -477,12 +477,23 @@ async def get_job(
     format: str | None = Query(default=None, alias="format"),
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> Any:
-    """Return the job detail envelope (JSON), or ``404`` when unknown."""
+    """Return the job detail envelope (JSON), or ``404`` when unknown.
+
+    ``format=html`` renders the full status panel; ``format=badge`` renders a
+    one-word status for compact slots (meetings list rows) and nothing once the
+    job is terminal, which ends the poller.
+    """
     job = _load_job(job_repo, job_id)
     if format == "html":
         return templates.TemplateResponse(
             request=request,
             name="partials/job_status.html",
+            context={"job": job},
+        )
+    if format == "badge":
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/job_badge.html",
             context={"job": job},
         )
     return JSONResponse(content=_envelope(job))

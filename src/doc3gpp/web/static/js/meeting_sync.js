@@ -32,6 +32,7 @@
     window.bindJobPolling(form, {
       queuedSelector: ".sync-queued",
       targetSelector: "." + TARGET_CLASS,
+      statusFormat: form.getAttribute("data-status-format") || "html",
       onTerminal: function () {
         window.location.reload();
       },

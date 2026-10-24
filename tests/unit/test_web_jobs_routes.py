@@ -425,6 +425,30 @@ def test_get_job_returns_404_for_unknown(client: Any) -> None:
     assert r.json()["error"] == "job_not_found"
 
 
+def test_get_job_badge_shows_pending_then_running(client: Any) -> None:
+    """``?format=badge`` is a one-word status; a queued job reads as pending."""
+    c, repo, _ = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    queued = c.get(f"/jobs/{job.id}?format=badge")
+    assert queued.status_code == 200
+    assert ">pending</span>" in queued.text
+    assert 'hx-trigger="every 2s"' in queued.text
+    repo.mark_running(job.id, message="starting")
+    running = c.get(f"/jobs/{job.id}?format=badge")
+    assert ">running</span>" in running.text
+    assert 'hx-trigger="every 2s"' in running.text
+
+
+def test_get_job_badge_is_empty_once_terminal(client: Any) -> None:
+    """A terminal job renders nothing, so the polling span disappears."""
+    c, repo, _ = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_succeeded(job.id, summary={"ok": True})
+    r = c.get(f"/jobs/{job.id}?format=badge")
+    assert r.status_code == 200
+    assert r.text.strip() == ""
+
+
 def test_get_job_html_includes_params_section(client: Any) -> None:
     """The ?format=html detail page renders a 'Params' section with the params dict.
 

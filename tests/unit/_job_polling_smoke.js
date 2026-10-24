@@ -73,6 +73,7 @@ function makeQueued() {
 
 function makeForm(ownTarget) {
   const handlers = {};
+  const classes = new Set();
   return {
     tagName: "FORM",
     id: "test-form",
@@ -86,6 +87,17 @@ function makeForm(ownTarget) {
         checked: false,
       },
     ],
+    classList: {
+      add: function (name) {
+        classes.add(name);
+      },
+      remove: function (name) {
+        classes.delete(name);
+      },
+      contains: function (name) {
+        return classes.has(name);
+      },
+    },
     addEventListener: function (event, cb) {
       handlers[event] = cb;
     },
@@ -124,7 +136,7 @@ function makeWrapper() {
 
 // ---- drive one full scenario ----
 
-function runScenario(useOnTerminal) {
+function runScenario(useOnTerminal, statusFormat) {
   reloadCalled = false;
   onTerminalCalled = false;
   observerCallback = null;
@@ -147,6 +159,7 @@ function runScenario(useOnTerminal) {
   const opts = {
     queuedSelector: ".sync-queued",
     targetSelector: "#test-form-job-target",
+    statusFormat: statusFormat,
   };
   if (useOnTerminal) {
     opts.onTerminal = function () {
@@ -156,6 +169,7 @@ function runScenario(useOnTerminal) {
 
   global.bindJobPolling(form, opts);
   form._handlers.submit({ preventDefault: function () {} });
+  const busyAfterSubmit = form.classList.contains("job-busy");
 
   return new Promise(function (resolve) {
     // Let the fetch promise chain (attachPolling ->
@@ -170,6 +184,8 @@ function runScenario(useOnTerminal) {
       resolve({
         reloadCalled,
         onTerminalCalled,
+        busyAfterSubmit,
+        busyAfterFinish: form.classList.contains("job-busy"),
         wrapper: target.appended[0],
         target,
         firstRowTarget,
@@ -185,7 +201,7 @@ async function main() {
   (0, eval)(source);
 
   // Scenario 1: onTerminal provided.
-  const provided = await runScenario(true);
+  const provided = await runScenario(true, "badge");
   assert.strictEqual(
     provided.onTerminalCalled,
     true,
@@ -195,6 +211,26 @@ async function main() {
     provided.reloadCalled,
     false,
     "window.location.reload should NOT be called when onTerminal is given"
+  );
+
+  // The job-busy class hides the list's trigger button while the job runs
+  // and is cleared once the job reaches a terminal state.
+  assert.strictEqual(
+    provided.busyAfterSubmit,
+    true,
+    "form should be marked job-busy on submit"
+  );
+  assert.strictEqual(
+    provided.busyAfterFinish,
+    false,
+    "job-busy should be cleared when the job finishes"
+  );
+
+  // List rows ask for the compact badge, not the full job panel.
+  assert.strictEqual(
+    provided.wrapper.attrs["hx-get"],
+    "/jobs/job-1?format=badge",
+    "statusFormat badge should select the compact status partial"
   );
 
   // The job wrapper must swap only itself. The list's #results wrapper
@@ -222,6 +258,11 @@ async function main() {
 
   // Scenario 2: onTerminal omitted -> default reload.
   const omitted = await runScenario(false);
+  assert.strictEqual(
+    omitted.wrapper.attrs["hx-get"],
+    "/jobs/job-1?format=html",
+    "omitted statusFormat should keep the full job panel"
+  );
   assert.strictEqual(
     omitted.reloadCalled,
     true,

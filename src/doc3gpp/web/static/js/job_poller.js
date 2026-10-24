@@ -8,11 +8,13 @@
 //   2. We POST the form's body to the form's action URL and read
 //      ``job_id`` from the JSON envelope (202 with
 //      ``{"job_id": ..., "status": "queued", "links": {...}}``).
-//   3. We inject a wrapper div with ``hx-get="/jobs/{id}?format=html"``
-//      and ``hx-trigger="load"`` into the form's target element. HTMX
-//      swaps in the job-status partial, which itself polls every 2s
-//      while the job is non-terminal and renders a static block once
-//      it reaches a terminal state (see partials/job_status.html).
+//   3. We inject a wrapper div with ``hx-get="/jobs/{id}?format=<statusFormat>"``
+//      (``html`` unless the form asks for ``badge``) and ``hx-trigger="load"``
+//      into the form's target element. HTMX swaps in the status partial,
+//      which itself polls every 2s while the job is non-terminal and renders
+//      a static block once it reaches a terminal state (see
+//      partials/job_status.html and partials/job_badge.html). While the job
+//      runs the form carries the ``job-busy`` class.
 //   4. A MutationObserver watches the target. Once the polling span
 //      (the ``hx-trigger="every 2s"`` block in the partial) has
 //      appeared AND subsequently disappeared, we conclude the job is
@@ -71,6 +73,9 @@
     *   Defaults to ``function () { window.location.reload(); }``; pass
     *   a custom callback when the page needs a different refresh
     *   behaviour (e.g. an HTMX partial swap on the hub page).
+    * @param {string} [options.statusFormat="html"] ``format`` value for
+    *   the status partial. ``html`` renders the full job panel; ``badge``
+    *   renders a one-word status for compact table cells.
     */
   function bindJobPolling(form, options) {
     if (!form || !form.tagName || form.tagName !== "FORM") {
@@ -91,9 +96,11 @@
         : function () {
             window.location.reload();
           };
+    var statusFormat = opts.statusFormat || "html";
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      form.classList.add("job-busy");
       var queued = form.querySelector(queuedSelector);
       if (queued) {
         queued.textContent = queued.dataset.label || queued.textContent;
@@ -153,19 +160,32 @@
           if (!body || !body.job_id) {
             throw new Error("enqueue response missing job_id");
           }
-          attachPolling(form, target, body.job_id, queued, onTerminal);
+          return body.job_id;
         })
-        .catch(function (err) {
-          if (queued) {
-            queued.textContent = "Failed to enqueue job";
-            queued.style.display = "inline";
+        .then(
+          function (jobId) {
+            attachPolling(form, target, jobId, queued, onTerminal, statusFormat);
+          },
+          function (err) {
+            form.classList.remove("job-busy");
+            if (queued) {
+              queued.textContent = "Failed to enqueue job";
+              queued.style.display = "inline";
+            } else if (target) {
+              var note = document.createElement("span");
+              note.textContent = "Failed to enqueue job";
+              target.appendChild(note);
+            }
+            console.error(err);
           }
+        )
+        .catch(function (err) {
           console.error(err);
         });
     });
   }
 
-  function attachPolling(form, target, jobId, queued, onTerminal) {
+  function attachPolling(form, target, jobId, queued, onTerminal, statusFormat) {
     if (!target) {
       // Without a target we can't observe the polling span. Fall back
       // to a blind refresh after the fallback window so the page
@@ -176,12 +196,13 @@
         queued.style.display = "inline";
       }
       window.setTimeout(function () {
+        form.classList.remove("job-busy");
         onTerminal();
       }, TERMINAL_FALLBACK_MS);
       return;
     }
     var div = document.createElement("div");
-    div.setAttribute("hx-get", "/jobs/" + jobId + "?format=html");
+    div.setAttribute("hx-get", "/jobs/" + jobId + "?format=" + statusFormat);
     div.setAttribute("hx-trigger", "load");
     // Swap only this wrapper. Without an explicit target, htmx inherits
     // hx-target="this" from the list's #results partial and replaces the
@@ -189,7 +210,7 @@
     div.setAttribute("hx-target", "this");
     div.setAttribute("hx-swap", "outerHTML");
     target.appendChild(div);
-    installTerminalObserver(target, queued, onTerminal);
+    installTerminalObserver(form, target, queued, onTerminal);
     if (global.htmx) {
       global.htmx.process(div);
     }
@@ -197,10 +218,10 @@
 
   // The job-status partial renders a polling span only when status is
   // non-terminal (templates/partials/job_status.html). When HTMX
-  // swaps to a terminal state the polling span disappears — hide the
-  // "queued" hint so it doesn't linger forever, and reload the page
-  // so the server-rendered sections pick up the freshly-written DB
-  // rows.
+  // swaps to a terminal state the polling span disappears — clear the
+  // busy state, hide the "queued" hint so it doesn't linger forever,
+  // and hand over to onTerminal (a page reload by default) so the
+  // server-rendered sections pick up the freshly-written DB rows.
   //
   // Important: the freshly-appended wrapper div carries
   // ``hx-trigger="load"`` (NOT ``every 2s``), and a mutation fires
@@ -217,7 +238,7 @@
   // span, so ``pollSeen`` stays false and the observer would never
   // fire. A timeout fallback hides the hint and reloads the page once
   // the job has had ample time to reach a terminal state.
-  function installTerminalObserver(target, queued, onTerminal) {
+  function installTerminalObserver(form, target, queued, onTerminal) {
     if (!target || !global.MutationObserver) {
       return;
     }
@@ -228,6 +249,7 @@
         return;
       }
       done = true;
+      form.classList.remove("job-busy");
       if (queued) {
         queued.style.display = "none";
       }

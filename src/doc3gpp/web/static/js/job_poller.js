@@ -53,9 +53,10 @@
    *   to ``.sync-queued``; the tdoc parse form passes
    *   ``.parse-queued``.
    * @param {string} [options.targetSelector] CSS selector for the
-   *   div the wrapper element is appended to. Defaults to the form's
-   *   sibling ``#<form.id>-job-target`` (matches
-   *   ``#parse-job-target`` / ``#sync-job-target`` conventions).
+   *   div the wrapper element is appended to. Looked up inside the
+   *   form first (list rows repeat the class), then the document. Defaults
+   *   to ``#<form.id>-job-target`` (matches ``#parse-job-target`` /
+   *   ``#sync-job-target`` conventions).
    * @param {string} [options.body] Override the request body. When
    *   unset, the form's own fields are sent as
    *   ``application/x-www-form-urlencoded`` — the same shape the
@@ -80,7 +81,10 @@
     var targetSelector =
       opts.targetSelector ||
       (form.id ? "#" + form.id + "-job-target" : null);
-    var target = targetSelector ? document.querySelector(targetSelector) : null;
+    var target = targetSelector
+      ? form.querySelector(targetSelector) ||
+        document.querySelector(targetSelector)
+      : null;
     var onTerminal =
       typeof opts.onTerminal === "function"
         ? opts.onTerminal
@@ -179,6 +183,10 @@
     var div = document.createElement("div");
     div.setAttribute("hx-get", "/jobs/" + jobId + "?format=html");
     div.setAttribute("hx-trigger", "load");
+    // Swap only this wrapper. Without an explicit target, htmx inherits
+    // hx-target="this" from the list's #results partial and replaces the
+    // whole list with the job panel.
+    div.setAttribute("hx-target", "this");
     div.setAttribute("hx-swap", "outerHTML");
     target.appendChild(div);
     installTerminalObserver(target, queued, onTerminal);

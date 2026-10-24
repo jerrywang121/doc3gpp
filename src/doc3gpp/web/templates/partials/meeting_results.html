@@ -28,7 +28,7 @@
             <td>{{ meeting.end_doc or '-' }}</td>
             <td>
               <form
-                id="sync-form"
+                class="sync-form"
                 method="post"
                 action="/jobs/sync_tdocs"
                 title="Last sync: {{ meeting.tdoc_list_last_sync | dt_short or 'never' }}"
@@ -37,7 +37,7 @@
                 <button type="submit" class="sync-btn sync-{{ meeting.tdoc_list_last_sync | sync_state }}"
                         aria-label="Sync TDocs for meeting {{ meeting.meeting_id }}">&#8635;</button>
                 <span class="sync-queued" style="display:none">queued</span>
-                <div id="sync-form-job-target"></div>
+                <div class="sync-job-target"></div>
               </form>
             </td>
             <td><a href="/meetings/{{ meeting.meeting_id }}">show</a></td>

@@ -71,7 +71,7 @@ function makeQueued() {
   };
 }
 
-function makeForm() {
+function makeForm(ownTarget) {
   const handlers = {};
   return {
     tagName: "FORM",
@@ -92,8 +92,8 @@ function makeForm() {
     getAttribute: function (attr) {
       return attr === "action" ? "/jobs/sync_tdocs" : null;
     },
-    querySelector: function () {
-      return makeQueued();
+    querySelector: function (sel) {
+      return sel === "#test-form-job-target" ? ownTarget : makeQueued();
     },
     _handlers: handlers,
   };
@@ -102,10 +102,23 @@ function makeForm() {
 function makeTarget() {
   return {
     style: {},
-    appendChild: function () {},
+    appended: [],
+    appendChild: function (node) {
+      this.appended.push(node);
+    },
     querySelector: function () {
       return pollVisible ? { nodeType: 1 } : null;
     },
+  };
+}
+
+function makeWrapper() {
+  return {
+    attrs: {},
+    setAttribute: function (name, value) {
+      this.attrs[name] = value;
+    },
+    style: {},
   };
 }
 
@@ -117,16 +130,18 @@ function runScenario(useOnTerminal) {
   observerCallback = null;
   pollVisible = false;
 
-  const form = makeForm();
+  // The list page repeats the job-target id on every row, so a
+  // document-level lookup returns the first row's target. The form's own
+  // target must win.
   const target = makeTarget();
+  const firstRowTarget = makeTarget();
+  const form = makeForm(target);
 
   global.document = {
     querySelector: function (sel) {
-      return sel === "#test-form-job-target" ? target : null;
+      return sel === "#test-form-job-target" ? firstRowTarget : null;
     },
-    createElement: function () {
-      return { setAttribute: function () {}, style: {} };
-    },
+    createElement: makeWrapper,
   };
 
   const opts = {
@@ -152,7 +167,13 @@ function runScenario(useOnTerminal) {
       // Second observer fire: polling span gone -> finish() -> onTerminal.
       pollVisible = false;
       observerCallback();
-      resolve({ reloadCalled, onTerminalCalled });
+      resolve({
+        reloadCalled,
+        onTerminalCalled,
+        wrapper: target.appended[0],
+        target,
+        firstRowTarget,
+      });
     });
   });
 }
@@ -174,6 +195,29 @@ async function main() {
     provided.reloadCalled,
     false,
     "window.location.reload should NOT be called when onTerminal is given"
+  );
+
+  // The job wrapper must swap only itself. The list's #results wrapper
+  // declares hx-target="this", which htmx inherits; without an explicit
+  // target on the wrapper the job panel replaces the whole list.
+  assert.ok(
+    provided.wrapper,
+    "job wrapper should be appended to the form's job target"
+  );
+  assert.strictEqual(
+    provided.wrapper.attrs["hx-target"],
+    "this",
+    'job wrapper must set hx-target="this" so it does not inherit the list target'
+  );
+  assert.strictEqual(
+    provided.target.appended.length,
+    1,
+    "job panel should land in the clicked form's own job target"
+  );
+  assert.strictEqual(
+    provided.firstRowTarget.appended.length,
+    0,
+    "job panel must not land in the first row's job target"
   );
 
   // Scenario 2: onTerminal omitted -> default reload.

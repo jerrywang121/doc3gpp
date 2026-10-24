@@ -121,6 +121,12 @@ def test_sync_fragment_includes_recent_jobs_table(client: Any) -> None:
     assert "<table" in text
 
 
+def test_sync_page_renders_recent_jobs_id_once(client: Any) -> None:
+    """The hub page holds one ``#recent-jobs`` element; the id is a swap target."""
+    text = client.get("/sync").text
+    assert text.count('id="recent-jobs"') == 1
+
+
 def test_landing_lists_sync_link(client: Any) -> None:
     """The landing page nav links to /sync."""
     html = client.get("/").text

@@ -9,7 +9,7 @@
 // We bind forms on ``DOMContentLoaded`` (and run inline if the
 // document is already ready) and then watch the document for new
 // forms: the meetings list swaps its results partial in via HTMX
-// when the user applies a filter, so fresh ``#sync-form`` rows
+// when the user applies a filter, so fresh ``.sync-form`` rows
 // appear after the script has already loaded. The observer ignores
 // forms that already carry a data-bound marker so we don't double-
 // bind (the helpers listen on ``submit`` and a double-binding
@@ -17,7 +17,8 @@
 (function () {
   "use strict";
 
-  var FORM_ID = "sync-form";
+  var FORM_CLASS = "sync-form";
+  var TARGET_CLASS = "sync-job-target";
   var BOUND_ATTR = "data-doc3gpp-sync-bound";
 
   function bindForm(form) {
@@ -30,7 +31,7 @@
     form.setAttribute(BOUND_ATTR, "1");
     window.bindJobPolling(form, {
       queuedSelector: ".sync-queued",
-      targetSelector: "#" + FORM_ID + "-job-target",
+      targetSelector: "." + TARGET_CLASS,
       onTerminal: function () {
         window.location.reload();
       },
@@ -38,7 +39,7 @@
   }
 
   function bindAll() {
-    var forms = document.querySelectorAll("#" + FORM_ID);
+    var forms = document.querySelectorAll("." + FORM_CLASS);
     for (var i = 0; i < forms.length; i++) {
       bindForm(forms[i]);
     }

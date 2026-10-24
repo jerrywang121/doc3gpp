@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -2684,13 +2686,36 @@ def test_meetings_list_sync_form_uses_shared_poller(client: TestClient) -> None:
     """
     html = client.get("/meetings").text
     assert 'src="/static/js/job_poller.js"' in html
-    # The list view's per-row form must declare a target div the
-    # poller injects into. The poller derives the target id as
-    # ``<form.id>-job-target`` so ``id="sync-form"`` → ``id="sync-form-job-target"``.
-    assert 'id="sync-form-job-target"' in html
+    # Each list row's form carries the shared ``sync-form`` class and a
+    # ``sync-job-target`` div the poller injects into. Rows repeat the
+    # class, never an id, so the list stays valid HTML.
+    assert 'class="sync-form"' in html
+    assert 'class="sync-job-target"' in html
     # The buggy pure-HTMX pattern is gone.
     assert 'hx-swap="none"' not in html
     assert 'hx-on::after-request' not in html
+
+
+class _IdCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ids: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.ids.extend(value for name, value in attrs if name == "id" and value)
+
+
+@pytest.mark.parametrize(
+    "headers", [{}, {"HX-Request": "true"}], ids=["full-page", "htmx-partial"],
+)
+def test_meetings_list_has_no_duplicate_ids(
+    client: TestClient, headers: dict[str, str],
+) -> None:
+    """Repeated list rows must not reuse an element id (invalid HTML)."""
+    collector = _IdCollector()
+    collector.feed(client.get("/meetings", headers=headers).text)
+    duplicates = {i: n for i, n in Counter(collector.ids).items() if n > 1}
+    assert duplicates == {}
 
 
 def test_job_poller_js_is_served(client: TestClient) -> None:

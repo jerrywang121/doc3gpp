@@ -303,7 +303,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
         return _to_json({"meeting": render.to_jsonable(meeting)})
 
     # ---- TDocs ----------------------------------------------------
-    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, ls_to, ls_cc, original_ls, tdoc_for, abstract, secretary_remarks, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly. The parsed filter keeps complete (true) or incomplete (false) extractions.")
+    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. meeting_id is an exact numeric match on the parent meeting id (see list_meetings). The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, ls_to, ls_cc, original_ls, tdoc_for, abstract, secretary_remarks, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly. The parsed filter keeps complete (true) or incomplete (false) extractions.")
     @_mcp_error_guard
     def list_tdocs(
         limit: Annotated[int, Field(description="Maximum number of tdocs to return.")] = 50,

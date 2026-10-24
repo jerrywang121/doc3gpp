@@ -1030,7 +1030,7 @@ def test_show_markdown_full_includes_summary_of_change() -> None:
         tdoc_heading="## TDoc",
         tdoc_missing_note=None,
         parse_hint="--tdoc <id>",
-        show_extracted_details_fallback=False,
+        suppress_no_details_placeholder=False,
         files_missing_hint="—",
     )
     assert "**summary_of_change**: Add USIM config setter." in stream.getvalue()

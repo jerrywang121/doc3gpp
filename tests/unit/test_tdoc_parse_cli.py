@@ -24,14 +24,15 @@ from typer.testing import CliRunner
 from doc3gpp.cli import app
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
-from doc3gpp.models.tdoc_content_families import eligible_type_values
+from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES, eligible_type_values
 from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
-from doc3gpp.models.tdoc_document import TDocDocument
+from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.tdoc_identity import document_id_for
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.services.tdoc_cr_service import (
     BatchExtractResult,
@@ -43,6 +44,7 @@ from doc3gpp.services.tdoc_cr_service import (
 from doc3gpp.services.tdoc_pipeline import PipelineItem
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.repositories.tdoc_content_sql import SQLAlchemyTDocContentRepository
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
@@ -2358,6 +2360,69 @@ def test_tdoc_show_no_ftp_url_skips_cover_and_ttcn(sqlite_env) -> None:
     assert "extracted_at: -" in result.output
     assert "[Extracted Details]" not in result.output
     assert "cr_num: 3790" not in result.output
+
+
+def _seed_discussion_extract(tdoc_id: str, url: str) -> None:
+    """Store a complete discussion extraction: one main document, no cover row."""
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="discussion", ftp_url=url)
+    )
+    text = "# Discussion body"
+    document_id = document_id_for(url, "main.docx")
+    store = next(store for store in TDOC_CONTENT_STORES if store.key == "discussion")
+    SQLAlchemyTDocContentRepository().replace_family_bundle(
+        store,
+        TDocExtractMeta(
+            ftp_url=url,
+            tdoc_id=tdoc_id,
+            cache_file=f"{tdoc_id}.zip",
+            doc_filename="main.docx",
+            document_count=1,
+        ),
+        (
+            TDocDocument(
+                document_id=document_id,
+                source_file="main.docx",
+                markdown_file=markdown_member_name(document_id, "main.docx"),
+                file_order=0,
+                markdown_text=text,
+                content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            ),
+        ),
+    )
+
+
+def test_tdoc_show_parsed_discussion_points_at_raw_markdown(sqlite_env) -> None:
+    """A parsed discussion has no cover; the table points at ``--format raw``."""
+    create_schema()
+    _seed_discussion_extract("R5s260020", "stored/r5s260020_discussion.zip")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260020"])
+    assert result.exit_code == 0, result.output
+    assert "parsed: True" in result.output
+    assert "document_count: 1" in result.output
+    assert "No extracted details" not in result.output
+    assert "extracted_at: -" not in result.output
+    assert "extracted_at: " in result.output
+    assert "doc3gpp tdoc show --tdoc R5s260020 --format raw" in result.output
+
+
+def test_tdoc_show_json_parsed_discussion_carries_raw_note(sqlite_env) -> None:
+    create_schema()
+    _seed_discussion_extract("R5s260021", "stored/r5s260021_discussion.zip")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260021", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["tdoc"]["parsed"] is True
+    assert payload["tdoc"]["document_count"] == 1
+    assert "cover" not in payload
+    assert "get_tdoc_content" in payload["note"]
+    assert "doc3gpp tdoc show --tdoc R5s260021 --format raw" in payload["note"]
 
 
 # ---------------------------------------------------------------------------

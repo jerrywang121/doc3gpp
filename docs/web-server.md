@@ -577,6 +577,9 @@ is raised only when neither is supplied. The URL mode surfaces every
 row across the six URL-keyed tables whose `ftp_url` matches; auto-sync
 is never triggered (no parent TDoc / meeting to anchor on). A
 `tdoc_url_not_found` error is raised when the URL resolves to no rows.
+`parsed` and `document_count` match `list_tdocs`. When a TDoc has an
+extract but no cover row (non-CR TDocs and CR annexes), the response
+carries a `note` pointing at `get_tdoc_content` for the raw markdown.
 
 **Job tools** — `sync_meetings`, `sync_tdocs`, `sync_tdocs_by_meeting`,
 `sync_all_tdocs`, `sync_specs`, `parse_tdocs`, `parse_tdoc_url`,

@@ -253,3 +253,76 @@ def _canonicalise(payload: Any) -> bytes:
     value-equivalent comparison regardless of key order.
     """
     return json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+
+
+def test_raw_only_extract_by_id_points_at_raw_markdown() -> None:
+    """An extract without a cover row carries a note naming the raw markdown."""
+    tdoc = TDoc(tdoc_id="R5-260002", ftp_url="R5/26.001/R5-260002.zip")
+    extracted_at = datetime(2026, 5, 5, 12, 30, 0, tzinfo=timezone.utc)
+    repos = _make_fake_repos(
+        tdoc=tdoc, cover=None, meta_extracted_at=extracted_at,
+        ttcn=None, changes=None, files=[],
+    )
+
+    record = TDocShowRecord.from_tdoc_id("R5-260002", repos)
+
+    assert record.note is not None
+    assert "get_tdoc_content" in record.note
+    assert "tdoc_id='R5-260002'" in record.note
+    assert "doc3gpp tdoc show --tdoc R5-260002 --format raw" in record.note
+
+    from doc3gpp.cli import _build_show_payload
+    from doc3gpp.web.render import to_jsonable
+
+    cli_payload = _build_show_payload(record)
+    assert cli_payload["note"] == record.note
+    assert _canonicalise(cli_payload) == _canonicalise(to_jsonable(record))
+
+
+def test_raw_only_extract_by_url_points_at_raw_markdown() -> None:
+    url = "R5/26.001/R5-260002.zip"
+    tdoc = TDoc(tdoc_id="R5-260002", ftp_url=url)
+    extracted_at = datetime(2026, 5, 5, 12, 30, 0, tzinfo=timezone.utc)
+    repos = _make_fake_repos(
+        tdoc=tdoc, cover=None, meta_extracted_at=extracted_at,
+        ttcn=None, changes=None, files=[],
+    )
+
+    record = TDocShowRecordByUrl.from_ftp_url(url, repos)
+
+    assert record.note is not None
+    assert f"ftp_url='{url}'" in record.note
+    assert f"doc3gpp tdoc show --ftp-url {url} --format raw" in record.note
+
+    from doc3gpp.cli import _build_show_payload
+    from doc3gpp.web.render import to_jsonable
+
+    cli_payload = _build_show_payload(
+        record, anchor_key="ftp_url", anchor_value=url
+    )
+    assert cli_payload["note"] == record.note
+    assert _canonicalise(cli_payload) == _canonicalise(to_jsonable(record))
+
+
+def test_no_note_without_extract_or_when_cover_present() -> None:
+    """The note appears only for an extract that has no cover row."""
+    tdoc = TDoc(tdoc_id="R5-260003", ftp_url="R5/26.001/R5-260003.zip")
+    no_extract = _make_fake_repos(
+        tdoc=tdoc, cover=None, meta_extracted_at=None,
+        ttcn=None, changes=None, files=[],
+    )
+    record = TDocShowRecord.from_tdoc_id("R5-260003", no_extract)
+    assert record.note is None
+    from doc3gpp.web.render import to_jsonable
+
+    assert "note" not in to_jsonable(record)
+
+    cover = TDocCRDetails(tdoc_id="R5-260003", spec="38.523-3")
+    with_cover = _make_fake_repos(
+        tdoc=tdoc, cover=cover,
+        meta_extracted_at=datetime(2026, 5, 5, tzinfo=timezone.utc),
+        ttcn=None, changes=None, files=[],
+    )
+    record = TDocShowRecord.from_tdoc_id("R5-260003", with_cover)
+    assert record.note is None
+    assert "note" not in to_jsonable(record)

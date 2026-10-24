@@ -281,9 +281,9 @@ class SQLAlchemyTDocRepository:
         """
         with self._session_factory() as session:
             row = session.get(TDocORM, tdoc_id)
-        if row is None:
-            return None
-        return _orm_to_domain(row)
+            if row is None:
+                return None
+            return _with_parse_state(session, _orm_to_domain(row))
 
     def get_by_ftp_url(self, ftp_url: str) -> TDoc | None:
         """Return the TDoc whose ``ftp_url`` matches exactly.
@@ -303,9 +303,9 @@ class SQLAlchemyTDocRepository:
                 .order_by(TDocORM.tdoc_id.asc())
                 .limit(1)
             ).first()
-        if row is None:
-            return None
-        return _orm_to_domain(row)
+            if row is None:
+                return None
+            return _with_parse_state(session, _orm_to_domain(row))
 
     def list_with_meeting(
         self,
@@ -480,6 +480,12 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
         ls_cc=row.ls_cc,
         original_ls=row.original_ls,
     )
+
+
+def _with_parse_state(session: Session, tdoc: TDoc) -> TDoc:
+    """Attach ``parsed`` / ``document_count`` derived from the stored extraction."""
+    parsed, document_count = _parse_state(session, [tdoc.tdoc_id])[tdoc.tdoc_id]
+    return replace(tdoc, parsed=parsed, document_count=document_count)
 
 
 def complete_extraction_predicate() -> ColumnElement[bool]:

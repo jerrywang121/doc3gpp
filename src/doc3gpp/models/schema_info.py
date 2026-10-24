@@ -161,8 +161,8 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("ls_to", "str", True, "liaison recipients."),
                 FieldInfo("ls_cc", "str", True, "liaison CC list."),
                 FieldInfo("original_ls", "text", True, "original liaison statement."),
-                FieldInfo("parsed", "bool", False, "True when the TDoc has a complete extraction for its type; derived by tdoc list, not stored."),
-                FieldInfo("document_count", "int", True, "Stored content rows of the TDoc's extraction; null when not parsed; derived by tdoc list, not stored."),
+                FieldInfo("parsed", "bool", False, "True when the TDoc has a complete extraction for its type; derived by tdoc list, tdoc show, and get_tdoc, not stored."),
+                FieldInfo("document_count", "int", True, "Stored content rows of the TDoc's extraction; null when not parsed; derived by tdoc list, tdoc show, and get_tdoc, not stored."),
             ),
         ),
         TableSchema(

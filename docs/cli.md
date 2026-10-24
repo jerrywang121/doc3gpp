@@ -653,7 +653,14 @@ Options:
     an empty list). The `parser_version` and `details` lines are
     gone — `extracted_at` is sourced from `tdoc_extracts` at the
     same URL and rendered as `extracted_at: -` when the row is
-    missing. Every `tdoc_files` row matching `tdoc_id` renders
+    missing. The `[TDoc]` block carries `parsed` and `document_count`,
+    the same values `tdoc list` reports (`parsed: True` for a complete
+    extraction). When an extract row exists but has no cover (non-CR
+    TDocs and CR annexes), the block prints `Raw markdown is available;
+    run \`doc3gpp tdoc show --tdoc <id> --format raw\`` (or
+    `--ftp-url <url>` for the URL selector) instead of the parse hint.
+    The `No extracted details; run ... tdoc parse` hint appears only
+    when no extract row exists. Every `tdoc_files` row matching `tdoc_id` renders
     under an `[Auxiliary Files]` block with the four informative
     fields (`type`, `file`, `ftp_url`, `uploaded_date`); the
     autoincrement `id` and the `tdoc_id` match key are dropped
@@ -668,7 +675,9 @@ Options:
     (optional keys are **omitted**, not emitted as `null`, when
     no corresponding row exists):
     - `tdoc` — every `TDoc` field, with `date` / `datetime` values
-      ISO-8601-encoded.
+      ISO-8601-encoded. `parsed` (bool) and `document_count` (int, or
+      `null` when not parsed) are derived from the stored extraction,
+      the same values `tdoc list` reports.
     - `cover` — the slim cover-page dataclass keyed by
       `tdoc.ftp_url` (omitted when no `tdoc_cr_cover_page` row).
     - `ttcn` — the TTCN sidecar dataclass keyed by
@@ -688,6 +697,12 @@ Options:
       dataclass field of `TDocFile` is serialised (`id`,
       `tdoc_id`, `type`, `file`, `ftp_url`, `uploaded_date`).
       Omitted when the TDoc has no auxiliary files.
+    - `note` — present only when an extract exists without a cover row
+      (non-CR TDocs and CR annexes). It states that no structured details
+      are extracted and points at the raw markdown: call the
+      `get_tdoc_content` MCP tool, or run `doc3gpp tdoc show --tdoc <id>
+      --format raw`. The same key and text appear on the HTTP and MCP
+      JSON payloads.
   - `markdown`: a Markdown document — `# TDoc` heading, bullet list
     of TDoc fields under `## Metadata`, then `## Extracted Cover
     Details` (slim cover-page fields when present) and `##
@@ -695,9 +710,12 @@ Options:
     JSON fenced block + `changed_functions` as a bullet list when
     the TDoc is a TTCN CR and the sidecar exists). The
     `changed_functions` bullet list renders one `* <entry>` per
-    line, or `—` when the aggregate is empty. When no extract row
-    is present, a single `_No extracted details; run \`doc3gpp
-    tdoc parse --tdoc <id>\` first._ placeholder is emitted.
+    line, or `—` when the aggregate is empty. When an extract row
+    exists without a cover, an `## Extracted Details` section shows
+    `extracted_at` and a line pointing at the raw markdown (`doc3gpp
+    tdoc show --tdoc <id> --format raw`). When no extract row is
+    present, a single `_No extracted details; run \`doc3gpp
+    tdoc parse --tdoc <id>\` first._` placeholder is emitted.
     Every `tdoc_files` row matching `tdoc_id` renders under `##
     Auxiliary Files` with one nested bullet group per file
     (`type`, `file`, `ftp_url`, `uploaded_date`); when no files

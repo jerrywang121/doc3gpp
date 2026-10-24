@@ -537,3 +537,39 @@ def test_document_count_and_parsed_follow_the_current_url_only(sqlite_env) -> No
     row = _by_id(SQLAlchemyTDocRepository().list(limit=10))[tdoc_id]
     assert row.parsed is True
     assert row.document_count == 1
+
+
+def test_get_by_id_and_ftp_url_carry_the_same_parsed_state_as_list(sqlite_env) -> None:
+    create_schema()
+    _seed_extract(
+        "R5s260121", store="discussion", rows=("main.docx",), main="main.docx",
+        document_count=1, tdoc_type="discussion",
+    )
+    _seed_extract(
+        "R5s260122", store="cr", rows=(), main="CRs/main.docx",
+        document_count=0, cover=True,
+    )
+    _seed_tdoc("R5s260123", "discussion")
+    repo = SQLAlchemyTDocRepository()
+    listed = _by_id(repo.list(limit=10))
+
+    discussion = repo.get_by_id("R5s260121")
+    assert discussion is not None
+    assert discussion.parsed is True
+    assert discussion.document_count == 1
+    assert repo.get_by_ftp_url(_url("R5s260121")).parsed is True
+
+    cr = repo.get_by_id("R5s260122")
+    assert cr is not None
+    assert cr.parsed is True
+    assert cr.document_count == 0
+
+    unparsed = repo.get_by_id("R5s260123")
+    assert unparsed is not None
+    assert unparsed.parsed is False
+    assert unparsed.document_count is None
+    assert repo.get_by_ftp_url(_url("R5s260123")).parsed is False
+
+    for tdoc_id in ("R5s260121", "R5s260122", "R5s260123"):
+        assert listed[tdoc_id].parsed is repo.get_by_id(tdoc_id).parsed
+        assert listed[tdoc_id].document_count == repo.get_by_id(tdoc_id).document_count

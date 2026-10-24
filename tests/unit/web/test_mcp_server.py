@@ -483,3 +483,58 @@ def test_mcp_get_tdoc_existing_tdoc_id_path_unchanged(sqlite_env) -> None:
 
     payload = json.loads(asyncio.run(run()).content[0].text)
     assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+
+
+def test_mcp_get_tdoc_parsed_discussion_reports_parsed_and_raw_note(sqlite_env) -> None:
+    """A parsed discussion reports ``parsed`` and points at ``get_tdoc_content``."""
+    import hashlib
+    import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
+    from doc3gpp.models.tdoc_cr import TDocExtractMeta
+    from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
+    from doc3gpp.models.tdoc_identity import document_id_for
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    _, server = _server()
+    url = "stored/r5s260030_discussion.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260030", type="discussion", ftp_url=url)
+    )
+    text = "# Discussion body"
+    document_id = document_id_for(url, "main.docx")
+    store = next(s for s in TDOC_CONTENT_STORES if s.key == "discussion")
+    SQLAlchemyTDocContentRepository().replace_family_bundle(
+        store,
+        TDocExtractMeta(
+            ftp_url=url,
+            tdoc_id="R5s260030",
+            cache_file="R5s260030.zip",
+            doc_filename="main.docx",
+            document_count=1,
+        ),
+        (
+            TDocDocument(
+                document_id=document_id,
+                source_file="main.docx",
+                markdown_file=markdown_member_name(document_id, "main.docx"),
+                file_order=0,
+                markdown_text=text,
+                content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            ),
+        ),
+    )
+
+    async def run():
+        return await _call(server, "get_tdoc", {"tdoc_id": "R5s260030"})
+
+    payload = json.loads(asyncio.run(run()).content[0].text)
+    assert payload["tdoc"]["parsed"] is True
+    assert payload["tdoc"]["document_count"] == 1
+    assert "cover" not in payload
+    assert "get_tdoc_content" in payload["note"]
+    assert "No extracted details" not in json.dumps(payload)

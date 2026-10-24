@@ -3207,6 +3207,8 @@ def _build_show_payload(
             }
             for file in record.files
         ]
+    if record.note is not None:
+        payload["note"] = record.note
     return payload
 
 
@@ -3327,6 +3329,12 @@ def _render_tdoc_show_markdown_compact(
                 stream.write(
                     f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
                 )
+        elif record.extracted_at is not None:
+            stream.write(f"\nextracted_at: {_fmt_dt(record.extracted_at)}\n")
+            stream.write(
+                "note: Raw markdown is available; run "
+                f"doc3gpp tdoc show {_raw_show_hint(record)} --format raw.\n"
+            )
 
         if record.ttcn is not None:
             stream.write("\n")
@@ -3388,7 +3396,7 @@ def _render_tdoc_show_markdown_full(
     tdoc_heading: str,
     tdoc_missing_note: str | None,
     parse_hint: str,
-    show_extracted_details_fallback: bool,
+    suppress_no_details_placeholder: bool,
     files_missing_hint: str,
     omit_files_heading_when_empty: bool = False,
 ) -> None:
@@ -3397,12 +3405,11 @@ def _render_tdoc_show_markdown_full(
     Both renderers share the per-block (cover / ttcn / changes / files)
     logic; the differences are the top-level document header, the
     tdoc section heading + fallback note, the parse-hint string baked
-    into the "no extracted details" placeholder, whether to render an
-    ``## Extracted Details`` section when only ``extracted_at`` is
-    known (by-url yes, by-id no), the "no auxiliary files" placeholder
-    text, and whether the ``## Auxiliary Files`` heading is emitted
-    when no files are attached (by-id yes, by-url no). Those are all
-    parameters here.
+    into the "no extracted details" placeholder, whether that
+    placeholder is suppressed (by-url yes, by-id no), the "no
+    auxiliary files" placeholder text, and whether the ``## Auxiliary
+    Files`` heading is emitted when no files are attached (by-id yes,
+    by-url no). Those are all parameters here.
     """
     stream.write(f"{header_line}\n\n")
 
@@ -3429,20 +3436,23 @@ def _render_tdoc_show_markdown_full(
             stream.write(f"- **{f.name}**: {rendered}\n")
         if record.extracted_at is not None:
             stream.write(f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n")
-    elif show_extracted_details_fallback and record.extracted_at is not None:
-        # by-url only: when no cover row exists but the extract
-        # timestamp does, surface it under its own short section so
-        # the document skeleton stays populated.
+    elif record.extracted_at is not None:
+        # No cover row, but the extract exists: non-CR TDocs and CR
+        # annexes only have raw markdown, so point at it.
         stream.write("\n## Extracted Details\n\n")
         stream.write(
             f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n"
+        )
+        stream.write(
+            "\n_Raw markdown is available; run "
+            f"`doc3gpp tdoc show {_raw_show_hint(record)} --format raw`._\n"
         )
     elif (
         record.cover is None
         and record.ttcn is None
         and record.extracted_at is None
         and record.changes is None
-        and not show_extracted_details_fallback
+        and not suppress_no_details_placeholder
     ):
         # by-id: when nothing is known, emit a single "no extracted
         # details" placeholder pointing at the parse command.
@@ -3568,7 +3578,7 @@ def _render_tdoc_show_markdown(
             tdoc_heading="## Metadata",
             tdoc_missing_note=None,
             parse_hint="--tdoc <id>",
-            show_extracted_details_fallback=False,
+            suppress_no_details_placeholder=False,
             files_missing_hint=(
                 "No auxiliary files; run "
                 "`doc3gpp tdoc sync` first if you haven't synced "
@@ -3578,6 +3588,13 @@ def _render_tdoc_show_markdown(
     finally:
         if close_after:
             stream.close()
+
+
+def _raw_show_hint(record: TDocShowRecord | TDocShowRecordByUrl) -> str:
+    """Return the ``tdoc show`` selector that reads the raw markdown back."""
+    if isinstance(record, TDocShowRecordByUrl):
+        return f"--ftp-url {record.ftp_url}"
+    return f"--tdoc {record.tdoc.tdoc_id}"
 
 
 def _render_tdoc_show_table_body(
@@ -3620,14 +3637,17 @@ def _render_tdoc_show_table_body(
         # block (by-id) or after the [FTP URL] anchor (by-url). The
         # header re-appears once a real cover row surfaces (see the
         # ``record.cover is not None`` branch below).
-        stream.write(
-            f"No extracted details; run `doc3gpp tdoc parse {parse_hint}` first.\n"
-        )
         if record.extracted_at is not None:
+            stream.write(
+                f"Raw markdown is available; run `doc3gpp tdoc show {_raw_show_hint(record)} --format raw`.\n"
+            )
             stream.write(
                 f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
             )
         else:
+            stream.write(
+                f"No extracted details; run `doc3gpp tdoc parse {parse_hint}` first.\n"
+            )
             stream.write("extracted_at: -\n")
 
     if record.cover is not None:
@@ -3986,7 +4006,7 @@ def _render_tdoc_show_by_url_markdown(
                 "in a sync but no parent TDoc row was stored._"
             ),
             parse_hint="--from-url <url>",
-            show_extracted_details_fallback=True,
+            suppress_no_details_placeholder=True,
             files_missing_hint="No auxiliary files match this URL.",
             omit_files_heading_when_empty=True,
         )

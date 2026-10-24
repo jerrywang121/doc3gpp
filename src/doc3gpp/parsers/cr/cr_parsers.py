@@ -95,7 +95,6 @@ class CRParserBase(TDocParser):
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
         if not (tdoc_id or "").strip():
             raise ValueError("tdoc_id is required and cannot be empty")
@@ -134,7 +133,7 @@ class CRParserBase(TDocParser):
         details_payload: dict[str, Any] = {}
         for parser in self._details:
             ok, payload, _adv = parser.parse(
-                lines, max_text_length=max_text_length, full=full
+                lines, max_text_length=max_text_length
             )
             if ok:
                 details_payload[parser.name] = payload
@@ -241,13 +240,12 @@ class TTCNCRParser(CRParserBase):
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
         """TTCN CRs run the base extraction and then drop the body
         sidecar (``changes=None``) — TTCN CRs write the
         ``tdoc_cr_ttcn_details`` sidecar instead."""
         result = super().parse(
             markdown, tdoc_id=tdoc_id,
-            max_text_length=max_text_length, full=full,
+            max_text_length=max_text_length,
         )
         return TDocCRParseResult(cover=result.cover, ttcn=result.ttcn, changes=None)

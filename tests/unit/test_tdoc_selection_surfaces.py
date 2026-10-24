@@ -64,7 +64,7 @@ class _RecordingCrService:
         self._result = result or BatchExtractResult(successes={}, failures={}, skipped={})
         self.calls: list[list[str]] = []
 
-    def extract_many(self, tdoc_ids, *, force=False, full=False, runner=None, **_kwargs):
+    def extract_many(self, tdoc_ids, *, force=False, runner=None, **_kwargs):
         self.calls.append(list(tdoc_ids))
         return self._result
 

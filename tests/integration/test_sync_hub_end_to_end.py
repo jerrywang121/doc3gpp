@@ -144,9 +144,9 @@ def test_sync_page_forms_have_real_inputs(seeded_app: Any) -> None:
         ),
         (
             "/jobs/parse/tdocs",
-            {"filter": {"tdoc_id": "S2-26%"}, "force": False, "full": False},
+            {"filter": {"tdoc_id": "S2-26%"}, "force": False},
             "parse_tdocs",
-            {"filter": {"tdoc_id": "S2-26%"}, "force": False, "full": False},
+            {"filter": {"tdoc_id": "S2-26%"}, "force": False},
         ),
         # parse/tdoc-url adds defaults for the fields the body omits (C2).
         (
@@ -156,7 +156,6 @@ def test_sync_page_forms_have_real_inputs(seeded_app: Any) -> None:
             {
                 "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5_Radio/TSGR5_99/Docs/",
                 "force": False,
-                "full": False,
                 "recursive": False,
                 "max_depth": 2,
             },

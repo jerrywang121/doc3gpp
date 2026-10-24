@@ -2179,11 +2179,6 @@ def tdoc_parse(
             "Local batch parse: overwrite existing output files."
         ),
     ),
-    full: bool = typer.Option(
-        False,
-        "--full",
-        help="Forward full=True to the parser (parser to extract info beyond cover page, e.g. TTCN corrections).",
-    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -2255,8 +2250,7 @@ def tdoc_parse(
       --force (re-fetch/re-parse/over-write every match), 
       --yes (skip confirmation prompt),
       --format table|json|markdown|raw 
-        (raw output covered markdown of the Tdoc, without extracting fields),
-      --full (extracting full Tdoc, otherwise only extracting cover page fields)
+        (raw output covered markdown of the Tdoc, without extracting fields)
 
     DB TDoc parse filters options (for selecting which TDocs to parse):
       --tdoc, --meeting-id, --meeting, --status, --cr-cat, --spec, --wi,
@@ -2264,11 +2258,11 @@ def tdoc_parse(
       --cr-num, --cr-pack, --source, --type, --uploaded-date
 
     Local TDoc parse:
-      --from-path PATH [--output PATH] [--format table|json|markdown|raw] [--full]
+      --from-path PATH [--output PATH] [--format table|json|markdown|raw]
       (PATH may be a single .docx/.zip file or a directory of them)
 
     Online TDoc parse:
-      --from-url URL [--output PATH] [--format table|json|markdown|raw] [--full]
+      --from-url URL [--output PATH] [--format table|json|markdown|raw]
       (URL may be a single 3GPP .docx/.zip file or a 3GPP FTP folder; folder
       batch scans .docx/.zip files, recurses with --recursive, and always
       writes cache/DB for matching TDoc ids)
@@ -2316,7 +2310,6 @@ def tdoc_parse(
                         from_url=None,
                         fmt=direct_format,
                         output=direct_output,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2333,7 +2326,6 @@ def tdoc_parse(
                         fmt=direct_format,
                         recursive=recursive,
                         force=force,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2375,7 +2367,6 @@ def tdoc_parse(
                         from_url=from_url,
                         fmt=direct_format,
                         output=direct_output,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2387,7 +2378,6 @@ def tdoc_parse(
                         fmt=direct_format,
                         max_depth=effective_depth,
                         force=force,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2398,7 +2388,6 @@ def tdoc_parse(
                             from_url,
                             max_depth=effective_depth,
                             force=force,
-                            full=full,
                             max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                             **_optional_runner_kwargs(
                                 tdoc_service.extract_from_url_batch,
@@ -2411,7 +2400,6 @@ def tdoc_parse(
                             from_url=from_url,
                             fmt=direct_format,
                             output=direct_output,
-                            full=full,
                             max_tdoc_size_bytes=max_tdoc_size_bytes,
                             compact=resolved_compact,
                             runner=pipeline,
@@ -2572,8 +2560,8 @@ def tdoc_parse(
     tdoc_ids = [m.tdoc.tdoc_id for m in to_parse]
     dispatched_set = set(tdoc_ids)
     logger.info(
-        "Starting TDoc parse for %d id(s) (force=%s, full=%s)",
-        len(tdoc_ids), force, full,
+        "Starting TDoc parse for %d id(s) (force=%s)",
+        len(tdoc_ids), force,
     )
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     settings = get_settings()
@@ -2582,7 +2570,6 @@ def tdoc_parse(
             batch = service.extract_many(
                 tdoc_ids,
                 force=force,
-                full=full,
                 runner=pipeline,
             )
     except PythonDocxNotInstalledError as exc:
@@ -2858,7 +2845,6 @@ def _tdoc_parse_direct(
     from_url: str | None,
     fmt: str | None,
     output: str | None,
-    full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
     runner: TDocPipeline | None = None,
@@ -2898,7 +2884,6 @@ def _tdoc_parse_direct(
             payload = Path(from_path).read_bytes()
             extract_kwargs: dict[str, object] = {
                 "force": False,
-                "full": full,
                 "max_tdoc_size_bytes": max_tdoc_size_bytes,
             }
             extract_kwargs.update(
@@ -2910,7 +2895,6 @@ def _tdoc_parse_direct(
         else:
             extract_kwargs = {
                 "force": False,
-                "full": full,
                 "max_tdoc_size_bytes": max_tdoc_size_bytes,
             }
             extract_kwargs.update(
@@ -4103,7 +4087,6 @@ def _tdoc_parse_local_batch(
     fmt: str | None,
     recursive: bool,
     force: bool,
-    full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
     runner: TDocPipeline | None = None,
@@ -4189,14 +4172,12 @@ def _tdoc_parse_local_batch(
             return prepare_from_bytes(
                 payload,
                 str(input_path),
-                full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes,
             )
         return service.extract_from_bytes(
             payload,
             str(input_path),
             force=False,
-            full=full,
             max_tdoc_size_bytes=max_tdoc_size_bytes,
         )
 
@@ -4299,7 +4280,6 @@ def _tdoc_parse_url_batch(
     fmt: str | None,
     max_depth: int,
     force: bool,
-    full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
     runner: TDocPipeline | None = None,
@@ -4315,7 +4295,6 @@ def _tdoc_parse_url_batch(
     batch_kwargs: dict[str, object] = {
         "max_depth": max_depth,
         "force": force,
-        "full": full,
         "max_tdoc_size_bytes": max_tdoc_size_bytes or None,
     }
     batch_kwargs.update(

@@ -39,12 +39,11 @@ class _FakeBatchService:
         *,
         max_depth: int = 2,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int = 0,
         on_progress=None,
         is_cancelled=None,
     ) -> DirectParseBatchResult:
-        self.batch_calls.append((url, {"max_depth": max_depth, "force": force, "full": full}))
+        self.batch_calls.append((url, {"max_depth": max_depth, "force": force}))
         if self.batch_result is None:
             raise NotAFolderError(f"not a folder: {url}")
         return self.batch_result
@@ -54,10 +53,9 @@ class _FakeBatchService:
         url: str,
         *,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int = 0,
     ) -> DirectParseResult:
-        self.direct_calls.append((url, {"force": force, "full": full}))
+        self.direct_calls.append((url, {"force": force}))
         if self.direct_raises is not None:
             raise self.direct_raises
         assert self.direct_result is not None

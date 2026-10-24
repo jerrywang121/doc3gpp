@@ -284,7 +284,6 @@ def test_parse_tdoc_url_enqueues_with_all_defaults(sqlite_env) -> None:
     assert params == {
         "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/",
         "force": False,
-        "full": False,
         "recursive": False,
         "max_depth": 2,
     }
@@ -311,7 +310,6 @@ def test_parse_tdoc_url_enqueues_recursive_without_max_depth(sqlite_env) -> None
                 "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/",
                 "recursive": True,
                 "force": True,
-                "full": True,
             },
         )
 
@@ -325,7 +323,6 @@ def test_parse_tdoc_url_enqueues_recursive_without_max_depth(sqlite_env) -> None
     assert params == {
         "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/",
         "force": True,
-        "full": True,
         "recursive": True,
     }
 

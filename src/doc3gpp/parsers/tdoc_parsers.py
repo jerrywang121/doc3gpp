@@ -25,7 +25,6 @@ class SectionParser(Protocol[T]):
         lines: list[str],
         *,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> tuple[bool, T, int]: ...
 
 
@@ -45,7 +44,6 @@ class TDocParser(Protocol):
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult: ...
 
 

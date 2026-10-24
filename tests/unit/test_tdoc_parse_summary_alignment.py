@@ -21,7 +21,6 @@ class _FakeBatchService:
         *,
         max_depth: int = 2,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int = 0,
         on_progress=None,
         is_cancelled=None,

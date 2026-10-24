@@ -237,7 +237,6 @@ def test_post_parse_tdocs(client: Any) -> None:
     assert job.params == {
         "filter": {"meeting_id": 5},
         "force": False,
-        "full": True,
     }
 
 
@@ -249,7 +248,6 @@ def test_post_parse_tdocs_single_tdoc_payload(client: Any) -> None:
         json={
             "filter": {"tdoc_id": "R5-260001"},
             "force": True,
-            "full": True,
         },
     )
     assert r.status_code == 202
@@ -259,7 +257,6 @@ def test_post_parse_tdocs_single_tdoc_payload(client: Any) -> None:
     assert job.params == {
         "filter": {"tdoc_id": "R5-260001"},
         "force": True,
-        "full": True,
     }
 
 
@@ -484,7 +481,6 @@ def test_get_job_html_params_for_nested_filter(client: Any) -> None:
         {
             "filter": {"tdoc_id": "R5-123456"},
             "force": True,
-            "full": False,
         },
     )
     r = c.get(f"/jobs/{job.id}?format=html")
@@ -498,8 +494,6 @@ def test_get_job_html_params_for_nested_filter(client: Any) -> None:
     assert "R5-123456" in pre_block
     assert '"force"' in pre_block
     assert "true" in pre_block  # JSON boolean
-    assert '"full"' in pre_block
-    assert "false" in pre_block
 
 
 def test_get_job_html_empty_params_renders_brace_pair(client: Any) -> None:

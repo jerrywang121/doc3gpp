@@ -232,7 +232,7 @@ def test_forced_support_conversion_failure_is_tolerated_and_recorded(
         content_repo=content_repo,
     )
 
-    prepared = service.prepare_from_url(url, force=True, full=False)
+    prepared = service.prepare_from_url(url, force=True)
     assert isinstance(prepared, PreparedDirectTDoc)
     service.persist_prepared_url(prepared)
     url_key = prepared.extract_meta.ftp_url
@@ -241,7 +241,7 @@ def test_forced_support_conversion_failure_is_tolerated_and_recorded(
     ] == ["a/support-alpha.docx", "b/support-beta.docx"]
 
     dummy.payloads[url] = partial_stream.getvalue()
-    partial = service.prepare_from_url(url, force=True, full=False)
+    partial = service.prepare_from_url(url, force=True)
     assert isinstance(partial, PreparedDirectTDoc)
     assert partial.extract_meta.skipped_sources == ("a/broken-support.docx",)
     service.persist_prepared_url(partial)

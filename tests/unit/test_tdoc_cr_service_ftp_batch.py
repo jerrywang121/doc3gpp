@@ -338,10 +338,10 @@ def test_extract_from_url_batch_delegates_per_file(service: TDocCrService) -> No
     assert len(batch.results) == 2
     assert batch.failures == {}
     service.prepare_from_url.assert_any_call(
-        file1, force=False, full=False, max_tdoc_size_bytes=None,
+        file1, force=False, max_tdoc_size_bytes=None,
     )
     service.prepare_from_url.assert_any_call(
-        file2, force=False, full=False, max_tdoc_size_bytes=None,
+        file2, force=False, max_tdoc_size_bytes=None,
     )
 
 

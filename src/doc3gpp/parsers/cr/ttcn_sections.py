@@ -84,7 +84,6 @@ class TTCNOverviewParser:
         lines: Sequence[str],
         *,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> tuple[bool, dict[str, str], int]:
         details: dict[str, str] = {}
         start_idx: int | None = None
@@ -174,7 +173,6 @@ class TTCNCorrectionsParser:
         lines: Sequence[str],
         *,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> tuple[bool, list[dict[str, str]], int]:
         changes: list[dict[str, str]] = []
         next_line_number = 0
@@ -223,7 +221,6 @@ class TTCNCorrectionsParser:
             success, change, advancing = _parse_ttcn_cr_single_correction(
                 lines[next_line_number:],
                 max_text_length=max_text_length,
-                full=full,
             )
             if not success:
                 break
@@ -246,7 +243,6 @@ def _parse_ttcn_cr_single_correction(
     lines: Sequence[str],
     *,
     max_text_length: int = 0,
-    full: bool = False,
 ) -> tuple[bool, dict[str, str], int]:
     """Parse a single correction metadata table from TTCN markdown."""
     change: dict[str, str] = {}
@@ -312,57 +308,56 @@ def _parse_ttcn_cr_single_correction(
     if next_line_number == 0:
         next_line_number = end_idx
     else:
-        if full:
-            key: str | None = None
-            scan_idx = next_line_number
-            while scan_idx < total_lines:
-                text = lines[scan_idx]
-                scan_idx += 1
-                if text.startswith("#"):
-                    scan_idx -= 1
-                    break
-                if _FUNCTION_NAME_START_RE.match(text):
-                    scan_idx -= 2
-                    break
-                if _SINGLE_CORRECTION_BEFORE_RE.match(text):
-                    key = "before_change"
-                    continue
-                if _SINGLE_CORRECTION_AFTER_RE.match(text):
-                    key = "after_change"
-                    continue
-                if _SINGLE_CORRECTION_NEW_RE.match(text):
-                    key = "new_change"
-                    continue
-                if _SINGLE_CORRECTION_MCC_IMPL_RE.match(text):
-                    key = "mcc_implementation"
-                    continue
-                if _TABLE_CELL_RE.match(text):
-                    # ``text`` is the cell line; ``scan_idx`` was just
-                    # incremented past it at the top of the loop.
-                    # Step back so ``scan_idx`` points at the cell
-                    # line, then extract content starting there
-                    # (``_extract_change_from_table`` skips empty /
-                    # separator rows like ``| --- |`` until the first
-                    # real content row). ``advancing2`` is the count of
-                    # rows consumed; if it is zero (the cell line did
-                    # not match inside the helper — defensive, should
-                    # not happen since we just matched it), advance by
-                    # one to avoid an infinite loop on the same cell.
-                    scan_idx -= 1
-                    advancing2, content = _extract_change_from_table(
-                        lines[scan_idx:], max_lines=5
-                    )
-                    scan_idx += advancing2 if advancing2 > 0 else 1
-                    if content:
-                        if key is None:
-                            key = "new_change"
-                        existing = change.get(key)
-                        if existing is None:
-                            change[key] = content
-                        else:
-                            change[key] = existing + "\n\n/*********************************/\n\n" + content
-                        key = None
-            next_line_number = scan_idx
+        key: str | None = None
+        scan_idx = next_line_number
+        while scan_idx < total_lines:
+            text = lines[scan_idx]
+            scan_idx += 1
+            if text.startswith("#"):
+                scan_idx -= 1
+                break
+            if _FUNCTION_NAME_START_RE.match(text):
+                scan_idx -= 2
+                break
+            if _SINGLE_CORRECTION_BEFORE_RE.match(text):
+                key = "before_change"
+                continue
+            if _SINGLE_CORRECTION_AFTER_RE.match(text):
+                key = "after_change"
+                continue
+            if _SINGLE_CORRECTION_NEW_RE.match(text):
+                key = "new_change"
+                continue
+            if _SINGLE_CORRECTION_MCC_IMPL_RE.match(text):
+                key = "mcc_implementation"
+                continue
+            if _TABLE_CELL_RE.match(text):
+                # ``text`` is the cell line; ``scan_idx`` was just
+                # incremented past it at the top of the loop.
+                # Step back so ``scan_idx`` points at the cell
+                # line, then extract content starting there
+                # (``_extract_change_from_table`` skips empty /
+                # separator rows like ``| --- |`` until the first
+                # real content row). ``advancing2`` is the count of
+                # rows consumed; if it is zero (the cell line did
+                # not match inside the helper — defensive, should
+                # not happen since we just matched it), advance by
+                # one to avoid an infinite loop on the same cell.
+                scan_idx -= 1
+                advancing2, content = _extract_change_from_table(
+                    lines[scan_idx:], max_lines=5
+                )
+                scan_idx += advancing2 if advancing2 > 0 else 1
+                if content:
+                    if key is None:
+                        key = "new_change"
+                    existing = change.get(key)
+                    if existing is None:
+                        change[key] = content
+                    else:
+                        change[key] = existing + "\n\n/*********************************/\n\n" + content
+                    key = None
+        next_line_number = scan_idx
 
         if max_text_length > 0:
             for key_name in (

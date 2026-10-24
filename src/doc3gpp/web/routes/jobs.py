@@ -122,7 +122,6 @@ class _SyncTestcasesBody(BaseModel):
 class _ParseTDocsBody(BaseModel):
     filter: dict[str, Any] = {}
     force: bool = False
-    full: bool = False
     max_batch: int | None = None
 
 
@@ -145,7 +144,6 @@ class _ParseTDocURLBody(BaseModel):
     recursive: bool = False
     max_depth: int = 2
     force: bool = False
-    full: bool = False
 
 
 class _ParseSpecDocsBody(BaseModel):
@@ -246,7 +244,6 @@ async def post_parse_tdocs(
     params: dict[str, JSONValue] = {
         "filter": body.filter,
         "force": body.force,
-        "full": body.full,
     }
     if body.max_batch is not None:
         params["max_batch"] = body.max_batch
@@ -325,7 +322,6 @@ async def post_parse_tdoc_url(
     params: dict[str, JSONValue] = {
         "url": normalized_url,
         "force": body.force,
-        "full": body.full,
         "recursive": body.recursive,
     }
     if not body.recursive:

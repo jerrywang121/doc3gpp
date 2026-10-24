@@ -316,7 +316,7 @@ def test_extract_from_url_db_cache_hit_returns_sql_documents(
     service._content_repo.get_extract_meta.return_value = meta
     service._content_repo.list_documents.return_value = (annex,)
 
-    result = service.extract_from_url(url, force=False, full=False)
+    result = service.extract_from_url(url, force=False)
 
     assert result.from_cache is True
     assert result.persisted is False
@@ -360,7 +360,6 @@ def test_incomplete_sql_bundle_is_reparsed_for_direct_url(tmp_path: Path) -> Non
     prepared = service.prepare_from_url(
         "https://www.3gpp.org/ftp/tsg_ran/r5s260009.zip",
         force=False,
-        full=False,
     )
 
     assert isinstance(prepared, PreparedDirectTDoc)
@@ -499,7 +498,6 @@ def test_prepare_from_url_defers_repository_writes(tmp_path: Path) -> None:
     prepared = service.prepare_from_url(
         "https://www.3gpp.org/ftp/.../R5s260009.zip",
         force=True,
-        full=False,
     )
 
     assert isinstance(prepared, PreparedDirectTDoc)
@@ -565,7 +563,7 @@ class _FakeParser:
 
     def __init__(self, result: TDocCRParseResult) -> None:
         self._result = result
-        self.calls: list[tuple[str, bool]] = []
+        self.calls: list[str] = []
 
     parser_version = "1.0.0"
 
@@ -580,9 +578,8 @@ class _FakeParser:
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
-        self.calls.append((tdoc_id, full))
+        self.calls.append(tdoc_id)
         return self._result
 
 
@@ -615,7 +612,7 @@ def test_extract_persists_one_atomic_multidocument_bundle(tmp_path: Path) -> Non
         tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
     )
 
-    prepared = service.prepare_extract("R5s260009", full=True)
+    prepared = service.prepare_extract("R5s260009")
     assert isinstance(prepared, PreparedTDocExtract)
     assert prepared.main_source_file == "z/R5s260009.docx"
     assert [document.source_file for document in prepared.documents] == [
@@ -627,8 +624,7 @@ def test_extract_persists_one_atomic_multidocument_bundle(tmp_path: Path) -> Non
         "a/support-alpha.docx",
         "b/support-beta.docx",
     ]
-    assert parser.calls == [("R5s260009", True)]
-    service._content_repo.replace_cr_bundle.assert_not_called()  # type: ignore[attr-defined]
+    assert parser.calls == ["R5s260009"]
 
     result = service.persist_prepared_extract(prepared)
 
@@ -780,45 +776,18 @@ def test_extract_atomic_bundle_uses_matching_ftp_url(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ``full`` kwarg plumbing — TTCN ``before_change`` / ``after_change`` /
-# ``new_change`` extraction requires ``full=True`` end-to-end.
+# TTCN ``before_change`` / ``after_change`` / ``new_change`` extraction runs
+# on every parse; there is no opt-out.
 # ---------------------------------------------------------------------------
 
 
-def test_extract_forwards_full_true_to_parser(tmp_path: Path) -> None:
-    """``extract(..., full=True)`` propagates ``full=True`` to the parser.
+def test_extract_invokes_parser_for_full_ttcn_extraction(tmp_path: Path) -> None:
+    """``extract(...)`` hands the TDoc to the parser on every call.
 
-    Without this plumbing the TTCN corrections sub-parser skips the
-    ``before_change`` / ``after_change`` / ``new_change`` extraction
-    loop, even when the caller explicitly opts in via ``--full``.
-    Regression-locks the wiring added so ``tdoc parse --full`` in DB
-    mode produces TTCN sidecars with the change-content fields.
+    The TTCN corrections sub-parser always extracts the
+    ``before_change`` / ``after_change`` / ``new_change`` bodies, so the
+    service has no mode switch to forward.
     """
-    fixture = FIXTURES_DIR / "R5s260009.zip"
-    if not fixture.exists():
-        pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-
-    cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
-    parser = _FakeParser(TDocCRParseResult(cover=cover))
-
-    service, _, _, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes,
-    )
-    service._parser = parser  # type: ignore[attr-defined]
-    tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="stored/r5s260009.zip",
-    )
-
-    service.extract("R5s260009", full=True)
-
-    assert parser.calls == [("R5s260009", True)]
-
-
-def test_extract_full_defaults_to_false(tmp_path: Path) -> None:
-    """``extract()`` without ``full=`` defaults to ``False`` (metadata only)."""
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
@@ -839,18 +808,11 @@ def test_extract_full_defaults_to_false(tmp_path: Path) -> None:
 
     service.extract("R5s260009")
 
-    assert parser.calls == [("R5s260009", False)]
+    assert parser.calls == ["R5s260009"]
 
 
-def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
-    """``extract_many(..., full=True)`` propagates ``full=True`` to every
-    :meth:`TDocCrService.extract` call in the batch.
-
-    A batch where ``full`` is silently dropped would re-parse every TDoc
-    in metadata-only mode, producing the same empty
-    ``before_change`` / ``after_change`` / ``new_change`` gap that the
-    DB-mode ``tdoc parse --full`` flow used to exhibit.
-    """
+def test_extract_many_invokes_parser_for_each_tdoc(tmp_path: Path) -> None:
+    """``extract_many(...)`` runs the parser once per TDoc in the batch."""
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
@@ -859,7 +821,7 @@ def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
     cover_a = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
     cover_b = TDocCRDetails(tdoc_id="R5s260051", spec="38.523-3", cr_num="3806")
 
-    extract_full_calls: list[tuple[str, bool, bool]] = []
+    extract_calls: list[str] = []
 
     class _RecordingParser:
         parser_version = "1.0.0"
@@ -875,9 +837,8 @@ def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
             *,
             tdoc_id: str,
             max_text_length: int = 0,
-            full: bool = False,
         ) -> TDocCRParseResult:
-            extract_full_calls.append((tdoc_id, full))
+            extract_calls.append(tdoc_id)
             return TDocCRParseResult(
                 cover=cover_a if tdoc_id == "R5s260009" else cover_b,
             )
@@ -892,19 +853,9 @@ def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
         ftp_url=f"stored/{tdoc_id}.zip",
     )
 
-    service.extract_many(["R5s260009", "R5s260051"], full=True)
-
-    assert extract_full_calls == [
-        ("R5s260009", True),
-        ("R5s260051", True),
-    ]
-    extract_full_calls.clear()
     service.extract_many(["R5s260009", "R5s260051"])
 
-    assert extract_full_calls == [
-        ("R5s260009", False),
-        ("R5s260051", False),
-    ]
+    assert extract_calls == ["R5s260009", "R5s260051"]
 
 
 def test_extract_raises_skip_when_ftp_url_is_null(tmp_path: Path) -> None:
@@ -1120,7 +1071,7 @@ def test_extract_many_routes_too_large_to_skipped(tmp_path) -> None:
 
     service, _, _, _, _, _ = _build_service(tmp_path)
 
-    def _boom(tdoc_id: str, *, force: bool = False, full: bool = False):
+    def _boom(tdoc_id: str, *, force: bool = False):
         raise TDocTooLargeError(source=tdoc_id, size=10, limit=5)
 
     service.prepare_extract = _boom  # type: ignore[method-assign]
@@ -1213,7 +1164,7 @@ def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
 
     service.collect_3gpp_file_urls = lambda url, *, max_depth: urls  # type: ignore[method-assign]
 
-    def _boom(url: str, *, force: bool = False, full: bool = False,
+    def _boom(url: str, *, force: bool = False,
               max_tdoc_size_bytes: int | None = None):
         raise TDocTooLargeError(source=url, size=99, limit=10)
 
@@ -1346,8 +1297,8 @@ def test_extract_many_uses_runner_for_parallel_prepare_and_serial_persist(
             ),
         )
 
-    def prepare(raw_id: str, *, force: bool = False, full: bool = False):
-        del force, full
+    def prepare(raw_id: str, *, force: bool = False):
+        del force
         prepare_barrier.wait(timeout=2)
         return prepared(raw_id.strip())
 
@@ -1433,8 +1384,8 @@ def test_extract_many_writer_failure_does_not_stop_later_item(tmp_path: Path) ->
             ),
         )
 
-    def prepare(raw_id: str, *, force: bool = False, full: bool = False):
-        del force, full
+    def prepare(raw_id: str, *, force: bool = False):
+        del force
         return prepared(raw_id)
 
     def persist(value: PreparedTDocExtract) -> ExtractResult:

@@ -486,7 +486,6 @@ def _direct_parse_payload(
     payload: bytes,
     *,
     filename: str,
-    full: bool,
     max_bytes: int,
     max_documents: int,
     max_uncompressed_bytes: int,
@@ -595,7 +594,7 @@ def _direct_parse_payload(
     )
     if parse_main is None:
         parser = build_default_registry().resolve(resolved_tdoc_id, tdoc_type="CR")
-        parsed = parser.parse(main_markdown, tdoc_id=resolved_tdoc_id, full=full)
+        parsed = parser.parse(main_markdown, tdoc_id=resolved_tdoc_id)
     else:
         parsed = parse_main(main_markdown, resolved_tdoc_id)
 
@@ -639,7 +638,6 @@ def direct_parse_bytes(
     payload: bytes,
     *,
     filename: str,
-    full: bool = False,
     max_bytes: int = 0,
     max_documents: int = 100,
     max_uncompressed_bytes: int = 0,
@@ -655,7 +653,6 @@ def direct_parse_bytes(
     return _direct_parse_payload(
         payload,
         filename=filename,
-        full=full,
         max_bytes=max_bytes,
         max_documents=max_documents,
         max_uncompressed_bytes=max_uncompressed_bytes,

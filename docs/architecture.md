@@ -1117,8 +1117,9 @@ the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group 
       `tdoc parse` exposes.
     - `parse` — `--tdoc` (LIKE pattern on `tdoc_id`), `--meeting-id`,
       `--meeting`, plus every text-column filter and `--uploaded-date`;
-      `--force` re-extracts already-parsed rows, `--full` is reserved
-      for the parser's `full=True` mode. End-to-end filter-driven:
+      `--force` re-extracts already-parsed rows. Every parse extracts
+      the full content (TTCN correction bodies included); there is no
+      opt-out flag. End-to-end filter-driven:
       candidates are the intersection of every supplied predicate, with
       CR, WID, LS, and discussion as the implicit default and a `max_batch` cap.
     - `search` and `index` — unified TDoc FTS5/vector/filter search and

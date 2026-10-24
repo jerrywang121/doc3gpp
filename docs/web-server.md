@@ -427,7 +427,7 @@ before this feature landed — they stay `NULL` until the next
 `doc3gpp tdoc sync` re-reads the meeting XLSX.
 
 The TDoc detail page shows a Parse card (only when the TDoc has an FTP
-URL) with "Force re-parse" and "Full extraction" checkboxes. Submitting
+URL) with a "Force re-parse" checkbox. Submitting
 enqueues a `parse_tdocs` job filtered to that single TDoc id; the job
 status partial polls inline until the job finishes, then the page
 reloads so the server-rendered cover page / TTCN / extracted-at

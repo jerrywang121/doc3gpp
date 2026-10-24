@@ -64,7 +64,6 @@ class _StubParser:
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
         return self._result
 

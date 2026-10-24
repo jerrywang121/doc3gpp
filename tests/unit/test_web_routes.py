@@ -2432,7 +2432,7 @@ def test_healthz_still_ok(client: TestClient) -> None:
 def test_tdoc_show_parse_card_rendered_when_ftp_url(
     client: TestClient, sqlite_env: Any,
 ) -> None:
-    """A TDoc with an ftp_url shows the Parse card with force/full checkboxes.
+    """A TDoc with an ftp_url shows the Parse card with a force checkbox and no full-extraction toggle.
 
     The form must (1) carry the parse route as its ``action`` so the
     shared ``bindJobPolling`` helper posts to the right URL (the old
@@ -2453,7 +2453,7 @@ def test_tdoc_show_parse_card_rendered_when_ftp_url(
     html = client.get("/tdocs/R5-260001").text
     assert "Parse this TDoc" in html
     assert 'name="force"' in html
-    assert 'name="full"' in html
+    assert 'name="full"' not in html
     assert 'src="/static/js/tdoc_parse.js"' in html
     # The form must declare the parse route so the shared
     # ``bindJobPolling`` helper resolves the POST URL.

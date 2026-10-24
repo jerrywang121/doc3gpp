@@ -199,7 +199,7 @@ def test_web_job_path_parse_auto_indexes_fts5_and_embeddings(
         semantic_service=semantic_service,
     )
 
-    result = service.extract_many(["R5-260001"], force=True, full=True)
+    result = service.extract_many(["R5-260001"], force=True)
     assert "R5-260001" in result.successes
 
     search_service.upsert_for_tdoc.assert_called_once_with("R5-260001")

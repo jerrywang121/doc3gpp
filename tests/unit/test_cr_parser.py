@@ -456,20 +456,17 @@ _TTCN_CORRECTION_LINES_FULL = (
 )
 
 
-def test_ttcn_cr_full_true_extracts_before_after_change_content() -> None:
-    """``parse(..., full=True)`` populates ``before_change`` and
-    ``after_change`` from the standalone ``Before change`` / ``After
-    change`` markers and their following content rows.
+def test_ttcn_cr_default_parse_extracts_before_after_change_content() -> None:
+    """``parse(...)`` populates ``before_change`` and ``after_change``
+    from the standalone ``Before change`` / ``After change`` markers and
+    their following content rows, with no opt-in flag.
 
-    The TTCN corrections sub-parser only enters its before/after/new
-    extraction loop when ``full=True``. Locks the gate AND the slice
-    arithmetic — a previous off-by-one in
-    ``_extract_change_from_table`` call site caused an infinite loop
-    on realistic TTCN markdown layouts, silently dropping every
-    operator's ``--full`` invocation.
+    Locks the slice arithmetic as well — a previous off-by-one in
+    ``_extract_change_from_table`` call site caused an infinite loop on
+    realistic TTCN markdown layouts.
     """
     md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
-    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
     assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
     assert len(parsed.ttcn.required_changes) == 1
     change = parsed.ttcn.required_changes[0]
@@ -479,42 +476,8 @@ def test_ttcn_cr_full_true_extracts_before_after_change_content() -> None:
     assert "new_change" not in change
 
 
-def test_ttcn_cr_full_false_omits_before_after_change_content() -> None:
-    """``parse(..., full=False)`` (the default) leaves
-    ``before_change`` / ``after_change`` / ``new_change`` unset even
-    when the source markdown carries them.
-
-    Metadata-only extraction is the default — that's the contract the
-    default ``tdoc parse`` flow depends on (small rows, fast parser).
-    Operators who need the change content must opt in with ``--full``;
-    this test pins that contract.
-    """
-    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
-    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=False)
-    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
-    assert len(parsed.ttcn.required_changes) == 1
-    change = parsed.ttcn.required_changes[0]
-    assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
-    assert "before_change" not in change
-    assert "after_change" not in change
-    assert "new_change" not in change
-
-
-def test_ttcn_cr_full_default_omits_before_after_change_content() -> None:
-    """Without ``full=`` (default ``False``), the before/after/new keys
-    are never present on the change dict.
-    """
-    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
-    parsed = parse_cr_details(md, tdoc_id="R5s260009")
-    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
-    change = parsed.ttcn.required_changes[0]
-    assert "before_change" not in change
-    assert "after_change" not in change
-    assert "new_change" not in change
-
-
-def test_ttcn_cr_full_true_returns_within_bounded_time() -> None:
-    """Regression guard for the ``if full:`` infinite-loop bug.
+def test_ttcn_cr_parse_returns_within_bounded_time() -> None:
+    """Regression guard for the before/after/new extraction infinite loop.
 
     Before the slice-index fix, a standalone ``Before change`` marker
     followed by a content row sent the parser into an infinite loop on
@@ -526,24 +489,24 @@ def test_ttcn_cr_full_true_returns_within_bounded_time() -> None:
     """
     import multiprocessing
 
-    process = multiprocessing.Process(target=_run_full_ttcn_parse)
+    process = multiprocessing.Process(target=_run_ttcn_parse)
     process.start()
     process.join(timeout=15)
     if process.is_alive():
         process.terminate()
         process.join(timeout=5)
-        pytest.fail("ttcn full=True parser hung")
+        pytest.fail("ttcn parser hung")
     assert process.exitcode == 0
 
 
-def _run_full_ttcn_parse() -> None:
-    """Run the full TTCN parse in an isolated process for a hard timeout."""
+def _run_ttcn_parse() -> None:
+    """Run the TTCN parse in an isolated process for a hard timeout."""
     md = "\n".join(
         list(_HEADER_LINES)
         + list(_TTCN_OVERVIEW_LINES)
         + list(_TTCN_CORRECTION_LINES_FULL)
     )
-    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
     assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
     assert parsed.ttcn.required_changes
 

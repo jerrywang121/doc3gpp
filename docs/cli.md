@@ -1095,10 +1095,10 @@ Options:
   The on-disk zip cache is **always** consulted first regardless of
   `--force` — `download_tdoc_zip` keys the cache on `tdocs.ftp_url`
   (via `derive_cache_file`) and reuses the cached bytes on a hit.
-- `--full`: reserved for the parser's `full=True` mode (pulls in
-  `before_change` / `after_change` per correction). The current
-  service does not yet wire this through; accepted silently so
-  existing scripts keep parsing.
+- Every parse extracts the full content, including the TTCN correction
+  bodies (`before_change` / `after_change` / `new_change`). There is no
+  opt-out flag. TDocs parsed before this behaviour existed are not
+  re-parsed automatically; backfill them with `--force`.
 - `--yes` / `-y`: skip the confirmation prompt before extracting.
   Useful in scripts and CI where an interactive prompt would block.
 - `--max-tdoc-size-kb INT`: override
@@ -1465,7 +1465,6 @@ Options:
 - `--force`: when `--from-path` is a directory or `--from-url` is a
   folder, overwrite existing output files. Rejected for single file
   sources.
-- `--full`: forward `full=True` to the parser (TTCN corrections).
 - `--compact`: see "Compact output" in the format-overview section.
 
 Archive safety limits are TOML-only settings under `[tdoc_parse]`:

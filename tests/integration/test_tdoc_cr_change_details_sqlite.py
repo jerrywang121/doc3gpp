@@ -175,7 +175,7 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
 
         def parse(
             self, markdown: str, *, tdoc_id: str,
-            max_text_length: int = 0, full: bool = False,
+            max_text_length: int = 0,
         ) -> TDocCRParseResult:
             return TDocCRParseResult(
                 cover=TDocCRDetails(

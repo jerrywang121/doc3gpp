@@ -968,7 +968,6 @@ class _FakeTDocCrServiceForUrl:
         *,
         max_depth: int,
         force: bool,
-        full: bool,
         max_tdoc_size_bytes: int | None,
         on_progress: object | None = None,
         is_cancelled: object | None = None,
@@ -977,7 +976,6 @@ class _FakeTDocCrServiceForUrl:
             "url": url,
             "max_depth": max_depth,
             "force": force,
-            "full": full,
             "max_tdoc_size_bytes": max_tdoc_size_bytes,
         })
         if self.raise_extract is not None:
@@ -993,13 +991,11 @@ class _FakeTDocCrServiceForUrl:
         url: str,
         *,
         force: bool,
-        full: bool,
         max_tdoc_size_bytes: int | None,
     ) -> DirectParseResult:
         self.single_extract_calls.append({
             "url": url,
             "force": force,
-            "full": full,
             "max_tdoc_size_bytes": max_tdoc_size_bytes,
         })
         if not self.results:
@@ -1844,7 +1840,6 @@ def test_parse_tdoc_url_mid_flight_cancel_lands_cancelled() -> None:
             *,
             max_depth: int,
             force: bool,
-            full: bool,
             max_tdoc_size_bytes: int | None,
             on_progress=None,
             is_cancelled=None,

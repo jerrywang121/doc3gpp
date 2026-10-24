@@ -926,12 +926,11 @@ def build_mcp_server(state: WebState) -> MCPServer:
     def parse_tdocs(
         filter: Annotated[dict[str, Any] | None, Field(description="Filter dict selecting which tdocs to parse. Supported keys: tdoc_id, meeting, meeting_id, status, cr_cat, spec, wi, revision_of, revised_to, title, ftp_url, source, tdoc_type, uploaded_date, release, version, cr_num, cr_pack. Text fields (all except meeting_id) are SQL LIKE patterns: use % as a wildcard (e.g. {'tdoc_id': 'R5-26%', 'meeting': '%RAN%', 'title': '%handover%'}); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability; uploaded_date accepts '<op> YYYY-MM-DD'. A plain value with no wildcard still matches exactly.")] = None,
         force: Annotated[bool, Field(description="Re-parse tdocs already present in the cover-page table.")] = False,
-        full: Annotated[bool, Field(description="Parse full content (not just cover page + change details).")] = False,
         max_batch: Annotated[int | None, Field(description="Cap on the number of tdocs parsed in this job.")] = None,
     ) -> str:
         if not filter:
             raise InvalidFilterError("filter is required")
-        params: dict[str, Any] = {"filter": filter, "force": force, "full": full}
+        params: dict[str, Any] = {"filter": filter, "force": force}
         if max_batch is not None:
             params["max_batch"] = max_batch
         return _enqueue(state, JobKind.PARSE_TDOCS, params, "queued parse_tdocs")
@@ -943,8 +942,8 @@ def build_mcp_server(state: WebState) -> MCPServer:
             "from a canonical 3GPP FTP URL (HTTPS https://www.3gpp.org/ftp/... "
             "or bare www.3gpp.org/ftp/...; explicit HTTP is rejected). Mirrors "
             "`doc3gpp tdoc parse --from-url`. Use `recursive`/`max_depth` to "
-            "scan subfolders; `force` re-parses already-cached files; `full` "
-            "parses the TTCN corrections sub-parser. When "
+            "scan subfolders; `force` re-parses already-cached files. "
+            "When "
             "Settings.sync.auto_sync is on, the worker runs the same "
             "TSG→meeting→tdoc-list auto-sync the CLI runs before parsing, so "
             "the cover-page FK on tdocs is satisfied. Returns a job_id; poll "
@@ -957,7 +956,6 @@ def build_mcp_server(state: WebState) -> MCPServer:
         recursive: Annotated[bool, Field(description="Scan subfolders (BFS); equivalent to CLI's --recursive. Mutually exclusive with max_depth.")] = False,
         max_depth: Annotated[int, Field(description="Maximum BFS depth (0 = root folder only). Ignored when recursive=True.")] = 2,
         force: Annotated[bool, Field(description="Re-parse even when a cover-page row already exists (forwarded to the service).")] = False,
-        full: Annotated[bool, Field(description="Parse full content for TTCN corrections (forwarded to the service).")] = False,
     ) -> str:
         try:
             url = validate_tdoc_ftp_url(url)
@@ -970,7 +968,6 @@ def build_mcp_server(state: WebState) -> MCPServer:
         params: dict[str, Any] = {
             "url": url,
             "force": force,
-            "full": full,
             "recursive": recursive,
         }
         if not recursive:

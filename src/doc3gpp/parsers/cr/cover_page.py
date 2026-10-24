@@ -123,7 +123,6 @@ class CRCoverPageParser:
         lines: Sequence[str],
         *,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> tuple[bool, dict[str, str], int]:
         details: dict[str, str] = {}
 

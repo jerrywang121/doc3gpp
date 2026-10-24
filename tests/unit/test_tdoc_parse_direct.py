@@ -473,7 +473,7 @@ def test_direct_parse_bytes_with_bare_docx_returns_synthetic_id(
     buf = io.BytesIO()
     doc.save(buf)
 
-    bundle = direct_parse_bytes(buf.getvalue(), filename="random.docx", full=False)
+    bundle = direct_parse_bytes(buf.getvalue(), filename="random.docx")
 
     assert isinstance(bundle, TDocParseBundle)
     assert len(bundle.documents) == 1
@@ -490,7 +490,7 @@ def test_direct_parse_bytes_with_zip_returns_bundle_with_inner_source(
         pytest.skip("python-docx or fixture missing")
 
     bundle = direct_parse_bytes(
-        fixture.read_bytes(), filename="R5s260009.zip", full=False,
+        fixture.read_bytes(), filename="R5s260009.zip",
     )
 
     assert isinstance(bundle, TDocParseBundle)
@@ -502,7 +502,7 @@ def test_direct_parse_bytes_with_zip_returns_bundle_with_inner_source(
 def test_direct_parse_bytes_rejects_malformed_zip() -> None:
     """A zip-shaped but malformed payload raises ``ValueError``."""
     with pytest.raises((ValueError, zipfile.BadZipFile)):
-        direct_parse_bytes(b"PK\x03\x04 corrupt", filename="x.zip", full=False)
+        direct_parse_bytes(b"PK\x03\x04 corrupt", filename="x.zip")
 
 
 @pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
@@ -521,7 +521,7 @@ def test_direct_parse_bytes_converts_every_member_and_selects_cr_main() -> None:
         "z/R5s260009.docx": main_docx,
     })
 
-    bundle = direct_parse_bytes(payload, filename="R5s260009.zip", full=True)
+    bundle = direct_parse_bytes(payload, filename="R5s260009.zip")
 
     assert isinstance(bundle, TDocParseBundle)
     assert bundle.main_source_file == "z/R5s260009.docx"
@@ -695,7 +695,7 @@ def test_extract_from_bytes_never_touches_cache_or_db(tmp_path: Path) -> None:
     service, _scraper, cache, cr_repo, _, tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
-    result = service.extract_from_bytes(payload, "local.docx", full=False)
+    result = service.extract_from_bytes(payload, "local.docx")
     assert isinstance(result, DirectParseResult)
     assert result.source_kind == "local"
     assert result.from_cache is False
@@ -717,7 +717,7 @@ def test_local_cr_file_takes_tdoc_id_from_filename_over_cover(tmp_path: Path) ->
     service, _scraper, _cache, _cr_repo, _, _tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
-    result = service.extract_from_bytes(main_docx, "R5s260999.docx", full=False)
+    result = service.extract_from_bytes(main_docx, "R5s260999.docx")
 
     assert result.tdoc_id == "R5s260999"
     assert result.details.tdoc_id == "R5s260999"
@@ -742,7 +742,7 @@ def test_local_cr_file_without_cover_tdoc_id_uses_filename_id(tmp_path: Path) ->
     service, _scraper, _cache, _cr_repo, _, _tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
-    result = service.extract_from_bytes(buf.getvalue(), "R5s260998.docx", full=False)
+    result = service.extract_from_bytes(buf.getvalue(), "R5s260998.docx")
 
     assert result.tdoc_id == "R5s260998"
     assert result.details.tdoc_id == "R5s260998"
@@ -765,7 +765,7 @@ def test_nameless_local_cr_takes_cover_tdoc_id(tmp_path: Path) -> None:
     service, _scraper, _cache, _cr_repo, _, _tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
-    result = service.extract_from_bytes(cover_docx.getvalue(), "local-cr.docx", full=False)
+    result = service.extract_from_bytes(cover_docx.getvalue(), "local-cr.docx")
 
     assert result.tdoc_id == "R5-000042"
     assert result.details.tdoc_id == "R5-000042"
@@ -790,7 +790,7 @@ def test_nameless_local_cr_without_cover_id_uses_local_stem(tmp_path: Path) -> N
     service, _scraper, _cache, _cr_repo, _, _tdoc_repo = _build_service_with_fake_repos(
         tmp_path, zip_bytes=b"unused",
     )
-    result = service.extract_from_bytes(buf.getvalue(), "local-cr.docx", full=False)
+    result = service.extract_from_bytes(buf.getvalue(), "local-cr.docx")
 
     assert result.tdoc_id == "LOCAL-local-cr"
     assert result.details.tdoc_id == "LOCAL-local-cr"
@@ -860,7 +860,7 @@ def test_extract_from_url_other_url_skips_cache_and_db(tmp_path: Path) -> None:
     )
     scraper.get_bytes.return_value = docx_bytes
     result = service.extract_from_url(
-        "https://example.com/R5s260099.docx", force=False, full=False,
+        "https://example.com/R5s260099.docx", force=False,
     )
     assert result.source_kind == "url-other"
     assert result.from_cache is False
@@ -893,7 +893,7 @@ def test_extract_from_url_3gpp_with_tdoc_in_tdocs_writes_cache_and_db(
     tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
 
     url = "https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip"
-    result = service.extract_from_url(url, force=False, full=False)
+    result = service.extract_from_url(url, force=False)
 
     assert result.source_kind == "url-3gpp"
     assert result.persisted is True
@@ -940,7 +940,7 @@ def test_extract_from_url_3gpp_with_tdoc_missing_in_tdocs_skips_db(
 
     result = service.extract_from_url(
         "https://www.3gpp.org/ftp/.../R5s260043_MCC160Comments_r1.docx",
-        force=False, full=False,
+        force=False,
     )
     assert result.source_kind == "url-3gpp"
     assert result.tdoc_id == "R5s260043"
@@ -981,7 +981,7 @@ def test_extract_from_url_3gpp_with_no_pattern_in_filename_is_rejected(
     with pytest.raises(ValueError, match="TDoc"):
         service.extract_from_url(
             "https://www.3gpp.org/ftp/.../meeting_minutes.docx",
-            force=False, full=False,
+            force=False,
         )
     scraper.get_bytes.assert_not_called()
     assert cr_repo.upsert.call_count == 0
@@ -1038,7 +1038,7 @@ def test_extract_from_url_3gpp_db_cache_hit_short_circuits(
     service._content_repo.list_documents.return_value = ()  # type: ignore[attr-defined]
 
     result = service.extract_from_url(
-        "https://www.3gpp.org/ftp/" + ftp_url, force=False, full=False,
+        "https://www.3gpp.org/ftp/" + ftp_url, force=False,
     )
 
     assert result.from_cache is True
@@ -1079,34 +1079,33 @@ class _FakeService:
         self.bytes_runner_calls: list[object | None] = []
 
     def extract_from_url(
-        self, url: str, *, force: bool, full: bool,
+        self, url: str, *, force: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
     ) -> DirectParseResult:
-        self.url_calls.append((url, force, full))
+        self.url_calls.append((url, force))
         self.url_runner_calls.append(runner)
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
 
     def extract_from_bytes(
-        self, payload: bytes, filename: str, *, force: bool, full: bool,
+        self, payload: bytes, filename: str, *, force: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
     ) -> DirectParseResult:
-        self.bytes_calls.append((payload, filename, force, full))
+        self.bytes_calls.append((payload, filename, force))
         self.bytes_runner_calls.append(runner)
         if isinstance(self._result, Exception):
             raise self._result
         return self._result
 
     def prepare_from_bytes(
-        self, payload: bytes, filename: str, *, full: bool,
+        self, payload: bytes, filename: str, *,
         max_tdoc_size_bytes: int = 0,
     ) -> DirectParseResult:
         return self.extract_from_bytes(
             payload,
             filename,
             force=False,
-            full=full,
             max_tdoc_size_bytes=max_tdoc_size_bytes,
         )
 
@@ -1846,7 +1845,7 @@ def test_cli_from_path_recursive_mirrors_subfolders(
 
     class _CountingFakeService(_FakeService):
         def extract_from_bytes(
-            self, payload: bytes, filename: str, *, force: bool, full: bool,
+            self, payload: bytes, filename: str, *, force: bool,
             max_tdoc_size_bytes: int = 0, runner=None,
         ) -> DirectParseResult:
             call_count["n"] += 1
@@ -1902,11 +1901,11 @@ def test_cli_from_path_folder_prepares_in_parallel_and_emits_sorted(
 
     class _OverlappingFakeService(_FakeService):
         def extract_from_bytes(
-            self, payload: bytes, filename: str, *, force: bool, full: bool,
+            self, payload: bytes, filename: str, *, force: bool,
             max_tdoc_size_bytes: int = 0, runner=None,
         ) -> DirectParseResult:
             nonlocal active, preparations_overlapped
-            del payload, force, full, max_tdoc_size_bytes, runner
+            del payload, force, max_tdoc_size_bytes, runner
             with active_lock:
                 active += 1
                 if active > 1:

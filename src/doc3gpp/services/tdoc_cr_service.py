@@ -496,7 +496,6 @@ class TDocCrService:
         payload: bytes,
         *,
         filename: str,
-        full: bool,
         max_bytes: int | None = None,
         tdoc_id: str | None = None,
     ) -> TDocParseBundle:
@@ -512,7 +511,6 @@ class TDocCrService:
             return direct_parse_bytes(
                 payload,
                 filename=filename,
-                full=full,
                 max_bytes=source_limit,
                 max_documents=self._max_documents_per_zip,
                 max_uncompressed_bytes=self._max_uncompressed_size_bytes,
@@ -523,13 +521,11 @@ class TDocCrService:
             return self._resolve_parser(resolved_id).parse(
                 markdown,
                 tdoc_id=resolved_id,
-                full=full,
             )
 
         return _direct_parse_payload(
             payload,
             filename=filename,
-            full=full,
             max_bytes=source_limit,
             max_documents=self._max_documents_per_zip,
             max_uncompressed_bytes=self._max_uncompressed_size_bytes,
@@ -685,7 +681,6 @@ class TDocCrService:
         tdoc_id: str,
         *,
         force: bool = False,
-        full: bool = False,
     ) -> PreparedTDocExtract | PreparedFamilyExtract | ExtractResult | FamilyExtractResult:
         """Prepare every supported DOCX in one TDoc ZIP without SQL writes."""
         normalised = self._validate_tdoc_id(tdoc_id)
@@ -736,7 +731,6 @@ class TDocCrService:
         bundle = self._parse_bundle(
             downloaded.path.read_bytes(),
             filename=cache_file,
-            full=full,
             max_bytes=self._max_tdoc_size_bytes,
             tdoc_id=normalised,
         )
@@ -819,10 +813,9 @@ class TDocCrService:
         tdoc_id: str,
         *,
         force: bool = False,
-        full: bool = False,
     ) -> ExtractResult | FamilyExtractResult:
         """Prepare and persist one TDoc synchronously for CLI callers."""
-        prepared = self.prepare_extract(tdoc_id, force=force, full=full)
+        prepared = self.prepare_extract(tdoc_id, force=force)
         if isinstance(prepared, (ExtractResult, FamilyExtractResult)):
             return prepared
         return self.persist_prepared_extract(prepared)
@@ -832,7 +825,6 @@ class TDocCrService:
         tdoc_ids: Iterable[str],
         *,
         force: bool = False,
-        full: bool = False,
         on_progress: Callable[[str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
         runner: TDocPipeline | None = None,
@@ -883,7 +875,6 @@ class TDocCrService:
                     lambda raw_id: self.prepare_extract(
                         raw_id,
                         force=force,
-                        full=full,
                     ),
                     persist=cast(
                         Callable[[object], object],
@@ -941,7 +932,6 @@ class TDocCrService:
         url: str,
         *,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int | None = None,
         runner: TDocPipeline | None = None,
     ) -> DirectParseResult:
@@ -959,7 +949,6 @@ class TDocCrService:
                 return self.prepare_from_url(
                     value,
                     force=force,
-                    full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
                 )
             except asyncio.CancelledError:
@@ -1003,7 +992,6 @@ class TDocCrService:
         url: str,
         *,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int | None = None,
     ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
         """Prepare one direct URL bundle without mutating SQL repositories."""
@@ -1025,7 +1013,6 @@ class TDocCrService:
                     identity=url,
                     tdoc_id=extract_tdoc_id_from_filename(url),
                 ),
-                full=full,
                 max_bytes=max_bytes,
             )
 
@@ -1048,7 +1035,6 @@ class TDocCrService:
                     identity=stored_ftp_url,
                     tdoc_id=None,
                 ),
-                full=full,
                 max_bytes=max_bytes,
             )
 
@@ -1070,7 +1056,6 @@ class TDocCrService:
                     identity=stored_ftp_url,
                     tdoc_id=extracted_id,
                 ),
-                full=full,
                 max_bytes=max_bytes,
             )
 
@@ -1080,7 +1065,6 @@ class TDocCrService:
             stored_ftp_url=stored_ftp_url,
             tdoc=tdoc,
             force=force,
-            full=full,
             max_bytes=max_bytes,
         )
 
@@ -1146,7 +1130,6 @@ class TDocCrService:
         *,
         max_depth: int = 2,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int | None = None,
         on_progress: Callable[[str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
@@ -1182,7 +1165,6 @@ class TDocCrService:
                 lambda file_url: self.prepare_from_url(
                     file_url,
                     force=force,
-                    full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
                 ),
                 persist=cast(
@@ -1263,7 +1245,6 @@ class TDocCrService:
         docx_bytes: bytes,
         filename: str,
         *,
-        full: bool = True,
         max_tdoc_size_bytes: int | None = None,
     ) -> DirectParseResult:
         """Convert local DOCX/ZIP bytes in memory without cache or SQL writes."""
@@ -1281,7 +1262,7 @@ class TDocCrService:
             identity=f"local:{tdoc_id}:{filename}",
             tdoc_id=tdoc_id,
         )
-        return self._direct_in_memory(source, full=full, max_bytes=max_bytes)
+        return self._direct_in_memory(source, max_bytes=max_bytes)
 
     def extract_from_bytes(
         self,
@@ -1289,7 +1270,6 @@ class TDocCrService:
         filename: str,
         *,
         force: bool = False,
-        full: bool = True,
         max_tdoc_size_bytes: int | None = None,
         runner: TDocPipeline | None = None,
     ) -> DirectParseResult:
@@ -1311,7 +1291,6 @@ class TDocCrService:
                 return self.prepare_from_bytes(
                     payload,
                     filename,
-                    full=full,
                     max_tdoc_size_bytes=max_bytes,
                 )
             except asyncio.CancelledError:
@@ -1393,7 +1372,6 @@ class TDocCrService:
         payload: bytes,
         *,
         filename: str,
-        full: bool,
         max_bytes: int,
         tdoc_id: str | None,
         sniffed: bool,
@@ -1403,7 +1381,6 @@ class TDocCrService:
             return self._parse_bundle(
                 payload,
                 filename=filename,
-                full=full,
                 max_bytes=max_bytes,
                 tdoc_id=tdoc_id,
             )
@@ -1416,7 +1393,6 @@ class TDocCrService:
         self,
         source: _DirectSource,
         *,
-        full: bool,
         max_bytes: int,
     ) -> DirectParseResult:
         """Route an in-memory source to the family or CR parse with no SQL writes."""
@@ -1449,7 +1425,6 @@ class TDocCrService:
         bundle = self._parse_cr_bundle(
             source.payload,
             filename=source.filename,
-            full=full,
             max_bytes=max_bytes,
             tdoc_id=source.tdoc_id,
             sniffed=tdoc_type is None,
@@ -1611,7 +1586,6 @@ class TDocCrService:
         cache_file: str,
         stored_ftp_url: str,
         tdoc_id: str,
-        full: bool,
         max_bytes: int,
         force: bool,
         payload: bytes | None,
@@ -1630,7 +1604,6 @@ class TDocCrService:
         bundle = self._parse_cr_bundle(
             payload,
             filename=url,
-            full=full,
             max_bytes=max_bytes,
             tdoc_id=tdoc_id,
             sniffed=sniffed,
@@ -1689,7 +1662,6 @@ class TDocCrService:
         stored_ftp_url: str,
         tdoc: TDoc,
         force: bool,
-        full: bool,
         max_bytes: int,
     ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
         """Prepare a URL-keyed bundle for a TDoc whose ``tdocs`` row exists."""
@@ -1714,7 +1686,6 @@ class TDocCrService:
                 cache_file=cache_file,
                 stored_ftp_url=stored_ftp_url,
                 tdoc_id=tdoc_id,
-                full=full,
                 max_bytes=max_bytes,
                 force=force,
                 payload=None,
@@ -1760,7 +1731,6 @@ class TDocCrService:
             cache_file=cache_file,
             stored_ftp_url=stored_ftp_url,
             tdoc_id=tdoc_id,
-            full=full,
             max_bytes=max_bytes,
             force=force,
             payload=payload,

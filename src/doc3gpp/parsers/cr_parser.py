@@ -53,7 +53,6 @@ def parse_cr_details(
     *,
     tdoc_id: str,
     max_text_length: int = 0,
-    full: bool = False,
 ) -> TDocCRParseResult:
     """Parse a CR markdown body into a :class:`TDocCRParseResult`.
 
@@ -70,7 +69,6 @@ def parse_cr_details(
         markdown,
         tdoc_id=tdoc_id,
         max_text_length=max_text_length,
-        full=full,
     )
 
 

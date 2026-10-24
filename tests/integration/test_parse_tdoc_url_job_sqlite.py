@@ -84,12 +84,10 @@ def test_parse_tdoc_url_job_end_to_end(sqlite_env, monkeypatch) -> None:
         url,
         *,
         force,
-        full,
         max_tdoc_size_bytes,
     ):
         assert url.endswith("R5s260001.zip")
         assert force is False
-        assert full is False
         assert max_tdoc_size_bytes is not None
         return url
 

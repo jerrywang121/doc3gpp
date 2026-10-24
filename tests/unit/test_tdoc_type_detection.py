@@ -247,7 +247,7 @@ def test_auto_sync_on_collects_ids_for_local_batch(
     output_dir = tmp_path / "out"
 
     class _SkippingService:
-        def prepare_from_bytes(self, payload, filename, *, full, max_tdoc_size_bytes):
+        def prepare_from_bytes(self, payload, filename, *, max_tdoc_size_bytes):
             raise TDocTypeSkippedError(None, "type could not be determined")
 
     monkeypatch.setattr(

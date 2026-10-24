@@ -113,12 +113,11 @@ class _FakeCrService:
         tdoc_ids,
         *,
         force: bool = False,
-        full: bool = False,
         on_progress=None,
         is_cancelled=None,
         runner=None,
     ) -> BatchExtractResult:
-        self.many_calls.append((list(tdoc_ids), force, full))
+        self.many_calls.append((list(tdoc_ids), force))
         self.runner_calls.append(runner)
         if self._raise_from_many is not None:
             raise self._raise_from_many
@@ -149,12 +148,11 @@ class _OverlapCrService(_FakeCrService):
         tdoc_ids,
         *,
         force: bool = False,
-        full: bool = False,
         on_progress=None,
         is_cancelled=None,
         runner=None,
     ) -> BatchExtractResult:
-        del force, full, on_progress, is_cancelled
+        del force, on_progress, is_cancelled
         self.runner_calls.append(runner)
         assert runner is not None
         ids = list(tdoc_ids)
@@ -615,7 +613,7 @@ def test_tdoc_parse_tdoc_flag_singular_silently_keeps_last(sqlite_env, monkeypat
     # The repo saw only the LAST --tdoc value.
     assert repo.list_with_meeting_calls[0]["tdoc_id"] == "R5s260010"
     # And the dispatched id is the resolved one, not both.
-    assert fake.many_calls == [(["R5s260010"], False, False)]
+    assert fake.many_calls == [(["R5s260010"], False)]
 
 
 # ---------------------------------------------------------------------------
@@ -636,7 +634,7 @@ def test_tdoc_parse_tdoc_like_pattern_happy_path(sqlite_env, monkeypatch) -> Non
     result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009", "--yes"])
     assert result.exit_code == 0, result.output
     # The repo received the exact value as a LIKE pattern (not normalised).
-    assert fake.many_calls == [(["R5s260009"], False, False)]
+    assert fake.many_calls == [(["R5s260009"], False)]
     # The to-parse group was printed, plus a "Newly parsed" summary.
     assert "To parse" in result.output
     assert "R5s260009" in result.output
@@ -818,15 +816,11 @@ def test_tdoc_parse_force_passed_through(sqlite_env, monkeypatch) -> None:
         ["tdoc", "parse", "--tdoc", "R5s260009", "--force", "--yes"],
     )
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], True, False)]
+    assert fake.many_calls == [(["R5s260009"], True)]
 
 
-def test_tdoc_parse_full_passed_through(sqlite_env, monkeypatch) -> None:
-    """``--full`` reaches ``extract_many`` so TTCN ``before_change`` /
-    ``after_change`` / ``new_change`` extraction fires for every id in
-    the batch. Locks the wiring that previously silently dropped the
-    flag in the DB-mode path.
-    """
+def test_tdoc_parse_force_reaches_extract_many(sqlite_env, monkeypatch) -> None:
+    """``--force`` reaches ``extract_many`` (every parse runs the full extraction)."""
     runner = CliRunner()
     cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
@@ -836,27 +830,10 @@ def test_tdoc_parse_full_passed_through(sqlite_env, monkeypatch) -> None:
 
     result = runner.invoke(
         app,
-        ["tdoc", "parse", "--tdoc", "R5s260009", "--full", "--yes"],
+        ["tdoc", "parse", "--tdoc", "R5s260009", "--force", "--yes"],
     )
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], False, True)]
-
-
-def test_tdoc_parse_full_and_force_compose(sqlite_env, monkeypatch) -> None:
-    """``--full`` and ``--force`` both reach ``extract_many`` when combined."""
-    runner = CliRunner()
-    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
-    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, set())
-    fake = _FakeCrService(results={"R5s260009": _make_result()})
-    _patch_service(monkeypatch, fake)
-
-    result = runner.invoke(
-        app,
-        ["tdoc", "parse", "--tdoc", "R5s260009", "--full", "--force", "--yes"],
-    )
-    assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], True, True)]
+    assert fake.many_calls == [(["R5s260009"], True)]
 
 
 def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) -> None:
@@ -1118,7 +1095,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
         "uploaded_date": None,
         "exclude_parsed": True,
     }
-    assert fake.many_calls == [(["R5s260009", "R5s260011"], False, False)]
+    assert fake.many_calls == [(["R5s260009", "R5s260011"], False)]
     assert "R5s260009" in result.output
     assert "R5s260011" in result.output
     # Normal mode never renders the already-parsed table.
@@ -1168,7 +1145,7 @@ def test_tdoc_parse_meeting_id_force_re_extracts_parsed(
     )
     assert result.exit_code == 0, result.output
     # force=True was forwarded to extract_many with every CR tdoc id.
-    assert fake.many_calls == [(["R5s260009", "R5s260010"], True, False)]
+    assert fake.many_calls == [(["R5s260009", "R5s260010"], True)]
     # The completion summary reports Re-parsed + Newly parsed correctly.
     assert "Re-parsed (with --force):                  2" in result.output
     assert "Newly parsed:                              0" in result.output
@@ -1677,7 +1654,7 @@ def test_tdoc_parse_accepted_prompt_dispatches(sqlite_env, monkeypatch) -> None:
 
     result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], False, False)]
+    assert fake.many_calls == [(["R5s260009"], False)]
 
 
 def test_tdoc_parse_yes_short_alias_works(sqlite_env, monkeypatch) -> None:
@@ -1921,7 +1898,7 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
     assert result.exit_code == 0, result.output
     # With --force, all three are dispatched; R5s260001 was already
     # parsed (counted as Re-parsed), the other two are Newly parsed.
-    assert fake.many_calls == [(["R5s260001", "R5s260002", "R5s260003"], True, False)]
+    assert fake.many_calls == [(["R5s260001", "R5s260002", "R5s260003"], True)]
     assert "Re-parsed (with --force):                  1" in result.output
     assert "Newly parsed:                              2" in result.output
     assert "Skipped (already parsed before this run): 0" in result.output
@@ -1967,7 +1944,7 @@ def test_tdoc_parse_summary_without_force_dispatches_only_new(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260002"], False, False)]
+    assert fake.many_calls == [(["R5s260002"], False)]
     assert "Skipped (already parsed before this run): 0" in result.output
     assert "Re-parsed (with --force):                  0" in result.output
     assert "Newly parsed:                              1" in result.output
@@ -2223,7 +2200,7 @@ def test_tdoc_parse_max_batch_applies_after_excluding_parsed(
         # and the "To parse" preview contains only pending ids.
         assert result.exit_code == 0, result.output
         assert fake.many_calls == [
-            (["R5s260005", "R5s260004", "R5s260003"], False, False),
+            (["R5s260005", "R5s260004", "R5s260003"], False),
         ]
         to_parse_section = result.output.split("To parse [count=3]:", 1)[1]
         for parsed_id in parsed_ids:
@@ -3585,7 +3562,7 @@ class _RecordingCrService:
         return []
 
     def extract_from_url_batch(
-        self, url: str, *, max_depth: int, force: bool, full: bool,
+        self, url: str, *, max_depth: int, force: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
     ) -> _RecordingBatchResult:
         self.extract_batch_calls.append((url, max_depth))
@@ -3593,7 +3570,7 @@ class _RecordingCrService:
         return _RecordingBatchResult(results=[], failures={})
 
     def extract_from_url(
-        self, url: str, *, force: bool, full: bool,
+        self, url: str, *, force: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
     ) -> _RecordingSingleResult:
         self.extract_url_calls.append(url)

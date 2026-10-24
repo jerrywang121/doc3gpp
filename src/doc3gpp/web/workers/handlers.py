@@ -339,7 +339,6 @@ async def _parse_tdocs(
             "parse_tdocs job requires a 'filter' mapping parameter"
         )
     force = bool(job.params.get("force", False))
-    full = bool(job.params.get("full", False))
     max_batch = job.params.get("max_batch")
     max_batch = int(max_batch) if max_batch is not None else settings.tdoc_parse.max_batch
 
@@ -403,7 +402,6 @@ async def _parse_tdocs(
                 services.tdoc_cr.extract_many,
                 batch,
                 force=force,
-                full=full,
                 is_cancelled=cancel_event.is_set,
             )
             total_successes.update(result.successes)
@@ -415,7 +413,6 @@ async def _parse_tdocs(
                 lambda tdoc_id: services.tdoc_cr.prepare_extract(
                     tdoc_id,
                     force=force,
-                    full=full,
                 ),
                 persist=services.tdoc_cr.persist_prepared_extract,
                 is_complete=lambda value: isinstance(value, (ExtractResult, FamilyExtractResult)),
@@ -460,7 +457,6 @@ async def _parse_tdoc_url(
             f"parse_tdoc_url job requires a valid 3GPP FTP 'url' parameter: {exc}"
         ) from exc
     force = bool(job.params.get("force", False))
-    full = bool(job.params.get("full", False))
     recursive = bool(job.params.get("recursive", False))
     max_depth_param = job.params.get("max_depth")
     if recursive:
@@ -508,7 +504,6 @@ async def _parse_tdoc_url(
                     services.tdoc_cr.extract_from_url,
                     url,
                     force=force,
-                    full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                 )
             except Exception as exc:
@@ -527,7 +522,6 @@ async def _parse_tdoc_url(
                 url,
                 max_depth=max_depth,
                 force=force,
-                full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                 on_progress=progress,
                 is_cancelled=cancel_event.is_set,
@@ -556,7 +550,6 @@ async def _parse_tdoc_url(
             lambda file_url: services.tdoc_cr.prepare_from_url(
                 file_url,
                 force=force,
-                full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes or None,
             ),
             persist=services.tdoc_cr.persist_prepared_url,

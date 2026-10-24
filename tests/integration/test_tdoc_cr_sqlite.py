@@ -1339,7 +1339,6 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
                 tdoc_ids,
                 *,
                 force=False,
-                full=False,
                 on_progress=None,
                 is_cancelled=None,
                 runner=None,

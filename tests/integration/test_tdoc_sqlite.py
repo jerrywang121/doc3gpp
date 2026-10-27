@@ -342,6 +342,7 @@ def test_cli_tdoc_sync_from_meeting_name(monkeypatch, sqlite_env) -> None:
 
     monkeypatch.setattr("doc3gpp.scraping.client.ScraperClient", DummyClient)
     monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", DummyClient)
+    monkeypatch.setattr("doc3gpp.scraping.calendar_source.ScraperClient", DummyClient)
 
     # sync meetings into the DB using the local HTML fixture
     res = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])
@@ -392,6 +393,7 @@ def test_cli_tdoc_sync_from_meeting_id(monkeypatch, sqlite_env) -> None:
 
     monkeypatch.setattr("doc3gpp.scraping.client.ScraperClient", DummyClient)
     monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", DummyClient)
+    monkeypatch.setattr("doc3gpp.scraping.calendar_source.ScraperClient", DummyClient)
 
     # sync meetings into DB
     res = runner.invoke(app, ["meeting", "sync", "--tsg", "r5"])

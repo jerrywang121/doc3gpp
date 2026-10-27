@@ -76,5 +76,6 @@ def test_cover_text_projection_includes_summary_of_change(sqlite_env) -> None:
         )
     )
 
-    text_out = _cover_text(conn=get_engine(), tdoc_id="R5-227476")
+    with get_engine().begin() as conn:
+        text_out = _cover_text(conn=conn, tdoc_id="R5-227476")
     assert "AddUSIMConfigSetter" in text_out

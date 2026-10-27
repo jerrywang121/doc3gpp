@@ -88,7 +88,7 @@ def test_search_after_delete_returns_empty(sqlite_env) -> None:
     assert hits == []
 
 
-def test_stale_only_rebuild_batch_uses_bounded_keyset_queries(sqlite_env) -> None:
+def test_stale_only_rebuild_batch_runs_freshness_query_once(sqlite_env) -> None:
     from sqlalchemy import event
 
     create_schema()
@@ -128,8 +128,7 @@ def test_stale_only_rebuild_batch_uses_bounded_keyset_queries(sqlite_env) -> Non
         ["R5-KEYSET-001", "R5-KEYSET-002"],
         ["R5-KEYSET-003"],
     ]
-    assert len(stale_queries) >= 2
-    assert all("LIMIT" in statement.upper() for statement in stale_queries)
+    assert len(stale_queries) == 1
 
 
 def test_status_reports_row_count(sqlite_env) -> None:

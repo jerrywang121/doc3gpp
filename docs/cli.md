@@ -1741,7 +1741,7 @@ Behavior:
   bootstrap seed).
 - Otherwise `fetch_testcase_zip` → `record_download` (BEFORE
   parsing) → `extract_workbook` → `parse_testcase_workbook` →
-  `upsert_many` → per-TC `replace_statuses` → `record_parsed`.
+  `upsert_many` → one `replace_statuses_many` transaction → `record_parsed`.
 - Progress events mirror `spec sync` via tqdm (`listing →
   downloaded → parsed`, 3 steps) and the CLI echoes
   `outcome.reason`.
@@ -1862,7 +1862,7 @@ Behavior:
 - With `--group`: header via `TestCaseRepository.get(id, group)` +
   status rows via `list_statuses(id, group)` (sorted by `PATH_RANK`).
   Without `--group`: `TestCaseService.get_all(id)` (headers via a
-  `limit=500` exact-id `list` filter + per-header `list_statuses`).
+  `limit=500` exact-id `list` filter + batched `list_statuses_many`).
 - Table/markdown: one header block + status block per group,
   separated by blank lines, mirroring `spec show`. The status
   block columns are `path, gcf_ptcrb, ttcn_status` (no `group` —

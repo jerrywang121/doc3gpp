@@ -219,7 +219,7 @@ change set so the docs stay honest.
   with `token_count` still set is not detected by status; indexing still fails on it.
 - A rebuild started before this change has no persisted snapshot, so its `--resume` takes the newest upload date seen at resume time until the next fresh `--rebuild-embeddings`.
 - **A corrupt content blob is skipped by `tdoc index` rebuilds.** If a stored content
-  row cannot be decoded, `upsert_for_tdoc` logs a warning and the rebuild loop
+  row cannot be decoded, the batch containing it is rolled back and retried one TDoc at a time; `upsert_for_tdoc` logs a warning for that TDoc and the rebuild loop
   continues. The TDoc's old FTS rows remain and its stored hash still matches, so
   `--stale-only` does not retry it; a full `doc3gpp tdoc index --rebuild` is needed.
   Content is written only through the strict repository, so corruption is not expected.

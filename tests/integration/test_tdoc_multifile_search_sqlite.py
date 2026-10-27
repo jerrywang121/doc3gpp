@@ -525,7 +525,7 @@ def test_freshness_plan_is_set_based_and_detects_missing_changed_rows(
     finally:
         event.remove(engine, "before_cursor_execute", _capture_rebuild_query)
     assert rebuild_batches == [[_DOCUMENT_ID], [_OTHER_DOCUMENT_ID]]
-    assert len(rebuild_queries) == 3
+    assert len(rebuild_queries) == 1
     assert len(freshness_queries) == 1
 
     statement, parameters = freshness_queries[0]

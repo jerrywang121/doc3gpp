@@ -158,6 +158,23 @@ class SearchService:
             quiet=self._quiet,
         )
 
+    def _upsert_batch(self, tdoc_ids: list[str]) -> None:
+        """Upsert one rebuild batch in a single transaction.
+
+        If the batch fails, every TDoc is retried on its own so one bad row is
+        logged and skipped rather than aborting the whole batch.
+        """
+        try:
+            self._repo.upsert_many(tdoc_ids)
+        except Exception as exc:  # noqa: BLE001 - optional search index is best-effort
+            logger.warning(
+                "search batch upsert failed for %d tdocs, retrying one by one: %s",
+                len(tdoc_ids),
+                exc,
+            )
+            for tdoc_id in tdoc_ids:
+                self.upsert_for_tdoc(tdoc_id)
+
     def rebuild(
         self,
         batch_size: int,
@@ -194,8 +211,8 @@ class SearchService:
             batch_size=batch_size, after_id=after_id, stale_only=stale_only,
         )
         for batch in batches:
+            self._upsert_batch(batch)
             for tdoc_id in batch:
-                self.upsert_for_tdoc(tdoc_id)
                 processed += 1
                 # Guard against total=0 (shouldn't happen if there
                 # is work, but stay defensive).

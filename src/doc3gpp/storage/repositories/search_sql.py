@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import (
@@ -196,6 +196,24 @@ WITH document_sources AS (
 )
 """
 
+_DELETE_CHUNK_SIZE = 500
+
+
+def _delete_tdoc_rows(conn: Connection, tdoc_ids: Sequence[str]) -> None:
+    """Delete FTS rows for ``tdoc_ids``, one table scan per chunk.
+
+    ``tdoc_id`` is an UNINDEXED FTS5 column, so every DELETE scans the whole
+    table. Batching the ids turns one scan per TDoc into one per chunk.
+    """
+    for start in range(0, len(tdoc_ids), _DELETE_CHUNK_SIZE):
+        chunk = tdoc_ids[start : start + _DELETE_CHUNK_SIZE]
+        placeholders = ", ".join(f":id{index}" for index in range(len(chunk)))
+        conn.execute(
+            text(f"DELETE FROM tdoc_search WHERE tdoc_id IN ({placeholders})"),
+            {f"id{index}": tdoc_id for index, tdoc_id in enumerate(chunk)},
+        )
+
+
 class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     """Concrete :class:`SearchIndexRepository` backed by FTS5."""
 
@@ -211,11 +229,11 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     # ------------------------------------------------------------------
 
     def upsert(self, tdoc_id: str) -> None:
-        index_text = self._build_index_text(tdoc_id)
-        if index_text is None:
-            self.remove(tdoc_id)
+        self.upsert_many((tdoc_id,))
+
+    def upsert_many(self, tdoc_ids: Sequence[str]) -> None:
+        if not tdoc_ids:
             return
-        metadata_text, document_rows = index_text
         insert_row = text(
             """
             INSERT INTO tdoc_search (
@@ -232,59 +250,58 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             """
         )
         with self._engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM tdoc_search WHERE tdoc_id = :id"),
-                {"id": tdoc_id},
-            )
-            metadata_values: dict[str, Any] = {
-                column: "" for column in _SNIPPET_COLUMN_NAMES
-            }
-            metadata_values.update(metadata_text)
-            metadata_values.update(
-                {
-                    "tdoc_id": tdoc_id,
-                    "row_kind": "metadata",
-                    "document_id": None,
-                    "source_file": None,
-                    "extraction_version": None,
-                    "content_hash": None,
-                }
-            )
-            conn.execute(insert_row, metadata_values)
-            for (
-                document_id,
-                source_file,
-                extraction_version,
-                content_hash,
-                content_text,
-            ) in document_rows:
-                document_values: dict[str, Any] = {
+            _delete_tdoc_rows(conn, tdoc_ids)
+            last_uploaded_date: str | None = None
+            for tdoc_id in tdoc_ids:
+                index_text = self._build_index_text(conn, tdoc_id)
+                if index_text is None:
+                    continue
+                metadata_text, document_rows, uploaded_date = index_text
+                metadata_values: dict[str, Any] = {
                     column: "" for column in _SNIPPET_COLUMN_NAMES
                 }
-                document_values.update(
+                metadata_values.update(metadata_text)
+                metadata_values.update(
                     {
                         "tdoc_id": tdoc_id,
-                        "content_text": content_text,
-                        "row_kind": "document",
-                        "document_id": document_id,
-                        "source_file": source_file,
-                        "extraction_version": str(extraction_version),
-                        "content_hash": content_hash,
+                        "row_kind": "metadata",
+                        "document_id": None,
+                        "source_file": None,
+                        "extraction_version": None,
+                        "content_hash": None,
                     }
                 )
-                conn.execute(insert_row, document_values)
+                conn.execute(insert_row, metadata_values)
+                for (
+                    document_id,
+                    source_file,
+                    extraction_version,
+                    content_hash,
+                    content_text,
+                ) in document_rows:
+                    document_values: dict[str, Any] = {
+                        column: "" for column in _SNIPPET_COLUMN_NAMES
+                    }
+                    document_values.update(
+                        {
+                            "tdoc_id": tdoc_id,
+                            "content_text": content_text,
+                            "row_kind": "document",
+                            "document_id": document_id,
+                            "source_file": source_file,
+                            "extraction_version": str(extraction_version),
+                            "content_hash": content_hash,
+                        }
+                    )
+                    conn.execute(insert_row, document_values)
+                last_uploaded_date = uploaded_date or ""
 
+            if last_uploaded_date is None:
+                return
             now_iso = datetime.now(UTC).isoformat(timespec="seconds")
-            uploaded_date = conn.execute(
-                text("SELECT uploaded_date FROM tdocs WHERE tdoc_id = :id"),
-                {"id": tdoc_id},
-            ).scalar()
             for key, value in (
                 ("last_indexed_at", now_iso),
-                (
-                    "last_indexed_uploaded_date",
-                    uploaded_date or "",
-                ),
+                ("last_indexed_uploaded_date", last_uploaded_date),
             ):
                 conn.execute(
                     text(
@@ -555,23 +572,22 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             return
         last_id = after_id if after_id is not None else ""
         if stale_only:
-            sql = (
-                f"{_TDOC_FRESHNESS_CTES_SQL}"
-                " SELECT t.tdoc_id FROM tdocs t"
-                " JOIN stale_tdocs stale ON stale.tdoc_id = t.tdoc_id"
-                " WHERE t.tdoc_id > :last_id"
-                " ORDER BY t.tdoc_id ASC LIMIT :limit"
-            )
-            while True:
-                with self._engine.begin() as conn:
-                    ids = conn.execute(
-                        text(sql),
-                        {"last_id": last_id, "limit": batch_size},
-                    ).scalars().all()
-                if not ids:
-                    return
-                yield ids
-                last_id = ids[-1]
+            # The freshness CTE scans the whole corpus, so take one snapshot per
+            # rebuild and page through it instead of re-running it per batch.
+            with self._engine.begin() as conn:
+                stale_ids = conn.execute(
+                    text(
+                        f"{_TDOC_FRESHNESS_CTES_SQL}"
+                        " SELECT t.tdoc_id FROM tdocs t"
+                        " JOIN stale_tdocs stale ON stale.tdoc_id = t.tdoc_id"
+                        " WHERE t.tdoc_id > :last_id"
+                        " ORDER BY t.tdoc_id ASC"
+                    ),
+                    {"last_id": last_id},
+                ).scalars().all()
+            for start in range(0, len(stale_ids), batch_size):
+                yield list(stale_ids[start : start + batch_size])
+            return
 
         while True:
             with self._engine.begin() as conn:
@@ -700,49 +716,55 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
 
     def _build_index_text(
         self,
+        conn: Connection,
         tdoc_id: str,
-    ) -> tuple[dict[str, str], list[tuple[str, str, int, str, str]]] | None:
-        """Build metadata text and SQL-backed document rows for a TDoc."""
-        with self._engine.begin() as conn:
-            row = conn.execute(
-                text(
-                    """
-                    SELECT t.title, t.ftp_url, t.related_wis,
-                           m.title AS meeting_title,
-                           m.location AS meeting_location
-                      FROM tdocs t
-                      LEFT JOIN meetings m ON t.meeting_id = m.meeting_id
-                     WHERE t.tdoc_id = :id
-                    """
-                ),
-                {"id": tdoc_id},
-            ).first()
-            if row is None:
-                return None
-            document_rows = []
-            for store in TDOC_CONTENT_STORES:
-                orm = CONTENT_ORM_BY_STORE_KEY[store.key]
-                document_rows.extend(
-                    conn.execute(
-                        select(
-                            orm.doc_filename,
-                            orm.document_id,
-                            TDocExtractOrm.extraction_version,
-                            orm.content_hash,
-                            orm.content,
-                        )
-                        .select_from(orm)
-                        .join(TDocExtractOrm, TDocExtractOrm.ftp_url == orm.ftp_url)
-                        .where(TDocExtractOrm.tdoc_id == tdoc_id)
-                        .order_by(orm.ftp_url, orm.doc_filename)
-                    ).all()
-                )
-        title, ftp_url, related_wis, meeting_title, meeting_location = row
+    ) -> (
+        tuple[dict[str, str], list[tuple[str, str, int, str, str]], str | None]
+        | None
+    ):
+        """Build metadata text, SQL-backed document rows, and uploaded date."""
+        row = conn.execute(
+            text(
+                """
+                SELECT t.title, t.ftp_url, t.related_wis, t.uploaded_date,
+                       m.title AS meeting_title,
+                       m.location AS meeting_location
+                  FROM tdocs t
+                  LEFT JOIN meetings m ON t.meeting_id = m.meeting_id
+                 WHERE t.tdoc_id = :id
+                """
+            ),
+            {"id": tdoc_id},
+        ).first()
+        if row is None:
+            return None
+        document_rows = []
+        for store in TDOC_CONTENT_STORES:
+            orm = CONTENT_ORM_BY_STORE_KEY[store.key]
+            document_rows.extend(
+                conn.execute(
+                    select(
+                        orm.doc_filename,
+                        orm.document_id,
+                        TDocExtractOrm.extraction_version,
+                        orm.content_hash,
+                        orm.content,
+                    )
+                    .select_from(orm)
+                    .join(TDocExtractOrm, TDocExtractOrm.ftp_url == orm.ftp_url)
+                    .where(TDocExtractOrm.tdoc_id == tdoc_id)
+                    .order_by(orm.ftp_url, orm.doc_filename)
+                ).all()
+            )
+        (
+            title, ftp_url, related_wis, uploaded_date,
+            meeting_title, meeting_location,
+        ) = row
 
         wis_text = _wis_to_text(related_wis)
-        cover_text = _cover_text(conn=self._engine, tdoc_id=tdoc_id)
-        change_text = _change_text(conn=self._engine, tdoc_id=tdoc_id)
-        ttcn_text = _ttcn_text(conn=self._engine, tdoc_id=tdoc_id)
+        cover_text = _cover_text(conn=conn, tdoc_id=tdoc_id)
+        change_text = _change_text(conn=conn, tdoc_id=tdoc_id)
+        ttcn_text = _ttcn_text(conn=conn, tdoc_id=tdoc_id)
         documents = [
             (
                 document_row.document_id,
@@ -766,7 +788,7 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             "change_text": normalize_query(change_text),
             "ttcn_text": normalize_query(ttcn_text),
         }
-        return metadata_text, documents
+        return metadata_text, documents, uploaded_date
 
 
 def _content_markdown(source_file: str, content: bytes) -> str:
@@ -789,37 +811,35 @@ def _wis_to_text(related_wis: str | None) -> str:
     return " ".join(part.strip() for part in related_wis.split(",") if part.strip())
 
 
-def _cover_text(*, conn: Engine, tdoc_id: str) -> str:
-    with conn.begin() as c:
-        row = c.execute(
-            text(
-                """
-                SELECT spec, cr_num, rev, version, title, source, tsg,
-                       related_wis, date, cr_cat, release,
-                       reason_for_change, consequences_if_not_approved,
-                       summary_of_change,
-                       clauses_affected, other_comments, revision_history,
-                       extracted_tdoc_id
-                  FROM tdoc_cr_cover_page
-                 WHERE tdoc_id = :id
-                """
-            ),
-            {"id": tdoc_id},
-        ).first()
+def _cover_text(*, conn: Connection, tdoc_id: str) -> str:
+    row = conn.execute(
+        text(
+            """
+            SELECT spec, cr_num, rev, version, title, source, tsg,
+                   related_wis, date, cr_cat, release,
+                   reason_for_change, consequences_if_not_approved,
+                   summary_of_change,
+                   clauses_affected, other_comments, revision_history,
+                   extracted_tdoc_id
+              FROM tdoc_cr_cover_page
+             WHERE tdoc_id = :id
+            """
+        ),
+        {"id": tdoc_id},
+    ).first()
     if row is None:
         return ""
     return " ".join(str(v) for v in row if v is not None)
 
 
-def _change_text(*, conn: Engine, tdoc_id: str) -> str:
-    with conn.begin() as c:
-        row = c.execute(
-            text(
-                "SELECT clauses, changes FROM tdoc_cr_change_details "
-                "WHERE tdoc_id = :id"
-            ),
-            {"id": tdoc_id},
-        ).first()
+def _change_text(*, conn: Connection, tdoc_id: str) -> str:
+    row = conn.execute(
+        text(
+            "SELECT clauses, changes FROM tdoc_cr_change_details "
+            "WHERE tdoc_id = :id"
+        ),
+        {"id": tdoc_id},
+    ).first()
     if row is None:
         return ""
     clauses_text = row[0] or ""
@@ -831,19 +851,18 @@ def _change_text(*, conn: Engine, tdoc_id: str) -> str:
     return " ".join(parts)
 
 
-def _ttcn_text(*, conn: Engine, tdoc_id: str) -> str:
-    with conn.begin() as c:
-        row = c.execute(
-            text(
-                """
-                SELECT testcase, ue, ss, ats_version, ttcn_release,
-                       test_suite, required_changes, changed_functions
-                  FROM tdoc_cr_ttcn_details
-                 WHERE tdoc_id = :id
-                """
-            ),
-            {"id": tdoc_id},
-        ).first()
+def _ttcn_text(*, conn: Connection, tdoc_id: str) -> str:
+    row = conn.execute(
+        text(
+            """
+            SELECT testcase, ue, ss, ats_version, ttcn_release,
+                   test_suite, required_changes, changed_functions
+              FROM tdoc_cr_ttcn_details
+             WHERE tdoc_id = :id
+            """
+        ),
+        {"id": tdoc_id},
+    ).first()
     if row is None:
         return ""
     flat = " ".join(str(v) for v in row[:6] if v is not None)

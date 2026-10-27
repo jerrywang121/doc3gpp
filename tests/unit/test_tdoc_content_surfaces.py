@@ -376,6 +376,28 @@ def test_http_complete_markdown_omits_incomplete_header(sqlite_env, web_app) -> 
     assert "x-doc3gpp-extraction-complete" not in response.headers
 
 
+def test_http_html_content_escapes_raw_html(sqlite_env, web_app) -> None:
+    payload = (
+        "# Main body\n\n"
+        "<script>alert('xss')</script>\n\n"
+        "<img src=x onerror=alert(1)>\n\n"
+        "<ins>added</ins>\n\n"
+        "[bad](javascript:alert(1))\n"
+    )
+    main_source = _family_sources()[0][0]
+    _seed_family("R5-260109", "r5/docs/r5-260109.zip", ((main_source, payload),))
+
+    with TestClient(web_app) as client:
+        response = client.get("/tdocs/R5-260109/content?format=html")
+
+    assert response.status_code == 200, response.text
+    assert "<script>alert('xss')</script>" not in response.text
+    assert "<img src=x onerror=" not in response.text
+    assert 'href="javascript:' not in response.text
+    assert "&lt;script&gt;" in response.text
+    assert "<ins>added</ins>" in response.text
+
+
 def test_http_json_matches_mcp_json_bytes(sqlite_env, web_app, mcp_server) -> None:
     tdoc_id = "R5-260108"
     _seed_family(tdoc_id, "r5/docs/r5-260108.zip", _family_sources())

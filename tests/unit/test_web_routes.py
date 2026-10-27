@@ -4327,6 +4327,41 @@ def test_tdoc_show_required_changes_card_for_ttcn(
     assert "<code>mod_a.fn_one</code>" in body
 
 
+def test_tdoc_show_change_block_escapes_raw_html_but_keeps_revision_tags(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """Change-block text is escaped; only literal <ins>/<del> revision markers stay tags."""
+    from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+        SQLAlchemyTDocCrChangeDetailsRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    url = "r5/26.001/r5-260002.zip"
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5-260002", ftp_url=url))
+    SQLAlchemyTDocCrChangeDetailsRepository().upsert(
+        TDocCRChangeDetails(
+            tdoc_id="R5-260002",
+            ftp_url=url,
+            clauses=("5.2.3",),
+            changes=(
+                {
+                    "clauses": ["5.2.3"],
+                    "text": "</code></pre><script>alert(1)</script> <ins>kept</ins>",
+                },
+            ),
+        ),
+    )
+    response = client.get("/tdocs/R5-260002")
+    assert response.status_code == 200
+    body = response.text
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;/code&gt;&lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt;" in body
+    assert "<ins>kept</ins>" in body
+
+
 def test_tdoc_show_extracted_changes_card_for_non_ttcn(
     client: TestClient, sqlite_env: Any,
 ) -> None:

@@ -6,7 +6,7 @@ The review was read-only; the findings below have not been implemented.
 ## Critical
 
 - [ ] **Add HTTP and MCP authentication and authorization.** References: `src/doc3gpp/web/app.py:154-185`, `:224-235`; `src/doc3gpp/web/routes/jobs.py:157-341`, `:454-583`; `src/doc3gpp/cli_server.py:207-265`. Protect corpus reads, job inspection, sync, parse, indexing, cache purge, and cancellation. Treat host/origin checks as transport controls, not identity. Refuse non-loopback binding unless an explicit authentication mechanism is configured. Add tests for unauthenticated and authorized read/mutating requests.
-- [ ] **Prevent stored XSS in cached TDoc content.** References: `src/doc3gpp/web/routes/tdocs.py:86`, `:439-455`; `src/doc3gpp/web/templates/tdoc_content.html:6`. Disable raw HTML in Markdown rendering or sanitize rendered HTML with a strict allowlist before using `safe`. Add a regression test with `<script>` and event-handler payloads.
+- [x] **Prevent stored XSS in cached TDoc content.** References: `src/doc3gpp/web/routes/tdocs.py:86`, `:439-455`; `src/doc3gpp/web/templates/tdoc_content.html:6`. Disable raw HTML in Markdown rendering or sanitize rendered HTML with a strict allowlist before using `safe`. Add a regression test with `<script>` and event-handler payloads. Fixed: the shared Markdown renderer in `web/routes/tdocs.py` now has `html` disabled, with one inline rule that re-allows only the exact `<ins>`/`<del>` revision tags. The `tdoc_show.html` change-block text uses a new `revision_markup` filter in `web/templates_setup.py` (escape, then restore only those four tags) instead of `| safe`. The MCP content renderer shares the same Markdown renderer.
 
 ## Important
 

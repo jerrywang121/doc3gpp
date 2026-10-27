@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -106,7 +107,21 @@ _TDOC_DEFAULT_FIELDS = [
 
 _TDOC_ALLOWED_FIELDS = frozenset(TDOC_COLUMN_LABELS)
 
-_MD_RENDERER = MarkdownIt("commonmark", {"html": True, "linkify": True}).enable("table")
+_MD_RENDERER = MarkdownIt("commonmark", {"html": False, "linkify": True}).enable("table")
+_REVISION_TAG_RE = re.compile(r"</?(?:ins|del)>", re.IGNORECASE)
+
+
+def _revision_tag_rule(state, silent: bool) -> bool:
+    match = _REVISION_TAG_RE.match(state.src, state.pos)
+    if match is None:
+        return False
+    if not silent:
+        state.push("html_inline", "", 0).content = match.group(0)
+    state.pos = match.end()
+    return True
+
+
+_MD_RENDERER.inline.ruler.before("escape", "revision_tag", _revision_tag_rule)
 
 
 def _build_show_repos(

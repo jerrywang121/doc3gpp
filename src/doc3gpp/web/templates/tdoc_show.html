@@ -158,7 +158,7 @@
       {% for block in record.changes.changes %}
         <article class="change-block-entry">
           <h3>Block {{ loop.index }}{% if block.clauses %} · clauses: {{ block.clauses | join(', ') }}{% endif %}</h3>
-          <pre><code class="change-block">{{ block.text | safe }}</code></pre>
+          <pre><code class="change-block">{{ block.text | revision_markup }}</code></pre>
         </article>
       {% endfor %}
     </section>

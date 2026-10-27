@@ -15,9 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.sync import BulkSyncFailure
-from doc3gpp.models.sync import BulkSyncOutcome
-from doc3gpp.models.sync import SyncOutcome
+from doc3gpp.models.sync import BulkSyncFailure, BulkSyncOutcome, SyncOutcome
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.services.tdoc_sync_coordinator import (
@@ -284,8 +282,8 @@ def test_sync_chains_into_tdoc_file_service(monkeypatch) -> None:
         captured["tdoc_ids"] = list(tdoc_ids)
         return 4
 
-    from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_file_service import TDocFileService
+    from doc3gpp.services.tdoc_service import TDocService
 
     monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_tdoc_sync)
     monkeypatch.setattr(TDocFileService, "sync_from_meeting_ftp", fake_file_sync)
@@ -564,8 +562,8 @@ def test_sync_runs_tdoc_list_even_when_meeting_has_no_ftp_url(
         captured["file_sync_ftp_url"] = ftp_url
         return 0
 
-    from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_file_service import TDocFileService
+    from doc3gpp.services.tdoc_service import TDocService
 
     monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_tdoc_sync)
     monkeypatch.setattr(
@@ -603,8 +601,8 @@ def test_sync_for_meeting_name_runs_tdoc_list_even_when_no_ftp_url(
     tdoc_repo = _FakeTDocRepository()
     tdoc_file_repo = _FakeTDocFileRepository()
 
-    from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_file_service import TDocFileService
+    from doc3gpp.services.tdoc_service import TDocService
 
     file_sync_called = {"value": False}
 
@@ -736,8 +734,8 @@ def test_sync_all_tracked_meetings_skips_file_scan_when_no_ftp_url(
         file_sync_called["value"] = True
         return 0
 
-    from doc3gpp.services.tdoc_service import TDocService
     from doc3gpp.services.tdoc_file_service import TDocFileService
+    from doc3gpp.services.tdoc_service import TDocService
 
     monkeypatch.setattr(TDocService, "sync_tdoc_list", fake_tdoc_sync)
     monkeypatch.setattr(

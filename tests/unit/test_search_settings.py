@@ -8,22 +8,36 @@ from pydantic import ValidationError
 from doc3gpp.settings.schema import SearchSettings
 
 
-def test_bm25_weights_default_is_eight_floats() -> None:
-    """``bm25_weights`` defaults to 8 floats matching the 8 FTS5 columns."""
+def test_bm25_weights_default_is_nine_floats() -> None:
+    """The defaults match the nine indexed TDoc FTS5 columns."""
     settings = SearchSettings()
-    assert settings.bm25_weights == (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
-    assert len(settings.bm25_weights) == 8
+    assert settings.bm25_weights == (
+        5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0,
+    )
+    assert len(settings.bm25_weights) == 9
     assert all(isinstance(w, float) for w in settings.bm25_weights)
 
 
 def test_bm25_weights_rejects_wrong_length() -> None:
-    """``bm25_weights`` must have exactly 8 elements (one per FTS5 column)."""
+    """Only legacy eight-entry and current nine-entry tuples are valid."""
     with pytest.raises(ValidationError):
         SearchSettings(bm25_weights=(1.0, 2.0, 3.0))
     with pytest.raises(ValidationError):
         SearchSettings(
-            bm25_weights=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+            bm25_weights=(
+                1.0, 2.0, 3.0, 4.0, 5.0,
+                6.0, 7.0, 8.0, 9.0, 10.0,
+            )
         )
+
+
+
+def test_bm25_weights_normalizes_legacy_eight_entry_value() -> None:
+    weights = (5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0)
+    assert SearchSettings(bm25_weights=weights).bm25_weights == (
+        *weights,
+        1.0,
+    )
 
 
 def test_search_fanout_factor_default_is_4():
@@ -40,6 +54,7 @@ def test_search_fanout_factor_accepts_bounds():
 
 def test_search_fanout_factor_rejects_below_one():
     import pytest
+
     from doc3gpp.settings.schema import SearchSettings
     with pytest.raises(ValueError):
         SearchSettings(search_fanout_factor=0)
@@ -47,6 +62,7 @@ def test_search_fanout_factor_rejects_below_one():
 
 def test_search_fanout_factor_rejects_above_64():
     import pytest
+
     from doc3gpp.settings.schema import SearchSettings
     with pytest.raises(ValueError):
         SearchSettings(search_fanout_factor=65)

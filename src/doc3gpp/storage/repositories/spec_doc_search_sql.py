@@ -45,7 +45,10 @@ from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SPEC_DOC_SNIPPET_COLUMNS
 from doc3gpp.storage.db.fts5_query import normalize_query
 from doc3gpp.storage.db.session import get_specdata_engine
-from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
+from doc3gpp.storage.repositories.spec_doc_sql import (
+    SQLAlchemySpecDocRepository,
+    decode_chunk_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,8 +284,8 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
         ]
         sql = [
             "SELECT spec_doc_search.chunk_id,",
-            "       bm25(spec_doc_search, :w0, :w1, :w2, :w3, :w4, :w5)"
-            " AS score,",
+            ("       bm25(spec_doc_search, :w0, :w1, :w2, :w3, :w4, :w5)"
+            " AS score,"),
         ]
         params: dict[str, Any] = {
             "query": match_expr,
@@ -302,8 +305,8 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
             "       c.sections, c.tables,",
             "       c.chunk_index, c.text",
             "  FROM spec_doc_search",
-            "  JOIN spec_doc_chunks c"
-            "    ON c.chunk_id = spec_doc_search.chunk_id",
+            ("  JOIN spec_doc_chunks c"
+            "    ON c.chunk_id = spec_doc_search.chunk_id"),
             " WHERE spec_doc_search MATCH :query",
         ])
         for attr, column, param in (
@@ -348,7 +351,7 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
                     sections=row[base + 3],
                     tables=row[base + 4],
                     chunk_index=int(row[base + 5]),
-                    text=row[base + 6],
+                    text=decode_chunk_text(row[0], row[base + 6]),
                     score=row[1],
                     previews=previews,
                 )

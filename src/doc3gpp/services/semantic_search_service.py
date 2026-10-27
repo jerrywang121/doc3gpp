@@ -23,17 +23,69 @@ from __future__ import annotations
 import dataclasses
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from doc3gpp.cli_filters import SearchQueryBuilder
 from doc3gpp.models.search import (
-    RebuildProgress, SearchFilters, SearchHit, SearchIndexStatus,
+    RebuildProgress,
+    SearchFilters,
+    SearchHit,
+    SearchIndexStatus,
 )
-from doc3gpp.models.semantic_search import SemanticSearchHit
-from doc3gpp.services.embedding.chunker import _chunks
+from doc3gpp.models.semantic_search import (
+    EmbeddedChunk,
+    SemanticDocumentHit,
+    SemanticSearchHit,
+    parse_content_chunk_id,
+)
+from doc3gpp.services.embedding.chunker import _chunks, plan_content_chunks
 from doc3gpp.services.search_service import SearchService
-from doc3gpp.storage.repositories.vector_sql import _build_embed_text
 
 logger = logging.getLogger(__name__)
+
+# sqlite-vec rejects a knn ``k`` above this, so the distinct-TDoc widening stops here.
+_KNN_MAX_K = 4096
+
+
+@dataclass(slots=True)
+class _VecTdoc:
+    """Best knn evidence for one TDoc: its 0-based rank, best chunk, and content documents."""
+
+    rank: int
+    best_chunk_id: str
+    distance: float
+    documents: dict[str, SemanticDocumentHit] = field(default_factory=dict)
+
+    def document_hits(self) -> tuple[SemanticDocumentHit, ...]:
+        return tuple(sorted(self.documents.values(), key=lambda h: (h.distance, h.document_id)))
+
+
+def _group_vec_hits(vec_hits: list[tuple[str, str, int, float]]) -> dict[str, _VecTdoc]:
+    """Group knn rows per TDoc, keeping the closest chunk and the best chunk per document.
+
+    ``rank`` is the 0-based position of the TDoc among distinct tdoc_ids in knn
+    order, so sibling chunks of one TDoc do not push other TDocs down the ranking.
+    """
+    grouped: dict[str, _VecTdoc] = {}
+    for tdoc_id, chunk_id, _chunk_idx, dist in vec_hits:
+        entry = grouped.get(tdoc_id)
+        if entry is None:
+            entry = grouped[tdoc_id] = _VecTdoc(
+                rank=len(grouped), best_chunk_id=chunk_id, distance=dist,
+            )
+        elif dist < entry.distance:
+            entry.best_chunk_id, entry.distance = chunk_id, dist
+        signature = parse_content_chunk_id(chunk_id)
+        if signature is None:
+            continue
+        document_id = signature[0]
+        previous = entry.documents.get(document_id)
+        if previous is None or dist < previous.distance:
+            entry.documents[document_id] = SemanticDocumentHit(
+                document_id=document_id, chunk_id=chunk_id, distance=dist,
+            )
+    return grouped
 
 
 def rrf_merge(
@@ -54,22 +106,20 @@ def rrf_merge(
     A tdoc_id present in only one side contributes 0 from the other
     side's rank. ``hit`` is ``None`` for vector-only tdogs; the
     service synthesizes a minimal :class:`SearchHit` from the JOIN
-    before returning to the CLI.
+    before returning to the CLI. ``document_hits`` carries the best
+    chunk of each content document from the vector side.
     """
+    # FTS5 hits are grouped by parent TDoc; keep the original hit intact so
+    # its matched_documents provenance survives fusion unchanged.
     fts5_rank: dict[str, int] = {h.tdoc_id: i for i, h in enumerate(fts5_hits)}
     fts5_by_id: dict[str, SearchHit] = {h.tdoc_id: h for h in fts5_hits}
-    # Reduce vec chunks to min distance per tdoc_id, preserving chunk rank
-    vec_best: dict[str, tuple[int, str, float]] = {}  # tdoc_id -> (rank, best_chunk_id, min_dist)
-    for rank, (tdoc_id, chunk_id, _chunk_idx, dist) in enumerate(vec_hits):
-        prev = vec_best.get(tdoc_id)
-        if prev is None or dist < prev[2]:
-            vec_best[tdoc_id] = (rank, chunk_id, dist)
+    vec_best = _group_vec_hits(vec_hits)
     all_ids = set(fts5_rank) | set(vec_best)
     scored: list[SemanticSearchHit] = []
     for tdoc_id in all_ids:
         r_fts = fts5_rank.get(tdoc_id)
-        r_vec_tup = vec_best.get(tdoc_id)
-        r_vec = r_vec_tup[0] if r_vec_tup is not None else None
+        vec_entry = vec_best.get(tdoc_id)
+        r_vec = vec_entry.rank if vec_entry is not None else None
         w = vector_weight
         fts5_term = (1.0 / (k + r_fts)) * (1.0 - w) if r_fts is not None else 0.0
         vec_term = (1.0 / (k + r_vec)) * w if r_vec is not None else 0.0
@@ -80,8 +130,9 @@ def rrf_merge(
             hit=fts5_by_id.get(tdoc_id),  # None for vector-only
             rank_fts5=r_fts,
             rank_vec=r_vec,
-            min_chunk_distance=r_vec_tup[2] if r_vec_tup else None,
-            best_chunk_id=r_vec_tup[1] if r_vec_tup else None,
+            min_chunk_distance=vec_entry.distance if vec_entry else None,
+            best_chunk_id=vec_entry.best_chunk_id if vec_entry else None,
+            document_hits=vec_entry.document_hits() if vec_entry else (),
         ))
     scored.sort(key=lambda h: h.rrf_score, reverse=True)
     return scored[:limit]
@@ -147,23 +198,24 @@ class SemanticSearchService:
         """
         query_vec = self._embedder.encode([query])[0]
         if fts5_query is None:
-            vec_hits = self._vec.knn(query_vec, limit=limit, filters=filters)
-            if not vec_hits:
+            grouped = self._distinct_tdoc_knn(query_vec, limit=limit, filters=filters)
+            if not grouped:
                 return []
-            # Rank vec hits by distance, dress as SemanticSearchHit with
+            # Rank TDocs by their closest chunk, dress as SemanticSearchHit with
             # rank_fts5=None, rrf_score=-distance. Same DTO so the CLI
             # renderer branches uniformly between the two paths.
             hits = [
                 SemanticSearchHit(
                     tdoc_id=tdoc_id,
-                    rrf_score=-distance,
+                    rrf_score=-entry.distance,
                     rank_fts5=None,
-                    rank_vec=rank,
-                    min_chunk_distance=distance,
-                    best_chunk_id=chunk_id,
+                    rank_vec=entry.rank,
+                    min_chunk_distance=entry.distance,
+                    best_chunk_id=entry.best_chunk_id,
                     hit=None,  # populated below
+                    document_hits=entry.document_hits(),
                 )
-                for rank, (tdoc_id, chunk_id, _idx, distance) in enumerate(vec_hits)
+                for tdoc_id, entry in grouped.items()
             ]
             hits.sort(key=lambda h: h.rrf_score, reverse=True)  # least-negative = best
             hits = hits[:limit]
@@ -171,7 +223,7 @@ class SemanticSearchService:
 
         fts5_expr = SearchQueryBuilder(fts5_query).build()
         fanout = self._settings.semantic_search.fanout_multiplier
-        internal_limit = max(limit * fanout, 0)
+        internal_limit = min(max(limit * fanout, 0), _KNN_MAX_K)
         fts5_filters = SearchFilters(
             tsg=filters.tsg, meeting=filters.meeting,
             meeting_id=filters.meeting_id, tdoc_id=filters.tdoc_id,
@@ -180,7 +232,7 @@ class SemanticSearchService:
             limit=internal_limit,
         )
         fts5_hits = self._fts5.search(fts5_expr, fts5_filters)
-        vec_hits = self._vec.knn(query_vec, limit=internal_limit, filters=filters)
+        vec_hits = self._distinct_tdoc_rows(query_vec, limit=limit, filters=filters)
         merged = rrf_merge(
             fts5_hits, vec_hits,
             k=self._settings.semantic_search.rrf_k,
@@ -188,6 +240,44 @@ class SemanticSearchService:
             limit=limit,
         )
         return self._populate_metadata_stubs(merged)
+
+    def _distinct_tdoc_knn(
+        self,
+        query_vec,
+        *,
+        limit: int,
+        filters: SearchFilters,
+    ) -> dict[str, _VecTdoc]:
+        """Group the distinct-TDoc knn window per TDoc (see :meth:`_distinct_tdoc_rows`)."""
+        return _group_vec_hits(self._distinct_tdoc_rows(query_vec, limit=limit, filters=filters))
+
+    def _distinct_tdoc_rows(
+        self,
+        query_vec,
+        *,
+        limit: int,
+        filters: SearchFilters,
+    ) -> list[tuple[str, str, int, float]]:
+        """Return the knn rows of up to ``limit`` distinct TDocs, in knn order.
+
+        The knn limit counts chunk rows, so one TDoc with many near chunks can use
+        every slot. The knn gets only the pushed filters (tdoc, TSG, meeting id, and
+        date range), which vec0 applies before ``k``, so each window is exact. LIKE
+        filters (meeting, release, spec) run on the window through
+        ``matching_tdoc_ids``. Fetch ``limit * fanout_multiplier`` rows, keep the
+        TDocs that pass ``filters``, and double the window while fewer than ``limit``
+        distinct TDocs were kept. The window is exhausted when it returns fewer rows
+        than requested.
+        """
+        pushed = dataclasses.replace(filters, meeting=None, release=None, spec=None)
+        fetch = min(max(limit * self._settings.semantic_search.fanout_multiplier, limit), _KNN_MAX_K)
+        while True:
+            window = self._vec.knn(query_vec, limit=fetch, filters=pushed)
+            allowed = self._vec.matching_tdoc_ids({row[0] for row in window}, filters)
+            kept = [row for row in window if row[0] in allowed]
+            if len({row[0] for row in kept}) >= limit or len(window) < fetch or fetch >= _KNN_MAX_K:
+                return kept
+            fetch = min(fetch * 2, _KNN_MAX_K)
 
     def _populate_metadata_stubs(
         self,
@@ -219,27 +309,45 @@ class SemanticSearchService:
 
 
     def index_for_tdoc(self, tdoc_id: str) -> None:
-        embed_text = _build_embed_text(tdoc_id)
+        embed_text = self._vec.embed_text_for_tdoc(tdoc_id)
         if embed_text is None:
             self._vec.remove_for_tdoc(tdoc_id)
             return
-        chunks = _chunks(
-            embed_text,
-            self._settings.semantic_search.chunk_size,
-            self._settings.semantic_search.chunk_overlap,
-        )
-        max_chunks = getattr(self._settings.semantic_search, "max_chunks_per_tdoc", 8)
-        if len(chunks) > max_chunks:
-            chunks = chunks[:max_chunks]
-        if not chunks:
+        semantic = self._settings.semantic_search
+        metadata_texts = _chunks(embed_text, semantic.chunk_size, semantic.chunk_overlap)
+        max_chunks = getattr(semantic, "max_chunks_per_tdoc", 8)
+        metadata_texts = metadata_texts[:max_chunks]
+        content = list(plan_content_chunks(
+            self._vec.content_documents_for_tdoc(tdoc_id),
+            semantic.chunk_size,
+            semantic.chunk_overlap,
+            semantic.max_content_chunks_per_tdoc,
+        ))
+        texts = [
+            *metadata_texts,
+            *(chunk for _document_id, _content_hash, chunks in content for chunk in chunks),
+        ]
+        if not texts:
             self._vec.remove_for_tdoc(tdoc_id)
             return
         # Batch all chunks for one TDoc into a single embedder call.
         # The remote embeddings API charges per request, so calling
         # encode() per chunk would be O(chunks) HTTP round-trips per TDoc.
-        embeddings_array = self._embedder.encode(chunks)
-        embeddings = [embeddings_array[i] for i in range(len(chunks))]
-        self._vec.upsert_chunks(tdoc_id, embeddings)
+        embeddings = self._embedder.encode(texts)
+        labelled = [
+            EmbeddedChunk(chunk_id=f"{tdoc_id}#{i}", chunk_index=i, embedding=embeddings[i])
+            for i in range(len(metadata_texts))
+        ]
+        position = len(metadata_texts)
+        for document_id, content_hash, chunks in content:
+            for i in range(len(chunks)):
+                labelled.append(EmbeddedChunk(
+                    chunk_id=f"{tdoc_id}#{document_id}#{content_hash}#{i}",
+                    chunk_index=i,
+                    embedding=embeddings[position],
+                ))
+                position += 1
+        self._vec.upsert_chunks(tdoc_id, labelled)
 
     def remove_for_tdoc(self, tdoc_id: str) -> None:
         self._vec.remove_for_tdoc(tdoc_id)
@@ -268,11 +376,23 @@ class SemanticSearchService:
         ``embedding_model`` in ``vec_meta`` first — the vec0 dim is a
         schema-level property fixed at ``CREATE VIRTUAL TABLE`` time,
         so a dim change needs a fresh table rather than in-place
-        row writes. The resume path instead fails fast when the
-        live embedder's dim/model no longer matches the stored
-        values (no silent cross-model mixing). Duck-typed embedders
-        without a ``model_name`` attribute (e.g. test doubles) stamp
-        / check dim only.
+        row writes. The exception is ``stale_only=True``: when the
+        table exists at the live dim and model, its rows are kept and
+        only stale TDocs are re-embedded (each upsert replaces that
+        TDoc's own rows). Any other reset re-embeds every TDoc. The
+        resume path instead fails fast when the live embedder's
+        dim/model no longer matches the stored values (no silent
+        cross-model mixing). Duck-typed embedders without a
+        ``model_name`` attribute (e.g. test doubles) stamp / check
+        dim only.
+
+        A completed rebuild stamps ``last_rebuild_at`` and the
+        ``MAX(uploaded_date)`` snapshot taken before the first batch of the
+        fresh run, so a TDoc uploaded during the rebuild stays stale. A resume
+        with a cursor stamps the snapshot that fresh run persisted. A resume
+        without a cursor takes a new maximum, because it re-embeds every TDoc
+        present at resume time. An interrupted rebuild is not stamped, and a
+        full reset clears the old stamps.
         """
         model = getattr(self._embedder, "model_name", None)
         live_dim = getattr(self._embedder, "dim", None)
@@ -280,12 +400,36 @@ class SemanticSearchService:
             if hasattr(self._vec, "verify_compatible") and live_dim is not None:
                 self._vec.verify_compatible(live_dim, model)
             after_id = self._vec.get_resume_cursor()
+            if after_id is None:
+                latest = (
+                    self._vec.latest_uploaded_date()
+                    if hasattr(self._vec, "latest_uploaded_date") else None
+                )
+            else:
+                latest = (
+                    self._vec.get_resume_snapshot()
+                    if hasattr(self._vec, "get_resume_snapshot") else None
+                )
         else:
             # Force a fresh start regardless of any stale cursor.
             self._vec.clear_resume_cursor()
             if hasattr(self._vec, "reset_for_rebuild") and live_dim is not None:
-                self._vec.reset_for_rebuild(live_dim, model)
+                keep = (
+                    stale_only
+                    and hasattr(self._vec, "keeps_index")
+                    and self._vec.keeps_index(live_dim, model)
+                )
+                if not keep:
+                    self._vec.reset_for_rebuild(live_dim, model)
+                    # The reset empties the table, so every TDoc must be re-embedded.
+                    stale_only = False
             after_id = None
+            latest = (
+                self._vec.latest_uploaded_date()
+                if hasattr(self._vec, "latest_uploaded_date") else None
+            )
+            if hasattr(self._vec, "set_resume_snapshot"):
+                self._vec.set_resume_snapshot(latest)
         total = self._vec.count_tdocs_to_index(
             stale_only=stale_only, after_id=after_id,
         )
@@ -315,6 +459,10 @@ class SemanticSearchService:
                     )
                     last_yielded_pct = pct
             self._vec.set_resume_cursor(batch[-1])
+        if hasattr(self._vec, "mark_rebuilt"):
+            self._vec.mark_rebuilt(
+                latest, datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
 
     def status(self) -> SearchIndexStatus:
         return self._vec.status()

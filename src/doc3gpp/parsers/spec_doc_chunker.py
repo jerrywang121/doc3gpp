@@ -1,8 +1,8 @@
 """Pure block-to-chunk splitter with atomic table-row handling."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
 
 from doc3gpp.models.spec_doc import ChunkDraft
 from doc3gpp.parsers.docx_converter import (
@@ -87,7 +87,7 @@ def chunk_blocks(blocks: list[Block], chunk_size: int = 512, chunk_overlap: int 
             ))
         elif isinstance(b, ParagraphBlock):
             tables: tuple[str, ...] = ()
-            caption_no, caption_title = _split_table_caption(b.text)
+            caption_no, _caption_title = _split_table_caption(b.text)
             if caption_no is not None:
                 for adjacent_index in (block_index - 1, block_index + 1):
                     if 0 <= adjacent_index < len(blocks):

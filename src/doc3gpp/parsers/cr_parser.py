@@ -7,7 +7,9 @@ to work without changes:
 
 * :func:`parse_cr_details` — top-level entry point.
 * :func:`extract_docx_from_zip` — pulls a single ``(filename, bytes)``
-  pair out of a CR zip.
+  pair out of a CR zip using the shared safe member-metadata selector.
+* :func:`enumerate_docx_members` and the identity/archive helpers — enumerate
+  supported members and build/read source-aware Markdown ZIP artifacts.
 * :func:`derive_tech_from_spec` — derives a 5G/LTE/etc. label from a
   spec number.
 * :class:`CRHeaderMissingError` — raised when the input lacks the
@@ -22,6 +24,10 @@ to work without changes:
 from __future__ import annotations
 
 from doc3gpp.models.tdoc_cr import TDocCRParseResult
+from doc3gpp.parsers.cr.header import (
+    _TDOC_HEADER_PATTERN,
+    CRHeaderMissingError,
+)
 from doc3gpp.parsers.cr.helpers import (
     _COVER_FIELDS,
     _collapse_whitespace,
@@ -30,11 +36,16 @@ from doc3gpp.parsers.cr.helpers import (
     derive_tech_from_spec,
     extract_docx_from_zip,
 )
-from doc3gpp.parsers.cr.header import (
-    CRHeaderMissingError,
-    _TDOC_HEADER_PATTERN,
-)
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
+from doc3gpp.parsers.tdoc_zip import (
+    TDocZipLimitError,
+    TDocZipValidationError,
+    build_markdown_archive,
+    document_id_for,
+    enumerate_docx_members,
+    ephemeral_document_id_for,
+    read_markdown_archive,
+)
 
 
 def parse_cr_details(
@@ -42,7 +53,6 @@ def parse_cr_details(
     *,
     tdoc_id: str,
     max_text_length: int = 0,
-    full: bool = False,
 ) -> TDocCRParseResult:
     """Parse a CR markdown body into a :class:`TDocCRParseResult`.
 
@@ -59,18 +69,24 @@ def parse_cr_details(
         markdown,
         tdoc_id=tdoc_id,
         max_text_length=max_text_length,
-        full=full,
     )
 
 
 __all__ = [
-    "CRHeaderMissingError",
     "_COVER_FIELDS",
     "_TDOC_HEADER_PATTERN",
+    "CRHeaderMissingError",
+    "TDocZipLimitError",
+    "TDocZipValidationError",
     "_collapse_whitespace",
     "_remove_markdown_formatting",
     "_search_pattern_in_lines",
+    "build_markdown_archive",
     "derive_tech_from_spec",
+    "document_id_for",
+    "enumerate_docx_members",
+    "ephemeral_document_id_for",
     "extract_docx_from_zip",
     "parse_cr_details",
+    "read_markdown_archive",
 ]

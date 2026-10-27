@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import threading
 import time
 from datetime import datetime, timezone
@@ -6,6 +7,8 @@ from types import SimpleNamespace
 
 from doc3gpp.models.jobs import Job, JobKind, JobStatus
 from doc3gpp.models.tdoc_cr import DirectParseResult
+from doc3gpp.models.tdoc_document import TDocDocument
+from doc3gpp.parsers.tdoc_zip import ephemeral_document_id_for
 from doc3gpp.services.tdoc_cr_service import TDocNotYetOnFTPError, TDocTooLargeError
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.workers.handlers import _parse_tdoc_url, _parse_tdocs
@@ -43,6 +46,34 @@ def _url_job(url: str) -> Job:
         created_at=datetime.now(timezone.utc),
         started_at=None,
         finished_at=None,
+    )
+
+
+def _direct_result(file_url: str, tdoc_id: str) -> DirectParseResult:
+    source_file = f"{tdoc_id}.docx"
+    markdown = ""
+    document_id = ephemeral_document_id_for(
+        hashlib.sha256(file_url.encode("utf-8")).hexdigest(), source_file
+    )
+    document = TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=f"documents/{document_id}/{tdoc_id}.md",
+        file_order=0,
+        markdown_text=markdown,
+        content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    )
+    return DirectParseResult(
+        source_kind="url-3gpp",
+        documents=(document,),
+        main_source_file=source_file,
+        details=None,
+        extract_meta=None,
+        from_cache=False,
+        persisted=True,
+        tdoc_id=tdoc_id,
+        tdoc_id_in_tdocs=True,
+        source_url=file_url,
     )
 
 
@@ -167,17 +198,8 @@ def test_parse_tdoc_url_folder_prepares_in_parallel_and_preserves_discovery_orde
         time.sleep(0.01)
         with lock:
             active_writes -= 1
-        return DirectParseResult(
-            source_kind="url-3gpp",
-            markdown="",
-            details=None,
-            extract_meta=None,
-            from_cache=False,
-            persisted=True,
-            tdoc_id=file_url.rsplit("/", 1)[-1].removesuffix(".zip"),
-            tdoc_id_in_tdocs=True,
-            source_url=file_url,
-        )
+        tdoc_id = file_url.rsplit("/", 1)[-1].removesuffix(".zip")
+        return _direct_result(file_url, tdoc_id)
 
     pipeline = PipelineRuntime(prepare_workers=2)
     services = SimpleNamespace(
@@ -223,17 +245,7 @@ def test_parse_tdoc_url_single_file_uses_one_item_runner_contract():
 
     def persist(value):
         persisted.append(value)
-        return DirectParseResult(
-            source_kind="url-3gpp",
-            markdown="",
-            details=None,
-            extract_meta=None,
-            from_cache=False,
-            persisted=True,
-            tdoc_id="RP-2601234",
-            tdoc_id_in_tdocs=True,
-            source_url=value,
-        )
+        return _direct_result(value, "RP-2601234")
 
     pipeline = PipelineRuntime(prepare_workers=1)
     services = SimpleNamespace(
@@ -263,11 +275,23 @@ def test_parse_tdoc_url_single_file_uses_one_item_runner_contract():
     assert persisted == [file_url]
     assert result["requested"] == 1
     assert result["successes"] == 1
+    source_file = "RP-2601234.docx"
+    expected_document_id = ephemeral_document_id_for(
+        hashlib.sha256(file_url.encode("utf-8")).hexdigest(), source_file
+    )
     assert result["files"] == [
         {
             "tdoc_id": "RP-2601234",
             "ftp_url": file_url,
             "status": "ok",
+            "main_source_file": source_file,
+            "documents": [
+                {
+                    "document_id": expected_document_id,
+                    "source_file": source_file,
+                    "file_order": 0,
+                },
+            ],
         }
     ]
 
@@ -557,7 +581,7 @@ def _store_backed_service(*, hold_first_prepare: bool = False):
 def test_extract_many_duplicate_repeat_sees_first_persist_with_parallel_runner():
     from doc3gpp.services.tdoc_pipeline import TDocPipeline
 
-    service, calls, persists = _store_backed_service(hold_first_prepare=True)
+    service, _calls, persists = _store_backed_service(hold_first_prepare=True)
     runtime = PipelineRuntime(prepare_workers=2)
     messages: list[str] = []
     try:
@@ -581,7 +605,7 @@ def test_extract_many_duplicate_repeat_sees_first_persist_with_parallel_runner()
 def test_extract_many_duplicate_force_reparses_repeat_and_keeps_source_order():
     from doc3gpp.services.tdoc_pipeline import TDocPipeline
 
-    service, calls, persists = _store_backed_service()
+    service, _calls, persists = _store_backed_service()
     runtime = PipelineRuntime(prepare_workers=2)
     try:
         batch = service.extract_many(
@@ -634,3 +658,48 @@ def test_shutdown_waits_for_blocked_submitted_writer_and_write_completes():
 
     assert future.result(timeout=1) == "A"
     assert log == ["write-done", "shutdown-returned"]
+
+
+def test_parse_tdocs_family_cache_hit_is_success_without_persist():
+    from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
+    from doc3gpp.services.tdoc_family_service import FamilyExtractResult
+
+    wid = next(store for store in TDOC_CONTENT_STORES if store.key == "wid")
+    cached = FamilyExtractResult(
+        tdoc_id="R5-000002",
+        store=wid,
+        extract_meta=None,
+        documents=(),
+        skipped_sources=(),
+        from_cache=True,
+    )
+    persisted: list[object] = []
+
+    def prepare(tdoc_id, **_kwargs):
+        return cached
+
+    def persist(prepared):
+        persisted.append(prepared)
+        return prepared
+
+    pipeline = PipelineRuntime(prepare_workers=1)
+    services = _gated_runtime_services(pipeline, ["R5-000002"], prepare, persist)
+
+    async def run():
+        return await _parse_tdocs(
+            _job(),
+            services,
+            Settings(),
+            progress=lambda *_a, **_k: None,
+            cancel_event=asyncio.Event(),
+        )
+
+    try:
+        result = asyncio.run(run())
+    finally:
+        pipeline.shutdown()
+
+    assert persisted == []
+    assert result["successes"] == 1
+    assert result["failures"] == 0
+    assert result["skipped"] == 0

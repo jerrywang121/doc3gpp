@@ -38,7 +38,7 @@ def _wb_bytes() -> bytes:
 
 def test_parse_workbook():
     from doc3gpp.parsers.testcase_parser import parse_testcase_workbook
-    cases, statuses, notes = parse_testcase_workbook(_wb_bytes())
+    cases, statuses, _notes = parse_testcase_workbook(_wb_bytes())
     by_id = {c.testcase_id: c for c in cases}
     assert by_id["TC_1"].spec == "38.523-1"
     assert by_id["TC_9"].spec == "34.229-1"

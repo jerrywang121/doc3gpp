@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from doc3gpp.services.spec_doc_semantic_service import SpecDocSemanticService
     from doc3gpp.services.spec_doc_service import SpecDocService
     from doc3gpp.services.spec_service import SpecService
+    from doc3gpp.services.tdoc_content_service import TDocContentService
     from doc3gpp.services.tdoc_cr_service import TDocCrService
     from doc3gpp.services.tdoc_index_service import TDocIndexService
     from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
@@ -182,6 +183,7 @@ class ServiceContainer:
     tdoc_index: TDocIndexService | None = None
     spec_doc_index: SpecDocIndexService | None = None
     pipeline: PipelineRuntime | None = None
+    tdoc_content: TDocContentService | None = None
 
 
 @dataclass(slots=True)

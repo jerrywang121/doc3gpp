@@ -10,8 +10,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from doc3gpp.storage.db.testcase_base import TestCaseBase
 from doc3gpp.storage.db import models as m  # noqa: F401
+from doc3gpp.storage.db.testcase_base import TestCaseBase
 
 
 @pytest.fixture()
@@ -84,6 +84,7 @@ def test_replace_statuses_cleans_stale_paths(session_factory) -> None:
 
 def test_sources_ledger(session_factory) -> None:
     from datetime import datetime, timezone
+
     from doc3gpp.models.testcase import TestCaseSource
     from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
     repo = SQLAlchemyTestCaseRepository(session_factory)

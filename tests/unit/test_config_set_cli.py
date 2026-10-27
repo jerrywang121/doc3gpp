@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import logging
 import os
-import tomllib
 from pathlib import Path
 
 import pytest
+import tomllib
 from typer.testing import CliRunner
 
 from doc3gpp.cli import _configure_logging, app
@@ -30,7 +30,6 @@ from doc3gpp.settings.config_source import (
 )
 from doc3gpp.settings.config_writer import read_toml
 from doc3gpp.settings.loader import get_settings
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

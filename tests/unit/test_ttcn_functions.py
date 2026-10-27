@@ -27,7 +27,6 @@ from doc3gpp.parsers.cr.ttcn_functions import (
     extract_module_basename,
 )
 
-
 # ---------------------------------------------------------------------------
 # extract_module_basename
 # ---------------------------------------------------------------------------
@@ -60,7 +59,7 @@ def test_extract_module_basename_windows_path() -> None:
 
 
 def test_extract_module_basename_without_extension() -> None:
-    """The ``(?:\.ttcn)?`` segment is optional — bare basenames without
+    r"""The ``(?:\.ttcn)?`` segment is optional — bare basenames without
     an extension still resolve to the rightmost alphanumeric run."""
     assert extract_module_basename("POS/NR5GC_Functions") == "NR5GC_Functions"
 

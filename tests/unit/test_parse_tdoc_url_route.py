@@ -62,7 +62,6 @@ def test_post_parse_tdoc_url_happy_path(client: Any) -> None:
             "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5_Radio/TSGR5_99/Docs/",
             "max_depth": 2,
             "force": False,
-            "full": False,
         },
     )
     assert r.status_code == 202

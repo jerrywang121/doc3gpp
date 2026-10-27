@@ -71,6 +71,7 @@ def test_output_compact_toml_override_false_explicit(
 
 def test_sync_settings_default_spec_interval() -> None:
     from datetime import timedelta
+
     from doc3gpp.settings.schema import Settings
     s = Settings()
     assert s.sync.spec_sync_interval == timedelta(hours=24)

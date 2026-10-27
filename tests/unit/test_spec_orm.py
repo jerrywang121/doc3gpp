@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, inspect
 
-from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db import models as m  # noqa: F401 - registers metadata
+from doc3gpp.storage.db.base import Base
 
 
 def test_spec_tables_created() -> None:

@@ -16,7 +16,6 @@ from sqlalchemy import text
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
-
 EXPECTED_TDOC_INDEXES = {
     "idx_tdocs_release_spec",
     "idx_tdocs_uploaded_date",

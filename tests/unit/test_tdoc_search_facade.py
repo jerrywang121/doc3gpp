@@ -5,14 +5,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from doc3gpp.models.search import SearchFilters, SearchHit, SearchUnavailableError
+from doc3gpp.models.search import (
+    MatchedDocument,
+    SearchFilters,
+    SearchHit,
+    SearchUnavailableError,
+)
 from doc3gpp.models.semantic_search import (
+    SemanticDocumentHit,
     SemanticSearchHit,
     SemanticSearchUnavailableError,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.unified_search import SearchMode, TDocSearchResult
 from doc3gpp.services.tdoc_search_facade import TDocSearchFacade
+from doc3gpp.storage.db.migrate import create_schema
 
 
 class RecordingFts:
@@ -42,17 +49,52 @@ class RecordingSemantic:
 
 
 class RecordingSource:
-    def __init__(self, rows: list[TDocWithMeeting]) -> None:
+    def __init__(
+        self,
+        rows: list[TDocWithMeeting],
+        documents: dict[str, tuple[str, str]] | None = None,
+    ) -> None:
         self.rows = rows
+        self.documents = documents or {}
         self.calls: list[SearchFilters] = []
+        self.document_source_calls: list[frozenset[str]] = []
 
     def list_for_search(self, filters: SearchFilters) -> list[TDocWithMeeting]:
         self.calls.append(filters)
         return self.rows
 
+    def document_sources_by_id(
+        self, document_ids: frozenset[str],
+    ) -> dict[str, tuple[str, str]]:
+        self.document_source_calls.append(frozenset(document_ids))
+        return {
+            document_id: self.documents[document_id]
+            for document_id in document_ids
+            if document_id in self.documents
+        }
+
 
 def _settings(weight: float = 0.35) -> SimpleNamespace:
     return SimpleNamespace(semantic_search=SimpleNamespace(fts5_weight=weight))
+
+
+def _matched_documents() -> tuple[MatchedDocument, ...]:
+    return (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="docs/main.docx",
+            score=-4.2,
+            previews={"content_text": "<<handover>> procedure"},
+        ),
+        MatchedDocument(
+            document_id="doc-appendix",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="support/appendix.docx",
+            score=-2.1,
+            previews={"content_text": "<<handover>> appendix"},
+        ),
+    )
 
 
 def _search_hit() -> SearchHit:
@@ -68,6 +110,7 @@ def _search_hit() -> SearchHit:
         wis="WI-1",
         type="CR",
         status="Agreed",
+        matched_documents=_matched_documents(),
     )
 
 
@@ -123,6 +166,7 @@ def test_fts5_search_normalizes_and_flattens_with_snippet_override() -> None:
             type="CR",
             status="Agreed",
             best_chunk_id=None,
+            matched_documents=_matched_documents(),
         )
     ]
 
@@ -164,6 +208,7 @@ def test_semantic_search_uses_semantic_query_and_distance_score() -> None:
             best_chunk_id="R5-000001#0",
         )
     ]
+    assert results[0].matched_documents == ()
 
 
 def test_hybrid_search_passes_both_queries_and_maps_rrf_score() -> None:
@@ -202,8 +247,73 @@ def test_hybrid_search_passes_both_queries_and_maps_rrf_score() -> None:
             type="CR",
             status="Agreed",
             best_chunk_id="R5-000001#0",
+            matched_documents=_matched_documents(),
         )
     ]
+
+
+def test_vector_only_hybrid_hit_serializes_empty_matched_documents() -> None:
+    from dataclasses import replace
+
+    from doc3gpp.models.unified_search import tdoc_search_result_to_dict
+
+    vector_only_hit = SemanticSearchHit(
+        tdoc_id="R5-000001",
+        rrf_score=0.31,
+        hit=replace(_search_hit(), matched_documents=()),
+        rank_fts5=None,
+        rank_vec=0,
+        min_chunk_distance=0.12,
+        best_chunk_id="R5-000001#0",
+    )
+    facade = _facade(
+        fts=RecordingFts(),
+        semantic=RecordingSemantic([vector_only_hit]),
+    )
+
+    results = facade.search(
+        text="no FTS hit",
+        semantic="vector match",
+        filters=SearchFilters(limit=1),
+    )
+
+    assert tdoc_search_result_to_dict(results[0])["matched_documents"] == []
+
+
+def test_chunk_hit_provenance_resolves_through_source_repository(sqlite_env) -> None:
+    create_schema()
+    chunk_id = "R5-000001#doc-main#hash-main#0"
+    semantic = RecordingSemantic([
+        SemanticSearchHit(
+            tdoc_id="R5-000001",
+            rrf_score=0.25,
+            hit=_search_hit(),
+            min_chunk_distance=0.1,
+            best_chunk_id=chunk_id,
+            document_hits=(
+                SemanticDocumentHit(
+                    document_id="doc-main", chunk_id=chunk_id, distance=0.1,
+                ),
+            ),
+        ),
+    ])
+    source = RecordingSource(
+        [], documents={"doc-main": ("ran/doc.zip", "docs/main.docx")},
+    )
+    facade = _facade(fts=None, semantic=semantic, source=source)
+
+    results = facade.search(text=None, semantic="meaning", filters=SearchFilters(limit=3))
+
+    assert source.document_source_calls == [frozenset({"doc-main"})]
+    assert results[0].matched_documents == (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="ran/doc.zip",
+            source_file="docs/main.docx",
+            score=0.1,
+            previews={},
+        ),
+    )
 
 
 def test_filter_search_only_reads_source_repository() -> None:
@@ -235,6 +345,7 @@ def test_filter_search_only_reads_source_repository() -> None:
     assert results[0].tsg == "RAN"
     assert results[0].wis == "WI-2"
     assert results[0].best_chunk_id is None
+    assert results[0].matched_documents == ()
 
 
 @pytest.mark.parametrize(

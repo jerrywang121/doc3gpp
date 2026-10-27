@@ -11,6 +11,7 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from doc3gpp.models.search import SearchFilters
+from doc3gpp.storage.compression import compress_json
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.search_sql import (
@@ -87,22 +88,111 @@ def test_search_after_delete_returns_empty(sqlite_env) -> None:
     assert hits == []
 
 
+def test_stale_only_rebuild_batch_uses_bounded_keyset_queries(sqlite_env) -> None:
+    from sqlalchemy import event
+
+    create_schema()
+    repo = SQLAlchemySearchIndexRepository()
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO tdocs (tdoc_id, title, ftp_url, type) "
+                "VALUES (:tdoc_id, :title, :ftp_url, 'CR')"
+            ),
+            [
+                {
+                    "tdoc_id": f"R5-KEYSET-{index:03d}",
+                    "title": f"TDoc {index}",
+                    "ftp_url": f"archive/{index}.zip",
+                }
+                for index in range(1, 4)
+            ],
+        )
+
+    stale_queries: list[str] = []
+
+    def record_stale_query(
+        _conn, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if "stale_tdocs" in statement.lower():
+            stale_queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_stale_query)
+    try:
+        batches = list(repo.rebuild_batch(2, after_id=None, stale_only=True))
+    finally:
+        event.remove(engine, "before_cursor_execute", record_stale_query)
+
+    assert batches == [
+        ["R5-KEYSET-001", "R5-KEYSET-002"],
+        ["R5-KEYSET-003"],
+    ]
+    assert len(stale_queries) >= 2
+    assert all("LIMIT" in statement.upper() for statement in stale_queries)
+
+
 def test_status_reports_row_count(sqlite_env) -> None:
-    """Status row_count matches the number of upserts."""
+    """Status row_count counts logical TDocs rather than FTS source rows."""
     create_schema()
     repo = SQLAlchemySearchIndexRepository()
     engine = get_engine()
     seeded_ids = [f"R5-{1000000 + i}" for i in range(3)]
-    for tdoc_id in seeded_ids:
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        for tdoc_id in seeded_ids:
             conn.execute(
                 text(
-                    f"INSERT INTO tdocs (tdoc_id, title, ftp_url, type) "
-                    f"VALUES ('{tdoc_id}', 'doc', "
-                    f"'https://www.3gpp.org/ftp/{tdoc_id}.zip', 'CR')"
-                )
+                    "INSERT INTO tdocs (tdoc_id, title, ftp_url, type) "
+                    "VALUES (:tdoc_id, 'doc', :ftp_url, 'CR')"
+                ),
+                {
+                    "tdoc_id": tdoc_id,
+                    "ftp_url": f"https://www.3gpp.org/ftp/{tdoc_id}.zip",
+                },
             )
+        extraction_url = "archive/R5-1000000.zip"
+        conn.execute(
+            text(
+                """
+                INSERT INTO tdoc_extracts (
+                    ftp_url, tdoc_id, cache_file, doc_filename, parser_version,
+                    extraction_version, document_count
+                ) VALUES (
+                    :ftp_url, :tdoc_id, 'R5-1000000.zip', 'main.docx', '1.0.0', 1, 2
+                )
+                """
+            ),
+            {"ftp_url": extraction_url, "tdoc_id": seeded_ids[0]},
+        )
+        for index, content in enumerate(("alpha support", "beta support")):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tdoc_cr_annexes (
+                        ftp_url, doc_filename, document_id, tdoc_id, content,
+                        content_hash
+                    ) VALUES (
+                        :ftp_url, :doc_filename, :document_id, :tdoc_id,
+                        :content, :content_hash
+                    )
+                    """
+                ),
+                {
+                    "document_id": str(index + 1) * 64,
+                    "ftp_url": extraction_url,
+                    "doc_filename": f"support/{index}.docx",
+                    "tdoc_id": seeded_ids[0],
+                    "content": compress_json(content),
+                    "content_hash": "a" * 64,
+                },
+            )
+    for tdoc_id in seeded_ids:
         repo.upsert(tdoc_id)
     status = repo.status()
+    with engine.begin() as conn:
+        physical_count = conn.execute(
+            text("SELECT COUNT(*) FROM tdoc_search")
+        ).scalar_one()
     assert status.row_count == 3
+    assert physical_count == 5
     assert status.enabled is True

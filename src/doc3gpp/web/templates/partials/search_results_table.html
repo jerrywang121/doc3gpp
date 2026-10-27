@@ -6,7 +6,7 @@
         <th>Title</th>
         <th>Meeting</th>
         <th>TSG</th>
-        <th>Mode</th><th>Score</th>
+        <th>Mode</th><th>Score</th><th>Matched sources</th>
       </tr>
     </thead>
     <tbody>
@@ -18,10 +18,17 @@
           <td>{{ hit.tsg or '-' }}</td>
           <td>{{ hit.search_mode.value }}</td>
           <td>{{ '%.4f' | format(hit.score) if hit.score is not none else '-' }}</td>
+          <td>
+            {% if hit.matched_documents %}
+              {% for document in hit.matched_documents %}
+                <a href="/tdocs/by-url/content?ftp_url={{ document.ftp_url | urlencode }}&amp;source_file={{ document.source_file | urlencode }}">{{ document.source_file }}</a>{% if not loop.last %}<br>{% endif %}
+              {% endfor %}
+            {% else %}-{% endif %}
+          </td>
         </tr>
         {% if hit.previews is not none and hit.previews %}
           <tr class="preview-row">
-            <td colspan="6">
+            <td colspan="7">
               <details class="hit-details">
                 <summary>Matching fields</summary>
                 {% for col, snippet in hit.previews.items() %}

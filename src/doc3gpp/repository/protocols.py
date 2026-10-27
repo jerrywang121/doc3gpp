@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
@@ -16,6 +16,7 @@ from doc3gpp.models.search import (
     SearchIndexStatus,
     TDocMeta,
 )
+from doc3gpp.models.semantic_search import EmbeddedChunk
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
@@ -26,12 +27,14 @@ from doc3gpp.models.spec_doc import (
     SpecDocToc,
 )
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_content_families import TDocContentStore
 from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.testcase import TestCase, TestCaseSource, TestCaseStatus
 from doc3gpp.models.tsg import Tsg
@@ -109,6 +112,8 @@ class TDocRepository(Protocol):
         abstract: str | None = None,
         secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
+        eligible_types: Sequence[str] | None = None,
+        parsed: bool | None = None,
     ) -> list[TDoc]:
         """Return a list of recent TDoc records with optional filters.
 
@@ -149,11 +154,22 @@ class TDocRepository(Protocol):
           column above. Powers the matching CLI flags on
           ``tdoc list`` and the matching query parameters on the
           web ``/tdocs`` route / MCP ``list_tdocs``.
-        - ``exclude_parsed``: when ``True``, drop every TDoc whose
-          ``tdoc_id`` already has a row in ``tdoc_cr_cover_page`` —
-          applied in SQL *before* ``ORDER BY ... OFFSET ... LIMIT`` so
-          the limit reflects the un-parsed candidate set. Default
-          ``False`` keeps the raw match set.
+        - ``eligible_types``: keep rows whose casefolded, stripped
+          ``tdocs.type`` is one of the given values. ``None`` means no
+          filter. Applied in SQL before pagination.
+        - ``parsed``: ``True`` keeps complete extractions and ``False``
+          keeps incomplete ones, including TDocs never extracted. ``None``
+          means no filter. Completeness follows the rule for the content
+          store of the stored extraction: a CR needs a v2 parent, a cover
+          row, and as many annex rows as ``document_count`` with no annex
+          named like the main; a family needs a v2 parent with
+          ``document_count > 0``, as many content rows as
+          ``document_count``, and the main row. Both need no skipped
+          sources. Applied in SQL before pagination.
+        - ``exclude_parsed``: when ``True``, drop complete extractions;
+          equivalent to ``parsed=False``. Applied in SQL before pagination
+          so the limit reflects the un-parsed candidate set. Default
+          ``False`` keeps raw matches.
 
         Pagination:
         - ``offset``: rows to skip before applying ``limit``. Combined
@@ -214,15 +230,18 @@ class TDocRepository(Protocol):
         abstract: str | None = None,
         secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
+        eligible_types: Sequence[str] | None = None,
+        parsed: bool | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its meeting's display name.
 
         Equivalent to ``list(...)`` plus a ``meetings`` lookup to populate
         ``meeting_name``. Suitable for CLI / export code paths that surface
         the meeting name alongside TDoc fields. Accepts the same filters
-        and pagination as :meth:`list` (including ``exclude_parsed`` and
-        the ``ls_to`` / ``ls_cc`` / ``original_ls`` / ``tdoc_for`` /
-        ``abstract`` / ``secretary_remarks`` rich-filter grammar).
+        and pagination as :meth:`list` (including ``exclude_parsed``,
+        ``eligible_types``, ``parsed``, and the ``ls_to`` / ``ls_cc`` /
+        ``original_ls`` / ``tdoc_for`` / ``abstract`` /
+        ``secretary_remarks`` rich-filter grammar).
         """
         ...
 
@@ -232,6 +251,16 @@ class TDocRepository(Protocol):
         This is the direct SQL path for filter-only search. It applies the
         same rich text/date filter grammar as the indexed search paths but
         does not read or initialize an FTS5 index.
+        """
+        ...
+
+    def document_sources_by_id(
+        self, document_ids: Collection[str],
+    ) -> dict[str, tuple[str, str]]:
+        """Map stored content ``document_id`` values to ``(ftp_url, source_file)``.
+
+        Unknown IDs are omitted. Search uses this to attach source provenance
+        to chunk hits.
         """
         ...
 
@@ -603,10 +632,9 @@ class TDocCrDetailRepository(Protocol):
 
     Owns the cover-page fields extracted from a CR document. The
     companion ``tdoc_extracts`` table (cache paths + provenance) is still
-    queried through this repository for read convenience, but writes are
-    split into a separate :meth:`upsert_extract_meta` method so the
-    service layer can persist cover-page rows, TTCN sidecars, and
-    extract metadata independently.
+    queried through this repository for read convenience. Legacy single-table
+    writes remain available, while atomic cover/sidecar/document replacement is
+    owned by :class:`TDocContentRepository`.
 
     Identity is the immutable download ``url`` — 3GPP zip assets are
     byte-for-byte identical for the lifetime of a URL, while the logical
@@ -664,6 +692,56 @@ class TDocCrDetailRepository(Protocol):
         ...
 
 
+class TDocContentRepository(Protocol):
+    """Atomic persistence and URL-keyed reads for per-type TDoc content rows.
+
+    ``store`` selects one content table from ``TDOC_CONTENT_STORES``. Both
+    replace methods are atomic and clear the URL's rows from every content
+    table. The CR main document is never stored in SQL.
+    """
+
+    def get_extract_meta(self, ftp_url: str) -> TDocExtractMeta | None:
+        """Return the ``tdoc_extracts`` parent row for an immutable ``ftp_url``."""
+        ...
+
+    def replace_cr_bundle(
+        self,
+        details: TDocCRDetails,
+        ttcn: TDocCRTTCNDetails | None,
+        changes: TDocCRChangeDetails | None,
+        meta: TDocExtractMeta,
+        annexes: Sequence[TDocDocument],
+    ) -> None:
+        """Atomically replace a CR's sidecars, parent row, and annex rows."""
+        ...
+
+    def replace_family_bundle(
+        self,
+        store: TDocContentStore,
+        meta: TDocExtractMeta,
+        documents: Sequence[TDocDocument],
+    ) -> None:
+        """Atomically replace the parent and content rows; ``documents[0]`` is the main."""
+        ...
+
+    def list_documents(
+        self,
+        store: TDocContentStore,
+        ftp_url: str,
+    ) -> tuple[TDocDocument, ...]:
+        """Return one URL's documents from ``store`` in derived file order."""
+        ...
+
+    def get_document(
+        self,
+        store: TDocContentStore,
+        ftp_url: str,
+        source_file: str,
+    ) -> TDocDocument | None:
+        """Return one exact source member from an immutable ZIP URL."""
+        ...
+
+
 class TDocCrTTCNDetailRepository(Protocol):
     """Storage operations for the TTCN sidecar (one row per immutable ftp_url)."""
 
@@ -695,9 +773,10 @@ class TDocCrChangeDetailsRepository(Protocol):
 class SearchIndexRepository(Protocol):
     """FTS5-backed search index for ``tdocs``.
 
-    All write paths are idempotent (``INSERT OR REPLACE`` /
-    ``DELETE``). The repository owns the JOIN between the FTS5
-    virtual table and the ``tdocs`` / ``meetings`` rows so callers
+    All write paths are idempotent. Upsert atomically replaces a parent's
+    metadata and complete document row set; remove deletes all rows for it.
+    The repository owns the JOIN between the FTS5 virtual table and the
+    ``tdocs`` / ``meetings`` rows so callers
     never need to know that index rows are projections rather than
     copies of the source data.
 
@@ -709,41 +788,32 @@ class SearchIndexRepository(Protocol):
     """
 
     def upsert(self, tdoc_id: str) -> None:
-        """Rebuild the FTS5 row for ``tdoc_id`` from the joined tables.
+        """Atomically replace the metadata and document FTS rows for a TDoc.
 
-        Idempotent: a re-upsert of the same ``tdoc_id`` replaces the
-        existing row in place. Decompresses the gzip JSON blobs in
-        Python (sqlite has no ``gzip()`` SQL builtin) and inserts the
-        concatenated text into every FTS5 column.
-
-        ``tdoc_id`` is the user-facing string (e.g. ``"R5-1234567"``)
-        — NOT the sqlite-internal rowid int — so the FTS5 row
-        identity stays stable across full ``--rebuild`` cycles
-        (FTS5 rowids get re-allocated on each ``DELETE+INSERT``).
+        The metadata row is rebuilt from the existing TDoc/meeting/CR inputs;
+        document rows are rebuilt from all current SQL document children across
+        the TDoc's stored extraction URLs. The user-facing TDoc ID is the stable
+        grouping identity; physical FTS rowids are not part of the contract.
         """
         ...
 
     def remove(self, tdoc_id: str) -> None:
-        """Delete the FTS5 row for ``tdoc_id``. No-op if absent."""
+        """Delete all metadata and document FTS rows for one TDoc."""
         ...
 
     def search(
         self, query: str, filters: SearchFilters,
         snippet_tokens: int | None = None,
     ) -> list[SearchHit]:
-        """Run an FTS5 ``MATCH`` + filters + ``bm25()`` scoring.
+        """Match physical rows, then return one grouped hit per TDoc.
 
-        Returns at most ``filters.limit`` hits, ordered by score
-        ascending (lower = better in FTS5). Filters apply as
-        additional ``AND`` clauses on the joined ``tdocs`` /
-        ``meetings`` tables.
+        FTS expressions match one metadata or document row at a time. Parent
+        scores use the best matching row, and parent pagination is applied
+        before loading all matching document sources. Document provenance and
+        source-specific previews are returned through SearchHit.matched_documents.
 
-        ``snippet_tokens`` is an optional per-call override for the
-        configured ``Settings.search.snippet_tokens`` knob. When
-        ``None`` the cached setting value is used; the CLI's
-        ``--snippet-tokens`` flag forwards the user-supplied value
-        so a single invocation can retune the preview length
-        without mutating the config.
+        The optional snippet_tokens value overrides the configured snippet
+        length for this call without mutating settings.
         """
         ...
 
@@ -753,26 +823,24 @@ class SearchIndexRepository(Protocol):
         after_id: str | None,
         stale_only: bool,
     ) -> Iterable[list[str]]:
-        """Yield batches of ``tdoc_id`` strings for the rebuild loop.
+        """Yield logical TDoc IDs for the rebuild loop.
 
-        ``stale_only=True`` returns only rows whose
-        ``tdocs.uploaded_date > last_indexed_uploaded_date``; the
-        default (``False``) returns every ``tdoc_id``. ``after_id``
-        sets the cursor — rows with ``tdoc_id > after_id`` are
-        returned so resume picks up where the previous crash left
-        off. The comparison is the natural TEXT order on
-        ``tdocs.tdoc_id`` (e.g. ``"R5-1234567"`` < ``"R5-1234568"``).
-        The caller (``SearchService``) iterates the batches and
-        invokes :meth:`upsert` per id.
+        stale_only selects parents whose indexed upload date or complete set of
+        SQL document IDs, hashes, extraction versions, or counts is stale.
+        after_id keeps the resume cursor in natural TDoc-ID order. Each yielded
+        parent is upserted with its complete metadata and document row set.
         """
         ...
 
-    def count_tdocs_to_index(self, stale_only: bool) -> int:
-        """Return how many rows the next rebuild will process.
+    def count_tdocs_to_index(
+        self,
+        stale_only: bool,
+        after_id: str | None = None,
+    ) -> int:
+        """Count logical TDocs the next rebuild will process.
 
-        The CLI prints this total up-front so operators can size the
-        rebuild. ``stale_only=True`` matches :meth:`rebuild_batch`'s
-        filtering.
+        stale_only uses the same date and SQL document-completeness checks as
+        rebuild_batch. The optional parent cursor matches the resume scope.
         """
         ...
 
@@ -803,14 +871,11 @@ class SearchIndexRepository(Protocol):
         ...
 
     def status(self) -> SearchIndexStatus:
-        """Return a :class:`SearchIndexStatus` snapshot for ``tdoc index``.
+        """Return logical row count and freshness for the FTS5 index.
 
-        Reads ``tdoc_search_meta`` + ``COUNT(*)`` from the FTS5 table
-        + ``MAX(uploaded_date)`` from ``tdocs`` to compute
-        ``is_stale``. ``enabled`` reflects whether the repo was
-        constructed without raising :class:`SearchUnavailableError`
-        — the service layer translates a missing service into
-        ``enabled=False``.
+        Freshness includes the existing upload-date check plus source document
+        IDs, hashes, extraction versions, and expected counts. row_count counts
+        distinct parent TDocs, not their physical FTS metadata/document rows.
         """
         ...
 
@@ -884,7 +949,9 @@ class VectorIndexRepository(Protocol):
     """sqlite-vec backed vector index for ``tdocs``.
 
     All write paths are idempotent (``DELETE`` + ``INSERT``). One
-    ``tdoc_id`` maps to N chunk rows (``chunk_id = "{tdoc_id}#{i}"``).
+    ``tdoc_id`` maps to N chunk rows. Metadata chunks use
+    ``chunk_id = "{tdoc_id}#{i}"``; content chunks use
+    ``"{tdoc_id}#{document_id}#{content_hash}#{i}"``.
     Implementations are dialect-aware: on sqlite with sqlite-vec
     enabled everything works; on non-sqlite or sqlite-vec-less builds
     every method raises :class:`VectorIndexUnavailableError`. The
@@ -892,12 +959,31 @@ class VectorIndexRepository(Protocol):
     ``None`` so callers can degrade gracefully.
     """
 
-    def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None:
-        """Replace all chunk rows for ``tdoc_id`` with the new embeddings.
+    def upsert_chunks(self, tdoc_id: str, chunks: Sequence[EmbeddedChunk]) -> None:
+        """Replace all chunk rows for ``tdoc_id`` with the labelled chunks.
 
-        Deletes existing chunks for ``tdoc_id`` then inserts the new
-        chunk rows in a single transaction. ``chunk_id`` is
-        ``f"{tdoc_id}#{i}"`` for ``i`` in ``range(len(embeddings))``.
+        Deletes existing chunks for ``tdoc_id`` then inserts one row per
+        chunk in a single transaction, keeping each chunk's ``chunk_id``.
+        """
+        ...
+
+    def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
+        """Return ``(document_id, content_hash)`` pairs of indexed content chunks.
+
+        Keyed by ``tdoc_id``. Metadata chunks contribute nothing, and a TDoc
+        with no content chunks is absent from the mapping.
+        """
+        ...
+
+    def embed_text_for_tdoc(self, tdoc_id: str) -> str | None:
+        """Return the metadata embed text for ``tdoc_id``, or ``None`` when it is absent."""
+        ...
+
+    def content_documents_for_tdoc(self, tdoc_id: str) -> list[tuple[str, str, str]]:
+        """Return ``(document_id, content_hash, markdown)`` for each stored content document.
+
+        Documents come back in indexing order. A TDoc with no content rows
+        returns an empty list.
         """
         ...
 
@@ -911,9 +997,23 @@ class VectorIndexRepository(Protocol):
     ) -> list[tuple[str, str, int, float]]:
         """KNN by cosine distance; returns ``(tdoc_id, chunk_id, chunk_index, distance)``.
 
-        Joins to ``tdocs`` / ``meetings`` for filters. ``limit`` caps
-        the chunk count (NOT the tdoc count — the service reduces
-        chunks to tdocs via ``min(distance)``).
+        Metadata filters (``tdoc_id``, ``tsg``, ``meeting_id``, ``since``/``until``)
+        run inside the vec0 scan before ``limit``, so the window is exact. A
+        filtered call excludes meetingless TDocs. LIKE filters (``meeting``,
+        ``release``, ``spec``) join ``tdocs``/``meetings`` and apply after the
+        window. ``limit`` caps the chunk count (NOT the tdoc count — the service
+        reduces chunks to tdocs via ``min(distance)``).
+        """
+        ...
+
+    def matching_tdoc_ids(
+        self, tdoc_ids: Collection[str], filters: SearchFilters,
+    ) -> frozenset[str]:
+        """Return the subset of ``tdoc_ids`` whose TDoc passes ``filters``.
+
+        Applies the same predicates as the filtered :meth:`knn` path, so a
+        TDoc without a meeting does not match. Empty ``tdoc_ids`` returns an
+        empty frozenset without a query.
         """
         ...
 
@@ -930,6 +1030,26 @@ class VectorIndexRepository(Protocol):
     def set_resume_cursor(self, tdoc_id: str) -> None: ...
 
     def clear_resume_cursor(self) -> None: ...
+
+    def set_resume_snapshot(self, latest_uploaded_date: str | None) -> None:
+        """Persist the fresh run's pre-rebuild ``MAX(uploaded_date)`` snapshot."""
+        ...
+
+    def get_resume_snapshot(self) -> str | None:
+        """Return the snapshot a resumed rebuild stamps: the persisted value, else the current MAX."""
+        ...
+
+    def latest_uploaded_date(self) -> str | None:
+        """Return the raw ``MAX(tdocs.uploaded_date)``, or ``None`` for an empty corpus."""
+        ...
+
+    def mark_rebuilt(self, latest_uploaded_date: str | None, rebuilt_at: str) -> None:
+        """Stamp a completed rebuild: ``last_rebuild_at`` and the pre-rebuild snapshot.
+
+        ``latest_uploaded_date`` is the value :meth:`latest_uploaded_date` returned
+        before the rebuild began; ``None`` clears ``last_indexed_uploaded_date``.
+        """
+        ...
 
     def status(self) -> SearchIndexStatus: ...
 
@@ -1201,6 +1321,10 @@ class SpecDocVectorRepository(Protocol):
 
     def verify_compatible(self, dim: int, model: str | None) -> None:
         """Raise on live-vs-stored dim/model mismatch without writing."""
+        ...
+
+    def keeps_index(self, dim: int, model: str | None) -> bool:
+        """Return True when the existing vector table matches ``dim`` and ``model``."""
         ...
 
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:

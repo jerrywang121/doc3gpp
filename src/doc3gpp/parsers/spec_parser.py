@@ -347,12 +347,12 @@ def extract_cr_tdocs(html: str) -> list[str]:
 
 __all__ = [
     "SpecHeaderFields",
+    "extract_cr_tdocs",
+    "extract_etsi_pdf_url",
+    "normalise_release",
     "normalise_tsg_long_name",
     "parse_dynareport_header",
-    "parse_spec_list",
     "parse_spec_detail",
-    "extract_etsi_pdf_url",
-    "extract_cr_tdocs",
-    "normalise_release",
+    "parse_spec_list",
     "release_from_version",
 ]

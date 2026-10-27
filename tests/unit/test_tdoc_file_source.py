@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 from doc3gpp.models.tdoc_file import (
-    TDocFileTypeRevision,
     TDocFileTypeReview,
+    TDocFileTypeRevision,
     TDocFileTypeSupport,
 )
 from doc3gpp.scraping.ftp_source import fetch_tdoc_files_from_meeting_ftp

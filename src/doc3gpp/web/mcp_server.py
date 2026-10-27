@@ -49,11 +49,11 @@ from doc3gpp.web.errors import (
     MeetingNotFoundError,
     SettingsDisabledError,
     SpecNotFoundError,
-    TDocNotFoundError,
     TDocUrlNotFoundError,
     TestcaseNotFoundError,
     TSGNotFoundError,
     map_mcp_error,
+    map_tdoc_content_error,
 )
 from doc3gpp.web.filters import parse_date_query, parse_text_query
 
@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from doc3gpp.web.state import WebState
 
 _MEETING_FIELDS = ["meeting_id", "name", "location", "start_date", "end_date", "ftp_url", "start_doc", "end_doc"]
-_TDOC_FIELDS = ["tdoc_id", "meeting_name", "title", "source", "type", "status", "cr_cat", "spec", "version", "related_wis"]
+_TDOC_FIELDS = ["tdoc_id", "meeting_name", "title", "source", "type", "status", "cr_cat", "spec", "version", "related_wis", "parsed"]
 _TSG_FIELDS = ["tsg_name", "short_name", "description"]
 _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
 _SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs", "parsed"]
@@ -179,8 +179,8 @@ def _enqueue(state: WebState, kind: JobKind, params: dict[str, Any], message: st
 def _validate_search_pagination(
     *, limit: int, offset: int = 0, snippet_tokens: int | None = None
 ) -> None:
-    if not 1 <= limit <= 200:
-        raise InvalidFilterError("limit must be between 1 and 200")
+    if not 1 <= limit <= 150:
+        raise InvalidFilterError("limit must be between 1 and 150")
     if offset < 0:
         raise InvalidFilterError("offset must be non-negative")
     if snippet_tokens is not None and not 1 <= snippet_tokens <= 64:
@@ -268,6 +268,10 @@ def build_mcp_server(state: WebState) -> MCPServer:
         website_url="https://github.com/jerrywang121/doc3gpp",
     )
     services = state.services
+    if services.tdoc_content is None:
+        from doc3gpp.services.factory import build_tdoc_content_service
+
+        services.tdoc_content = build_tdoc_content_service(settings=state.settings)
 
     # ---- Meetings -------------------------------------------------
     @server.tool(name="list_meetings", description="List meetings, optionally filtered by TSG, name, location or year. The tsg, name and location filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. name='%handover%' matches any name containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
@@ -299,7 +303,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
         return _to_json({"meeting": render.to_jsonable(meeting)})
 
     # ---- TDocs ----------------------------------------------------
-    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, ls_to, ls_cc, original_ls, tdoc_for, abstract, secretary_remarks, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly.")
+    @server.tool(name="list_tdocs", description="List TDocs, optionally filtered by any tdoc field. meeting_id is an exact numeric match on the parent meeting id (see list_meetings). The tdoc_id, meeting, title, source, spec, wi, release, version, cr_num, cr_pack, ls_to, ls_cc, original_ls, tdoc_for, abstract, secretary_remarks, status, cr_cat, tdoc_type and revision_of/revised_to filters support Rich filter patterns: SQL LIKE patterns: use % as a wildcard (e.g. title='%handover%' matches any title containing 'handover'); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability. A plain value with no wildcard still matches exactly. The parsed filter keeps complete (true) or incomplete (false) extractions.")
     @_mcp_error_guard
     def list_tdocs(
         limit: Annotated[int, Field(description="Maximum number of tdocs to return.")] = 50,
@@ -326,6 +330,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
         tdoc_for: Annotated[str | None, Field(description="Rich filter on tdoc_for.")] = None,
         abstract: Annotated[str | None, Field(description="Rich filter on abstract.")] = None,
         secretary_remarks: Annotated[str | None, Field(description="Rich filter on secretary_remarks.")] = None,
+        parsed: Annotated[bool | None, Field(description="Filter by complete extraction state: true keeps parsed TDocs, false keeps the rest.")] = None,
     ) -> str:
         rows = services.tdoc.list_recent_with_meeting(
             limit=limit,
@@ -352,6 +357,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
             tdoc_for=tdoc_for,
             abstract=abstract,
             secretary_remarks=secretary_remarks,
+            parsed=parsed,
         )
         return _to_json(render.tdoc_rows(rows, _TDOC_FIELDS))
 
@@ -441,41 +447,99 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
         return _to_json(render.to_jsonable(record))
 
-    @server.tool(name="get_tdoc_content", description="Return the cached markdown body for a tdoc id.")
+    @server.tool(
+        name="get_tdoc_content",
+        description="Return all or one stored Markdown source for a TDoc ID or ZIP URL.",
+    )
     @_mcp_error_guard
     def get_tdoc_content(
-        tdoc_id: Annotated[str, Field(description="Canonical tdoc id (e.g. 'R5-260013').")],
-        format: Annotated[str, Field(description="Output format: 'markdown' (default) or 'html'.")] = "markdown",
+        tdoc_id: Annotated[
+            str | None,
+            Field(description="Canonical TDoc id (for example, 'R5-260013')."),
+        ] = None,
+        ftp_url: Annotated[
+            str | None,
+            Field(description="Exact stored ZIP URL for URL-anchored content lookup."),
+        ] = None,
+        source_file: Annotated[
+            str | None,
+            Field(description="Exact full source member path within the ZIP."),
+        ] = None,
+        format: Annotated[
+            str,
+            Field(description="Output format: markdown (default), html, or json."),
+        ] = "markdown",
     ) -> str:
-        if format not in ("markdown", "html"):
-            raise InvalidFilterError("format must be one of 'markdown'|'html'")
-        from pathlib import Path
+        from html import escape
+        from urllib.parse import urlencode
 
-        from doc3gpp.services.tdoc_cr_service import _read_cached_markdown_path
-        from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-        from doc3gpp.web.routes.tdocs import _MD_RENDERER, _resolve_cache_file
-
-        tdoc = SQLAlchemyTDocRepository().get_by_id(tdoc_id)
-        if tdoc is None or not tdoc.ftp_url:
-            raise TDocNotFoundError(tdoc_id)
-        cache_file = _resolve_cache_file(tdoc)
-        markdown_path = Path(state.settings.cache.dir) / "markdown" / cache_file
-        if not markdown_path.exists():
-            raise CacheMissError(
-                f"No cached markdown for TDoc {tdoc_id}.",
-                hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id}",
-            )
-        text = _read_cached_markdown_path(
-            cache_file, Path(state.settings.cache.dir)
+        from doc3gpp.services.tdoc_content_service import (
+            render_tdoc_documents_markdown,
+            tdoc_content_to_dict,
         )
-        if not text:
-            raise CacheMissError(
-                f"Failed to decode cached markdown for TDoc {tdoc_id}.",
-                hint=f"run: doc3gpp tdoc parse --tdoc {tdoc_id} --force",
+
+        if (tdoc_id is None) == (ftp_url is None):
+            raise InvalidFilterError(
+                "exactly one of 'tdoc_id' or 'ftp_url' is required"
             )
-        if format == "html":
-            return _MD_RENDERER.render(text)
-        return text
+        if format not in ("markdown", "html", "json"):
+            raise InvalidFilterError(
+                "format must be one of 'markdown'|'html'|'json'"
+            )
+
+        try:
+            content = services.tdoc_content.get(
+                tdoc_id=tdoc_id,
+                ftp_url=ftp_url,
+                source_file=source_file,
+            )
+        except ValueError as exc:
+            raise map_tdoc_content_error(
+                exc, tdoc_id=tdoc_id, ftp_url=ftp_url
+            ) from exc
+
+        if format == "json":
+            return _to_json(tdoc_content_to_dict(content))
+
+        if not content.complete:
+            command = (
+                f"doc3gpp tdoc parse --tdoc {tdoc_id} --force"
+                if tdoc_id
+                else f"doc3gpp tdoc parse --from-url {ftp_url} --force"
+            )
+            skipped = (
+                f" Skipped sources: {', '.join(content.skipped_sources)}."
+                if content.skipped_sources
+                else ""
+            )
+            raise CacheMissError(
+                f"This TDoc extraction is incomplete.{skipped} Use format='json' "
+                "to inspect the completion flag, or re-parse before consuming text.",
+                hint=f"run: {command}",
+            )
+
+        if format == "markdown":
+            return render_tdoc_documents_markdown(
+                content.documents, include_source_headers=True
+            )
+
+        from doc3gpp.web.routes.tdocs import _MD_RENDERER
+
+        sections: list[str] = []
+        for document in content.documents:
+            label = "Main document" if document.is_main else "Supporting document"
+            href = "/tdocs/by-url/content?" + urlencode(
+                {"ftp_url": content.ftp_url, "source_file": document.source_file}
+            )
+            sections.append(
+                f'<section class="tdoc-document"><h2>{label}: '
+                f'<code>{escape(document.source_file)}</code></h2>'
+                f'<p><a class="tdoc-source-link" href="{escape(href, quote=True)}">'
+                f"View only this source</a></p>"
+                f'<div class="tdoc-content">{_MD_RENDERER.render(document.markdown)}</div>'
+                "</section>"
+            )
+        return "\n".join(sections)
 
     # ---- TSGs -----------------------------------------------------
     @server.tool(name="list_tsgs", description="List all standardisation groups (TSGs).")
@@ -640,7 +704,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
 
         return _to_json(schema_payload("meeting"))
 
-    @server.tool(name="get_tdoc_schema", description="Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files and tdoc_extracts tables.")
+    @server.tool(name="get_tdoc_schema", description="Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files, tdoc_extracts, and the four content tables (tdoc_cr_annexes, tdoc_wid_contents, tdoc_ls_contents, tdoc_discussion_contents).")
     @_mcp_error_guard
     def get_tdoc_schema() -> str:
         from doc3gpp.models.schema_info import schema_payload
@@ -857,17 +921,16 @@ def build_mcp_server(state: WebState) -> MCPServer:
             message = f"queued sync_specs for TSG {tsg}"
         return _enqueue(state, JobKind.SYNC_SPECS, params, message)
 
-    @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages + change details.")
+    @server.tool(name="parse_tdocs", description="Enqueue extraction of tdoc cover pages, change details, and content. With no tdoc_type, selects CR, WID, LS, and discussion TDocs; an explicit tdoc_type is intersected with those types.")
     @_mcp_error_guard
     def parse_tdocs(
         filter: Annotated[dict[str, Any] | None, Field(description="Filter dict selecting which tdocs to parse. Supported keys: tdoc_id, meeting, meeting_id, status, cr_cat, spec, wi, revision_of, revised_to, title, ftp_url, source, tdoc_type, uploaded_date, release, version, cr_num, cr_pack. Text fields (all except meeting_id) are SQL LIKE patterns: use % as a wildcard (e.g. {'tdoc_id': 'R5-26%', 'meeting': '%RAN%', 'title': '%handover%'}); a leading ! flips to NOT LIKE; 'null'/'not-null' match column nullability; uploaded_date accepts '<op> YYYY-MM-DD'. A plain value with no wildcard still matches exactly.")] = None,
         force: Annotated[bool, Field(description="Re-parse tdocs already present in the cover-page table.")] = False,
-        full: Annotated[bool, Field(description="Parse full content (not just cover page + change details).")] = False,
         max_batch: Annotated[int | None, Field(description="Cap on the number of tdocs parsed in this job.")] = None,
     ) -> str:
         if not filter:
             raise InvalidFilterError("filter is required")
-        params: dict[str, Any] = {"filter": filter, "force": force, "full": full}
+        params: dict[str, Any] = {"filter": filter, "force": force}
         if max_batch is not None:
             params["max_batch"] = max_batch
         return _enqueue(state, JobKind.PARSE_TDOCS, params, "queued parse_tdocs")
@@ -879,8 +942,8 @@ def build_mcp_server(state: WebState) -> MCPServer:
             "from a canonical 3GPP FTP URL (HTTPS https://www.3gpp.org/ftp/... "
             "or bare www.3gpp.org/ftp/...; explicit HTTP is rejected). Mirrors "
             "`doc3gpp tdoc parse --from-url`. Use `recursive`/`max_depth` to "
-            "scan subfolders; `force` re-parses already-cached files; `full` "
-            "parses the TTCN corrections sub-parser. When "
+            "scan subfolders; `force` re-parses already-cached files. "
+            "When "
             "Settings.sync.auto_sync is on, the worker runs the same "
             "TSG→meeting→tdoc-list auto-sync the CLI runs before parsing, so "
             "the cover-page FK on tdocs is satisfied. Returns a job_id; poll "
@@ -893,7 +956,6 @@ def build_mcp_server(state: WebState) -> MCPServer:
         recursive: Annotated[bool, Field(description="Scan subfolders (BFS); equivalent to CLI's --recursive. Mutually exclusive with max_depth.")] = False,
         max_depth: Annotated[int, Field(description="Maximum BFS depth (0 = root folder only). Ignored when recursive=True.")] = 2,
         force: Annotated[bool, Field(description="Re-parse even when a cover-page row already exists (forwarded to the service).")] = False,
-        full: Annotated[bool, Field(description="Parse full content for TTCN corrections (forwarded to the service).")] = False,
     ) -> str:
         try:
             url = validate_tdoc_ftp_url(url)
@@ -906,7 +968,6 @@ def build_mcp_server(state: WebState) -> MCPServer:
         params: dict[str, Any] = {
             "url": url,
             "force": force,
-            "full": full,
             "recursive": recursive,
         }
         if not recursive:

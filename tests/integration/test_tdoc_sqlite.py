@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 from typer.testing import CliRunner
+from typing_extensions import Self
 
 from doc3gpp.cli import app
 from doc3gpp.models.meeting import Meeting
@@ -12,8 +13,6 @@ from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.services.tdoc_service import TDocService
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.db.models import TDocCrDetailOrm
-from doc3gpp.storage.db.session import get_session_factory
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
@@ -206,7 +205,7 @@ def test_tdoc_service_sync_tdoc_list(monkeypatch, sqlite_env) -> None:
         def __init__(self, *args, **kwargs):
             pass
 
-        def __enter__(self) -> "DummyClient":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -604,10 +603,27 @@ def test_list_with_meeting_exclude_parsed_filters_before_limit(sqlite_env) -> No
         TDoc(tdoc_id="R5-260008", meeting_id=300, ftp_url="x/08"),
         TDoc(tdoc_id="R5-260007", meeting_id=300, ftp_url="x/07"),
     ])
-    with get_session_factory()() as session:
-        session.add(TDocCrDetailOrm(ftp_url="x/10", tdoc_id="R5-260010"))
-        session.add(TDocCrDetailOrm(ftp_url="x/09", tdoc_id="R5-260009"))
-        session.commit()
+    from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
+    )
+
+    content_repo = SQLAlchemyTDocContentRepository()
+    for tdoc_id, ftp_url in (("R5-260010", "x/10"), ("R5-260009", "x/09")):
+        content_repo.replace_cr_bundle(
+            TDocCRDetails(tdoc_id=tdoc_id, ftp_url=ftp_url),
+            None,
+            None,
+            TDocExtractMeta(
+                ftp_url=ftp_url,
+                tdoc_id=tdoc_id,
+                cache_file=f"{tdoc_id}.zip",
+                doc_filename=f"{tdoc_id}.docx",
+                extraction_version=2,
+                document_count=0,
+            ),
+            (),
+        )
 
     pending = repo.list_with_meeting(limit=2, meeting_id=300, exclude_parsed=True)
     assert [r.tdoc.tdoc_id for r in pending] == ["R5-260008", "R5-260007"]

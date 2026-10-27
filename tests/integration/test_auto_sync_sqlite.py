@@ -6,14 +6,14 @@ These tests exercise the full CLI path with local fixtures standing in for
 - enabling ``sync.auto_sync`` causes ``meeting list``, ``tdoc list`` and
   ``tdoc show`` to internally trigger syncs,
 - DB-mode ``tdoc parse`` triggers auto-sync,
-- direct-mode ``tdoc parse --from-path`` does not trigger auto-sync.
+- direct-mode ``tdoc parse --from-path`` runs the type-detection sync steps.
 """
 
 from __future__ import annotations
 
-from datetime import date
-from datetime import timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
@@ -44,7 +44,7 @@ def _disable_auto_sync_by_default(monkeypatch):
 
 def _future_date(days: int = 7) -> date:
     """Return a date far enough in the future to avoid the closed window."""
-    return date.today() + timedelta(days=days)
+    return datetime.now(timezone.utc).date() + timedelta(days=days)
 
 
 def _enable_auto_sync(monkeypatch) -> None:
@@ -247,13 +247,15 @@ def test_tdoc_parse_db_mode_auto_sync_triggers_sync(
     assert "[auto-sync]" in result.stdout
 
 
-def test_tdoc_parse_direct_mode_does_not_auto_sync(
+def test_tdoc_parse_direct_mode_auto_syncs_from_path(
     monkeypatch, sqlite_env
 ) -> None:
-    """Direct-mode tdoc parse (--from-path) must not trigger auto-sync."""
+    """Direct-mode tdoc parse (--from-path) runs the type-detection sync steps (P7)."""
     runner = CliRunner()
     assert runner.invoke(app, ["db", "init"]).exit_code == 0
     _enable_auto_sync(monkeypatch)
+    tsg_sync = MagicMock(return_value=False)
+    monkeypatch.setattr("doc3gpp.cli_auto_sync.sync_tsg_internal", tsg_sync)
 
     fixture_path = (
         Path(__file__).parent.parent
@@ -273,4 +275,5 @@ def test_tdoc_parse_direct_mode_does_not_auto_sync(
         ],
     )
     assert result.exit_code == 0
-    assert "[auto-sync]" not in result.stdout
+    tsg_sync.assert_called_once()
+    assert tsg_sync.call_args.args[0] == "R5"

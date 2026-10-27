@@ -7,9 +7,21 @@ without calling a remote embeddings API.
 
 from __future__ import annotations
 
+import functools
+import operator
+
 import pytest
 
 pytestmark = pytest.mark.semantic
+
+
+def _labelled(tdoc_id, vectors):
+    from doc3gpp.models.semantic_search import EmbeddedChunk
+
+    return [
+        EmbeddedChunk(chunk_id=f"{tdoc_id}#{i}", chunk_index=i, embedding=vec)
+        for i, vec in enumerate(vectors)
+    ]
 
 
 @pytest.fixture()
@@ -32,8 +44,8 @@ def test_upsert_then_knn_returns_expected_order(repo):
     a[0][0] = 1.0  # chunk 0 close to query
     b = [np.zeros(384, dtype=np.float32)]
     b[0][0] = 0.5
-    repo.upsert_chunks("R5-1", a)
-    repo.upsert_chunks("R5-2", b)
+    repo.upsert_chunks("R5-1", _labelled("R5-1", a))
+    repo.upsert_chunks("R5-2", _labelled("R5-2", b))
     query = np.zeros(384, dtype=np.float32)
     query[0] = 1.0
     hits = repo.knn(query, limit=10)
@@ -47,7 +59,7 @@ def test_upsert_then_knn_returns_expected_order(repo):
 def test_remove_for_tdoc(repo):
     import numpy as np
 
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
     repo.remove_for_tdoc("R5-1")
     hits = repo.knn(np.zeros(384, dtype=np.float32), limit=10)
     assert not any(h[0] == "R5-1" for h in hits)
@@ -56,9 +68,9 @@ def test_remove_for_tdoc(repo):
 def test_upsert_replaces_existing_chunks(repo):
     import numpy as np
 
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(8)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(8)]))
     # re-parse with fewer chunks -> surplus deleted
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(4)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(4)]))
     # only 4 chunk rows for R5-1 now
     hits = repo.knn(np.zeros(384, dtype=np.float32), limit=100)
     r5_1_chunks = [h for h in hits if h[0] == "R5-1"]
@@ -68,7 +80,7 @@ def test_upsert_replaces_existing_chunks(repo):
 def test_status_reports_row_count(repo):
     import numpy as np
 
-    repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(3)])
+    repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32) for _ in range(3)]))
     status = repo.status()
     assert status.row_count >= 3
 
@@ -80,7 +92,7 @@ def test_dim_mismatch_raises(repo):
     from doc3gpp.models.semantic_search import VectorIndexUnavailableError
 
     with pytest.raises(VectorIndexUnavailableError):
-        repo.upsert_chunks("R5-1", bad)
+        repo.upsert_chunks("R5-1", _labelled("R5-1", bad))
 
 
 def test_constructor_raises_vector_index_unavailable_when_meta_missing(sqlite_env) -> None:
@@ -114,12 +126,13 @@ def test_rebuild_batch_walks_all_tdocs(sqlite_env, monkeypatch):
     Seed 7 tdocs with ascending ids, ask for 3 at a time, and expect
     three batches of [3, 3, 1].
     """
+    from sqlalchemy import text
+
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.storage.repositories.vector_sql import (
         SQLAlchemyVectorIndexRepository,
     )
-    from sqlalchemy import text
 
     create_schema()
     eng = get_engine()
@@ -158,17 +171,18 @@ def test_rebuild_batch_walks_all_tdocs(sqlite_env, monkeypatch):
         f"expected 3+3+1 batches for 7 tdocs at batch_size=3, got {[len(b) for b in batches]}"
     )
     assert sum(len(b) for b in batches) == 7
-    assert sorted(sum(batches, [])) == [f"R5-{i:06d}" for i in range(1, 8)]
+    assert sorted(functools.reduce(operator.iadd, batches, [])) == [f"R5-{i:06d}" for i in range(1, 8)]
 
 
 def test_rebuild_batch_resumes_from_after_id(sqlite_env):
     """after_id cursor must skip already-seen tdocs in the next call."""
+    from sqlalchemy import text
+
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.storage.repositories.vector_sql import (
         SQLAlchemyVectorIndexRepository,
     )
-    from sqlalchemy import text
 
     create_schema()
     eng = get_engine()
@@ -204,14 +218,14 @@ def test_rebuild_batch_resumes_from_after_id(sqlite_env):
         repo.rebuild_batch(batch_size=2, after_id=None, stale_only=False),
     )
     assert [len(b) for b in first] == [2, 2, 1]
-    last_seen = sum(first, [])[-1]
+    last_seen = functools.reduce(operator.iadd, first, [])[-1]
     # 5 rows total; first call yielded all 5. A second call past the
     # last id must return an empty list (no more rows).
     second = list(
         repo.rebuild_batch(batch_size=2, after_id=last_seen, stale_only=False),
     )
-    assert sum(second, []) == [], (
-        f"after_id={last_seen} is past the last row; expected [], got {sum(second, [])}"
+    assert functools.reduce(operator.iadd, second, []) == [], (
+        f"after_id={last_seen} is past the last row; expected [], got {functools.reduce(operator.iadd, second, [])}"
     )
 
     # Now check the real resume semantics: after the first batch of 2
@@ -221,18 +235,19 @@ def test_rebuild_batch_resumes_from_after_id(sqlite_env):
     tail = list(
         repo.rebuild_batch(batch_size=2, after_id=mid_seen, stale_only=False),
     )
-    assert sum(tail, []) == ["R5-000003", "R5-000004", "R5-000005"], (
-        f"after_id={mid_seen} must skip R5-000001..R5-000002; got {sum(tail, [])}"
+    assert functools.reduce(operator.iadd, tail, []) == ["R5-000003", "R5-000004", "R5-000005"], (
+        f"after_id={mid_seen} must skip R5-000001..R5-000002; got {functools.reduce(operator.iadd, tail, [])}"
     )
 
 
 def test_model_mismatch_raises_even_when_dim_matches(sqlite_env):
     import numpy as np
+    from sqlalchemy import text
+
     from doc3gpp.models.semantic_search import VectorIndexUnavailableError
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
-    from sqlalchemy import text
     from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
 
     create_schema()
     eng = get_engine()
@@ -240,7 +255,7 @@ def test_model_mismatch_raises_even_when_dim_matches(sqlite_env):
         conn.execute(text("UPDATE vec_meta SET value='old-model' WHERE key='embedding_model'"))
     repo = SQLAlchemyVectorIndexRepository(expected_model="new-model")
     with pytest.raises(VectorIndexUnavailableError) as excinfo:
-        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+        repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
     message = str(excinfo.value)
     assert "doc3gpp tdoc index --rebuild-embeddings" in message
     assert "tdoc search index" not in message
@@ -248,11 +263,12 @@ def test_model_mismatch_raises_even_when_dim_matches(sqlite_env):
 
 def test_legacy_db_missing_model_treated_as_mismatch(sqlite_env):
     import numpy as np
+    from sqlalchemy import text
+
     from doc3gpp.models.semantic_search import VectorIndexUnavailableError
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
-    from sqlalchemy import text
     from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
 
     create_schema()
     eng = get_engine()
@@ -260,7 +276,7 @@ def test_legacy_db_missing_model_treated_as_mismatch(sqlite_env):
         conn.execute(text("DELETE FROM vec_meta WHERE key='embedding_model'"))
     repo = SQLAlchemyVectorIndexRepository(expected_model="nomic-embed-text")
     with pytest.raises(VectorIndexUnavailableError, match="rebuild-embeddings"):
-        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+        repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
 
 
 def test_count_tdocs_to_index_respects_after_id(sqlite_env):
@@ -270,12 +286,13 @@ def test_count_tdocs_to_index_respects_after_id(sqlite_env):
     stops at 4,193 (the resume tail) — looks like 31% complete when
     the rebuild actually finished every TDoc past the cursor.
     """
+    from sqlalchemy import text
+
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.storage.repositories.vector_sql import (
         SQLAlchemyVectorIndexRepository,
     )
-    from sqlalchemy import text
 
     create_schema()
     eng = get_engine()
@@ -323,8 +340,9 @@ def test_rebuild_embeddings_stamps_dim_and_model(sqlite_env):
     both ``vec_meta`` keys from the live embedder so a subsequent
     same-model reader sees a compatible index.
     """
-    import numpy as np
     from unittest.mock import MagicMock
+
+    import numpy as np
     from sqlalchemy import text
 
     from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -369,8 +387,10 @@ def test_rebuild_embeddings_resume_mismatch_raises(sqlite_env):
     must not silently mix rows from two models into one ``vec0``
     table — it raises the mismatch error with the rebuild hint.
     """
-    import numpy as np
     from unittest.mock import MagicMock
+
+    import numpy as np
+    from sqlalchemy import text
 
     from doc3gpp.models.semantic_search import VectorIndexUnavailableError
     from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -379,7 +399,6 @@ def test_rebuild_embeddings_resume_mismatch_raises(sqlite_env):
     from doc3gpp.storage.repositories.vector_sql import (
         SQLAlchemyVectorIndexRepository,
     )
-    from sqlalchemy import text
 
     create_schema()
     eng = get_engine()
@@ -432,4 +451,55 @@ def test_expected_dim_mismatch_raises_on_upsert(sqlite_env):
     with pytest.raises(
         VectorIndexUnavailableError, match="rebuild-embeddings",
     ):
-        repo.upsert_chunks("R5-1", [np.zeros(384, dtype=np.float32)])
+        repo.upsert_chunks("R5-1", _labelled("R5-1", [np.zeros(384, dtype=np.float32)]))
+
+
+def test_semantic_only_search_collapses_crowded_chunk_pool_on_real_index(repo):
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.services.semantic_search_service import SemanticSearchService
+
+    query = np.zeros(384, dtype=np.float32)
+    query[0] = 1.0
+    from datetime import date
+
+    from doc3gpp.models.meeting import Meeting
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    SQLAlchemyMeetingRepository().upsert_many([
+        Meeting(
+            meeting_id=300, name="RAN5#300", title="m", location="Online",
+            start_date=date(2026, 1, 1), end_date=date(2026, 1, 2),
+        ),
+    ])
+    SQLAlchemyTDocRepository().upsert_many(
+        [TDoc(tdoc_id=f"R5-{letter}", meeting_id=300) for letter in "ABCDEF"],
+    )
+    crowded = []
+    for i in range(20):
+        vec = np.zeros(384, dtype=np.float32)
+        vec[0], vec[1] = 1.0, 0.01 * (i + 1)
+        crowded.append(vec)
+    repo.upsert_chunks("R5-A", _labelled("R5-A", crowded))
+    for index, letter in enumerate("BCDEF"):
+        vec = np.zeros(384, dtype=np.float32)
+        vec[0], vec[2] = 1.0, 0.5 + 0.1 * index
+        repo.upsert_chunks(f"R5-{letter}", _labelled(f"R5-{letter}", [vec]))
+
+    settings = MagicMock()
+    settings.semantic_search.fanout_multiplier = 1
+    settings.semantic_search.rrf_k = 60
+    embedder = MagicMock()
+    embedder.encode.return_value = np.stack([query])
+    svc = SemanticSearchService(MagicMock(), embedder, repo, settings)
+
+    out = svc.search(
+        "q", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5,
+    )
+
+    assert [hit.tdoc_id for hit in out] == ["R5-A", "R5-B", "R5-C", "R5-D", "R5-E"]

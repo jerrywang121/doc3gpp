@@ -7,6 +7,8 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
+from doc3gpp.models.search import MatchedDocument
+
 
 class SearchMode(str, Enum):
     FTS5 = "fts5"
@@ -30,6 +32,7 @@ class TDocSearchResult:
     type: str | None
     status: str | None
     best_chunk_id: str | None
+    matched_documents: tuple[MatchedDocument, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +73,16 @@ def tdoc_search_result_to_dict(result: TDocSearchResult) -> dict[str, Any]:
         "type": result.type,
         "status": result.status,
         "best_chunk_id": result.best_chunk_id,
+        "matched_documents": [
+            {
+                "document_id": document.document_id,
+                "ftp_url": document.ftp_url,
+                "source_file": document.source_file,
+                "score": document.score,
+                "previews": document.previews,
+            }
+            for document in result.matched_documents
+        ],
     }
 
 

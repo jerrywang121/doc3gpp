@@ -11,7 +11,6 @@ from typing import Protocol, TypeVar, runtime_checkable
 
 from doc3gpp.models.tdoc_cr import TDocCRParseResult
 
-
 T = TypeVar("T")
 
 
@@ -26,7 +25,6 @@ class SectionParser(Protocol[T]):
         lines: list[str],
         *,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> tuple[bool, T, int]: ...
 
 
@@ -46,7 +44,6 @@ class TDocParser(Protocol):
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult: ...
 
 

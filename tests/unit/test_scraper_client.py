@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from doc3gpp.scraping.client import ScraperClient, _RETRYABLE_STATUS_CODES
+from doc3gpp.scraping.client import _RETRYABLE_STATUS_CODES, ScraperClient
 
 
 def _build_response(status_code: int) -> httpx.Response:
@@ -110,9 +110,10 @@ def test_get_text_gives_up_after_max_retries() -> None:
     client = _client_with_http_client(http_client)
     client._max_retries = 2  # 1 initial + 2 retries = 3 attempts
 
-    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)):
-        with pytest.raises(httpx.HTTPError, match="conn refused"):
-            client.get_text("https://example.com/x")
+    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)), pytest.raises(
+        httpx.HTTPError, match="conn refused"
+    ):
+        client.get_text("https://example.com/x")
 
     assert http_client.get.call_count == 3
 
@@ -128,9 +129,10 @@ def test_get_text_raises_immediately_on_non_retryable_error() -> None:
 
     client = _client_with_http_client(http_client)
 
-    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)):
-        with pytest.raises(httpx.InvalidURL):
-            client.get_text("https://example.com/x")
+    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)), pytest.raises(
+        httpx.InvalidURL
+    ):
+        client.get_text("https://example.com/x")
 
     # No retries on programming-error class exceptions.
     assert http_client.get.call_count == 1
@@ -164,9 +166,10 @@ def test_get_text_does_not_retry_on_404() -> None:
 
     client = _client_with_http_client(http_client)
 
-    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)):
-        with pytest.raises(httpx.HTTPStatusError):
-            client.get_text("https://example.com/missing")
+    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)), pytest.raises(
+        httpx.HTTPStatusError
+    ):
+        client.get_text("https://example.com/missing")
 
     assert http_client.get.call_count == 1
 
@@ -271,9 +274,10 @@ def test_give_up_after_max_retries_on_5xx() -> None:
     client = _client_with_http_client(http_client)
     client._max_retries = 1  # 1 initial + 1 retry = 2 attempts
 
-    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)):
-        with pytest.raises(httpx.HTTPStatusError, match="503"):
-            client.get_text("https://example.com/x")
+    with patch.object(ScraperClient, "_sleep", staticmethod(lambda _: None)), pytest.raises(
+        httpx.HTTPStatusError, match="503"
+    ):
+        client.get_text("https://example.com/x")
 
     assert http_client.get.call_count == 2
 

@@ -19,12 +19,14 @@ Design notes:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
-from datetime import datetime
-from typing import Any, Literal
+from datetime import date, datetime
+from typing import TYPE_CHECKING, Any, Literal
 
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+from doc3gpp.models.tdoc_document import TDocDocument
 
+if TYPE_CHECKING:
+    from doc3gpp.models.tdoc_content_families import TDocContentStore
 
 _PARSER_VERSION = "1.0.0"
 
@@ -230,9 +232,10 @@ class TDocExtractMeta:
 
     Mirrors :class:`doc3gpp.storage.db.models.TDocExtractOrm` but stays
     a pure value object so the service layer can move the data around
-    without leaking SQLAlchemy attributes. Only the *paths* of the
-    cached artefacts are persisted here — the bytes live under
-    :mod:`doc3gpp.scraping.cache`.
+    without leaking SQLAlchemy attributes. Cache paths are persisted here;
+    the authoritative converted Markdown text lives in the per-type content
+    SQL rows (``tdoc_cr_annexes`` and the WID/LS/discussion content tables),
+    while the source ZIP and derived Markdown archive remain in the cache.
 
     Identity is the immutable URL — the same URL serves byte-for-byte
     identical 3GPP artefacts, while a TDoc id may map to multiple URLs
@@ -253,14 +256,23 @@ class TDocExtractMeta:
             (see :mod:`doc3gpp.scraping.cache`). Only the basename
             is persisted so the row stays portable when ``cache.dir``
             moves.
-        doc_filename: Filename of the word document inside the zip
-            (e.g. ``"R5s260009.docx"``).
+        doc_filename: Full source path of the main Word document inside
+            the ZIP (e.g. ``"CRs/main/R5s260009.docx"``). It does not
+            enumerate supporting documents.
         extracted_at: When the extract was performed. ``None`` on
             newly-built values (the SQL repo stamps a fresh value on
             first insert via the column's ``server_default``).
         parser_version: Version of the parser that produced this
             metadata. ``"1.0.0"`` matches the value baked into the
             ORM column's default and :class:`TDocCRDetails`.
+        extraction_version: Document-layout version. Existing/single-file
+            extractions default to version ``1``; complete multi-file
+            extractions use version ``2``.
+        document_count: Number of stored document rows. Legacy metadata
+            defaults to ``0`` until a complete document collection is written.
+        skipped_sources: ZIP member paths that could not be converted and
+            were left out of the stored document collection. An empty tuple
+            means nothing was skipped.
     """
 
     ftp_url: str
@@ -269,6 +281,9 @@ class TDocExtractMeta:
     doc_filename: str
     extracted_at: datetime | None = None
     parser_version: str = _PARSER_VERSION
+    extraction_version: int = 1
+    document_count: int = 0
+    skipped_sources: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Mirror TDocCRDetails' invariant; the URL is the row identity.
@@ -282,6 +297,25 @@ class TDocExtractMeta:
             raise ValueError("TDocExtractMeta requires a non-empty tdoc_id")
         if stripped_id != self.tdoc_id:
             object.__setattr__(self, "tdoc_id", stripped_id)
+        if (
+            isinstance(self.extraction_version, bool)
+            or not isinstance(self.extraction_version, int)
+            or self.extraction_version < 1
+        ):
+            raise ValueError("TDocExtractMeta extraction_version must be a positive integer")
+        if (
+            isinstance(self.document_count, bool)
+            or not isinstance(self.document_count, int)
+            or self.document_count < 0
+        ):
+            raise ValueError("TDocExtractMeta document_count must be a non-negative integer")
+        if not isinstance(self.skipped_sources, (list, tuple)) or not all(
+            isinstance(source, str) and source.strip() for source in self.skipped_sources
+        ):
+            raise ValueError(
+                "TDocExtractMeta skipped_sources must be a list or tuple of non-empty strings"
+            )
+        object.__setattr__(self, "skipped_sources", tuple(self.skipped_sources))
 
 
 # Allowed values for ``DirectParseResult.source_kind``. Stored as a
@@ -306,11 +340,14 @@ class DirectParseResult:
             canonical 3GPP FTP root), or ``"url-other"`` (any other
             HTTP(S) URL). Mutually exclusive; the dispatcher picks
             exactly one per call.
-        markdown: The converted markdown, always populated. For
-            ``--format raw`` this is what the CLI emits verbatim; for
-            the structured formats it feeds ``parse_cr_details``.
-        details: The parsed CR fields. ``None`` when ``--format raw``
-            was selected (the raw converter never calls the parser).
+        documents: Converted Markdown documents in deterministic order,
+            with the main source first. Direct/local sources use
+            ephemeral document IDs instead of inventing a stored FTP URL.
+        main_source_file: Full source path of the document that owns the
+            parsed CR metadata.
+        details: The parsed CR fields from the main document. ``None``
+            when ``--format raw`` was selected (the raw converter never
+            calls the CR parser).
         extract_meta: Cache-extract metadata sidecar. ``None`` when
             the call did not write to the on-disk cache (local files,
             non-3GPP URLs, and 3GPP URLs whose FK target is missing
@@ -326,22 +363,25 @@ class DirectParseResult:
             do not re-write the rows).
         tdoc_id: The 3GPP TDoc id extracted from the source
             filename when the pattern matches; ``None`` when the
-            filename has no 3GPP id (a synthetic ``LOCAL-<stem>``
-            is used internally by the parser but is *not* surfaced
-            here so the caller can branch on "did the filename
-            match?" without recomputing the synthetic id).
-        tdoc_id_in_tdocs: ``True`` when the extracted ``tdoc_id``
-            has a matching row in the ``tdocs`` table — i.e. when
-            the FK target for the DB writes exists. Always
-            ``False`` for local files and non-3GPP URLs; only the
-            3GPP-URL branch consults the ``tdocs`` table.
+            filename has no 3GPP id (a synthetic ``LOCAL-<stem>`` is
+            used internally by the parser but is not surfaced here).
+        tdoc_id_in_tdocs: ``True`` when the extracted ``tdoc_id`` has
+            a matching row in the ``tdocs`` table. Always ``False``
+            for local files and non-3GPP URLs; only the 3GPP-URL branch
+            consults the ``tdocs`` table.
         source_url: The original file or folder URL supplied to the
             direct-parse call. Populated for URL sources so batch
             emitters can mirror the upstream folder structure.
+        content_store: The family store (WID, LS, or discussion) that
+            holds this result. ``None`` for CR results, which carry
+            ``details`` instead.
+        skipped_sources: Family member paths whose conversion failed.
+            CR results report skipped annexes through ``extract_meta``.
     """
 
     source_kind: DirectSourceKind
-    markdown: str
+    documents: tuple[TDocDocument, ...]
+    main_source_file: str
     details: TDocCRDetails | None
     extract_meta: TDocExtractMeta | None
     from_cache: bool
@@ -349,6 +389,8 @@ class DirectParseResult:
     tdoc_id: str | None
     tdoc_id_in_tdocs: bool
     source_url: str | None = None
+    content_store: TDocContentStore | None = None
+    skipped_sources: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)

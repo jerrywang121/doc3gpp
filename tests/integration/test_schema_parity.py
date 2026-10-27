@@ -7,7 +7,7 @@ import json
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from tests.integration.test_web_end_to_end import app_with_deps  # noqa: F401,F811
+from tests.integration.test_web_end_to_end import app_with_deps  # noqa: F401
 
 
 def test_rest_schema_json_matches_cli_compact(app_with_deps, sqlite_env) -> None:  # noqa: F811
@@ -57,7 +57,6 @@ def test_mcp_schema_parity_with_http_json(sqlite_env) -> None:
     from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.web.app import build_app
-
     from tests.integration.test_mcp_end_to_end import _seed_corpus, _state_and_server
 
     _state_and_server()

@@ -31,7 +31,6 @@ from typing import Any
 
 import numpy as np
 
-
 EMBEDDING_DIM = 384
 
 
@@ -159,8 +158,8 @@ ROWS: list[tuple[str, str, str, str, str | None, str, int, set[str]]] = [
     ),
     (
         "SEM-MULTI-001",
-        "Rel-17 NR sidelink PHY MAC PDCP RLC test spec "
-        "lte nr sidelink unlicensed coverage enhancement prach",
+        ("Rel-17 NR sidelink PHY MAC PDCP RLC test spec "
+        "lte nr sidelink unlicensed coverage enhancement prach"),
         "v7", "Rel-17", "37.901", "RAN1", 9101, {"multi"},
     ),
     (
@@ -352,7 +351,7 @@ def build_semantic_corpus(engine: Any) -> list[str]:
                     {
                         "tid": tid,
                         "ftp": ftp,
-                        "clauses": "\n".join(["5.4.2.1", "5.4.2.2"]),
+                        "clauses": "5.4.2.1\n5.4.2.2",
                         "changes": _gz(
                             [{"type": "ins", "text": "new NB-IoT MAC procedure"}]
                         ),

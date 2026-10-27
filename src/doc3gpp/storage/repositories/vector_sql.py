@@ -14,23 +14,33 @@ blobs decompressed in Python via
 :func:`doc3gpp.storage.compression.decompress_json`. The ``wis`` join
 is a comma-separated LIKE match on ``tdocs.related_wis``; matched
 ``wis.name`` rows are joined with ``; `` and appended after the
-meeting title.
+meeting title. Content documents (CR annexes and family members) come
+from the four content tables, in indexing order.
 """
 
 from __future__ import annotations
 
 import json as _json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
+from itertools import groupby
 
 import numpy as np
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy import bindparam, text
+from sqlalchemy.engine import Engine, Row
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
-from doc3gpp.models.semantic_search import VectorIndexUnavailableError
+from doc3gpp.models.semantic_chunking import planned_document_keys
+from doc3gpp.models.semantic_search import (
+    EmbeddedChunk,
+    VectorIndexUnavailableError,
+    parse_content_chunk_id,
+)
+from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
+from doc3gpp.models.tdoc_document import ordered_sources
 from doc3gpp.repository.protocols import VectorIndexRepository
+from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.session import get_engine
 from doc3gpp.storage.repositories.rich_filters import (
@@ -42,6 +52,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DIM = 384
 MAX_CHUNKS_PER_TDOC = 32
+# vec0 metadata columns cannot store NULL, so a missing value is stored as a
+# sentinel: -1 for a meetingless TDoc, '' for a missing TSG or upload date.
+_NO_MEETING_ID = -1
+_TDOC_METADATA_SELECT = (
+    "SELECT t.tdoc_id, t.meeting_id, m.tsg, t.uploaded_date "
+    "  FROM tdocs t LEFT JOIN meetings m ON m.meeting_id = t.meeting_id"
+)
 
 
 def _check_sqlite_vec(engine: Engine) -> None:
@@ -68,6 +85,117 @@ def _check_sqlite_vec(engine: Engine) -> None:
             ) from exc
 
 
+def _like_predicates(filters: SearchFilters) -> tuple[list[str], dict]:
+    """Return the LIKE ``AND`` clauses for meeting name/title, release, and spec.
+
+    vec0 rejects LIKE on a metadata column in a KNN query, so these never
+    push into the window: :func:`_knn_predicates` joins for them and
+    :meth:`SQLAlchemyVectorIndexRepository.matching_tdoc_ids` applies them.
+    """
+    clauses: list[str] = []
+    params: dict = {}
+    if filters.meeting:
+        # Rich-filter grammar over name OR title: the results
+        # page shows m.title, but the CLI convention (meeting
+        # list --name, tdoc list text filters) is LIKE on the
+        # stored field.
+        meeting_clauses, meeting_params = build_text_filter_or_params(
+            ("m.name", "m.title"), filters.meeting, param="meeting",
+        )
+        clauses.append(f"({meeting_clauses})")
+        params.update(meeting_params)
+    if filters.release:
+        clause, bound = build_text_filter_sql("t.release", filters.release, param="release")
+        if bound is not None:
+            params["release"] = bound
+        clauses.append(clause)
+    if filters.spec:
+        clause, bound = build_text_filter_sql("t.spec", filters.spec, param="spec")
+        if bound is not None:
+            params["spec"] = bound
+        clauses.append(clause)
+    return clauses, params
+
+
+def _filter_predicates(filters: SearchFilters) -> tuple[list[str], dict]:
+    """Return the ``AND`` clauses and bound params for ``filters``.
+
+    The clauses reference ``tdocs t`` and ``meetings m``; callers join both
+    tables before applying them. ``tdoc_id`` overrides the other predicates.
+    """
+    clauses: list[str] = []
+    params: dict = {}
+    if filters.tdoc_id:
+        clauses.append("t.tdoc_id = :tdoc_id")
+        params["tdoc_id"] = filters.tdoc_id
+        return clauses, params
+    if filters.tsg:
+        # meetings.tsg is stored upper-case by sync, so callers
+        # may pass any case (mirrors meeting_sql / wi_sql).
+        clauses.append("m.tsg = :tsg")
+        params["tsg"] = filters.tsg.upper()
+    if filters.meeting_id is not None:
+        clauses.append("m.meeting_id = :meeting_id")
+        params["meeting_id"] = filters.meeting_id
+    if filters.since:
+        clauses.append("t.uploaded_date >= :since")
+        params["since"] = filters.since
+    if filters.until:
+        clauses.append("t.uploaded_date <= :until")
+        params["until"] = filters.until
+    like_clauses, like_params = _like_predicates(filters)
+    clauses.extend(like_clauses)
+    params.update(like_params)
+    return clauses, params
+
+
+def _knn_predicates(filters: SearchFilters) -> tuple[list[str], dict, bool]:
+    """Return the knn ``AND`` clauses, bound params, and whether to join ``tdocs``/``meetings``.
+
+    Pushed clauses name ``vec_tdoc_embeddings`` metadata columns, so vec0
+    applies them before ``k``. ``meeting_id >= 0`` drops meetingless TDocs,
+    which are stored as ``-1``. A date range also requires
+    ``uploaded_date != ''`` because a missing date is stored as ``''``.
+    ``tdoc_id`` overrides the other predicates, as in :func:`_filter_predicates`.
+    """
+    vec = "vec_tdoc_embeddings"
+    clauses = [f"{vec}.meeting_id >= 0"]
+    params: dict = {}
+    if filters.tdoc_id:
+        clauses.append(f"{vec}.tdoc_id = :tdoc_id")
+        params["tdoc_id"] = filters.tdoc_id
+        return clauses, params, False
+    if filters.tsg:
+        clauses.append(f"{vec}.tsg = :tsg")
+        params["tsg"] = filters.tsg.upper()
+    if filters.meeting_id is not None:
+        clauses.append(f"{vec}.meeting_id = :meeting_id")
+        params["meeting_id"] = filters.meeting_id
+    if filters.since or filters.until:
+        clauses.append(f"{vec}.uploaded_date != ''")
+    if filters.since:
+        clauses.append(f"{vec}.uploaded_date >= :since")
+        params["since"] = filters.since
+    if filters.until:
+        clauses.append(f"{vec}.uploaded_date <= :until")
+        params["until"] = filters.until
+    like_clauses, like_params = _like_predicates(filters)
+    clauses.extend(like_clauses)
+    params.update(like_params)
+    return clauses, params, bool(like_clauses)
+
+
+def _vec_metadata(
+    meeting_id: int | None, tsg: str | None, uploaded_date: str | None,
+) -> tuple[int, str, str]:
+    """Return ``(meeting_id, tsg, uploaded_date)`` as vec0 stores them, sentinels for NULL."""
+    return (
+        _NO_MEETING_ID if meeting_id is None else int(meeting_id),
+        tsg or "",
+        "" if uploaded_date is None else str(uploaded_date),
+    )
+
+
 class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     def __init__(
         self,
@@ -79,6 +207,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         self._dim, self._stored_model = self._read_or_init_dim_and_model()
         self._expected_model = expected_model
         self._expected_dim = expected_dim
+        self._chunk_settings = get_settings().semantic_search
 
     def _read_or_init_dim_and_model(self) -> tuple[int, str | None]:
         with self._engine.begin() as conn:
@@ -147,11 +276,34 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 f"`doc3gpp tdoc index --rebuild-embeddings`"
             )
 
+    def keeps_index(self, dim: int, model: str | None) -> bool:
+        """Return True when the ``vec0`` table exists at ``dim`` and ``model``.
+
+        The non-raising form of :meth:`verify_compatible`, used by a
+        ``stale_only`` rebuild to keep the existing rows. A missing table or
+        ``model=None`` (duck-typed embedders) returns False, so the caller
+        falls back to :meth:`reset_for_rebuild`.
+        """
+        if model is None:
+            return False
+        try:
+            self.verify_compatible(dim, model)
+        except VectorIndexUnavailableError:
+            return False
+        with self._engine.begin() as conn:
+            return conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'vec_tdoc_embeddings'"
+                )
+            ).first() is not None
+
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec0`` at ``dim`` and stamp ``vec_meta``.
 
         A dimension change requires rebuilding the virtual table because
-        its dimension is fixed at CREATE time. Refreshes cached dimension
+        its dimension is fixed at CREATE time. Clears the rebuild stamps so
+        an interrupted rebuild reads as stale. Refreshes cached dimension
         and model metadata after recreating the index.
         """
         width = int(dim)
@@ -170,6 +322,12 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 raise VectorIndexUnavailableError(
                     f"sqlite-vec extension load failed: {exc}"
                 ) from exc
+            conn.execute(
+                text(
+                    "DELETE FROM vec_meta "
+                    "WHERE key IN ('last_rebuild_at', 'last_indexed_uploaded_date')"
+                )
+            )
             conn.execute(text("DROP TABLE IF EXISTS vec_tdoc_embeddings"))
             conn.execute(
                 text(
@@ -177,6 +335,9 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                     "    chunk_id TEXT PRIMARY KEY,\n"
                     "    tdoc_id TEXT,\n"
                     "    chunk_index INTEGER,\n"
+                    "    meeting_id INTEGER,\n"
+                    "    tsg TEXT,\n"
+                    "    uploaded_date TEXT,\n"
                     f"    embedding FLOAT[{width}] distance_metric=cosine\n"
                     ")"
                 )
@@ -205,28 +366,70 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         for v in embeddings:
             self._check_compatible(v.shape[-1], what="upsert")
 
-    def upsert_chunks(self, tdoc_id: str, embeddings: list[np.ndarray]) -> None:
-        self._check_dim(embeddings)
+    def upsert_chunks(self, tdoc_id: str, chunks: Sequence[EmbeddedChunk]) -> None:
+        self._check_dim([chunk.embedding for chunk in chunks])
         # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:emb).
         with self._engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM vec_tdoc_embeddings WHERE tdoc_id = :id"),
                 {"id": tdoc_id},
             )
-            for i, vec in enumerate(embeddings):
+            row = conn.execute(
+                text(_TDOC_METADATA_SELECT + " WHERE t.tdoc_id = :id"),
+                {"id": tdoc_id},
+            ).first()
+            meeting_id, tsg, uploaded_date = _vec_metadata(
+                *(row[1:] if row is not None else (None, None, None)),
+            )
+            for chunk in chunks:
                 conn.execute(
                     text(
                         "INSERT INTO vec_tdoc_embeddings "
-                        "(chunk_id, tdoc_id, chunk_index, embedding) "
-                        "VALUES (:cid, :tid, :ci, :emb)"
+                        "(chunk_id, tdoc_id, chunk_index, meeting_id, tsg, uploaded_date, embedding) "
+                        "VALUES (:cid, :tid, :ci, :mid, :tsg, :udate, :emb)"
                     ),
                     {
-                        "cid": f"{tdoc_id}#{i}",
+                        "cid": chunk.chunk_id,
                         "tid": tdoc_id,
-                        "ci": i,
-                        "emb": np.asarray(vec, dtype=np.float32).tobytes(),
+                        "ci": chunk.chunk_index,
+                        "mid": meeting_id,
+                        "tsg": tsg,
+                        "udate": uploaded_date,
+                        "emb": np.asarray(chunk.embedding, dtype=np.float32).tobytes(),
                     },
                 )
+
+    def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
+        return self._indexed_state()[0]
+
+    def embed_text_for_tdoc(self, tdoc_id: str) -> str | None:
+        return _build_embed_text(tdoc_id)
+
+    def content_documents_for_tdoc(self, tdoc_id: str) -> list[tuple[str, str, str]]:
+        return _build_content_documents(tdoc_id)
+
+    def _indexed_state(
+        self,
+    ) -> tuple[dict[str, frozenset[tuple[str, str]]], dict[str, set[tuple[int, str, str]]]]:
+        """Return each TDoc's indexed content signatures and stored metadata in one scan."""
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT tdoc_id, chunk_id, meeting_id, tsg, uploaded_date "
+                    "FROM vec_tdoc_embeddings"
+                )
+            ).all()
+        signatures: dict[str, set[tuple[str, str]]] = {}
+        metadata: dict[str, set[tuple[int, str, str]]] = {}
+        for tdoc_id, chunk_id, meeting_id, tsg, uploaded_date in rows:
+            metadata.setdefault(tdoc_id, set()).add((meeting_id, tsg, uploaded_date))
+            signature = parse_content_chunk_id(chunk_id)
+            if signature is not None:
+                signatures.setdefault(tdoc_id, set()).add(signature)
+        return (
+            {tdoc_id: frozenset(values) for tdoc_id, values in signatures.items()},
+            metadata,
+        )
 
     def remove_for_tdoc(self, tdoc_id: str) -> None:
         with self._engine.begin() as conn:
@@ -251,70 +454,61 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             "q": np.asarray(query_vec, dtype=np.float32).tobytes(),
             "k": limit,
         }
+        clauses: list[str] = []
         if filters is not None:
-            sql.append("  JOIN tdocs t   ON t.tdoc_id = vec_tdoc_embeddings.tdoc_id")
-            sql.append("  JOIN meetings m ON t.meeting_id = m.meeting_id")
-            if filters.tdoc_id:
-                sql.append("   AND t.tdoc_id = :tdoc_id")
-                params["tdoc_id"] = filters.tdoc_id
-            else:
-                if filters.tsg:
-                    # meetings.tsg is stored upper-case by sync, so callers
-                    # may pass any case (mirrors meeting_sql / wi_sql).
-                    sql.append("   AND m.tsg = :tsg")
-                    params["tsg"] = filters.tsg.upper()
-                if filters.meeting:
-                    # Rich-filter grammar over name OR title: the results
-                    # page shows m.title, but the CLI convention (meeting
-                    # list --name, tdoc list text filters) is LIKE on the
-                    # stored field.
-                    meeting_clauses, meeting_params = build_text_filter_or_params(
-                        ("m.name", "m.title"), filters.meeting, param="meeting",
-                    )
-                    sql.append(f"   AND ({meeting_clauses})")
-                    params.update(meeting_params)
-                if filters.meeting_id is not None:
-                    sql.append("   AND m.meeting_id = :meeting_id")
-                    params["meeting_id"] = filters.meeting_id
-                if filters.release:
-                    clause, bound = build_text_filter_sql("t.release", filters.release, param="release")
-                    if bound is not None:
-                        params["release"] = bound
-                    sql.append(f"   AND {clause}")
-                if filters.spec:
-                    clause, bound = build_text_filter_sql("t.spec", filters.spec, param="spec")
-                    if bound is not None:
-                        params["spec"] = bound
-                    sql.append(f"   AND {clause}")
-                if filters.since:
-                    sql.append("   AND t.uploaded_date >= :since")
-                    params["since"] = filters.since
-                if filters.until:
-                    sql.append("   AND t.uploaded_date <= :until")
-                    params["until"] = filters.until
+            clauses, filter_params, needs_join = _knn_predicates(filters)
+            params.update(filter_params)
+            if needs_join:
+                sql.append("  JOIN tdocs t   ON t.tdoc_id = vec_tdoc_embeddings.tdoc_id")
+                sql.append("  JOIN meetings m ON t.meeting_id = m.meeting_id")
         sql.append(" WHERE embedding MATCH :q AND k = :k")
+        sql.extend(f"   AND {clause}" for clause in clauses)
         # Note: binds raw float32 bytes via sqlite-vec's BLOB conversion; equivalent to vec_bit(:q).
         sql.append("  ORDER BY distance IS NULL, distance ASC, chunk_id ASC")
         with self._engine.begin() as conn:
             rows = conn.execute(text("\n".join(sql)), params).all()
         return [(r[1], r[0], int(r[2]), float(r[3]) if r[3] is not None else float("inf")) for r in rows]
 
+    def matching_tdoc_ids(
+        self, tdoc_ids: Collection[str], filters: SearchFilters,
+    ) -> frozenset[str]:
+        ids = list(tdoc_ids)
+        if not ids:
+            return frozenset()
+        clauses, params = _filter_predicates(filters)
+        sql = [
+            "SELECT t.tdoc_id",
+            "  FROM tdocs t",
+            "  JOIN meetings m ON t.meeting_id = m.meeting_id",
+            " WHERE t.tdoc_id IN :tdoc_ids",
+        ]
+        sql.extend(f"   AND {clause}" for clause in clauses)
+        stmt = text("\n".join(sql)).bindparams(bindparam("tdoc_ids", expanding=True))
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt, {**params, "tdoc_ids": ids}).all()
+        return frozenset(row[0] for row in rows)
+
     def rebuild_batch(
         self, batch_size: int, after_id: str | None, stale_only: bool,
     ) -> Iterable[list[str]]:
+        if batch_size < 1:
+            return
         last_id = after_id if after_id is not None else ""
+        if stale_only:
+            stale_ids = [tdoc_id for tdoc_id in self._stale_tdoc_ids() if tdoc_id > last_id]
+            for start in range(0, len(stale_ids), batch_size):
+                yield stale_ids[start:start + batch_size]
+            return
         while True:
-            sql = ["SELECT tdoc_id FROM tdocs WHERE tdoc_id > :last_id"]
             params: dict[str, object] = {"last_id": last_id, "limit": batch_size}
-            if stale_only:
-                sql.append(
-                    " AND uploaded_date > ("
-                    " SELECT value FROM vec_meta "
-                    " WHERE key = 'last_indexed_uploaded_date')"
-                )
-            sql.append(" ORDER BY tdoc_id ASC LIMIT :limit")
             with self._engine.begin() as conn:
-                rows = conn.execute(text(" ".join(sql)), params).all()
+                rows = conn.execute(
+                    text(
+                        "SELECT tdoc_id FROM tdocs WHERE tdoc_id > :last_id "
+                        "ORDER BY tdoc_id ASC LIMIT :limit"
+                    ),
+                    params,
+                ).all()
             ids = [r[0] for r in rows]
             if not ids:
                 return
@@ -324,20 +518,16 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
     def count_tdocs_to_index(
         self, stale_only: bool, after_id: str | None = None,
     ) -> int:
+        if stale_only:
+            return sum(
+                1 for tdoc_id in self._stale_tdoc_ids()
+                if after_id is None or tdoc_id > after_id
+            )
         sql = ["SELECT COUNT(*) FROM tdocs"]
         params: dict[str, object] = {}
-        clauses: list[str] = []
         if after_id is not None:
-            clauses.append("tdoc_id > :after_id")
+            sql.append(" WHERE tdoc_id > :after_id")
             params["after_id"] = after_id
-        if stale_only:
-            clauses.append(
-                "uploaded_date > ("
-                "SELECT value FROM vec_meta "
-                " WHERE key = 'last_indexed_uploaded_date')"
-            )
-        if clauses:
-            sql.append(" WHERE " + " AND ".join(clauses))
         with self._engine.begin() as conn:
             return int(
                 conn.execute(text(" ".join(sql)), params).scalar() or 0,
@@ -377,6 +567,67 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 ),
             )
 
+    def set_resume_snapshot(self, latest_uploaded_date: str | None) -> None:
+        """Persist the fresh run's ``MAX(uploaded_date)`` snapshot beside the cursor.
+
+        An empty corpus (``None``) is stored as ``''``. No upload date is empty, so the
+        marker tells "snapshot was None" apart from a missing key, which means the rebuild
+        started before snapshots were persisted.
+        """
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO vec_meta (key, value) "
+                    "VALUES ('last_rebuild_snapshot_uploaded_date', :v) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                ),
+                {"v": "" if latest_uploaded_date is None else latest_uploaded_date},
+            )
+
+    def get_resume_snapshot(self) -> str | None:
+        """Return the snapshot a cursor-set resumed rebuild stamps.
+
+        The persisted fresh-run value, with the ``''`` marker read back as ``None``. A
+        missing key (a rebuild started before snapshots were persisted) falls back to the
+        current :meth:`latest_uploaded_date`. A cursorless resume does not call this; it
+        takes :meth:`latest_uploaded_date` directly.
+        """
+        with self._engine.begin() as conn:
+            stored = conn.execute(
+                text("SELECT value FROM vec_meta WHERE key = 'last_rebuild_snapshot_uploaded_date'")
+            ).scalar()
+        if stored is None:
+            return self.latest_uploaded_date()
+        return stored or None
+
+    def latest_uploaded_date(self) -> str | None:
+        with self._engine.begin() as conn:
+            latest = conn.execute(text("SELECT MAX(uploaded_date) FROM tdocs")).scalar()
+        return None if latest is None else str(latest)
+
+    def mark_rebuilt(self, latest_uploaded_date: str | None, rebuilt_at: str) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO vec_meta (key, value) VALUES ('last_rebuild_at', :v) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                ),
+                {"v": rebuilt_at},
+            )
+            if latest_uploaded_date is None:
+                conn.execute(
+                    text("DELETE FROM vec_meta WHERE key = 'last_indexed_uploaded_date'")
+                )
+            else:
+                conn.execute(
+                    text(
+                        "INSERT INTO vec_meta (key, value) "
+                        "VALUES ('last_indexed_uploaded_date', :v) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                    ),
+                    {"v": latest_uploaded_date},
+                )
+
     def status(self) -> SearchIndexStatus:
         with self._engine.begin() as conn:
             row_count = int(
@@ -397,6 +648,10 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             stored_model = conn.execute(
                 text("SELECT value FROM vec_meta WHERE key='embedding_model'")
             ).scalar()
+        date_stale = bool(latest and (not last_indexed or str(latest) > last_indexed))
+        if not date_stale and last_indexed:
+            date_stale = self._has_unindexed_snapshot_day_tdoc(str(last_indexed))
+        is_stale = date_stale or bool(self._stale_content_tdoc_ids())
         from datetime import datetime as _dt
         return SearchIndexStatus(
             enabled=True,
@@ -404,10 +659,102 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
             last_rebuild_at=_dt.fromisoformat(last_rebuild) if last_rebuild else None,
             last_indexed_uploaded_date=_dt.fromisoformat(last_indexed) if last_indexed else None,
             latest_tdocs_uploaded_date=_dt.fromisoformat(str(latest)) if latest else None,
-            is_stale=bool(latest and (not last_indexed or str(latest) > last_indexed)),
+            is_stale=is_stale,
             embedding_dim=int(stored_dim) if stored_dim is not None else None,
             embedding_model=stored_model,
         )
+
+    def _has_unindexed_snapshot_day_tdoc(self, snapshot: str) -> bool:
+        """Return True when a TDoc uploaded on the snapshot day is missing from the index.
+
+        Only a missing row makes the status stale. An indexed same-day TDoc is fresh,
+        although stale-only re-embeds it. A TDoc with empty embed text is never indexed,
+        so it is ignored, or the status would stay stale.
+        """
+        with self._engine.begin() as conn:
+            missing = conn.execute(
+                text(
+                    "SELECT t.tdoc_id FROM tdocs t "
+                    " WHERE t.uploaded_date = :day "
+                    "   AND NOT EXISTS ("
+                    "     SELECT 1 FROM vec_tdoc_embeddings v WHERE v.tdoc_id = t.tdoc_id)"
+                ),
+                {"day": snapshot},
+            ).scalars().all()
+        return any(_build_embed_text(tdoc_id) for tdoc_id in missing)
+
+    def _stale_tdoc_ids(self) -> list[str]:
+        """Return sorted ``tdoc_id``s that are uploaded-date stale or content stale.
+
+        The date part includes the snapshot day (``>=``), so a stale-only run re-embeds
+        TDocs already indexed on that day. That is the accepted cost of the same-day cutoff.
+        """
+        with self._engine.begin() as conn:
+            date_stale = conn.execute(
+                text(
+                    "SELECT tdoc_id FROM tdocs WHERE uploaded_date >= ("
+                    " SELECT value FROM vec_meta "
+                    " WHERE key = 'last_indexed_uploaded_date')"
+                )
+            ).scalars().all()
+        return sorted(set(date_stale) | self._stale_content_tdoc_ids())
+
+    def _stale_content_tdoc_ids(self) -> set[str]:
+        """Return ``tdoc_id``s whose indexed content or metadata differs from SQL.
+
+        Metadata is copied into the vec table at index time and no hook updates
+        it, so a TDoc whose stored ``meeting_id`` / ``tsg`` / ``uploaded_date``
+        no longer matches its ``tdocs`` and ``meetings`` rows is stale. A TDoc with
+        a NULL ``token_count`` (not yet computed, or stored content that cannot be
+        decoded) is always stale, so one such row is reported for its own TDoc and
+        does not abort the other TDocs.
+        """
+        expected = self._expected_content_signatures()
+        actual, indexed_metadata = self._indexed_state()
+        with self._engine.begin() as conn:
+            rows = conn.execute(text(_TDOC_METADATA_SELECT)).all()
+        stale: set[str] = set()
+        for tdoc_id, meeting_id, tsg, uploaded_date in rows:
+            signature = expected.get(tdoc_id, frozenset())
+            if signature is None or signature != actual.get(tdoc_id, frozenset()):
+                stale.add(tdoc_id)
+                continue
+            stored = indexed_metadata.get(tdoc_id)
+            if stored is not None and stored != {_vec_metadata(meeting_id, tsg, uploaded_date)}:
+                stale.add(tdoc_id)
+        return stale
+
+    def _expected_content_signatures(
+        self,
+    ) -> dict[str, frozenset[tuple[str, str]] | None]:
+        """Return the content signatures a fresh index holds, per TDoc.
+
+        Uses the same plan as :meth:`SemanticSearchService.index_for_tdoc`, so a
+        blank document or one past the content cap has no expected signature.
+        The plan reads each row's stored ``token_count`` and never decompresses
+        ``content``. A ``None`` value marks a TDoc with any NULL ``token_count``.
+        """
+        settings = self._chunk_settings
+        expected: dict[str, frozenset[tuple[str, str]] | None] = {}
+        with self._engine.begin() as conn:
+            rows = conn.execute(text(_STATUS_CONTENT_ROWS_SQL))
+            for tdoc_id, group in groupby(rows, key=lambda row: row.tdoc_id):
+                ordered = list(_ordered_rows(list(group)))
+                if any(row.token_count is None for row in ordered):
+                    expected[tdoc_id] = None
+                    continue
+                expected[tdoc_id] = frozenset(
+                    planned_document_keys(
+                        (
+                            (row.document_id, row.content_hash, row.token_count)
+                            for row in ordered
+                        ),
+                        settings.chunk_size,
+                        settings.chunk_overlap,
+                        settings.max_content_chunks_per_tdoc,
+                    )
+                )
+        return expected
 
     def get_tdocs_metadata(
         self, tdoc_ids: list[str],
@@ -596,3 +943,64 @@ def _build_embed_text(tdoc_id: str) -> str | None:
             elif decoded is not None:
                 parts.append(str(decoded)[:2000])
     return " :: ".join(p for p in parts if p)
+
+
+def _content_rows_sql(*, single_tdoc: bool, status_only: bool = False) -> str:
+    where = " WHERE e.tdoc_id = :tdoc_id" if single_tdoc else ""
+    payload = "c.token_count AS token_count" if status_only else "c.content AS content"
+    selects = [
+        "SELECT e.tdoc_id AS tdoc_id, c.ftp_url AS ftp_url, "
+        "e.doc_filename AS main, c.doc_filename AS source_file, "
+        "c.document_id AS document_id, c.content_hash AS content_hash, "
+        f"{payload} "
+        f"FROM {store.table_name} c "
+        f"JOIN tdoc_extracts e ON e.ftp_url = c.ftp_url{where}"
+        for store in TDOC_CONTENT_STORES
+    ]
+    return "\nUNION ALL\n".join(selects) + "\nORDER BY tdoc_id, ftp_url, source_file"
+
+
+_CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False)
+_CONTENT_ROWS_FOR_TDOC_SQL = _content_rows_sql(single_tdoc=True)
+_STATUS_CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False, status_only=True)
+
+
+class UndecodableContentError(ValueError):
+    """A stored content row cannot be decoded into Markdown."""
+
+
+def _ordered_rows(rows: Sequence[Row]) -> Iterator[Row]:
+    """Yield content rows in indexing order without decoding their content.
+
+    Rows are grouped by ZIP URL. Each URL's main document comes first and the
+    other sources follow in path order. The CR main is never a row, so a CR
+    yields its annexes in path order.
+    """
+    by_url: dict[str, dict[str, Row]] = {}
+    mains: dict[str, str] = {}
+    for row in rows:
+        by_url.setdefault(row.ftp_url, {})[row.source_file] = row
+        mains[row.ftp_url] = row.main
+    for ftp_url, rows_by_source in by_url.items():
+        for source in ordered_sources(tuple(rows_by_source), main=mains[ftp_url]):
+            yield rows_by_source[source]
+
+
+def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
+    """Yield ``(document_id, content_hash, markdown)`` in indexing order."""
+    for row in _ordered_rows(rows):
+        markdown = decompress_json(row.content)
+        if markdown is None:
+            raise UndecodableContentError(
+                f"stored content for {row.source_file!r} cannot be decoded"
+            )
+        yield row.document_id, row.content_hash, markdown
+
+
+def _build_content_documents(tdoc_id: str) -> list[tuple[str, str, str]]:
+    """Return one TDoc's stored content documents in indexing order."""
+    with get_engine().begin() as conn:
+        rows = conn.execute(
+            text(_CONTENT_ROWS_FOR_TDOC_SQL), {"tdoc_id": tdoc_id},
+        ).all()
+    return list(_ordered_documents(rows))

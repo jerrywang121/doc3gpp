@@ -9,6 +9,7 @@ exit code.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from doc3gpp.models.search import SearchError, SearchHit
 
@@ -36,12 +37,43 @@ class VectorIndexUnavailableError(SemanticSearchError):
 
 
 @dataclass(slots=True, frozen=True)
+class EmbeddedChunk:
+    """One chunk ready for the vector index: its ID, position, and embedding."""
+
+    chunk_id: str
+    chunk_index: int
+    embedding: Any
+
+
+@dataclass(slots=True, frozen=True)
+class SemanticDocumentHit:
+    """Best chunk of one content document (CR annex or family member) of a TDoc."""
+
+    document_id: str
+    chunk_id: str
+    distance: float
+
+
+def parse_content_chunk_id(chunk_id: str) -> tuple[str, str] | None:
+    """Return ``(document_id, content_hash)`` for a content chunk ID.
+
+    Content chunks are ``<tdoc_id>#<document_id>#<content_hash>#<i>``. Metadata
+    chunks (``<tdoc_id>#<i>``) return ``None``.
+    """
+    parts = chunk_id.split("#")
+    if len(parts) != 4:
+        return None
+    return parts[1], parts[2]
+
+
+@dataclass(slots=True, frozen=True)
 class SemanticSearchHit:
     """A single merged hit from the RRF fusion of FTS5 + vector rankings.
 
-    ``rank_fts5`` / ``rank_vec`` are the 0-based positions in the
-    respective fan-out lists, or ``None`` when the ``tdoc_id`` was not
-    present in that side's fan-out. ``min_chunk_distance`` is the
+    ``rank_fts5`` / ``rank_vec`` are the 0-based positions in the respective
+    fan-out lists, or ``None`` when the ``tdoc_id`` was not present in that
+    side's fan-out. ``rank_vec`` counts distinct TDocs in knn order, not chunk
+    rows. ``min_chunk_distance`` is the
     lowest cosine distance across all chunks for this ``tdoc_id``
     (``None`` when the tdoc had no vector rows). ``best_chunk_id`` is
     the chunk that produced the min distance (for ``--explain``
@@ -59,13 +91,17 @@ class SemanticSearchHit:
     rank_vec: int | None = None
     min_chunk_distance: float | None = None
     best_chunk_id: str | None = None
+    document_hits: tuple[SemanticDocumentHit, ...] = ()
 
 
 __all__ = [
+    "EmbeddedChunk",
     "EmbedderUnavailableError",
+    "SemanticDocumentHit",
     "SemanticSearchError",
     "SemanticSearchHit",
     "SemanticSearchQueryError",
     "SemanticSearchUnavailableError",
     "VectorIndexUnavailableError",
+    "parse_content_chunk_id",
 ]

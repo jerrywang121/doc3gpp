@@ -10,23 +10,36 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import io
+import logging
 import threading
 import zipfile
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import select
 
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_content_families import (
+    TDOC_CONTENT_STORES,
+    is_complete_cr_extraction,
+)
 from doc3gpp.models.tdoc_cr import (
+    DirectParseResult,
+    TDocCRChangeDetails,
     TDocCRDetails,
     TDocCRParseResult,
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
-from doc3gpp.parsers.cr_parser import extract_docx_from_zip
+from doc3gpp.models.tdoc_document import TDocDocument
+from doc3gpp.parsers.tdoc_zip import (
+    build_markdown_archive,
+    document_id_for,
+    read_markdown_archive,
+)
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.services.tdoc_cr_service import (
@@ -35,11 +48,26 @@ from doc3gpp.services.tdoc_cr_service import (
     PreparedDirectTDoc,
     PreparedTDocExtract,
     TDocCrService,
-    _wrap_markdown_zip,
 )
+from doc3gpp.services.tdoc_family_service import TDocFamilyService
 from doc3gpp.services.tdoc_pipeline import TDocPipeline
+from doc3gpp.settings.schema import TDocParseSettings
+from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.db.models import TDocCrAnnexOrm, TDocORM
+from doc3gpp.storage.db.session import get_session_factory
+from doc3gpp.storage.repositories.tdoc_content_sql import (
+    SQLAlchemyTDocContentRepository,
+)
+from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+    SQLAlchemyTDocCrChangeDetailsRepository,
+)
+from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+    SQLAlchemyTDocCrTtcnRepository,
+)
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
+CR_STORE = next(store for store in TDOC_CONTENT_STORES if store.key == "cr")
 
 
 def _docx_available() -> bool:
@@ -54,6 +82,7 @@ def _build_service(
     tmp_path: Path,
     *,
     zip_bytes: bytes | None = None,
+    family_service: TDocFamilyService | None = None,
 ) -> tuple[
     TDocCrService, MagicMock, TDocCache, MagicMock, MagicMock, MagicMock,
 ]:
@@ -70,13 +99,15 @@ def _build_service(
 
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
-    cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
     cr_change_details_repo = MagicMock()
     cr_change_details_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = None
+    content_repo = MagicMock()
+    content_repo.get_extract_meta.return_value = None
+    content_repo.list_documents.return_value = ()
 
     service = TDocCrService(
         cache=cache,
@@ -85,6 +116,8 @@ def _build_service(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
+        content_repo=content_repo,
+        family_service=family_service,
     )
     return service, scraper, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
@@ -93,168 +126,135 @@ def _dummy_details(tdoc_id: str) -> TDocCRDetails:
     return TDocCRDetails(tdoc_id=tdoc_id, spec="38.523-3", cr_num="3790", rev="0")
 
 
+def _test_document(
+    markdown_text: str,
+    *,
+    ftp_url: str = "stored/test.zip",
+    source_file: str = "main.docx",
+    file_order: int = 0,
+) -> TDocDocument:
+    document_id = document_id_for(ftp_url, source_file)
+    stem = source_file.rsplit("/", 1)[-1][:-5] or "document"
+    return TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=f"documents/{document_id}/{stem}.md",
+        file_order=file_order,
+        markdown_text=markdown_text,
+        content_hash=hashlib.sha256(markdown_text.encode("utf-8")).hexdigest(),
+    )
+
+
+def _make_docx(text: str) -> bytes:
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph(text)
+    payload = io.BytesIO()
+    document.save(payload)
+    return payload.getvalue()
+
+
+def _multifile_zip_with_main(main_zip: bytes) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(main_zip)) as source:
+        main_docx = source.read(next(
+            name for name in source.namelist() if name.lower().endswith(".docx")
+        ))
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("a/support-alpha.docx", _make_docx("support alpha text"))
+        archive.writestr("b/support-beta.docx", _make_docx("support beta text"))
+        archive.writestr("z/R5s260009.docx", main_docx)
+    return payload.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # Markdown cache compression / round-trip.
 # ---------------------------------------------------------------------------
 
 
-def _zip_markdown_bytes(text: str, *, inner_name: str) -> bytes:
-    """Helper: wrap ``text`` in a real ZIP archive (mirrors ``_wrap_markdown_zip``).
-
-    Tests seed the on-disk cache directly via ``cache.put_bytes`` to
-    exercise read paths without re-running the docx-to-markdown render.
-    """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(inner_name, text.encode("utf-8"))
-    return buf.getvalue()
-
-
 @pytest.mark.skipif(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_markdown_cache_writes_real_zip_and_hits_without_rerendering(
+def test_markdown_cache_writes_real_multi_document_zip_and_manifest(
     tmp_path: Path,
-    monkeypatch: Any,
 ) -> None:
-    """On write the markdown cache is a real ``zipfile.ZipFile``; on read it is unpacked.
-
-    The ``PK\x03\x04`` magic is the post-this-change format — the cache
-    file extends with ``.zip`` and is byte-for-byte the same shape a
-    ``zipfile.ZipFile(..., "w")`` call would produce, so ``unzip`` /
-    7z / WinZip can open it directly off disk.
-    """
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-    service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
-
-    doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
-    cache_file = "R5s260009-abcdef0123456789.zip"
-
-    markdown = service._load_or_render_markdown(
-        cache_file=cache_file,
-        docx_bytes=docx_bytes,
-        doc_filename=doc_filename,
-        force=False,
-    )
-    assert markdown
-
-    cached_path = cache.path_for(cache_file, "markdown")
-    assert cached_path.exists()
-    raw = cached_path.read_bytes()
-    assert raw[:4] == b"PK\x03\x04", (
-        "markdown cache must be a real ZIP — got magic "
-        f"{raw[:4]!r}, expected b'PK\\x03\\x04'"
-    )
-    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-        names = zf.namelist()
-        assert len(names) == 1
-        assert names[0].endswith(".md")
-        assert zf.read(names[0]).decode("utf-8") == markdown
-
-    def _boom(*_args: Any, **_kwargs: Any) -> str:  # pragma: no cover
-        raise AssertionError("convert_document_to_markdown should not be re-invoked")
-
-    monkeypatch.setattr(
-        "doc3gpp.services.tdoc_cr_service.convert_document_to_markdown",
-        _boom,
-        raising=False,
+    zip_bytes = _multifile_zip_with_main(fixture.read_bytes())
+    service, _, cache, _, _, tdoc_repo = _build_service(tmp_path, zip_bytes=zip_bytes)
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
     )
 
-    second = service._load_or_render_markdown(
-        cache_file=cache_file,
-        docx_bytes=docx_bytes,
-        doc_filename=doc_filename,
-        force=False,
-    )
-    assert second == markdown
+    prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert isinstance(prepared, PreparedTDocExtract)
+    assert prepared.main_source_file == "z/R5s260009.docx"
+    assert prepared.extract_meta.doc_filename == "z/R5s260009.docx"
+    assert prepared.extract_meta.extraction_version == 2
+    assert prepared.extract_meta.document_count == 2
+    raw = cache.get_bytes(prepared.extract_meta.cache_file, "markdown")
+    assert raw is not None and raw.startswith(b"PK\x03\x04")
+    archive = read_markdown_archive(raw)
+    assert archive.manifest_version == 1
+    assert archive.main_source_file == "z/R5s260009.docx"
+    assert [document.source_file for document in archive.documents] == [
+        "z/R5s260009.docx",
+        "a/support-alpha.docx",
+        "b/support-beta.docx",
+    ]
+    assert "support alpha text" in archive.documents[1].markdown_text
+    assert "support beta text" in archive.documents[2].markdown_text
 
 
-@pytest.mark.skipif(
-    not _docx_available(),
-    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
-)
 def test_markdown_cache_reads_legacy_plain_utf8(tmp_path: Path) -> None:
-    """Pre-change plain UTF-8 markdown cache files continue to work.
-
-    The ``_decompress_markdown`` reader magic-byte-sniffs for plain UTF-8
-    (no leading ``PK`` / ``\\x1f\\x8b``), so legacy unzipped cache files
-    remain readable after the ZIP-wrapping change.
-    """
-    fixture = FIXTURES_DIR / "R5s260009.zip"
-    if not fixture.exists():
-        pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-    service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
-
-    doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
-    cache_file = "R5s260009-abcdef0123456789.zip"
-
+    """Legacy plain UTF-8 bytes remain isolated from versioned documents."""
     legacy_text = "legacy plain markdown cache content"
-    cache.path_for(cache_file, "markdown").write_text(legacy_text, encoding="utf-8")
-
-    result = service._load_or_render_markdown(
-        cache_file=cache_file,
-        docx_bytes=docx_bytes,
-        doc_filename=doc_filename,
-        force=False,
-    )
-    assert result == legacy_text
+    archive = read_markdown_archive(legacy_text.encode("utf-8"))
+    assert archive.is_legacy is True
+    assert archive.legacy_markdown == legacy_text
+    assert archive.documents == ()
 
 
-@pytest.mark.skipif(
-    not _docx_available(),
-    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
-)
 def test_markdown_cache_reads_legacy_gzip_blob(tmp_path: Path) -> None:
-    """Pre-this-change gzip-compressed cache files remain readable.
-
-    The pre-change writer produced a gzip-compressed blob with ``.zip``
-    extension; the reader's magic-byte sniff falls through to ``gzip.decompress``
-    when ``PK`` is not the leading two bytes, so a cache file written by
-    the previous code path still decodes cleanly.
-    """
-    fixture = FIXTURES_DIR / "R5s260009.zip"
-    if not fixture.exists():
-        pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-    service, _, cache, _, _, _ = _build_service(tmp_path, zip_bytes=zip_bytes)
-
-    doc_filename, docx_bytes = extract_docx_from_zip(zip_bytes)
-    cache_file = "R5s260009-abcdef0123456789.zip"
-
+    """Legacy gzip bytes remain readable without claiming provenance."""
     legacy_text = "legacy gzip-blob markdown cache content"
-    cache.put_bytes(
-        cache_file,
-        gzip.compress(legacy_text.encode("utf-8")),
-        "markdown",
+    archive = read_markdown_archive(gzip.compress(legacy_text.encode("utf-8")))
+    assert archive.is_legacy is True
+    assert archive.legacy_markdown == legacy_text
+    assert archive.documents == ()
+
+
+def test_markdown_cache_archive_contains_manifest_and_source_documents() -> None:
+    ftp_url = "tsg_ran/r5s260009.zip"
+    main = _test_document("# main\nbody\n", ftp_url=ftp_url)
+    support = _test_document(
+        "support body\n",
+        ftp_url=ftp_url,
+        source_file="annex/info.docx",
+        file_order=1,
     )
 
-    result = service._load_or_render_markdown(
-        cache_file=cache_file,
-        docx_bytes=docx_bytes,
-        doc_filename=doc_filename,
-        force=False,
+    payload = build_markdown_archive(
+        (main, support),
+        ftp_url=ftp_url,
+        main_source_file="main.docx",
     )
-    assert result == legacy_text
 
-
-def test_wrap_markdown_zip_is_a_real_zip(tmp_path: Path) -> None:
-    """``_wrap_markdown_zip`` output passes ``zipfile.ZipFile``'s read path.
-
-    Belt-and-braces unit test that does not require a docx fixture —
-    locks the public contract independently of ``_load_or_render_markdown``.
-    """
-    payload = "# hello\nbody\n"
-    archive = _wrap_markdown_zip(payload, inner_name="R5s260009.md")
-
-    assert archive[:4] == b"PK\x03\x04"
-    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
-        assert zf.namelist() == ["R5s260009.md"]
-        assert zf.read("R5s260009.md").decode("utf-8") == payload
+    assert payload.startswith(b"PK\x03\x04")
+    decoded = read_markdown_archive(payload)
+    assert decoded.manifest_version == 1
+    assert decoded.main_source_file == "main.docx"
+    assert [document.markdown_text for document in decoded.documents] == [
+        "# main\nbody\n",
+        "support body\n",
+    ]
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert len(archive.namelist()) == 3
+        assert sum(name.endswith(".md") for name in archive.namelist()) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -266,49 +266,219 @@ def test_wrap_markdown_zip_is_a_real_zip(tmp_path: Path) -> None:
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_extract_from_url_db_cache_hit_populates_markdown_for_raw(
+def test_extract_from_url_db_cache_hit_returns_sql_documents(
     tmp_path: Path,
 ) -> None:
-    """A DB cache hit reads the on-disk markdown so ``--format raw`` is non-empty."""
+    """A direct URL cache hit returns the archive main plus the SQL annexes."""
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
     service, scraper, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes
+        tmp_path, zip_bytes=fixture.read_bytes()
     )
-    tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
-
-    url = "https://www.3gpp.org/ftp/.../R5s260009.zip"
-    stored_ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
-    expected_markdown = "# Raw cache hit markdown\nCached body paragraph."
-
-    cache_file = "R5s260009-abcdef0123456789.zip"
-    cache.put_bytes(
-        cache_file,
-        _zip_markdown_bytes(expected_markdown, inner_name="R5s260009.md"),
-        "markdown",
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009",
+        type="CR",
+        ftp_url="tsg_ran/r5s260009.zip",
     )
 
-    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
-    cr_repo.get_extract_meta_by_url.return_value = TDocExtractMeta(
+    url = "https://www.3gpp.org/ftp/tsg_ran/R5s260009.zip"
+    stored_ftp_url = "tsg_ran/r5s260009.zip"
+    main = _test_document(
+        "# Archive main\nStored body.",
+        ftp_url=stored_ftp_url,
+        source_file="z/R5s260009.docx",
+    )
+    annex = _test_document(
+        "# SQL annex\nStored body.",
+        ftp_url=stored_ftp_url,
+        source_file="b/support-beta.docx",
+        file_order=1,
+    )
+    meta = TDocExtractMeta(
         ftp_url=stored_ftp_url,
         tdoc_id="R5s260009",
-        cache_file=cache_file,
-        doc_filename="R5s260009.docx",
+        cache_file="R5s260009-abcdef0123456789.zip",
+        doc_filename="z/R5s260009.docx",
+        extraction_version=2,
+        document_count=1,
     )
+    cache.put_bytes(
+        meta.cache_file,
+        build_markdown_archive(
+            (main, annex),
+            ftp_url=stored_ftp_url,
+            main_source_file=main.source_file,
+        ),
+        "markdown",
+    )
+    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
+    service._content_repo.get_extract_meta.return_value = meta
+    service._content_repo.list_documents.return_value = (annex,)
 
-    result = service.extract_from_url(url, force=False, full=False)
+    result = service.extract_from_url(url, force=False)
 
     assert result.from_cache is True
     assert result.persisted is False
     assert result.tdoc_id == "R5s260009"
     assert result.tdoc_id_in_tdocs is True
-    assert result.markdown == expected_markdown
-    # Network was NOT touched on a DB cache hit.
+    assert result.documents == (main, annex)
+    assert result.main_source_file == "z/R5s260009.docx"
     assert scraper.get_bytes.call_count == 0
-    # The repos were not asked to upsert anything.
-    assert cr_repo.upsert.call_count == 0
+    service._content_repo.list_documents.assert_called_once_with(CR_STORE, stored_ftp_url)
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_incomplete_sql_bundle_is_reparsed_for_direct_url(tmp_path: Path) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    service, scraper, _cache, cr_repo, _, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=fixture.read_bytes()
+    )
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009", type="CR", ftp_url="tsg_ran/r5s260009.zip"
+    )
+    stored_url = "tsg_ran/r5s260009.zip"
+    old_document = _test_document(
+        "old body", ftp_url=stored_url, source_file="main.docx"
+    )
+    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
+    service._content_repo.get_extract_meta.return_value = TDocExtractMeta(
+        ftp_url=stored_url,
+        tdoc_id="R5s260009",
+        cache_file="R5s260009.zip",
+        doc_filename="main.docx",
+        extraction_version=2,
+        document_count=2,
+    )
+    service._content_repo.list_documents.return_value = (old_document,)  # type: ignore[attr-defined]
+
+    prepared = service.prepare_from_url(
+        "https://www.3gpp.org/ftp/tsg_ran/r5s260009.zip",
+        force=False,
+    )
+
+    assert isinstance(prepared, PreparedDirectTDoc)
+    assert len(prepared.documents) == 1
+    assert scraper.get_bytes.call_count == 1
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_prepare_extract_reparses_incomplete_sql_document_rows(tmp_path: Path) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    service, scraper, _cache, cr_repo, _, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=fixture.read_bytes()
+    )
+    stored_url = "stored/r5s260009.zip"
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009", type="CR", ftp_url=stored_url
+    )
+    cr_repo.get_by_url.return_value = _dummy_details("R5s260009")
+    service._content_repo.get_extract_meta.return_value = TDocExtractMeta(
+        ftp_url=stored_url,
+        tdoc_id="R5s260009",
+        cache_file="R5s260009.zip",
+        doc_filename="main.docx",
+        extraction_version=2,
+        document_count=2,
+    )
+    service._content_repo.list_documents.return_value = (  # type: ignore[attr-defined]
+        _test_document("old body", ftp_url=stored_url, source_file="main.docx"),
+    )
+
+    prepared = service.prepare_extract("R5s260009", force=False)
+
+    assert isinstance(prepared, PreparedTDocExtract)
+    assert len(prepared.documents) == 1
+    assert scraper.get_bytes.call_count == 1
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_prepare_extract_does_not_reuse_complete_fallback_for_current_url(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from doc3gpp.parsers.normalizers import normalize_ftp_path
+
+    tdoc_id = "R5s260009"
+    current_path = "stored/r5s260009.zip"
+    fallback_path = "template/r5s260009.zip"
+    current_url = f"https://www.3gpp.org/ftp/{current_path}"
+    fallback_url = f"https://www.3gpp.org/ftp/{fallback_path}"
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists(), f"fixture missing: {fixture}"
+
+    service, _scraper, _cache, cr_repo, _, tdoc_repo = _build_service(tmp_path)
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id=tdoc_id, type="CR", ftp_url=current_path
+    )
+    current_key = normalize_ftp_path(current_url)
+    fallback_key = normalize_ftp_path(fallback_url)
+    details_by_url = {
+        current_key: TDocCRDetails(tdoc_id=tdoc_id, ftp_url=current_key),
+        fallback_key: TDocCRDetails(tdoc_id=tdoc_id, ftp_url=fallback_key),
+    }
+    meta_by_url = {
+        current_key: TDocExtractMeta(
+            ftp_url=current_key,
+            tdoc_id=tdoc_id,
+            cache_file="R5s260009.zip",
+            doc_filename="main.docx",
+            extraction_version=2,
+            document_count=1,
+        ),
+        fallback_key: TDocExtractMeta(
+            ftp_url=fallback_key,
+            tdoc_id=tdoc_id,
+            cache_file="R5s260009-fallback.zip",
+            doc_filename="main.docx",
+            extraction_version=2,
+            document_count=1,
+        ),
+    }
+    cr_repo.get_by_url.side_effect = details_by_url.get
+    service._content_repo.get_extract_meta.side_effect = meta_by_url.get  # type: ignore[attr-defined]
+    fallback_document = _test_document(
+        "complete fallback body",
+        ftp_url=fallback_key,
+        source_file="annex.docx",
+        file_order=1,
+    )
+    service._content_repo.list_documents.side_effect = (  # type: ignore[attr-defined]
+        lambda _store, url: (fallback_document,) if url == fallback_key else ()
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.resolve_download_url",
+        lambda *_args: (current_url, fallback_url),
+    )
+    monkeypatch.setattr(
+        "doc3gpp.services.tdoc_cr_service.download_tdoc_zip",
+        lambda *_args, **_kwargs: SimpleNamespace(url=current_url, path=fixture),
+    )
+
+    prepared = service.prepare_extract(tdoc_id)
+
+    assert isinstance(prepared, PreparedTDocExtract)
+    assert prepared.extract_meta.ftp_url == current_key
+    service.persist_prepared_extract(prepared)
+    stored_meta = (
+        service._content_repo.replace_cr_bundle.call_args.args[3]  # type: ignore[attr-defined]
+    )
+    assert stored_meta.ftp_url == current_key
 
 
 @pytest.mark.skipif(
@@ -319,23 +489,63 @@ def test_prepare_from_url_defers_repository_writes(tmp_path: Path) -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
+    payload = _multifile_zip_with_main(fixture.read_bytes())
     service, scraper, _cache, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=fixture.read_bytes()
+        tmp_path, zip_bytes=payload
     )
     tdoc_repo.get_by_id.return_value = TDoc(tdoc_id="R5s260009", type="CR")
 
     prepared = service.prepare_from_url(
         "https://www.3gpp.org/ftp/.../R5s260009.zip",
         force=True,
-        full=False,
     )
 
     assert isinstance(prepared, PreparedDirectTDoc)
     assert prepared.tdoc_id == "R5s260009"
+    assert prepared.main_source_file == "z/R5s260009.docx"
+    assert len(prepared.documents) == 3
+    assert not hasattr(prepared, "markdown")
     assert scraper.get_bytes.call_count == 1
+    service._content_repo.replace_cr_bundle.assert_not_called()  # type: ignore[attr-defined]
     cr_repo.upsert.assert_not_called()
     cr_repo.upsert_extract_meta.assert_not_called()
     cr_ttcn_repo.upsert.assert_not_called()
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_url_folder_batch_returns_multidocument_bundle(tmp_path: Path) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    payload = _multifile_zip_with_main(fixture.read_bytes())
+    service, _, _, _, _, tdoc_repo = _build_service(tmp_path, zip_bytes=payload)
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009", type="CR", ftp_url="Docs/R5s260009.zip"
+    )
+    file_url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    service.collect_3gpp_file_urls = (  # type: ignore[method-assign]
+        lambda _url, *, max_depth: [file_url]
+    )
+
+    batch = service.extract_from_url_batch(
+        "https://www.3gpp.org/ftp/Docs/", max_depth=0,
+    )
+
+    assert batch.failures == {}
+    assert batch.skipped == {}
+    assert len(batch.results) == 1
+    result = batch.results[0]
+    assert result.main_source_file == "z/R5s260009.docx"
+    assert [document.source_file for document in result.documents] == [
+        "z/R5s260009.docx",
+        "a/support-alpha.docx",
+        "b/support-beta.docx",
+    ]
+    assert result.persisted is True
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +563,7 @@ class _FakeParser:
 
     def __init__(self, result: TDocCRParseResult) -> None:
         self._result = result
-        self.calls: list[tuple[str, bool]] = []
+        self.calls: list[str] = []
 
     parser_version = "1.0.0"
 
@@ -368,9 +578,8 @@ class _FakeParser:
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
-        self.calls.append((tdoc_id, full))
+        self.calls.append(tdoc_id)
         return self._result
 
 
@@ -378,85 +587,86 @@ class _FakeParser:
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_extract_calls_three_upserts_for_ttcn_tdoc(tmp_path: Path) -> None:
-    """A TTCN-shaped TDoc triggers the three-way write path:
-
-    1. ``cr_repo.upsert(cover)`` — slim cover-page row.
-    2. ``cr_ttcn_repo.upsert(ttcn)`` — TTCN sidecar.
-    3. ``cr_repo.upsert_extract_meta(meta)`` — cache-metadata row.
-    """
+def test_extract_persists_one_atomic_multidocument_bundle(tmp_path: Path) -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
+    zip_bytes = _multifile_zip_with_main(fixture.read_bytes())
 
     cover = TDocCRDetails(
-        tdoc_id="R5s260009",
-        spec="38.523-3",
-        cr_num="3790",
-        rev="0",
+        tdoc_id="R5s260009", spec="38.523-3", cr_num="3790", rev="0"
     )
     ttcn = TDocCRTTCNDetails(
         tdoc_id="R5s260009",
         testcase="7.1.3.5.3",
         required_changes=[{"function_name": "fl_TC_7_1_3_5_3_Body"}],
     )
-    parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=ttcn))
+    changes = TDocCRChangeDetails(clauses=("38.523-3",))
+    parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=ttcn, changes=changes))
 
     service, _, _, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=zip_bytes,
     )
     service._parser = parser  # type: ignore[attr-defined]
     tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="stored/r5s260009.zip",
+        tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
     )
 
-    result = service.extract("R5s260009")
+    prepared = service.prepare_extract("R5s260009")
+    assert isinstance(prepared, PreparedTDocExtract)
+    assert prepared.main_source_file == "z/R5s260009.docx"
+    assert [document.source_file for document in prepared.documents] == [
+        "z/R5s260009.docx",
+        "a/support-alpha.docx",
+        "b/support-beta.docx",
+    ]
+    assert [document.source_file for document in prepared.annexes] == [
+        "a/support-alpha.docx",
+        "b/support-beta.docx",
+    ]
+    assert parser.calls == ["R5s260009"]
 
-    assert cr_repo.upsert.call_count == 1
-    assert cr_ttcn_repo.upsert.call_count == 1
-    assert cr_repo.upsert_extract_meta.call_count == 1
+    result = service.persist_prepared_extract(prepared)
 
-    cover_arg = cr_repo.upsert.call_args.args[0]
-    assert isinstance(cover_arg, TDocCRDetails)
-    assert cover_arg.tdoc_id == "R5s260009"
-    assert cover_arg.ftp_url == "stored/r5s260009.zip"
-
-    ttcn_arg = cr_ttcn_repo.upsert.call_args.args[0]
-    assert isinstance(ttcn_arg, TDocCRTTCNDetails)
-    assert ttcn_arg.tdoc_id == "R5s260009"
-    assert ttcn_arg.ftp_url == "stored/r5s260009.zip"
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
+    details_arg, ttcn_arg, changes_arg, meta_arg, documents_arg = (
+        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
+    )
+    assert details_arg.ftp_url == "stored/r5s260009.zip"
     assert ttcn_arg.testcase == "7.1.3.5.3"
-
-    meta_arg = cr_repo.upsert_extract_meta.call_args.args[0]
-    assert isinstance(meta_arg, TDocExtractMeta)
-    assert meta_arg.ftp_url == "stored/r5s260009.zip"
-    assert meta_arg.tdoc_id == "R5s260009"
-    assert meta_arg.doc_filename.lower().endswith(".docx")
-
-    assert result.details.tdoc_id == "R5s260009"
+    assert changes_arg.clauses == ("38.523-3",)
+    assert meta_arg.ftp_url == details_arg.ftp_url
+    assert meta_arg.doc_filename == "z/R5s260009.docx"
+    assert meta_arg.extraction_version == 2
+    assert meta_arg.document_count == 2
+    assert [document.source_file for document in documents_arg] == [
+        "a/support-alpha.docx",
+        "b/support-beta.docx",
+    ]
+    assert all(document.document_id == document_id_for(
+        "stored/r5s260009.zip", document.source_file
+    ) for document in documents_arg)
     assert result.details.cr_num == "3790"
-    assert result.extract_meta.ftp_url == "stored/r5s260009.zip"
-    assert result.from_cache is False
+    assert result.extract_meta.document_count == 2
+    cr_repo.upsert.assert_not_called()
+    cr_repo.upsert_extract_meta.assert_not_called()
+    cr_ttcn_repo.upsert.assert_not_called()
 
 
 @pytest.mark.skipif(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_prepare_extract_defers_repository_writes_until_persist(tmp_path: Path) -> None:
+def test_prepare_extract_defers_atomic_bundle_write_until_persist(tmp_path: Path) -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
     service, _, _, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=fixture.read_bytes(),
     )
-    cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
     service._parser = _FakeParser(  # type: ignore[attr-defined]
         TDocCRParseResult(
-            cover=cover,
+            cover=TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790"),
             ttcn=TDocCRTTCNDetails(tdoc_id="R5s260009", testcase="7.1.3.5.3"),
         )
     )
@@ -466,163 +676,118 @@ def test_prepare_extract_defers_repository_writes_until_persist(tmp_path: Path) 
 
     prepared = service.prepare_extract("R5s260009")
 
-    assert cr_repo.upsert.call_count == 0
-    assert cr_ttcn_repo.upsert.call_count == 0
+    service._content_repo.replace_cr_bundle.assert_not_called()  # type: ignore[attr-defined]
     result = service.persist_prepared_extract(prepared)
     assert result.details.tdoc_id == "R5s260009"
-    assert cr_repo.upsert.call_count == 1
-    assert cr_ttcn_repo.upsert.call_count == 1
-    assert cr_repo.upsert_extract_meta.call_count == 1
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
+    cr_repo.upsert.assert_not_called()
+    cr_ttcn_repo.upsert.assert_not_called()
+    cr_repo.upsert_extract_meta.assert_not_called()
 
 
 @pytest.mark.skipif(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_extract_skips_ttcn_upsert_for_non_ttcn_tdoc(tmp_path: Path) -> None:
-    """A non-TTCN TDoc (parser returns ``ttcn=None``) writes cover and
-    extract meta but NEVER touches the TTCN repo.
-    """
+def test_extract_atomic_bundle_clears_absent_optional_sidecars(tmp_path: Path) -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-
-    cover = TDocCRDetails(
-        tdoc_id="R5s260009",
-        spec="38.523-3",
-        cr_num="3790",
+    parser = _FakeParser(
+        TDocCRParseResult(
+            cover=TDocCRDetails(
+                tdoc_id="R5s260009", spec="38.523-3", cr_num="3790"
+            ),
+            ttcn=None,
+            changes=None,
+        )
     )
-    parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=None))
-
-    service, _, _, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes,
+    service, _, _, _, _, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=fixture.read_bytes(),
     )
     service._parser = parser  # type: ignore[attr-defined]
     tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="stored/r5s260009.zip",
+        tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
     )
 
     result = service.extract("R5s260009")
 
-    assert cr_repo.upsert.call_count == 1
-    assert cr_ttcn_repo.upsert.call_count == 0
-    assert cr_repo.upsert_extract_meta.call_count == 1
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
+    _details, ttcn, changes, _meta, _documents = (
+        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
+    )
+    assert ttcn is None
+    assert changes is None
     assert result.from_cache is False
 
 
 def test_extract_three_upsert_order_preserved(tmp_path: Path) -> None:
-    """The three upsert calls fire in a deterministic order:
-    ``cr_repo.upsert(cover)`` first, then
-    ``cr_ttcn_repo.upsert(ttcn)`` (if applicable), then
-    ``cr_repo.upsert_extract_meta(meta)`` last. This ordering matters
-    for any test that records call order on the same mock; the
-    assertion below captures the production contract.
-    """
+    """One aggregate replacement owns cover, sidecars, metadata, and documents."""
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-
     cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
     ttcn = TDocCRTTCNDetails(tdoc_id="R5s260009", testcase="7.1.3.5.3")
-    parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=ttcn))
-
     service, _, _, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes,
+        tmp_path, zip_bytes=fixture.read_bytes(),
     )
-    service._parser = parser  # type: ignore[attr-defined]
+    service._parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=ttcn))  # type: ignore[attr-defined]
     tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="stored/r5s260009.zip",
+        tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
     )
 
     service.extract("R5s260009")
 
-    cr_calls = [c[0] for c in cr_repo.mock_calls]
-    ttcn_calls = [c[0] for c in cr_ttcn_repo.mock_calls]
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
+    _details, stored_ttcn, _changes, _meta, docs = (
+        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
+    )
+    assert stored_ttcn is not None
+    assert docs == ()
+    cr_repo.upsert.assert_not_called()
+    cr_ttcn_repo.upsert.assert_not_called()
+    cr_repo.upsert_extract_meta.assert_not_called()
 
-    assert "upsert" in cr_calls
-    assert "upsert_extract_meta" in cr_calls
-    assert cr_calls.index("upsert") < cr_calls.index("upsert_extract_meta")
-    assert ttcn_calls == ["upsert"]
 
-
-def test_extract_three_upserts_use_matching_ftp_url(tmp_path: Path) -> None:
-    """All three upserts carry the same ``ftp_url`` (the immutable
-    URL the row is keyed on). Mixing URLs across the three writes
-    would break the read contract.
-    """
+def test_extract_atomic_bundle_uses_matching_ftp_url(tmp_path: Path) -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-
     cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
     ttcn = TDocCRTTCNDetails(tdoc_id="R5s260009", testcase="7.1.3.5.3")
-    parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=ttcn))
-
-    service, _, _, cr_repo, cr_ttcn_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes,
+    service, _, _, _, _, tdoc_repo = _build_service(
+        tmp_path,
+        zip_bytes=_multifile_zip_with_main(fixture.read_bytes()),
     )
-    service._parser = parser  # type: ignore[attr-defined]
+    service._parser = _FakeParser(TDocCRParseResult(cover=cover, ttcn=ttcn))  # type: ignore[attr-defined]
     tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="stored/r5s260009.zip",
+        tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
     )
 
     service.extract("R5s260009")
 
-    cover_ftp = cr_repo.upsert.call_args.args[0].ftp_url
-    ttcn_ftp = cr_ttcn_repo.upsert.call_args.args[0].ftp_url
-    meta_ftp = cr_repo.upsert_extract_meta.call_args.args[0].ftp_url
-    assert cover_ftp == ttcn_ftp == meta_ftp == "stored/r5s260009.zip"
+    details_arg, ttcn_arg, _changes, meta_arg, documents = (
+        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
+    )
+    assert details_arg.ftp_url == ttcn_arg.ftp_url == meta_arg.ftp_url
+    assert meta_arg.ftp_url == "stored/r5s260009.zip"
+    assert documents[0].source_file == "a/support-alpha.docx"
+    assert documents[0].document_id == document_id_for(meta_arg.ftp_url, "a/support-alpha.docx")
 
 
 # ---------------------------------------------------------------------------
-# ``full`` kwarg plumbing — TTCN ``before_change`` / ``after_change`` /
-# ``new_change`` extraction requires ``full=True`` end-to-end.
+# TTCN ``before_change`` / ``after_change`` / ``new_change`` extraction runs
+# on every parse; there is no opt-out.
 # ---------------------------------------------------------------------------
 
 
-def test_extract_forwards_full_true_to_parser(tmp_path: Path) -> None:
-    """``extract(..., full=True)`` propagates ``full=True`` to the parser.
+def test_extract_invokes_parser_for_full_ttcn_extraction(tmp_path: Path) -> None:
+    """``extract(...)`` hands the TDoc to the parser on every call.
 
-    Without this plumbing the TTCN corrections sub-parser skips the
-    ``before_change`` / ``after_change`` / ``new_change`` extraction
-    loop, even when the caller explicitly opts in via ``--full``.
-    Regression-locks the wiring added so ``tdoc parse --full`` in DB
-    mode produces TTCN sidecars with the change-content fields.
+    The TTCN corrections sub-parser always extracts the
+    ``before_change`` / ``after_change`` / ``new_change`` bodies, so the
+    service has no mode switch to forward.
     """
-    fixture = FIXTURES_DIR / "R5s260009.zip"
-    if not fixture.exists():
-        pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-
-    cover = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
-    parser = _FakeParser(TDocCRParseResult(cover=cover))
-
-    service, _, _, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes,
-    )
-    service._parser = parser  # type: ignore[attr-defined]
-    tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="stored/r5s260009.zip",
-    )
-
-    service.extract("R5s260009", full=True)
-
-    assert parser.calls == [("R5s260009", True)]
-
-
-def test_extract_full_defaults_to_false(tmp_path: Path) -> None:
-    """``extract()`` without ``full=`` defaults to ``False`` (metadata only)."""
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
@@ -643,18 +808,11 @@ def test_extract_full_defaults_to_false(tmp_path: Path) -> None:
 
     service.extract("R5s260009")
 
-    assert parser.calls == [("R5s260009", False)]
+    assert parser.calls == ["R5s260009"]
 
 
-def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
-    """``extract_many(..., full=True)`` propagates ``full=True`` to every
-    :meth:`TDocCrService.extract` call in the batch.
-
-    A batch where ``full`` is silently dropped would re-parse every TDoc
-    in metadata-only mode, producing the same empty
-    ``before_change`` / ``after_change`` / ``new_change`` gap that the
-    DB-mode ``tdoc parse --full`` flow used to exhibit.
-    """
+def test_extract_many_invokes_parser_for_each_tdoc(tmp_path: Path) -> None:
+    """``extract_many(...)`` runs the parser once per TDoc in the batch."""
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
@@ -663,7 +821,7 @@ def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
     cover_a = TDocCRDetails(tdoc_id="R5s260009", spec="38.523-3", cr_num="3790")
     cover_b = TDocCRDetails(tdoc_id="R5s260051", spec="38.523-3", cr_num="3806")
 
-    extract_full_calls: list[tuple[str, bool, bool]] = []
+    extract_calls: list[str] = []
 
     class _RecordingParser:
         parser_version = "1.0.0"
@@ -679,9 +837,8 @@ def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
             *,
             tdoc_id: str,
             max_text_length: int = 0,
-            full: bool = False,
         ) -> TDocCRParseResult:
-            extract_full_calls.append((tdoc_id, full))
+            extract_calls.append(tdoc_id)
             return TDocCRParseResult(
                 cover=cover_a if tdoc_id == "R5s260009" else cover_b,
             )
@@ -696,19 +853,9 @@ def test_extract_many_forwards_full_to_each_extract(tmp_path: Path) -> None:
         ftp_url=f"stored/{tdoc_id}.zip",
     )
 
-    service.extract_many(["R5s260009", "R5s260051"], full=True)
-
-    assert extract_full_calls == [
-        ("R5s260009", True),
-        ("R5s260051", True),
-    ]
-    extract_full_calls.clear()
     service.extract_many(["R5s260009", "R5s260051"])
 
-    assert extract_full_calls == [
-        ("R5s260009", False),
-        ("R5s260051", False),
-    ]
+    assert extract_calls == ["R5s260009", "R5s260051"]
 
 
 def test_extract_raises_skip_when_ftp_url_is_null(tmp_path: Path) -> None:
@@ -727,7 +874,6 @@ def test_extract_raises_skip_when_ftp_url_is_null(tmp_path: Path) -> None:
     scraper = MagicMock()
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
-    cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
@@ -744,6 +890,7 @@ def test_extract_raises_skip_when_ftp_url_is_null(tmp_path: Path) -> None:
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
+        content_repo=MagicMock(),
     )
 
     with pytest.raises(TDocNotYetOnFTPError) as info:
@@ -770,7 +917,6 @@ def test_extract_many_routes_null_ftp_url_into_skip_bucket(
     scraper = MagicMock()
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
-    cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
@@ -783,7 +929,7 @@ def test_extract_many_routes_null_ftp_url_into_skip_bucket(
         ),
         "R5s263499": TDoc(
             tdoc_id="R5s263499",
-            type="LS",
+            type="other",
             ftp_url=f"tsg_ran/{tdoc_id}.zip",
         ),
     }[tdoc_id]
@@ -795,6 +941,7 @@ def test_extract_many_routes_null_ftp_url_into_skip_bucket(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
+        content_repo=MagicMock(),
     )
 
     result = service.extract_many(["R5s263431", "R5s263432", "R5s263499"])
@@ -803,9 +950,10 @@ def test_extract_many_routes_null_ftp_url_into_skip_bucket(
     assert "TDocNotYetOnFTPError" in result.skipped["R5s263431"]
     # The "no ftp_url" row is NOT in failures.
     assert "R5s263431" not in result.failures
-    # The non-CR row stays a real failure.
-    assert "R5s263499" in result.failures
-    assert "TDocTypeUnsupportedError" in result.failures["R5s263499"]
+    # The ineligible-type row is skipped before any download.
+    assert "R5s263499" in result.skipped
+    assert "TDocTypeUnsupportedError" in result.skipped["R5s263499"]
+    assert "R5s263499" not in result.failures
 
 
 def test_extract_many_skipped_only_batch_exits_cleanly(
@@ -822,7 +970,6 @@ def test_extract_many_skipped_only_batch_exits_cleanly(
     scraper = MagicMock()
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
-    cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
@@ -839,6 +986,7 @@ def test_extract_many_skipped_only_batch_exits_cleanly(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=MagicMock(),
         tdoc_repository=tdoc_repo,
+        content_repo=MagicMock(),
     )
 
     result = service.extract_many(["R5s263431"])
@@ -850,6 +998,19 @@ def test_extract_many_skipped_only_batch_exits_cleanly(
 # ---------------------------------------------------------------------------
 # TDocTooLargeError + max_tdoc_size_bytes kwarg
 # ---------------------------------------------------------------------------
+
+
+def test_tdoc_parse_archive_limits_default_and_allow_zero() -> None:
+    settings = TDocParseSettings()
+    assert settings.max_documents_per_zip == 100
+    assert settings.max_uncompressed_size_kb == 102400
+
+    unlimited = TDocParseSettings(
+        max_documents_per_zip=0,
+        max_uncompressed_size_kb=0,
+    )
+    assert unlimited.max_documents_per_zip == 0
+    assert unlimited.max_uncompressed_size_kb == 0
 
 
 def test_constructor_default_max_tdoc_size_bytes_is_zero(tmp_path) -> None:
@@ -868,6 +1029,7 @@ def test_constructor_default_max_tdoc_size_bytes_is_zero(tmp_path) -> None:
         cr_ttcn_repository=MagicMock(),
         cr_change_details_repository=MagicMock(),
         tdoc_repository=MagicMock(),
+        content_repo=MagicMock(),
     )
     assert service._max_tdoc_size_bytes == 0
 
@@ -881,6 +1043,7 @@ def test_constructor_accepts_max_tdoc_size_bytes(tmp_path) -> None:
         cr_ttcn_repository=MagicMock(),
         cr_change_details_repository=MagicMock(),
         tdoc_repository=MagicMock(),
+        content_repo=MagicMock(),
         max_tdoc_size_bytes=2_500_000,
     )
     assert service._max_tdoc_size_bytes == 2_500_000
@@ -908,7 +1071,7 @@ def test_extract_many_routes_too_large_to_skipped(tmp_path) -> None:
 
     service, _, _, _, _, _ = _build_service(tmp_path)
 
-    def _boom(tdoc_id: str, *, force: bool = False, full: bool = False):
+    def _boom(tdoc_id: str, *, force: bool = False):
         raise TDocTooLargeError(source=tdoc_id, size=10, limit=5)
 
     service.prepare_extract = _boom  # type: ignore[method-assign]
@@ -920,6 +1083,70 @@ def test_extract_many_routes_too_large_to_skipped(tmp_path) -> None:
         reason.startswith("TDocTooLargeError:")
         for reason in batch.skipped.values()
     )
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+@pytest.mark.parametrize("limit_name", ["document_count", "uncompressed_bytes"])
+def test_archive_limit_violations_use_batch_skip_bucket(
+    tmp_path: Path, limit_name: str,
+) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    payload = _multifile_zip_with_main(fixture.read_bytes())
+    service, _, _, _, _, tdoc_repo = _build_service(tmp_path, zip_bytes=payload)
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009", type="CR", ftp_url="stored/r5s260009.zip"
+    )
+    if limit_name == "document_count":
+        service._max_documents_per_zip = 1  # type: ignore[attr-defined]
+    else:
+        service._max_uncompressed_size_bytes = 32  # type: ignore[attr-defined]
+
+    batch = service.extract_many(["R5s260009"])
+
+    assert batch.failures == {}
+    assert set(batch.skipped) == {"R5s260009"}
+    assert batch.skipped["R5s260009"].startswith("TDocZipLimitError:")
+    service._content_repo.replace_cr_bundle.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+@pytest.mark.parametrize("limit_name", ["document_count", "uncompressed_bytes"])
+def test_url_folder_archive_limit_violations_use_skip_bucket(
+    tmp_path: Path, limit_name: str,
+) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+    payload = _multifile_zip_with_main(fixture.read_bytes())
+    service, _, _, _, _, tdoc_repo = _build_service(tmp_path, zip_bytes=payload)
+    tdoc_repo.get_by_id.return_value = TDoc(
+        tdoc_id="R5s260009", type="CR", ftp_url="Docs/R5s260009.zip"
+    )
+    file_url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    service.collect_3gpp_file_urls = (  # type: ignore[method-assign]
+        lambda _url, *, max_depth: [file_url]
+    )
+    if limit_name == "document_count":
+        service._max_documents_per_zip = 1  # type: ignore[attr-defined]
+    else:
+        service._max_uncompressed_size_bytes = 32  # type: ignore[attr-defined]
+
+    batch = service.extract_from_url_batch(
+        "https://www.3gpp.org/ftp/Docs/", max_depth=0,
+    )
+
+    assert batch.failures == {}
+    assert set(batch.skipped) == {file_url}
+    assert batch.skipped[file_url].startswith("TDocZipLimitError:")
+    service._content_repo.replace_cr_bundle.assert_not_called()  # type: ignore[attr-defined]
 
 
 def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
@@ -937,7 +1164,7 @@ def test_extract_from_url_batch_routes_too_large_to_skipped(tmp_path) -> None:
 
     service.collect_3gpp_file_urls = lambda url, *, max_depth: urls  # type: ignore[method-assign]
 
-    def _boom(url: str, *, force: bool = False, full: bool = False,
+    def _boom(url: str, *, force: bool = False,
               max_tdoc_size_bytes: int | None = None):
         raise TDocTooLargeError(source=url, size=99, limit=10)
 
@@ -991,9 +1218,19 @@ def test_extract_from_url_batch_is_cancelled_aborts_batch(tmp_path) -> None:
 
     def _extract(url: str, **kwargs):
         seen.append(url)
-        from doc3gpp.models.tdoc_cr import DirectParseResult
-
-        return DirectParseResult(tdoc_id=None, source_url=url)
+        document = _test_document("direct body", ftp_url="direct/test.zip")
+        return DirectParseResult(
+            source_kind="url-3gpp",
+            documents=(document,),
+            main_source_file=document.source_file,
+            details=None,
+            extract_meta=None,
+            from_cache=False,
+            persisted=False,
+            tdoc_id=None,
+            tdoc_id_in_tdocs=False,
+            source_url=url,
+        )
 
     service.prepare_from_url = _extract  # type: ignore[assignment]
 
@@ -1042,6 +1279,14 @@ def test_extract_many_uses_runner_for_parallel_prepare_and_serial_persist(
     def prepared(tdoc_id: str) -> PreparedTDocExtract:
         return PreparedTDocExtract(
             details=_dummy_details(tdoc_id),
+            documents=(
+                _test_document(
+                    "bundle markdown",
+                    ftp_url=f"stored/{tdoc_id}.zip",
+                    source_file=f"{tdoc_id}.docx",
+                ),
+            ),
+            main_source_file=f"{tdoc_id}.docx",
             ttcn=None,
             changes=None,
             extract_meta=TDocExtractMeta(
@@ -1052,8 +1297,8 @@ def test_extract_many_uses_runner_for_parallel_prepare_and_serial_persist(
             ),
         )
 
-    def prepare(raw_id: str, *, force: bool = False, full: bool = False):
-        del force, full
+    def prepare(raw_id: str, *, force: bool = False):
+        del force
         prepare_barrier.wait(timeout=2)
         return prepared(raw_id.strip())
 
@@ -1121,6 +1366,14 @@ def test_extract_many_writer_failure_does_not_stop_later_item(tmp_path: Path) ->
     def prepared(tdoc_id: str) -> PreparedTDocExtract:
         return PreparedTDocExtract(
             details=_dummy_details(tdoc_id),
+            documents=(
+                _test_document(
+                    "bundle markdown",
+                    ftp_url=f"stored/{tdoc_id}.zip",
+                    source_file=f"{tdoc_id}.docx",
+                ),
+            ),
+            main_source_file=f"{tdoc_id}.docx",
             ttcn=None,
             changes=None,
             extract_meta=TDocExtractMeta(
@@ -1131,8 +1384,8 @@ def test_extract_many_writer_failure_does_not_stop_later_item(tmp_path: Path) ->
             ),
         )
 
-    def prepare(raw_id: str, *, force: bool = False, full: bool = False):
-        del force, full
+    def prepare(raw_id: str, *, force: bool = False):
+        del force
         return prepared(raw_id)
 
     def persist(value: PreparedTDocExtract) -> ExtractResult:
@@ -1155,3 +1408,241 @@ def test_extract_many_writer_failure_does_not_stop_later_item(tmp_path: Path) ->
     assert persisted == ["first", "later"]
     assert result.successes["later"].details.tdoc_id == "later"
     assert result.failures == {"first": "RuntimeError: writer failed"}
+
+
+# ---------------------------------------------------------------------------
+# CR bundle contract: annexes in SQL, main only in the archive (P9, P13, R24).
+# ---------------------------------------------------------------------------
+
+
+def _main_docx() -> bytes:
+    with zipfile.ZipFile(FIXTURES_DIR / "R5s260009.zip") as source:
+        return source.read("R5s260009.docx")
+
+
+def _zip_of(*members: tuple[str, bytes]) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        for name, data in members:
+            archive.writestr(name, data)
+    return payload.getvalue()
+
+
+def _cr_zip(*annexes: tuple[str, bytes]) -> bytes:
+    """Return a TDoc ZIP holding the CR fixture as ``R5s260009.docx`` plus annexes."""
+    return _zip_of(("R5s260009.docx", _main_docx()), *annexes)
+
+
+def _make_empty_docx() -> bytes:
+    from docx import Document
+
+    payload = io.BytesIO()
+    Document().save(payload)
+    return payload.getvalue()
+
+
+def _tdoc_row() -> TDoc:
+    return TDoc(tdoc_id="R5s260009", type="CR", ftp_url="tsg_ran/r5s260009.zip")
+
+
+@pytest.fixture()
+def cr_db(sqlite_env) -> None:
+    create_schema("main")
+    with get_session_factory()() as session:
+        session.add(
+            TDocORM(
+                tdoc_id="R5s260009",
+                type="CR",
+                ftp_url="tsg_ran/r5s260009.zip",
+            )
+        )
+        session.commit()
+
+
+def _real_service(tmp_path: Path, zip_bytes: bytes) -> tuple[TDocCrService, MagicMock, TDocCache]:
+    cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
+    scraper = MagicMock()
+    scraper.get_bytes.return_value = zip_bytes
+    tdoc_repo = MagicMock()
+    tdoc_repo.get_by_id.return_value = _tdoc_row()
+    service = TDocCrService(
+        cache=cache,
+        scraper_client=scraper,
+        cr_repository=SQLAlchemyTDocCrRepository(),
+        cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
+        tdoc_repository=tdoc_repo,
+        content_repo=SQLAlchemyTDocContentRepository(),
+        family_service=MagicMock(),
+    )
+    return service, scraper, cache
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_persist_writes_annexes_only(cr_db, tmp_path: Path) -> None:
+    service, _scraper, cache = _real_service(
+        tmp_path, _cr_zip(("b/support-beta.docx", _make_docx("support beta text")))
+    )
+
+    prepared = service.prepare_extract("R5s260009", force=True)
+    result = service.persist_prepared_extract(prepared)
+
+    assert isinstance(result, ExtractResult)
+    assert result.extract_meta.document_count == 1
+    with get_session_factory()() as session:
+        annex_sources = list(session.scalars(select(TDocCrAnnexOrm.doc_filename)))
+    assert annex_sources == ["b/support-beta.docx"]
+    archive = read_markdown_archive(cache.get_bytes(result.extract_meta.cache_file, "markdown"))
+    assert [document.source_file for document in archive.documents] == [
+        "R5s260009.docx",
+        "b/support-beta.docx",
+    ]
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_cache_hit_requires_archive(cr_db, tmp_path: Path) -> None:
+    service, _scraper, cache = _real_service(
+        tmp_path, _cr_zip(("b/support-beta.docx", _make_docx("support beta text")))
+    )
+    first = service.extract("R5s260009")
+    assert first.from_cache is False
+
+    hit = service.prepare_extract("R5s260009")
+    assert isinstance(hit, ExtractResult)
+    assert hit.from_cache is True
+    assert hit.tdoc_id == "R5s260009"
+
+    archive_path = cache.path_for(first.extract_meta.cache_file, "markdown")
+    archive_path.unlink()
+
+    again = service.prepare_extract("R5s260009")
+    assert isinstance(again, PreparedTDocExtract)
+    assert archive_path.is_file()
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_zero_annex_bundle_is_complete_with_cover(tmp_path: Path) -> None:
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_cr_zip()
+    )
+    tdoc_repo.get_by_id.return_value = _tdoc_row()
+
+    prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert isinstance(prepared, PreparedTDocExtract)
+    assert prepared.annexes == ()
+    assert prepared.extract_meta.document_count == 0
+    assert is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True) is True
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_annex_failure_is_tolerant(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    payload = _cr_zip(
+        ("a/support-alpha.docx", b"not a docx"),
+        ("b/support-beta.docx", _make_docx("support beta text")),
+    )
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=payload
+    )
+    tdoc_repo.get_by_id.return_value = _tdoc_row()
+
+    with caplog.at_level(logging.WARNING):
+        prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert isinstance(prepared, PreparedTDocExtract)
+    assert prepared.extract_meta.skipped_sources == ("a/support-alpha.docx",)
+    assert is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True) is False
+    assert prepared.extract_meta.document_count == 1
+    assert [document.source_file for document in prepared.documents] == [
+        "R5s260009.docx",
+        "b/support-beta.docx",
+    ]
+    assert [document.source_file for document in prepared.annexes] == [
+        "b/support-beta.docx",
+    ]
+    assert "a/support-alpha.docx" in caplog.text
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_candidate_annex_failure_fails_tdoc(tmp_path: Path) -> None:
+    """A failed member named for the TDoc could be the main, so the TDoc fails."""
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_cr_zip(("R5s260009_annex.docx", b"not a docx"))
+    )
+    tdoc_repo.get_by_id.return_value = _tdoc_row()
+
+    with pytest.raises(
+        ValueError,
+        match="Failed to convert supported DOCX member 'R5s260009_annex.docx'",
+    ):
+        service.prepare_extract("R5s260009", force=True)
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_zero_text_annex_is_stored_as_empty_document(tmp_path: Path) -> None:
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_cr_zip(("b/support-empty.docx", _make_empty_docx()))
+    )
+    tdoc_repo.get_by_id.return_value = _tdoc_row()
+
+    prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert isinstance(prepared, PreparedTDocExtract)
+    empty = next(
+        document for document in prepared.annexes if document.source_file == "b/support-empty.docx"
+    )
+    assert empty.markdown_text == ""
+    assert prepared.extract_meta.skipped_sources == ()
+    assert is_complete_cr_extraction(prepared.extract_meta, prepared.annexes, has_cover=True) is True
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_zero_text_main_fails_tdoc(tmp_path: Path) -> None:
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=_zip_of(("R5s260009.docx", _make_empty_docx()))
+    )
+    tdoc_repo.get_by_id.return_value = _tdoc_row()
+
+    with pytest.raises(
+        ValueError,
+        match="Failed to convert supported DOCX member 'R5s260009.docx'",
+    ):
+        service.prepare_extract("R5s260009", force=True)
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_direct_parse_bytes_fails_when_no_main_and_an_annex_is_corrupt() -> None:
+    from doc3gpp.parsers.direct_extractor import direct_parse_bytes
+
+    with pytest.raises(
+        ValueError,
+        match="Failed to convert supported DOCX member 'a/x.docx'",
+    ):
+        direct_parse_bytes(
+            _zip_of(("a/x.docx", b"not a docx")),
+            filename="R5s260009.zip",
+        )

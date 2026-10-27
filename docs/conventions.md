@@ -18,11 +18,11 @@ gets updated alongside the fix.
   pool unless they need network or the `[semantic]` extra.
 - Online tests hit live 3gpp.org + FTP and are flaky — run with
   `pytest -m online -rs` to surface skip reasons.
-- The dev extras pull in `pytest-xdist`; `scripts/test_sqlite.sh`
-  auto-uses `-n auto` when xdist is importable, otherwise it
-  falls back to sequential. Locally you can also pass
-  `pytest -n auto` (or `-n 4`) directly for a ~3× speedup on
-  4+ core machines.
+- `scripts/test_sqlite.sh` runs with `-n auto` when `pytest-xdist` is
+  installed (dev extras) and falls back to sequential otherwise. Pass
+  `-n 0` to force a sequential run. Keep tests independent of shared
+  engine and settings state; the remaining cache audit is tracked in
+  `docs/TODO.md`.
 
 ## Lint / static analysis
 
@@ -168,7 +168,8 @@ doc3gpp config path   # which file is being read
 doc3gpp config show   # the fully-resolved settings, as JSON
 ```
 
-The full TOML schema lives in [`doc3gpp.toml.example`](../doc3gpp.toml.example).
+The full TOML schema lives in the packaged
+[`doc3gpp.toml.example`](../src/doc3gpp/data/doc3gpp.toml.example).
 
 Recognised env vars (closed allowlist; see
 `doc3gpp.settings.schema.ALLOWED_ENV_VARS` for the canonical list):
@@ -194,11 +195,15 @@ XDG_CONFIG_HOME            # XDG root for the user-wide config fallback
 ```
 
 The `tdoc_parse.*` knobs (`max_batch`, `max_ftp_depth`,
-`max_tdoc_size_kb`) are **TOML-only** by convention. None of them
+`max_tdoc_size_kb`, `max_documents_per_zip`,
+`max_uncompressed_size_kb`) are **TOML-only** by convention. None of them
 are added to `ALLOWED_ENV_VARS`, so `DOC3GPP_TDOC_PARSE__MAX_BATCH`
 / `DOC3GPP_TDOC_PARSE__MAX_TDOC_SIZE_KB` / etc. are silently ignored
 at runtime. Configure them via `[tdoc_parse] <key> = <value>` in
 the TOML file, or via `doc3gpp config set tdoc_parse.<key> <value>`.
+The archive defaults are `max_documents_per_zip = 100` and
+`max_uncompressed_size_kb = 102400` aggregate supported-member bytes;
+`0` disables either limit.
 The corresponding CLI flag (e.g. `--max-tdoc-size-kb`) is a
 per-invocation override — the value is **not** written back to the
 TOML config.
@@ -268,9 +273,11 @@ text/date filter. The earlier `--tdoc-id` integer PK selector and the
 mutual exclusivity with `--meeting-id` are gone — pick the filter
 combination that targets the intended subset.
 
-In normal mode the SQL query excludes rows already present in
-`tdoc_cr_cover_page` before applying the batch cap, so the preview and
-confirmation list only **pending** TDocs. With `--force`, the exclusion
+In normal mode the SQL query excludes rows whose extraction is already
+complete before applying the batch cap, so the preview and confirmation
+list only **pending** TDocs. Completeness follows the TDoc's type: a CR
+TDoc needs its `tdoc_cr_cover_page` row plus complete annex rows, and a
+WID, LS, or discussion TDoc needs its complete content rows. With `--force`, the exclusion
 is disabled and every match (including already-parsed rows) becomes a
 candidate. If the pending set is empty, the CLI prints
 `Nothing to extract — every match is already parsed.` and exits `0`
@@ -328,16 +335,46 @@ basename:
   `zipfile.ZipFile`. Opening with `unzip` / 7z / WinZip yields the
   inner `.docx` straight away.
 - `cache.dir/markdown/<cache_file>` — **real ZIP** produced by
-  `_wrap_markdown_zip` in `services/tdoc_cr_service.py`. The archive
-  holds a single UTF-8 entry named `<docx stem>.md`
-  (`zipfile.ZIP_DEFLATED`); opening with `unzip` / 7z / WinZip
-  extracts that markdown file. The reader
-  (`_decompress_markdown`) magic-byte-sniffs on-disk bytes so legacy
-  gzip blobs (`\x1f\x8b`) and pre-gzip plain UTF-8 cache files remain
-  readable without forcing a re-extract.
+  `services/tdoc_cr_service.py` and `services/tdoc_family_service.py`. The versioned archive contains one
+  UTF-8 Markdown member per converted `.docx` (the CR main, every CR annex, and every family document) plus a JSON manifest
+  (mapping source paths to member names and content hashes); opening it
+  with `unzip` / 7z / WinZip exposes the derived artifact. SQL
+  `tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`
+  remain authoritative for retrieval and FTS5 rebuilding, except for the CR main,
+  which is read only from this archive. The reader also accepts legacy single-member Markdown
+  ZIPs, gzip blobs (`\x1f\x8b`), and pre-gzip plain UTF-8, but legacy
+  bodies are incomplete version-1 content and never make a version-2 SQL
+  extraction complete.
 
 Both formats are deliberate so a single `*.zip` extension maps to a
 single on-disk archive shape that standard archival tooling can open.
+
+## TDoc ZIP content ownership
+
+- `tdoc_files` remains the FTP-discovered auxiliary-file ledger
+  (revisions/reviews/support files); it is not populated with ZIP members.
+- `tdoc_extracts` owns one extraction parent per immutable ZIP `ftp_url`,
+  including the main member path, extraction version, document count, skipped
+  sources, and cache pointer.
+- The per-type content tables own inner-member content. `tdoc_cr_annexes` holds CR
+  annexes; `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`
+  hold family documents (main and annexes). Each row has the member's full path,
+  stable identity, compressed Markdown, and content hash. Order and archive names
+  are derived on read, main first. The CR main is never stored in SQL; the CR
+  cover, optional TTCN sidecar, and optional body-change sidecar come only from it.
+- Eligible `tdocs.type` values, their content tables, and the completeness rules
+  live only in `models/tdoc_content_families.py`. Parse selection, the pipeline,
+  content reads, search, and the schema registry read from there; do not hard-code
+  type lists or table names elsewhere.
+- Cache purge and FIFO eviction remove only derived files; they do not remove
+  SQL documents, change version-2 completeness, or prevent a search-index
+  rebuild. Version-1 rows remain pending until normal parse discovery
+  reprocesses the original ZIP (the source ZIP may still be cached).
+- FTS5 indexes each stored document as its own physical row but groups results
+  back to one logical TDoc before pagination. Stored content documents (CR annexes,
+  and the main and annexes of WID, LS, and discussion TDocs) are also semantically
+  chunked, with the per-TDoc cap `max_content_chunks_per_tdoc`; the CR main gets no
+  content chunks and its body is not full-text indexed.
 
 
 ## meeting list --tdoc flow

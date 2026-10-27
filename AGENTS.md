@@ -49,7 +49,8 @@ doc3gpp/
 │   │   ├── db/               # ORM models, engine, create_schema bootstrap
 │   │   ├── backends/         # per-dialect engine kwargs
 │   │   └── repositories/     # SQL impls of the repository Protocols
-│   │       └── tdoc_cr_ttcn_sql.py   # SQL impl of TDocCrTTCNDetailRepository
+│   │       ├── tdoc_cr_ttcn_sql.py   # SQL impl of TDocCrTTCNDetailRepository
+│   │       └── tdoc_extraction_sql.py # atomic CR bundle + ZIP document rows
 │   └── cli_filters.py    # shared filter / TDoc-id grammar
 ├── tests/
 │   ├── unit/             # mock external calls
@@ -75,20 +76,24 @@ For the full symbol-to-file table, see
 | Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and honours the per-spec `specs.last_synced_at` skip rule (one row per spec, no TSG-level gate) — each per-worker `_sync_one_spec` short-circuits specs whose `last_synced_at` is within `Settings.sync.spec_sync_interval` and stamps the spec's own `last_synced_at` on a successful re-sync. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. Parsed output status is derived from non-null `spec_doc_sources.parsed_at` in the separate specdata database; it is transient output, not a column in the main `specs` / `spec_versions` tables or schema registry. |
 | Add a testcase sync / list / show source | `src/doc3gpp/cli.py` (`testcase_app`) + `src/doc3gpp/services/testcase_service.py` + `src/doc3gpp/storage/repositories/testcase_sql.py` | History listing → `select_latest` → zip → workbook → `parse_testcase_workbook` → `upsert_many` + per-TC `replace_statuses`. See the workflow one-liners below. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
-| Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only. Uses `-n auto` when xdist is installed. |
+| Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only, `-n auto` via pytest-xdist when installed (sequential otherwise). |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
 | Add a spec-document (`spec doc`) source / parse / chunk / search knob | `src/doc3gpp/scraping/spec_doc_source.py` + `src/doc3gpp/parsers/` + `src/doc3gpp/services/spec_doc_service.py` + `src/doc3gpp/services/spec_doc_search_facade.py` / `spec_doc_index_service.py` + `src/doc3gpp/storage/repositories/` | Parse/chunk behavior and the dedicated specdata cache/database are described below; unified `spec doc search` selects FTS5, semantic, hybrid, or filter-only mode. |
 | Add a spec-document CLI command | `src/doc3gpp/cli.py` (`spec_doc_search`, `spec_doc_index`) | Current search/index commands are `spec doc search` and `spec doc index`; search accepts `--text` and `--semantic`, while index reports or rebuilds the FTS5/vector components. |
 | Add a spec-document web route / MCP tool / job | `src/doc3gpp/web/routes/spec_docs.py` (`GET /specs/{spec_id}/docs`, `GET /specs/{spec_id}/docs/toc`, `GET /spec-docs/search`, `GET /spec-docs/index`, `GET /spec-docs/schema`) + `src/doc3gpp/web/routes/jobs.py` (`POST /jobs/spec-docs/index`, `POST /jobs/parse/spec-docs`) + `src/doc3gpp/web/mcp_server.py` (`get_spec_toc`, `search_spec_docs`, `get_spec_doc_index`, `index_spec_docs`, `get_spec_doc_schema`, `parse_spec_docs`) | The version-first page shows source state, parse/re-parse job form, TOC, and paginated chunks. Unified search rows are shared with CLI/HTTP/MCP; `JobKind.INDEX_SPEC_DOCS = "index_spec_docs"` handles index maintenance. |
 | Add a TDoc search/index command or hook | `src/doc3gpp/cli.py` (`tdoc_search`, `tdoc_index`) + `src/doc3gpp/services/tdoc_search_facade.py` / `tdoc_index_service.py` + `src/doc3gpp/storage/repositories/` | `tdoc search` selects FTS5, semantic, hybrid, or filter-only mode from `--text` / `--semantic`; `tdoc index` reports or rebuilds both indexes. |
+| Add TDoc raw-content retrieval | `src/doc3gpp/services/tdoc_content_service.py` + `src/doc3gpp/cli.py` + `src/doc3gpp/web/routes/tdocs.py` / `web/mcp_server.py` | SQL-first content from `tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`; the CR main is read from the derived cache archive, and a missing archive is a cache-miss error with a re-parse hint. `--source-file` is exact and ZIP-scoped. URL reads do not download or extract. |
+| Add or change a TDoc content family / type routing | `src/doc3gpp/models/tdoc_content_families.py` (`TDOC_CONTENT_STORES`, `store_for_type`, `is_complete_cr_extraction`, `is_complete_family_extraction`) | The single registry of eligible `tdocs.type` values, their content table, and whether the store holds the main document. CR's store holds annexes only. Parse selection, the pipeline, content retrieval, search, and the schema registry read from it. |
+| Change WID, LS, or discussion extraction | `src/doc3gpp/services/tdoc_family_service.py` (`TDocFamilyService`) + `src/doc3gpp/parsers/tdoc_family_main.py` + `src/doc3gpp/parsers/tdoc_zip_convert.py` | The service reuses or downloads the ZIP, selects the main with `select_main_member`, converts `.docx` members (failed annexes go to `skipped_sources`), and persists through `TDocContentRepository.replace_family_bundle`. Conversion is pure and lives in `parsers/`. |
+| Change the TDoc content tables | `src/doc3gpp/storage/repositories/tdoc_content_sql.py` (`SQLAlchemyTDocContentRepository`) + `src/doc3gpp/storage/db/models.py` (`_TDocContentRowMixin`, `TDocCrAnnexOrm`, `TDocWidContentOrm`, `TDocLsContentOrm`, `TDocDiscussionContentOrm`) + `src/doc3gpp/models/schema_info.py` | Four tables share one row shape (`ftp_url`, `doc_filename`, `document_id`, `tdoc_id`, `content` as compressed JSON, `content_hash`, `token_count`). The schema registry must match the ORM columns (`tests/unit/test_schema_info.py::test_registry_matches_orm_columns`). |
 | Tune the FTS5 search subsystem | `src/doc3gpp/settings/schema.py` (`SearchSettings`) | FTS5 search knobs (`enabled`, `auto_index_on_parse`, `rebuild_batch_size`, `snippet_tokens`, `bm25_weights`, `search_fanout_factor`); TOML `[search]` block. Per-column previews are driven by `bm25_weights` (weight>0 → snippet bound; match in snippet → surfaced; weight=0 → both skipped). |
 | Add a semantic search knob | `src/doc3gpp/settings/schema.py` (`SemanticSearchSettings`) | TOML `[semantic_search]` block; `fts5_weight` is the persisted hybrid blend setting, not a request-level flag. |
 | Add an embedding model | `src/doc3gpp/services/embedding/remote_embedder.py` | `OpenAICompatibleEmbedder` over the remote `/embeddings` API; `Embedder` Protocol in `repository/protocols.py`. `embedding_base_url` unset disables the stack. |
 | Add a vector DDL change | `src/doc3gpp/storage/db/migrate.py` (`_create_vector_schema`) + `src/doc3gpp/storage/repositories/vector_sql.py` | Gated on sqlite + sqlite-vec. |
-| Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. The six `GET /<resources>/schema` routes read the static `models/schema_info.py` registry (no DB) and share `templates/schema.html` + `partials/schema_results.html` grouped by table. List routes that pair with an HTMX filter form render a fragment for `HX-Request: true`. Unified search uses `GET /tdocs/search` and `GET /spec-docs/search` with `text` and `semantic` query inputs; index status is at `/tdocs/index` and `/spec-docs/index`. The web app builds ONE shared `OpenAICompatibleEmbedder` in `build_state` (or `None` when `embedding_base_url` is unset) and injects it into the search facades and index services.
+| Add a web route / HTML page | `src/doc3gpp/web/routes/` + `src/doc3gpp/web/render.py` + templates in `src/doc3gpp/web/templates/` + `src/doc3gpp/web/filters.py` (`is_htmx_request`) | Routes are thin adapters over services via `web/deps.py` `Depends` helpers; keep HTML/JSON/CLI output byte-consistent. The seven `GET /<resources>/schema` routes read the static `models/schema_info.py` registry (no DB) and share `templates/schema.html` + `partials/schema_results.html` grouped by table. List routes that pair with an HTMX filter form render a fragment for `HX-Request: true`. Unified search uses `GET /tdocs/search` and `GET /spec-docs/search` with `text` and `semantic` query inputs; index status is at `/tdocs/index` and `/spec-docs/index`. The web app builds ONE shared `OpenAICompatibleEmbedder` in `build_state` (or `None` when `embedding_base_url` is unset) and injects it into the search facades and index services.
 - The tdoc detail page (`tdoc_show.html`) renders two extra cards when the parent TDoc has been parsed: 'Required changes' (one entry per TTCN `required_changes` dict) for TTCN CRs, and 'Extracted changes' (one entry per body-derived change block) for non-TTCN CRs. Both cards are gated on the sidecar's presence and are mutually exclusive. |
 | Add a sync hub panel / sync hub page | `src/doc3gpp/web/routes/sync.py` + `src/doc3gpp/web/templates/sync.html` + `src/doc3gpp/web/static/js/sync_hub.js` | The current hub has twelve enqueue forms, including required-TSG `id="sync-wis-form"` → `POST /jobs/sync/wis`, `id="tdoc-index-form"` → `POST /jobs/tdocs/index`, `id="spec-doc-index-form"` → `POST /jobs/spec-docs/index`, and `id="testcase-form"` → `POST /jobs/sync/testcases`; forms reuse `bindJobPolling` + `JobRepository.create`. Parse TDocs exposes an exact numeric Meeting ID filter. New routes that need HTTP exposure land in `web/routes/jobs.py` next to their existing siblings. |
-| Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). The six `get_*_schema` tools are pure `schema_payload()` reads (no params). The MCP mount supports both `streamable_http` (default) and `sse` transports, selected via `[mcp] transport` in `doc3gpp.toml`; the streamable_http mount answers each POST with a plain `application/json` body (`json_response=True` in `src/doc3gpp/web/app.py::_mount_mcp_in_lifespan`) — the legacy SSE-streamed response is rejected by TypeScript-SDK clients with "Legacy MCP SSE endpoints are not supported"; browser origins are allowed via `[mcp] allowed_origins` (defaults to `http://127.0.0.1` and `http://localhost`). |
+| Add an MCP tool | `src/doc3gpp/web/mcp_server.py` | Register via `@server.tool`; the tool result must byte-match the equivalent HTTP `?format=json` route (`_to_json` uses compact separators + `ensure_ascii=False`). The seven `get_*_schema` tools are pure `schema_payload()` reads (no params). The MCP mount supports both `streamable_http` (default) and `sse` transports, selected via `[mcp] transport` in `doc3gpp.toml`; the streamable_http mount answers each POST with a plain `application/json` body (`json_response=True` in `src/doc3gpp/web/app.py::_mount_mcp_in_lifespan`) — the legacy SSE-streamed response is rejected by TypeScript-SDK clients with "Legacy MCP SSE endpoints are not supported"; browser origins are allowed via `[mcp] allowed_origins` (defaults to `http://127.0.0.1` and `http://localhost`). |
 | Add a background job kind | `src/doc3gpp/models/jobs.py` (`JobKind`, e.g. `JobKind.PARSE_TDOC_URL`) + `src/doc3gpp/web/workers/handlers.py` (`KIND_TO_HANDLER`, e.g. `_parse_tdoc_url`) + `src/doc3gpp/web/routes/jobs.py` | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; SSE progress via `append_log`/progress callbacks. |
 | Add a spec sync job / MCP tool | `src/doc3gpp/models/jobs.py` (`JobKind.SYNC_SPECS`) + `src/doc3gpp/web/workers/handlers.py` (`_sync_specs`) + `src/doc3gpp/web/routes/jobs.py` (`POST /jobs/sync/specs`) + `src/doc3gpp/web/mcp_server.py` (`sync_specs`) | Enqueue from route/MCP via `JobWorkerHandle.enqueue`; the handler validates the `tsg` against the `tsgs` reference table (rejecting unknown/legacy TSGs before any network work) then calls `services.spec.sync(tsg, force=force, on_progress=...)`. The `_sync_meetings` handler applies the same `tsgs`-table validation before `services.meeting.sync`. |
 | Change job repo / worker | `src/doc3gpp/storage/repositories/jobs_sql.py` + `src/doc3gpp/web/workers/job_worker.py` + `src/doc3gpp/web/state.py` (`JobWorkerHandle`) | `get_job_repo` / `get_job_worker` deps in `web/deps.py`; tests override them. |
@@ -233,7 +238,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `--parsed true|false` filters before pagination.
 - `doc3gpp <resource> schema` (`tsg`, `meeting`, `tdoc`, `wi`, `spec`,
   `testcase`, `spec doc`) describes every column of the resource's table(s) from the
-  static `models/schema_info.py` registry (17 tables, 157 fields; no
+  static `models/schema_info.py` registry (21 tables, 190 fields; no
   filters, no DB reads). Flat rows `table, field, type, nullable,
   description, values`; `nullable` is `yes`/`no` in table/markdown and a
   bool in JSON; `values` comma-joined, `"-"` when free-form. Same payload
@@ -266,18 +271,54 @@ Workflows in one line (full prose in `docs/architecture.md`):
   when only the module basename is recoverable the entry is recorded
   as `'<module>.'` (trailing-dot sentinel); when only the function name
   is recoverable it is recorded as `'.<function>'` (leading-dot
-  sentinel); when neither is recoverable the correction is dropped. `TDocCrService` fans the result
-  out across THREE independent upserts: the slim cover-page row in
-  `tdoc_cr_cover_page`, the optional `tdoc_cr_ttcn_details` sidecar (only
-  when the parser recognised a TTCN CR), and the `tdoc_extracts`
-  metadata row. `TDocCrService` also writes a `tdoc_cr_change_details`
-  row (non-TTCN CRs only) when the parser detects revision marks.
+  sentinel); when neither is recoverable the correction is dropped.
+  `TDocCrService` converts every supported `.docx` in the ZIP and selects
+  exactly one main document with the structural CR-cover detector. The main
+  document alone owns the cover, optional TTCN sidecar, and optional
+  body-change sidecar. Every other converted `.docx` is a CR annex and is
+  stored in `tdoc_cr_annexes`; the CR main Markdown is not stored in SQL and
+  lives only in the derived archive. Annex conversion is tolerant: a failed
+  annex is logged, listed in `tdoc_extracts.skipped_sources`, and leaves the
+  extraction incomplete, so the next normal parse retries it.
+  `TDocContentRepository.replace_cr_bundle` atomically replaces the annex rows,
+  the `tdoc_extracts` parent, and the sidecars for the URL on the serialized
+  writer. The Markdown cache is a versioned multi-member ZIP with a manifest. A
+  CR cache hit requires the v2 parent, the cover row, the annex rows that
+  satisfy `is_complete_cr_extraction`, and the archive `markdown/<cache_file>`.
+  Only `.docx` members are converted; `.doc`, PDF, spreadsheets, and nested
+  ZIPs are not converted. The TOML-only per-archive limits are
+  `max_documents_per_zip = 100` and `max_uncompressed_size_kb = 102400`; `0`
+  disables either one. `tdoc_files` remains FTP auxiliary-file metadata,
+  `tdoc_extracts` is the single parent per immutable ZIP URL, `tdoc_cr_annexes`
+  owns CR annex content, and `tdoc_wid_contents`, `tdoc_ls_contents`, and
+  `tdoc_discussion_contents` own family content (main and annexes). SQL content
+  remains available and rebuildable after the derived cache is evicted, except
+  the CR main. Legacy plain UTF-8, gzip, and single-member Markdown artifacts are
+  readable only as incomplete version-1 content; parse discovery treats them
+  as pending for normal reprocessing.
   Full grammar and prompt-completion semantics in
   [`docs/conventions.md`](docs/conventions.md) and
   [`docs/cli.md`](docs/cli.md).
+- `doc3gpp tdoc parse` selection and families: with no `--type`, CR plus WID
+  new/revised, LS in/out, and discussion TDocs are selected (case-insensitive
+  exact match on `tdocs.type`). An explicit `--type` is a rich filter that is
+  intersected with those types, so `other` and other ineligible types are never
+  downloaded. On the CLI, an exact `--tdoc <id>` with no `--type` skips the
+  eligibility filter so an ineligible TDoc reaches the pipeline and is reported as
+  skipped. Web and MCP parse apply the eligibility filter to every selector,
+  including exact ids. WID, LS, and discussion TDocs go through `TDocFamilyService`,
+  which stores the main and every annex; only `.docx` members are converted, and a
+  `.doc`-only main fails the TDoc.
 - `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a
-  direct-mode alternative that bypasses the database filters. Local
-  files parse in-memory only; 3GPP-URL downloads follow the
+  direct-mode alternative that bypasses the database filters. ZIPs
+  convert supported `.docx` members sequentially; a unique structural
+  CR cover selects the main source, and the other members are CR annexes stored
+  as content (a family TDoc stores its main and every annex). Raw direct/batch
+  output preserves source identity with named
+  blocks when multiple documents are present. The TOML-only
+  `[tdoc_parse]` archive limits default to `max_documents_per_zip = 100`
+  and `max_uncompressed_size_kb = 102400`; `0` disables either limit.
+  Local files parse in-memory only; 3GPP-URL downloads follow the
   FK-aware behaviour matrix in `docs/cli.md` (cache + DB writes
   land when the filename's tdoc_id is present in `tdocs`; otherwise
   the result is still emitted with a warning). The zip cache is
@@ -287,17 +328,18 @@ Workflows in one line (full prose in `docs/architecture.md`):
   bare `www.3gpp.org/ftp/...` form is normalized), `.docx`/`.zip` files
   must have a TDoc-shaped basename including `RP-...` plenary ids, and
   any other canonical path is a folder with an optional trailing slash.
-  `Settings.sync.auto_sync` is enabled, `tdoc parse --from-url`
-  on a 3GPP FTP URL extracts tdoc_id candidates from the URL
-  (basename for file URLs; BFS up to `--max-depth` / `--recursive`
-  for folder URLs) and runs `trigger_auto_sync(...)` **before**
-  dispatching to the per-file parse helpers — see
-  [`src/doc3gpp/cli.py:1527-1539`](src/doc3gpp/cli.py) and the
-  "Auto-sync from URL candidates" section in `docs/cli.md`. The
-  ordering is TSG sync → meeting sync → parse, so the meeting_id
-  resolution can usually find the parent row by the time the parse
-  fires. Same skip rules as DB-mode apply; non-3GPP URLs never
-  trigger auto-sync; failures stay warnings.
+  When `Settings.sync.auto_sync` is enabled, both `--from-path` and `--from-url`
+  run the direct-mode sync steps (TSG sync, meeting sync, TDoc-list sync)
+  **before** the parse, through `_auto_sync_direct_tdoc_ids` and
+  `trigger_auto_sync` in `src/doc3gpp/cli.py`. A 3GPP FTP `--from-url` takes its
+  candidate ids from the URL (basename for file URLs; BFS up to `--max-depth` /
+  `--recursive` for folder URLs). `--from-path` takes the id from the file name.
+  A non-3GPP `--from-url` takes the first TDoc-shaped match in the whole URL, which
+  can come from a directory segment; the spec's step 1 reads the file name, so
+  this mismatch is recorded in `docs/known-constraints.md`. The same skip rules as
+  DB mode apply, and failures stay warnings. `--from-path` never persists. A
+  3GPP FTP `--from-url` persists when a `tdocs` row exists; a non-3GPP
+  `--from-url` is parsed in memory only.
 - `doc3gpp tdoc show --tdoc <id>` resolves the parent `tdoc` row, then
   looks up the slim cover-page details and the extract metadata by the
   row's immutable `tdoc.ftp_url` (one row per URL — the URL is the row
@@ -310,16 +352,17 @@ Workflows in one line (full prose in `docs/architecture.md`):
   optional `ttcn` block, `extracted_at` (sourced from the
   `tdoc_extracts` row via PK JOIN), and `files` (the auxiliary files
   block / placeholder) as separate sections — the legacy `details` /
-  `parser_version` fields no longer appear in the output. The `tdoc_extracts` row carries a single `cache_file` column
-  (basename, derived from `tdoc.ftp_url` via `derive_cache_file()`);
-  the CLI reconstructs paths as `{cache.dir}/zips/<cache_file>` and
-  `{cache.dir}/markdown/<cache_file>` via `_build_cache().root` +
-  `derive_cache_file(ftp_url)`. **Both subtrees write real ZIPs** so
-  the `.zip` extension maps to a format `unzip` / 7z / WinZip can open
-  straight from disk — the zip subtree holds the 3GPP-served zip bytes;
-  the markdown subtree holds a `zipfile.ZipFile` wrapper produced by
-  `_wrap_markdown_zip` (single entry named `<docx stem>.md`,
-  `ZIP_DEFLATED`).
+  `parser_version` fields no longer appear in the output. For raw output,
+  `tdoc show --tdoc` runs extraction first, so an incomplete TDoc is re-extracted
+  on each raw read, then reads authoritative Markdown from SQL; the CR main comes
+  from the archive. Optional `--source-file` selects an exact ZIP member and is valid
+  only with `--format raw`. `tdoc_extracts` keeps one `cache_file` pointer, the
+  extraction version, the stored-row count, and `skipped_sources` per immutable ZIP
+  URL; each content table stores the full source path, compressed Markdown, and
+  content hash. The derived `markdown/<cache_file>` ZIP contains every converted
+  document plus a manifest. Cache purge/eviction does not delete SQL content or
+  prevent FTS5 rebuilding, but it makes raw CR main Markdown unavailable until the
+  TDoc is re-downloaded.
 - `doc3gpp tdoc show --ftp-url <url>` resolves the URL into matching
   rows across four tables (`tdocs`, `tdoc_cr_cover_page`,
   `tdoc_cr_ttcn_details`, `tdoc_files`) directly — `tdocs` and
@@ -338,11 +381,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   the upload pipeline (no DB-level `UNIQUE` constraint); the lookup
   returns a single row via `ORDER BY tdoc_id ASC LIMIT 1` as a
   deterministic fallback if the invariant is ever violated.
-  `--format raw` on the URL path reads the cache file directly via
-  `derive_cache_file(url)` (no `TDocCrService.extract` detour)
-  because the URL is the row identity — a cache miss raises
-  `BadParameter` pointing at `doc3gpp tdoc parse --from-url <url>`
-  or `doc3gpp tdoc parse --tdoc <id>`. The CLI bundles the result
+  `--format raw` on the URL path uses the content service's SQL-first,
+  exact-URL snapshot (with legacy-cache fallback only when it can identify
+  the source); it does not call `TDocCrService.extract`, download, or sync.
+  An unavailable legacy cache raises `BadParameter` pointing at
+  `doc3gpp tdoc parse --from-url <url>` or `doc3gpp tdoc parse --tdoc <id>`.
+  Optional `--source-file` selects one exact member path and is valid only for
+  raw output. The CLI bundles the non-raw result
   into a new `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn,
   extracted_at, files)` DTO and renders it under a
   `# FTP URL` / `[FTP URL]` anchor; the renderer contract follows
@@ -360,14 +405,23 @@ Workflows in one line (full prose in `docs/architecture.md`):
    filter-only source SQL. Results are flattened into shared search rows;
    `search_mode` is `fts5`, `semantic`, `hybrid`, or `filter`, `score` is
    the mode-specific score (or `null` for filter mode), `previews` is
-   populated only for FTS5, and the array order is final rank. TDoc rows
-   include `type`, `status`, and `best_chunk_id`; per-source rank and
-   nested-hit fields are not public.
+   populated only for FTS5, and the array order is final rank. Every TDoc row
+   includes an always-present `matched_documents` array with source identity,
+   URL, score, and previews; FTS5 and hybrid may populate it, semantic-only
+   and filter-only return `[]`. TDoc rows also include `type`, `status`, and
+   `best_chunk_id`; per-source rank and nested-hit fields are not public.
+   Stored content documents (CR annexes, and the main and annexes of WID, LS, and
+   discussion TDocs) are FTS5-searchable and semantically chunked. The CR main body
+   is not full-text indexed; its cover, change, and TTCN fields are.
  - `doc3gpp tdoc index [--rebuild|--rebuild-embeddings|--rebuild-all]`
-   → `TDocIndexService.rebuild(...)` → independent FTS5/vector rebuilds
-   with `--resume`, `--stale-only`, and `--batch`, or `IndexStatus` with no
-   rebuild flag. Hybrid weighting comes from
-   `Settings.semantic_search.fts5_weight`.
+    → `TDocIndexService.rebuild(...)` → independent FTS5/vector rebuilds
+    with `--resume`, `--stale-only`, and `--batch`, or `IndexStatus` with no
+    rebuild flag. FTS5 currentness compares expected document rows, IDs,
+    content hashes, and extraction versions—not only `uploaded_date`—while
+    `row_count` remains a logical-TDoc count. Existing eight-value
+    `search.bm25_weights` settings are accepted with a ninth `content_text`
+    weight of `1.0`; new defaults have nine entries. Hybrid weighting comes
+    from `Settings.semantic_search.fts5_weight`.
   - `doc3gpp spec doc parse --spec <id> [--release R] [--version V] [--force]` accepts exactly one spec and calls `SpecDocService.parse_many` with a one-item list → resolve the numeric-newest `SpecVersion` with a non-empty `.zip` URL via `resolve_spec_doc_version` (after optional release filtering); when both `--release` and `--version` are given, their release numbers must align (for example, `Rel-18` with `18.5.0`); explicit `--version` is strict and fails clearly when its ZIP link is missing. Fetch the ZIP with internal `fetch_spec_doc_zip` when absent (or use the zip cache at `{spec_doc.cache_dir}/zips/<spec_id>/<version>.zip`), and record the download. `--force` re-downloads before re-parsing, including pairs that already carry `parsed_at`.
   - `doc3gpp spec doc parse --spec <id> [--release R] [--version V] [--force]` → immutable-skip when `(spec_id, version)` already carries `parsed_at` (unless `--force`) → `parse` = fetch-if-missing + `list_spec_docx` + `convert_document_to_blocks` + `order_spec_files` + `extract_spec_toc` + `chunk_blocks` → `upsert_toc` + `replace_chunks` + per-file markdown cache (`{spec_doc.cache_dir}/markdown/<spec_id>/<version>/`) + `record_parsed` + best-effort auto-index (`upsert_for_version`) / auto-embed (`index_for_version`). Oversized zips → skip bucket; unknown spec/version or empty (no-docx) zips → failure bucket. Prints `ok/skipped/failed` buckets only (`--format/--output/--compact` accepted but ignored). Background `parse_spec_docs` jobs use scalar `spec_id` / optional `release` / `version` / `force`, log and store the result in `result.failure_details`. Chunk/search metadata uses newline-delimited combined `sections` and `tables`; TOC entries retain `section_no` / `title`.
  - `doc3gpp spec doc toc show --spec <id> --version <v> [--fields] [--format/--output/--compact]` → `SpecDocService.get_toc` (stored `(spec_id, version)` rows; miss → `BadParameter`). Default fields `section_no, title, level, source_file` (`[output.fields] spec_doc_toc`).
@@ -383,7 +437,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
 - Spec-document tables live in a separate sqlite file (`specdata_database_url`, default sibling `<main-stem>_specdata.db`); `db init/reset/check` take `--scope main|testcase|specdata|all` and `create_schema("specdata")` creates the three relational tables plus the FTS5 (`spec_doc_search`, `spec_doc_search_meta`) and vector (`vec_spec_doc_embeddings`, `vec_spec_doc_meta`) sidecars.
   - Web spec-document portal: `/specs/{spec_id}` links each version to `/specs/{spec_id}/docs?version=...`; the collapsed version page shows the downloaded/parsed state, enqueues `POST /jobs/parse/spec-docs` for parse or force re-parse, and renders the collapsed TOC plus filtered, paginated chunks with a range, up to ten rolling page numbers, ellipses, and first/previous/next/last controls. Search uses a full-width Query field and plural `sections`/`tables` filters; shared `TDoc Search` / `Spec Docs Search` tabs link Spec Docs hits back to version pages and chunk anchors. There is no standalone spec-doc fetch or public repair route; the pre-deployment local corpus is repaired once from cached ZIPs.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
-  TOML + env settings for diffing against `doc3gpp.toml.example`.
+  TOML + env settings for diffing against
+  `src/doc3gpp/data/doc3gpp.toml.example`.
 - `doc3gpp config init --target <auto|project|user> [--force]` writes
   the packaged default TOML template (full defaults) at the bootstrap
   target — `auto` (default) picks `./doc3gpp.toml` when run from a
@@ -399,8 +454,9 @@ Workflows in one line (full prose in `docs/architecture.md`):
   same meeting-calendar and TDoc-list sync paths used by explicit
   `meeting sync` / `tdoc sync`. The same skip rules apply and are never
   bypassed; failures are logged as warnings and do not abort the read
-  command. Direct-mode `tdoc parse --from-path` / `--from-url` never
-  triggers auto-sync. The `tdoc show --ftp-url` selector also never
+  command. Direct-mode `tdoc parse --from-path` / `--from-url` run the sync steps
+  for the TDoc id derived from the source (see the direct-mode bullet above). The
+  `tdoc show --ftp-url` selector also never
   triggers auto-sync — the URL is the row identity and there's no
   parent TDoc / meeting to anchor a sync on; users wanting a fresh
   extract at the URL must run `tdoc parse --from-url <url>` or
@@ -414,8 +470,7 @@ ruff check .
 
 # Full sqlite test suite (unit + integration, excludes online)
 ./scripts/test_sqlite.sh
-# (auto-uses pytest-xdist -n auto when the [dev] extra is installed;
-#  falls back to sequential otherwise. ~3x speedup on 4+ core machines.)
+# (sequential; parallel runs fail on shared engine state, see docs/TODO.md)
 
 # Online tests (opt-in, hits live 3gpp.org and FTP)
 python -m pytest -m online -rs
@@ -441,7 +496,7 @@ suite.
 | Where each public symbol lives (symbol → file reference) | [`docs/code-map.md`](docs/code-map.md) |
 | Filter grammar, settings caching, commit policy, anti-patterns, unique styles | [`docs/conventions.md`](docs/conventions.md) |
 | Open limitations (schema bootstrap, hardcoded FTP URL, R5-/C6- URL templates, test surface, …) | [`docs/known-constraints.md`](docs/known-constraints.md) |
-| Per-knob TOML schema reference | [`doc3gpp.toml.example`](doc3gpp.toml.example) |
+| Per-knob TOML schema reference | [`doc3gpp.toml.example`](src/doc3gpp/data/doc3gpp.toml.example) |
 | Search index design + spec contract | [`docs/superpowers/specs/2026-07-29-fts5-search-design.md`](docs/superpowers/specs/2026-07-29-fts5-search-design.md) |
 | FTS5 implementation plan | [`docs/superpowers/plans/2026-07-29-fts5-search.md`](docs/superpowers/plans/2026-07-29-fts5-search.md) |
 | Spec sync / list / show design + plan | [`docs/superpowers/specs/2026-08-10-spec-sync-list-show-design.md`](docs/superpowers/specs/2026-08-10-spec-sync-list-show-design.md) + [`docs/superpowers/plans/2026-08-10-spec-sync-list-show.md`](docs/superpowers/plans/2026-08-10-spec-sync-list-show.md) |

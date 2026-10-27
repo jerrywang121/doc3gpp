@@ -284,7 +284,6 @@ def test_parse_tdoc_url_enqueues_with_all_defaults(sqlite_env) -> None:
     assert params == {
         "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/",
         "force": False,
-        "full": False,
         "recursive": False,
         "max_depth": 2,
     }
@@ -311,7 +310,6 @@ def test_parse_tdoc_url_enqueues_recursive_without_max_depth(sqlite_env) -> None
                 "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/",
                 "recursive": True,
                 "force": True,
-                "full": True,
             },
         )
 
@@ -325,7 +323,6 @@ def test_parse_tdoc_url_enqueues_recursive_without_max_depth(sqlite_env) -> None
     assert params == {
         "url": "https://www.3gpp.org/ftp/TSG_RAN/WG5/",
         "force": True,
-        "full": True,
         "recursive": True,
     }
 
@@ -358,9 +355,10 @@ def test_parse_tdoc_url_enqueues_explicit_max_depth(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_prefers_url_when_both_supplied(sqlite_env) -> None:
     """Both ``tdoc_id`` and ``ftp_url`` → URL wins, tdoc_id ignored (human ruling)."""
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
     import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     url = "r5/26.001/r5s260001.zip"
@@ -412,9 +410,10 @@ def test_mcp_get_tdoc_by_url_404_on_no_rows(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_url_normalisation(sqlite_env) -> None:
     """A full https URL and a bare relative path resolve the same record."""
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
     import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     bare = "r5/26.001/r5s260001.zip"
@@ -430,13 +429,14 @@ def test_mcp_get_tdoc_url_normalisation(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
     """The URL-mode JSON envelope mirrors the CLI ``--format json`` shape."""
-    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
-    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    import json
+
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.models.tdoc_file import TDocFile
-    import json
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     url = "r5/26.001/r5s260001.zip"
@@ -467,9 +467,10 @@ def test_mcp_get_tdoc_by_url_returns_json_envelope(sqlite_env) -> None:
 
 def test_mcp_get_tdoc_existing_tdoc_id_path_unchanged(sqlite_env) -> None:
     """Regression: the ``tdoc_id`` path still works (no behavioural change)."""
-    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-    from doc3gpp.models.tdoc import TDoc
     import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
     _, server = _server()
     SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url="x.zip"))
@@ -479,3 +480,58 @@ def test_mcp_get_tdoc_existing_tdoc_id_path_unchanged(sqlite_env) -> None:
 
     payload = json.loads(asyncio.run(run()).content[0].text)
     assert payload["tdoc"]["tdoc_id"] == "R5s260001"
+
+
+def test_mcp_get_tdoc_parsed_discussion_reports_parsed_and_raw_note(sqlite_env) -> None:
+    """A parsed discussion reports ``parsed`` and points at ``get_tdoc_content``."""
+    import hashlib
+    import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
+    from doc3gpp.models.tdoc_cr import TDocExtractMeta
+    from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
+    from doc3gpp.models.tdoc_identity import document_id_for
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    _, server = _server()
+    url = "stored/r5s260030_discussion.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260030", type="discussion", ftp_url=url)
+    )
+    text = "# Discussion body"
+    document_id = document_id_for(url, "main.docx")
+    store = next(s for s in TDOC_CONTENT_STORES if s.key == "discussion")
+    SQLAlchemyTDocContentRepository().replace_family_bundle(
+        store,
+        TDocExtractMeta(
+            ftp_url=url,
+            tdoc_id="R5s260030",
+            cache_file="R5s260030.zip",
+            doc_filename="main.docx",
+            document_count=1,
+        ),
+        (
+            TDocDocument(
+                document_id=document_id,
+                source_file="main.docx",
+                markdown_file=markdown_member_name(document_id, "main.docx"),
+                file_order=0,
+                markdown_text=text,
+                content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            ),
+        ),
+    )
+
+    async def run():
+        return await _call(server, "get_tdoc", {"tdoc_id": "R5s260030"})
+
+    payload = json.loads(asyncio.run(run()).content[0].text)
+    assert payload["tdoc"]["parsed"] is True
+    assert payload["tdoc"]["document_count"] == 1
+    assert "cover" not in payload
+    assert "get_tdoc_content" in payload["note"]
+    assert "No extracted details" not in json.dumps(payload)

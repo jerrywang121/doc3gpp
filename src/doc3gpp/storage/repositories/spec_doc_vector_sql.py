@@ -199,6 +199,28 @@ class SQLAlchemySpecDocVectorRepository(SpecDocVectorRepository):
                 f"`doc3gpp spec doc index --rebuild-embeddings`"
             )
 
+    def keeps_index(self, dim: int, model: str | None) -> bool:
+        """Return True when ``vec_spec_doc_embeddings`` exists at ``dim`` and ``model``.
+
+        The non-raising form of :meth:`verify_compatible`, used by a
+        ``stale_only`` rebuild to keep the existing rows. A missing table or
+        ``model=None`` (duck-typed embedders) returns False, so the caller
+        falls back to :meth:`reset_for_rebuild`.
+        """
+        if model is None:
+            return False
+        try:
+            self.verify_compatible(dim, model)
+        except VectorIndexUnavailableError:
+            return False
+        with _VecConnection(self._engine) as conn:
+            return conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'vec_spec_doc_embeddings'"
+                )
+            ).first() is not None
+
     def reset_for_rebuild(self, dim: int, model: str | None) -> None:
         """Drop + recreate ``vec_spec_doc_embeddings`` at ``dim``.
 

@@ -24,6 +24,7 @@ def test_semantic_extra_drops_sentence_transformers():
 def test_config_set_dry_run_redacts_api_key(tmp_path, monkeypatch):
     """`config set --dry-run` must not echo the raw API key."""
     from typer.testing import CliRunner
+
     from doc3gpp.cli import app
     from doc3gpp.settings.loader import get_settings
 
@@ -46,6 +47,7 @@ def test_config_set_dry_run_redacts_api_key(tmp_path, monkeypatch):
 def test_config_show_redacts_api_key(tmp_path, monkeypatch):
     """`config show` must redact a configured API key."""
     from typer.testing import CliRunner
+
     from doc3gpp.cli import app
     from doc3gpp.settings.loader import get_settings
 
@@ -75,11 +77,12 @@ def test_index_status_panel_shows_vector_model_and_dim(sqlite_env):
     ``embedding_model`` so a pending mismatch is visible before any
     query fails with the rebuild hint.
     """
+    from sqlalchemy import text
     from typer.testing import CliRunner
+
     from doc3gpp.cli import app
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
-    from sqlalchemy import text
 
     create_schema()
     eng = get_engine()
@@ -99,7 +102,9 @@ def test_index_status_panel_shows_vector_model_and_dim(sqlite_env):
 def test_unified_search_explain_prints_fts5_configuration(monkeypatch):
     """Unified search keeps the FTS5 explanation on the text path."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
+
     from doc3gpp.cli import app
     from doc3gpp.services import factory
 

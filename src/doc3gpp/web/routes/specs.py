@@ -14,7 +14,6 @@ from doc3gpp.web.filters import is_htmx_request, parse_bool_query, parse_int_que
 from doc3gpp.web.render import spec_rows, spec_version_rows
 from doc3gpp.web.templates_setup import templates
 
-
 router = APIRouter(prefix="/specs", tags=["specs"])
 
 

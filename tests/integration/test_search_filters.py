@@ -276,3 +276,73 @@ def test_search_malformed_match_cli_exits_cleanly(semantic_search_corpus) -> Non
     )
     assert result.exit_code == 2
     assert "bad query" in result.output
+
+
+
+def test_document_matches_respect_parent_tdoc_filter(sqlite_env) -> None:
+    import hashlib
+
+    from doc3gpp.models.search import SearchFilters
+    from doc3gpp.storage.compression import compress_json
+    from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.search_sql import (
+        SQLAlchemySearchIndexRepository,
+    )
+
+    create_schema()
+    _seed_minimal_db()
+    engine = get_engine()
+    source_url = "https://www.3gpp.org/ftp/R5-1000000-review.zip"
+    markdown = "filterattachmentneedle"
+    document_id = hashlib.sha256(b"filter-document-id").hexdigest()
+    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO tdoc_extracts (
+                    ftp_url, tdoc_id, cache_file, doc_filename, parser_version,
+                    extraction_version, document_count
+                ) VALUES (
+                    :ftp_url, 'R5-1000000', 'review.zip', 'main.docx', '1.0.0', 1, 1
+                )
+                """
+            ),
+            {"ftp_url": source_url},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO tdoc_cr_annexes (
+                    ftp_url, doc_filename, document_id, tdoc_id, content,
+                    content_hash
+                ) VALUES (
+                    :ftp_url, 'review.docx', :document_id, 'R5-1000000',
+                    :content, :content_hash
+                )
+                """
+            ),
+            {
+                "document_id": document_id,
+                "ftp_url": source_url,
+                "content": compress_json(markdown),
+                "content_hash": content_hash,
+            },
+        )
+
+    repo = SQLAlchemySearchIndexRepository()
+    repo.upsert("R5-1000000")
+    included = repo.search(
+        "filterattachmentneedle",
+        SearchFilters(tdoc_id="R5-1000000", limit=5),
+    )
+    excluded = repo.search(
+        "filterattachmentneedle",
+        SearchFilters(tdoc_id="R5-9999999", limit=5),
+    )
+
+    assert len(included) == 1
+    assert included[0].tdoc_id == "R5-1000000"
+    assert len(included[0].matched_documents) == 1
+    assert included[0].matched_documents[0].source_file == "review.docx"
+    assert excluded == []

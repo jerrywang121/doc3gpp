@@ -15,8 +15,8 @@ from doc3gpp.web.filters import (
     parse_bool_query,
     parse_date_query,
     parse_int_query,
-    parse_text_query,
     parse_tdoc_id_query,
+    parse_text_query,
 )
 
 

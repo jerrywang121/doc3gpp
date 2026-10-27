@@ -9,8 +9,8 @@ commands never touch the database.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 from typer.testing import CliRunner
@@ -18,7 +18,6 @@ from typer.testing import CliRunner
 from doc3gpp.cli import _build_cache, app
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.settings.loader import get_settings
-
 
 # ---------------------------------------------------------------------------
 # Helpers

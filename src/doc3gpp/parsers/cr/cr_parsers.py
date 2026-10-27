@@ -25,13 +25,12 @@ from doc3gpp.parsers.cr.header import (
 )
 from doc3gpp.parsers.cr.helpers import _COVER_FIELDS
 from doc3gpp.parsers.cr.ttcn_functions import extract_changed_functions
-from doc3gpp.parsers.tdoc_parsers import SectionParser, TDocParser
 from doc3gpp.parsers.cr.ttcn_sections import (
     TTCNCorrectionsParser,
     TTCNOverviewParser,
 )
+from doc3gpp.parsers.tdoc_parsers import SectionParser, TDocParser
 from doc3gpp.settings.loader import get_settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,9 @@ def _parse_cover_date(raw: str) -> _date | None:
         "%d-%b-%Y",
     ):
         try:
-            return _datetime.strptime(text, fmt).date()
+            # The upstream field is a date-only value; discard the temporary
+            # naive datetime immediately after parsing it.
+            return _datetime.strptime(text, fmt).date()  # noqa: DTZ007
         except ValueError:
             continue
     logger.warning(
@@ -68,7 +69,7 @@ def _parse_cover_date(raw: str) -> _date | None:
 
 
 class CRParserBase(TDocParser):
-    """Common orchestration for CR-type TDoc parsers.
+    """Common orchestration for CR TDoc parsers.
 
     Concrete subclasses register themselves by overriding :meth:`supports`.
     """
@@ -94,7 +95,6 @@ class CRParserBase(TDocParser):
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
         if not (tdoc_id or "").strip():
             raise ValueError("tdoc_id is required and cannot be empty")
@@ -119,13 +119,12 @@ class CRParserBase(TDocParser):
             r"3GPP\s+TSG-\w+\s+Meeting\s+#\d{4}-TTCN\s+email",
             header_blob,
             re.IGNORECASE,
-        ):
-            if is_ttcn_tdoc(tdoc_id):
-                logger.warning(
-                    "CR header does not match the expected "
-                    "'3GPP TSG-<WG> Meeting #<YEAR>-TTCN email' layout; "
-                    "extraction may be incomplete"
-                )
+        ) and is_ttcn_tdoc(tdoc_id):
+            logger.warning(
+                "CR header does not match the expected "
+                "'3GPP TSG-<WG> Meeting #<YEAR>-TTCN email' layout; "
+                "extraction may be incomplete"
+            )
 
         _ok, cover_details, _adv = self._cover.parse(
             lines, max_text_length=max_text_length
@@ -134,7 +133,7 @@ class CRParserBase(TDocParser):
         details_payload: dict[str, Any] = {}
         for parser in self._details:
             ok, payload, _adv = parser.parse(
-                lines, max_text_length=max_text_length, full=full
+                lines, max_text_length=max_text_length
             )
             if ok:
                 details_payload[parser.name] = payload
@@ -241,13 +240,12 @@ class TTCNCRParser(CRParserBase):
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
         """TTCN CRs run the base extraction and then drop the body
         sidecar (``changes=None``) — TTCN CRs write the
         ``tdoc_cr_ttcn_details`` sidecar instead."""
         result = super().parse(
             markdown, tdoc_id=tdoc_id,
-            max_text_length=max_text_length, full=full,
+            max_text_length=max_text_length,
         )
         return TDocCRParseResult(cover=result.cover, ttcn=result.ttcn, changes=None)

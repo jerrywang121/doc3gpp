@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Date,
@@ -14,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -305,12 +305,13 @@ class TDocCrChangeDetailOrm(Base):
 class TDocExtractOrm(Base):
     """Metadata-only sidecar recording that a TDoc has been extracted.
 
-    The "expensive" payload (the cached zip and the rendered markdown)
-    lives on disk under the cache directory — these columns only hold
-    *paths*. A row here means ``scraping.tdoc_zip_source`` and
-    ``parsers.docx_converter`` have already produced artefacts
-    on disk, so the next extract call can short-circuit the network
-    and the python-docx render.
+    The cached ZIP and derived Markdown archive remain on disk under the
+    cache directory. The authoritative converted Markdown bodies live in
+    the per-type content tables (:class:`TDocCrAnnexOrm`,
+    :class:`TDocWidContentOrm`, :class:`TDocLsContentOrm`,
+    :class:`TDocDiscussionContentOrm`) keyed by this immutable ZIP URL;
+    this parent carries cache paths, provenance, and extraction
+    completeness, including the ZIP members that were skipped.
 
     Mirrors the URL-PK scheme of :class:`TDocCrDetailOrm`: identity
     is the immutable download URL (stored relative to the 3GPP FTP
@@ -336,6 +337,78 @@ class TDocExtractOrm(Base):
     parser_version: Mapped[str] = mapped_column(
         String(32), nullable=False, default="1.0.0"
     )
+    extraction_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    document_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    skipped_sources: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class _TDocContentRowMixin:
+    """Shared column shape for per-type TDoc content rows.
+
+    One row per document inside an immutable ZIP URL. ``ftp_url`` and
+    ``doc_filename`` form the composite primary key; ``ftp_url`` cascades
+    from :class:`TDocExtractOrm` and ``tdoc_id`` cascades from
+    :class:`TDocORM`, so deleting either parent removes the content.
+    ``content`` holds the :func:`doc3gpp.storage.compression.compress_json`
+    payload of the converted Markdown. ``token_count`` is the whitespace token
+    count of that Markdown; it is NULL until computed or when the content cannot
+    be decoded, and vector status reads it instead of decompressing ``content``.
+    """
+
+    ftp_url: Mapped[str] = mapped_column(
+        String(1024),
+        ForeignKey("tdoc_extracts.ftp_url", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    doc_filename: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    document_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    content: Mapped[bytes] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=False,
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class TDocCrAnnexOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents other than the main CR of a CR archive."""
+
+    __tablename__ = "tdoc_cr_annexes"
+
+
+class TDocWidContentOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents of a WID TDoc archive."""
+
+    __tablename__ = "tdoc_wid_contents"
+
+
+class TDocLsContentOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents of an LS TDoc archive."""
+
+    __tablename__ = "tdoc_ls_contents"
+
+
+class TDocDiscussionContentOrm(_TDocContentRowMixin, Base):
+    """Converted Word documents of a discussion TDoc archive."""
+
+    __tablename__ = "tdoc_discussion_contents"
+
+
+CONTENT_ORM_BY_STORE_KEY: dict[str, type[_TDocContentRowMixin]] = {
+    "cr": TDocCrAnnexOrm,
+    "wid": TDocWidContentOrm,
+    "ls": TDocLsContentOrm,
+    "discussion": TDocDiscussionContentOrm,
+}
 
 
 class JobORM(Base):
@@ -557,7 +630,12 @@ class SpecDocTocORM(SpecDataBase):
 
 
 class SpecDocChunkORM(SpecDataBase):
-    """One chunk row; PK is ``{spec_id}@{version}#{chunk_index}``."""
+    """One chunk row; PK is ``{spec_id}@{version}#{chunk_index}``.
+
+    ``text`` holds the gzip-JSON encoding of the chunk body (see
+    :func:`doc3gpp.storage.compression.compress_json`); readers decode it in
+    :mod:`doc3gpp.storage.repositories.spec_doc_sql`.
+    """
 
     __tablename__ = "spec_doc_chunks"
 
@@ -570,4 +648,6 @@ class SpecDocChunkORM(SpecDataBase):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sections: Mapped[str | None] = mapped_column(Text, nullable=True)
     tables: Mapped[str | None] = mapped_column(Text, nullable=True)
-    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    text: Mapped[bytes] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024), nullable=False, default=b"",
+    )

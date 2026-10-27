@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.repository.protocols import TDocFileRepository

@@ -40,8 +40,8 @@ def test_upsert_and_get_round_trip(sqlite_env) -> None:
     )
     # FK needs the parent tdoc row; create one. Note: TDocORM has
     # no `tsg` column — that lives on the parent meeting row.
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.db.models import TDocORM
+    from doc3gpp.storage.db.session import get_session_factory
     sf = get_session_factory()
     with sf() as s:
         s.add(TDocORM(tdoc_id="R5-999999", ftp_url="tsg_wg1/cr123.zip",
@@ -76,8 +76,8 @@ def test_get_by_url_returns_none_on_miss(sqlite_env) -> None:
 def test_cascade_delete_with_parent_tdoc(sqlite_env) -> None:
     from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.db.models import TDocORM
+    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
         SQLAlchemyTDocCrChangeDetailsRepository,
     )
@@ -111,8 +111,9 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
     confirm the CLI surfaces the new ``changes`` key on the rendered
     DTO.
     """
-    from typer.testing import CliRunner
     from unittest.mock import MagicMock
+
+    from typer.testing import CliRunner
 
     from doc3gpp.cli import app
     from doc3gpp.models.tdoc_cr import (
@@ -123,8 +124,11 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
     from doc3gpp.scraping.cache import TDocCache
     from doc3gpp.services.tdoc_cr_service import TDocCrService
     from doc3gpp.storage.db.migrate import create_schema
-    from doc3gpp.storage.db.session import get_session_factory
     from doc3gpp.storage.db.models import TDocORM
+    from doc3gpp.storage.db.session import get_session_factory
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
+    )
     from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
         SQLAlchemyTDocCrChangeDetailsRepository,
     )
@@ -171,7 +175,7 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
 
         def parse(
             self, markdown: str, *, tdoc_id: str,
-            max_text_length: int = 0, full: bool = False,
+            max_text_length: int = 0,
         ) -> TDocCRParseResult:
             return TDocCRParseResult(
                 cover=TDocCRDetails(
@@ -194,6 +198,7 @@ def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=SQLAlchemyTDocRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
         parser=_StubParser(),  # type: ignore[arg-type]
     )
 

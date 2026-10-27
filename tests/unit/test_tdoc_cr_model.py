@@ -23,22 +23,26 @@ on the immutable download ``url`` so multiple revisions of the same
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import FrozenInstanceError
 from datetime import date
 
 import pytest
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import sessionmaker
 
+from doc3gpp.models.tdoc_content_families import is_complete_cr_extraction
 from doc3gpp.models.tdoc_cr import (
+    DirectParseResult,
     TDocCRDetails,
     TDocCRParseResult,
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
+from doc3gpp.models.tdoc_identity import document_id_for
 from doc3gpp.storage.db.base import Base
-from doc3gpp.storage.db.models import TDocCrDetailOrm
-from doc3gpp.storage.db.models import TDocExtractOrm
-from doc3gpp.storage.db.models import TDocORM
+from doc3gpp.storage.db.models import TDocCrDetailOrm, TDocExtractOrm, TDocORM
 
 
 def test_default_construction_has_none_fields() -> None:
@@ -69,9 +73,9 @@ def test_details_has_no_blob_or_parser_version_fields() -> None:
     # The legacy attributes must be gone — accessing them raises
     # ``AttributeError`` on a ``slots=True`` dataclass.
     with pytest.raises(AttributeError):
-        details.details  # type: ignore[attr-defined]
+        details.__getattribute__("details")
     with pytest.raises(AttributeError):
-        details.parser_version  # type: ignore[attr-defined]
+        details.__getattribute__("parser_version")
 
 
 def test_post_init_rejects_blank_tdoc_id() -> None:
@@ -140,7 +144,7 @@ def test_tdoc_cr_details_summary_of_change_none_in_persisted() -> None:
 def test_dataclass_is_frozen() -> None:
     """Mutation of any field raises ``FrozenInstanceError``."""
     details = TDocCRDetails(tdoc_id="R5s260009")
-    with pytest.raises(Exception):  # FrozenInstanceError, not raised by us
+    with pytest.raises(FrozenInstanceError):
         details.tdoc_id = "R5s260010"  # type: ignore[misc]
 
 
@@ -334,6 +338,76 @@ def test_cache_file_must_be_present(tmp_path) -> None:
     """The QA lock: ``cache_file`` is mandatory even with a fresh tmp dir."""
     with pytest.raises(TypeError):
         TDocExtractMeta(ftp_url="x", tdoc_id="y")  # no cache_file
+
+
+def test_extract_meta_defaults_to_legacy_incomplete_version() -> None:
+    """Existing extraction metadata defaults to version 1 with no documents."""
+    meta = TDocExtractMeta(
+        ftp_url="x",
+        tdoc_id="y",
+        cache_file="source.zip",
+        doc_filename="main.docx",
+    )
+
+    assert getattr(meta, "extraction_version", None) == 1
+    assert getattr(meta, "document_count", None) == 0
+
+
+
+def _annex(ftp_url: str, source_file: str, file_order: int) -> TDocDocument:
+    markdown = f"annex {source_file}"
+    document_id = document_id_for(ftp_url, source_file)
+    return TDocDocument(
+        document_id=document_id,
+        source_file=source_file,
+        markdown_file=markdown_member_name(document_id, source_file),
+        file_order=file_order,
+        markdown_text=markdown,
+        content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    )
+
+
+def test_extract_meta_completeness_tracks_versioned_document_count() -> None:
+    legacy = TDocExtractMeta(
+        ftp_url="legacy.zip",
+        tdoc_id="R5-legacy",
+        cache_file="legacy.zip",
+        doc_filename="main.docx",
+    )
+    empty_v2 = TDocExtractMeta(
+        ftp_url="empty.zip",
+        tdoc_id="R5-empty",
+        cache_file="empty.zip",
+        doc_filename="main.docx",
+        extraction_version=2,
+        document_count=0,
+    )
+    complete = TDocExtractMeta(
+        ftp_url="complete.zip",
+        tdoc_id="R5-complete",
+        cache_file="complete.zip",
+        doc_filename="main.docx",
+        extraction_version=2,
+        document_count=2,
+    )
+    annexes = tuple(
+        _annex(complete.ftp_url, source_file, order)
+        for order, source_file in enumerate(("a/one.docx", "b/two.docx"))
+    )
+
+    assert not is_complete_cr_extraction(legacy, (), has_cover=True)
+    assert is_complete_cr_extraction(empty_v2, (), has_cover=True)
+    assert is_complete_cr_extraction(complete, annexes, has_cover=True)
+    assert not is_complete_cr_extraction(complete, annexes[:1], has_cover=True)
+
+
+def test_direct_parse_result_uses_document_collection_contract() -> None:
+    """Direct parse results carry source documents instead of a scalar body."""
+    field_names = DirectParseResult.__dataclass_fields__
+
+    assert "documents" in field_names
+    assert "main_source_file" in field_names
+    assert "markdown" not in field_names
 
 
 # ---------------------------------------------------------------------------

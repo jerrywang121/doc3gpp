@@ -8,7 +8,7 @@ error so the caller can inspect the result without a separate
 as a 404 when the ``job_id`` is unknown.
 """
 # FastAPI dependency calls in route signatures are intentional.
-# ruff: noqa: B008, BLE001
+# ruff: noqa: BLE001
 from __future__ import annotations
 
 import asyncio
@@ -122,7 +122,6 @@ class _SyncTestcasesBody(BaseModel):
 class _ParseTDocsBody(BaseModel):
     filter: dict[str, Any] = {}
     force: bool = False
-    full: bool = False
     max_batch: int | None = None
 
 
@@ -145,7 +144,6 @@ class _ParseTDocURLBody(BaseModel):
     recursive: bool = False
     max_depth: int = 2
     force: bool = False
-    full: bool = False
 
 
 class _ParseSpecDocsBody(BaseModel):
@@ -246,7 +244,6 @@ async def post_parse_tdocs(
     params: dict[str, JSONValue] = {
         "filter": body.filter,
         "force": body.force,
-        "full": body.full,
     }
     if body.max_batch is not None:
         params["max_batch"] = body.max_batch
@@ -325,7 +322,6 @@ async def post_parse_tdoc_url(
     params: dict[str, JSONValue] = {
         "url": normalized_url,
         "force": body.force,
-        "full": body.full,
         "recursive": body.recursive,
     }
     if not body.recursive:
@@ -477,12 +473,23 @@ async def get_job(
     format: str | None = Query(default=None, alias="format"),
     job_repo: JobRepository = Depends(get_job_repo),
 ) -> Any:
-    """Return the job detail envelope (JSON), or ``404`` when unknown."""
+    """Return the job detail envelope (JSON), or ``404`` when unknown.
+
+    ``format=html`` renders the full status panel; ``format=badge`` renders a
+    one-word status for compact slots (meetings list rows) and nothing once the
+    job is terminal, which ends the poller.
+    """
     job = _load_job(job_repo, job_id)
     if format == "html":
         return templates.TemplateResponse(
             request=request,
             name="partials/job_status.html",
+            context={"job": job},
+        )
+    if format == "badge":
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/job_badge.html",
             context={"job": job},
         )
     return JSONResponse(content=_envelope(job))

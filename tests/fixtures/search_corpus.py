@@ -189,7 +189,7 @@ def build_corpus(engine: Any) -> list[str]:
                     {
                         "tid": tid,
                         "ftp": ftp,
-                        "clauses": "\n".join(["5.4.2.1", "5.4.2.2"]),
+                        "clauses": "5.4.2.1\n5.4.2.2",
                         "changes": _gz(
                             [{"type": "ins", "text": "new NB-IoT MAC procedure"}]
                         ),

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Select, distinct, not_, or_, select
+from collections.abc import Collection, Sequence
+from dataclasses import replace
+
+from sqlalchemy import ColumnElement, Select, and_, distinct, func, not_, or_, select
+from sqlalchemy.orm import Session
 
 from doc3gpp.cli_filters import (
     DATE_FILTER_RE,
@@ -10,8 +14,22 @@ from doc3gpp.cli_filters import (
 )
 from doc3gpp.models.search import SearchFilters
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
-from doc3gpp.storage.db.models import MeetingORM, TDocCrDetailOrm, TDocORM
+from doc3gpp.models.tdoc_content_families import FAMILY_STORES
+from doc3gpp.storage.db.models import (
+    CONTENT_ORM_BY_STORE_KEY,
+    MeetingORM,
+    TDocCrAnnexOrm,
+    TDocCrDetailOrm,
+    TDocExtractOrm,
+    TDocORM,
+)
 from doc3gpp.storage.db.session import get_session_factory
+from doc3gpp.storage.repositories.tdoc_document_sources import (
+    document_sources_by_id as _document_sources_by_id,
+)
+
+_FAMILY_ORMS = tuple(CONTENT_ORM_BY_STORE_KEY[store.key] for store in FAMILY_STORES)
+_CONTENT_ORMS = (TDocCrAnnexOrm, *_FAMILY_ORMS)
 
 
 class SQLAlchemyTDocRepository:
@@ -131,16 +149,24 @@ class SQLAlchemyTDocRepository:
         abstract: str | None = None,
         secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
+        eligible_types: Sequence[str] | None = None,
+        parsed: bool | None = None,
     ) -> list[TDoc]:
         """Return recent TDoc records ordered by descending ``tdoc_id``.
 
         ``tdoc_id`` encodes the source-year and sequence (e.g.
         ``R5s260001``), so a lexicographic descending order is a stable
-        approximation of "newest first" within a single TSG. Pure
-        persistence shape — no joined meeting metadata. Callers that
-        need ``meeting_name`` should use :meth:`list_with_meeting`.
+        approximation of "newest first" within a single TSG. Each returned
+        row carries ``parsed`` (complete extraction state) and
+        ``document_count`` (stored content rows, ``None`` when not complete).
+        Callers that need ``meeting_name`` should use :meth:`list_with_meeting`.
 
         Optional filters:
+        - ``eligible_types``: keep rows whose casefolded, stripped
+          ``tdocs.type`` is one of the given values. ``None`` means no filter.
+        - ``parsed``: ``True`` keeps complete extractions, ``False`` keeps
+          incomplete ones (including TDocs never extracted), ``None`` means
+          no filter. ``exclude_parsed=True`` is equivalent to ``parsed=False``.
         - ``tdoc_id``: SQL ``LIKE`` pattern against ``tdocs.tdoc_id``
           (rich-filter grammar — ``null`` / ``not-null`` /
           ``!pattern`` / plain LIKE). The same parameter powers the
@@ -203,17 +229,31 @@ class SQLAlchemyTDocRepository:
             stmt = _apply_text_filter(stmt, TDocORM.secretary_remarks, secretary_remarks)
             stmt = _apply_date_filter(stmt, TDocORM.uploaded_date, uploaded_date)
 
+            if eligible_types is not None:
+                casefolded = [value.casefold() for value in eligible_types]
+                stmt = stmt.where(func.lower(func.trim(TDocORM.type, " \t\r\n")).in_(casefolded))
+
+            complete = complete_extraction_predicate()
+            if parsed is not None:
+                stmt = stmt.where(complete if parsed else ~complete)
             if exclude_parsed:
-                stmt = stmt.where(
-                    ~select(TDocCrDetailOrm.tdoc_id)
-                    .where(TDocCrDetailOrm.tdoc_id == TDocORM.tdoc_id)
-                    .exists()
-                )
+                stmt = stmt.where(~complete)
 
             stmt = stmt.order_by(TDocORM.tdoc_id.desc()).offset(offset).limit(limit)
             rows = session.scalars(stmt).all()
+            domain_rows = [_orm_to_domain(row) for row in rows]
+            if not domain_rows:
+                return []
+            state = _parse_state(session, [row.tdoc_id for row in domain_rows])
 
-        return [_orm_to_domain(row) for row in rows]
+        return [
+            replace(
+                row,
+                parsed=state[row.tdoc_id][0],
+                document_count=state[row.tdoc_id][1],
+            )
+            for row in domain_rows
+        ]
 
     def list_tdoc_ids_for_meeting(self, meeting_id: int) -> list[str]:
         """Return the TDoc IDs currently stored for ``meeting_id``."""
@@ -241,9 +281,9 @@ class SQLAlchemyTDocRepository:
         """
         with self._session_factory() as session:
             row = session.get(TDocORM, tdoc_id)
-        if row is None:
-            return None
-        return _orm_to_domain(row)
+            if row is None:
+                return None
+            return _with_parse_state(session, _orm_to_domain(row))
 
     def get_by_ftp_url(self, ftp_url: str) -> TDoc | None:
         """Return the TDoc whose ``ftp_url`` matches exactly.
@@ -263,9 +303,9 @@ class SQLAlchemyTDocRepository:
                 .order_by(TDocORM.tdoc_id.asc())
                 .limit(1)
             ).first()
-        if row is None:
-            return None
-        return _orm_to_domain(row)
+            if row is None:
+                return None
+            return _with_parse_state(session, _orm_to_domain(row))
 
     def list_with_meeting(
         self,
@@ -296,13 +336,15 @@ class SQLAlchemyTDocRepository:
         abstract: str | None = None,
         secretary_remarks: str | None = None,
         exclude_parsed: bool = False,
+        eligible_types: Sequence[str] | None = None,
+        parsed: bool | None = None,
     ) -> list[TDocWithMeeting]:
         """Like :meth:`list` but wraps each row with its parent meeting's name.
 
         Performs an extra batched lookup against ``meetings`` to populate
         ``TDocWithMeeting.meeting_name``. Used by the CLI / export code paths.
         Accepts the same rich filters and pagination as :meth:`list`,
-        including ``exclude_parsed``.
+        including ``exclude_parsed``, ``eligible_types``, and ``parsed``.
         """
         tdocs = self.list(
             limit=limit,
@@ -332,6 +374,8 @@ class SQLAlchemyTDocRepository:
             abstract=abstract,
             secretary_remarks=secretary_remarks,
             exclude_parsed=exclude_parsed,
+            eligible_types=eligible_types,
+            parsed=parsed,
         )
         if not tdocs:
             return []
@@ -401,6 +445,12 @@ class SQLAlchemyTDocRepository:
             for tdoc, meeting_name, meeting_tsg in rows
         ]
 
+    def document_sources_by_id(
+        self, document_ids: Collection[str],
+    ) -> dict[str, tuple[str, str]]:
+        """Map stored content ``document_id`` values to ``(ftp_url, source_file)``."""
+        return _document_sources_by_id(document_ids)
+
 
 def _orm_to_domain(row: TDocORM) -> TDoc:
     """Map an ORM row to a TDoc dataclass (no joined metadata)."""
@@ -430,6 +480,137 @@ def _orm_to_domain(row: TDocORM) -> TDoc:
         ls_cc=row.ls_cc,
         original_ls=row.original_ls,
     )
+
+
+def _with_parse_state(session: Session, tdoc: TDoc) -> TDoc:
+    """Attach ``parsed`` / ``document_count`` derived from the stored extraction."""
+    parsed, document_count = _parse_state(session, [tdoc.tdoc_id])[tdoc.tdoc_id]
+    return replace(tdoc, parsed=parsed, document_count=document_count)
+
+
+def complete_extraction_predicate() -> ColumnElement[bool]:
+    """Return the SQL mirror of the completeness rules, correlated to ``TDocORM``.
+
+    True when the TDoc's current-URL ``tdoc_extracts`` row (``tdocs.ftp_url``)
+    satisfies :func:`doc3gpp.models.tdoc_content_families.is_complete_cr_extraction`
+    or :func:`doc3gpp.models.tdoc_content_families.is_complete_family_extraction`.
+    """
+    extract = TDocExtractOrm
+    return (
+        select(extract.ftp_url)
+        .where(_current_complete_extract(extract))
+        .correlate(TDocORM)
+        .exists()
+    )
+
+
+def _cr_complete(extract: type[TDocExtractOrm]) -> ColumnElement[bool]:
+    cover = (
+        select(TDocCrDetailOrm.ftp_url)
+        .where(TDocCrDetailOrm.ftp_url == extract.ftp_url)
+        .correlate(extract)
+        .exists()
+    )
+    main_as_annex = (
+        select(TDocCrAnnexOrm.ftp_url)
+        .where(
+            TDocCrAnnexOrm.ftp_url == extract.ftp_url,
+            TDocCrAnnexOrm.doc_filename == extract.doc_filename,
+        )
+        .correlate(extract)
+        .exists()
+    )
+    return and_(
+        _is_v2_unskipped(extract),
+        cover,
+        _content_count(TDocCrAnnexOrm, extract) == extract.document_count,
+        ~main_as_annex,
+    )
+
+
+def _family_complete(orm: type, extract: type[TDocExtractOrm]) -> ColumnElement[bool]:
+    main_row = (
+        select(orm.ftp_url)
+        .where(orm.ftp_url == extract.ftp_url, orm.doc_filename == extract.doc_filename)
+        .correlate(extract)
+        .exists()
+    )
+    return and_(
+        _is_v2_unskipped(extract),
+        extract.document_count > 0,
+        _content_count(orm, extract) == extract.document_count,
+        main_row,
+    )
+
+
+def _is_v2_unskipped(extract: type[TDocExtractOrm]) -> ColumnElement[bool]:
+    return and_(
+        extract.extraction_version == 2,
+        or_(extract.skipped_sources.is_(None), extract.skipped_sources == "[]"),
+    )
+
+
+def _content_count(orm: type, extract: type[TDocExtractOrm]) -> ColumnElement[int]:
+    return (
+        select(func.count())
+        .select_from(orm)
+        .where(orm.ftp_url == extract.ftp_url)
+        .correlate(extract)
+        .scalar_subquery()
+    )
+
+
+def _complete_extract(extract: type[TDocExtractOrm]) -> ColumnElement[bool]:
+    return or_(
+        _cr_complete(extract),
+        *(_family_complete(orm, extract) for orm in _FAMILY_ORMS),
+    )
+
+
+def _current_complete_extract(extract: type[TDocExtractOrm]) -> ColumnElement[bool]:
+    """Match the parent row at the TDoc's current URL and require completeness.
+
+    ``parsed``, ``exclude_parsed``, ``--parsed``, and ``document_count`` all use
+    this one composition, so they cannot drift apart.
+    """
+    return and_(
+        extract.tdoc_id == TDocORM.tdoc_id,
+        extract.ftp_url == TDocORM.ftp_url,
+        _complete_extract(extract),
+    )
+
+
+def _stored_content_count(extract: type[TDocExtractOrm]) -> ColumnElement[int]:
+    counts = [_content_count(orm, extract) for orm in _CONTENT_ORMS]
+    return sum(counts[1:], counts[0])
+
+
+def _parse_state(
+    session: Session, tdoc_ids: Sequence[str]
+) -> dict[str, tuple[bool, int | None]]:
+    """Return ``(parsed, document_count)`` per TDoc in one query.
+
+    ``document_count`` is the stored content-row count of the TDoc's current-URL
+    extraction, and ``None`` when that extraction is not complete.
+    """
+    extract = TDocExtractOrm
+    document_count = (
+        select(func.max(_stored_content_count(extract)))
+        .where(_current_complete_extract(extract))
+        .correlate(TDocORM)
+        .scalar_subquery()
+    )
+    rows = session.execute(
+        select(
+            TDocORM.tdoc_id,
+            complete_extraction_predicate().label("parsed"),
+            document_count.label("document_count"),
+        ).where(TDocORM.tdoc_id.in_(tdoc_ids))
+    ).all()
+    return {
+        tdoc_id: (bool(parsed), count if parsed else None)
+        for tdoc_id, parsed, count in rows
+    }
 
 
 def _apply_text_filter(
@@ -479,4 +660,5 @@ __all__ = [
     "SQLAlchemyTDocRepository",
     "_apply_date_filter",
     "_apply_text_filter",
+    "complete_extraction_predicate",
 ]

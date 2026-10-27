@@ -15,6 +15,9 @@ from doc3gpp.repository.protocols import SpecDocRepository
 
 logger = logging.getLogger(__name__)
 
+# sqlite-vec rejects a knn ``k`` above this, so the hybrid fan-out is clamped to it.
+_KNN_MAX_K = 4096
+
 
 def rrf_merge(
     fts5_hits: list[SpecDocHit],
@@ -139,7 +142,7 @@ class SpecDocSemanticService:
             ][:limit]
             return self._populate_chunk_metadata(hits)
         fanout = self._settings.semantic_search.fanout_multiplier
-        n = max(limit * fanout, 0)
+        n = min(max(limit * fanout, 0), _KNN_MAX_K)
         f = SpecDocSearchFilters(
             spec_id=filters.spec_id,
             release=filters.release,
@@ -246,7 +249,15 @@ class SpecDocSemanticService:
         else:
             self._vec.clear_resume_cursor()
             if hasattr(self._vec, "reset_for_rebuild") and live_dim is not None:
-                self._vec.reset_for_rebuild(live_dim, model)
+                keep = (
+                    stale_only
+                    and hasattr(self._vec, "keeps_index")
+                    and self._vec.keeps_index(live_dim, model)
+                )
+                if not keep:
+                    self._vec.reset_for_rebuild(live_dim, model)
+                    # The reset empties the table, so every pair must be re-embedded.
+                    stale_only = False
             after_id = None
 
         total = self._vec.count_versions_to_index(

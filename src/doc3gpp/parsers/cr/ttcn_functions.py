@@ -20,7 +20,8 @@ column delimiter and relies on this invariant to avoid escaping.
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 # Accepts both forward-slash and backslash separators because the
 # user-supplied example (Windows-style) only carries backslashes.

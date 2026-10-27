@@ -37,6 +37,8 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
 from doc3gpp.services.tdoc_cr_service import ExtractResult
+from doc3gpp.services.tdoc_family_service import FamilyExtractResult
+from doc3gpp.services.tdoc_parse_selection import parse_selection_kwargs
 from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.settings.schema import Settings
 from doc3gpp.web.state import ServiceContainer
@@ -337,7 +339,6 @@ async def _parse_tdocs(
             "parse_tdocs job requires a 'filter' mapping parameter"
         )
     force = bool(job.params.get("force", False))
-    full = bool(job.params.get("full", False))
     max_batch = job.params.get("max_batch")
     max_batch = int(max_batch) if max_batch is not None else settings.tdoc_parse.max_batch
 
@@ -362,8 +363,11 @@ async def _parse_tdocs(
         "cr_pack",
     }
     list_filters = {
-        k: v for k, v in filters.items() if k in _KNOWN_LIST_FILTERS
+        k: v
+        for k, v in filters.items()
+        if k in _KNOWN_LIST_FILTERS and k != "tdoc_type"
     }
+    list_filters.update(parse_selection_kwargs(filters.get("tdoc_type")))
     if "meeting" in list_filters:
         list_filters["meeting_like"] = list_filters.pop("meeting")
     tdocs = services.tdoc_repo.list(
@@ -398,7 +402,6 @@ async def _parse_tdocs(
                 services.tdoc_cr.extract_many,
                 batch,
                 force=force,
-                full=full,
                 is_cancelled=cancel_event.is_set,
             )
             total_successes.update(result.successes)
@@ -410,10 +413,9 @@ async def _parse_tdocs(
                 lambda tdoc_id: services.tdoc_cr.prepare_extract(
                     tdoc_id,
                     force=force,
-                    full=full,
                 ),
                 persist=services.tdoc_cr.persist_prepared_extract,
-                is_complete=lambda value: isinstance(value, ExtractResult),
+                is_complete=lambda value: isinstance(value, (ExtractResult, FamilyExtractResult)),
                 is_cancelled=cancel_event.is_set,
             )
             for outcome in outcomes:
@@ -455,7 +457,6 @@ async def _parse_tdoc_url(
             f"parse_tdoc_url job requires a valid 3GPP FTP 'url' parameter: {exc}"
         ) from exc
     force = bool(job.params.get("force", False))
-    full = bool(job.params.get("full", False))
     recursive = bool(job.params.get("recursive", False))
     max_depth_param = job.params.get("max_depth")
     if recursive:
@@ -503,7 +504,6 @@ async def _parse_tdoc_url(
                     services.tdoc_cr.extract_from_url,
                     url,
                     force=force,
-                    full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                 )
             except Exception as exc:
@@ -522,7 +522,6 @@ async def _parse_tdoc_url(
                 url,
                 max_depth=max_depth,
                 force=force,
-                full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                 on_progress=progress,
                 is_cancelled=cancel_event.is_set,
@@ -551,7 +550,6 @@ async def _parse_tdoc_url(
             lambda file_url: services.tdoc_cr.prepare_from_url(
                 file_url,
                 force=force,
-                full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes or None,
             ),
             persist=services.tdoc_cr.persist_prepared_url,
@@ -591,21 +589,37 @@ async def _parse_tdoc_url(
             "tdoc_id": r.tdoc_id,
             "ftp_url": r.source_url or "",
             "status": "ok" if r.persisted else "parsed-no-fk",
+            "main_source_file": r.main_source_file,
+            "documents": [
+                {
+                    "document_id": document.document_id,
+                    "source_file": document.source_file,
+                    "file_order": document.file_order,
+                }
+                for document in r.documents
+            ],
         })
 
+    document_count = sum(len(result.documents) for result in batch.results)
+    document_label = "document" if document_count == 1 else "documents"
     progress(
-        f"done: {len(batch.results)} parsed, {len(batch.failures)} failed, "
-        f"{len(batch.skipped)} skipped",
+        f"done: {len(batch.results)} parsed, {document_count} {document_label}, "
+        f"{len(batch.failures)} failed, {len(batch.skipped)} skipped",
         force=True,
     )
 
-    return {
+    summary: dict[str, JSONValue] = {
         "requested": len(batch.results) + len(batch.failures) + len(batch.skipped),
         "successes": len(batch.results),
         "failures": len(batch.failures),
         "skipped": len(batch.skipped),
         "files": files,
     }
+    if batch.failures:
+        # The pipeline's failure messages carry the failing DOCX member path;
+        # return them so queued jobs retain the same source-level detail as CLI.
+        summary["failure_details"] = dict(batch.failures)
+    return summary
 
 
 async def _parse_spec_docs(

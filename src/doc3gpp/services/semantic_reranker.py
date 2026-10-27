@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 
-
 from doc3gpp.models.search import SearchHit
 from doc3gpp.repository.protocols import Embedder, VectorIndexRepository
 

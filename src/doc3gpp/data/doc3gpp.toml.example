@@ -62,11 +62,12 @@
 # tdoc = [
 #   "tdoc_id", "meeting_name", "title",
 #   "source", "type", "status",
-#   "cr_cat", "spec", "version", "related_wis",
+#   "cr_cat", "spec", "version", "related_wis", "parsed",
 #   # "ftp_url" — relative path to the TDoc zip on https://www.3gpp.org/ftp/
 #   # "abstract" — TL;DR pulled from the XLSX "Abstract" column
 #   # "secretary_remarks" — free-form secretary annotations from XLSX
 #   # "original_ls" — LS origin pointer from the XLSX "Original LS" column
+#   # "document_count" — stored content rows; not in the default list (use --fields)
 # ]
 # tsg = ["tsg_name", "short_name", "description"]
 # wi = ["wi_id", "acronym", "release", "name"]
@@ -122,6 +123,13 @@
 # Plain context lines captured before and after each change block.
 # 0 = no context, only marker lines + bridge.
 # body_change_context_padding = 2
+
+# Archive limits for `.docx` members inside each TDoc ZIP. The size cap is
+# aggregate uncompressed bytes across supported members; 0 disables either cap.
+[tdoc_parse]
+max_documents_per_zip = 100
+max_uncompressed_size_kb = 102400
+
 # Direct-parse flags (`--from-path`, `--from-url`, `--format`, `--output`)
 # are CLI-only — no TOML equivalent is exposed for the
 # `tdoc parse --from-*` direct mode.
@@ -164,14 +172,14 @@ rebuild_batch_size = 100
 snippet_tokens = 8
 
 # Per-column BM25 weights passed to FTS5's bm25() ranking function
-# and snippet() selection. Order MUST match the 8 indexed columns of
+# and snippet() selection. Order MUST match the 9 indexed columns of
 # the tdoc_search virtual table: (title, ftp_url, meeting_title,
-# meeting_location, wis, cover_text, change_text, ttcn_text). A
-# column with weight 0 is excluded from both ranking and previews; a
-# column with weight > 0 gets its own highlighted snippet in query
-# results (one per column, only when the snippet actually contains
-# a match). Tune interactively via `doc3gpp tdoc search --text ... --explain`.
-bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+# meeting_location, wis, cover_text, change_text, ttcn_text,
+# content_text). Existing eight-value configurations append a 1.0
+# content_text weight. A column with weight 0 is excluded from both
+# ranking and previews; a column with weight > 0 gets its own highlighted
+# snippet when the column matches the query.
+bm25_weights = [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0]
 
 # Candidate multiplier used by the unified semantic/hybrid search path.
 # Higher values give RRF more candidates at the cost of more vector lookups.
@@ -289,11 +297,16 @@ search_fanout_factor = 4
 
 # Fan-out multiplier for the hybrid FTS5 + vector path. Each side retrieves
 # `fanout_multiplier * --limit` candidates before RRF merge and truncation.
-# fanout_multiplier = 4
+# fanout_multiplier = 8
 
 # Hard cap on the number of chunks indexed per TDoc. Prevents
 # pathological TDoc bodies from dominating the index.
 # max_chunks_per_tdoc = 8
+
+# TOML-only. Hard cap on content chunks per TDoc, counted across its CR
+# annexes or family documents in order (main first for a family). Text
+# past the cap is not embedded; full-text search still finds it.
+# max_content_chunks_per_tdoc = 16
 
 # ── HTTP server (`doc3gpp server`) ───────────────────────────────────────────
 # Knobs for the FastAPI/uvicorn HTTP surface mounted by the

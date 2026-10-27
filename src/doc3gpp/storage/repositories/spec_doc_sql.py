@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
@@ -28,6 +29,8 @@ from doc3gpp.storage.db.models import (
 )
 from doc3gpp.storage.db.session import get_specdata_session_factory
 from doc3gpp.storage.repositories.rich_filters import apply_text_filter
+
+logger = logging.getLogger(__name__)
 
 
 class SQLAlchemySpecDocRepository:
@@ -215,7 +218,7 @@ class SQLAlchemySpecDocRepository:
                         chunk_index=index,
                         sections=draft.sections,
                         tables=draft.tables,
-                        text=draft.text,
+                        text=compress_json(draft.text),
                     )
                 )
             existing = session.get(SpecDocSourceORM, (spec_id, version))
@@ -398,13 +401,28 @@ def _orm_to_chunk(row: SpecDocChunkORM) -> SpecDocChunk:
         source_file=row.source_file,
         sections=row.sections,
         tables=row.tables,
-        text=row.text,
+        text=decode_chunk_text(row.chunk_id, row.text),
         chunk_id=row.chunk_id,
         spec_id=row.spec_id,
         version=row.version,
         release=row.release,
         chunk_index=row.chunk_index,
     )
+
+
+def decode_chunk_text(chunk_id: str, blob: bytes | str | None) -> str:
+    """Return the chunk body; a ``str`` is a legacy plain-text row not yet migrated."""
+    if isinstance(blob, str):
+        return blob
+    value = decompress_json(blob)
+    if isinstance(value, str):
+        return value
+    if blob is not None:
+        logger.warning(
+            "spec_doc chunk %s text blob could not be decoded; returning empty text",
+            chunk_id,
+        )
+    return ""
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

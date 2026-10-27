@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
+from doc3gpp.settings.loader import get_settings
+
+FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
+
+
+@pytest.fixture(autouse=True)
+def _disable_auto_sync_by_default(monkeypatch):
+    """Keep these direct-mode batch tests hermetic: no TDoc type sync against the network."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def _docx_available() -> bool:
@@ -18,6 +32,28 @@ def _docx_available() -> bool:
     return True
 
 
+def _multifile_zip(fixture_bytes: bytes) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(fixture_bytes)) as source:
+        main_docx = source.read(next(
+            name for name in source.namelist() if name.lower().endswith(".docx")
+        ))
+    from docx import Document
+
+    def support_docx(text: str) -> bytes:
+        document = Document()
+        document.add_paragraph(text)
+        payload = io.BytesIO()
+        document.save(payload)
+        return payload.getvalue()
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("a/support-alpha.docx", support_docx("local batch support alpha"))
+        archive.writestr("b/support-beta.docx", support_docx("local batch support beta"))
+        archive.writestr("z/R5s260009.docx", main_docx)
+    return payload.getvalue()
+
+
 @pytest.fixture
 def sized_dir(tmp_path: Path) -> Path:
     """Create a directory with a small file and a large file (relative to the cap)."""
@@ -26,6 +62,40 @@ def sized_dir(tmp_path: Path) -> Path:
     big = tmp_path / "R5-260200.docx"
     big.write_bytes(b"y" * (3 * 1024 * 1024))
     return tmp_path
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_local_folder_batch_emits_all_bundle_documents(tmp_path: Path) -> None:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    assert fixture.exists()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "R5s260009.zip").write_bytes(
+        _multifile_zip(fixture.read_bytes())
+    )
+    output_dir = tmp_path / "out"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(input_dir),
+            "--output", str(output_dir),
+            "--format", "raw",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    outputs = list(output_dir.iterdir())
+    assert len(outputs) == 1
+    markdown = outputs[0].read_text(encoding="utf-8")
+    assert "local batch support alpha" in markdown
+    assert "local batch support beta" in markdown
+    assert "<!-- doc3gpp-source: \"z/R5s260009.docx\" -->" in markdown
 
 
 @pytest.mark.skipif(

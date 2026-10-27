@@ -19,7 +19,9 @@ revision's detail rows.
 
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import replace
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
@@ -36,8 +38,9 @@ class SQLAlchemyTDocCrRepository:
 
     Persists two tables — ``tdoc_cr_cover_page`` (parsed cover-page fields)
     and ``tdoc_extracts`` (paths to cached zip / markdown) — both keyed
-    by the immutable download ``ftp_url``. Cover-page rows and extract
-    metadata rows are written through separate upsert methods.
+    by the immutable download ``ftp_url``. Cover-page and extract-metadata upserts remain available for legacy
+    callers; atomic multi-table extraction writes belong to
+    SQLAlchemyTDocContentRepository.
     """
 
     def __init__(self, session_factory=None) -> None:
@@ -139,6 +142,7 @@ class SQLAlchemyTDocCrRepository:
             )
 
         ftp_url = meta.ftp_url.lower()
+        legacy_meta = replace(meta, extraction_version=1, document_count=0)
         with self._session_factory() as session:
             extract_row = session.get(TDocExtractOrm, ftp_url)
             if extract_row is None:
@@ -146,7 +150,7 @@ class SQLAlchemyTDocCrRepository:
                 session.add(extract_row)
             else:
                 extract_row.tdoc_id = meta.tdoc_id
-            self._meta_to_orm(extract_row, meta)
+            self._meta_to_orm(extract_row, legacy_meta)
             session.commit()
 
     def get_extract_meta(self, tdoc_id: str) -> list[TDocExtractMeta]:
@@ -222,8 +226,32 @@ class SQLAlchemyTDocCrRepository:
         target.cache_file = meta.cache_file
         target.doc_filename = meta.doc_filename
         target.parser_version = meta.parser_version
+        target.extraction_version = meta.extraction_version
+        target.document_count = meta.document_count
+        target.skipped_sources = _encode_skipped_sources(meta.skipped_sources)
         if meta.extracted_at is not None:
             target.extracted_at = meta.extracted_at
+
+
+def _encode_skipped_sources(sources: tuple[str, ...]) -> str | None:
+    """Serialise skipped ZIP members; an empty tuple is stored as ``NULL``."""
+    if not sources:
+        return None
+    return json.dumps(list(sources), ensure_ascii=False)
+
+
+def _decode_skipped_sources(raw: str | None) -> tuple[str, ...]:
+    """Inverse of :func:`_encode_skipped_sources`; ``NULL`` and ``'[]'`` are empty."""
+    if not raw:
+        return ()
+    decoded = json.loads(raw)
+    if not isinstance(decoded, list) or not all(
+        isinstance(item, str) and item.strip() for item in decoded
+    ):
+        raise ValueError(
+            f"tdoc_extracts.skipped_sources must be a JSON array of non-empty strings, got {raw!r}"
+        )
+    return tuple(decoded)
 
 
 def _orm_to_details(row: TDocCrDetailOrm) -> TDocCRDetails:
@@ -264,4 +292,7 @@ def _orm_to_meta(row: TDocExtractOrm) -> TDocExtractMeta:
         doc_filename=row.doc_filename,
         extracted_at=row.extracted_at,
         parser_version=row.parser_version,
+        extraction_version=row.extraction_version,
+        document_count=row.document_count,
+        skipped_sources=_decode_skipped_sources(row.skipped_sources),
     )

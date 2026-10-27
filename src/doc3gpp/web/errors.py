@@ -46,6 +46,12 @@ from doc3gpp.models.spec_doc import (
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
 )
+from doc3gpp.services.tdoc_content_service import (
+    TDocContentIncompleteError,
+    TDocContentIneligibleError,
+    TDocContentNotFoundError,
+    TDocContentNotFoundReason,
+)
 from doc3gpp.services.tdoc_cr_service import (
     TDocNotFoundError,
     TDocUrlNotFoundError,
@@ -96,6 +102,55 @@ class CacheMissError(LookupError):
         self.hint = hint
 
 
+class TDocContentSourceNotFoundError(LookupError):
+    """Raised when an exact source member is absent from the stored ZIP."""
+
+
+class TDocContentTypeIneligibleError(LookupError):
+    """Raised when a TDoc's stored type has no raw Markdown content family."""
+
+
+def map_tdoc_content_error(
+    exc: Exception,
+    *,
+    tdoc_id: str | None = None,
+    ftp_url: str | None = None,
+) -> Exception:
+    """Translate typed content-service errors into the shared envelopes."""
+    if isinstance(exc, TDocContentIneligibleError):
+        return TDocContentTypeIneligibleError(str(exc))
+    if isinstance(exc, TDocContentIncompleteError):
+        force = True
+        detail = str(exc)
+    elif isinstance(exc, TDocContentNotFoundError):
+        detail = str(exc)
+        reason = exc.reason
+        if reason is TDocContentNotFoundReason.TDOC_NOT_FOUND:
+            return TDocNotFoundError(tdoc_id or "")
+        if reason is TDocContentNotFoundReason.URL_NOT_FOUND:
+            return TDocUrlNotFoundError(ftp_url or "")
+        if reason is TDocContentNotFoundReason.SOURCE_NOT_FOUND:
+            return TDocContentSourceNotFoundError(detail)
+        force = reason in {
+            TDocContentNotFoundReason.LEGACY_METADATA_INVALID,
+            TDocContentNotFoundReason.LEGACY_CACHE_INVALID,
+            TDocContentNotFoundReason.CACHE_UNAVAILABLE,
+        }
+    elif isinstance(exc, ValueError):
+        return InvalidFilterError(str(exc))
+    else:
+        return exc
+
+    command = (
+        f"doc3gpp tdoc parse --tdoc {tdoc_id}"
+        if tdoc_id
+        else f"doc3gpp tdoc parse --from-url {ftp_url or '<url>'}"
+    )
+    if force:
+        command += " --force"
+    return CacheMissError(detail, hint=f"run: {command}")
+
+
 class SearchIndexCorruptWebError(RuntimeError):
     """HTTP-facing corruption error carrying the affected resource."""
 
@@ -130,6 +185,8 @@ MCP_CODE_INTERNAL_ERROR = -32603
 _MCP_RESOURCE_BY_EXC: dict[type[Exception], tuple[str, int]] = {
     TDocNotFoundError: ("tdoc", MCP_CODE_NOT_FOUND),
     TDocUrlNotFoundError: ("tdoc", MCP_CODE_NOT_FOUND),
+    TDocContentSourceNotFoundError: ("tdoc_content", MCP_CODE_NOT_FOUND),
+    TDocContentTypeIneligibleError: ("tdoc_content", MCP_CODE_NOT_FOUND),
     MeetingNotFoundError: ("meeting", MCP_CODE_NOT_FOUND),
     TSGNotFoundError: ("tsg", MCP_CODE_NOT_FOUND),
     WINotFoundError: ("wi", MCP_CODE_NOT_FOUND),
@@ -178,6 +235,8 @@ def map_mcp_error(exc: Exception) -> tuple[int, str, dict[str, Any]] | None:
 _ERROR_SLUGS: dict[type[Exception], str] = {
     TDocNotFoundError: "tdoc_not_found",
     TDocUrlNotFoundError: "tdoc_url_not_found",
+    TDocContentSourceNotFoundError: "tdoc_content_source_not_found",
+    TDocContentTypeIneligibleError: "tdoc_content_type_ineligible",
     MeetingNotFoundError: "meeting_not_found",
     TSGNotFoundError: "tsg_not_found",
     WINotFoundError: "wi_not_found",
@@ -205,6 +264,8 @@ _ERROR_SLUGS: dict[type[Exception], str] = {
 _STATUS_BY_EXC: dict[type[Exception], int] = {
     TDocNotFoundError: 404,
     TDocUrlNotFoundError: 404,
+    TDocContentSourceNotFoundError: 404,
+    TDocContentTypeIneligibleError: 404,
     MeetingNotFoundError: 404,
     TSGNotFoundError: 404,
     WINotFoundError: 404,
@@ -312,10 +373,13 @@ __all__ = [
     "SpecDocUnknownSpecError",
     "SpecDocUnknownVersionError",
     "SpecNotFoundError",
+    "TDocContentSourceNotFoundError",
+    "TDocContentTypeIneligibleError",
     "TSGNotFoundError",
     "TestcaseNotFoundError",
     "WINotFoundError",
     "map_domain_error",
     "map_mcp_error",
+    "map_tdoc_content_error",
     "register_error_handlers",
 ]

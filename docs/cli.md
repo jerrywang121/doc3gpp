@@ -54,6 +54,11 @@ When enabled:
 - `tdoc show` delegates to the same auto-sync logic as `tdoc list --tdoc`.
 - `tdoc parse` (without `--from-path` or `--from-url`) delegates to the same
   auto-sync logic as `tdoc list` with the same filters.
+- `tdoc parse --from-path` and `tdoc parse --from-url` run the direct-mode sync
+  steps (TSG sync, meeting sync, TDoc-list sync) for the TDoc id derived from the
+  source before parsing. The id comes from the file name for `--from-path`, and
+  for a 3GPP FTP `--from-url` from the URL's candidates (see
+  [Direct-mode auto-sync](#direct-mode-auto-sync)).
 
 The internal sync calls always respect the existing skip rules
 (`meeting_sync_interval`, `tdoc_list_closed_window`, `tdoc_list_sync_interval`).
@@ -63,8 +68,24 @@ commands. When a sync actually runs, the command prints
 with the same prefix. Sync failures are logged as warnings and do not abort
 the parent read command.
 
-Direct-mode `tdoc parse` (`--from-path` or `--from-url`) never triggers
-auto-sync.
+### Direct-mode auto-sync
+
+Direct-mode `tdoc parse` (`--from-path` or `--from-url`) runs the same steps
+when `sync.auto_sync` is on, before the parse:
+
+1. Extract the TDoc id from the source. `--from-path` uses the file name. A
+   3GPP FTP `--from-url` uses the TDoc-shaped candidates from the URL (the
+   basename for a file URL; a BFS of the folder up to `--max-depth` /
+   `--recursive` for a folder URL). A non-3GPP `--from-url` uses the first
+   TDoc-shaped match in the whole URL string, so an id in a directory segment
+   can trigger the sync. The type-detection specification says "file name" for
+   this step; the difference is recorded in
+   [`known-constraints.md`](known-constraints.md).
+2. Sync the TSG for that id, then its meeting list, then the meeting's TDoc
+   list, through `trigger_auto_sync`. The same skip rules as the read commands
+   apply, and failures stay warnings.
+3. Parse. `--from-path` never persists. A 3GPP FTP `--from-url` persists when a
+   `tdocs` row exists; a non-3GPP `--from-url` is parsed in memory only.
 
 ## db Commands
 
@@ -473,6 +494,12 @@ Options:
 - --uploaded-date: filter by `uploaded_date`. See
   [Filter syntax](#filter-syntax) below for the
   accepted forms (including date comparisons).
+- --parsed: `true` or `false`. `true` keeps TDocs with a complete extraction for
+  their type; `false` keeps the others. Completeness is the same rule the parse
+  selection uses: a CR needs its v2 parent, cover row, and annex rows (see
+  [Parse completeness](#parse-completeness)); WID, LS, and discussion TDocs
+  need their v2 parent and content rows. A CR parsed before the annex upgrade
+  reports `false` until it is re-parsed.
 - --fields: comma-separated list of fields to include in output, or `all`.
 - --format: see "Common list output options" below (table | json | markdown).
 - --compact: see "Compact output" in the format-overview section.
@@ -480,7 +507,13 @@ Options:
 
 Default output fields:
 
-- `tdoc_id`, `meeting_name`, `title`, `source`, `type`, `status`, `cr_cat`, `spec`, `version`, `related_wis`
+- `tdoc_id`, `meeting_name`, `title`, `source`, `type`, `status`, `cr_cat`, `spec`, `version`, `related_wis`, `parsed`
+
+Output fields `parsed` (boolean: a complete extraction exists for the TDoc's
+type) and `document_count` (integer: the stored content rows of that
+extraction, or `null` when the TDoc is not parsed). `document_count` is not in
+the default list; request it with `--fields`, for example
+`--fields tdoc_id,parsed,document_count`.
 
 Auto-sync: when `sync.auto_sync` is enabled, `tdoc list` may internally sync
 meeting calendars and TDoc lists for the TSG(s) and meeting ID(s) inferred
@@ -547,10 +580,12 @@ doc3gpp tdoc list --fields tdoc_id,title,status
 
 Purpose:
 
-- Describe every field of the six `tdoc` tables (70 rows):
-  `tdocs` (24), `tdoc_cr_cover_page` (20),
-  `tdoc_cr_ttcn_details` (10), `tdoc_cr_change_details` (4),
-  `tdoc_files` (6), `tdoc_extracts` (6).
+- Describe every field of the ten `tdoc` tables (99 rows):
+  `tdocs` (26, including the derived `parsed` and `document_count`),
+  `tdoc_cr_cover_page` (20), `tdoc_cr_ttcn_details` (10),
+  `tdoc_cr_change_details` (4), `tdoc_files` (6), `tdoc_extracts` (9),
+  `tdoc_cr_annexes` (6), `tdoc_wid_contents` (6), `tdoc_ls_contents` (6),
+  `tdoc_discussion_contents` (6).
 
 Options:
 
@@ -599,6 +634,10 @@ Options:
   both URL spellings resolve the same row. Mutually exclusive with
   `--tdoc`. Does NOT trigger auto-sync (no parent TDoc to anchor a
   meeting sync).
+- `--source-file PATH`: select one exact, full ZIP member path for raw
+  content (for example, `Annex/Support.docx`). This is not a local
+  filesystem path, is scoped to the selected TDoc/ZIP URL, and is valid
+  only with `--format raw`; an unknown member is a not-found error.
 - `--format {table,json,markdown,raw}`: output format. Default
   `table`, unless overridden by `[output].format` in the resolved
   TOML config (`output.format`).
@@ -614,7 +653,14 @@ Options:
     an empty list). The `parser_version` and `details` lines are
     gone — `extracted_at` is sourced from `tdoc_extracts` at the
     same URL and rendered as `extracted_at: -` when the row is
-    missing. Every `tdoc_files` row matching `tdoc_id` renders
+    missing. The `[TDoc]` block carries `parsed` and `document_count`,
+    the same values `tdoc list` reports (`parsed: True` for a complete
+    extraction). When an extract row exists but has no cover (non-CR
+    TDocs and CR annexes), the block prints `Raw markdown is available;
+    run \`doc3gpp tdoc show --tdoc <id> --format raw\`` (or
+    `--ftp-url <url>` for the URL selector) instead of the parse hint.
+    The `No extracted details; run ... tdoc parse` hint appears only
+    when no extract row exists. Every `tdoc_files` row matching `tdoc_id` renders
     under an `[Auxiliary Files]` block with the four informative
     fields (`type`, `file`, `ftp_url`, `uploaded_date`); the
     autoincrement `id` and the `tdoc_id` match key are dropped
@@ -629,7 +675,9 @@ Options:
     (optional keys are **omitted**, not emitted as `null`, when
     no corresponding row exists):
     - `tdoc` — every `TDoc` field, with `date` / `datetime` values
-      ISO-8601-encoded.
+      ISO-8601-encoded. `parsed` (bool) and `document_count` (int, or
+      `null` when not parsed) are derived from the stored extraction,
+      the same values `tdoc list` reports.
     - `cover` — the slim cover-page dataclass keyed by
       `tdoc.ftp_url` (omitted when no `tdoc_cr_cover_page` row).
     - `ttcn` — the TTCN sidecar dataclass keyed by
@@ -649,6 +697,12 @@ Options:
       dataclass field of `TDocFile` is serialised (`id`,
       `tdoc_id`, `type`, `file`, `ftp_url`, `uploaded_date`).
       Omitted when the TDoc has no auxiliary files.
+    - `note` — present only when an extract exists without a cover row
+      (non-CR TDocs and CR annexes). It states that no structured details
+      are extracted and points at the raw markdown: call the
+      `get_tdoc_content` MCP tool, or run `doc3gpp tdoc show --tdoc <id>
+      --format raw`. The same key and text appear on the HTTP and MCP
+      JSON payloads.
   - `markdown`: a Markdown document — `# TDoc` heading, bullet list
     of TDoc fields under `## Metadata`, then `## Extracted Cover
     Details` (slim cover-page fields when present) and `##
@@ -656,9 +710,12 @@ Options:
     JSON fenced block + `changed_functions` as a bullet list when
     the TDoc is a TTCN CR and the sidecar exists). The
     `changed_functions` bullet list renders one `* <entry>` per
-    line, or `—` when the aggregate is empty. When no extract row
-    is present, a single `_No extracted details; run \`doc3gpp
-    tdoc parse --tdoc <id>\` first._ placeholder is emitted.
+    line, or `—` when the aggregate is empty. When an extract row
+    exists without a cover, an `## Extracted Details` section shows
+    `extracted_at` and a line pointing at the raw markdown (`doc3gpp
+    tdoc show --tdoc <id> --format raw`). When no extract row is
+    present, a single `_No extracted details; run \`doc3gpp
+    tdoc parse --tdoc <id>\` first._` placeholder is emitted.
     Every `tdoc_files` row matching `tdoc_id` renders under `##
     Auxiliary Files` with one nested bullet group per file
     (`type`, `file`, `ftp_url`, `uploaded_date`); when no files
@@ -666,18 +723,27 @@ Options:
     first if you haven't synced this meeting yet._` placeholder
     keeps the document skeleton stable. Long fields are **not**
     truncated in this mode.
-  - `raw`: the converted `.docx` markdown body (the artefact the CR
-    parser consumes) for CR-type TDocs. The markdown is loaded from
-    `{cache.dir}/markdown/<cache_file>` where `cache_file` is the
-    `tdoc_extracts.cache_file` column value derived from
-    `tdoc.ftp_url` via `derive_cache_file()`. Requires `python-docx`
-    (`pip install doc3gpp[extract]`) when the cache is cold; surfaces a
-    friendly error otherwise. When no cached markdown exists, this
-    format triggers a fresh `TDocCrService.extract()` to populate the
-    cache + DB. Non-CR-type TDocs are rejected with a friendly error.
-    If the markdown cache file is missing or unreadable, the error
-    message is:
-    `Markdown cache for TDoc '<tdoc>' is empty or unreadable (cache_file: <cache_file>, cache_dir: <dir>)`.
+  - `raw`: converted Markdown for a TDoc of an eligible type (CR, WID new/revised,
+    LS in/out, or discussion). TDoc-ID mode runs extraction first, as
+    `tdoc parse` does, so an incomplete TDoc is re-extracted (and re-downloaded
+    when its ZIP is not cached) on each raw read; it then reads authoritative SQL
+    content. For a WID, LS, or discussion TDoc, every stored document comes from
+    its family table, main first. For a CR TDoc, the main document comes from the
+    derived archive `markdown/<cache_file>` and the annexes come from
+    `tdoc_cr_annexes`, main first. URL mode reads a side-effect-free exact-URL
+    snapshot and never syncs, downloads, or extracts. `--source-file` selects one
+    exact member. A CR annex requested with `--source-file` is served from SQL
+    without reading the archive; the full CR output needs the archive, so URL mode
+    fails with the re-parse hint when it is missing. Without `--source-file`, one
+    body is emitted unchanged and multiple bodies are emitted as main-first named
+    blocks of the form `<!-- doc3gpp-source: <JSON-encoded source_file> -->`
+    followed by the original Markdown. The Markdown cache ZIP is derived; it is not
+    the content source for SQL-backed documents. Legacy plain UTF-8, gzip, and
+    single-member Markdown ZIPs remain readable as incomplete version-1 content, but
+    never make a version-2 extraction complete. An unavailable legacy cache produces
+    a parse hint. Requires `python-docx` (`pip install doc3gpp[extract]`) when
+    extraction is needed. A TDoc of any other type is rejected with
+    `TDoc '<id>' has type '<type>'; raw Markdown is available for CR, WID, LS, and discussion TDocs`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Pass `-` for stdout (the historical default).
 - `--compact`: see "Compact output" in the format-overview section.
@@ -721,12 +787,12 @@ Behavior:
   the `<ins>` / `<del>` markers). JSON output gains a `changes` key.
   The table renderer emits a `[Change Details]` block with clause
   + change-block counts.
-- `raw` bypasses the DB-row render entirely and reads the converted
-  markdown from the cache. When the cache is cold, the extract
-  pipeline runs (download zip, render markdown, persist across
-  `tdoc_cr_cover_page` + the optional `tdoc_cr_ttcn_details` +
-  `tdoc_extracts` in three independent upserts) before the result is
-  emitted.
+- `raw` bypasses the structured DB-row render. In TDoc-ID mode, the CLI
+  first runs extraction (reusing the source ZIP cache when available),
+  then reads the content tables SQL-first; the CR main comes from the archive.
+  In URL mode it reads a SQL-first snapshot and never triggers extraction,
+  download, or sync. CR annexes and family documents do not create
+  `tdoc_files` rows; that table remains reserved for auxiliary FTP-file metadata.
 
 `--ftp-url` selector:
 
@@ -748,11 +814,11 @@ Behavior:
   ttcn, extracted_at, files)` and renders under a `# FTP URL` /
   `[FTP URL]` anchor with the same omit-when-null convention as the
   `--tdoc` path.
-- `--format raw` on the URL path reads the cache file directly via
-  `derive_cache_file(url)` (no `TDocCrService.extract` detour) because
-  the URL is the row identity. Cache miss → `BadParameter` pointing at
-  `doc3gpp tdoc parse --from-url <url>` or
-  `doc3gpp tdoc parse --tdoc <id>`.
+- `--format raw` on the URL path asks the content service for the exact
+  ZIP URL. SQL document rows take precedence; only when SQL content is
+  absent may the service use a legacy cache body whose source is known.
+  This path never calls `TDocCrService.extract`, downloads, or syncs. A
+  missing/unreadable legacy body raises `BadParameter` with a parse hint.
 
 Examples:
 
@@ -766,17 +832,31 @@ doc3gpp tdoc show --tdoc R5s260009 --format json
 # Markdown for archival / review.
 doc3gpp tdoc show --tdoc R5s260009 --format markdown -o R5s260009.md
 
-# Converted .docx markdown (raw). Triggers an extract on cache miss.
+# All stored ZIP documents, main first, with named blocks when multi-file.
 doc3gpp tdoc show --tdoc R5s260009 --format raw -o R5s260009.md
+# Select one exact source member (not a local filesystem path).
+doc3gpp tdoc show --tdoc R5s260009 --format raw \
+    --source-file 'Annex/Support.docx' -o support.md
 
 # URL-keyed read — show every row matching the URL across the four
 # tables (default table format). Normalises both full URLs and bare
 # relative paths via `normalize_ftp_path`.
 doc3gpp tdoc show --ftp-url TSG_RAN/WG5_Test_ex-T1/.../R5s260009.zip
 
-# URL-keyed raw — read the converted markdown cache directly (URL is
-# the row identity; cache miss points at `tdoc parse --from-url`).
+# URL-keyed raw — SQL-first exact URL snapshot; no implicit sync,
+# download, or extraction. A missing legacy cache points at `tdoc parse`.
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
+```
+
+A multi-document raw result has explicit source labels rather than unnamed
+concatenated bodies:
+
+```markdown
+<!-- doc3gpp-source: "CR/Main.docx" -->
+# CR main Markdown
+
+<!-- doc3gpp-source: "Annex/Support.docx" -->
+# CR annex Markdown
 ```
 
 Sample output for a TTCN CR (`R5s260009`, fixture-driven) — every
@@ -935,22 +1015,26 @@ contract for both the `markdown` and `table` formats.
 
 Purpose:
 
-- Download a TDoc zip from the 3GPP FTP, render its `.docx` body to
-  markdown, parse the cover-page fields, and persist the result
-  across the slim cover-page table (`tdoc_cr_cover_page`), the cache
-  metadata table (`tdoc_extracts`), and — when the parser
-  recognises a TTCN CR — the new `tdoc_cr_ttcn_details` sidecar.
-  TTCN detection is automatic: the parser returns a
-  `TDocCRParseResult(cover, ttcn)` and `TDocCrService` writes the
-  sidecar only when `ttcn is not None` (i.e. when
-  `is_ttcn_tdoc(tdoc_id)` and the cover-page document contains a
-  TTCN overview + corrections section). The CLI surface itself is
-  unchanged — only the storage fan-out is wider. Wraps the Phase 6
-  `TDocCrService.extract_many` for batch CLI use.
+- Download a TDoc ZIP, convert every supported `.docx` member, and store the
+  content for the TDoc's type. For a CR TDoc, exactly one member must be the
+  structural CR cover. That main document alone produces the cover row and the
+  optional TTCN/body-change sidecars, and its full Markdown is kept only in the
+  derived archive. Every other converted `.docx` is a CR annex stored in
+  `tdoc_cr_annexes`. For a WID, LS, or discussion TDoc, the main document and every
+  annex are stored in that type's table (`tdoc_wid_contents`, `tdoc_ls_contents`,
+  or `tdoc_discussion_contents`). Each successful run atomically replaces the URL's
+  `tdoc_extracts` parent and content rows. `tdoc_files` is separate: it continues
+  to describe auxiliary files discovered on FTP.
+
+Eligible types are matched case-insensitively and exactly after trimming
+spaces, tabs, carriage returns, and line feeds on `tdocs.type`: `CR` (CR
+annexes), `WID new` and `WID revised` (WID), `LS in` and `LS out` (LS), and
+`discussion` (discussion). Every other type, including `other`, is never
+downloaded or stored.
 
 Every flag is a **filter** — the candidate set is the intersection of
-every supplied predicate, and CR-type is the implicit default (the
-extractor only handles CR TDocs). The two batch-style selectors from
+every supplied predicate. With no `--type`, the default selects CR plus the
+WID, LS, and discussion TDocs. The two batch-style selectors from
 earlier releases (`--tdoc-id` as an integer PK and the mutual
 exclusivity with `--meeting-id`) have been removed; `--tdoc` is now a
 LIKE pattern on `tdoc_id` that can be freely combined with
@@ -960,8 +1044,9 @@ required — an empty call exits non-zero before any DB lookup.
 Auto-sync: when `sync.auto_sync` is enabled, the database-mode path
 (without `--from-path` or `--from-url`) triggers the same internal sync
 logic as `tdoc list` with the same filters before building the candidate
-set. Direct-mode parse (`--from-path` or `--from-url`) never triggers
-auto-sync. See [Auto-sync behavior](#auto-sync-behavior) above.
+set. Direct-mode parse runs the direct-mode sync steps instead; see
+[Direct-mode auto-sync](#direct-mode-auto-sync). See
+[Auto-sync behavior](#auto-sync-behavior) above.
 
 Options:
 
@@ -970,7 +1055,11 @@ Options:
   / `_` wildcards (`R5s26%`, `R5_260001`), the literal tokens
   `null` / `not-null`, or a `!pattern` form. The flag is singular
   — combining multiple `--tdoc` values is not supported; build the
-  pattern instead.
+  pattern instead. An exact id with no `--type` skips the eligibility filter,
+  so an ineligible TDoc reaches the pipeline and is reported as
+  `<id>: SKIPPED - TDocTypeUnsupportedError: TDoc '<id>' has type '<type>'; only CR, WID, LS, and discussion TDocs are parsed`.
+  It is counted under `Skipped:` and is never downloaded. Pattern selectors apply
+  the eligibility filter, so ineligible rows are not selected.
 - `--meeting-id N`: exact integer match against `meetings.meeting_id`.
   Combinable with every other filter; rows must satisfy every
   supplied predicate.
@@ -986,9 +1075,10 @@ Options:
 - `--title PATTERN`: filter on `title`.
 - `--ftp-url PATTERN`: filter on `ftp_url`.
 - `--source PATTERN`: filter on source / contributor.
-- `--type PATTERN`: filter on document `type`. Defaults to `CR`
-  when no type filter is supplied (the extractor only handles CR
-  TDocs); pass an explicit `--type` to override.
+- `--type PATTERN`: filter on document `type`. With no `--type`, the default is
+  CR plus WID, LS, and discussion TDocs. An explicit value is a rich filter that
+  is intersected with those eligible types, so `--type other` selects nothing.
+  Ineligible types are never downloaded.
 - `--release PATTERN`: filter on the TDoc's `release` (e.g.
   `Rel-18`). Accepts the same rich-filter grammar as `--spec`.
 - `--version PATTERN`: filter on `version` (e.g. `18.1.0`).
@@ -1005,10 +1095,10 @@ Options:
   The on-disk zip cache is **always** consulted first regardless of
   `--force` — `download_tdoc_zip` keys the cache on `tdocs.ftp_url`
   (via `derive_cache_file`) and reuses the cached bytes on a hit.
-- `--full`: reserved for the parser's `full=True` mode (pulls in
-  `before_change` / `after_change` per correction). The current
-  service does not yet wire this through; accepted silently so
-  existing scripts keep parsing.
+- Every parse extracts the full content, including the TTCN correction
+  bodies (`before_change` / `after_change` / `new_change`). There is no
+  opt-out flag. TDocs parsed before this behaviour existed are not
+  re-parsed automatically; backfill them with `--force`.
 - `--yes` / `-y`: skip the confirmation prompt before extracting.
   Useful in scripts and CI where an interactive prompt would block.
 - `--max-tdoc-size-kb INT`: override
@@ -1083,10 +1173,13 @@ table is truncated to the first 20 rows per group with an explicit
 
 After filters resolve, the CLI:
 
-1. In normal mode, the SQL query already excludes rows that have a
-   `tdoc_cr_cover_page` entry, so the candidate set consists only of
-   **pending** TDocs. With `--force`, the exclusion is disabled and
-   every match (including already-parsed rows) becomes a candidate.
+1. In normal mode, the SQL query selects **pending** TDocs: a TDoc is parsed only
+   when its extraction is complete for its type (see
+   [Parse completeness](#parse-completeness)). A version-1 extraction is
+   pending. Selection is SQL-only, so a complete CR whose cache archive was purged
+   is not re-selected by a normal parse; recover it with `tdoc parse --tdoc <id>
+   --force` or a `tdoc show --tdoc <id> --format raw` read. With `--force`, every
+   matching row, including complete extractions, becomes a candidate.
 2. Prints the candidate table with the column set above. If the
    candidate set is empty, prints `Nothing to extract — every match is
    already parsed.` and exits `0` (successful no-op).
@@ -1094,9 +1187,11 @@ After filters resolve, the CLI:
    (`y/N`, default `N`). A declined prompt exits 0 with `Aborted.`
    — no work happened, so non-zero is misleading.
 4. Dispatches the batch through `TDocCrService.extract_many`.
-5. Prints a completion summary on five counters:
-   - `Skipped (exceeds max_tdoc_size_kb): N`
-   - `Skipped (already parsed before this run): N`
+5. Prints a completion summary on seven counters:
+    - `Skipped (exceeds max_tdoc_size_kb): N`
+    - `Skipped (archive member limits): N`
+    - `Skipped: N` (every other skip: FTP-pending TDocs, ineligible types named by an exact `--tdoc`, and direct-mode sources whose type cannot be determined; the per-row `SKIPPED - <reason>` keeps the cause)
+    - `Skipped (already parsed before this run): N`
    - `Re-parsed (with --force): N`
    - `Newly parsed: N`
    - `Failures: N`
@@ -1104,6 +1199,46 @@ After filters resolve, the CLI:
    (truncated by max_batch=…): N` line is appended with a hint to
    re-run the same command **without** `--force` to continue with the
    next batch of pending rows.
+
+#### Parse completeness
+
+A TDoc counts as parsed when its extraction is complete for its type. The same
+rule drives normal selection, `--parsed` on `tdoc list`, and the web and MCP
+filters; Python and SQL implement it (`is_complete_cr_extraction` and
+`is_complete_family_extraction` in `models/tdoc_content_families.py`).
+
+- CR: the `tdoc_extracts` parent is version 2, `skipped_sources` is empty, the
+  cover row exists, `document_count` equals the number of annex rows, and no
+  annex has the CR main's name. A CR with zero annexes is complete. A cache hit
+  also needs the archive `markdown/<cache_file>`; without it, a parse that runs
+  (for example `--force`) downloads and rewrites the archive.
+- WID, LS, and discussion: the parent is version 2, `skipped_sources` is empty,
+  `document_count` equals the number of content rows, and the first row is the
+  main document named by `tdoc_extracts.doc_filename`.
+
+#### Tolerant annexes and skipped sources
+
+A failed annex does not fail the TDoc. The CLI prints `warning: skipped <member>`
+under the TDoc's success line, lists the member in `tdoc_extracts.skipped_sources`,
+and the run counts the TDoc as a success, but the extraction stays incomplete,
+so the next normal `tdoc parse` retries it and prints the warning again. A
+zero-text annex, and a zero-text WID, LS, or discussion main, are stored as empty
+content. Failures that still fail the TDoc are: a main document that does not
+convert, a missing or ambiguous main, a corrupt archive, an identity error, and a
+failed member named for the TDoc (for example `R5-123456_annex.docx`), which
+could be the main.
+
+#### Main document selection
+
+Candidates are `.docx` members whose basename starts with the TDoc number,
+compared case-insensitively, where the next character is not a digit (so
+`R5-1234567.docx` is not a candidate for `R5-123456`). A single candidate is the
+main. With several candidates, the member named exactly `<tdoc_id>.docx` is the
+main; otherwise the TDoc fails with `ambiguous main document for <tdoc_id>`. With
+none, the TDoc fails with `no main .docx for <tdoc_id>`.
+
+Only `.docx` is converted. When the only main-named member is a `.doc`, the TDoc
+fails with `main document for <tdoc_id> is not .docx: <member>`.
 
 #### Size limit
 
@@ -1221,10 +1356,10 @@ doc3gpp tdoc parse --tdoc R5s260009
 # Wildcard pattern — any TDoc id starting with the 2026 source prefix.
 doc3gpp tdoc parse --tdoc 'R5s26%' --yes
 
-# Parse every not-yet-parsed CR-type TDoc under meeting 85434.
+# Parse every not-yet-parsed CR, WID, LS, and discussion TDoc under meeting 85434.
 doc3gpp tdoc parse --meeting-id 85434
 
-# Re-parse every CR-type TDoc under the meeting (DB row + markdown
+# Re-parse every eligible TDoc under the meeting (DB row + markdown
 # cache bypassed; on-disk zip cache is still consulted first).
 doc3gpp tdoc parse --meeting-id 85434 --force
 
@@ -1267,8 +1402,12 @@ Options:
 - `--from-path PATH`: parse a local `.docx`/`.zip` file, or parse
   every `.docx`/`.zip` under a directory tree. The path type is auto-
   detected: a file is parsed as a single source, a directory is
-  processed as a batch. The cache and database are never touched for
-  local files.
+  processed as a batch. ZIPs convert every supported `.docx` member
+  sequentially. The TDoc type is determined first (see
+  [Direct-mode type detection](#direct-mode-type-detection)). For CR, exactly one
+  converted member must contain the structural CR cover; it owns the
+  CR/TTCN/body-change metadata, and the other members are annexes held in memory.
+  Local files are never written to the cache or the database.
 - `--from-url URL`: download the URL and parse it. For the canonical
   3GPP FTP site, only HTTPS URLs under
   `https://www.3gpp.org/ftp/...` are accepted; the bare form
@@ -1280,9 +1419,9 @@ Options:
   treated as a folder, and its trailing slash is optional. Canonical
   single files are parsed directly; folders are processed as batches.
   Canonical 3GPP results are cached on disk and written to
-  `tdoc_extracts` + `tdoc_cr_cover_page` (and to
-  `tdoc_cr_ttcn_details` when the parser produced a TTCN sidecar —
-  subject to the FK matrix below). Other HTTP(S) URLs retain the
+  `tdoc_extracts` and the content table for the TDoc's type. For CR they also
+  write `tdoc_cr_cover_page` and, when the parser produced a TTCN sidecar,
+  `tdoc_cr_ttcn_details`; all of these are subject to the FK matrix below. Other HTTP(S) URLs retain the
   existing in-memory parsing behavior. Schemes other than `http(s)`
   (e.g. `ftp://`, `file://`) are rejected — download out of band and
   use `--from-path` instead.
@@ -1290,10 +1429,18 @@ Options:
   `table` (tab-separated header + single data row, matching
   `tdoc list --format table`). `markdown` writes a single-row GFM
   table, `json` writes a single JSON object via `dataclasses.asdict`,
-  `raw` writes the converted markdown verbatim and skips the parser
-  entirely. The set is wider than the regular
-  `* list --format` literal (`raw` is local-mode-only) so the CLI
-  rejects unknown values at the boundary.
+  and `raw` writes converted Markdown without record formatting. One
+  document is emitted unchanged; for multiple documents, each source
+  is emitted as a named block beginning with
+  `<!-- doc3gpp-source: <JSON-encoded source_file> -->`, main first.
+  The set is wider than the regular `* list --format` literal (`raw` is
+  direct-mode-only) so the CLI rejects unknown values at the boundary.
+  For a WID, LS, or discussion TDoc, the direct-mode result is the summary line
+  `TDoc <id>: <store>, <n> documents, extraction_version 2`, followed by
+  `warning: skipped <member>` lines for tolerated annexes. That summary ignores
+  `--format` (as DB-mode `tdoc parse` does), except `--format raw`, which prints the
+  documents instead as named source blocks, main first. CR output still honours
+  `--format`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Required when `--from-path` is a directory; optional when
   `--from-path` is a single file or `--from-url` is a folder. In batch
@@ -1313,13 +1460,30 @@ Options:
   workers (default `min(32, cpu_count + 4)`; config only, no flag); database
   and URL writes go through one serialized writer, local folders are
   in-memory. Discovery, output files, summaries and exit codes keep the
-  deterministic source order. Unavailable-on-FTP and oversized files are
-  skips; other errors are failures.
+  deterministic source order. Unavailable-on-FTP, oversized files, and
+  configured archive-limit violations are skips; other errors are failures.
 - `--force`: when `--from-path` is a directory or `--from-url` is a
   folder, overwrite existing output files. Rejected for single file
   sources.
-- `--full`: forward `full=True` to the parser (TTCN corrections).
 - `--compact`: see "Compact output" in the format-overview section.
+
+Archive safety limits are TOML-only settings under `[tdoc_parse]`:
+`max_documents_per_zip` defaults to `100`, and
+`max_uncompressed_size_kb` defaults to `102400` (aggregate supported-member
+bytes). Setting either value to `0` disables that limit. Exceeding either
+archive limit enters the existing skip bucket; a corrupt main document or
+zero/multiple CR-cover candidates enter the failure bucket. A corrupt annex is a
+warning, not a failure (see [Tolerant annexes and skipped sources](#tolerant-annexes-and-skipped-sources)).
+
+ZIP parsing converts `.docx` members only; `.doc`, PDF, spreadsheets, and
+nested ZIPs are not converted. Unsupported members are ignored with
+source-named warnings. For CR, exactly one converted member must contain the
+structural CR cover, and it alone owns CR/TTCN/body-change metadata; every other
+converted member is a CR annex. For WID, LS, and discussion TDocs, the main
+document and every annex are content. A failed annex is tolerated (see
+[Tolerant annexes and skipped sources](#tolerant-annexes-and-skipped-sources)).
+A failure to read or convert the main document, or a corrupt archive, fails the
+whole archive rather than persisting a partial collection.
 
 Mutual exclusivity:
 
@@ -1377,7 +1541,10 @@ Directory (batch) behaviour (local or 3GPP URL folder):
   [Size limit](#size-limit) above), an additional
   `Skipped (exceeds max_tdoc_size_kb): N` line is appended — the
   local path is gated by a pre-read `Path.stat().st_size` check, so
-  the oversized file never reaches the parser.
+  the oversized file never reaches the parser. Two more skip lines
+  follow it: `Skipped (archive member limits): N` counts ZIPs refused by
+  `max_documents_per_zip` or `max_uncompressed_size_kb`, and `Skipped:` counts
+  every other skip (the summary total is the sum of the three).
 - DB/cache writes happen automatically for 3GPP URL folder batches
   when the extracted TDoc id exists in `tdocs`; missing ids are parsed
   in-memory and warned per file.
@@ -1388,19 +1555,19 @@ Directory (batch) behaviour (local or 3GPP URL folder):
 
 FK-aware behaviour matrix (3GPP URL):
 
-| Filename / id state | Cache writes? | `tdoc_extracts` row? | `tdoc_cr_cover_page` row? | `tdoc_cr_ttcn_details` row? | Output? | Warning? |
+| Filename / id state | Cache writes? | `tdoc_extracts` row? | content rows? | `tdoc_cr_cover_page` row? | `tdoc_cr_ttcn_details` row? | Output? | Warning? |
 |---|---|---|---|---|---|---|
-| `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes | yes (skipped when `--format raw`) | yes — only when the parser emitted a TTCN sidecar (i.e. `is_ttcn_tdoc(tdoc_id)` and the document contained a TTCN overview / corrections section) | always | no |
-| `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
-| Canonical `.docx`/`.zip` basename has no `tdoc_id` pattern | no | no | no | no | no — rejected at the URL boundary | yes — validation error mentioning TDoc |
+| `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes (version 2) | yes, every stored document (CR: annexes; WID, LS, discussion: main and annexes) | yes, main member (CR only) | yes — only when the main parser emitted a TTCN sidecar | always, including `raw` | no |
+| `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
+| Canonical `.docx`/`.zip` basename has no `tdoc_id` pattern | no | no | no | no | no | no — rejected at the URL boundary | yes — validation error mentioning TDoc |
 
 Local files and non-3GPP URLs always emit output and never touch
 the cache or the database.
 
-Auto-sync from URL candidates (3GPP only): when `Settings.sync.auto_sync`
-is enabled, `tdoc parse --from-url` extracts `tdoc_id` candidates from
-the URL **before** dispatching to the parse helpers, then fires
-`trigger_auto_sync(...)` with the candidate set:
+Auto-sync from URL candidates: when `Settings.sync.auto_sync` is enabled,
+`tdoc parse --from-url` extracts `tdoc_id` candidates from the URL **before**
+dispatching to the parse helpers, then runs the direct-mode sync steps for them
+(`trigger_auto_sync` through `_auto_sync_direct_tdoc_ids` in `src/doc3gpp/cli.py`):
 
 - **3GPP FTP file URL** (`.docx` / `.zip` suffix) → one candidate parsed
   out of the TDoc-shaped basename via
@@ -1411,17 +1578,43 @@ the URL **before** dispatching to the parse helpers, then fires
   fails (warning only — the parse still proceeds).
 - **Other canonical 3GPP paths** → treated as folders, including paths
   without a trailing `/`.
-- **Non-3GPP URL** → empty. The CLI gates the call on
-  `is_3gpp_ftp_url()` so non-3GPP URLs never trigger the candidate
-  helper.
+- **Non-3GPP URL** → zero or one candidate: the first TDoc-shaped match in
+  the whole URL string, because `extract_tdoc_id_from_filename()` searches the full
+  string. A directory segment such as `R5-123456/` can supply the id. The
+  type-detection specification's step 1 reads the file name instead; this
+  difference is recorded in [`known-constraints.md`](known-constraints.md).
 
 Same skip rules as DB-mode apply (intervals, closed window, upstream
 mtime — never bypassed, never broken by a sync failure). When the
 candidate set is non-empty, `trigger_auto_sync` runs the TSG sync
-first so the meeting_id resolution usually finds the parent row by the
-time the parse fires; ordering is **TSG sync → meeting sync → parse**.
-Non-3GPP URLs, parse errors, and BFS failures all stay warnings and
-never abort the parse.
+first, then the meeting sync and the TDoc-list sync, so the meeting_id
+resolution usually finds the parent row by the time the parse
+fires; ordering is **TSG sync → meeting sync → TDoc-list sync → parse**.
+Sync failures and BFS failures stay warnings and never abort the parse.
+
+#### Direct-mode type detection
+
+`--from-path` and `--from-url` decide the TDoc type in this order:
+
+1. The sync steps above, when `sync.auto_sync` is on.
+2. A known `tdocs.type` routes the source. CR goes to the CR parse; WID, LS,
+   and discussion go to the family parse; any other type is skipped with
+   `SKIPPED - type '<type>' is not parsed` on stderr.
+   A complete cached extraction for a 3GPP URL is used before any download.
+3. A blank or missing `tdocs.type` uses a complete cached extraction for the URL
+   when one exists, without a download. Otherwise the ZIP is downloaded (or read
+   from the cache) and its main document is sniffed.
+4. With no `tdocs` row, a 3GPP URL whose id is extracted and a non-3GPP URL
+   are sniffed and parsed in memory. A `--from-path` source is always in memory.
+5. Sniffing converts only the main member: for a ZIP, the `.docx` whose name
+   starts with the TDoc id; for a standalone `.docx`, the file itself. WID
+   needs `3GPP™ Work Item Description` in the first 20 non-empty lines. LS needs a
+   `Title: LS on …` or `Title: Reply LS on …` line in the first 10. Discussion needs
+   `Title: Discussion on …` in the first 10. CR needs the structural CR cover. A
+   source that matches none is skipped with `type could not be determined`.
+
+A family or CR result is persisted only for a 3GPP `--from-url` with a `tdocs`
+row. Local files and non-3GPP URLs are never persisted.
 
 Cache naming: both the zip cache and the markdown cache are keyed on
 the same `cache_file` column from `tdoc_extracts`, derived from the
@@ -1471,7 +1664,8 @@ doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --format raw
 doc3gpp tdoc parse --from-url \
     https://www.3gpp.org/ftp/tsg_ran/WG5_Test_ex-T1/TTCN/TTCN_CRs/2026/Docs/R5s260009.zip
 
-# 3GPP URL → emit the converted markdown verbatim, skip the parser.
+# 3GPP URL → emit source-aware Markdown; a stored TDoc also persists its
+# version-2 document bundle and main-document sidecars.
 doc3gpp tdoc parse --from-url \
     https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 
@@ -1837,6 +2031,21 @@ hybrid RRF, and neither input uses filter-only source SQL. Text input is
 normalized through the FTS5 query builder; plain text, operators, and quoted
 phrases follow the FTS5 syntax described below.
 
+FTS5 searches both TDoc metadata and the stored Markdown of every content document:
+CR annexes and the main and annexes of WID, LS, and discussion TDocs. A term
+present only in a CR annex can find its parent TDoc:
+
+```bash
+doc3gpp tdoc search --text "annex-only handover parameter" --format json
+```
+
+Stored content documents are indexed at two levels. FTS5 indexes each CR annex,
+and every WID, LS, and discussion document (main and annexes), as its own source
+row. The vector index adds labelled chunks for the same documents, capped by
+`semantic_search.max_content_chunks_per_tdoc`, next to the TDoc-level metadata
+chunks. The CR main body is not full-text indexed; its cover, change, and TTCN
+fields are.
+
 Filters (all optional, AND-combined):
 
 | Flag | Effect |
@@ -1849,7 +2058,7 @@ Filters (all optional, AND-combined):
 | `--spec TEXT` | Rich filter over `tdocs.spec` (e.g. `38.3%` matches `38.300` and `38.300-1`; `!38.3%` for NOT LIKE; `null`/`not-null`) |
 | `--since DATE` | `tdocs.uploaded_date >= since` (YYYY-MM-DD) |
 | `--until DATE` | `tdocs.uploaded_date <= until` (YYYY-MM-DD) |
-| `--limit INT` | max results (default 20) |
+| `--limit INT` | max results (default 20, range 0-150) |
 | `--format table|json|markdown` | output format (default `table`) |
 | `--compact` | strip JSON / markdown decorators |
 | `--text TEXT` | FTS5 text or MATCH expression. Optional. |
@@ -1873,7 +2082,7 @@ piped stdout) and looks exactly like this:
 # search config
 match:           "tdoc"
 snippet_tokens:  8
-bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
+bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0]
 ```
 
 - `match` is the literal FTS5 `MATCH` expression the SQL repository
@@ -1883,12 +2092,15 @@ bm25_weights:    [5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0]
 - `snippet_tokens` echoes the per-call value (the `--snippet-tokens`
   CLI flag when supplied, otherwise the cached
   `Settings.search.snippet_tokens`).
-- `bm25_weights` is the literal 8-float vector forwarded to
+- `bm25_weights` is the literal 9-float vector forwarded to
   `bm25(tdoc_search, ...)` for this query. It also drives snippet
   selection: the repo binds one `snippet(...)` per `weight > 0`
   column and surfaces the result in the hit's `previews` map only
   when the snippet contains a match (so weight 0 = skip both
-  ranking and previews).
+  ranking and previews). The indexed columns are `(title, ftp_url,
+  meeting_title, meeting_location, wis, cover_text, change_text,
+  ttcn_text, content_text)`. Existing eight-value settings remain
+  accepted by appending the ninth `content_text` weight `1.0`.
 
 Two retunable knobs are useful here: the `--snippet-tokens` CLI
 flag above overrides the cached `Settings.search.snippet_tokens`
@@ -1905,6 +2117,12 @@ score, vector distance, RRF score, or JSON `null` for filter mode.
 `previews` is an object only for FTS5 rows and JSON `null` for the other modes.
 TDoc rows also include `type`, `status`, and `best_chunk_id`. Public rows do
 not expose `rank_*`, nested `hit`, `rrf_score`, or `min_chunk_distance` fields.
+Every TDoc result always includes `matched_documents`, an array of
+`{document_id, ftp_url, source_file, score, previews}` entries. FTS5 and hybrid
+may carry source matches (hybrid retains its FTS5 list); semantic-only and
+filter-only results serialize `[]`. The top-level `ftp_url` remains the
+canonical parent URL; use an entry's URL and exact `source_file` for a
+source-specific content read.
 
 The per-request `--fts5-weight`, `fts5_weight`, `--fts5-query`, `fts5_query`,
 `--sem-query`, and `sem_query` controls are removed. Hybrid weighting comes
@@ -1918,17 +2136,43 @@ independent `IndexStatus` snapshot. `--rebuild`, `--rebuild-embeddings`, and
 
 | Flag | Effect |
 | --- | --- |
-| `--rebuild` | Rebuild every TDoc FTS5 row by walking `tdocs` and upserting the current source text; clears the resume cursor for a fresh rebuild. |
+| `--rebuild` | Rebuild each logical TDoc's metadata row and all SQL-backed document rows; clears the resume cursor for a fresh rebuild. |
 | `--rebuild-embeddings` | Drop and rebuild the vector index. |
 | `--rebuild-all` | Run both component rebuilds in sequence. |
 | `--batch INT` | Override the configured rebuild batch size. |
 | `--resume` | Continue from the last stored cursor. |
-| `--stale-only` | Only rebuild rows newer than the last indexed source row. |
+| `--stale-only` | Rebuild logical TDocs whose metadata/documents, document IDs, content hashes, or extraction versions differ from SQL; freshness is not based only on `uploaded_date`. |
 | `--quiet` | Suppress rebuild progress messages. |
 
 The semantic extra and `[semantic_search].embedding_base_url` are required
 for vector operations. Index status reports unavailable components rather than
-changing the search command contract.
+changing the search command contract. FTS5 `row_count` and pagination remain
+logical-TDoc counts; physical metadata/document rows are grouped before the
+parent limit/offset is applied.
+
+Rebuild notes:
+
+- `--stale-only` for FTS5 compares expected document rows, IDs, content hashes,
+  and extraction versions. The semantic check compares content hashes only, so a
+  change to `semantic_search.chunk_size` or `chunk_overlap` is not detected; run
+  `--rebuild-embeddings` after such a change.
+- `--stale-only` with `--rebuild-embeddings` keeps the existing vector table when
+  its stored dimension and model match the live embedder, and re-embeds only the
+  stale TDocs; fresh TDocs keep their vectors. TDocs uploaded on the last rebuild's
+  snapshot day are re-embedded on every run (the date cutoff is inclusive). A dimension
+  or model change, or a missing table, drops the table and re-embeds every TDoc. Without
+  `--stale-only`, `--rebuild-embeddings` always drops and rebuilds the table.
+- A stored document that cannot be decoded is logged and skipped by the rebuild
+  loop. Its old FTS rows remain, and its stored hash still matches, so
+  `--stale-only` does not retry it. Only a full `--rebuild` repairs it.
+- `IndexStatus.is_stale` is true when a TDoc was uploaded after the last completed
+  vector rebuild's snapshot day, when a TDoc uploaded on that day is missing from the
+  index (a TDoc with no title or metadata text is never indexed and is ignored), or when
+  a TDoc's indexed content or metadata differs from SQL. An already-indexed TDoc on the
+  snapshot day does not make the status stale. A completed rebuild stamps
+  `last_rebuild_at` and the newest upload date it saw. A full rebuild clears those stamps
+  when it starts, so an interrupted run leaves the status stale. See
+  [`known-constraints.md`](known-constraints.md) for the metadata-only gap.
 
 ## tsg Commands
 
@@ -2543,7 +2787,7 @@ Options:
 - --sections: rich filter over combined section identifier/title metadata.
   Optional.
 - --tables: rich filter over combined table identifier/title metadata. Optional.
-- --limit: max results. Default `20`, range `>= 0`.
+- --limit: max results. Default `20`, range `0`-`150`.
 - --offset: rows to skip before applying `--limit`. Default `0`, range `>= 0`.
 - --fields: comma-separated list of fields to include (or `all` for all fields).
 - --format: `table` (default, tab-separated), `json`, or `markdown`.
@@ -2589,6 +2833,8 @@ Options:
 - --resume: continue from the last stored cursor.
 - --stale-only: rebuild only stale rows.
 - --quiet: suppress progress messages.
+
+`--stale-only` with `--rebuild-embeddings` keeps the existing `vec_spec_doc_embeddings` table when its stored dimension and model match the live embedder, and re-embeds only the source-version pairs whose `parsed_at` is later than the stored `last_indexed_parsed_at` cutoff; pairs already embedded keep their vectors. A dimension or model change, or a missing table, drops the table and re-embeds every pair. Without `--stale-only`, `--rebuild-embeddings` always drops and rebuilds the table.
 
 ### doc3gpp spec doc schema
 
@@ -2816,7 +3062,7 @@ Error: Invalid value: sync.meeting_sync_interval must be a valid duration
 ```
 
 The full set of accepted value shapes is the same as the schema
-declaration in [`doc3gpp.toml.example`](https://github.com/jerrywang121/doc3gpp/blob/main/doc3gpp.toml.example).
+declaration in the [packaged TOML template](../src/doc3gpp/data/doc3gpp.toml.example).
 
 Only the closed allowlist (`doc3gpp.settings.schema.ALLOWED_ENV_VARS`)
 of `DOC3GPP_*` env vars overrides TOML values at runtime. Any other

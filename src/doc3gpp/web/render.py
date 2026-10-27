@@ -105,8 +105,8 @@ def spec_doc_semantic_hit_to_json(hit: Any) -> dict[str, Any]:
     """
     inner = getattr(hit, "hit", None)
     return {
-        "chunk_id": getattr(hit, "chunk_id"),
-        "rrf_score": getattr(hit, "rrf_score"),
+        "chunk_id": hit.chunk_id,
+        "rrf_score": hit.rrf_score,
         "rank_fts5": getattr(hit, "rank_fts5", None),
         "rank_vec": getattr(hit, "rank_vec", None),
         "min_chunk_distance": getattr(hit, "min_chunk_distance", None),
@@ -135,6 +135,8 @@ TDOC_COLUMN_LABELS: dict[str, str] = {
     "tdoc_for": "For",
     "abstract": "Abstract",
     "secretary_remarks": "Secretary Remarks",
+    "parsed": "Parsed",
+    "document_count": "Documents",
 }
 
 # Default HTML table columns: the previous hard-coded set with
@@ -302,26 +304,56 @@ def meeting_rows(
 def tdoc_rows(
     rows: list[Any],
     fields: list[str],
-) -> list[dict[str, str]]:
+) -> list[dict[str, object]]:
     """Build ``tdoc list --format json``-shaped rows for ``TDocWithMeeting`` rows.
 
     ``meeting_name`` is a top-level attribute on the DTO; every other
     field lives on ``row.tdoc`` (the same routing the CLI's
-    ``_tdoc_field`` helper encodes).
+    ``_tdoc_field`` helper encodes). ``parsed`` and ``document_count``
+    stay typed (bool and int or null).
     """
-    out: list[dict[str, str]] = []
+    out: list[dict[str, object]] = []
     for item in rows:
         assert isinstance(item, TDocWithMeeting)
         out.append(
             {
-                f: _coerce_cell(
+                f: _tdoc_cell(
+                    f,
                     item.meeting_name if f == "meeting_name"
-                    else getattr(item.tdoc, f, None)
+                    else getattr(item.tdoc, f, None),
                 )
                 for f in fields
             }
         )
     return out
+
+
+def tdoc_table_rows(
+    rows: list[Any],
+    fields: list[str],
+) -> list[dict[str, str]]:
+    """Build HTML table cells for ``TDocWithMeeting`` rows.
+
+    Same rows as :func:`tdoc_rows`, with every cell rendered as text:
+    ``parsed`` reads ``true`` or ``false`` and a missing value reads ``-``.
+    """
+    return [
+        {field: _tdoc_table_cell(field, value) for field, value in row.items()}
+        for row in tdoc_rows(rows, fields)
+    ]
+
+
+def _tdoc_cell(field: str, value: Any) -> object:
+    """Preserve the typed TDoc parse-state values; coerce every other cell."""
+    if field in ("parsed", "document_count"):
+        return value
+    return _coerce_cell(value)
+
+
+def _tdoc_table_cell(field: str, value: object) -> str:
+    if field == "parsed" and isinstance(value, bool):
+        return "true" if value else "false"
+    return _coerce_cell(value)
 
 
 def tsg_rows(tsgs: list[Any], fields: list[str]) -> list[dict[str, str]]:

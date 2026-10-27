@@ -16,9 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi import Path as PathParam
-from fastapi import Query, Request
 from fastapi.responses import JSONResponse
 
 from doc3gpp.models.meeting import Meeting
@@ -34,7 +33,6 @@ from doc3gpp.web.filters import (
 )
 from doc3gpp.web.render import meeting_rows, to_jsonable
 from doc3gpp.web.templates_setup import templates
-
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 

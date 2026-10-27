@@ -24,35 +24,38 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import (
+    MatchedDocument,
     SearchError,
     SearchFilters,
     SearchHit,
     SearchIndexStatus,
 )
+from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.repository.protocols import SearchIndexRepository
-from doc3gpp.storage.repositories.rich_filters import (
-    build_text_filter_or_params,
-    build_text_filter_sql,
-)
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import _SNIPPET_COLUMN_NAMES
 from doc3gpp.storage.compression import decompress_json
 from doc3gpp.storage.db.fts5_query import normalize_query
+from doc3gpp.storage.db.models import CONTENT_ORM_BY_STORE_KEY, TDocExtractOrm
 from doc3gpp.storage.db.session import get_engine
+from doc3gpp.storage.repositories.rich_filters import (
+    build_text_filter_or_params,
+    build_text_filter_sql,
+)
+from doc3gpp.storage.repositories.tdoc_document_sources import (
+    tdoc_document_sources_sql,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# FTS5 ``snippet()`` and ``bm25()`` take a 0-based ``cid``. The
-# ``tdoc_search`` virtual table declares 9 columns in this order:
-# ``tdoc_id`` (UNINDEXED, cid 0), then ``title`` (cid 1) ..
-# ``ttcn_text`` (cid 8). The 8 indexed columns therefore occupy
-# cids 1..8.
+# FTS5 snippet column IDs account for the unindexed tdoc_id column at cid 0.
+# The nine idx text fields therefore occupy cids 1 through 9.
 def _snippet_column_cid(name: str) -> int:
     return _SNIPPET_COLUMN_NAMES.index(name) + 1
 
@@ -81,8 +84,7 @@ def _check_fts5(engine: Engine) -> None:
 # Imported here (not at module top) to avoid a circular import: this
 # module is imported by services/factory.py which itself imports
 # SearchUnavailableError from models.search.
-from doc3gpp.models.search import SearchUnavailableError  # noqa: E402
-
+from doc3gpp.models.search import SearchUnavailableError
 
 # FTS5 ``MATCH`` parse failures surface as ``OperationalError`` with a
 # message like ``fts5: syntax error near ...``. Distinguish a malformed
@@ -117,6 +119,83 @@ def _classify_search_error(exc: OperationalError) -> SearchError:
     return SearchIndexCorruptError(msg)
 
 
+_DOCUMENT_SOURCES_SQL = tdoc_document_sources_sql()
+
+_TDOC_FRESHNESS_CTES_SQL = f"""
+WITH document_sources AS (
+{_DOCUMENT_SOURCES_SQL}
+), expected_documents AS (
+    SELECT e.tdoc_id, d.document_id, d.source_file, d.content_hash,
+           e.extraction_version
+    FROM tdoc_extracts e
+    JOIN document_sources d ON d.ftp_url = e.ftp_url
+), declared_counts AS (
+    SELECT tdoc_id, SUM(document_count) AS declared_document_count
+    FROM tdoc_extracts
+    GROUP BY tdoc_id
+), actual_counts AS (
+    SELECT e.tdoc_id, COUNT(d.document_id) AS actual_document_count
+    FROM tdoc_extracts e
+    LEFT JOIN document_sources d ON d.ftp_url = e.ftp_url
+    GROUP BY e.tdoc_id
+), expected_counts AS (
+    SELECT declared.tdoc_id,
+           declared.declared_document_count,
+           actual.actual_document_count
+    FROM declared_counts declared
+    JOIN actual_counts actual ON actual.tdoc_id = declared.tdoc_id
+), indexed_rows AS (
+    SELECT tdoc_id, row_kind, document_id, source_file, content_hash,
+           CAST(extraction_version AS INTEGER) AS extraction_version
+    FROM tdoc_search
+), indexed_documents AS (
+    SELECT tdoc_id, row_kind, document_id, source_file, content_hash,
+           extraction_version
+    FROM indexed_rows
+    WHERE row_kind = 'document'
+), indexed_counts AS (
+    SELECT tdoc_id,
+           COUNT(*) AS physical_row_count,
+           SUM(CASE WHEN row_kind = 'metadata' THEN 1 ELSE 0 END)
+               AS metadata_row_count
+    FROM indexed_rows
+    GROUP BY tdoc_id
+), index_checkpoint AS (
+    SELECT COALESCE(
+        MAX(CASE WHEN key = 'last_indexed_uploaded_date' THEN value END),
+        ''
+    ) AS last_indexed_uploaded_date
+    FROM tdoc_search_meta
+), stale_tdocs AS (
+    SELECT t.tdoc_id
+    FROM tdocs t
+    LEFT JOIN indexed_counts idx ON idx.tdoc_id = t.tdoc_id
+    LEFT JOIN expected_counts expected ON expected.tdoc_id = t.tdoc_id
+    CROSS JOIN index_checkpoint checkpoint
+    WHERE t.uploaded_date > checkpoint.last_indexed_uploaded_date
+       OR COALESCE(idx.metadata_row_count, 0) <> 1
+       OR COALESCE(idx.physical_row_count, 0)
+            <> 1 + COALESCE(expected.actual_document_count, 0)
+       OR COALESCE(expected.declared_document_count, 0)
+            <> COALESCE(expected.actual_document_count, 0)
+    UNION
+    SELECT expected.tdoc_id
+    FROM expected_documents expected
+    LEFT JOIN indexed_documents idx
+      ON idx.tdoc_id = expected.tdoc_id
+     AND idx.document_id = expected.document_id
+     AND idx.source_file = expected.source_file
+     AND idx.content_hash = expected.content_hash
+     AND idx.extraction_version = expected.extraction_version
+    WHERE idx.row_kind IS NULL
+    UNION
+    SELECT idx.tdoc_id
+    FROM indexed_counts idx
+    LEFT JOIN tdocs t ON t.tdoc_id = idx.tdoc_id
+    WHERE t.tdoc_id IS NULL
+)
+"""
+
 class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     """Concrete :class:`SearchIndexRepository` backed by FTS5."""
 
@@ -132,31 +211,69 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     # ------------------------------------------------------------------
 
     def upsert(self, tdoc_id: str) -> None:
-        text_payload = self._build_index_text(tdoc_id)
-        if text_payload is None:
+        index_text = self._build_index_text(tdoc_id)
+        if index_text is None:
             self.remove(tdoc_id)
             return
+        metadata_text, document_rows = index_text
+        insert_row = text(
+            """
+            INSERT INTO tdoc_search (
+                tdoc_id, title, ftp_url, meeting_title, meeting_location,
+                wis, cover_text, change_text, ttcn_text, content_text,
+                row_kind, document_id, source_file, extraction_version,
+                content_hash
+            ) VALUES (
+                :tdoc_id, :title, :ftp_url, :meeting_title, :meeting_location,
+                :wis, :cover_text, :change_text, :ttcn_text, :content_text,
+                :row_kind, :document_id, :source_file, :extraction_version,
+                :content_hash
+            )
+            """
+        )
         with self._engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM tdoc_search WHERE tdoc_id = :id"),
                 {"id": tdoc_id},
             )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO tdoc_search (
-                        tdoc_id, title, ftp_url, meeting_title,
-                        meeting_location, wis, cover_text,
-                        change_text, ttcn_text
-                    ) VALUES (
-                        :tdoc_id, :title, :ftp_url, :meeting_title,
-                        :meeting_location, :wis, :cover_text,
-                        :change_text, :ttcn_text
-                    )
-                    """
-                ),
-                {"tdoc_id": tdoc_id, **text_payload},
+            metadata_values: dict[str, Any] = {
+                column: "" for column in _SNIPPET_COLUMN_NAMES
+            }
+            metadata_values.update(metadata_text)
+            metadata_values.update(
+                {
+                    "tdoc_id": tdoc_id,
+                    "row_kind": "metadata",
+                    "document_id": None,
+                    "source_file": None,
+                    "extraction_version": None,
+                    "content_hash": None,
+                }
             )
+            conn.execute(insert_row, metadata_values)
+            for (
+                document_id,
+                source_file,
+                extraction_version,
+                content_hash,
+                content_text,
+            ) in document_rows:
+                document_values: dict[str, Any] = {
+                    column: "" for column in _SNIPPET_COLUMN_NAMES
+                }
+                document_values.update(
+                    {
+                        "tdoc_id": tdoc_id,
+                        "content_text": content_text,
+                        "row_kind": "document",
+                        "document_id": document_id,
+                        "source_file": source_file,
+                        "extraction_version": str(extraction_version),
+                        "content_hash": content_hash,
+                    }
+                )
+                conn.execute(insert_row, document_values)
+
             now_iso = datetime.now(UTC).isoformat(timespec="seconds")
             uploaded_date = conn.execute(
                 text("SELECT uploaded_date FROM tdocs WHERE tdoc_id = :id"),
@@ -195,28 +312,20 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         self, query: str, filters: SearchFilters,
         snippet_tokens: int | None = None,
     ) -> list[SearchHit]:
-        """Run the FTS5 ``MATCH`` + filters + scoring + rerank.
+        """Return grouped parent hits with matching document provenance.
 
-        ``snippet_tokens`` is an optional per-call override for the
-        ``Settings.search.snippet_tokens`` cached value. When ``None``
-        (the default) the cached value is used; when provided, it
-        is forwarded to the ``snippet(...)`` call so the CLI's
-        ``--snippet-tokens`` flag can retune the preview length for
-        a single invocation without mutating settings.
-
-        The SELECT emits one ``snippet(tdoc_search, col_idx, ...)``
-        per column whose ``bm25_weights[i] > 0`` so each weight>0
-        column surfaces its own highlighted span in the result
-        ``previews`` mapping. Weight=0 columns are skipped entirely
-        (no extra snippet() call, no placeholder).
+        A streamed top-level FTS query finds the best rows for parent ranking;
+        a second top-level query loads all matching rows for the selected
+        parents. Keeping bm25 and snippet calls in top-level FTS queries avoids
+        SQLite losing its auxiliary-function context in a reused CTE.
         """
+        limit = max(filters.limit, 0)
+        if limit == 0:
+            return []
         effective_tokens = (
             snippet_tokens if snippet_tokens is not None
             else self._snippet_tokens
         )
-        # Identify the weight>0 columns and bind a ``:col_i_<n>``
-        # parameter to each so the SQL is fully parameterised
-        # (sqlite sees ``?`` placeholders for the column index).
         snippet_columns: list[tuple[str, int]] = [
             (name, _snippet_column_cid(name))
             for name, weight in zip(
@@ -224,115 +333,213 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             )
             if weight > 0
         ]
-        sql = [
-            "SELECT tdoc_search.tdoc_id,",
-            "       bm25(tdoc_search, :w0, :w1, :w2, :w3, :w4, :w5, :w6, :w7)"
-            " AS score,",
-        ]
-        params: dict[str, Any] = {
-            "query": query,
-            "tok": effective_tokens,
-        }
-        for i, weight in enumerate(self._weights):
-            params[f"w{i}"] = weight
-        # One snippet() per weight>0 column. Bind each col idx as a
-        # named param so the order is independent of the dict
-        # iteration order.
-        for n, (_name, col_idx) in enumerate(snippet_columns):
-            param = f"col_{n}"
-            sql.append(
-                f"       snippet(tdoc_search, :{param}, '<<', '>>', '…', :tok)"
-                f" AS snippet_{n},"
-            )
-            params[param] = col_idx
-        sql.extend([
-            "       t.title, m.title AS meeting, m.tsg AS tsg,",
-            "       t.uploaded_date,",
-            "       tdoc_search.ftp_url, tdoc_search.wis,",
-            "       t.type, t.status",
-            "  FROM tdoc_search",
-            "  JOIN tdocs t   ON t.tdoc_id = tdoc_search.tdoc_id",
-            "  JOIN meetings m ON t.meeting_id = m.meeting_id",
-            " WHERE tdoc_search MATCH :query",
-        ])
+        weight_args = ", ".join(
+            f":w{index}" for index in range(len(self._weights))
+        )
+        where_clauses = ["tdoc_search MATCH :query"]
+        filter_params: dict[str, Any] = {"query": query}
         if filters.tsg:
-            # meetings.tsg is stored upper-case by sync, so callers may
-            # pass any case (mirrors meeting_sql / wi_sql).
-            sql.append("   AND m.tsg = :tsg")
-            params["tsg"] = filters.tsg.upper()
+            where_clauses.append("m.tsg = :tsg")
+            filter_params["tsg"] = filters.tsg.upper()
         if filters.meeting:
-            # Rich-filter grammar over name OR title: the results page
-            # shows m.title, but the CLI convention (meeting list --name,
-            # tdoc list text filters) is LIKE on the stored field. Apply
-            # the grammar to each column and OR the resulting clauses.
             meeting_clauses, meeting_params = build_text_filter_or_params(
                 ("m.name", "m.title"), filters.meeting, param="meeting",
             )
-            sql.append(f"   AND ({meeting_clauses})")
-            params.update(meeting_params)
+            where_clauses.append(f"({meeting_clauses})")
+            filter_params.update(meeting_params)
         if filters.meeting_id is not None:
-            sql.append("   AND m.meeting_id = :meeting_id")
-            params["meeting_id"] = filters.meeting_id
+            where_clauses.append("m.meeting_id = :meeting_id")
+            filter_params["meeting_id"] = filters.meeting_id
         if filters.tdoc_id:
-            sql.append("   AND t.tdoc_id = :tdoc_id")
-            params["tdoc_id"] = filters.tdoc_id
+            where_clauses.append("t.tdoc_id = :tdoc_id")
+            filter_params["tdoc_id"] = filters.tdoc_id
         if filters.release:
-            clause, bound = build_text_filter_sql("t.release", filters.release, param="release")
+            clause, bound = build_text_filter_sql(
+                "t.release", filters.release, param="release",
+            )
+            where_clauses.append(clause)
             if bound is not None:
-                params["release"] = bound
-            sql.append(f"   AND {clause}")
+                filter_params["release"] = bound
         if filters.spec:
-            clause, bound = build_text_filter_sql("t.spec", filters.spec, param="spec")
+            clause, bound = build_text_filter_sql(
+                "t.spec", filters.spec, param="spec",
+            )
+            where_clauses.append(clause)
             if bound is not None:
-                params["spec"] = bound
-            sql.append(f"   AND {clause}")
+                filter_params["spec"] = bound
         if filters.since:
-            sql.append("   AND t.uploaded_date >= :since")
-            params["since"] = filters.since
+            where_clauses.append("t.uploaded_date >= :since")
+            filter_params["since"] = filters.since
         if filters.until:
-            sql.append("   AND t.uploaded_date <= :until")
-            params["until"] = filters.until
-        sql.append(
-            " ORDER BY bm25(tdoc_search, :w0, :w1, :w2, :w3, :w4, "
-            ":w5, :w6, :w7) LIMIT :limit"
+            where_clauses.append("t.uploaded_date <= :until")
+            filter_params["until"] = filters.until
+        where_sql = " AND ".join(where_clauses)
+        from_sql = (
+            "FROM tdoc_search "
+            "JOIN tdocs t ON t.tdoc_id = tdoc_search.tdoc_id "
+            "JOIN meetings m ON t.meeting_id = m.meeting_id"
         )
-        params["limit"] = max(filters.limit, 0)
+        weight_params = {
+            f"w{index}": weight
+            for index, weight in enumerate(self._weights)
+        }
+        rank_sql = text(
+            f"""
+            SELECT tdoc_search.tdoc_id,
+                   bm25(tdoc_search, {weight_args}) AS score
+              {from_sql}
+             WHERE {where_sql}
+             ORDER BY bm25(tdoc_search, {weight_args}) ASC,
+                      tdoc_search.tdoc_id ASC,
+                      COALESCE(tdoc_search.source_file, '') ASC,
+                      COALESCE(tdoc_search.document_id, '') ASC
+            """
+        )
+        selected_parent_ids: list[str] = []
+        parent_scores: dict[str, float] = {}
         try:
             with self._engine.begin() as conn:
-                rows = conn.execute(text("\n".join(sql)), params).all()
+                ranked_rows = conn.execute(
+                    rank_sql,
+                    {**weight_params, **filter_params},
+                ).yield_per(128)
+                try:
+                    for row in ranked_rows:
+                        tdoc_id = row[0]
+                        if tdoc_id in parent_scores:
+                            continue
+                        selected_parent_ids.append(tdoc_id)
+                        parent_scores[tdoc_id] = float(row[1])
+                        if len(selected_parent_ids) == limit:
+                            break
+                finally:
+                    ranked_rows.close()
+                if not selected_parent_ids:
+                    return []
+
+                sql = [
+                    "SELECT tdoc_search.tdoc_id, tdoc_search.row_kind,",
+                    "       tdoc_search.document_id, tdoc_search.source_file,",
+                    f"       bm25(tdoc_search, {weight_args}) AS row_score,",
+                ]
+                params: dict[str, Any] = {
+                    **weight_params,
+                    **filter_params,
+                    "tok": effective_tokens,
+                }
+                for index, (_name, column_id) in enumerate(snippet_columns):
+                    parameter = f"col_{index}"
+                    sql.append(
+                        f"       snippet(tdoc_search, :{parameter}, '<<', '>>', '…', :tok) "
+                        f"AS snippet_{index},"
+                    )
+                    params[parameter] = column_id
+                sql.extend(
+                    [
+                        "       t.title, m.title AS meeting, m.tsg AS tsg,",
+                        "       t.uploaded_date, t.ftp_url, t.related_wis,",
+                        "       t.type, t.status, doc.ftp_url AS document_ftp_url",
+                        f"  {from_sql}",
+                        "  JOIN temp._doc3gpp_search_selected_tdocs selected",
+                        "    ON selected.tdoc_id = tdoc_search.tdoc_id",
+                        f"  LEFT JOIN ({_DOCUMENT_SOURCES_SQL}) doc",
+                        "    ON doc.document_id = tdoc_search.document_id",
+                        f" WHERE {where_sql}",
+                        " ORDER BY selected.parent_rank ASC,",
+                        f"          bm25(tdoc_search, {weight_args}) ASC,",
+                        "          tdoc_search.tdoc_id ASC,",
+                        "          COALESCE(doc.ftp_url, '') ASC,",
+                        "          COALESCE(tdoc_search.source_file, '') ASC,",
+                        "          COALESCE(tdoc_search.document_id, '') ASC",
+                    ]
+                )
+                conn.execute(
+                    text("DROP TABLE IF EXISTS temp._doc3gpp_search_selected_tdocs")
+                )
+                conn.execute(
+                    text(
+                        "CREATE TEMP TABLE _doc3gpp_search_selected_tdocs ("
+                        "tdoc_id TEXT PRIMARY KEY, parent_rank INTEGER NOT NULL)"
+                    )
+                )
+                try:
+                    conn.execute(
+                        text(
+                            "INSERT INTO temp._doc3gpp_search_selected_tdocs "
+                            "(tdoc_id, parent_rank) VALUES (:tdoc_id, :parent_rank)"
+                        ),
+                        [
+                            {"tdoc_id": tdoc_id, "parent_rank": rank}
+                            for rank, tdoc_id in enumerate(selected_parent_ids)
+                        ],
+                    )
+                    rows = conn.execute(text("\n".join(sql)), params).all()
+                finally:
+                    conn.execute(
+                        text("DROP TABLE IF EXISTS temp._doc3gpp_search_selected_tdocs")
+                    )
         except OperationalError as exc:
             raise _classify_search_error(exc) from exc
-        hits: list[SearchHit] = []
+
+        parent_rows: dict[str, dict[str, Any]] = {}
+        documents_by_parent: dict[str, list[MatchedDocument]] = {
+            tdoc_id: [] for tdoc_id in selected_parent_ids
+        }
+        preview_offset = 5 + len(snippet_columns)
         for row in rows:
             previews: dict[str, str] = {}
-            for n, (name, _col_idx) in enumerate(snippet_columns):
-                value = row[2 + n]
-                # A column belongs in ``previews`` only when its
-                # FTS5 ``snippet()`` actually surfaced a match —
-                # the contract is ``weight>0 AND matching snippet``.
-                # FTS5 returns the closest context for the column
-                # even when the column itself has no match; the
-                # only reliable signal of a real match is the
-                # presence of the snippet markers (``<<`` and
-                # ``>>``) emitted around the matched tokens.
+            for index, (name, _column_id) in enumerate(snippet_columns):
+                value = row[5 + index]
                 if value and "<<" in value and ">>" in value:
                     previews[name] = value
-            hits.append(
-                SearchHit(
-                    tdoc_id=row[0],
-                    score=row[1],
-                    previews=previews,
-                    title=row[2 + len(snippet_columns)],
-                    meeting=row[3 + len(snippet_columns)],
-                    tsg=row[4 + len(snippet_columns)],
-                    uploaded_date=row[5 + len(snippet_columns)],
-                    ftp_url=row[6 + len(snippet_columns)],
-                    wis=row[7 + len(snippet_columns)],
-                    type=row[8 + len(snippet_columns)],
-                    status=row[9 + len(snippet_columns)],
+
+            tdoc_id = row[0]
+            if tdoc_id not in parent_rows:
+                parent_rows[tdoc_id] = {
+                    "score": parent_scores[tdoc_id],
+                    "title": row[preview_offset],
+                    "meeting": row[preview_offset + 1],
+                    "tsg": row[preview_offset + 2],
+                    "uploaded_date": row[preview_offset + 3],
+                    "ftp_url": row[preview_offset + 4],
+                    "related_wis": row[preview_offset + 5],
+                    "type": row[preview_offset + 6],
+                    "status": row[preview_offset + 7],
+                    "previews": {},
+                }
+
+            if row[1] == "metadata":
+                parent_rows[tdoc_id]["previews"] = previews
+            elif row[1] == "document" and row[preview_offset + 8] is not None:
+                documents_by_parent[tdoc_id].append(
+                    MatchedDocument(
+                        document_id=row[2],
+                        ftp_url=row[preview_offset + 8],
+                        source_file=row[3],
+                        score=float(row[3 + 1]),
+                        previews=previews,
+                    )
                 )
+
+        return [
+            SearchHit(
+                tdoc_id=tdoc_id,
+                score=parent["score"],
+                previews=parent["previews"],
+                title=parent["title"],
+                meeting=parent["meeting"],
+                tsg=parent["tsg"],
+                uploaded_date=parent["uploaded_date"],
+                ftp_url=parent["ftp_url"],
+                wis=_wis_to_text(parent["related_wis"]),
+                type=parent["type"],
+                status=parent["status"],
+                matched_documents=tuple(documents_by_parent[tdoc_id]),
             )
-        return hits
+            for tdoc_id in selected_parent_ids
+            if tdoc_id in parent_rows
+            for parent in (parent_rows[tdoc_id],)
+        ]
 
     # ------------------------------------------------------------------
     # Maintenance
@@ -344,24 +551,39 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         after_id: str | None,
         stale_only: bool,
     ) -> Iterable[list[str]]:
+        if batch_size < 1:
+            return
         last_id = after_id if after_id is not None else ""
+        if stale_only:
+            sql = (
+                f"{_TDOC_FRESHNESS_CTES_SQL}"
+                " SELECT t.tdoc_id FROM tdocs t"
+                " JOIN stale_tdocs stale ON stale.tdoc_id = t.tdoc_id"
+                " WHERE t.tdoc_id > :last_id"
+                " ORDER BY t.tdoc_id ASC LIMIT :limit"
+            )
+            while True:
+                with self._engine.begin() as conn:
+                    ids = conn.execute(
+                        text(sql),
+                        {"last_id": last_id, "limit": batch_size},
+                    ).scalars().all()
+                if not ids:
+                    return
+                yield ids
+                last_id = ids[-1]
+
         while True:
-            sql = [
-                "SELECT tdoc_id FROM tdocs",
-                " WHERE tdoc_id > :last_id",
-                " ORDER BY tdoc_id ASC LIMIT :limit",
-            ]
-            params: dict[str, Any] = {"last_id": last_id, "limit": batch_size}
-            if stale_only:
-                sql.append(" AND uploaded_date > COALESCE((")
-                sql.append(
-                    "   SELECT value FROM tdoc_search_meta "
-                    "   WHERE key = 'last_indexed_uploaded_date'"
-                    " ), '')"
-                )
             with self._engine.begin() as conn:
-                rows = conn.execute(text("\n".join(sql)), params).all()
-            ids = [r[0] for r in rows]
+                rows = conn.execute(
+                    text(
+                        "SELECT tdoc_id FROM tdocs "
+                        "WHERE tdoc_id > :last_id "
+                        "ORDER BY tdoc_id ASC LIMIT :limit"
+                    ),
+                    {"last_id": last_id, "limit": batch_size},
+                ).all()
+            ids = [row[0] for row in rows]
             if not ids:
                 return
             yield ids
@@ -370,23 +592,21 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     def count_tdocs_to_index(
         self, stale_only: bool, after_id: str | None = None,
     ) -> int:
-        sql = ["SELECT COUNT(*) FROM tdocs"]
-        clauses: list[str] = []
         params: dict[str, object] = {}
+        after_clause = ""
         if after_id is not None:
-            clauses.append("tdoc_id > :after_id")
+            after_clause = " WHERE t.tdoc_id > :after_id"
             params["after_id"] = after_id
         if stale_only:
-            clauses.append(
-                "uploaded_date > COALESCE((SELECT value FROM "
-                "tdoc_search_meta WHERE key = 'last_indexed_uploaded_date'), '')"
-            )
-        if clauses:
-            sql.append(" WHERE " + " AND ".join(clauses))
+            sql = (
+                f"{_TDOC_FRESHNESS_CTES_SQL}"
+                " SELECT COUNT(*) FROM tdocs t"
+                " JOIN stale_tdocs stale ON stale.tdoc_id = t.tdoc_id"
+            ) + after_clause
+        else:
+            sql = "SELECT COUNT(*) FROM tdocs t" + after_clause
         with self._engine.begin() as conn:
-            return int(
-                conn.execute(text(" ".join(sql)), params).scalar() or 0,
-            )
+            return int(conn.execute(text(sql), params).scalar() or 0)
 
     def get_resume_cursor(self) -> str | None:
         with self._engine.begin() as conn:
@@ -432,9 +652,15 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
 
     def status(self) -> SearchIndexStatus:
         with self._engine.begin() as conn:
-            row_count = int(
-                conn.execute(text("SELECT COUNT(*) FROM tdoc_search")).scalar() or 0
-            )
+            freshness = conn.execute(
+                text(
+                    f"{_TDOC_FRESHNESS_CTES_SQL} "
+                    "SELECT (SELECT COUNT(*) FROM indexed_counts), "
+                    "EXISTS (SELECT 1 FROM stale_tdocs)"
+                )
+            ).one()
+            row_count = int(freshness[0] or 0)
+            is_stale = bool(freshness[1])
             last_rebuild = conn.execute(
                 text(
                     "SELECT value FROM tdoc_search_meta "
@@ -459,11 +685,6 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
         latest_dt = (
             _parse_iso(latest_uploaded_date[0]) if latest_uploaded_date else None
         )
-        is_stale = (
-            last_indexed_dt is not None
-            and latest_dt is not None
-            and latest_dt > last_indexed_dt
-        )
         return SearchIndexStatus(
             enabled=True,
             row_count=row_count,
@@ -477,14 +698,11 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
     # Internal: build concatenated text for one tdoc_id
     # ------------------------------------------------------------------
 
-    def _build_index_text(self, tdoc_id: str) -> dict[str, str] | None:
-        """Return the column→text mapping for ``tdoc_id``.
-
-        Runs a single JOIN across ``tdocs`` + ``meetings`` + the
-        three sidecars and decompresses the gzip JSON blobs in
-        Python. Returns ``None`` when no ``tdocs`` row exists (the
-        caller translates that into a :meth:`remove`).
-        """
+    def _build_index_text(
+        self,
+        tdoc_id: str,
+    ) -> tuple[dict[str, str], list[tuple[str, str, int, str, str]]] | None:
+        """Build metadata text and SQL-backed document rows for a TDoc."""
         with self._engine.begin() as conn:
             row = conn.execute(
                 text(
@@ -499,16 +717,46 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
                 ),
                 {"id": tdoc_id},
             ).first()
-        if row is None:
-            return None
+            if row is None:
+                return None
+            document_rows = []
+            for store in TDOC_CONTENT_STORES:
+                orm = CONTENT_ORM_BY_STORE_KEY[store.key]
+                document_rows.extend(
+                    conn.execute(
+                        select(
+                            orm.doc_filename,
+                            orm.document_id,
+                            TDocExtractOrm.extraction_version,
+                            orm.content_hash,
+                            orm.content,
+                        )
+                        .select_from(orm)
+                        .join(TDocExtractOrm, TDocExtractOrm.ftp_url == orm.ftp_url)
+                        .where(TDocExtractOrm.tdoc_id == tdoc_id)
+                        .order_by(orm.ftp_url, orm.doc_filename)
+                    ).all()
+                )
         title, ftp_url, related_wis, meeting_title, meeting_location = row
 
         wis_text = _wis_to_text(related_wis)
         cover_text = _cover_text(conn=self._engine, tdoc_id=tdoc_id)
         change_text = _change_text(conn=self._engine, tdoc_id=tdoc_id)
         ttcn_text = _ttcn_text(conn=self._engine, tdoc_id=tdoc_id)
+        documents = [
+            (
+                document_row.document_id,
+                document_row.doc_filename,
+                int(document_row.extraction_version),
+                document_row.content_hash,
+                normalize_query(
+                    _content_markdown(document_row.doc_filename, document_row.content)
+                ),
+            )
+            for document_row in document_rows
+        ]
 
-        return {
+        metadata_text = {
             "title": normalize_query(title or ""),
             "ftp_url": ftp_url or "",
             "meeting_title": meeting_title or "",
@@ -518,6 +766,15 @@ class SQLAlchemySearchIndexRepository(SearchIndexRepository):
             "change_text": normalize_query(change_text),
             "ttcn_text": normalize_query(ttcn_text),
         }
+        return metadata_text, documents
+
+
+def _content_markdown(source_file: str, content: bytes) -> str:
+    """Decode one stored content row with the same rule as the content repo."""
+    markdown = decompress_json(content)
+    if markdown is None:
+        raise ValueError(f"stored content for {source_file!r} cannot be decoded")
+    return markdown
 
 
 def _wis_to_text(related_wis: str | None) -> str:
@@ -592,7 +849,7 @@ def _ttcn_text(*, conn: Engine, tdoc_id: str) -> str:
     flat = " ".join(str(v) for v in row[:6] if v is not None)
     req = _blob_to_text(row[6])
     cf = (row[7] or "").replace("\n", " ") if row[7] else ""
-    return " ".join([flat, req, cf])
+    return f"{flat} {req} {cf}"
 
 
 def _blob_to_text(blob: bytes | None) -> str:

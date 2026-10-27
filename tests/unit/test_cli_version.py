@@ -6,7 +6,6 @@ from typer.testing import CliRunner
 from doc3gpp import __version__
 from doc3gpp.cli import app
 
-
 runner = CliRunner()
 
 

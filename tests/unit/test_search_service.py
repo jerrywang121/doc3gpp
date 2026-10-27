@@ -497,6 +497,8 @@ def test_factory_tdoc_cr_service_forwards_embedder(monkeypatch) -> None:
     class FakeSettings:
         class tdoc_parse:
             max_tdoc_size_kb = 1000
+            max_documents_per_zip = 100
+            max_uncompressed_size_kb = 102400
 
         class cache:
             dir = "/tmp/cache"

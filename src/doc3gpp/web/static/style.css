@@ -321,6 +321,16 @@ dl.kv dd {
   font-size: 0.85rem;
 }
 
+.job-busy > .sync-btn {
+  display: none;
+}
+
+.job-badge {
+  font-size: 0.85rem;
+  color: #0969da;
+  white-space: nowrap;
+}
+
 .changed-functions {
   margin: 0;
   padding-left: 1.25rem;

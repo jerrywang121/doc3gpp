@@ -71,8 +71,9 @@ function makeQueued() {
   };
 }
 
-function makeForm() {
+function makeForm(ownTarget) {
   const handlers = {};
+  const classes = new Set();
   return {
     tagName: "FORM",
     id: "test-form",
@@ -86,14 +87,25 @@ function makeForm() {
         checked: false,
       },
     ],
+    classList: {
+      add: function (name) {
+        classes.add(name);
+      },
+      remove: function (name) {
+        classes.delete(name);
+      },
+      contains: function (name) {
+        return classes.has(name);
+      },
+    },
     addEventListener: function (event, cb) {
       handlers[event] = cb;
     },
     getAttribute: function (attr) {
       return attr === "action" ? "/jobs/sync_tdocs" : null;
     },
-    querySelector: function () {
-      return makeQueued();
+    querySelector: function (sel) {
+      return sel === "#test-form-job-target" ? ownTarget : makeQueued();
     },
     _handlers: handlers,
   };
@@ -102,36 +114,52 @@ function makeForm() {
 function makeTarget() {
   return {
     style: {},
-    appendChild: function () {},
+    appended: [],
+    appendChild: function (node) {
+      this.appended.push(node);
+    },
     querySelector: function () {
       return pollVisible ? { nodeType: 1 } : null;
     },
   };
 }
 
+function makeWrapper() {
+  return {
+    attrs: {},
+    setAttribute: function (name, value) {
+      this.attrs[name] = value;
+    },
+    style: {},
+  };
+}
+
 // ---- drive one full scenario ----
 
-function runScenario(useOnTerminal) {
+function runScenario(useOnTerminal, statusFormat) {
   reloadCalled = false;
   onTerminalCalled = false;
   observerCallback = null;
   pollVisible = false;
 
-  const form = makeForm();
+  // The list page repeats the job-target id on every row, so a
+  // document-level lookup returns the first row's target. The form's own
+  // target must win.
   const target = makeTarget();
+  const firstRowTarget = makeTarget();
+  const form = makeForm(target);
 
   global.document = {
     querySelector: function (sel) {
-      return sel === "#test-form-job-target" ? target : null;
+      return sel === "#test-form-job-target" ? firstRowTarget : null;
     },
-    createElement: function () {
-      return { setAttribute: function () {}, style: {} };
-    },
+    createElement: makeWrapper,
   };
 
   const opts = {
     queuedSelector: ".sync-queued",
     targetSelector: "#test-form-job-target",
+    statusFormat: statusFormat,
   };
   if (useOnTerminal) {
     opts.onTerminal = function () {
@@ -141,6 +169,7 @@ function runScenario(useOnTerminal) {
 
   global.bindJobPolling(form, opts);
   form._handlers.submit({ preventDefault: function () {} });
+  const busyAfterSubmit = form.classList.contains("job-busy");
 
   return new Promise(function (resolve) {
     // Let the fetch promise chain (attachPolling ->
@@ -152,7 +181,15 @@ function runScenario(useOnTerminal) {
       // Second observer fire: polling span gone -> finish() -> onTerminal.
       pollVisible = false;
       observerCallback();
-      resolve({ reloadCalled, onTerminalCalled });
+      resolve({
+        reloadCalled,
+        onTerminalCalled,
+        busyAfterSubmit,
+        busyAfterFinish: form.classList.contains("job-busy"),
+        wrapper: target.appended[0],
+        target,
+        firstRowTarget,
+      });
     });
   });
 }
@@ -164,7 +201,7 @@ async function main() {
   (0, eval)(source);
 
   // Scenario 1: onTerminal provided.
-  const provided = await runScenario(true);
+  const provided = await runScenario(true, "badge");
   assert.strictEqual(
     provided.onTerminalCalled,
     true,
@@ -176,8 +213,56 @@ async function main() {
     "window.location.reload should NOT be called when onTerminal is given"
   );
 
+  // The job-busy class hides the list's trigger button while the job runs
+  // and is cleared once the job reaches a terminal state.
+  assert.strictEqual(
+    provided.busyAfterSubmit,
+    true,
+    "form should be marked job-busy on submit"
+  );
+  assert.strictEqual(
+    provided.busyAfterFinish,
+    false,
+    "job-busy should be cleared when the job finishes"
+  );
+
+  // List rows ask for the compact badge, not the full job panel.
+  assert.strictEqual(
+    provided.wrapper.attrs["hx-get"],
+    "/jobs/job-1?format=badge",
+    "statusFormat badge should select the compact status partial"
+  );
+
+  // The job wrapper must swap only itself. The list's #results wrapper
+  // declares hx-target="this", which htmx inherits; without an explicit
+  // target on the wrapper the job panel replaces the whole list.
+  assert.ok(
+    provided.wrapper,
+    "job wrapper should be appended to the form's job target"
+  );
+  assert.strictEqual(
+    provided.wrapper.attrs["hx-target"],
+    "this",
+    'job wrapper must set hx-target="this" so it does not inherit the list target'
+  );
+  assert.strictEqual(
+    provided.target.appended.length,
+    1,
+    "job panel should land in the clicked form's own job target"
+  );
+  assert.strictEqual(
+    provided.firstRowTarget.appended.length,
+    0,
+    "job panel must not land in the first row's job target"
+  );
+
   // Scenario 2: onTerminal omitted -> default reload.
   const omitted = await runScenario(false);
+  assert.strictEqual(
+    omitted.wrapper.attrs["hx-get"],
+    "/jobs/job-1?format=html",
+    "omitted statusFormat should keep the full job panel"
+  );
   assert.strictEqual(
     omitted.reloadCalled,
     true,

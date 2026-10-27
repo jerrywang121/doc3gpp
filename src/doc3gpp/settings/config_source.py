@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 if sys.version_info >= (3, 11):
-    import tomllib  # noqa: F401 - intentional stdlib fallback
+    import tomllib
 else:  # pragma: no cover - exercised only on Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 

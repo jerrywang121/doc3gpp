@@ -37,9 +37,10 @@ def test_db_reset_deletes_file_and_recreates_schema(sqlite_env) -> None:
     pre_count = _count_meetings()
     assert pre_count == 0  # init seeds tsgs only, not meetings
 
+    from datetime import date
+
     from doc3gpp.models.meeting import Meeting
     from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
-    from datetime import date
 
     SQLAlchemyMeetingRepository().upsert_many(
         [

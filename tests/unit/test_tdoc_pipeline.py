@@ -16,6 +16,7 @@ from doc3gpp.services.tdoc_cr_service import (
     PreparedDirectTDoc,
     TDocNotYetOnFTPError,
     TDocTooLargeError,
+    TDocTypeUnsupportedError,
 )
 from doc3gpp.services.tdoc_pipeline import (
     PipelineItem,
@@ -46,10 +47,16 @@ def test_direct_url_writer_persists_prepared_result(tmp_path: Path) -> None:
     result = service.persist_prepared_url(prepared)
 
     assert result.persisted is True
-    cr_repo.upsert.assert_called_once_with(prepared.details)
-    cr_repo.upsert_extract_meta.assert_called_once_with(prepared.extract_meta)
-    if prepared.ttcn is not None:
-        cr_ttcn_repo.upsert.assert_called_once_with(prepared.ttcn)
+    service._content_repo.replace_cr_bundle.assert_called_once_with(
+        prepared.details,
+        prepared.ttcn,
+        prepared.changes,
+        prepared.extract_meta,
+        prepared.annexes,
+    )
+    cr_repo.upsert.assert_not_called()
+    cr_repo.upsert_extract_meta.assert_not_called()
+    cr_ttcn_repo.upsert.assert_not_called()
 
 
 def test_prepare_tasks_overlap_but_persist_tasks_are_serialized() -> None:
@@ -360,6 +367,15 @@ def test_tdoc_exception_classifier_uses_skip_and_failure_buckets() -> None:
     )
 
 
+def test_classify_marks_unsupported_type_as_skipped() -> None:
+    unsupported = TDocTypeUnsupportedError("R5-000001", "other")
+
+    assert classify_tdoc_exception(unsupported) == (
+        "skipped",
+        f"TDocTypeUnsupportedError: {unsupported}",
+    )
+
+
 def test_final_writer_cancellation_propagates_after_drain() -> None:
     asyncio.run(_run_final_writer_cancellation_test())
 
@@ -523,3 +539,33 @@ async def _run_permit_reuse_after_cancellation_test() -> None:
         cancellation.set()
         release_writer.set()
         await runtime.shutdown_async()
+
+
+def test_pipeline_failure_preserves_archive_member_source_path() -> None:
+    runtime = PipelineRuntime(prepare_workers=2, max_pending=2)
+    runner = TDocPipeline(runtime)
+    source_url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    member_failure = (
+        "Failed to convert supported DOCX member 'b/shared.docx': invalid package"
+    )
+
+    def prepare(value: str) -> str:
+        if value == source_url:
+            raise ValueError(member_failure)
+        return value
+
+    try:
+        outcomes = runner.run_sync(
+            [
+                PipelineItem(key=source_url, value=source_url),
+                PipelineItem(key="later-success", value="later-success"),
+            ],
+            prepare,
+        )
+    finally:
+        runtime.shutdown()
+
+    assert [outcome.key for outcome in outcomes] == [source_url, "later-success"]
+    assert outcomes[0].status == "failed"
+    assert outcomes[0].reason == f"ValueError: {member_failure}"
+    assert outcomes[1].status == "success"

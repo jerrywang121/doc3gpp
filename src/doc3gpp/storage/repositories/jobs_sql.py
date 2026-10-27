@@ -293,7 +293,7 @@ def _decode_json_object(value: str | None) -> dict[str, JSONValue]:
         return {}
     decoded = json.loads(value)
     if not isinstance(decoded, dict):
-        raise ValueError(f"expected JSON object, got {type(decoded).__name__}")
+        raise TypeError(f"expected JSON object, got {type(decoded).__name__}")
     return decoded
 
 
@@ -303,7 +303,7 @@ def _decode_json_array(value: str | None) -> list[str]:
         return []
     decoded = json.loads(value)
     if not isinstance(decoded, list):
-        raise ValueError(f"expected JSON array, got {type(decoded).__name__}")
+        raise TypeError(f"expected JSON array, got {type(decoded).__name__}")
     return [str(line) for line in decoded]
 
 

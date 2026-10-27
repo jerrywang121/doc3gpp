@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from doc3gpp.models.search import SearchHit
 from doc3gpp.services.semantic_search_service import rrf_merge
 
@@ -77,3 +79,18 @@ def test_rrf_synthesizes_hit_for_vector_only_tdoc():
     assert out[0].tdoc_id == "A"
     # hit is None for vector-only; service fills it later
     assert out[0].hit is None
+
+
+def test_rrf_vector_rank_counts_tdocs_not_chunk_rows():
+    fts5: list = []
+    vec = [
+        ("A", "A#0", 0, 0.1),
+        ("A", "A#1", 1, 0.2),
+        ("A", "A#2", 2, 0.3),
+        ("B", "B#0", 3, 0.4),
+    ]
+    out = rrf_merge(fts5, vec, k=60, vector_weight=1.0, limit=10)
+    by_id = {h.tdoc_id: h for h in out}
+    assert by_id["A"].rank_vec == 0
+    assert by_id["B"].rank_vec == 1
+    assert by_id["B"].rrf_score == pytest.approx(1 / (60 + 1))

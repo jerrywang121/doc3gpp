@@ -9,8 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.storage.db import models as m
 from doc3gpp.storage.db.base import Base
-from doc3gpp.storage.db import models as m  # noqa: F401
 from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
 
 

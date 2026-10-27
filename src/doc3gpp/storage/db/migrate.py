@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import text
+import re
 
+from sqlalchemy import inspect, text
+
+from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
@@ -10,12 +13,16 @@ from doc3gpp.storage.db.models import (
     SpecDocTocORM,  # noqa: F401 - registers specdata tables on SpecDataBase
     SpecORM,  # noqa: F401 - ensures model metadata is loaded
     SpecVersionORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocCrAnnexOrm,  # noqa: F401 - registers URL-owned CR annex content
     TDocCrChangeDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrDetailOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocCrTtcnDetailOrm,  # noqa: F401 - ensures model metadata is loaded
+    TDocDiscussionContentOrm,  # noqa: F401 - registers URL-owned discussion content
     TDocExtractOrm,  # noqa: F401 - ensures model metadata is loaded
     TDocFileORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocLsContentOrm,  # noqa: F401 - registers URL-owned LS content
     TDocORM,  # noqa: F401 - ensures model metadata is loaded
+    TDocWidContentOrm,  # noqa: F401 - registers URL-owned WID content
     TestCaseORM,  # noqa: F401 - ensures model metadata is loaded
     TestCaseSourceORM,  # noqa: F401 - ensures model metadata is loaded
     TestCaseStatusORM,  # noqa: F401 - ensures model metadata is loaded
@@ -207,38 +214,65 @@ def _migrate_spec_versions_drop_comment() -> None:
 
 
 def _create_search_schema() -> None:
-    """Create the FTS5 virtual table + meta sidecar.
+    """Create or migrate the FTS5 table, metadata sidecar, and filter indexes.
 
-    Gated on the runtime availability of FTS5 — when missing this is
-    a no-op. The check uses ``PRAGMA compile_options`` (FTS5 is
-    reported as
-    ``ENABLE_FTS5`` when compiled in) and is wrapped in a
-    ``try/except`` so an older sqlite without FTS5 (very rare) does
-    not block the rest of ``create_schema``.
-
-    The DDL itself matches
-    ``docs/superpowers/specs/2026-07-29-fts5-search-design.md`` §"FTS5
-    schema". We use stock sqlite's ``unicode61`` tokenizer (no
-    ``tokenize=`` directive) — Python's bundled sqlite lacks
-    ``ENABLE_FTS5_TOKENIZER`` so a custom Python tokenizer
-    registered via ``fts5_tokenizer()`` is unavailable. The
-    index-time normalization that fills the gap lives in
-    :mod:`doc3gpp.storage.db.fts5_query`.
-
-    Idempotent: ``IF NOT EXISTS`` makes a second ``create_schema``
-    call a no-op.
+    FTS5 creation is gated on the runtime compile options so a sqlite build
+    without FTS5 does not block the rest of schema creation. Existing virtual
+    tables are recreated when their ordered column/indexing layout differs;
+    the metadata sidecar and regular-table filter indexes are left intact.
     """
     engine = get_engine()
+    expected_layout = (
+        ("tdoc_id", True),
+        ("title", False),
+        ("ftp_url", False),
+        ("meeting_title", False),
+        ("meeting_location", False),
+        ("wis", False),
+        ("cover_text", False),
+        ("change_text", False),
+        ("ttcn_text", False),
+        ("content_text", False),
+        ("row_kind", True),
+        ("document_id", True),
+        ("source_file", True),
+        ("extraction_version", True),
+        ("content_hash", True),
+    )
     with engine.begin() as conn:
         try:
             opts = conn.execute(text("PRAGMA compile_options")).all()
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
-        fts5_available = any(
-            row[0] == "ENABLE_FTS5" for row in opts
-        )
-        if not fts5_available:
+        if not any(row[0] == "ENABLE_FTS5" for row in opts):
             return
+
+        existing_sql = conn.execute(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'tdoc_search'"
+            )
+        ).scalar()
+        if existing_sql is not None:
+            try:
+                columns_sql = (
+                    existing_sql.lower()
+                    .split("fts5(", 1)[1]
+                    .rsplit(")", 1)[0]
+                )
+                actual_layout = tuple(
+                    (
+                        parts[0],
+                        len(parts) > 1 and parts[1] == "unindexed",
+                    )
+                    for declaration in columns_sql.split(",")
+                    if (parts := declaration.strip().split())
+                )
+            except IndexError:
+                actual_layout = ()
+            if actual_layout != expected_layout:
+                conn.execute(text("DROP TABLE tdoc_search"))
+
         conn.execute(
             text(
                 """
@@ -251,7 +285,13 @@ def _create_search_schema() -> None:
                     wis,
                     cover_text,
                     change_text,
-                    ttcn_text
+                    ttcn_text,
+                    content_text,
+                    row_kind UNINDEXED,
+                    document_id UNINDEXED,
+                    source_file UNINDEXED,
+                    extraction_version UNINDEXED,
+                    content_hash UNINDEXED
                 )
                 """
             )
@@ -266,15 +306,8 @@ def _create_search_schema() -> None:
                 """
             )
         )
-        # Composite indexes for filter push-down on the regular
-        # ``tdocs`` and ``meetings`` tables. These complement both the
-        # FTS5 virtual table and the sqlite-vec KNN path by accelerating
-        # the structured WHERE clauses issued alongside vector/FTS5
-        # queries: release/spec/date on tdocs and name/tsg on meetings.
-        # Plain CREATE INDEX works cross-dialect, but the surrounding
-        # FTS5 gate narrows this to sqlite — FTS5 is sqlite-only by
-        # convention. Locked down by
-        # ``tests/integration/test_search_indexes.py``.
+        # Composite indexes for filter push-down on the regular tdocs and
+        # meetings tables. FTS5 is sqlite-only by convention.
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS idx_tdocs_release_spec "
@@ -293,6 +326,9 @@ def _create_search_schema() -> None:
                 "ON meetings (name, tsg)"
             )
         )
+
+
+_VEC_METADATA_COLUMNS = frozenset({"meeting_id", "tsg", "uploaded_date"})
 
 
 def _create_vector_schema(dim: int | None = None) -> None:
@@ -319,13 +355,33 @@ def _create_vector_schema(dim: int | None = None) -> None:
             load_sqlite_vec(conn.connection.driver_connection)
         except Exception:  # noqa: BLE001 - best-effort schema creation
             return
-        width = int(dim) if dim is not None else 384
+        existing_width = None
+        layout_dropped = False
+        columns = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(vec_tdoc_embeddings)")).all()
+        }
+        if columns and not _VEC_METADATA_COLUMNS <= columns:
+            # vec0 cannot add columns in place, so the old layout is dropped and
+            # recreated empty at its existing width. Rebuild with
+            # `doc3gpp tdoc index --rebuild-embeddings` (SQL only, no download).
+            existing_sql = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE name = 'vec_tdoc_embeddings'")
+            ).scalar_one()
+            width_match = re.search(r"FLOAT\[(\d+)\]", existing_sql)
+            if width_match is not None:
+                existing_width = int(width_match.group(1))
+            conn.execute(text("DROP TABLE vec_tdoc_embeddings"))
+            layout_dropped = True
+        width = int(dim) if dim is not None else (existing_width or 384)
         conn.execute(
             text(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS vec_tdoc_embeddings USING vec0(\n"
                 "    chunk_id TEXT PRIMARY KEY,\n"
                 "    tdoc_id TEXT,\n"
                 "    chunk_index INTEGER,\n"
+                "    meeting_id INTEGER,\n"
+                "    tsg TEXT,\n"
+                "    uploaded_date TEXT,\n"
                 f"    embedding FLOAT[{width}] distance_metric=cosine\n"
                 ")"
             )
@@ -340,6 +396,14 @@ def _create_vector_schema(dim: int | None = None) -> None:
                 """
             )
         )
+        if layout_dropped:
+            conn.execute(
+                text(
+                    "DELETE FROM vec_meta WHERE key IN "
+                    "('last_rebuild_at', 'last_indexed_uploaded_date', "
+                    "'last_rebuild_last_tdoc_id', 'last_rebuild_snapshot_uploaded_date')"
+                )
+            )
         if dim is not None:
             conn.execute(
                 text(
@@ -458,6 +522,184 @@ def _create_specdata_vector_schema(dim: int | None = None) -> None:
             )
 
 
+def _migrate_tdoc_extract_completeness() -> None:
+    """Add extraction layout/count/skip columns while preserving legacy rows.
+
+    Existing databases receive version 1, a zero document count, and a NULL
+    skipped-source list. SQLAlchemy's inspector keeps the table/column probes
+    dialect-safe, while a missing table is left for Base.metadata.create_all
+    to create with all columns.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        if not inspector.has_table("tdoc_extracts"):
+            return
+
+        column_names = {
+            column["name"] for column in inspector.get_columns("tdoc_extracts")
+        }
+        additions = (
+            ("extraction_version", "INTEGER NOT NULL DEFAULT 1"),
+            ("document_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("skipped_sources", "TEXT"),
+        )
+        for name, ddl in additions:
+            if name in column_names:
+                continue
+            conn.execute(
+                text(f"ALTER TABLE tdoc_extracts ADD COLUMN {name} {ddl}")
+            )
+
+
+_CONTENT_TABLES = (
+    "tdoc_cr_annexes",
+    "tdoc_wid_contents",
+    "tdoc_ls_contents",
+    "tdoc_discussion_contents",
+)
+
+
+def _migrate_content_document_id_index() -> None:
+    """Index ``document_id`` on the four TDoc content tables.
+
+    ``Base.metadata.create_all`` adds indexes only to new tables, so content
+    tables created before ``document_id`` carried ``index=True`` would scan on
+    every FTS union and freshness join. Idempotent: a missing table is left for
+    ``create_all`` to create with the index, and a table that already indexes
+    ``document_id`` under any name is skipped.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        for table in _CONTENT_TABLES:
+            if not inspector.has_table(table):
+                continue
+            if any(
+                index["column_names"] == ["document_id"]
+                for index in inspector.get_indexes(table)
+            ):
+                continue
+            conn.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_document_id "
+                    f"ON {table} (document_id)"
+                )
+            )
+
+
+_CONTENT_TOKEN_COUNT_BATCH = 500
+
+
+def _migrate_content_token_count() -> None:
+    """Add ``token_count`` to the four TDoc content tables and backfill it.
+
+    ``create_all`` does not add columns to existing tables, so a database created
+    before the column gets it here. A missing table is left for ``create_all``.
+    Each NULL row is decompressed and its ``len(markdown.split())`` stored.
+
+    Idempotent. A row whose content does not decode to text stays NULL and is
+    examined again on each run, so a rerun changes nothing once every decodable
+    row is filled.
+    """
+    engine = get_engine()
+    for table in _CONTENT_TABLES:
+        with engine.begin() as conn:
+            inspector = inspect(conn)
+            if not inspector.has_table(table):
+                continue
+            column_names = {column["name"] for column in inspector.get_columns(table)}
+            if "token_count" not in column_names:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN token_count INTEGER"))
+        _backfill_content_token_count(table)
+
+
+def _backfill_content_token_count(table: str) -> None:
+    """Fill NULL ``token_count`` rows of ``table`` in keyset batches.
+
+    The cursor advances past the last row each batch selects, including rows
+    that cannot be decoded. Advancing past only the updated rows would
+    re-select an undecodable row forever. One transaction per batch.
+    """
+    engine = get_engine()
+    after_url = ""
+    after_doc = ""
+    while True:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT ftp_url, doc_filename, content FROM {table} "
+                    "WHERE token_count IS NULL "
+                    "AND (ftp_url, doc_filename) > (:after_url, :after_doc) "
+                    "ORDER BY ftp_url, doc_filename LIMIT :limit"
+                ),
+                {
+                    "after_url": after_url,
+                    "after_doc": after_doc,
+                    "limit": _CONTENT_TOKEN_COUNT_BATCH,
+                },
+            ).all()
+            if not rows:
+                return
+            for ftp_url, doc_filename, content in rows:
+                markdown = decompress_json(content)
+                if not isinstance(markdown, str):
+                    continue
+                conn.execute(
+                    text(
+                        f"UPDATE {table} SET token_count = :token_count "
+                        "WHERE ftp_url = :ftp_url AND doc_filename = :doc_filename"
+                    ),
+                    {
+                        "token_count": len(markdown.split()),
+                        "ftp_url": ftp_url,
+                        "doc_filename": doc_filename,
+                    },
+                )
+        after_url, after_doc = rows[-1][0], rows[-1][1]
+
+
+_SPEC_DOC_CHUNK_TEXT_BATCH = 500
+
+
+def _migrate_spec_doc_chunk_text_blob() -> None:
+    """Gzip-JSON compress legacy plain-text ``spec_doc_chunks.text`` rows.
+
+    Rows are selected by ``typeof(text) = 'text'`` in ``chunk_id`` keyset
+    batches, one transaction per batch. A rerun after an interruption
+    re-selects only the rows still in plain text, and a completed run selects
+    nothing. The column keeps its declared ``TEXT`` type on upgraded
+    databases because SQLite stores BLOB values unchanged under TEXT
+    affinity, so the table is not rebuilt.
+    """
+    engine = get_specdata_engine()
+    with engine.connect() as conn:
+        if not inspect(conn).has_table("spec_doc_chunks"):
+            return
+    after = ""
+    while True:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT chunk_id, text FROM spec_doc_chunks "
+                    "WHERE chunk_id > :after AND typeof(text) = 'text' "
+                    "ORDER BY chunk_id LIMIT :limit"
+                ),
+                {"after": after, "limit": _SPEC_DOC_CHUNK_TEXT_BATCH},
+            ).all()
+            if not rows:
+                return
+            for chunk_id, body in rows:
+                conn.execute(
+                    text(
+                        "UPDATE spec_doc_chunks SET text = :blob "
+                        "WHERE chunk_id = :chunk_id"
+                    ),
+                    {"blob": compress_json(body), "chunk_id": chunk_id},
+                )
+        after = rows[-1][0]
+
+
 def create_schema(scope: str = "all") -> None:
     """Create database tables for configured backend(s).
 
@@ -484,12 +726,16 @@ def create_schema(scope: str = "all") -> None:
         _migrate_tdoc_cr_cover_page_summary_of_change()
         _migrate_tdocs_xlsx_metadata()
         _migrate_spec_versions_drop_comment()
+        _migrate_tdoc_extract_completeness()
+        _migrate_content_document_id_index()
+        _migrate_content_token_count()
         Base.metadata.create_all(bind=engine)
         _create_search_schema()
         _create_vector_schema()
     if scope in ("testcase", "all"):
         TestCaseBase.metadata.create_all(bind=get_testcase_engine())
     if scope in ("specdata", "all"):
+        _migrate_spec_doc_chunk_text_blob()
         _create_specdata_orm_tables()
         _create_specdata_search_schema()
         _create_specdata_vector_schema()

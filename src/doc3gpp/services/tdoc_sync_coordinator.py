@@ -10,16 +10,12 @@ callers.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 import logging
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
 from doc3gpp.models.meeting import Meeting
-from doc3gpp.models.sync import BulkSyncFailure
-from doc3gpp.models.sync import BulkSyncOutcome
-from doc3gpp.models.sync import SyncOutcome
+from doc3gpp.models.sync import BulkSyncFailure, BulkSyncOutcome, SyncOutcome
 from doc3gpp.repository.protocols import (
     MeetingRepository,
     TDocFileRepository,

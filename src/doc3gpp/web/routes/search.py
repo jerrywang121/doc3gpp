@@ -1,6 +1,5 @@
 """Unified TDoc search and index-status routes."""
 # FastAPI dependency calls in route signatures are intentional.
-# ruff: noqa: B008
 from __future__ import annotations
 
 import asyncio
@@ -45,7 +44,7 @@ from doc3gpp.web.templates_setup import templates
 
 router = APIRouter(tags=["search"])
 
-_LIMIT_CAP = 200
+_LIMIT_CAP = 150
 
 
 def _build_filters(

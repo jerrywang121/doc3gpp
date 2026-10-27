@@ -1,6 +1,7 @@
-# ruff: noqa: F401,E702
+# ruff: noqa: F401
 def test_skip_matrix(monkeypatch):
     from datetime import datetime, timezone
+
     from doc3gpp.models.testcase import TestCaseSource
     from doc3gpp.services.testcase_service import TestCaseService
     class Repo:

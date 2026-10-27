@@ -1,8 +1,13 @@
 from doc3gpp.models.testcase import (
-    TestCase, TestCaseDetail, TestCaseSource, TestCaseStatus,
-    TestCaseWithStatuses, TestcaseSourceNotFoundError,
+    TestCase,
+    TestCaseDetail,
+    TestCaseSource,
+    TestcaseSourceNotFoundError,
+    TestCaseStatus,
+    TestCaseWithStatuses,
     TestcaseWorkbookNotFoundError,
 )
+
 
 def test_dataclass_shapes():
     tc = TestCase(testcase_id="TC_1", group="5G", title="T", spec="38.523-1")

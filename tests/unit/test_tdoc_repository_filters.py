@@ -1,11 +1,11 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from doc3gpp.storage.db.base import Base
-from doc3gpp.storage.db.models import TDocORM, MeetingORM
+from doc3gpp.storage.db.models import MeetingORM, TDocORM
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
 
 
@@ -20,16 +20,16 @@ def insert_data(session):
         name="RAN5#111",
         title="Meeting 111",
         location="Online",
-        start_date=datetime(2026, 1, 1),
-        end_date=datetime(2026, 1, 5),
+        start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        end_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
     )
     m2 = MeetingORM(
         meeting_id=2,
         name="SA2#150",
         title="Meeting 150",
         location="Paris",
-        start_date=datetime(2026, 2, 1),
-        end_date=datetime(2026, 2, 5),
+        start_date=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        end_date=datetime(2026, 2, 5, tzinfo=timezone.utc),
     )
     session.add_all([m1, m2])
 

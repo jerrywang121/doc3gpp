@@ -3,7 +3,7 @@
 // Thin wrapper over the shared ``bindJobPolling`` helper from
 // ``job_poller.js``. The tdoc parse route
 // (``POST /jobs/parse/tdocs``) expects a JSON envelope (filter +
-// force + full), unlike the flat ``/jobs/sync_tdocs`` alias that
+// force), unlike the flat ``/jobs/sync_tdocs`` alias that
 // reads form-encoded bodies — so we override the body via
 // ``buildBody`` and the Content-Type via ``contentType``, and let
 // the poller own the polling + reload lifecycle.
@@ -29,11 +29,9 @@
       contentType: "application/json",
       buildBody: function (form) {
         var force = form.querySelector('input[name="force"]').checked;
-        var full = form.querySelector('input[name="full"]').checked;
         return JSON.stringify({
           filter: { tdoc_id: tdocId },
           force: force,
-          full: full,
         });
       },
     });

@@ -21,6 +21,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from typing_extensions import Self
 
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
@@ -38,15 +39,17 @@ from doc3gpp.services.tdoc_cr_service import (
     TDocTypeUnsupportedError,
 )
 from doc3gpp.storage.db.migrate import create_schema
-from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+from doc3gpp.storage.repositories.tdoc_content_sql import (
+    SQLAlchemyTDocContentRepository,
+)
 from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
     SQLAlchemyTDocCrChangeDetailsRepository,
 )
+from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
-
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
@@ -122,6 +125,7 @@ def _build_service(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     return service, scraper_mock, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
@@ -584,7 +588,7 @@ class _DummyScraperClient:
         return self._payload
 
     # The factory does not use ``with``; these exist only for symmetry.
-    def __enter__(self) -> "_DummyScraperClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -730,6 +734,7 @@ def test_extract_uses_primary_url_from_tdocs_table(sqlite_env, tmp_path) -> None
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -788,6 +793,7 @@ def test_extract_falls_back_to_template_when_primary_url_fails(
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -836,6 +842,7 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     # Seed the parent TDoc row. Under the post-T3 contract every row
     # carries an ftp_url; for an ``R5s`` id we pre-populate it with the
@@ -851,7 +858,7 @@ def test_extract_without_primary_url_uses_template_only(sqlite_env, tmp_path) ->
     # URL before any downstream failure — that's what this test guards.
     try:
         service.extract("R5s260009")
-    except Exception:
+    except Exception:  # noqa: BLE001,S110 - downstream extraction is not under test
         pass
 
     assert scraper_mock.get_bytes.call_count == 1
@@ -897,6 +904,7 @@ def test_extract_persists_download_url_in_cr_details(sqlite_env, tmp_path) -> No
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -957,6 +965,7 @@ def test_extract_fallback_url_persisted_in_cr_details(sqlite_env, tmp_path) -> N
         cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=tdoc_repo,
+        content_repo=SQLAlchemyTDocContentRepository(),
     )
     tdoc_repo.upsert_many(
         [TDoc(tdoc_id="R5s260009", type="CR", ftp_url=primary_ftp_url)]
@@ -1197,25 +1206,33 @@ def test_parse_with_combined_filters_against_sqlite(
     ]
     tdoc_repo.upsert_many(cr_tdocs)
 
-    # Mark R5s260001 as already parsed. In normal mode the SQL filter
-    # excludes it before the limit, so it never reaches the dispatch
-    # and the summary's "Skipped" bucket stays empty.
+    # Mark R5s260001 as parsed with a complete version-2 bundle attached to
+    # its current TDoc URL. In normal mode the SQL filter excludes it before
+    # the limit, so it never reaches the dispatch.
+    from doc3gpp.storage.repositories.tdoc_content_sql import (
+        SQLAlchemyTDocContentRepository,
+    )
+
     cr_repo = SQLAlchemyTDocCrRepository()
-    cr_repo.upsert(
+    current_ftp_url = cr_tdocs[0].ftp_url
+    SQLAlchemyTDocContentRepository().replace_cr_bundle(
         TDocCRDetails(
             tdoc_id="R5s260001",
             spec="38.523-3",
             cr_num="3790",
-            ftp_url="stored/r5s260001.zip",
+            ftp_url=current_ftp_url,
         ),
-    )
-    cr_repo.upsert_extract_meta(
+        None,
+        None,
         TDocExtractMeta(
-            ftp_url="stored/r5s260001.zip",
+            ftp_url=current_ftp_url,
             tdoc_id="R5s260001",
             cache_file="R5s260001.zip",
             doc_filename="R5s260001.docx",
+            extraction_version=2,
+            document_count=0,
         ),
+        (),
     )
 
     # Swap the production ScraperClient class for our dummy.
@@ -1322,7 +1339,6 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
                 tdoc_ids,
                 *,
                 force=False,
-                full=False,
                 on_progress=None,
                 is_cancelled=None,
                 runner=None,
@@ -1337,7 +1353,19 @@ def test_parse_batch_limit_truncates_with_remaining_summary(
                         tid: type(
                             "R",
                             (),
-                            {"details": TDocCRDetails(tdoc_id=tid, spec=None, cr_num=None, title=None)},
+                            {
+                                "details": TDocCRDetails(
+                                    tdoc_id=tid, spec=None, cr_num=None, title=None
+                                ),
+                                "extract_meta": TDocExtractMeta(
+                                    ftp_url=f"docs/{tid}.zip",
+                                    tdoc_id=tid,
+                                    cache_file=f"{tid}.zip",
+                                    doc_filename=f"{tid}.docx",
+                                    extraction_version=2,
+                                    document_count=0,
+                                ),
+                            },
                         )()
                         for tid in ids
                     },
@@ -1400,7 +1428,7 @@ def test_extract_writes_cache_file_and_resolves_path(sqlite_env, tmp_path) -> No
     ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/r5s260009.zip"
     expected_cache_file = derive_cache_file(ftp_url)
 
-    service, scraper_mock, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+    service, _scraper_mock, cache, cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_payload(fixture),
     )
     _seed_cr_tdoc(tdoc_repo, "R5s260009")
@@ -1478,9 +1506,10 @@ def test_extract_meta_orm_round_trips_cache_file(sqlite_env) -> None:
 def test_tdoc_cr_detail_orm_has_summary_of_change_column(sqlite_env) -> None:
     """A fresh ``tdoc_cr_cover_page`` schema carries
     ``summary_of_change TEXT`` after ``create_schema``."""
+    from sqlalchemy import text
+
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
-    from sqlalchemy import text
 
     create_schema()
     with get_engine().begin() as conn:
@@ -1493,9 +1522,10 @@ def test_migrate_adds_summary_of_change_to_existing_db(sqlite_env) -> None:
     """Migration adds ``summary_of_change`` to a database whose
     ``tdoc_cr_cover_page`` predates the column. Idempotent on a second
     call."""
+    from sqlalchemy import text
+
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.db.session import get_engine
-    from sqlalchemy import text
 
     engine = get_engine()
     # Simulate a legacy DB: the ``tdoc_cr_cover_page`` table exists but

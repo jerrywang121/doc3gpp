@@ -35,7 +35,7 @@ import tomli_w
 from pydantic import BaseModel, ValidationError
 
 if sys.version_info >= (3, 11):
-    import tomllib  # noqa: F401 - intentional stdlib fallback
+    import tomllib
 else:  # pragma: no cover - exercised only on Python 3.10
     import tomli as tomllib  # type: ignore[no-redef, no-redef]
 
@@ -44,7 +44,6 @@ from doc3gpp.settings.config_source import (
     DEFAULT_USER_CONFIG,
 )
 from doc3gpp.settings.schema import Settings
-
 
 #: Markers that identify a project root when walking parents for
 #: ``resolve_init_target``. The first hit on any of these wins.
@@ -321,9 +320,9 @@ def load_default_template(path: Path | None = None) -> str:
 
 
 __all__ = [
-    "ConfigValidationError",
     "DEFAULT_PROJECT_CONFIG",
     "DEFAULT_USER_CONFIG",
+    "ConfigValidationError",
     "load_default_template",
     "parse_dotted_key",
     "patch_dotted",

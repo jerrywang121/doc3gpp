@@ -71,14 +71,27 @@ class SearchFilters:
 
 
 @dataclass(slots=True, frozen=True)
+class MatchedDocument:
+    """One SQL-backed document source that matched an FTS5 query."""
+
+    document_id: str
+    ftp_url: str
+    source_file: str
+    score: float
+    previews: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True)
 class SearchHit:
-    """A single FTS5 hit joined back to ``tdocs`` + ``meetings``.
+    """A parent-level FTS5 hit joined back to ``tdocs`` + ``meetings``.
 
     ``score`` is the raw ``bm25(tdoc_search)`` value (lower = better
     match in FTS5). ``previews`` maps every column whose
     ``bm25_weights[i] > 0`` to its FTS5 ``snippet(...)`` output (with
     ``<<...>>`` markers around matches); weight=0 columns are absent
-    from the mapping. The CLI renders each entry as a labeled block
+    from the mapping. The matched_documents tuple carries matching SQL-backed
+    source rows in document score/source order. The CLI renders each entry as
+    a labeled block
     in ``table`` / ``markdown`` and as a nested object in ``json``.
     """
 
@@ -93,6 +106,7 @@ class SearchHit:
     wis: str | None
     type: str | None = None
     status: str | None = None
+    matched_documents: tuple[MatchedDocument, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -163,6 +177,7 @@ class SearchIndexStatus:
 
 
 __all__ = [
+    "MatchedDocument",
     "RebuildProgress",
     "SearchError",
     "SearchFilters",

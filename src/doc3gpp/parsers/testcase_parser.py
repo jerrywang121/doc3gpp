@@ -118,8 +118,10 @@ def parse_testcase_workbook(
             if norm in _COMMON_COLS and norm not in cols:
                 cols[norm] = idx
 
-        def _col(row: tuple[object, ...], name: str) -> str | None:
-            idx = cols.get(name)
+        def _col(
+            row: tuple[object, ...], name: str, columns: dict[str, int]
+        ) -> str | None:
+            idx = columns.get(name)
             return _cell(_at(row, idx)) if idx is not None else None
 
         valid_pairs: list[tuple[int, int, str]] = []
@@ -149,14 +151,14 @@ def parse_testcase_workbook(
             valid_pairs.append((gcf_idx, ttcn_idx, path))
 
         for row in rows:
-            testcase_id = _col(row, "tc")
+            testcase_id = _col(row, "tc", cols)
             if testcase_id is None:
                 logger.debug("%s: skipping row with empty TC", sheet_name)
                 continue
             if group in FIXED_SPEC:
                 spec = FIXED_SPEC[group]
             else:
-                spec = _col(row, "part of")
+                spec = _col(row, "part of", cols)
             if (testcase_id, group) in seen_keys:
                 logger.warning(
                     "%s: skipping duplicate TC %r in group %r "
@@ -171,11 +173,11 @@ def parse_testcase_workbook(
                 TestCase(
                     testcase_id=testcase_id,
                     group=group,
-                    title=_col(row, "title"),
-                    ats=_col(row, "ats"),
-                    feature=_col(row, "feature"),
-                    release=_col(row, "release"),
-                    wis=_col(row, "ran wic"),
+                    title=_col(row, "title", cols),
+                    ats=_col(row, "ats", cols),
+                    feature=_col(row, "feature", cols),
+                    release=_col(row, "release", cols),
+                    wis=_col(row, "ran wic", cols),
                     spec=spec,
                 )
             )

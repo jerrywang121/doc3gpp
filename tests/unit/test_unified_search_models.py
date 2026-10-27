@@ -1,8 +1,10 @@
+import json
 from dataclasses import FrozenInstanceError, is_dataclass
 from datetime import date, datetime, timezone
 
 import pytest
 
+from doc3gpp.models.search import MatchedDocument
 from doc3gpp.models.unified_search import (
     SearchMode,
     SpecDocSearchResult,
@@ -25,6 +27,7 @@ TDOC_KEYS = [
     "type",
     "status",
     "best_chunk_id",
+    "matched_documents",
 ]
 
 SPECDOC_KEYS = [
@@ -47,6 +50,7 @@ def _tdoc_result(
     *,
     previews: dict[str, str] | None,
     uploaded_date: str | date | datetime | None = "2025-01-10",
+    matched_documents: tuple[MatchedDocument, ...] = (),
 ) -> TDocSearchResult:
     return TDocSearchResult(
         tdoc_id="R1-25-0001",
@@ -62,6 +66,7 @@ def _tdoc_result(
         type="CR",
         status="Agreed",
         best_chunk_id="R1-25-0001#0" if mode in (SearchMode.SEMANTIC, SearchMode.HYBRID) else None,
+        matched_documents=matched_documents,
     )
 
 
@@ -74,6 +79,7 @@ def test_tdoc_result_has_exact_keys_and_mode_specific_previews(mode: SearchMode)
     assert list(payload) == TDOC_KEYS
     assert payload["search_mode"] == mode.value
     assert payload["previews"] == (previews if mode is SearchMode.FTS5 else None)
+    assert payload["matched_documents"] == []
     assert payload["type"] == "CR"
     assert payload["status"] == "Agreed"
     assert payload["score"] == (None if mode is SearchMode.FILTER else 1.25)
@@ -137,7 +143,51 @@ def test_tdoc_serializer_returns_complete_public_payload():
         "type": "CR",
         "status": "Agreed",
         "best_chunk_id": None,
+        "matched_documents": [],
     }
+
+
+def test_tdoc_serializer_preserves_matched_document_provenance_as_json() -> None:
+    documents = (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="docs/main.docx",
+            score=-4.25,
+            previews={"content_text": "<<handover>> procedure"},
+        ),
+        MatchedDocument(
+            document_id="doc-appendix",
+            ftp_url="https://www.3gpp.org/ftp/R5-000001.zip",
+            source_file="support/appendix.docx",
+            score=-2.0,
+            previews={"content_text": "<<handover>> appendix"},
+        ),
+    )
+    result = _tdoc_result(
+        SearchMode.FTS5,
+        previews={"title": "<<Title>>"},
+        matched_documents=documents,
+    )
+
+    payload = json.loads(json.dumps(tdoc_search_result_to_dict(result)))
+
+    assert payload["matched_documents"] == [
+        {
+            "document_id": "doc-main",
+            "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
+            "source_file": "docs/main.docx",
+            "score": -4.25,
+            "previews": {"content_text": "<<handover>> procedure"},
+        },
+        {
+            "document_id": "doc-appendix",
+            "ftp_url": "https://www.3gpp.org/ftp/R5-000001.zip",
+            "source_file": "support/appendix.docx",
+            "score": -2.0,
+            "previews": {"content_text": "<<handover>> appendix"},
+        },
+    ]
 
 
 def test_search_result_dtos_are_frozen_and_slotted():

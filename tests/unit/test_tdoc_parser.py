@@ -338,7 +338,7 @@ def test_empty_date_cell_is_none() -> None:
 def test_parse_date_cell_handles_datetime_instances() -> None:
     import datetime
 
-    dt = datetime.datetime(2026, 6, 1, 12, 30)
+    dt = datetime.datetime(2026, 6, 1, 12, 30, tzinfo=datetime.timezone.utc)
     assert _parse_date_cell(dt) == datetime.date(2026, 6, 1)
 
 
@@ -524,9 +524,11 @@ def test_read_tdoc_sheet_real_fixture_extracts_per_tdoc_urls() -> None:
 def test_read_tdoc_sheet_resilient_when_xlsx_bytes_are_corrupt() -> None:
     # A corrupt XLSX must raise from openpyxl (existing contract) — the
     # hyperlink side-channel must not mask the original failure mode.
+    import zipfile
+
     import pytest
 
-    with pytest.raises(Exception):
+    with pytest.raises(zipfile.BadZipFile):
         # An empty buffer is not a valid zip; openpyxl raises.
         read_tdoc_sheet(b"")
 

@@ -11,7 +11,6 @@ from doc3gpp.parsers.cr.helpers import (
     _search_pattern_in_lines,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -124,7 +123,6 @@ class CRCoverPageParser:
         lines: Sequence[str],
         *,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> tuple[bool, dict[str, str], int]:
         details: dict[str, str] = {}
 

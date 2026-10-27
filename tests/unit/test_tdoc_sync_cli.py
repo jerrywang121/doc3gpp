@@ -14,9 +14,7 @@ from __future__ import annotations
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
-from doc3gpp.models.sync import BulkSyncFailure
-from doc3gpp.models.sync import BulkSyncOutcome
-from doc3gpp.models.sync import SyncOutcome
+from doc3gpp.models.sync import BulkSyncFailure, BulkSyncOutcome, SyncOutcome
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
 )

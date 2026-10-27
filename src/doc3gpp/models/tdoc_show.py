@@ -37,6 +37,14 @@ from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.parsers.cr.header import is_ttcn_tdoc
 
 
+def _raw_markdown_note(*, mcp_selector: str, cli_selector: str) -> str:
+    return (
+        "No structured details are extracted for this TDoc, but its raw markdown "
+        f"is available: call get_tdoc_content with {mcp_selector}, or run "
+        f"`doc3gpp tdoc show {cli_selector} --format raw`."
+    )
+
+
 @dataclass(slots=True, frozen=True)
 class TDocShowRecord:
     """Bundled output of ``tdoc show`` for the JSON / markdown / table renderers.
@@ -63,6 +71,9 @@ class TDocShowRecord:
             ``None`` when no ``tdoc_extracts`` row exists for that URL.
         files: Auxiliary ``tdoc_files`` rows matching ``tdoc_id``;
             empty tuple when the parent TDoc has no auxiliary files.
+        note: Pointer to the raw markdown when an extraction exists but
+            carries no cover row (non-CR TDocs and CR annexes); ``None``
+            otherwise.
     """
 
     tdoc: TDoc
@@ -71,13 +82,14 @@ class TDocShowRecord:
     changes: TDocCRChangeDetails | None = None
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
+    note: str | None = None
 
     @classmethod
     def from_tdoc_id(
         cls,
         tdoc_id: str,
-        repos: "TDocShowRepos",
-    ) -> "TDocShowRecord":
+        repos: TDocShowRepos,
+    ) -> TDocShowRecord:
         """Compose a :class:`TDocShowRecord` by resolving ``tdoc_id`` across all 5 repos.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_command`
@@ -114,6 +126,12 @@ class TDocShowRecord:
             changes = change_details[0] if change_details else None
 
         files = tuple(repos.file.get_for_tdoc_id(record.tdoc_id))
+        note = None
+        if cover is None and extracted_at is not None:
+            note = _raw_markdown_note(
+                mcp_selector=f"tdoc_id='{record.tdoc_id}'",
+                cli_selector=f"--tdoc {record.tdoc_id}",
+            )
         return cls(
             tdoc=record,
             cover=cover,
@@ -121,6 +139,7 @@ class TDocShowRecord:
             changes=changes,
             extracted_at=extracted_at,
             files=files,
+            note=note,
         )
 
 
@@ -149,6 +168,8 @@ class TDocShowRecordByUrl:
             ``None`` when no ``tdoc_extracts`` row exists.
         files: Auxiliary ``tdoc_files`` rows matching ``ftp_url``;
             empty tuple when no auxiliary file is attached.
+        note: Pointer to the raw markdown when an extraction exists but
+            carries no cover row; ``None`` otherwise.
     """
 
     ftp_url: str
@@ -158,13 +179,14 @@ class TDocShowRecordByUrl:
     changes: TDocCRChangeDetails | None = None
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
+    note: str | None = None
 
     @classmethod
     def from_ftp_url(
         cls,
         ftp_url: str,
-        repos: "TDocShowRepos",
-    ) -> "TDocShowRecordByUrl":
+        repos: TDocShowRepos,
+    ) -> TDocShowRecordByUrl:
         """Compose a :class:`TDocShowRecordByUrl` by URL across all 5 repos.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_by_ftp_url`
@@ -184,6 +206,12 @@ class TDocShowRecordByUrl:
         ttcn = repos.cr_ttcn.get_by_url(ftp_url) if cover is not None else None
         changes = repos.cr_change_details.get_by_url(ftp_url)
         files = tuple(repos.file.get_by_ftp_url(ftp_url))
+        note = None
+        if cover is None and extracted_at is not None:
+            note = _raw_markdown_note(
+                mcp_selector=f"ftp_url='{ftp_url}'",
+                cli_selector=f"--ftp-url {ftp_url}",
+            )
         return cls(
             ftp_url=ftp_url,
             tdoc=tdoc,
@@ -192,6 +220,7 @@ class TDocShowRecordByUrl:
             changes=changes,
             extracted_at=extracted_at,
             files=files,
+            note=note,
         )
 
 
@@ -206,11 +235,11 @@ class TDocShowRepos:
     directly to assert the composition round-trip.
     """
 
-    tdoc: "object"  # TDocRepository
-    cr: "object"  # TDocCrDetailRepository
-    cr_ttcn: "object"  # TDocCrTTCNDetailRepository
-    cr_change_details: "object"  # TDocCrChangeDetailsRepository
-    file: "object"  # TDocFileRepository
+    tdoc: object  # TDocRepository
+    cr: object  # TDocCrDetailRepository
+    cr_ttcn: object  # TDocCrTTCNDetailRepository
+    cr_change_details: object  # TDocCrChangeDetailsRepository
+    file: object  # TDocFileRepository
 
 
 __all__ = [

@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 
 import httpx
+from typing_extensions import Self
 
 from doc3gpp.config import get_settings
 
@@ -182,7 +183,7 @@ class ScraperClient:
         """Close the underlying HTTP client."""
         self._client.close()
 
-    def __enter__(self) -> "ScraperClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

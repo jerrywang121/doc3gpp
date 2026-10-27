@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 
 def test_remote_embedding_settings_defaults():
     from doc3gpp.settings.schema import SemanticSearchSettings
@@ -13,15 +15,16 @@ def test_remote_embedding_settings_defaults():
 
 def test_remote_embedding_settings_validation():
     import pytest
+
     from doc3gpp.settings.schema import SemanticSearchSettings
     SemanticSearchSettings(embedding_timeout_s=1.0, embedding_batch_size=1)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(embedding_timeout_s=0.0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(embedding_timeout_s=301.0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(embedding_batch_size=0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SemanticSearchSettings(embedding_batch_size=513)
 
 

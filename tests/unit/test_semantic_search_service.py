@@ -5,8 +5,12 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from doc3gpp.models.search import SearchFilters, SearchHit
-from doc3gpp.services.semantic_search_service import SemanticSearchService
+from doc3gpp.models.search import MatchedDocument, SearchFilters, SearchHit
+from doc3gpp.services.semantic_search_service import (
+    _KNN_MAX_K,
+    SemanticSearchService,
+    rrf_merge,
+)
 
 
 def _hit(tdoc_id: str) -> SearchHit:
@@ -23,6 +27,7 @@ def _settings():
     s.semantic_search.chunk_size = 200
     s.semantic_search.chunk_overlap = 20
     s.semantic_search.max_chunks_per_tdoc = 8
+    s.semantic_search.max_content_chunks_per_tdoc = 16
     return s
 
 
@@ -85,6 +90,9 @@ def test_search_vector_only_hit_populates_metadata_from_tdocs():
         def knn(self, qv, limit, filters):
             self.knn_calls.append((qv, limit, filters))
             return [("R4-2605982", "R4-2605982#0", 0, 0.78)]
+
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
 
         def get_tdocs_metadata(self, tdoc_ids):
             self.metadata_calls.append(list(tdoc_ids))
@@ -163,6 +171,9 @@ def test_search_mixed_hits_only_looks_up_metadata_for_vector_only():
                 ("R4-2", "R4-2#0", 1, 0.2),
             ]
 
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
+
         def get_tdocs_metadata(self, tdoc_ids):
             self.metadata_calls.append(list(tdoc_ids))
             return {
@@ -201,6 +212,9 @@ def test_search_vector_only_hit_unknown_tdoc_leaves_stub_empty():
 
         def knn(self, qv, limit, filters):
             return [("GHOST-1", "GHOST-1#0", 0, 0.5)]
+
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
 
         def get_tdocs_metadata(self, tdoc_ids):
             self.metadata_calls.append(list(tdoc_ids))
@@ -258,12 +272,31 @@ def test_search_uses_fanout_multiplier():
     assert vec.knn.call_args[1]["limit"] == 40
 
 
+def test_hybrid_internal_knn_limit_is_clamped_to_knn_max_k():
+    fts5 = MagicMock()
+    fts5.search.return_value = []
+    vec = MagicMock()
+    vec.knn.return_value = []
+    settings = _settings()
+    settings.semantic_search.fanout_multiplier = 100
+    svc = SemanticSearchService(fts5, _mock_embedder(), vec, settings)
+    svc.search(
+        "q",
+        fts5_query="q",
+        filters=SearchFilters(),
+        limit=150,
+        fts5_weight=0.5,
+    )
+    assert vec.knn.call_args[1]["limit"] == _KNN_MAX_K
+
+
 def test_search_synthesizes_fts5_hit_for_vector_only_tdoc():
     """Vector-only tdoc (not in FTS5 fan-out) must still carry a real SearchHit."""
     fts5 = MagicMock()
     fts5.search.return_value = []
     vec = MagicMock()
     vec.knn.return_value = [("R5-1", "R5-1#0", 0, 0.1)]
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     svc = SemanticSearchService(fts5, _mock_embedder(), vec, _settings())
     out = svc.search(
         "valid",
@@ -279,13 +312,11 @@ def test_search_synthesizes_fts5_hit_for_vector_only_tdoc():
     assert out[0].hit.tdoc_id == "R5-1"
 
 
-def test_index_for_tdoc_calls_upsert_chunks(monkeypatch):
+def test_index_for_tdoc_calls_upsert_chunks():
     vec = MagicMock()
+    vec.embed_text_for_tdoc.return_value = "long text " * 200
+    vec.content_documents_for_tdoc.return_value = []
     fts5 = MagicMock()
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "long text " * 200,
-    )
     svc = SemanticSearchService(fts5, _mock_embedder(n_chunks=3), vec, _settings())
     svc.index_for_tdoc("R5-1")
     vec.upsert_chunks.assert_called_once()
@@ -295,7 +326,7 @@ def test_index_for_tdoc_calls_upsert_chunks(monkeypatch):
     assert isinstance(args[0][1], list)
 
 
-def test_index_for_tdoc_encodes_all_chunks_in_one_call(monkeypatch):
+def test_index_for_tdoc_encodes_all_chunks_in_one_call():
     """Regression: chunks for one TDoc must be batched into a single
     ``embedder.encode([...])`` call, not one call per chunk. The
     remote embeddings API charges per request, so
@@ -304,11 +335,10 @@ def test_index_for_tdoc_encodes_all_chunks_in_one_call(monkeypatch):
     import numpy as np
 
     vec = MagicMock()
+    # 4000 tokens -> more than 8 chunks, so max_chunks_per_tdoc caps the batch.
+    vec.embed_text_for_tdoc.return_value = "long text " * 4000
+    vec.content_documents_for_tdoc.return_value = []
     fts5 = MagicMock()
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "long text " * 4000,  # -> 8 chunks capped by max_chunks_per_tdoc
-    )
     embedder = MagicMock()
     embedder.dim = 384
     # encode() returns one row per chunk; 4000 whitespace tokens at
@@ -337,11 +367,8 @@ def test_rebuild_embeddings_clears_cursor_when_resume_false() -> None:
     vec.count_tdocs_to_index.return_value = 3
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
     vec.get_resume_cursor.return_value = "C3-stale"
-    mp = pytest.MonkeyPatch()
-    mp.setattr(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "text",
-    )
+    vec.embed_text_for_tdoc.return_value = "text"
+    vec.content_documents_for_tdoc.return_value = []
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     list(
         svc.rebuild_embeddings(
@@ -352,7 +379,6 @@ def test_rebuild_embeddings_clears_cursor_when_resume_false() -> None:
     # After clear, get_resume_cursor must have been called and its
     # return value (None, after clear) used as after_id.
     vec.set_resume_cursor.assert_called_once_with("R5-3")
-    mp.undo()
 
 
 def test_rebuild_embeddings_honors_cursor_when_resume_true() -> None:
@@ -364,11 +390,8 @@ def test_rebuild_embeddings_honors_cursor_when_resume_true() -> None:
     vec.count_tdocs_to_index.return_value = 3
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
     vec.get_resume_cursor.return_value = "C3-resume-point"
-    mp = pytest.MonkeyPatch()
-    mp.setattr(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "text",
-    )
+    vec.embed_text_for_tdoc.return_value = "text"
+    vec.content_documents_for_tdoc.return_value = []
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     list(
         svc.rebuild_embeddings(
@@ -379,7 +402,6 @@ def test_rebuild_embeddings_honors_cursor_when_resume_true() -> None:
     # set_resume_cursor was still called to advance the cursor
     # forward.
     vec.set_resume_cursor.assert_called_once_with("R5-3")
-    mp.undo()
 
 
 def test_remove_for_tdoc_calls_repo():
@@ -389,7 +411,7 @@ def test_remove_for_tdoc_calls_repo():
     vec.remove_for_tdoc.assert_called_once_with("R5-1")
 
 
-def test_rebuild_embeddings_yields_progress(monkeypatch):
+def test_rebuild_embeddings_yields_progress():
     """Small corpora (total < 100) yield once per TDoc because
     integer-pct granularity exceeds 1.
     """
@@ -397,10 +419,8 @@ def test_rebuild_embeddings_yields_progress(monkeypatch):
     vec.count_tdocs_to_index.return_value = 3
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
     vec.get_resume_cursor.return_value = None
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "text",
-    )
+    vec.embed_text_for_tdoc.return_value = "text"
+    vec.content_documents_for_tdoc.return_value = []
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(svc.rebuild_embeddings(batch_size=10, stale_only=False, quiet=True))
     assert len(progress) == 3
@@ -408,7 +428,7 @@ def test_rebuild_embeddings_yields_progress(monkeypatch):
     assert all(p.total == 3 for p in progress)
 
 
-def test_rebuild_embeddings_yields_per_one_percent_for_13k_corpus(monkeypatch):
+def test_rebuild_embeddings_yields_per_one_percent_for_13k_corpus():
     """Real corpus size (13,693 tdocs) must yield exactly 100 times
     — once per integer-pct crossing. The final yield must be at
     processed = 13,693 (the corpus total).
@@ -420,10 +440,8 @@ def test_rebuild_embeddings_yields_per_one_percent_for_13k_corpus(monkeypatch):
         [f"R5-{i:06d}" for i in range(1, total + 1)],
     ])
     vec.get_resume_cursor.return_value = None
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "text",
-    )
+    vec.embed_text_for_tdoc.return_value = "text"
+    vec.content_documents_for_tdoc.return_value = []
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(
         svc.rebuild_embeddings(batch_size=total, stale_only=False, quiet=True),
@@ -442,7 +460,7 @@ def test_rebuild_embeddings_yields_per_one_percent_for_13k_corpus(monkeypatch):
     assert progress[-1].current_tdoc_id == f"R5-{total:06d}"
 
 
-def test_rebuild_embeddings_processed_is_monotonic(monkeypatch):
+def test_rebuild_embeddings_processed_is_monotonic():
     """rebuild_embeddings must yield processed values strictly
     increasing and total constant; the bar relies on processed
     climbing monotonically.
@@ -451,10 +469,8 @@ def test_rebuild_embeddings_processed_is_monotonic(monkeypatch):
     vec.count_tdocs_to_index.return_value = 7
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"], ["R5-4", "R5-5", "R5-6", "R5-7"]])
     vec.get_resume_cursor.return_value = None
-    monkeypatch.setattr(
-        "doc3gpp.services.semantic_search_service._build_embed_text",
-        lambda tid: "text",
-    )
+    vec.embed_text_for_tdoc.return_value = "text"
+    vec.content_documents_for_tdoc.return_value = []
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(svc.rebuild_embeddings(batch_size=3, stale_only=False, quiet=True))
     # For total=7, pct crosses at every TDoc → 7 yields.
@@ -521,6 +537,7 @@ def test_search_without_fts5_query_skips_fts5_service(monkeypatch):
     ]
     fts5 = MagicMock()
     emb = _mock_embedder()
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     svc = SemanticSearchService(fts5, emb, vec, _settings())
     out = svc.search(
         "natural prose",
@@ -541,15 +558,16 @@ def test_search_without_fts5_query_skips_fts5_service(monkeypatch):
 
 
 def test_search_without_fts5_query_truncates_to_limit(monkeypatch):
-    """The pure-vector path must still respect --limit (no internal fanout)."""
+    """The pure-vector path over-fetches chunk rows, then returns --limit TDocs."""
     vec = MagicMock()
     vec.knn.return_value = [
         (f"R5-{i}", f"R5-{i}#0", i, 0.1 * (i + 1)) for i in range(5)
     ]
+    vec.matching_tdoc_ids.side_effect = lambda tdoc_ids, filters: frozenset(tdoc_ids)
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=3, fts5_weight=0.5)
-    # vec.knn called with limit=3 (no internal fanout when FTS5 is skipped).
-    assert vec.knn.call_args[1]["limit"] == 3
+    # vec.knn is asked for limit * fanout chunk rows (fanout is 2 in _settings).
+    assert vec.knn.call_args[1]["limit"] == 6
     assert len(out) == 3
 
 
@@ -571,8 +589,11 @@ def test_search_without_fts5_query_vector_only_populates_metadata():
         status: str | None
 
     class _VecRepo:
-        def knn(self, qv, limit, filters):
+        def knn(self, qv, limit, filters=None):
             return [("R5-1", "R5-1#0", 0, 0.1)]
+
+        def matching_tdoc_ids(self, tdoc_ids, filters):
+            return frozenset(tdoc_ids)
 
         def get_tdocs_metadata(self, tdoc_ids):
             return {
@@ -630,3 +651,102 @@ def test_search_without_fts5_query_empty_vector_returns_empty():
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=10, fts5_weight=0.5)
     assert out == []
+
+
+def test_rrf_merge_preserves_grouped_fts_document_provenance() -> None:
+    documents = (
+        MatchedDocument(
+            document_id="doc-main",
+            ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
+            source_file="docs/main.docx",
+            score=-4.0,
+            previews={"content_text": "<<handover>>"},
+        ),
+        MatchedDocument(
+            document_id="doc-appendix",
+            ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
+            source_file="support/appendix.docx",
+            score=-2.0,
+            previews={"content_text": "<<handover>> appendix"},
+        ),
+    )
+    fts_hit = SearchHit(
+        tdoc_id="R5-1",
+        score=-3.0,
+        previews={},
+        title="Handover",
+        meeting=None,
+        tsg=None,
+        uploaded_date=None,
+        ftp_url="https://www.3gpp.org/ftp/R5-1.zip",
+        wis=None,
+        matched_documents=documents,
+    )
+
+    merged = rrf_merge(
+        [fts_hit],
+        [
+            ("R5-1", "R5-1#1", 1, 0.25),
+            ("R5-1", "R5-1#0", 0, 0.1),
+        ],
+        vector_weight=0.3,
+        limit=10,
+    )
+
+    assert len(merged) == 1
+    assert merged[0].tdoc_id == "R5-1"
+    assert merged[0].rank_fts5 == 0
+    assert merged[0].rank_vec == 0
+    assert merged[0].best_chunk_id == "R5-1#0"
+    assert merged[0].min_chunk_distance == pytest.approx(0.1)
+    assert merged[0].hit is fts_hit
+    assert merged[0].hit.matched_documents == documents
+
+
+class _ChunkPoolRepo:
+    """Chunk-row KNN over a fixed pool, nearest first, like sqlite-vec with ``k``."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.fetches = []
+
+    def knn(self, qv, limit, filters=None):
+        self.fetches.append(limit)
+        return self._rows[:limit]
+
+    def matching_tdoc_ids(self, tdoc_ids, filters):
+        return frozenset(tdoc_ids)
+
+    def get_tdocs_metadata(self, tdoc_ids):
+        return {}
+
+
+def test_semantic_only_search_returns_distinct_tdocs_past_a_crowded_chunk_pool():
+    """One TDoc with 20 near chunks must not use up the five distinct-TDoc slots."""
+    rows = [("R5-A", f"R5-A#{i}", i, 0.01 * (i + 1)) for i in range(20)]
+    rows += [
+        (f"R5-{letter}", f"R5-{letter}#0", 0, 0.5 + 0.01 * index)
+        for index, letter in enumerate("BCDEF")
+    ]
+    svc = SemanticSearchService(
+        MagicMock(), _mock_embedder(), _ChunkPoolRepo(rows), _settings(),
+    )
+
+    out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5)
+
+    assert [hit.tdoc_id for hit in out] == ["R5-A", "R5-B", "R5-C", "R5-D", "R5-E"]
+
+
+def test_semantic_only_search_returns_what_exists_when_pool_has_fewer_tdocs():
+    rows = [
+        ("R5-A", "R5-A#0", 0, 0.1),
+        ("R5-A", "R5-A#1", 1, 0.2),
+        ("R5-B", "R5-B#0", 0, 0.3),
+    ]
+    svc = SemanticSearchService(
+        MagicMock(), _mock_embedder(), _ChunkPoolRepo(rows), _settings(),
+    )
+
+    out = svc.search("q", fts5_query=None, filters=SearchFilters(), limit=5, fts5_weight=0.5)
+
+    assert [hit.tdoc_id for hit in out] == ["R5-A", "R5-B"]

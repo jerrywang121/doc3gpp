@@ -8,18 +8,17 @@ Glues the per-stage building blocks together:
    list XLSX classifies each id by document type).
 3. Download (or cache-hit) the TDoc zip from the 3GPP FTP via
    :mod:`doc3gpp.scraping.tdoc_zip_source`.
-4. Extract the ``.docx`` body from the zip via
-   :func:`doc3gpp.parsers.cr_parser.extract_docx_from_zip`.
-5. Convert the docx to markdown via the python-docx-based converter
-   in :mod:`doc3gpp.parsers.docx_converter`. The markdown cache shares
-   the zip cache's ``cache_file`` basename (URL-derived via
-   :func:`doc3gpp.scraping.cache_keys.derive_cache_file`) so a fresh
-   zip download lands on the same cache row as the prior run.
-6. Parse the markdown into a :class:`TDocCRDetails` value object via
-   :func:`doc3gpp.parsers.cr_parser.parse_cr_details`.
-7. Persist both the details row and the cache-extract metadata sidecar
-   in a single transaction via
-   :class:`doc3gpp.storage.repositories.tdoc_cr_sql.SQLAlchemyTDocCrRepository`.
+4. Enumerate every supported ``.docx`` member and convert members
+   sequentially through the shared parser pipeline.
+5. Select exactly one main document with the structural CR-cover detector;
+   supporting documents remain content-only. Annexes that fail to convert are
+   recorded in ``skipped_sources`` instead of failing the TDoc.
+6. Build a versioned Markdown archive that holds every converted document.
+7. Persist the cover, optional sidecars, extraction metadata, and the annex
+   rows atomically through ``TDocContentRepository`` before indexing.
+
+TDocs whose type has a family content store (WID, LS, discussion) are handed to
+:class:`doc3gpp.services.tdoc_family_service.TDocFamilyService` instead.
 
 The service owns three caching layers:
 
@@ -28,62 +27,63 @@ The service owns three caching layers:
   :func:`doc3gpp.scraping.cache_keys.derive_cache_file`); bypassed on
   network miss by
   :func:`doc3gpp.scraping.tdoc_zip_source.download_tdoc_zip`.
-* **Markdown cache** (``<root>/markdown/<cache_file>``) — shares the
-  zip cache's ``cache_file`` key; on-disk bytes are a real ``ZIP``
-  archive (single entry named ``<docx stem>.md``), so operators can
-  open / extract the cached markdown with standard archival tooling
-  (``unzip`` / 7z / WinZip). Legacy plain-UTF-8 and legacy gzip blobs
-  are still decoded transparently via magic-byte sniffing. Skipped when
-  the zip cache is already populated.
-* **Database cache** — the ``tdoc_cr_cover_page`` / ``tdoc_extracts``
-  rows; a hit short-circuits the entire pipeline and returns the
-  persisted ``TDocCRDetails`` with ``from_cache=True``.
+* **Markdown cache** (``<root>/markdown/<cache_file>``) — a real ZIP
+  archive with one Markdown member per DOCX and a versioned manifest. The
+  source path, document IDs, order, and content hashes are explicit in the
+  manifest; legacy plain-UTF-8, gzip, and one-member ZIP artifacts remain
+  readable for transitional cache consumers.
+* **Database cache** — a version-2 parent row, the cover row, and the complete
+  annex collection. The CR main is never stored in SQL. A hit also requires the
+  Markdown archive file, so a cached archive is the only source of the main.
 
-The ``from_cache`` flag on :class:`ExtractResult` refers to the DB
-cache — it does NOT fire when only the markdown cache is hot. A hot
-markdown cache still means we re-parsed and re-validated the document
-against the latest parser regexes.
+The ``from_cache`` flag on :class:`ExtractResult` refers to a complete SQL
+bundle hit. A cache artifact alone is not evidence of extraction completeness
+and is never used to skip reprocessing of an incomplete SQL parent.
 
-The parsed :class:`TDocCRParseResult` is fanned out across three
-independent writes: the slim ``tdoc_cr_cover_page`` cover row, an
-optional ``tdoc_cr_ttcn_details`` sidecar (only present for TTCN
-CRs), and the ``tdoc_extracts`` cache-metadata row. Each write goes
-through its own repository (cover via the slim CR repo, TTCN
-sidecar via the dedicated TTCN repo, extract metadata via
-``upsert_extract_meta``) so the storage surface mirrors the
-slimmed cover dataclass and the new sidecar table without leaking
-either parser payload back into the in-memory ``ExtractResult``.
+The main document's :class:`TDocCRParseResult` owns the slim cover row and
+optional TTCN/body-change sidecars. Supporting documents never enter the CR
+parser. ``replace_cr_bundle`` is the single repository write boundary; search
+and semantic indexing remain best-effort hooks that run only after the atomic
+transaction commits.
 """
 
 from __future__ import annotations
 
 import asyncio
-import gzip
-import io
 import logging
 import re
 import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_content_families import (
+    FAMILY_STORES,
+    TDOC_CONTENT_STORES,
+    is_complete_cr_extraction,
+    is_eligible_type,
+    store_for_type,
+)
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     DirectParseResult,
+    DirectSourceKind,
     TDocCRDetails,
     TDocCRParseResult,
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
-from doc3gpp.parsers.cr_parser import (
-    CRHeaderMissingError,
-    extract_docx_from_zip,
+from doc3gpp.models.tdoc_document import (
+    TDocDocument,
+    TDocParseBundle,
+    markdown_member_name,
 )
+from doc3gpp.parsers.cr_parser import CRHeaderMissingError
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
+    _direct_parse_payload,
     direct_parse_bytes,
     extract_tdoc_id_from_filename,
     is_3gpp_ftp_candidate_url,
@@ -91,12 +91,24 @@ from doc3gpp.parsers.direct_extractor import (
     validate_tdoc_ftp_url,
 )
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
+from doc3gpp.parsers.tdoc_family_main import TDocMainDocumentError
 from doc3gpp.parsers.tdoc_parsers import (
     TDocParser,
     TDocParserRegistry,
     build_default_registry,
 )
+from doc3gpp.parsers.tdoc_zip import (
+    build_markdown_archive,
+    document_id_for,
+    read_markdown_archive,
+)
+from doc3gpp.parsers.tdoc_zip_convert import (
+    TDocZipConversion,
+    convert_direct_main_markdown,
+    convert_direct_payload,
+)
 from doc3gpp.repository.protocols import (
+    TDocContentRepository,
     TDocCrChangeDetailsRepository,
     TDocCrDetailRepository,
     TDocCrTTCNDetailRepository,
@@ -111,7 +123,23 @@ from doc3gpp.scraping.tdoc_zip_source import (
     resolve_download_url,
 )
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
+from doc3gpp.services.tdoc_errors import (
+    TDocNotYetOnFTPError,
+    TDocTypeSkippedError,
+    TDocTypeUnsupportedError,
+)
+from doc3gpp.services.tdoc_family_service import (
+    FamilyExtractResult,
+    PreparedFamilyExtract,
+    TDocFamilyService,
+)
 from doc3gpp.services.tdoc_pipeline import PipelineItem, PipelineProgress, TDocPipeline
+from doc3gpp.services.tdoc_type_detection import (
+    TYPE_UNDETERMINED,
+    DirectTypeDecision,
+    decide_direct_type,
+    decide_known_type,
+)
 
 # Re-exported so callers can catch ``TDocTooLargeError`` from a single
 # import path (the service layer) without depending on the scraping
@@ -122,17 +150,20 @@ __all__ = [
     "BatchExtractResult",
     "CRHeaderMissingError",
     "ExtractResult",
+    "PreparedDirectFamily",
     "PreparedDirectTDoc",
     "PreparedTDocExtract",
     "TDocCrService",
     "TDocNotFoundError",
     "TDocNotYetOnFTPError",
     "TDocTooLargeError",
+    "TDocTypeSkippedError",
     "TDocTypeUnsupportedError",
     "TDocZipDownloadError",
 ]
 
 if TYPE_CHECKING:
+    from doc3gpp.models.tdoc_content_families import TDocContentStore
     from doc3gpp.scraping.client import ScraperClient
     from doc3gpp.services.search_service import SearchService
     from doc3gpp.services.semantic_search_service import SemanticSearchService
@@ -140,109 +171,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Public type alias for the type-check precondition. ``"CR"`` is the
-# only TDoc type whose zip layout we currently parse; the value is
-# normalised to upper-case so the comparison stays case-insensitive.
-_CR_TDOC_TYPE = "CR"
+_CR_STORE = next(store for store in TDOC_CONTENT_STORES if store.key == "cr")
 
 # Conservative shape guard for ``tdoc_id``. The CR/zip parser already
 # enforces a stricter regex internally; this is a *fast-fail* so a
 # garbage id never touches the cache root, the network, or the DB.
 _TDOC_ID_RE = re.compile(r"[A-Za-z0-9-]{1,32}")
-
-
-_GZIP_MAGIC = b"\x1f\x8b"
-_ZIP_MAGIC = b"PK\x03\x04"
-
-
-def _wrap_markdown_zip(text: str, *, inner_name: str) -> bytes:
-    """Wrap ``text`` in a real ``zipfile.ZipFile`` archive for on-disk storage.
-
-    The ``.zip`` extension on the cache key matches the on-disk format, so
-    operators can ``unzip`` / 7z / WinZip-open the cached markdown straight
-    from disk — and ``7z -t zip cache/markdown/...zip`` lists the inner
-    ``<inner_name>`` entry without any custom decoder.
-
-    The single entry is named ``inner_name`` (a ``.md`` basename derived
-    from the source docx filename) so an extracted copy from the archive
-    has a recognisable filename.
-
-    Args:
-        text: UTF-8 markdown text to wrap.
-        inner_name: Entry name inside the archive (e.g.
-            ``"R5s260009.md"``).
-
-    Returns:
-        The ZIP archive bytes ready to be handed to ``cache.put_bytes``.
-    """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(inner_name, text.encode("utf-8"))
-    return buf.getvalue()
-
-
-def _decompress_markdown(raw: bytes) -> str:
-    """Decode cached markdown bytes written by :func:`_wrap_markdown_zip`.
-
-    Three layouts are accepted on read:
-
-    1. **Real ZIP archive** (``PK\\x03\\x04`` magic) — the post-this-change
-       format. The first entry whose payload is valid UTF-8 wins; this
-       matches the legacy entry shape (``<docx stem>.md``) the writer
-       produces.
-    2. **Legacy gzip blob** (``\\x1f\\x8b`` magic) — the prior
-       pre-real-zip cache format. Decompressed via :mod:`gzip`.
-    3. **Legacy plain UTF-8** — the pre-gzip cache format (no compression
-       at all). Decoded directly.
-
-    Magic-byte sniffing keeps read tolerant: a cache populated by either
-    legacy write path stays readable while new writes adopt the real-ZIP
-    layout.
-
-    Raises:
-        OSError: zip / gzip decompression failed (corrupt cache file).
-        UnicodeDecodeError: payload bytes are not valid UTF-8.
-    """
-    if not raw:
-        return ""
-    if raw[:4] == _ZIP_MAGIC:
-        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-            for name in zf.namelist():
-                try:
-                    return zf.read(name).decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-            return ""
-    if raw[:2] == _GZIP_MAGIC:
-        return gzip.decompress(raw).decode("utf-8")
-    return raw.decode("utf-8")
-
-
-def _read_cached_markdown_path(cache_file: str, cache_root: Path) -> str:
-    """Load markdown from ``cache_root/markdown/<cache_file>``.
-
-    Returns empty string on any read/decode error so callers degrade
-    safely. The cache_file is trusted to be a previously persisted
-    basename from a :class:`TDocExtractMeta` row; the on-disk path is
-    reconstructed as ``cache_root / "markdown" / cache_file``. If the
-    file has been purged, is corrupt, or fails to decode, the failure
-    is logged at WARNING and an empty string is returned so callers
-    (including ``--format raw``) degrade safely while still benefiting
-    from the DB cache hit for other formats.
-    """
-    path = cache_root / "markdown" / cache_file
-    try:
-        raw = path.read_bytes()
-    except FileNotFoundError:
-        return ""
-    except OSError as exc:
-        logger.warning("Failed to read cached markdown at %s: %s", path, exc)
-        return ""
-    try:
-        return _decompress_markdown(raw)
-    except (OSError, UnicodeDecodeError) as exc:
-        logger.warning("Failed to decode cached markdown at %s: %s", path, exc)
-        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -258,24 +192,6 @@ class _DirectPipelineError(BaseException):
         super().__init__(str(cause))
 
 
-class TDocTypeUnsupportedError(ValueError):
-    """The given tdoc_id is known but its type is not ``"CR"``.
-
-    Inherits from :class:`ValueError` so callers that catch the broad
-    class still handle it correctly. The CLI translates this into a
-    friendly ``typer.BadParameter`` with the observed ``type`` value
-    surfaced for the operator.
-    """
-
-    def __init__(self, tdoc_id: str, observed_type: str | None) -> None:
-        self.tdoc_id = tdoc_id
-        self.observed_type = observed_type
-        super().__init__(
-            f"TDoc {tdoc_id!r} has type {observed_type!r}; "
-            "only CR-type TDocs are extractable"
-        )
-
-
 class TDocNotFoundError(LookupError):
     """The given tdoc_id is not present in the ``tdocs`` table.
 
@@ -288,26 +204,6 @@ class TDocNotFoundError(LookupError):
         super().__init__(
             f"TDoc {tdoc_id!r} is not stored in the tdocs table; "
             "run `doc3gpp tdoc sync` first"
-        )
-
-
-class TDocNotYetOnFTPError(ValueError):
-    """The row is stored but its ``ftp_url`` is still NULL.
-
-    Surfaced by :meth:`TDocCrService.extract` when
-    :attr:`doc3gpp.models.tdoc.TDoc.ftp_url` is ``None`` — meaning
-    the 3GPP FTP pipeline has not propagated the upload yet, so there
-    is nothing to download. Distinct from :class:`TDocNotFoundError`
-    (the row exists) and :class:`TDocZipDownloadError` (we tried but
-    failed); the upstream pipeline state is the actionable cause.
-    """
-
-    def __init__(self, tdoc_id: str) -> None:
-        self.tdoc_id = tdoc_id
-        super().__init__(
-            f"TDoc {tdoc_id!r} has no ftp_url yet — the 3GPP upload "
-            "pipeline has not propagated a final URL; try again later "
-            "or run `doc3gpp tdoc sync` to refresh the tdocs table"
         )
 
 
@@ -366,29 +262,111 @@ class ExtractResult:
     extract_meta: TDocExtractMeta
     from_cache: bool
 
+    @property
+    def tdoc_id(self) -> str:
+        return self.details.tdoc_id
+
+
+def _annexes_of(
+    documents: tuple[TDocDocument, ...],
+    main_source_file: str,
+) -> tuple[TDocDocument, ...]:
+    """Return every converted document except the CR main, which SQL never stores."""
+    return tuple(document for document in documents if document.source_file != main_source_file)
+
 
 @dataclass(slots=True, frozen=True)
 class PreparedTDocExtract:
-    """Pure preparation output waiting for the serialized DB writer."""
+    """CR metadata and all converted source documents for one TDoc ZIP."""
 
     details: TDocCRDetails
+    documents: tuple[TDocDocument, ...]
+    main_source_file: str
     ttcn: TDocCRTTCNDetails | None
     changes: TDocCRChangeDetails | None
     extract_meta: TDocExtractMeta
 
+    @property
+    def annexes(self) -> tuple[TDocDocument, ...]:
+        return _annexes_of(self.documents, self.main_source_file)
+
 
 @dataclass(slots=True, frozen=True)
 class PreparedDirectTDoc:
-    """Direct-URL preparation output waiting for the serialized DB writer."""
+    """Prepared direct-URL bundle awaiting the serialized SQL writer."""
 
     url: str
-    markdown: str
+    documents: tuple[TDocDocument, ...]
+    main_source_file: str
     details: TDocCRDetails
     ttcn: TDocCRTTCNDetails | None
     changes: TDocCRChangeDetails | None
     extract_meta: TDocExtractMeta
     tdoc_id: str
     cache_file: str
+
+    @property
+    def annexes(self) -> tuple[TDocDocument, ...]:
+        return _annexes_of(self.documents, self.main_source_file)
+
+
+@dataclass(slots=True, frozen=True)
+class PreparedDirectFamily:
+    """Prepared family bundle from a direct URL, awaiting the serialized SQL writer."""
+
+    url: str
+    prepared: PreparedFamilyExtract
+
+    @property
+    def tdoc_id(self) -> str:
+        return self.prepared.tdoc_id
+
+
+@dataclass(slots=True, frozen=True)
+class _DirectSource:
+    """One direct-mode source: its bytes, identity, and the TDoc id from its name."""
+
+    payload: bytes
+    filename: str
+    kind: DirectSourceKind
+    source_url: str | None
+    identity: str
+    tdoc_id: str | None
+
+
+def _check_direct_size(payload: bytes, source: str, max_bytes: int) -> None:
+    if max_bytes > 0 and len(payload) > max_bytes:
+        raise TDocTooLargeError(source=source, size=len(payload), limit=max_bytes)
+
+
+def _family_direct_result(
+    *,
+    source_kind: DirectSourceKind,
+    source_url: str | None,
+    tdoc_id: str | None,
+    tdoc_id_in_tdocs: bool,
+    store: TDocContentStore,
+    documents: tuple[TDocDocument, ...],
+    main_source_file: str,
+    extract_meta: TDocExtractMeta | None,
+    skipped_sources: tuple[str, ...],
+    from_cache: bool,
+    persisted: bool,
+) -> DirectParseResult:
+    return DirectParseResult(
+        source_kind=source_kind,
+        documents=documents,
+        main_source_file=main_source_file,
+        details=None,
+        extract_meta=extract_meta,
+        from_cache=from_cache,
+        persisted=persisted,
+        tdoc_id=tdoc_id,
+        tdoc_id_in_tdocs=tdoc_id_in_tdocs,
+        source_url=source_url,
+        content_store=store,
+        skipped_sources=skipped_sources,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -422,11 +400,11 @@ class BatchExtractResult:
             :class:`TDocNotYetOnFTPError` only). Tracked separately
             from failures because the operator-facing meaning differs
             ("FTP hasn't published yet" is not an error from our
-            side) and the CLI summary table surfaces it under its
-            own "Skipped (not yet on FTP)" line.
+            side) and the CLI summary table counts it in its generic
+            "Skipped" line.
     """
 
-    successes: dict[str, ExtractResult]
+    successes: dict[str, ExtractResult | FamilyExtractResult]
     failures: dict[str, str]
     skipped: dict[str, str] = field(default_factory=dict)
 
@@ -453,25 +431,51 @@ class TDocCrService:
         cr_ttcn_repository: TDocCrTTCNDetailRepository,
         cr_change_details_repository: TDocCrChangeDetailsRepository,
         tdoc_repository: TDocRepository,
+        content_repo: TDocContentRepository,
         parser: TDocParser | None = None,
         parser_registry: TDocParserRegistry | None = None,
         max_tdoc_size_bytes: int = 0,
+        max_documents_per_zip: int | None = None,
+        max_uncompressed_size_bytes: int | None = None,
         search_service: SearchService | None = None,
         semantic_service: SemanticSearchService | None = None,
+        family_service: TDocFamilyService | None = None,
     ) -> None:
+        from doc3gpp.settings.loader import get_settings
+
+        self._settings = get_settings()
         self._cache = cache
         self._scraper = scraper_client
         self._repo = cr_repository
         self._cr_ttcn_repo = cr_ttcn_repository
         self._change_details_repo = cr_change_details_repository
         self._tdoc_repo = tdoc_repository
+        self._content_repo = content_repo
         self._parser = parser
         self._parser_registry = parser_registry
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
+        self._max_documents_per_zip = (
+            self._settings.tdoc_parse.max_documents_per_zip
+            if max_documents_per_zip is None
+            else max_documents_per_zip
+        )
+        self._max_uncompressed_size_bytes = (
+            self._settings.tdoc_parse.max_uncompressed_size_kb * 1024
+            if max_uncompressed_size_bytes is None
+            else max_uncompressed_size_bytes
+        )
         self._search_service = search_service
         self._semantic_service = semantic_service
-        from doc3gpp.settings.loader import get_settings as _gs
-        self._settings = _gs()
+        if family_service is None:
+            family_service = TDocFamilyService(
+                scraper=scraper_client,
+                cache=cache,
+                content_repo=content_repo,
+                max_tdoc_size_bytes=max_tdoc_size_bytes,
+                max_documents_per_zip=self._max_documents_per_zip,
+                max_uncompressed_size_bytes=self._max_uncompressed_size_bytes,
+            )
+        self._family_service = family_service
 
     def _resolve_parser(self, tdoc_id: str) -> TDocParser:
         """Return the parser to use for ``tdoc_id``.
@@ -485,6 +489,82 @@ class TDocCrService:
             return self._parser
         registry = self._parser_registry or build_default_registry()
         return registry.resolve(tdoc_id, tdoc_type="CR")
+
+
+    def _parse_bundle(
+        self,
+        payload: bytes,
+        *,
+        filename: str,
+        max_bytes: int | None = None,
+        tdoc_id: str | None = None,
+    ) -> TDocParseBundle:
+        """Run shared ZIP enumeration, sequential conversion, and main parsing."""
+        source_limit = (
+            self._max_tdoc_size_bytes if max_bytes is None else max_bytes
+        )
+        if (
+            self._parser is None
+            and self._parser_registry is None
+            and tdoc_id is None
+        ):
+            return direct_parse_bytes(
+                payload,
+                filename=filename,
+                max_bytes=source_limit,
+                max_documents=self._max_documents_per_zip,
+                max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+            )
+
+        def parse_main(markdown: str, parsed_tdoc_id: str) -> TDocCRParseResult:
+            resolved_id = tdoc_id or parsed_tdoc_id
+            return self._resolve_parser(resolved_id).parse(
+                markdown,
+                tdoc_id=resolved_id,
+            )
+
+        return _direct_parse_payload(
+            payload,
+            filename=filename,
+            max_bytes=source_limit,
+            max_documents=self._max_documents_per_zip,
+            max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+            tdoc_id=tdoc_id,
+            parse_main=parse_main,
+        )
+
+    @staticmethod
+    def _bind_documents_to_ftp_url(
+        documents: tuple[TDocDocument, ...],
+        ftp_url: str,
+    ) -> tuple[TDocDocument, ...]:
+        """Replace ephemeral identities with immutable-URL document identities."""
+        persistent: list[TDocDocument] = []
+        for document in documents:
+            document_id = document_id_for(ftp_url, document.source_file)
+            persistent.append(
+                replace(
+                    document,
+                    document_id=document_id,
+                    markdown_file=markdown_member_name(document_id, document.source_file),
+                )
+            )
+        return tuple(persistent)
+
+    def _write_markdown_archive(
+        self,
+        *,
+        cache_file: str,
+        ftp_url: str,
+        main_source_file: str,
+        documents: tuple[TDocDocument, ...],
+    ) -> None:
+        archive = build_markdown_archive(
+            documents,
+            ftp_url=ftp_url,
+            main_source_file=main_source_file,
+        )
+        self._cache.put_bytes(cache_file, archive, "markdown")
 
     def _index_after_parse(self, tdoc_id: str) -> None:
         """Best-effort FTS5 upsert after a successful parse.
@@ -506,7 +586,7 @@ class TDocCrService:
             return
         try:
             self._search_service.upsert_for_tdoc(tdoc_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - index updates are best-effort
             logger.warning(
                 "failed to update search index for tdoc_id=%s: %s",
                 tdoc_id, exc,
@@ -540,6 +620,58 @@ class TDocCrService:
                 tdoc_id, exc,
             )
 
+    def _cached_cr_parts(
+        self,
+        stored_url: str,
+        tdoc_id: str,
+    ) -> tuple[TDocCRDetails, TDocExtractMeta, tuple[TDocDocument, ...]] | None:
+        """Return the stored CR cover, parent, and annexes when a complete bundle exists."""
+        cached_details = self._repo.get_by_url(stored_url)
+        cached_meta = self._content_repo.get_extract_meta(stored_url)
+        if (
+            cached_details is None
+            or cached_meta is None
+            or cached_meta.tdoc_id != tdoc_id
+            or normalize_ftp_path(cached_meta.ftp_url) != stored_url
+        ):
+            return None
+        annexes = self._content_repo.list_documents(_CR_STORE, stored_url)
+        if not is_complete_cr_extraction(cached_meta, annexes, has_cover=True):
+            return None
+        if not self._cache.path_for(cached_meta.cache_file, "markdown").is_file():
+            return None
+        return cached_details, cached_meta, annexes
+
+    def _cached_extract(self, stored_url: str, tdoc_id: str) -> ExtractResult | None:
+        cached = self._cached_cr_parts(stored_url, tdoc_id)
+        if cached is None:
+            return None
+        details, meta, _annexes = cached
+        logger.debug(
+            "Complete SQL extraction cache hit for TDoc %s at %s",
+            tdoc_id,
+            stored_url,
+        )
+        return ExtractResult(details=details, extract_meta=meta, from_cache=True)
+
+    def _cached_main_document(self, meta: TDocExtractMeta) -> TDocDocument | None:
+        """Return the CR main from its archive; SQL never stores it."""
+        raw = self._cache.get_bytes(meta.cache_file, "markdown")
+        if raw is None:
+            return None
+        try:
+            archive = read_markdown_archive(raw)
+        except (OSError, ValueError, zipfile.BadZipFile):
+            return None
+        return next(
+            (
+                document
+                for document in archive.documents
+                if document.source_file == meta.doc_filename
+            ),
+            None,
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -549,111 +681,29 @@ class TDocCrService:
         tdoc_id: str,
         *,
         force: bool = False,
-        full: bool = False,
-    ) -> PreparedTDocExtract | ExtractResult:
-        """Return parsed CR details + extract metadata for ``tdoc_id``.
-
-        Sequence:
-
-        1. Validate ``tdoc_id`` shape (``^[A-Za-z0-9-]{1,32}$``).
-        2. Look up the TDoc in the ``tdocs`` table via
-           :meth:`TDocRepository.get_by_id` — raise
-           :class:`TDocNotFoundError` on miss and
-           :class:`TDocTypeUnsupportedError` if ``type != "CR"``.
-        3. Pre-resolve the candidate download URL(s) via
-           :func:`resolve_download_url` and probe the DB cache by URL
-           before any network I/O. A hit short-circuits with
-           ``from_cache=True`` (and ``force=True`` skips this).
-        4. :func:`download_tdoc_zip` checks the on-disk zip cache first
-           via the ``ftp_url``-derived cache key (regardless of
-           ``force``) and returns the cached path on a hit. On a miss,
-           it downloads from the per-TDoc URL stored in
-           ``tdocs.ftp_url`` (rebuilt to a full URL via
-           :func:`build_ftp_url`), falling back to the template-based
-           URL on failure.
-        5. Once the actual serving URL is known, probe the DB cache
-           again by that URL — covers the case where ``primary_url``
-           was unset at step 3 but the template URL was usable.
-        6. Otherwise: extract the docx → compute sha256 of the
-           docx bytes → look up the markdown cache (skip on
-           ``force``) → render markdown if needed → parse → persist
-           under the resolved URL (normalised back to the relative
-           ``ftp_url`` form via :func:`normalize_ftp_path`) → return
-           ``from_cache=False``. When the zip was served from the
-           local cache, ``downloaded.url`` is ``None`` (the URL that
-           originally populated the cache is not tracked); fall back
-           to the first candidate the resolver would currently try
-           so persistence still has a non-empty identity URL.
-
-        Args:
-            tdoc_id: Canonical TDoc identifier.
-            force: Bypass the DB short-circuit probe (``tdoc_cr_cover_page``
-                / ``tdoc_extracts``) and the markdown cache on a fresh
-                parse. The on-disk zip cache is **always** consulted
-                first regardless of ``force`` — :func:`download_tdoc_zip`
-                keys the cache on ``tdocs.ftp_url`` (via
-                :func:`derive_cache_file`), and a hit returns the cached
-                path without re-downloading, even when ``force=True``.
-                The ``tdoc_cr_cover_page`` / ``tdoc_extracts`` rows are
-                always re-upserted on the parse path that runs.
-            full: Forwarded to the parser as ``full=True``. For TTCN
-                CRs this enables extraction of the per-correction
-                ``before_change`` / ``after_change`` / ``new_change``
-                content alongside the metadata fields; without it, only
-                the metadata (``function_name``, ``reason_for_change``,
-                ``summary_of_change``, ``ttcn_module``, ``mcc160_comment``)
-                is captured. Safe to flip on for non-TTCN CRs — the
-                generic :class:`CRParser` ignores the flag.
-        """
+    ) -> PreparedTDocExtract | PreparedFamilyExtract | ExtractResult | FamilyExtractResult:
+        """Prepare every supported DOCX in one TDoc ZIP without SQL writes."""
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
-
         if not tdoc.ftp_url:
-            # Stored row but the upload pipeline hasn't propagated a
-            # final URL yet — there is nothing on the 3GPP FTP to
-            # download. Surface this as a distinct exception so
-            # ``extract_many`` can route it into the skip bucket
-            # instead of treating it as a download failure.
             raise TDocNotYetOnFTPError(normalised)
+        store = store_for_type(tdoc.type)
+        if store is not None and store.includes_main:
+            return self._family_service.prepare_extract(tdoc, store, force=force)
 
-        # Stored ``ftp_url`` is relative to the 3GPP FTP root; rebuild
-        # the absolute URL the network layer expects.
         primary_url = build_ftp_url(tdoc.ftp_url)
-
-        # Derive the cache key from ``tdoc.ftp_url`` so it matches
-        # what :func:`download_tdoc_zip` writes to the zips cache
-        # (keyed on the same relative url). Keeping the two in sync
-        # is required for a cache hit to feed the same key into the
-        # markdown cache.
         cache_file = derive_cache_file(tdoc.ftp_url)
-
-        # Hoist the URL candidates so the persistence fallback below
-        # (used when the zip cache hits and ``downloaded.url`` is
-        # None) reuses the same ordering the cache probe iterates
-        # over — a freshly-persisted row must be findable by the
-        # next probe without re-resolving.
         candidates = resolve_download_url(normalised, primary_url)
+        canonical_url = normalize_ftp_path(primary_url)
 
-        # Pre-download cache probe: known candidate URLs can be
-        # resolved without touching the network, so the DB cache
-        # short-circuits the zip fetch.
         if not force:
             for candidate in candidates:
-                cached_details = self._repo.get_by_url(
-                    normalize_ftp_path(candidate)
-                )
-                cached_meta = self._repo.get_extract_meta_by_url(
-                    normalize_ftp_path(candidate)
-                )
-                if cached_details is not None and cached_meta is not None:
-                    logger.debug(
-                        "DB cache hit for TDoc %s at URL %s", normalised, candidate
-                    )
-                    return ExtractResult(
-                        details=cached_details,
-                        extract_meta=cached_meta,
-                        from_cache=True,
-                    )
+                stored_url = normalize_ftp_path(candidate)
+                if stored_url != canonical_url:
+                    continue
+                cached = self._cached_extract(stored_url, normalised)
+                if cached is not None:
+                    return cached
 
         downloaded = download_tdoc_zip(
             normalised,
@@ -663,105 +713,94 @@ class TDocCrService:
             ftp_url=tdoc.ftp_url,
             max_bytes=self._max_tdoc_size_bytes,
         )
-
-        # Post-download probe: ``tdoc.ftp_url`` was None so step 3 had
-        # no candidates, but the download resolved a URL via the
-        # template. The cache contract is per-URL, so we check again.
         resolved_url = downloaded.url
-        if not force and resolved_url:
-            cached_details = self._repo.get_by_url(
-                normalize_ftp_path(resolved_url)
-            )
-            cached_meta = self._repo.get_extract_meta_by_url(
-                normalize_ftp_path(resolved_url)
-            )
-            if cached_details is not None and cached_meta is not None:
-                logger.debug(
-                    "DB cache hit for TDoc %s at URL %s", normalised, resolved_url
-                )
-                return ExtractResult(
-                    details=cached_details,
-                    extract_meta=cached_meta,
-                    from_cache=True,
-                )
+        if (
+            not force
+            and resolved_url
+            and normalize_ftp_path(resolved_url) == canonical_url
+        ):
+            cached = self._cached_extract(normalize_ftp_path(resolved_url), normalised)
+            if cached is not None:
+                return cached
 
-        doc_filename, docx_bytes = extract_docx_from_zip(downloaded.path.read_bytes())
-
-        markdown = self._load_or_render_markdown(
-            cache_file=cache_file,
-            docx_bytes=docx_bytes,
-            doc_filename=doc_filename,
-            force=force,
+        stored_url = (
+            normalize_ftp_path(resolved_url)
+            if resolved_url
+            else normalize_ftp_path(candidates[0])
         )
-
-        # Persist under the relative ``ftp_url`` form so the database
-        # stores the same shape as ``meetings.ftp_url``. The download
-        # layer hands us an absolute URL on a fresh fetch; on a zip
-        # cache hit it returns ``url=None`` (the URL that originally
-        # populated the cache is unknown), so fall back to the first
-        # candidate the resolver would try — the same URL the cache
-        # probe above iterates over, which keeps the DB-cache contract
-        # consistent for the next call. ``download_tdoc_zip`` raises
-        # before returning when no candidate exists, so ``candidates``
-        # is non-empty here.
-        if resolved_url:
-            stored_ftp_url = normalize_ftp_path(resolved_url)
-        else:
-            stored_ftp_url = normalize_ftp_path(candidates[0])
-
-        parsed: TDocCRParseResult = self._resolve_parser(normalised).parse(
-            markdown, tdoc_id=normalised, full=full,
+        bundle = self._parse_bundle(
+            downloaded.path.read_bytes(),
+            filename=cache_file,
+            max_bytes=self._max_tdoc_size_bytes,
+            tdoc_id=normalised,
         )
-        cover = replace(parsed.cover, ftp_url=stored_ftp_url)
-        ttcn: TDocCRTTCNDetails | None = (
-            replace(
-                parsed.ttcn,
-                ftp_url=stored_ftp_url,
-                tdoc_id=normalised,
-            )
+        documents = self._bind_documents_to_ftp_url(bundle.documents, stored_url)
+        parsed = bundle.main_parse_result
+        cover = replace(
+            parsed.cover,
+            tdoc_id=normalised,
+            ftp_url=stored_url,
+        )
+        ttcn = (
+            replace(parsed.ttcn, ftp_url=stored_url, tdoc_id=normalised)
             if parsed.ttcn is not None
             else None
         )
-        changes: TDocCRChangeDetails | None = (
-            replace(
-                parsed.changes,
-                ftp_url=stored_ftp_url,
-                tdoc_id=normalised,
-            )
+        changes = (
+            replace(parsed.changes, ftp_url=stored_url, tdoc_id=normalised)
             if parsed.changes is not None
             else None
         )
         meta = TDocExtractMeta(
-            ftp_url=stored_ftp_url or "",
+            ftp_url=stored_url,
             tdoc_id=normalised,
             cache_file=cache_file,
-            doc_filename=doc_filename,
+            doc_filename=bundle.main_source_file,
+            extraction_version=2,
+            document_count=len(_annexes_of(documents, bundle.main_source_file)),
+            skipped_sources=bundle.skipped_sources,
+        )
+        self._write_markdown_archive(
+            cache_file=cache_file,
+            ftp_url=stored_url,
+            main_source_file=bundle.main_source_file,
+            documents=documents,
         )
         return PreparedTDocExtract(
             details=cover,
+            documents=documents,
+            main_source_file=bundle.main_source_file,
             ttcn=ttcn,
             changes=changes,
             extract_meta=meta,
         )
 
     def persist_prepared_extract(
-        self, prepared: PreparedTDocExtract
-    ) -> ExtractResult:
-        """Persist one prepared TDoc extract on the global writer thread."""
-        self._repo.upsert(prepared.details)
-        if prepared.ttcn is not None:
-            self._cr_ttcn_repo.upsert(prepared.ttcn)
-        if prepared.changes is not None:
-            self._change_details_repo.upsert(prepared.changes)
-        self._repo.upsert_extract_meta(prepared.extract_meta)
+        self,
+        prepared: PreparedTDocExtract | PreparedFamilyExtract,
+    ) -> ExtractResult | FamilyExtractResult:
+        """Commit the complete bundle before running best-effort index hooks."""
+        if isinstance(prepared, PreparedFamilyExtract):
+            family_result = self._family_service.persist_prepared_extract(prepared)
+            self._index_after_parse(family_result.tdoc_id)
+            self._embed_after_parse(family_result.tdoc_id)
+            return family_result
+        if not isinstance(prepared, PreparedTDocExtract):
+            raise TypeError(f"cannot persist {type(prepared).__name__}")
+        self._content_repo.replace_cr_bundle(
+            prepared.details,
+            prepared.ttcn,
+            prepared.changes,
+            prepared.extract_meta,
+            prepared.annexes,
+        )
         self._index_after_parse(prepared.details.tdoc_id)
         self._embed_after_parse(prepared.details.tdoc_id)
         logger.info(
-            "Persisted CR details for TDoc %s at ftp_url %s (spec=%s cr_num=%s)",
+            "Persisted %d CR annexes for TDoc %s at ftp_url %s",
+            len(prepared.annexes),
             prepared.details.tdoc_id,
             prepared.extract_meta.ftp_url,
-            prepared.details.spec,
-            prepared.details.cr_num,
         )
         return ExtractResult(
             details=prepared.details,
@@ -774,11 +813,10 @@ class TDocCrService:
         tdoc_id: str,
         *,
         force: bool = False,
-        full: bool = False,
-    ) -> ExtractResult:
+    ) -> ExtractResult | FamilyExtractResult:
         """Prepare and persist one TDoc synchronously for CLI callers."""
-        prepared = self.prepare_extract(tdoc_id, force=force, full=full)
-        if isinstance(prepared, ExtractResult):
+        prepared = self.prepare_extract(tdoc_id, force=force)
+        if isinstance(prepared, (ExtractResult, FamilyExtractResult)):
             return prepared
         return self.persist_prepared_extract(prepared)
 
@@ -787,7 +825,6 @@ class TDocCrService:
         tdoc_ids: Iterable[str],
         *,
         force: bool = False,
-        full: bool = False,
         on_progress: Callable[[str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
         runner: TDocPipeline | None = None,
@@ -838,13 +875,14 @@ class TDocCrService:
                     lambda raw_id: self.prepare_extract(
                         raw_id,
                         force=force,
-                        full=full,
                     ),
                     persist=cast(
                         Callable[[object], object],
                         self.persist_prepared_extract,
                     ),
-                    is_complete=lambda value: isinstance(value, ExtractResult),
+                    is_complete=lambda value: isinstance(
+                        value, (ExtractResult, FamilyExtractResult)
+                    ),
                     is_cancelled=is_cancelled,
                     on_progress=report,
                 )
@@ -865,14 +903,14 @@ class TDocCrService:
             if owns_runner and runtime is not None:
                 runtime.shutdown()
 
-        successes: dict[str, ExtractResult] = {}
+        successes: dict[str, ExtractResult | FamilyExtractResult] = {}
         failures: dict[str, str] = {}
         skipped: dict[str, str] = {}
         for outcome in outcomes:
             reason = outcome.reason or ""
             if outcome.status == "success":
-                result = cast(ExtractResult, outcome.value)
-                successes[result.details.tdoc_id] = result
+                result = cast(ExtractResult | FamilyExtractResult, outcome.value)
+                successes[result.tdoc_id] = result
             elif outcome.status == "skipped":
                 logger.info("Skipping TDoc %r: %s", outcome.key, reason)
                 skipped[outcome.key] = reason
@@ -894,7 +932,6 @@ class TDocCrService:
         url: str,
         *,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int | None = None,
         runner: TDocPipeline | None = None,
     ) -> DirectParseResult:
@@ -905,12 +942,13 @@ class TDocCrService:
             runtime = PipelineRuntime(prepare_workers=1)
             runner = TDocPipeline(runtime)
 
-        def prepare_one(value: str) -> PreparedDirectTDoc | DirectParseResult:
+        def prepare_one(
+            value: str,
+        ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
             try:
                 return self.prepare_from_url(
                     value,
                     force=force,
-                    full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
                 )
             except asyncio.CancelledError:
@@ -954,28 +992,28 @@ class TDocCrService:
         url: str,
         *,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int | None = None,
-    ) -> PreparedDirectTDoc | DirectParseResult:
-        """Prepare a direct URL parse without mutating repositories."""
+    ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
+        """Prepare one direct URL bundle without mutating SQL repositories."""
+        max_bytes = (
+            self._max_tdoc_size_bytes
+            if max_tdoc_size_bytes is None
+            else max_tdoc_size_bytes
+        )
         if is_3gpp_ftp_candidate_url(url):
             url = validate_tdoc_ftp_url(url)
         else:
             payload = self._scraper.get_bytes(url)
-            markdown, _docx_filename, parsed = direct_parse_bytes(
-                payload, filename=url, full=full,
-                max_bytes=self._max_tdoc_size_bytes,
-            )
-            return DirectParseResult(
-                source_kind="url-other",
-                markdown=markdown,
-                details=parsed.cover,
-                extract_meta=None,
-                from_cache=False,
-                persisted=False,
-                tdoc_id=parsed.cover.tdoc_id,
-                tdoc_id_in_tdocs=False,
-                source_url=url,
+            return self._direct_in_memory(
+                _DirectSource(
+                    payload=payload,
+                    filename=url,
+                    kind="url-other",
+                    source_url=url,
+                    identity=url,
+                    tdoc_id=extract_tdoc_id_from_filename(url),
+                ),
+                max_bytes=max_bytes,
             )
 
         cache_file = derive_cache_file(url)
@@ -983,85 +1021,100 @@ class TDocCrService:
         extracted_id = extract_tdoc_id_from_filename(url)
 
         if extracted_id is None:
-            payload = self._scraper.get_bytes(url)
-            markdown, _docx_filename, parsed = direct_parse_bytes(
-                payload, filename=url, full=full,
-                max_bytes=self._max_tdoc_size_bytes,
-            )
             logger.warning(
-                "Direct-parse URL %s has no TDoc id pattern; "
-                "skipping cache and DB writes",
+                "Direct-parse URL %s has no TDoc id pattern; skipping cache and DB writes",
                 url,
             )
-            return DirectParseResult(
-                source_kind="url-3gpp",
-                markdown=markdown,
-                details=parsed.cover,
-                extract_meta=None,
-                from_cache=False,
-                persisted=False,
-                tdoc_id=None,
-                tdoc_id_in_tdocs=False,
-                source_url=url,
+            payload = self._scraper.get_bytes(url)
+            return self._direct_in_memory(
+                _DirectSource(
+                    payload=payload,
+                    filename=url,
+                    kind="url-3gpp",
+                    source_url=url,
+                    identity=stored_ftp_url,
+                    tdoc_id=None,
+                ),
+                max_bytes=max_bytes,
             )
 
-        if not self._tdoc_in_tdocs(extracted_id):
-            payload = self._scraper.get_bytes(url)
-            markdown, _docx_filename, parsed = direct_parse_bytes(
-                payload, filename=url, full=full,
-                max_bytes=self._max_tdoc_size_bytes,
-            )
+        tdoc = self._tdoc_repo.get_by_id(extracted_id)
+        if tdoc is None:
             logger.warning(
                 "Direct-parse URL %s has tdoc_id %s missing from tdocs; "
                 "skipping cache and DB writes",
                 url,
                 extracted_id,
             )
-            return DirectParseResult(
-                source_kind="url-3gpp",
-                markdown=markdown,
-                details=parsed.cover,
-                extract_meta=None,
-                from_cache=False,
-                persisted=False,
-                tdoc_id=extracted_id,
-                tdoc_id_in_tdocs=False,
-                source_url=url,
+            payload = self._scraper.get_bytes(url)
+            return self._direct_in_memory(
+                _DirectSource(
+                    payload=payload,
+                    filename=url,
+                    kind="url-3gpp",
+                    source_url=url,
+                    identity=stored_ftp_url,
+                    tdoc_id=extracted_id,
+                ),
+                max_bytes=max_bytes,
             )
 
-        # 3GPP URL + tdoc_id ∈ tdocs: full happy path.
         return self._prepare_from_3gpp_url(
             url=url,
             cache_file=cache_file,
             stored_ftp_url=stored_ftp_url,
-            tdoc_id=extracted_id,
+            tdoc=tdoc,
             force=force,
-            full=full,
-            max_bytes=(
-                max_tdoc_size_bytes
-                if max_tdoc_size_bytes is not None
-                else self._max_tdoc_size_bytes
-            ),
+            max_bytes=max_bytes,
         )
 
-    def persist_prepared_url(self, prepared: PreparedDirectTDoc) -> DirectParseResult:
-        """Persist one prepared direct URL result on the serialized writer."""
-        self._repo.upsert(prepared.details)
-        if prepared.ttcn is not None:
-            self._cr_ttcn_repo.upsert(prepared.ttcn)
-        if prepared.changes is not None:
-            self._change_details_repo.upsert(prepared.changes)
-        self._repo.upsert_extract_meta(prepared.extract_meta)
+    def persist_prepared_url(
+        self,
+        prepared: PreparedDirectTDoc | PreparedDirectFamily,
+    ) -> DirectParseResult:
+        """Commit a URL-owned bundle once on the serialized writer lane."""
+        if isinstance(prepared, PreparedDirectFamily):
+            family_result = self._family_service.persist_prepared_extract(prepared.prepared)
+            self._index_after_parse(family_result.tdoc_id)
+            self._embed_after_parse(family_result.tdoc_id)
+            logger.info(
+                "Persisted %d family documents for TDoc %s at ftp_url %s",
+                len(family_result.documents),
+                family_result.tdoc_id,
+                prepared.prepared.extract_meta.ftp_url,
+            )
+            return _family_direct_result(
+                source_kind="url-3gpp",
+                source_url=prepared.url,
+                tdoc_id=family_result.tdoc_id,
+                tdoc_id_in_tdocs=True,
+                store=family_result.store,
+                documents=family_result.documents,
+                main_source_file=prepared.prepared.extract_meta.doc_filename,
+                extract_meta=family_result.extract_meta,
+                skipped_sources=family_result.skipped_sources,
+                from_cache=False,
+                persisted=True,
+            )
+        self._content_repo.replace_cr_bundle(
+            prepared.details,
+            prepared.ttcn,
+            prepared.changes,
+            prepared.extract_meta,
+            prepared.annexes,
+        )
         self._index_after_parse(prepared.tdoc_id)
         self._embed_after_parse(prepared.tdoc_id)
         logger.info(
-            "Persisted direct-parse CR details for tdoc_id %s at %s",
+            "Persisted %d direct-parse annexes for TDoc %s at %s",
+            len(prepared.annexes),
             prepared.tdoc_id,
             prepared.extract_meta.ftp_url,
         )
         return DirectParseResult(
             source_kind="url-3gpp",
-            markdown=prepared.markdown,
+            documents=prepared.documents,
+            main_source_file=prepared.main_source_file,
             details=prepared.details,
             extract_meta=prepared.extract_meta,
             from_cache=False,
@@ -1077,7 +1130,6 @@ class TDocCrService:
         *,
         max_depth: int = 2,
         force: bool = False,
-        full: bool = False,
         max_tdoc_size_bytes: int | None = None,
         on_progress: Callable[[str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
@@ -1113,7 +1165,6 @@ class TDocCrService:
                 lambda file_url: self.prepare_from_url(
                     file_url,
                     force=force,
-                    full=full,
                     max_tdoc_size_bytes=max_tdoc_size_bytes,
                 ),
                 persist=cast(
@@ -1194,32 +1245,24 @@ class TDocCrService:
         docx_bytes: bytes,
         filename: str,
         *,
-        full: bool = True,
         max_tdoc_size_bytes: int | None = None,
     ) -> DirectParseResult:
-        """Prepare local bytes without creating or owning a pipeline runtime."""
+        """Convert local DOCX/ZIP bytes in memory without cache or SQL writes."""
         max_bytes = (
-            max_tdoc_size_bytes
-            if max_tdoc_size_bytes is not None
-            else self._max_tdoc_size_bytes
-        )
-        markdown, _docx_filename, parsed = direct_parse_bytes(
-            docx_bytes,
-            filename=filename,
-            full=full,
-            max_bytes=max_bytes,
+            self._max_tdoc_size_bytes
+            if max_tdoc_size_bytes is None
+            else max_tdoc_size_bytes
         )
         tdoc_id = extract_tdoc_id_from_filename(filename)
-        return DirectParseResult(
-            source_kind="local",
-            markdown=markdown,
-            details=parsed.cover,
-            extract_meta=None,
-            from_cache=False,
-            persisted=False,
+        source = _DirectSource(
+            payload=docx_bytes,
+            filename=filename,
+            kind="local",
+            source_url=None,
+            identity=f"local:{tdoc_id}:{filename}",
             tdoc_id=tdoc_id,
-            tdoc_id_in_tdocs=False,
         )
+        return self._direct_in_memory(source, max_bytes=max_bytes)
 
     def extract_from_bytes(
         self,
@@ -1227,7 +1270,6 @@ class TDocCrService:
         filename: str,
         *,
         force: bool = False,
-        full: bool = True,
         max_tdoc_size_bytes: int | None = None,
         runner: TDocPipeline | None = None,
     ) -> DirectParseResult:
@@ -1249,7 +1291,6 @@ class TDocCrService:
                 return self.prepare_from_bytes(
                     payload,
                     filename,
-                    full=full,
                     max_tdoc_size_bytes=max_bytes,
                 )
             except asyncio.CancelledError:
@@ -1274,105 +1315,315 @@ class TDocCrService:
             raise RuntimeError(outcome.reason or "direct TDoc parse failed")
         return cast(DirectParseResult, outcome.value)
 
-    def _tdoc_in_tdocs(self, tdoc_id: str) -> bool:
-        """Return ``True`` when ``tdoc_id`` has a matching row in ``tdocs``.
+    def _direct_tdoc_type(self, tdoc_id: str | None) -> str | None:
+        if tdoc_id is None:
+            return None
+        tdoc = self._tdoc_repo.get_by_id(tdoc_id)
+        return None if tdoc is None else tdoc.type
 
-        Cheap single-row probe against the TDoc repository; the FK on
-        ``tdoc_extracts`` / ``tdoc_cr_cover_page`` is non-nullable, so
-        the service layer must consult this before either
-        :meth:`_repo.upsert` is called from the direct path.
+    def _convert_direct(
+        self,
+        payload: bytes,
+        *,
+        filename: str,
+        tdoc_id: str,
+        identity: str,
+    ) -> TDocZipConversion:
+        return convert_direct_payload(
+            payload,
+            filename=filename,
+            tdoc_id=tdoc_id,
+            identity=identity,
+            max_documents=self._max_documents_per_zip,
+            max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+        )
+
+    def _decide_direct(
+        self,
+        source: _DirectSource,
+        *,
+        tdoc_type: str | None,
+    ) -> DirectTypeDecision:
+        """Route a source by its TDoc type; sniff only the main when the type is unknown.
+
+        With no name-matched main, only the structural CR check can identify the
+        document, so the decision falls back to CR.
         """
-        return self._tdoc_repo.get_by_id(tdoc_id) is not None
+        tdoc_id = source.tdoc_id
+        if tdoc_id is None:
+            return DirectTypeDecision("cr", _CR_STORE)
+        try:
+            return decide_direct_type(
+                tdoc_id,
+                tdoc_type=tdoc_type,
+                main_markdown=lambda: convert_direct_main_markdown(
+                    source.payload,
+                    filename=source.filename,
+                    tdoc_id=tdoc_id,
+                    max_documents=self._max_documents_per_zip,
+                    max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+                ),
+            )
+        except TDocMainDocumentError:
+            return DirectTypeDecision("cr", _CR_STORE)
 
-    def _prepare_from_3gpp_url(
+    def _parse_cr_bundle(
+        self,
+        payload: bytes,
+        *,
+        filename: str,
+        max_bytes: int,
+        tdoc_id: str | None,
+        sniffed: bool,
+    ) -> TDocParseBundle:
+        """Run the CR parse; a sniffed source with no CR cover is skipped, not failed."""
+        try:
+            return self._parse_bundle(
+                payload,
+                filename=filename,
+                max_bytes=max_bytes,
+                tdoc_id=tdoc_id,
+            )
+        except CRHeaderMissingError as exc:
+            if sniffed:
+                raise TDocTypeSkippedError(tdoc_id, TYPE_UNDETERMINED) from exc
+            raise
+
+    def _direct_in_memory(
+        self,
+        source: _DirectSource,
+        *,
+        max_bytes: int,
+    ) -> DirectParseResult:
+        """Route an in-memory source to the family or CR parse with no SQL writes."""
+        _check_direct_size(source.payload, source.filename, max_bytes)
+        tdoc_type = self._direct_tdoc_type(source.tdoc_id)
+        decision = self._decide_direct(source, tdoc_type=tdoc_type)
+        if decision.kind == "skipped":
+            raise TDocTypeSkippedError(source.tdoc_id, decision.reason or TYPE_UNDETERMINED)
+        if decision.kind == "family":
+            assert decision.store is not None and source.tdoc_id is not None
+            conversion = self._convert_direct(
+                source.payload,
+                filename=source.filename,
+                tdoc_id=source.tdoc_id,
+                identity=source.identity,
+            )
+            return _family_direct_result(
+                source_kind=source.kind,
+                source_url=source.source_url,
+                tdoc_id=source.tdoc_id,
+                tdoc_id_in_tdocs=False,
+                store=decision.store,
+                documents=conversion.documents,
+                main_source_file=conversion.main_source_file,
+                extract_meta=None,
+                skipped_sources=conversion.skipped_sources,
+                from_cache=False,
+                persisted=False,
+            )
+        bundle = self._parse_cr_bundle(
+            source.payload,
+            filename=source.filename,
+            max_bytes=max_bytes,
+            tdoc_id=source.tdoc_id,
+            sniffed=tdoc_type is None,
+        )
+        cover = bundle.main_parse_result.cover
+        tdoc_id = source.tdoc_id
+        if tdoc_id is None and source.kind != "url-3gpp":
+            tdoc_id = extract_tdoc_id_from_filename(cover.extracted_tdoc_id or "") or cover.tdoc_id
+            cover = replace(cover, tdoc_id=tdoc_id)
+        return DirectParseResult(
+            source_kind=source.kind,
+            documents=bundle.documents,
+            main_source_file=bundle.main_source_file,
+            details=cover,
+            extract_meta=None,
+            from_cache=False,
+            persisted=False,
+            tdoc_id=tdoc_id,
+            tdoc_id_in_tdocs=False,
+            source_url=source.source_url,
+        )
+
+    def _fetch_direct_zip(self, url: str, *, cache_file: str, max_bytes: int) -> bytes:
+        payload = self._scraper.get_bytes(url)
+        self._cache.put_bytes(cache_file, payload, "zips")
+        if max_bytes > 0 and len(payload) > max_bytes:
+            raise TDocTooLargeError(
+                source=f"download:{url}",
+                size=len(payload),
+                limit=max_bytes,
+            )
+        return payload
+
+    def _family_prepared(
         self,
         *,
         url: str,
         cache_file: str,
         stored_ftp_url: str,
         tdoc_id: str,
-        force: bool,
-        full: bool,
-        max_bytes: int = 0,
-    ) -> PreparedDirectTDoc | DirectParseResult:
-        """Run the full extract pipeline for a 3GPP URL whose FK target exists.
-
-        The 3GPP branch of :meth:`extract_from_url` delegates to this
-        helper so the in-memory parse path stays readable. The helper
-        reuses the **markdown** cache (via :meth:`_load_or_render_markdown`
-        — ``cache_file`` keeps distinct revisions of the same
-        ``tdoc_id`` in distinct slots, the D10 fix) but **always**
-        re-downloads the zip from ``url`` via
-        :meth:`ScraperClient.get_bytes` and overwrites
-        ``zips/<cache_file>`` on every call. The DB short-circuit
-        probe runs only when ``force=False``; the markdown cache is
-        consulted regardless of ``force``. Writes both
-        :class:`TDocExtractMeta` + :class:`TDocCRDetails` rows on a
-        fresh extract.
-        """
-        if not force:
-            cached_details = self._repo.get_by_url(stored_ftp_url)
-            cached_meta = self._repo.get_extract_meta_by_url(stored_ftp_url)
-            if cached_details is not None and cached_meta is not None:
-                logger.debug(
-                    "DB cache hit for direct-parse URL %s", url,
-                )
-                cached_markdown = _read_cached_markdown_path(
-                    cached_meta.cache_file, self._cache.root,
-                )
-                return DirectParseResult(
-                    source_kind="url-3gpp",
-                    markdown=cached_markdown,
-                    details=cached_details,
-                    extract_meta=cached_meta,
-                    from_cache=True,
-                    persisted=False,
-                    tdoc_id=tdoc_id,
-                    tdoc_id_in_tdocs=True,
-                    source_url=url,
-                )
-
-        zip_payload = self._scraper.get_bytes(url)
-        # Post-fetch size guard: defence-in-depth — the direct-parse
-        # path also writes its own zip slot, and the cache's
-        # enforce_size_limit may evict it differently from the DB-mode
-        # path. The size check is cheap and keeps the per-file budget
-        # honest end-to-end.
-        if max_bytes > 0 and len(zip_payload) > max_bytes:
-            self._cache.put_bytes(cache_file, zip_payload, "zips")
-            raise TDocTooLargeError(
-                source=f"download:{url}",
-                size=len(zip_payload),
-                limit=max_bytes,
-            )
-        self._cache.put_bytes(cache_file, zip_payload, "zips")
-
-        doc_filename, docx_bytes = extract_docx_from_zip(zip_payload)
-        markdown = self._load_or_render_markdown(
+        store: TDocContentStore,
+        conversion: TDocZipConversion,
+    ) -> PreparedDirectFamily:
+        prepared = self._family_service.prepare_conversion(
+            tdoc_id=tdoc_id,
+            store=store,
+            ftp_url=stored_ftp_url,
             cache_file=cache_file,
-            docx_bytes=docx_bytes,
-            doc_filename=doc_filename,
-            force=force,
+            conversion=conversion,
         )
-        parsed: TDocCRParseResult = self._resolve_parser(tdoc_id).parse(
-            markdown, tdoc_id=tdoc_id, full=full,
+        return PreparedDirectFamily(url=url, prepared=prepared)
+
+    def _cached_family_result(
+        self,
+        *,
+        url: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+        store: TDocContentStore,
+    ) -> DirectParseResult | None:
+        cached = self._family_service.cached_extract(tdoc_id, store, stored_ftp_url)
+        if cached is None or cached.extract_meta is None:
+            return None
+        return _family_direct_result(
+            source_kind="url-3gpp",
+            source_url=url,
+            tdoc_id=tdoc_id,
+            tdoc_id_in_tdocs=True,
+            store=store,
+            documents=cached.documents,
+            main_source_file=cached.extract_meta.doc_filename,
+            extract_meta=cached.extract_meta,
+            skipped_sources=cached.skipped_sources,
+            from_cache=True,
+            persisted=False,
         )
-        cover = replace(parsed.cover, ftp_url=stored_ftp_url)
-        ttcn: TDocCRTTCNDetails | None = (
-            replace(
-                parsed.ttcn,
-                ftp_url=stored_ftp_url,
-                tdoc_id=tdoc_id,
+
+    def _cached_cr_result(
+        self,
+        *,
+        url: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+    ) -> DirectParseResult | None:
+        cached = self._cached_cr_parts(stored_ftp_url, tdoc_id)
+        if cached is None:
+            return None
+        cached_details, cached_meta, cached_annexes = cached
+        cached_main = self._cached_main_document(cached_meta)
+        if cached_main is None:
+            return None
+        logger.debug("Complete SQL extraction cache hit for direct URL %s", url)
+        return DirectParseResult(
+            source_kind="url-3gpp",
+            documents=(cached_main, *cached_annexes),
+            main_source_file=cached_meta.doc_filename,
+            details=cached_details,
+            extract_meta=cached_meta,
+            from_cache=True,
+            persisted=False,
+            tdoc_id=tdoc_id,
+            tdoc_id_in_tdocs=True,
+            source_url=url,
+        )
+
+    def _cached_unknown_type_result(
+        self,
+        *,
+        url: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+    ) -> DirectParseResult | None:
+        """Return a complete stored bundle of any type, so a hit never downloads."""
+        for store in FAMILY_STORES:
+            cached = self._cached_family_result(
+                url=url, stored_ftp_url=stored_ftp_url, tdoc_id=tdoc_id, store=store,
             )
+            if cached is not None:
+                return cached
+        return self._cached_cr_result(url=url, stored_ftp_url=stored_ftp_url, tdoc_id=tdoc_id)
+
+    def _prepare_family_from_url(
+        self,
+        *,
+        url: str,
+        cache_file: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+        store: TDocContentStore,
+        force: bool,
+        max_bytes: int,
+    ) -> PreparedDirectFamily | DirectParseResult:
+        if not force:
+            cached = self._cached_family_result(
+                url=url, stored_ftp_url=stored_ftp_url, tdoc_id=tdoc_id, store=store,
+            )
+            if cached is not None:
+                return cached
+        payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
+        conversion = self._convert_direct(
+            payload,
+            filename=url,
+            tdoc_id=tdoc_id,
+            identity=stored_ftp_url,
+        )
+        return self._family_prepared(
+            url=url,
+            cache_file=cache_file,
+            stored_ftp_url=stored_ftp_url,
+            tdoc_id=tdoc_id,
+            store=store,
+            conversion=conversion,
+        )
+
+    def _prepare_cr_from_url(
+        self,
+        *,
+        url: str,
+        cache_file: str,
+        stored_ftp_url: str,
+        tdoc_id: str,
+        max_bytes: int,
+        force: bool,
+        payload: bytes | None,
+        sniffed: bool,
+    ) -> PreparedDirectTDoc | DirectParseResult:
+        """Prepare a URL-keyed CR bundle; ``payload`` is set once the type was sniffed."""
+        if payload is None:
+            if not force:
+                cached = self._cached_cr_result(
+                    url=url, stored_ftp_url=stored_ftp_url, tdoc_id=tdoc_id,
+                )
+                if cached is not None:
+                    return cached
+            payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
+
+        bundle = self._parse_cr_bundle(
+            payload,
+            filename=url,
+            max_bytes=max_bytes,
+            tdoc_id=tdoc_id,
+            sniffed=sniffed,
+        )
+        documents = self._bind_documents_to_ftp_url(
+            bundle.documents, stored_ftp_url
+        )
+        parsed = bundle.main_parse_result
+        cover = replace(
+            parsed.cover,
+            tdoc_id=tdoc_id,
+            ftp_url=stored_ftp_url,
+        )
+        ttcn = (
+            replace(parsed.ttcn, ftp_url=stored_ftp_url, tdoc_id=tdoc_id)
             if parsed.ttcn is not None
             else None
         )
-        changes: TDocCRChangeDetails | None = (
-            replace(
-                parsed.changes,
-                ftp_url=stored_ftp_url,
-                tdoc_id=tdoc_id,
-            )
+        changes = (
+            replace(parsed.changes, ftp_url=stored_ftp_url, tdoc_id=tdoc_id)
             if parsed.changes is not None
             else None
         )
@@ -1380,17 +1631,110 @@ class TDocCrService:
             ftp_url=stored_ftp_url,
             tdoc_id=tdoc_id,
             cache_file=cache_file,
-            doc_filename=doc_filename,
+            doc_filename=bundle.main_source_file,
+            extraction_version=2,
+            document_count=len(_annexes_of(documents, bundle.main_source_file)),
+            skipped_sources=bundle.skipped_sources,
+        )
+        self._write_markdown_archive(
+            cache_file=cache_file,
+            ftp_url=stored_ftp_url,
+            main_source_file=bundle.main_source_file,
+            documents=documents,
         )
         return PreparedDirectTDoc(
             url=url,
-            markdown=markdown,
+            documents=documents,
+            main_source_file=bundle.main_source_file,
             details=cover,
             ttcn=ttcn,
             changes=changes,
             extract_meta=meta,
             tdoc_id=tdoc_id,
             cache_file=cache_file,
+        )
+
+    def _prepare_from_3gpp_url(
+        self,
+        *,
+        url: str,
+        cache_file: str,
+        stored_ftp_url: str,
+        tdoc: TDoc,
+        force: bool,
+        max_bytes: int,
+    ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
+        """Prepare a URL-keyed bundle for a TDoc whose ``tdocs`` row exists."""
+        tdoc_id = tdoc.tdoc_id
+        if tdoc.type is not None and tdoc.type.strip():
+            decision = decide_known_type(tdoc_id, tdoc.type)
+            if decision.kind == "skipped":
+                raise TDocTypeSkippedError(tdoc_id, decision.reason or TYPE_UNDETERMINED)
+            if decision.kind == "family":
+                assert decision.store is not None
+                return self._prepare_family_from_url(
+                    url=url,
+                    cache_file=cache_file,
+                    stored_ftp_url=stored_ftp_url,
+                    tdoc_id=tdoc_id,
+                    store=decision.store,
+                    force=force,
+                    max_bytes=max_bytes,
+                )
+            return self._prepare_cr_from_url(
+                url=url,
+                cache_file=cache_file,
+                stored_ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+                max_bytes=max_bytes,
+                force=force,
+                payload=None,
+                sniffed=False,
+            )
+
+        if not force:
+            cached = self._cached_unknown_type_result(
+                url=url, stored_ftp_url=stored_ftp_url, tdoc_id=tdoc_id,
+            )
+            if cached is not None:
+                return cached
+        payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
+        source = _DirectSource(
+            payload=payload,
+            filename=url,
+            kind="url-3gpp",
+            source_url=url,
+            identity=stored_ftp_url,
+            tdoc_id=tdoc_id,
+        )
+        decision = self._decide_direct(source, tdoc_type=None)
+        if decision.kind == "skipped":
+            raise TDocTypeSkippedError(tdoc_id, decision.reason or TYPE_UNDETERMINED)
+        if decision.kind == "family":
+            assert decision.store is not None
+            conversion = self._convert_direct(
+                payload,
+                filename=url,
+                tdoc_id=tdoc_id,
+                identity=stored_ftp_url,
+            )
+            return self._family_prepared(
+                url=url,
+                cache_file=cache_file,
+                stored_ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+                store=decision.store,
+                conversion=conversion,
+            )
+        return self._prepare_cr_from_url(
+            url=url,
+            cache_file=cache_file,
+            stored_ftp_url=stored_ftp_url,
+            tdoc_id=tdoc_id,
+            max_bytes=max_bytes,
+            force=force,
+            payload=payload,
+            sniffed=True,
         )
 
     # ------------------------------------------------------------------
@@ -1424,63 +1768,14 @@ class TDocCrService:
 
         Raises:
             TDocNotFoundError: The row is absent.
-            TDocTypeUnsupportedError: The row's ``type`` is not ``"CR"``
-                (case-insensitive).
+            TDocTypeUnsupportedError: The row's ``type`` has no content store.
         """
         tdoc = self._tdoc_repo.get_by_id(tdoc_id)
         if tdoc is None:
             raise TDocNotFoundError(tdoc_id)
-        observed = (tdoc.type or "").strip().upper()
-        if observed != _CR_TDOC_TYPE:
+        if not is_eligible_type(tdoc.type):
             raise TDocTypeUnsupportedError(tdoc_id, tdoc.type)
         return tdoc
-
-    def _load_or_render_markdown(
-        self,
-        *,
-        cache_file: str,
-        docx_bytes: bytes,
-        doc_filename: str,
-        force: bool,
-    ) -> str:
-        """Return markdown for ``docx_bytes``, hitting the cache when possible.
-
-        Cache key is the ``cache_file`` (URL-derived basename) — shared
-        with the zip cache. On-disk bytes are a real ``zipfile.ZipFile``
-        archive (single ``<docx stem>.md`` entry), so the ``.zip``
-        extension on disk matches a format that ``unzip`` / 7z / WinZip
-        understand. Legacy plain-UTF-8 and legacy gzip cache files are
-        still decoded transparently via
-        :func:`_decompress_markdown`'s magic-byte sniff.
-        ``force=True`` bypasses the markdown cache only — the upstream
-        zip is reused from :func:`download_tdoc_zip` on a cache hit
-        (the zip cache is keyed on ``ftp_url`` and consulted first
-        regardless of ``force``).
-        """
-        if not force:
-            cached = self._cache.get_bytes(cache_file, "markdown")
-            if cached is not None:
-                logger.debug(
-                    "Markdown cache hit for %s (cache_file=%s)",
-                    doc_filename,
-                    cache_file,
-                )
-                return _decompress_markdown(cached)
-
-        from doc3gpp.parsers.docx_converter import (
-            convert_document_to_markdown,
-        )
-
-        markdown = convert_document_to_markdown(docx_bytes, doc_filename)
-        docx_stem = Path(doc_filename).stem or "markdown"
-        inner_name = f"{docx_stem}.md"
-        self._cache.put_bytes(
-            cache_file,
-            _wrap_markdown_zip(markdown, inner_name=inner_name),
-            "markdown",
-        )
-        return markdown
-
 
 # Re-export the parser-side exception so callers can catch a single
 # type if they want to treat "not a CR markdown" as a soft failure in

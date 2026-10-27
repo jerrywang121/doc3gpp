@@ -43,8 +43,10 @@ from doc3gpp.models.tdoc_cr import (
     TDocCRParseResult,
     TDocCRTTCNDetails,
 )
+from doc3gpp.parsers.cr.helpers import _year_from_tdoc_id
 from doc3gpp.parsers.cr_parser import (
     CRHeaderMissingError,
+    TDocZipValidationError,
     _collapse_whitespace,
     _remove_markdown_formatting,
     _search_pattern_in_lines,
@@ -52,8 +54,6 @@ from doc3gpp.parsers.cr_parser import (
     extract_docx_from_zip,
     parse_cr_details,
 )
-from doc3gpp.parsers.cr.helpers import _year_from_tdoc_id
-
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
@@ -456,20 +456,17 @@ _TTCN_CORRECTION_LINES_FULL = (
 )
 
 
-def test_ttcn_cr_full_true_extracts_before_after_change_content() -> None:
-    """``parse(..., full=True)`` populates ``before_change`` and
-    ``after_change`` from the standalone ``Before change`` / ``After
-    change`` markers and their following content rows.
+def test_ttcn_cr_default_parse_extracts_before_after_change_content() -> None:
+    """``parse(...)`` populates ``before_change`` and ``after_change``
+    from the standalone ``Before change`` / ``After change`` markers and
+    their following content rows, with no opt-in flag.
 
-    The TTCN corrections sub-parser only enters its before/after/new
-    extraction loop when ``full=True``. Locks the gate AND the slice
-    arithmetic — a previous off-by-one in
-    ``_extract_change_from_table`` call site caused an infinite loop
-    on realistic TTCN markdown layouts, silently dropping every
-    operator's ``--full`` invocation.
+    Locks the slice arithmetic as well — a previous off-by-one in
+    ``_extract_change_from_table`` call site caused an infinite loop on
+    realistic TTCN markdown layouts.
     """
     md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
-    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
     assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
     assert len(parsed.ttcn.required_changes) == 1
     change = parsed.ttcn.required_changes[0]
@@ -479,42 +476,8 @@ def test_ttcn_cr_full_true_extracts_before_after_change_content() -> None:
     assert "new_change" not in change
 
 
-def test_ttcn_cr_full_false_omits_before_after_change_content() -> None:
-    """``parse(..., full=False)`` (the default) leaves
-    ``before_change`` / ``after_change`` / ``new_change`` unset even
-    when the source markdown carries them.
-
-    Metadata-only extraction is the default — that's the contract the
-    default ``tdoc parse`` flow depends on (small rows, fast parser).
-    Operators who need the change content must opt in with ``--full``;
-    this test pins that contract.
-    """
-    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
-    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=False)
-    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
-    assert len(parsed.ttcn.required_changes) == 1
-    change = parsed.ttcn.required_changes[0]
-    assert change["function_name"] == "fl_TC_7_1_3_5_3_Body"
-    assert "before_change" not in change
-    assert "after_change" not in change
-    assert "new_change" not in change
-
-
-def test_ttcn_cr_full_default_omits_before_after_change_content() -> None:
-    """Without ``full=`` (default ``False``), the before/after/new keys
-    are never present on the change dict.
-    """
-    md = "\n".join(list(_HEADER_LINES) + list(_TTCN_OVERVIEW_LINES) + list(_TTCN_CORRECTION_LINES_FULL))
-    parsed = parse_cr_details(md, tdoc_id="R5s260009")
-    assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
-    change = parsed.ttcn.required_changes[0]
-    assert "before_change" not in change
-    assert "after_change" not in change
-    assert "new_change" not in change
-
-
-def test_ttcn_cr_full_true_returns_within_bounded_time() -> None:
-    """Regression guard for the ``if full:`` infinite-loop bug.
+def test_ttcn_cr_parse_returns_within_bounded_time() -> None:
+    """Regression guard for the before/after/new extraction infinite loop.
 
     Before the slice-index fix, a standalone ``Before change`` marker
     followed by a content row sent the parser into an infinite loop on
@@ -526,24 +489,24 @@ def test_ttcn_cr_full_true_returns_within_bounded_time() -> None:
     """
     import multiprocessing
 
-    process = multiprocessing.Process(target=_run_full_ttcn_parse)
+    process = multiprocessing.Process(target=_run_ttcn_parse)
     process.start()
     process.join(timeout=15)
     if process.is_alive():
         process.terminate()
         process.join(timeout=5)
-        pytest.fail("ttcn full=True parser hung")
+        pytest.fail("ttcn parser hung")
     assert process.exitcode == 0
 
 
-def _run_full_ttcn_parse() -> None:
-    """Run the full TTCN parse in an isolated process for a hard timeout."""
+def _run_ttcn_parse() -> None:
+    """Run the TTCN parse in an isolated process for a hard timeout."""
     md = "\n".join(
         list(_HEADER_LINES)
         + list(_TTCN_OVERVIEW_LINES)
         + list(_TTCN_CORRECTION_LINES_FULL)
     )
-    parsed = parse_cr_details(md, tdoc_id="R5s260009", full=True)
+    parsed = parse_cr_details(md, tdoc_id="R5s260009")
     assert isinstance(parsed.ttcn, TDocCRTTCNDetails)
     assert parsed.ttcn.required_changes
 
@@ -663,6 +626,41 @@ def _make_zip(files: dict[str, bytes]) -> bytes:
     return bio.getvalue()
 
 
+def _tamper_uncompressed_size(
+    zip_bytes: bytes,
+    *,
+    member_name: str,
+    declared_size: int,
+) -> bytes:
+    """Change local/central ZIP size declarations while preserving data and CRC."""
+    tampered = bytearray(zip_bytes)
+    local_header = tampered.find(b"PK\x03\x04")
+    central_header = tampered.find(b"PK\x01\x02")
+    assert local_header >= 0
+    assert central_header >= 0
+
+    local_name_length = int.from_bytes(
+        tampered[local_header + 26 : local_header + 28],
+        "little",
+    )
+    local_name = bytes(
+        tampered[local_header + 30 : local_header + 30 + local_name_length]
+    )
+    central_name_length = int.from_bytes(
+        tampered[central_header + 28 : central_header + 30],
+        "little",
+    )
+    central_name = bytes(
+        tampered[central_header + 46 : central_header + 46 + central_name_length]
+    )
+    assert local_name == member_name.encode("utf-8")
+    assert central_name == member_name.encode("utf-8")
+
+    tampered[local_header + 22 : local_header + 26] = declared_size.to_bytes(4, "little")
+    tampered[central_header + 24 : central_header + 28] = declared_size.to_bytes(4, "little")
+    return bytes(tampered)
+
+
 def test_extract_docx_from_zip_picks_docx_over_doc() -> None:
     """When both ``.docx`` and ``.doc`` are present, ``.docx`` wins."""
     payload = _make_zip(
@@ -687,6 +685,60 @@ def test_extract_docx_from_zip_skips_macosx_resource_fork() -> None:
     name, body = extract_docx_from_zip(payload)
     assert name == "real.docx"
     assert body == b"REAL"
+
+
+def test_extract_docx_from_zip_normalizes_backslash_member_path() -> None:
+    """The legacy selector returns the normalized source path."""
+    payload = _make_zip({r"folder\main.docx": b"DOCX"})
+
+    name, body = extract_docx_from_zip(payload)
+
+    assert name == "folder/main.docx"
+    assert body == b"DOCX"
+
+
+def test_extract_docx_from_zip_reads_only_selected_docx(monkeypatch) -> None:
+    """Legacy selection does not read supported members it will discard."""
+    payload = _make_zip(
+        {
+            "a-main.docx": b"main",
+            "z-support.docx": b"support",
+        }
+    )
+    read_names: list[str] = []
+    original_open = zipfile.ZipFile.open
+
+    def tracked_open(archive, member, *args, **kwargs):
+        read_names.append(
+            member.filename if isinstance(member, zipfile.ZipInfo) else member
+        )
+        return original_open(archive, member, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", tracked_open)
+
+    name, body = extract_docx_from_zip(payload)
+
+    assert name == "a-main.docx"
+    assert body == b"main"
+    assert read_names == ["a-main.docx"]
+
+
+def test_extract_docx_from_zip_rejects_declared_size_larger_than_payload() -> None:
+    """A short DOCX payload cannot pass with a larger declared ZIP size."""
+    member_name = "main.docx"
+    payload = b"short but CRC-valid payload"
+    raw_zip = _make_zip({member_name: payload})
+    malformed_zip = _tamper_uncompressed_size(
+        raw_zip,
+        member_name=member_name,
+        declared_size=len(payload) + 5,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(malformed_zip)) as archive:
+        assert archive.read(member_name) == payload
+
+    with pytest.raises(TDocZipValidationError, match="declared"):
+        extract_docx_from_zip(malformed_zip)
 
 
 def test_extract_docx_from_zip_only_macosx_raises_value_error() -> None:

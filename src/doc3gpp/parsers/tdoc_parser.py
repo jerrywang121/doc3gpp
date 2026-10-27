@@ -4,8 +4,8 @@ import io
 import logging
 import re
 import zipfile
-from datetime import date, datetime
-from typing import Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from datetime import date, datetime, timezone
 
 from openpyxl import load_workbook
 
@@ -39,7 +39,7 @@ _HEADER_ROW_MARKERS = frozenset(
 )
 
 
-def _is_header_row(potential: Dict[str, int]) -> bool:
+def _is_header_row(potential: dict[str, int]) -> bool:
     has_tdoc = any("tdoc" in key for key in potential)
     if not has_tdoc:
         return False
@@ -54,7 +54,7 @@ def normalize_header(value: object) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-def to_text(value: object) -> Optional[str]:
+def to_text(value: object) -> str | None:
     """Convert a cell value to trimmed text, returning ``None`` for empty/missing.
 
     Distinguishes "missing" (cell was ``None``) from "empty" (cell was ``""``
@@ -100,7 +100,7 @@ def _parse_date_cell(value: object) -> date | None:
 
     for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
         try:
-            return datetime.strptime(text, fmt).date()
+            return datetime.strptime(text, fmt).date()  # noqa: DTZ007
         except ValueError:
             continue
 
@@ -115,7 +115,13 @@ def _parse_date_cell(value: object) -> date | None:
             try:
                 if hh is not None:
                     return datetime(
-                        year_i, month, day, int(hh), int(mm), int(ss)
+                        year_i,
+                        month,
+                        day,
+                        int(hh),
+                        int(mm),
+                        int(ss),
+                        tzinfo=timezone.utc,
                     ).date()
                 return date(year_i, month, day)
             except ValueError:
@@ -124,7 +130,7 @@ def _parse_date_cell(value: object) -> date | None:
     return None
 
 
-def pick_col(header_map: Dict[str, int], candidates: Iterable[str]) -> Optional[int]:
+def pick_col(header_map: dict[str, int], candidates: Iterable[str]) -> int | None:
     """Find the first matching column index for a set of header candidates.
 
     Exact (case-insensitive) matches are preferred; substring matches are used
@@ -176,7 +182,7 @@ _HYPERLINK_RE = re.compile(
 _CELL_REF_RE = re.compile(r"^(?P<col>[A-Z]+)(?P<row>\d+)$")
 
 
-def _extract_tdoc_hyperlinks(xlsx_bytes: bytes) -> Dict[int, Dict[str, str]]:
+def _extract_tdoc_hyperlinks(xlsx_bytes: bytes) -> dict[int, dict[str, str]]:
     """Extract external hyperlinks from a TDoc list XLSX without loading openpyxl.
 
     Returns a mapping ``{row_number: {column_letter: target_url}}`` for the
@@ -197,7 +203,7 @@ def _extract_tdoc_hyperlinks(xlsx_bytes: bytes) -> Dict[int, Dict[str, str]]:
     relationship entries that point at comments / drawings are skipped so
     the returned dict only contains real TDoc download URLs.
     """
-    result: Dict[int, Dict[str, str]] = {}
+    result: dict[int, dict[str, str]] = {}
     try:
         with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
             names = zf.namelist()
@@ -213,7 +219,7 @@ def _extract_tdoc_hyperlinks(xlsx_bytes: bytes) -> Dict[int, Dict[str, str]]:
                 logger.debug("XLSX missing workbook.xml or its rels; no hyperlinks")
                 return result
 
-            rid_to_target: Dict[str, str] = {}
+            rid_to_target: dict[str, str] = {}
             for m in _REL_TAG_RE.finditer(wb_rels):
                 rid_to_target[m.group("rid")] = m.group("target")
             for m in _REL_TAG_RE_REVERSED.finditer(wb_rels):
@@ -242,7 +248,7 @@ def _extract_tdoc_hyperlinks(xlsx_bytes: bytes) -> Dict[int, Dict[str, str]]:
 
             # 2. Map rId -> Target URL for this sheet's relationships.
             sheet_rels = zf.read(sheet_rels_path).decode("utf-8")
-            rid_to_url: Dict[str, str] = {}
+            rid_to_url: dict[str, str] = {}
             for m in _REL_TAG_RE.finditer(sheet_rels):
                 rid, target = m.group("rid"), m.group("target")
                 if target.startswith(("http://", "https://", "ftp://")):
@@ -273,7 +279,7 @@ def _extract_tdoc_hyperlinks(xlsx_bytes: bytes) -> Dict[int, Dict[str, str]]:
     return result
 
 
-def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
+def read_tdoc_sheet(xlsx_bytes: bytes) -> list[dict[str, object]]:
     logger.debug("Reading TDoc XLSX bytes (%s bytes)", len(xlsx_bytes))
     workbook = load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
     if workbook is None or not workbook.sheetnames:
@@ -288,7 +294,7 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
     # the iteration index below.
     hyperlinks = _extract_tdoc_hyperlinks(xlsx_bytes)
 
-    header_map: Dict[str, int] = {}
+    header_map: dict[str, int] = {}
     header_row_idx: int | None = None
     for row_idx, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
         potential = {normalize_header(cell): idx for idx, cell in enumerate(row) if normalize_header(cell)}
@@ -335,7 +341,7 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
         "original_ls": pick_col(header_map, ["Original LS"]),
     }
 
-    result: List[Dict[str, object]] = []
+    result: list[dict[str, object]] = []
     skipped_rows = 0
     # Start a fresh iterator at the row *after* the header so the index we
     # pair with the hyperlink map matches the real Excel row number.
@@ -355,7 +361,7 @@ def read_tdoc_sheet(xlsx_bytes: bytes) -> List[Dict[str, object]]:
             skipped_rows += 1
             continue
 
-        record: Dict[str, object] = {
+        record: dict[str, object] = {
             "tdoc": match.group(0),
             "tdoc_url": hyperlinks.get(row_index, {}).get(tdoc_col_letter),
         }

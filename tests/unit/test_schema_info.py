@@ -8,6 +8,16 @@ from doc3gpp.models.schema_info import (
     schema_payload,
 )
 
+# ``tdocs`` list fields computed by the TDoc list query; they are not ORM columns.
+TDOC_DERIVED_FIELDS = {("tdocs", "parsed"), ("tdocs", "document_count")}
+
+CONTENT_TABLES = (
+    "tdoc_cr_annexes",
+    "tdoc_wid_contents",
+    "tdoc_ls_contents",
+    "tdoc_discussion_contents",
+)
+
 
 def test_schema_field_order_and_keys() -> None:
     assert SCHEMA_FIELDS == ["table", "field", "type", "nullable", "description", "values"]
@@ -31,6 +41,13 @@ def test_spec_doc_schema_lists_combined_chunk_fields() -> None:
         "tables",
         "text",
     ]
+
+
+def test_spec_doc_chunk_text_is_described_as_gzip_json() -> None:
+    payload = schema_payload("spec_doc")
+    by_table_field = {(r["table"], r["field"]): r for r in payload}
+    assert by_table_field[("spec_doc_chunks", "text")]["type"] == "gzip-json"
+    assert by_table_field[("spec_doc_chunks", "text")]["nullable"] is False
 
 
 def test_tsg_payload_shape() -> None:
@@ -61,19 +78,35 @@ def test_tdoc_tables_and_counts() -> None:
         "tdoc_cr_change_details",
         "tdoc_files",
         "tdoc_extracts",
+        "tdoc_cr_annexes",
+        "tdoc_wid_contents",
+        "tdoc_ls_contents",
+        "tdoc_discussion_contents",
     ]
     counts = {t.table: len(t.fields) for t in tables}
     # Brief/plan claim 21 for tdoc_cr_cover_page, but the verbatim
     # entry lists 20 and the ORM (TDocCrDetailOrm) has 20 columns —
     # registry matches ORM; see task-2 report.
     assert counts == {
-        "tdocs": 24,
+        "tdocs": 26,
         "tdoc_cr_cover_page": 20,
         "tdoc_cr_ttcn_details": 10,
         "tdoc_cr_change_details": 4,
         "tdoc_files": 6,
-        "tdoc_extracts": 6,
+        "tdoc_extracts": 9,
+        "tdoc_cr_annexes": 7,
+        "tdoc_wid_contents": 7,
+        "tdoc_ls_contents": 7,
+        "tdoc_discussion_contents": 7,
     }
+    by_name = {t.table: t for t in tables}
+    extract_fields = {field.name: field for field in by_name["tdoc_extracts"].fields}
+    assert extract_fields["extraction_version"].values == ("1", "2")
+    assert "main" in extract_fields["doc_filename"].description
+    assert extract_fields["skipped_sources"].nullable is True
+    annex_fields = {field.name: field for field in by_name["tdoc_cr_annexes"].fields}
+    assert annex_fields["content"].type == "gzip-json"
+    assert "main" in annex_fields["doc_filename"].description
 
 
 def test_tdoc_categoricals() -> None:
@@ -83,6 +116,37 @@ def test_tdoc_categoricals() -> None:
     assert by_table_field[("tdoc_files", "type")]["values"] == "revision,review,support"
     assert by_table_field[("tdocs", "status")]["values"] == "-"
     assert by_table_field[("tdoc_cr_ttcn_details", "required_changes")]["type"] == "gzip-json"
+
+
+def test_schema_payload_lists_content_tables() -> None:
+    payload = schema_payload("tdoc")
+    for table in CONTENT_TABLES:
+        fields = [row["field"] for row in payload if row["table"] == table]
+        assert fields == [
+            "ftp_url",
+            "doc_filename",
+            "document_id",
+            "tdoc_id",
+            "content",
+            "content_hash",
+            "token_count",
+        ], table
+    by_table_field = {(r["table"], r["field"]): r for r in payload}
+    assert by_table_field[("tdoc_wid_contents", "content")]["type"] == "gzip-json"
+
+
+def test_schema_payload_has_no_tdoc_documents() -> None:
+    for resource in RESOURCE_SCHEMAS:
+        rows = schema_payload(resource)
+        assert all(row["table"] != "tdoc_documents" for row in rows), resource
+
+
+def test_schema_payload_tdoc_has_parsed_and_document_count() -> None:
+    by_table_field = {(r["table"], r["field"]): r for r in schema_payload("tdoc")}
+    assert by_table_field[("tdocs", "parsed")]["type"] == "bool"
+    assert by_table_field[("tdocs", "parsed")]["nullable"] is False
+    assert by_table_field[("tdocs", "document_count")]["type"] == "int"
+    assert by_table_field[("tdocs", "document_count")]["nullable"] is True
 
 
 def test_registry_matches_orm_columns() -> None:
@@ -95,12 +159,16 @@ def test_registry_matches_orm_columns() -> None:
         SpecDocTocORM,
         SpecORM,
         SpecVersionORM,
+        TDocCrAnnexOrm,
         TDocCrChangeDetailOrm,
         TDocCrDetailOrm,
         TDocCrTtcnDetailOrm,
+        TDocDiscussionContentOrm,
         TDocExtractOrm,
         TDocFileORM,
+        TDocLsContentOrm,
         TDocORM,
+        TDocWidContentOrm,
         TestCaseORM,
         TestCaseSourceORM,
         TestCaseStatusORM,
@@ -117,6 +185,10 @@ def test_registry_matches_orm_columns() -> None:
         "tdoc_cr_change_details": TDocCrChangeDetailOrm,
         "tdoc_files": TDocFileORM,
         "tdoc_extracts": TDocExtractOrm,
+        "tdoc_cr_annexes": TDocCrAnnexOrm,
+        "tdoc_wid_contents": TDocWidContentOrm,
+        "tdoc_ls_contents": TDocLsContentOrm,
+        "tdoc_discussion_contents": TDocDiscussionContentOrm,
         "wis": WiORM,
         "specs": SpecORM,
         "spec_versions": SpecVersionORM,
@@ -134,7 +206,11 @@ def test_registry_matches_orm_columns() -> None:
     assert sorted(by_table) == sorted(expected)
     for table_name, orm_cls in expected.items():
         columns = orm_cls.__table__.columns
-        registry = {f.name: f for f in by_table[table_name].fields}
+        registry = {
+            f.name: f
+            for f in by_table[table_name].fields
+            if (table_name, f.name) not in TDOC_DERIVED_FIELDS
+        }
         assert sorted(registry) == sorted(columns.keys()), table_name
         for col_name, column in columns.items():
             assert registry[col_name].nullable == column.nullable, (table_name, col_name)
@@ -210,3 +286,38 @@ def test_cli_schema_table_nullable_yes_no() -> None:
     assert by_field["url"][3] == "yes"
     assert by_field["short_name"][5].startswith("RP,R1")
     assert by_field["description"][5] == "-"
+
+
+
+def test_packaged_template_exposes_multifile_and_search_defaults() -> None:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+        import tomli as tomllib
+
+    from doc3gpp.settings.config_writer import load_default_template
+    from doc3gpp.settings.schema import SearchSettings, TDocParseSettings
+
+    template = tomllib.loads(load_default_template())
+    tdoc_parse_data = template["tdoc_parse"]
+    search_data = template["search"]
+
+    assert tdoc_parse_data["max_documents_per_zip"] == 100
+    assert tdoc_parse_data["max_uncompressed_size_kb"] == 102400
+    tdoc_parse = TDocParseSettings.model_validate(tdoc_parse_data)
+    assert tdoc_parse.max_documents_per_zip == 100
+    assert tdoc_parse.max_uncompressed_size_kb == 102400
+
+    assert search_data["bm25_weights"] == [
+        5.0, 0.0, 0.0, 1.0, 5.0, 5.0, 5.0, 5.0, 1.0
+    ]
+    search = SearchSettings.model_validate(search_data)
+    assert len(search.bm25_weights) == 9
+    assert search.bm25_weights[-1] == 1.0
+
+
+def test_default_config_example_has_content_chunk_cap() -> None:
+    from doc3gpp.settings.config_writer import load_default_template
+
+    assert "# max_content_chunks_per_tdoc = 16" in load_default_template()
+

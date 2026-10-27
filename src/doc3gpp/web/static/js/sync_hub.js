@@ -115,7 +115,6 @@
       var body = {
         filter: filter,
         force: readCheckbox(form, "force"),
-        full: readCheckbox(form, "full"),
       };
       var maxBatch = readText(form, "max_batch");
       if (maxBatch) {
@@ -130,7 +129,6 @@
         url: readText(form, "url"),
         recursive: recursive,
         force: readCheckbox(form, "force"),
-        full: readCheckbox(form, "full"),
       };
       if (!recursive) {
         var d = parseInt(readText(form, "max_depth"), 10);

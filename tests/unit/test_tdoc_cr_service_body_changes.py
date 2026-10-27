@@ -28,7 +28,6 @@ from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.services.tdoc_cr_service import TDocCrService
 
-
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 
 
@@ -65,7 +64,6 @@ class _StubParser:
         *,
         tdoc_id: str,
         max_text_length: int = 0,
-        full: bool = False,
     ) -> TDocCRParseResult:
         return self._result
 
@@ -90,13 +88,13 @@ def _build_service(
 
     cr_repo = MagicMock()
     cr_repo.get_by_url.return_value = None
-    cr_repo.get_extract_meta_by_url.return_value = None
     cr_ttcn_repo = MagicMock()
     cr_ttcn_repo.get_by_url.return_value = None
     cr_change_details_repo = MagicMock()
     cr_change_details_repo.get_by_url.return_value = None
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = None
+    content_repo = MagicMock()
 
     service = TDocCrService(
         cache=cache,
@@ -105,6 +103,7 @@ def _build_service(
         cr_ttcn_repository=cr_ttcn_repo,
         cr_change_details_repository=cr_change_details_repo,
         tdoc_repository=tdoc_repo,
+        content_repo=content_repo,
     )
     return service, cr_repo, cr_ttcn_repo, cr_change_details_repo, tdoc_repo
 
@@ -113,104 +112,86 @@ def _build_service(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_extract_writes_change_details_when_present(tmp_path: Path) -> None:
-    """When the parser returns a populated ``changes`` sidecar, the
-    service fans it out to the ``cr_change_details_repo.upsert`` call
-    with the resolved ``ftp_url`` and ``tdoc_id`` filled in.
-
-    Drives the real ``TDocCrService.extract(...)`` path so the
-    ``replace(parsed.changes, ftp_url=..., tdoc_id=...)`` + upsert
-    fan-out is exercised end-to-end. The download / cache / scraper /
-    file I/O layers are stubbed via the scraper mock (returning the
-    fixture zip bytes) and an in-memory disk cache; the parser is
-    stubbed via ``_StubParser`` so the result is deterministic
-    regardless of fixture content.
-    """
+def test_extract_writes_change_details_in_atomic_bundle(tmp_path: Path) -> None:
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-
-    cover = TDocCRDetails(
-        tdoc_id="R5s260009",
-        spec="38.523-3",
-        cr_num="3790",
-    )
     changes = TDocCRChangeDetails(
         ftp_url=None,
         tdoc_id=None,
         clauses=("5.2.3",),
         changes=({"clauses": ["5.2.3"], "text": "line A\n<ins>X</ins>"},),
     )
-    parser = _StubParser(TDocCRParseResult(cover=cover, ttcn=None, changes=changes))
+    parser = _StubParser(
+        TDocCRParseResult(
+            cover=TDocCRDetails(
+                tdoc_id="R5s260009", spec="38.523-3", cr_num="3790"
+            ),
+            ttcn=None,
+            changes=changes,
+        )
+    )
 
     service, cr_repo, cr_ttcn_repo, cr_change_details_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes,
+        tmp_path, zip_bytes=fixture.read_bytes(),
     )
     service._parser = parser  # type: ignore[attr-defined]
     tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="tsg_wg1/cr_r5s260009.zip",
+        tdoc_id="R5s260009", type="CR", ftp_url="tsg_wg1/cr_r5s260009.zip"
     )
 
     service.extract("R5s260009")
 
-    assert cr_change_details_repo.upsert.call_count == 1
-    written = cr_change_details_repo.upsert.call_args.args[0]
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
+    details, ttcn, written, meta, documents = service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
+    assert details.ftp_url == meta.ftp_url == "tsg_wg1/cr_r5s260009.zip"
+    assert ttcn is None
     assert isinstance(written, TDocCRChangeDetails)
     assert written.ftp_url == "tsg_wg1/cr_r5s260009.zip"
     assert written.tdoc_id == "R5s260009"
     assert written.clauses == ("5.2.3",)
     assert written.changes == ({"clauses": ["5.2.3"], "text": "line A\n<ins>X</ins>"},)
-
-    # The other upserts still fire (cover + extract meta) and the
-    # TTCN sidecar is skipped because the stub parser returned
-    # ``ttcn=None``.
-    assert cr_repo.upsert.call_count == 1
-    assert cr_repo.upsert_extract_meta.call_count == 1
-    assert cr_ttcn_repo.upsert.call_count == 0
+    assert documents == ()
+    cr_repo.upsert.assert_not_called()
+    cr_repo.upsert_extract_meta.assert_not_called()
+    cr_ttcn_repo.upsert.assert_not_called()
+    cr_change_details_repo.upsert.assert_not_called()
 
 
 @pytest.mark.skipif(
     not _docx_available(),
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
-def test_extract_skips_change_details_upsert_when_changes_none(
+def test_extract_atomic_bundle_carries_none_for_absent_changes(
     tmp_path: Path,
 ) -> None:
-    """When the parser returns ``changes=None`` (the body extractor
-    found no revision marks), the service must NOT touch the change
-    details repo.
-
-    Locks the no-op branch of the new fan-out so a regression that
-    unconditionally calls ``cr_change_details_repo.upsert(...)`` would
-    fail here.
-    """
     fixture = FIXTURES_DIR / "R5s260009.zip"
     if not fixture.exists():
         pytest.skip(f"fixture missing: {fixture}")
-    zip_bytes = fixture.read_bytes()
-
-    cover = TDocCRDetails(
-        tdoc_id="R5s260009",
-        spec="38.523-3",
-        cr_num="3790",
+    parser = _StubParser(
+        TDocCRParseResult(
+            cover=TDocCRDetails(
+                tdoc_id="R5s260009", spec="38.523-3", cr_num="3790"
+            ),
+            ttcn=None,
+            changes=None,
+        )
     )
-    parser = _StubParser(TDocCRParseResult(cover=cover, ttcn=None, changes=None))
-
     service, cr_repo, _cr_ttcn_repo, cr_change_details_repo, tdoc_repo = _build_service(
-        tmp_path, zip_bytes=zip_bytes,
+        tmp_path, zip_bytes=fixture.read_bytes(),
     )
     service._parser = parser  # type: ignore[attr-defined]
     tdoc_repo.get_by_id.return_value = TDoc(
-        tdoc_id="R5s260009",
-        type="CR",
-        ftp_url="tsg_wg1/cr_r5s260009.zip",
+        tdoc_id="R5s260009", type="CR", ftp_url="tsg_wg1/cr_r5s260009.zip"
     )
 
     service.extract("R5s260009")
 
-    assert cr_change_details_repo.upsert.call_count == 0
-    assert cr_repo.upsert.call_count == 1
-    assert cr_repo.upsert_extract_meta.call_count == 1
+    service._content_repo.replace_cr_bundle.assert_called_once()  # type: ignore[attr-defined]
+    _details, _ttcn, changes, _meta, _documents = (
+        service._content_repo.replace_cr_bundle.call_args.args  # type: ignore[attr-defined]
+    )
+    assert changes is None
+    cr_repo.upsert.assert_not_called()
+    cr_repo.upsert_extract_meta.assert_not_called()
+    cr_change_details_repo.upsert.assert_not_called()

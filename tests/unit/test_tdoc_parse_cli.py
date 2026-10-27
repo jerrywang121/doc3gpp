@@ -9,6 +9,7 @@ resets the settings/engine caches via ``conftest.sqlite_env``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -23,12 +24,15 @@ from typer.testing import CliRunner
 from doc3gpp.cli import app
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.models.tdoc import TDoc
+from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES, eligible_type_values
 from doc3gpp.models.tdoc_cr import (
     TDocCRDetails,
     TDocCRTTCNDetails,
     TDocExtractMeta,
 )
+from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.tdoc_identity import document_id_for
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.services.tdoc_cr_service import (
     BatchExtractResult,
@@ -40,6 +44,7 @@ from doc3gpp.services.tdoc_cr_service import (
 from doc3gpp.services.tdoc_pipeline import PipelineItem
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.repositories.tdoc_content_sql import SQLAlchemyTDocContentRepository
 from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
@@ -108,12 +113,11 @@ class _FakeCrService:
         tdoc_ids,
         *,
         force: bool = False,
-        full: bool = False,
         on_progress=None,
         is_cancelled=None,
         runner=None,
     ) -> BatchExtractResult:
-        self.many_calls.append((list(tdoc_ids), force, full))
+        self.many_calls.append((list(tdoc_ids), force))
         self.runner_calls.append(runner)
         if self._raise_from_many is not None:
             raise self._raise_from_many
@@ -144,12 +148,11 @@ class _OverlapCrService(_FakeCrService):
         tdoc_ids,
         *,
         force: bool = False,
-        full: bool = False,
         on_progress=None,
         is_cancelled=None,
         runner=None,
     ) -> BatchExtractResult:
-        del force, full, on_progress, is_cancelled
+        del force, on_progress, is_cancelled
         self.runner_calls.append(runner)
         assert runner is not None
         ids = list(tdoc_ids)
@@ -338,12 +341,78 @@ def _patch_service(monkeypatch, fake: _FakeCrService) -> None:
     )
 
 
+class _FakeContentDocument:
+    def __init__(
+        self,
+        source_file: str,
+        markdown: str,
+        *,
+        is_main: bool = False,
+    ) -> None:
+        self.document_id = "a" * 64
+        self.source_file = source_file
+        self.is_main = is_main
+        self.markdown = markdown
+
+
+class _FakeTDocContentService:
+    def __init__(self, documents: tuple[_FakeContentDocument, ...]) -> None:
+        self.documents = documents
+        self.calls: list[tuple[str | None, str | None, str | None]] = []
+
+    def get(
+        self,
+        *,
+        tdoc_id: str | None = None,
+        ftp_url: str | None = None,
+        source_file: str | None = None,
+    ):
+        self.calls.append((tdoc_id, ftp_url, source_file))
+        documents = self.documents
+        if source_file is not None:
+            documents = tuple(
+                document
+                for document in documents
+                if document.source_file == source_file
+            )
+        return type(
+            "FakeTDocContent",
+            (),
+            {
+                "tdoc_id": tdoc_id,
+                "ftp_url": ftp_url,
+                "extraction_version": 2,
+                "complete": True,
+                "documents": documents,
+            },
+        )()
+
+
+def _patch_content_service(monkeypatch, *documents: _FakeContentDocument):
+    service = _FakeTDocContentService(tuple(documents))
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_content_service",
+        lambda: service,
+        raising=False,
+    )
+    return service
+
+
+def _fake_content_document(
+    source_file: str,
+    markdown: str,
+    *,
+    is_main: bool = False,
+) -> _FakeContentDocument:
+    return _FakeContentDocument(source_file, markdown, is_main=is_main)
+
+
 def _patch_tdoc_repo_for_listing(
     monkeypatch,
     list_tdocs: list[TDoc],
     meeting_names: dict[int, str] | None = None,
     parsed_ids: set[str] | None = None,
-) -> "_FakeTDocRepoList":
+) -> _FakeTDocRepoList:
     """Stub ``build_tdoc_repository`` so ``tdoc parse`` can call ``list_with_meeting``.
 
     Records every ``list_with_meeting`` call so the test can assert
@@ -370,7 +439,7 @@ def _patch_tdoc_repo_for_listing(
 
 def _patch_meeting_service(
     monkeypatch, meetings: dict[int, Meeting | None]
-) -> "_FakeMeetingService":
+) -> _FakeMeetingService:
     """Stub ``build_meeting_service`` so ``--meeting-id`` validation has data.
 
     ``meetings`` maps meeting_id → :class:`Meeting` (or ``None`` to
@@ -391,7 +460,7 @@ def _patch_cr_repo(
     *,
     by_url: dict[str, TDocCRDetails] | None = None,
     extract_meta_by_url: dict[str, TDocExtractMeta] | None = None,
-) -> "_FakeCrDetailRepo":
+) -> _FakeCrDetailRepo:
     """Stub ``build_tdoc_cr_repository`` so ``tdoc parse`` can probe parsed status.
 
     ``parsed_ids`` is the set of TDoc ids considered already parsed
@@ -419,7 +488,7 @@ def _patch_cr_ttcn_repo(
     monkeypatch,
     *,
     by_url: dict[str, TDocCRTTCNDetails] | None = None,
-) -> "_FakeCrTtcnRepo":
+) -> _FakeCrTtcnRepo:
     """Stub ``build_tdoc_cr_ttcn_repository`` so ``tdoc show`` can probe the sidecar.
 
     Pass ``by_url`` to seed TTCN detail rows keyed by ``ftp_url``.
@@ -544,7 +613,7 @@ def test_tdoc_parse_tdoc_flag_singular_silently_keeps_last(sqlite_env, monkeypat
     # The repo saw only the LAST --tdoc value.
     assert repo.list_with_meeting_calls[0]["tdoc_id"] == "R5s260010"
     # And the dispatched id is the resolved one, not both.
-    assert fake.many_calls == [(["R5s260010"], False, False)]
+    assert fake.many_calls == [(["R5s260010"], False)]
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +634,7 @@ def test_tdoc_parse_tdoc_like_pattern_happy_path(sqlite_env, monkeypatch) -> Non
     result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009", "--yes"])
     assert result.exit_code == 0, result.output
     # The repo received the exact value as a LIKE pattern (not normalised).
-    assert fake.many_calls == [(["R5s260009"], False, False)]
+    assert fake.many_calls == [(["R5s260009"], False)]
     # The to-parse group was printed, plus a "Newly parsed" summary.
     assert "To parse" in result.output
     assert "R5s260009" in result.output
@@ -747,15 +816,11 @@ def test_tdoc_parse_force_passed_through(sqlite_env, monkeypatch) -> None:
         ["tdoc", "parse", "--tdoc", "R5s260009", "--force", "--yes"],
     )
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], True, False)]
+    assert fake.many_calls == [(["R5s260009"], True)]
 
 
-def test_tdoc_parse_full_passed_through(sqlite_env, monkeypatch) -> None:
-    """``--full`` reaches ``extract_many`` so TTCN ``before_change`` /
-    ``after_change`` / ``new_change`` extraction fires for every id in
-    the batch. Locks the wiring that previously silently dropped the
-    flag in the DB-mode path.
-    """
+def test_tdoc_parse_force_reaches_extract_many(sqlite_env, monkeypatch) -> None:
+    """``--force`` reaches ``extract_many`` (every parse runs the full extraction)."""
     runner = CliRunner()
     cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
@@ -765,27 +830,10 @@ def test_tdoc_parse_full_passed_through(sqlite_env, monkeypatch) -> None:
 
     result = runner.invoke(
         app,
-        ["tdoc", "parse", "--tdoc", "R5s260009", "--full", "--yes"],
+        ["tdoc", "parse", "--tdoc", "R5s260009", "--force", "--yes"],
     )
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], False, True)]
-
-
-def test_tdoc_parse_full_and_force_compose(sqlite_env, monkeypatch) -> None:
-    """``--full`` and ``--force`` both reach ``extract_many`` when combined."""
-    runner = CliRunner()
-    cr_tdocs = [TDoc(tdoc_id="R5s260009", type="CR")]
-    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, set())
-    fake = _FakeCrService(results={"R5s260009": _make_result()})
-    _patch_service(monkeypatch, fake)
-
-    result = runner.invoke(
-        app,
-        ["tdoc", "parse", "--tdoc", "R5s260009", "--full", "--force", "--yes"],
-    )
-    assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], True, True)]
+    assert fake.many_calls == [(["R5s260009"], True)]
 
 
 def test_tdoc_parse_python_docx_missing_friendly_error(sqlite_env, monkeypatch) -> None:
@@ -853,9 +901,9 @@ def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
 ) -> None:
     """Rows whose ``ftp_url`` is NULL (3GPP upload pipeline hasn't
     propagated yet) are routed to the ``skipped`` dict, NOT
-    ``failures`` — the CLI prints them under a dedicated
-    ``Skipped (not yet on FTP)`` summary line and exits 0 when the
-    batch has no real failures.
+    ``failures`` — the CLI counts them in the generic ``Skipped``
+    summary line (the per-row reason names the FTP cause) and exits 0
+    when the batch has no real failures.
     """
     # Pin ``auto_sync=false`` so the test doesn't depend on the
     # ``DOC3GPP_SYNC__AUTO_SYNC`` value any prior test left in
@@ -895,11 +943,56 @@ def test_tdoc_parse_ftp_url_null_lands_in_skip_bucket(
     # Per-row inline prefix for the skip bucket.
     assert "R5s263431: SKIPPED - TDocNotYetOnFTPError:" in result.output
     assert "R5s263432: SKIPPED - TDocNotYetOnFTPError:" in result.output
-    # Dedicated summary line (matches the existing format: right-padded
+    # Generic summary line (matches the existing format: right-padded
     # to a column width with the bucket label + count).
-    assert "Skipped (not yet on FTP):" in result.output
+    assert "Skipped:" + " " * 35 + "2" in result.output
     assert "Failures:                                  0" in result.output
     assert fake.runner_calls and fake.runner_calls[0] is not None
+
+
+def test_tdoc_parse_db_summary_value_lines_share_one_column(
+    sqlite_env, monkeypatch,
+) -> None:
+    """The DB-mode summary value lines start at one column (43).
+
+    ``Skipped:`` was padded to width 42 while its siblings
+    (``Re-parsed``, ``Newly parsed``, ``Failures``) put the value at
+    column 43, so the value sat one column left of the rest.
+    """
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+
+    runner = CliRunner()
+    cr_tdocs = [TDoc(tdoc_id=f"R5s26000{n}", type="CR") for n in (1, 2, 3, 4)]
+    _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
+    _patch_cr_repo(monkeypatch, {"R5s260002"})
+    fake = _FakeCrService(
+        results={
+            "R5s260001": _make_result("R5s260001"),
+            "R5s260002": _make_result("R5s260002"),
+        },
+        failures={"R5s260003": "ValueError: bad parse"},
+        skipped={"R5s260004": "TDocNotYetOnFTPError: not on FTP"},
+    )
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app, ["tdoc", "parse", "--tdoc", "R5s26000%", "--force", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    columns = {
+        label: next(
+            len(ln) - len(ln.split()[-1])
+            for ln in lines if ln.startswith(label)
+        )
+        for label in (
+            "Skipped:",
+            "Re-parsed (with --force):",
+            "Newly parsed:",
+            "Failures:",
+        )
+    }
+    assert columns == dict.fromkeys(columns, 43), columns
 
 
 def test_tdoc_parse_unexpected_internal_error_exits_cleanly(
@@ -984,7 +1077,8 @@ def test_tdoc_parse_meeting_id_parses_new_only(
         "tdoc_id": None,
         "meeting_like": None,
         "meeting_id": meeting_id,
-        "tdoc_type": "CR",
+        "tdoc_type": None,
+        "eligible_types": eligible_type_values(),
         "status": None,
         "cr_cat": None,
         "spec": None,
@@ -1001,7 +1095,7 @@ def test_tdoc_parse_meeting_id_parses_new_only(
         "uploaded_date": None,
         "exclude_parsed": True,
     }
-    assert fake.many_calls == [(["R5s260009", "R5s260011"], False, False)]
+    assert fake.many_calls == [(["R5s260009", "R5s260011"], False)]
     assert "R5s260009" in result.output
     assert "R5s260011" in result.output
     # Normal mode never renders the already-parsed table.
@@ -1020,11 +1114,10 @@ def test_tdoc_parse_meeting_id_force_re_extracts_parsed(
     runner = CliRunner()
     meeting_id = 7
     cr_tdocs = [
-        TDoc(tdoc_id="R5s260009", type="CR", meeting_id=meeting_id),
-        TDoc(tdoc_id="R5s260010", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260009", type="CR", meeting_id=meeting_id, parsed=True),
+        TDoc(tdoc_id="R5s260010", type="CR", meeting_id=meeting_id, parsed=True),
     ]
-    # Both are "parsed" in the fake CR repo; --force must skip the check.
-    parsed = {"R5s260009", "R5s260010"}
+    # Both are complete extractions; --force must still re-extract them.
 
     _patch_meeting_service(
         monkeypatch,
@@ -1038,7 +1131,6 @@ def test_tdoc_parse_meeting_id_force_re_extracts_parsed(
         },
     )
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={
             "R5s260009": _make_result("R5s260009"),
@@ -1053,7 +1145,7 @@ def test_tdoc_parse_meeting_id_force_re_extracts_parsed(
     )
     assert result.exit_code == 0, result.output
     # force=True was forwarded to extract_many with every CR tdoc id.
-    assert fake.many_calls == [(["R5s260009", "R5s260010"], True, False)]
+    assert fake.many_calls == [(["R5s260009", "R5s260010"], True)]
     # The completion summary reports Re-parsed + Newly parsed correctly.
     assert "Re-parsed (with --force):                  2" in result.output
     assert "Newly parsed:                              0" in result.output
@@ -1562,7 +1654,7 @@ def test_tdoc_parse_accepted_prompt_dispatches(sqlite_env, monkeypatch) -> None:
 
     result = runner.invoke(app, ["tdoc", "parse", "--tdoc", "R5s260009"])
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260009"], False, False)]
+    assert fake.many_calls == [(["R5s260009"], False)]
 
 
 def test_tdoc_parse_yes_short_alias_works(sqlite_env, monkeypatch) -> None:
@@ -1615,6 +1707,7 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
             cr_cat="F",
             status="Noted",
             spec="38.331",
+            parsed=True,
         ),
     ]
     _patch_meeting_service(
@@ -1629,7 +1722,6 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
         },
     )
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, {"R5s260010"})
     fake = _FakeCrService(results={"R5s260009": _make_result("R5s260009")})
     _patch_service(monkeypatch, fake)
 
@@ -1646,7 +1738,7 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
     assert result.exit_code == 0, result.output
     assert "To parse [count=2]:" in result.output
     assert (
-        "Already parsed in tdoc_cr_cover_page "
+        "Already parsed "
         "(with --force, these will be re-extracted) [count=1]:"
     ) in result.output
     assert "spec" in result.output
@@ -1654,6 +1746,61 @@ def test_tdoc_parse_renders_already_parsed_group(sqlite_env, monkeypatch) -> Non
     assert "R5s260010" in result.output
     for header in ("tdoc_id", "title", "type", "cr_cat", "status"):
         assert header in result.output
+
+
+def test_tdoc_parse_force_already_parsed_header_is_family_neutral(
+    sqlite_env, monkeypatch
+) -> None:
+    """Under ``--force`` the already-parsed group header names no CR table,
+    even when the only parsed member is a complete WID family TDoc."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    runner = CliRunner()
+    meeting_id = 34
+    family_tdocs = [
+        TDoc(
+            tdoc_id="R5s260011",
+            type="CR",
+            meeting_id=meeting_id,
+            title="Pending CR title",
+            cr_cat="F",
+            status="Agreed",
+            spec="38.331",
+        ),
+        TDoc(
+            tdoc_id="R5s260012",
+            type="WID new",
+            meeting_id=meeting_id,
+            title="Complete WID title",
+            status="Agreed",
+            spec="38.331",
+            parsed=True,
+        ),
+    ]
+    _patch_meeting_service(
+        monkeypatch,
+        {
+            meeting_id: Meeting(
+                meeting_id=meeting_id,
+                name="RAN5#112",
+                title="RAN WG5 #112",
+                location="Online",
+            ),
+        },
+    )
+    _patch_tdoc_repo_for_listing(monkeypatch, family_tdocs)
+    fake = _FakeCrService(results={"R5s260011": _make_result("R5s260011")})
+    _patch_service(monkeypatch, fake)
+
+    result = runner.invoke(
+        app,
+        ["tdoc", "parse", "--meeting-id", str(meeting_id), "--force", "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    header = next(
+        (line for line in result.output.splitlines() if "Already parsed" in line),
+        "",
+    )
+    assert header == "Already parsed (with --force, these will be re-extracted) [count=1]:"
 
 
 def test_tdoc_parse_meeting_filter_adds_meeting_name_column(
@@ -1716,11 +1863,10 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
     runner = CliRunner()
     meeting_id = 77
     cr_tdocs = [
-        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id),
+        TDoc(tdoc_id="R5s260001", type="CR", meeting_id=meeting_id, parsed=True),
         TDoc(tdoc_id="R5s260002", type="CR", meeting_id=meeting_id),
         TDoc(tdoc_id="R5s260003", type="CR", meeting_id=meeting_id),
     ]
-    parsed = {"R5s260001"}  # only one pre-parsed
     _patch_meeting_service(
         monkeypatch,
         {meeting_id: Meeting(
@@ -1731,7 +1877,6 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
         )},
     )
     _patch_tdoc_repo_for_listing(monkeypatch, cr_tdocs)
-    _patch_cr_repo(monkeypatch, parsed)
     fake = _FakeCrService(
         results={
             "R5s260001": _make_result("R5s260001"),
@@ -1753,7 +1898,7 @@ def test_tdoc_parse_summary_counts_split_correctly(sqlite_env, monkeypatch) -> N
     assert result.exit_code == 0, result.output
     # With --force, all three are dispatched; R5s260001 was already
     # parsed (counted as Re-parsed), the other two are Newly parsed.
-    assert fake.many_calls == [(["R5s260001", "R5s260002", "R5s260003"], True, False)]
+    assert fake.many_calls == [(["R5s260001", "R5s260002", "R5s260003"], True)]
     assert "Re-parsed (with --force):                  1" in result.output
     assert "Newly parsed:                              2" in result.output
     assert "Skipped (already parsed before this run): 0" in result.output
@@ -1799,7 +1944,7 @@ def test_tdoc_parse_summary_without_force_dispatches_only_new(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert fake.many_calls == [(["R5s260002"], False, False)]
+    assert fake.many_calls == [(["R5s260002"], False)]
     assert "Skipped (already parsed before this run): 0" in result.output
     assert "Re-parsed (with --force):                  0" in result.output
     assert "Newly parsed:                              1" in result.output
@@ -1854,14 +1999,13 @@ def test_tdoc_parse_db_mode_summary_splits_size_skip_from_ftp_skip(
     )
     assert result.exit_code == 0, result.output
     assert "Skipped (exceeds max_tdoc_size_kb" in result.output
-    assert "Skipped (not yet on FTP):" in result.output
-    # Split counts: 2 size-skip, 1 FTP-skip.
+    # Split counts: 2 size-skip, 1 other skip (the FTP reason is per row).
     size_line = next(
         (ln for ln in result.output.splitlines()
          if ln.startswith("Skipped (exceeds max_tdoc_size_kb")),
     )
     assert size_line.endswith(" 2"), size_line
-    assert "Skipped (not yet on FTP):                 1" in result.output
+    assert "Skipped:" + " " * 35 + "1" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -2056,7 +2200,7 @@ def test_tdoc_parse_max_batch_applies_after_excluding_parsed(
         # and the "To parse" preview contains only pending ids.
         assert result.exit_code == 0, result.output
         assert fake.many_calls == [
-            (["R5s260005", "R5s260004", "R5s260003"], False, False),
+            (["R5s260005", "R5s260004", "R5s260003"], False),
         ]
         to_parse_section = result.output.split("To parse [count=3]:", 1)[1]
         for parsed_id in parsed_ids:
@@ -2193,6 +2337,69 @@ def test_tdoc_show_no_ftp_url_skips_cover_and_ttcn(sqlite_env) -> None:
     assert "extracted_at: -" in result.output
     assert "[Extracted Details]" not in result.output
     assert "cr_num: 3790" not in result.output
+
+
+def _seed_discussion_extract(tdoc_id: str, url: str) -> None:
+    """Store a complete discussion extraction: one main document, no cover row."""
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="discussion", ftp_url=url)
+    )
+    text = "# Discussion body"
+    document_id = document_id_for(url, "main.docx")
+    store = next(store for store in TDOC_CONTENT_STORES if store.key == "discussion")
+    SQLAlchemyTDocContentRepository().replace_family_bundle(
+        store,
+        TDocExtractMeta(
+            ftp_url=url,
+            tdoc_id=tdoc_id,
+            cache_file=f"{tdoc_id}.zip",
+            doc_filename="main.docx",
+            document_count=1,
+        ),
+        (
+            TDocDocument(
+                document_id=document_id,
+                source_file="main.docx",
+                markdown_file=markdown_member_name(document_id, "main.docx"),
+                file_order=0,
+                markdown_text=text,
+                content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            ),
+        ),
+    )
+
+
+def test_tdoc_show_parsed_discussion_points_at_raw_markdown(sqlite_env) -> None:
+    """A parsed discussion has no cover; the table points at ``--format raw``."""
+    create_schema()
+    _seed_discussion_extract("R5s260020", "stored/r5s260020_discussion.zip")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tdoc", "show", "--tdoc", "R5s260020"])
+    assert result.exit_code == 0, result.output
+    assert "parsed: True" in result.output
+    assert "document_count: 1" in result.output
+    assert "No extracted details" not in result.output
+    assert "extracted_at: -" not in result.output
+    assert "extracted_at: " in result.output
+    assert "doc3gpp tdoc show --tdoc R5s260020 --format raw" in result.output
+
+
+def test_tdoc_show_json_parsed_discussion_carries_raw_note(sqlite_env) -> None:
+    create_schema()
+    _seed_discussion_extract("R5s260021", "stored/r5s260021_discussion.zip")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["tdoc", "show", "--tdoc", "R5s260021", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["tdoc"]["parsed"] is True
+    assert payload["tdoc"]["document_count"] == 1
+    assert "cover" not in payload
+    assert "get_tdoc_content" in payload["note"]
+    assert "doc3gpp tdoc show --tdoc R5s260021 --format raw" in payload["note"]
 
 
 # ---------------------------------------------------------------------------
@@ -2723,46 +2930,125 @@ def test_tdoc_show_format_json_output_writes_to_file(sqlite_env, tmp_path) -> No
 def test_tdoc_show_format_raw_emits_cached_markdown(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--format raw`` writes the converted markdown from the cache."""
+    """Raw format writes the selected content-service Markdown."""
     create_schema()
     _seed_full_crdetail_row("R5s260009")
-
-    cached_md = "# Heading\n\nbody paragraph\n"
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: cached_md,
-    )
+    markdown = "# Heading\n\nbody paragraph\n"
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
     }))
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260009.docx", markdown, is_main=True),
+    )
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
     )
+
     assert result.exit_code == 0, result.output
-    assert result.output == cached_md
+    assert result.output == markdown
+    assert content_service.calls == [("R5s260009", None, None)]
+
+
+
+def test_tdoc_show_raw_selects_the_exact_requested_source_file(
+    sqlite_env, monkeypatch
+) -> None:
+    create_schema()
+    _seed_full_crdetail_row("R5s260009")
+    cr_service = _FakeCrService(results={
+        "R5s260009": _make_result("R5s260009"),
+    })
+    _patch_service(monkeypatch, cr_service)
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260009.docx", "main body\n", is_main=True),
+        _fake_content_document("Annex/support.docx", "selected support body"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--tdoc", "R5s260009", "--format", "raw",
+            "--source-file", "Annex/support.docx",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "selected support body\n"
+    assert cr_service.extract_calls == ["R5s260009"]
+    assert content_service.calls == [
+        ("R5s260009", None, "Annex/support.docx"),
+    ]
+
+
+def test_tdoc_show_url_raw_source_is_a_side_effect_free_snapshot(
+    sqlite_env, monkeypatch
+) -> None:
+    create_schema()
+    _seed_ftp_url_target("R5s260109", _FTP_URL)
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260109.docx", "main body\n", is_main=True),
+        _fake_content_document("Annex/support.docx", "URL support body"),
+    )
+    auto_sync = MagicMock(return_value=(0, 0))
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", auto_sync)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: pytest.fail("URL content must not extract"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw",
+            "--source-file", "Annex/support.docx",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "URL support body\n"
+    assert content_service.calls == [
+        (None, _FTP_URL.lower(), "Annex/support.docx"),
+    ]
+    auto_sync.assert_not_called()
+
+
+def test_tdoc_show_rejects_source_file_on_non_raw_formats(sqlite_env) -> None:
+    create_schema()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--tdoc", "R5s260009", "--format", "json",
+            "--source-file", "Annex/support.docx",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--source-file" in result.output
+    assert "raw" in result.output.lower()
 
 
 def test_tdoc_show_format_raw_output_writes_to_file(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--format raw --output PATH`` writes the converted markdown to a file."""
+    """Raw output written to PATH contains the converted Markdown."""
     create_schema()
     _seed_full_crdetail_row("R5s260009")
-
-    cached_md = "raw body\n"
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: cached_md,
-    )
+    markdown = "raw body\n"
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
     }))
+    _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260009.docx", markdown, is_main=True),
+    )
 
     out_path = tmp_path / "raw.md"
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app,
         [
             "tdoc", "show",
@@ -2771,8 +3057,9 @@ def test_tdoc_show_format_raw_output_writes_to_file(
             "--output", str(out_path),
         ],
     )
+
     assert result.exit_code == 0, result.output
-    assert out_path.read_text() == cached_md
+    assert out_path.read_text() == markdown
 
 
 def test_tdoc_show_format_raw_non_cr_tdoc_raises_bad_parameter(
@@ -2847,24 +3134,23 @@ def test_tdoc_show_format_raw_zip_download_failure_raises_bad_parameter(
 def test_tdoc_show_format_raw_empty_cache_raises_bad_parameter(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """A non-empty extract_meta path that reads to empty raises BadParameter."""
+    """An unavailable legacy cache becomes a friendly parse hint."""
     create_schema()
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
-
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: "",
-    )
+    _seed_full_crdetail_row("R5s260009")
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    from doc3gpp.settings.loader import get_settings
+    get_settings.cache_clear()
     _patch_service(monkeypatch, _FakeCrService(results={
         "R5s260009": _make_result("R5s260009"),
     }))
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--tdoc", "R5s260009", "--format", "raw"]
     )
+
     assert result.exit_code != 0
     assert "empty or unreadable" in result.output
+    assert "tdoc parse" in result.output
 
 
 def test_tdoc_show_format_invalid_raises_bad_parameter(sqlite_env) -> None:
@@ -3195,44 +3481,40 @@ def test_tdoc_show_ftp_url_markdown_omits_tdoc_section_when_no_match(
 def test_tdoc_show_ftp_url_raw_emits_cached_markdown(
     sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--ftp-url --format raw`` reads the cache file derived from the
-    URL directly and writes its content to stdout."""
+    """The URL raw format reads the content-service snapshot."""
     create_schema()
     _seed_ftp_url_target("R5s260106", _FTP_URL)
-
-    cached_md = "# Heading\n\nbody from URL-keyed cache\n"
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: cached_md,
+    markdown = "# Heading\n\nbody from URL-keyed SQL\n"
+    content_service = _patch_content_service(
+        monkeypatch,
+        _fake_content_document("R5s260106.docx", markdown, is_main=True),
     )
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw"]
     )
+
     assert result.exit_code == 0, result.output
-    assert result.output == cached_md
+    assert result.output == markdown
+    assert content_service.calls == [(None, _FTP_URL.lower(), None)]
 
 
 def test_tdoc_show_ftp_url_raw_cache_miss_raises_bad_parameter(
-    sqlite_env, monkeypatch
+    sqlite_env, tmp_path, monkeypatch
 ) -> None:
-    """``--ftp-url --format raw`` with no cached markdown raises
-    ``BadParameter`` pointing at the parse command."""
+    """A URL cache miss remains a parse hint without triggering extraction."""
     create_schema()
     _seed_ftp_url_target("R5s260107", _FTP_URL)
+    monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
+    from doc3gpp.settings.loader import get_settings
+    get_settings.cache_clear()
 
-    monkeypatch.setattr(
-        "doc3gpp.cli._read_cached_markdown_path",
-        lambda cache_file, cache_root: "",
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app, ["tdoc", "show", "--ftp-url", _FTP_URL, "--format", "raw"]
     )
+
     assert result.exit_code != 0
-    assert "cached markdown" in result.output.lower() or "cache" in result.output
+    assert "cache" in result.output.lower()
     assert "tdoc parse" in result.output
 
 
@@ -3280,22 +3562,33 @@ class _RecordingCrService:
         return []
 
     def extract_from_url_batch(
-        self, url: str, *, max_depth: int, force: bool, full: bool,
+        self, url: str, *, max_depth: int, force: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
-    ) -> "_RecordingBatchResult":
+    ) -> _RecordingBatchResult:
         self.extract_batch_calls.append((url, max_depth))
         self.extract_batch_runner_calls.append(runner)
         return _RecordingBatchResult(results=[], failures={})
 
     def extract_from_url(
-        self, url: str, *, force: bool, full: bool,
+        self, url: str, *, force: bool,
         max_tdoc_size_bytes: int = 0, runner=None,
-    ) -> "_RecordingSingleResult":
+    ) -> _RecordingSingleResult:
         self.extract_url_calls.append(url)
         self.extract_url_runner_calls.append(runner)
+        source_file = "R5s260009.docx"
+        document_id = "0" * 64
+        document = TDocDocument(
+            document_id=document_id,
+            source_file=source_file,
+            markdown_file=f"documents/{document_id}/R5s260009.md",
+            file_order=0,
+            markdown_text="",
+            content_hash=hashlib.sha256(b"").hexdigest(),
+        )
         return _RecordingSingleResult(
             source_kind="url-3gpp",
-            markdown="",
+            documents=(document,),
+            main_source_file=source_file,
             details=None,
             extract_meta=None,
             from_cache=False,
@@ -3314,7 +3607,8 @@ class _RecordingBatchResult:
 @dataclass
 class _RecordingSingleResult:
     source_kind: str
-    markdown: str
+    documents: tuple[TDocDocument, ...]
+    main_source_file: str
     details: object
     extract_meta: object
     from_cache: bool
@@ -3425,10 +3719,10 @@ def test_tdoc_parse_from_url_3gpp_folder_skips_sync_when_no_candidates(
     assert batch_mock.call_args.kwargs["from_url"] == "https://www.3gpp.org/ftp/Docs/"
 
 
-def test_tdoc_parse_from_url_non_3gpp_skips_auto_sync(
+def test_tdoc_parse_from_url_non_3gpp_triggers_auto_sync_for_derived_id(
     sqlite_env, monkeypatch,
 ) -> None:
-    """Non-3GPP URLs never trigger auto-sync."""
+    """Non-3GPP URLs collect no FTP candidates, but the id in the file name still syncs (R57)."""
     _enable_auto_sync(monkeypatch)
     monkeypatch.setattr(
         "doc3gpp.cli.build_tdoc_cr_service", lambda *args, **kwargs: _RecordingCrService(),
@@ -3454,11 +3748,11 @@ def test_tdoc_parse_from_url_non_3gpp_skips_auto_sync(
 
     assert result.exit_code == 0, result.output
     # Non-3GPP URL short-circuits the ``is_3gpp_ftp_url`` gate in the
-    # CLI before the collect helper is invoked — so ``collect`` is NOT
-    # called and the sync is skipped, but the direct-mode parse still
-    # dispatches.
+    # CLI before the collect helper is invoked, so ``collect`` is NOT
+    # called. The TDoc id derived from the file name still drives sync.
     candidates_mock.assert_not_called()
-    sync_mock.assert_not_called()
+    sync_mock.assert_called_once()
+    assert sync_mock.call_args.kwargs["tdoc_ids"] == {"R5s260009"}
     direct_mock.assert_called_once()
 
 
@@ -3608,9 +3902,88 @@ def test_tdoc_parse_cli_renders_real_service_skip_and_failure_maps(
     assert f"R5s260002: SKIPPED - TDocNotYetOnFTPError: {ftp_exc}" in result.output
     assert f"R5s260003: SKIPPED - TDocTooLargeError: {big_exc}" in result.output
     assert "R5s260004: FAILED - ValueError: bad parse" in result.output
-    assert "Skipped (not yet on FTP):                 1" in result.output
+    assert "Skipped:" + " " * 35 + "1" in result.output
     size_line = next(
         ln for ln in result.output.splitlines()
         if ln.startswith("Skipped (exceeds max_tdoc_size_kb")
     )
     assert size_line.endswith(" 1"), size_line
+
+
+def test_tdoc_parse_local_folder_raw_keeps_duplicate_member_basenames(
+    sqlite_env, monkeypatch, tmp_path,
+) -> None:
+    """A local-folder raw result keeps both same-basename sources distinct."""
+    from doc3gpp.models.tdoc_cr import DirectParseResult
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "R5s260009.zip").write_bytes(b"fake ZIP payload")
+    output_dir = tmp_path / "output"
+
+    def document(source_file: str, order: int, markdown: str) -> TDocDocument:
+        document_id = hashlib.sha256(source_file.encode("utf-8")).hexdigest()
+        stem = source_file.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        return TDocDocument(
+            document_id=document_id,
+            source_file=source_file,
+            markdown_file=f"documents/{document_id}/{stem}.md",
+            file_order=order,
+            markdown_text=markdown,
+            content_hash=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        )
+
+    main_source = "z/R5s260009.docx"
+    parsed = DirectParseResult(
+        source_kind="local",
+        documents=(
+            document(main_source, 0, "main document text"),
+            document("a/shared.docx", 1, "alpha support text"),
+            document("b/shared.docx", 2, "beta support text"),
+        ),
+        main_source_file=main_source,
+        details=None,
+        extract_meta=None,
+        from_cache=False,
+        persisted=False,
+        tdoc_id="R5s260009",
+        tdoc_id_in_tdocs=False,
+    )
+
+    class FakeCrService:
+        def prepare_from_bytes(self, payload, filename, **_kwargs):
+            assert payload == b"fake ZIP payload"
+            assert Path(filename).name == "R5s260009.zip"
+            return parsed
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: FakeCrService(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "parse",
+            "--from-path", str(input_dir),
+            "--output", str(output_dir),
+            "--format", "raw",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    outputs = [path for path in output_dir.rglob("*") if path.is_file()]
+    assert len(outputs) == 1
+    raw = outputs[0].read_text(encoding="utf-8")
+    source_markers = (
+        '<!-- doc3gpp-source: "z/R5s260009.docx" -->',
+        '<!-- doc3gpp-source: "a/shared.docx" -->',
+        '<!-- doc3gpp-source: "b/shared.docx" -->',
+    )
+    assert all(marker in raw for marker in source_markers)
+    assert [raw.index(marker) for marker in source_markers] == sorted(
+        raw.index(marker) for marker in source_markers
+    )
+    assert "alpha support text" in raw
+    assert "beta support text" in raw

@@ -35,7 +35,6 @@ from doc3gpp.services import factory
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
-
 pytestmark = pytest.mark.semantic
 
 
@@ -83,6 +82,9 @@ def _bootstrap_corpus() -> None:
                     chunk_id TEXT PRIMARY KEY,
                     tdoc_id TEXT,
                     chunk_index INTEGER,
+                    meeting_id INTEGER,
+                    tsg TEXT,
+                    uploaded_date TEXT,
                     embedding FLOAT[4] distance_metric=cosine
                 )
                 """
@@ -164,8 +166,10 @@ def _seed_vectors(mappings: dict[str, list[list[float]]]) -> None:
                 conn.execute(
                     text(
                         "INSERT INTO vec_tdoc_embeddings "
-                        "(chunk_id, tdoc_id, chunk_index, embedding) "
-                        "VALUES (:cid, :tid, :ci, :emb)"
+                        "(chunk_id, tdoc_id, chunk_index, meeting_id, tsg, uploaded_date, embedding) "
+                        "SELECT :cid, t.tdoc_id, :ci, t.meeting_id, m.tsg, t.uploaded_date, :emb "
+                        "  FROM tdocs t JOIN meetings m ON m.meeting_id = t.meeting_id "
+                        " WHERE t.tdoc_id = :tid"
                     ),
                     {
                         "cid": f"{tdoc_id}#{chunk_index}",

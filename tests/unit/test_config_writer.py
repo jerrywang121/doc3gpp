@@ -12,10 +12,10 @@ known-clean filesystem state.
 from __future__ import annotations
 
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
+import tomllib
 from pydantic import ValidationError
 
 from doc3gpp.settings.config_source import (
@@ -36,7 +36,6 @@ from doc3gpp.settings.config_writer import (
     write_toml,
 )
 from doc3gpp.settings.schema import Settings
-
 
 # ---------------------------------------------------------------------------
 # read_toml

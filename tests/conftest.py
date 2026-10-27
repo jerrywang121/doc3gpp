@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.pool import Pool
 
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.session import (
@@ -8,6 +10,37 @@ from doc3gpp.storage.db.session import (
     get_specdata_engine,
     get_testcase_engine,
 )
+
+_opened_records = []
+
+
+def _track_connection(_dbapi_connection, connection_record) -> None:
+    _opened_records.append(connection_record)
+
+
+event.listen(Pool, "connect", _track_connection)
+
+
+@pytest.fixture(autouse=True)
+def _close_opened_connections():
+    """Invalidate pooled connections a test opened, so GC never closes them late."""
+    _opened_records.clear()
+    yield
+    for connection_record in _opened_records:
+        connection_record.invalidate()
+    _opened_records.clear()
+
+
+def _dispose_cached_engines() -> None:
+    """Close pooled sqlite connections before dropping the cached engines.
+
+    ``cache_clear`` alone leaves the connections open until garbage collection,
+    which surfaces as ``ResourceWarning: unclosed database``.
+    """
+    for cached in (get_engine, get_testcase_engine, get_specdata_engine):
+        if cached.cache_info().currsize:
+            cached().dispose()
+        cached.cache_clear()
 
 
 @pytest.fixture()
@@ -22,14 +55,10 @@ def sqlite_env(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "DOC3GPP_SPECDATA_DATABASE_URL", f"sqlite+pysqlite:///{specdata_db_path}"
     )
+    _dispose_cached_engines()
     get_settings.cache_clear()
-    get_engine.cache_clear()
-    get_testcase_engine.cache_clear()
-    get_specdata_engine.cache_clear()
     yield db_path
-    get_engine.cache_clear()
-    get_testcase_engine.cache_clear()
-    get_specdata_engine.cache_clear()
+    _dispose_cached_engines()
     get_settings.cache_clear()
 
 
@@ -70,6 +99,7 @@ def semantic_search_corpus(sqlite_env):
     Yields the sqlite engine so callers can layer more assertions on
     top.
     """
+    from doc3gpp.models.semantic_search import EmbeddedChunk
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.search_sql import (
         SQLAlchemySearchIndexRepository,
@@ -92,6 +122,12 @@ def semantic_search_corpus(sqlite_env):
 
     vec_repo = SQLAlchemyVectorIndexRepository()
     for tdoc_id in tdoc_ids:
-        vec_repo.upsert_chunks(tdoc_id, PRECOMPUTED_EMBEDDINGS[tdoc_id])
+        vec_repo.upsert_chunks(
+            tdoc_id,
+            [
+                EmbeddedChunk(chunk_id=f"{tdoc_id}#{i}", chunk_index=i, embedding=vec)
+                for i, vec in enumerate(PRECOMPUTED_EMBEDDINGS[tdoc_id])
+            ],
+        )
 
     yield engine

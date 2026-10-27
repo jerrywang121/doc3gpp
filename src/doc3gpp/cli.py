@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import tempfile
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import fields as dataclass_fields
 from datetime import date, datetime
@@ -43,8 +44,10 @@ from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.spec_doc import SpecDocSearchFilters, SpecDocSelectionError
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
+    DirectParseResult,
     TDocCRDetails,
 )
 from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl, TDocShowRepos
@@ -57,14 +60,15 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.parsers.normalizers import normalize_ftp_path
+from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, TDocZipValidationError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
-from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
-from doc3gpp.scraping.tdoc_zip_source import canonicalise_tdoc_id
+from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError, canonicalise_tdoc_id
 from doc3gpp.services.factory import (
     build_meeting_service,
     build_spec_doc_service,
     build_spec_service,
+    build_tdoc_content_service,
     build_tdoc_cr_change_details_repository,
     build_tdoc_cr_repository,
     build_tdoc_cr_service,
@@ -81,12 +85,22 @@ from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.services.spec_service import (
     SpecUnknownOnUpstreamError,
 )
+from doc3gpp.services.tdoc_content_service import (
+    TDocContentError,
+    TDocContentIneligibleError,
+    render_tdoc_documents_markdown,
+)
 from doc3gpp.services.tdoc_cr_service import (
     TDocNotFoundError,
     TDocTypeUnsupportedError,
     TDocZipDownloadError,
-    _read_cached_markdown_path,
 )
+from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
+from doc3gpp.services.tdoc_family_service import FamilyExtractResult
+from doc3gpp.services.tdoc_parse_selection import (
+    exact_tdoc_id as is_exact_tdoc_id,
+)
+from doc3gpp.services.tdoc_parse_selection import parse_selection_kwargs
 from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
 from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
@@ -280,6 +294,26 @@ def _tdoc_field(item: TDocWithMeeting, name: str) -> object | None:
     if name == "meeting_name":
         return item.meeting_name
     return getattr(item.tdoc, name, None)
+
+
+def _tdoc_list_cell(item: TDocWithMeeting, name: str, *, typed: bool) -> object:
+    """Render one ``tdoc list`` cell.
+
+    ``typed`` keeps the parse state as JSON scalars (``parsed`` as a
+    boolean, ``document_count`` as an integer or ``null``). Every other
+    cell, and every cell in table and Markdown output, is a string with
+    ``-`` for a missing value.
+    """
+    value = _tdoc_field(item, name)
+    if typed and name in ("parsed", "document_count"):
+        return value
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if name in ("reservation_date", "uploaded_date"):
+        return value.isoformat()
+    return str(value)
 
 
 VALID_FORMATS: tuple[str, ...] = ("table", "json", "markdown")
@@ -722,6 +756,8 @@ def _render_unified_tdoc_results(
     ]
     if any(result.previews is not None for result in results):
         fields.append("previews")
+    if any(result.matched_documents for result in results):
+        fields.append("matched_documents")
     rows = [
         [_display_value(getattr(result, field)) for field in fields]
         for result in results
@@ -733,6 +769,20 @@ def _render_unified_tdoc_results(
             row[preview_index] = "\n".join(
                 f"{column}: {snippet}" for column, snippet in previews.items()
             ) or "-"
+    if "matched_documents" in fields:
+        matched_index = fields.index("matched_documents")
+        for row, result in zip(rows, results):
+            documents = []
+            for document in result.matched_documents:
+                label = f"{document.source_file} (score={document.score:.4f})"
+                previews = ", ".join(
+                    f"{column}: {snippet.replace(chr(10), ' ')}"
+                    for column, snippet in document.previews.items()
+                )
+                if previews:
+                    label = f"{label} — {previews}"
+                documents.append(label)
+            row[matched_index] = " | ".join(documents) or "-"
     if format == "markdown":
         _emit_markdown(rows, sys.stdout, fields, compact=compact)
         return
@@ -1542,6 +1592,11 @@ def tdoc_list(
         "--uploaded-date",
         help="Filter on uploaded_date: null/not-null or '<op> YYYY-MM-DD'.",
     ),
+    parsed: str | None = typer.Option(
+        None,
+        "--parsed",
+        help="true|false: complete extraction state",
+    ),
     fields: str | None = typer.Option(
         None,
         "--fields",
@@ -1575,7 +1630,8 @@ def tdoc_list(
       --tdoc, --meeting-id, --meeting, --status, --cr-cat, --spec, --wi,
       --revision-of, --revised-to, --title, --ftp-url, --release, --version,
       --cr-num, --cr-pack, --source, --type, --uploaded-date,
-      --ls-to, --ls-cc, --original-ls, --for, --abstract, --secretary-remarks
+      --ls-to, --ls-cc, --original-ls, --for, --abstract, --secretary-remarks,
+      --parsed
     See docs/cli.md for full semantics and examples.
     """
 
@@ -1587,6 +1643,7 @@ def tdoc_list(
             validate_date_filter(uploaded_date)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from None
+    parsed_filter = _parse_bool_option(parsed, "--parsed")
 
     # ``meeting_name`` is a top-level attribute on ``TDocWithMeeting``; the
     # rest live on ``TDocWithMeeting.tdoc``.
@@ -1669,25 +1726,24 @@ def tdoc_list(
         tdoc_for=tdoc_for,
         abstract=abstract,
         secretary_remarks=secretary_remarks,
+        parsed=parsed_filter,
     )
 
-    rows: list[list[str]] = []
-    for item in records:
-        assert isinstance(item, TDocWithMeeting)
-        vals: list[str] = []
-        for f in out_fields:
-            v = _tdoc_field(item, f)
-            if v is None:
-                vals.append("-")
-                continue
+    if fmt == "json":
+        _dump_show_json(
+            [
+                {f: _tdoc_list_cell(item, f, typed=True) for f in out_fields}
+                for item in records
+            ],
+            output,
+            compact=resolved_compact,
+        )
+        return
 
-            if f in ("reservation_date", "uploaded_date") and v is not None:
-                vals.append(v.isoformat())
-            else:
-                vals.append(str(v))
-
-        rows.append(vals)
-
+    rows = [
+        [str(_tdoc_list_cell(item, f, typed=False)) for f in out_fields]
+        for item in records
+    ]
     _emit_records(
         rows=rows,
         fields=out_fields,
@@ -1730,7 +1786,7 @@ def tdoc_search(
     until: str | None = typer.Option(
         None, "--until", help="Uploaded-date upper bound."
     ),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    limit: int = typer.Option(20, "--limit", min=0, max=150, help="Max results."),
     fmt: str | None = typer.Option(
         None, "--format", help="table | json | markdown"
     ),
@@ -1901,7 +1957,7 @@ def tdoc_schema(
         help="Strip output formatting: JSON drops indent and operator-space. No-op for ``table``.",
     ),
 ) -> None:
-    """Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files and tdoc_extracts tables (meaning, format, possible values)."""
+    """Describe every column of the tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, tdoc_cr_change_details, tdoc_files, tdoc_extracts, and the four content tables (tdoc_cr_annexes, tdoc_wid_contents, tdoc_ls_contents, tdoc_discussion_contents) (meaning, format, possible values)."""
     settings = get_settings()
     fmt = _resolve_format(fmt, default=settings.output.format)
     resolved_compact = _resolve_compact(compact)
@@ -2103,7 +2159,11 @@ def tdoc_parse(
     tdoc_type: str | None = typer.Option(
         None,
         "--type",
-        help="SQL LIKE pattern on type (defaults to 'CR'; null/not-null/!pattern).",
+        help=(
+            "SQL LIKE pattern on type (null/not-null/!pattern). Defaults to "
+            "CR, WID, LS, and discussion TDocs; an explicit value is "
+            "intersected with those types."
+        ),
     ),
     uploaded_date: str | None = typer.Option(
         None,
@@ -2118,11 +2178,6 @@ def tdoc_parse(
             "DB parse: re-fetch and re-parse every match. "
             "Local batch parse: overwrite existing output files."
         ),
-    ),
-    full: bool = typer.Option(
-        False,
-        "--full",
-        help="Forward full=True to the parser (parser to extract info beyond cover page, e.g. TTCN corrections).",
     ),
     yes: bool = typer.Option(
         False,
@@ -2195,8 +2250,7 @@ def tdoc_parse(
       --force (re-fetch/re-parse/over-write every match), 
       --yes (skip confirmation prompt),
       --format table|json|markdown|raw 
-        (raw output covered markdown of the Tdoc, without extracting fields),
-      --full (extracting full Tdoc, otherwise only extracting cover page fields)
+        (raw output covered markdown of the Tdoc, without extracting fields)
 
     DB TDoc parse filters options (for selecting which TDocs to parse):
       --tdoc, --meeting-id, --meeting, --status, --cr-cat, --spec, --wi,
@@ -2204,11 +2258,11 @@ def tdoc_parse(
       --cr-num, --cr-pack, --source, --type, --uploaded-date
 
     Local TDoc parse:
-      --from-path PATH [--output PATH] [--format table|json|markdown|raw] [--full]
+      --from-path PATH [--output PATH] [--format table|json|markdown|raw]
       (PATH may be a single .docx/.zip file or a directory of them)
 
     Online TDoc parse:
-      --from-url URL [--output PATH] [--format table|json|markdown|raw] [--full]
+      --from-url URL [--output PATH] [--format table|json|markdown|raw]
       (URL may be a single 3GPP .docx/.zip file or a 3GPP FTP folder; folder
       batch scans .docx/.zip files, recurses with --recursive, and always
       writes cache/DB for matching TDoc ids)
@@ -2249,13 +2303,13 @@ def tdoc_parse(
             if not input_path.exists():
                 raise typer.BadParameter(f"--from-path does not exist: {from_path}")
             if input_path.is_file():
+                _auto_sync_direct_tdoc_ids([extract_tdoc_id_from_filename(input_path.name)])
                 with _tdoc_parse_pipeline(get_settings()) as pipeline:
                     _tdoc_parse_direct(
                         from_path=str(input_path),
                         from_url=None,
                         fmt=direct_format,
                         output=direct_output,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2272,7 +2326,6 @@ def tdoc_parse(
                         fmt=direct_format,
                         recursive=recursive,
                         force=force,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2299,13 +2352,14 @@ def tdoc_parse(
                     tdoc_service=tdoc_service,
                     max_depth=effective_depth,
                 )
-                if candidates:
-                    trigger_auto_sync(
-                        auto_sync_enabled=get_settings().sync.auto_sync,
-                        meeting_service=build_meeting_service(),
-                        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
-                        tdoc_ids=candidates,
-                    )
+            else:
+                candidates = {
+                    tdoc_id
+                    for tdoc_id in [extract_tdoc_id_from_filename(from_url)]
+                    if tdoc_id
+                }
+            if candidates:
+                _auto_sync_direct_tdoc_ids(candidates)
             with _tdoc_parse_pipeline(get_settings()) as pipeline:
                 if not is_3gpp_ftp_url(from_url) or _looks_like_3gpp_file_url(from_url):
                     _tdoc_parse_direct(
@@ -2313,7 +2367,6 @@ def tdoc_parse(
                         from_url=from_url,
                         fmt=direct_format,
                         output=direct_output,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2325,7 +2378,6 @@ def tdoc_parse(
                         fmt=direct_format,
                         max_depth=effective_depth,
                         force=force,
-                        full=full,
                         max_tdoc_size_bytes=max_tdoc_size_bytes,
                         compact=resolved_compact,
                         runner=pipeline,
@@ -2336,7 +2388,6 @@ def tdoc_parse(
                             from_url,
                             max_depth=effective_depth,
                             force=force,
-                            full=full,
                             max_tdoc_size_bytes=max_tdoc_size_bytes or None,
                             **_optional_runner_kwargs(
                                 tdoc_service.extract_from_url_batch,
@@ -2349,7 +2400,6 @@ def tdoc_parse(
                             from_url=from_url,
                             fmt=direct_format,
                             output=direct_output,
-                            full=full,
                             max_tdoc_size_bytes=max_tdoc_size_bytes,
                             compact=resolved_compact,
                             runner=pipeline,
@@ -2422,7 +2472,10 @@ def tdoc_parse(
         "tdoc_id": normalised_tdoc,
         "meeting_like": meeting,
         "meeting_id": meeting_id,
-        "tdoc_type": tdoc_type or "CR",
+        **parse_selection_kwargs(
+            tdoc_type,
+            exact_tdoc_id=bool(tdoc) and is_exact_tdoc_id(tdoc),
+        ),
         "status": status,
         "cr_cat": cr_cat,
         "spec": spec,
@@ -2459,15 +2512,10 @@ def tdoc_parse(
         raise typer.Exit(code=1)
 
     columns = _BASE_PARSE_COLUMNS + _active_extra_columns(filter_args)
-    cr_repo = build_tdoc_cr_repository()
     if force:
-        # Force mode: SQL returns every match, so we probe parsed status
-        # per id to feed the reparse / newly-parsed summary math and to
-        # render the "Already parsed" preview group.
-        parsed_ids = {
-            m.tdoc.tdoc_id for m in matches if cr_repo.get(m.tdoc.tdoc_id)
-        }
-        already_parsed = [m for m in matches if m.tdoc.tdoc_id in parsed_ids]
+        # Force mode: every match is re-extracted; ``parsed`` is family-aware.
+        already_parsed = [m for m in matches if m.tdoc.parsed]
+        parsed_ids = {m.tdoc.tdoc_id for m in already_parsed}
         to_parse = list(matches)
     else:
         # Normal mode: SQL excluded already-parsed rows before the limit,
@@ -2492,7 +2540,7 @@ def tdoc_parse(
     if already_parsed:
         suffix = " (with --force, these will be re-extracted)" if force else ""
         _print_parse_group(
-            f"Already parsed in tdoc_cr_cover_page{suffix}",
+            f"Already parsed{suffix}",
             already_parsed,
             columns,
         )
@@ -2512,8 +2560,8 @@ def tdoc_parse(
     tdoc_ids = [m.tdoc.tdoc_id for m in to_parse]
     dispatched_set = set(tdoc_ids)
     logger.info(
-        "Starting TDoc parse for %d id(s) (force=%s, full=%s)",
-        len(tdoc_ids), force, full,
+        "Starting TDoc parse for %d id(s) (force=%s)",
+        len(tdoc_ids), force,
     )
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     settings = get_settings()
@@ -2522,7 +2570,6 @@ def tdoc_parse(
             batch = service.extract_many(
                 tdoc_ids,
                 force=force,
-                full=full,
                 runner=pipeline,
             )
     except PythonDocxNotInstalledError as exc:
@@ -2544,24 +2591,37 @@ def tdoc_parse(
         raise typer.Exit(code=1) from None
 
     failures: list[str] = []
-    skipped_ftp: list[str] = []
     skipped_size: list[str] = []
+    skipped_archive: list[str] = []
+    skipped_other: list[str] = []
     for raw_id in tdoc_ids:
         normalised = raw_id.strip()
         if normalised in batch.successes:
             result = batch.successes[normalised]
-            typer.echo(
-                f"{normalised}: spec={result.details.spec} "
-                f"cr_num={result.details.cr_num} "
-                f"title={result.details.title}"
-            )
+            if isinstance(result, FamilyExtractResult):
+                typer.echo(
+                    f"TDoc {normalised}: {result.store.key}, "
+                    f"{len(result.documents)} documents, extraction_version 2"
+                )
+                skipped_sources = result.skipped_sources
+            else:
+                typer.echo(
+                    f"{normalised}: spec={result.details.spec} "
+                    f"cr_num={result.details.cr_num} "
+                    f"title={result.details.title}"
+                )
+                skipped_sources = result.extract_meta.skipped_sources
+            for skipped_source in skipped_sources:
+                typer.echo(f"warning: skipped {skipped_source}")
         elif normalised in batch.skipped:
             reason = batch.skipped[normalised]
             typer.echo(f"{normalised}: SKIPPED - {reason}")
             if reason.startswith("TDocTooLargeError:"):
                 skipped_size.append(normalised)
+            elif reason.startswith("TDocZipLimitError:"):
+                skipped_archive.append(normalised)
             else:
-                skipped_ftp.append(normalised)
+                skipped_other.append(normalised)
         elif normalised in batch.failures:
             typer.echo(f"{normalised}: FAILED - {batch.failures[normalised]}")
             failures.append(normalised)
@@ -2577,8 +2637,11 @@ def tdoc_parse(
     typer.echo(
         f"Skipped (exceeds max_tdoc_size_kb):          {len(skipped_size)}"
     )
+    typer.echo(
+        f"Skipped (archive member limits):              {len(skipped_archive)}"
+    )
     typer.echo(f"Skipped (already parsed before this run): {already_parsed}")
-    typer.echo(f"Skipped (not yet on FTP):                 {len(skipped_ftp)}")
+    typer.echo(f"{'Skipped:':<43}{len(skipped_other)}")
     typer.echo(f"Re-parsed (with --force):                  {re_parsed}")
     typer.echo(f"Newly parsed:                              {newly_parsed}")
     typer.echo(f"Failures:                                  {len(failures)}")
@@ -2758,13 +2821,30 @@ def _resolve_direct_format(fmt: str | None) -> str:
     return normalised
 
 
+def _auto_sync_direct_tdoc_ids(tdoc_ids: Iterable[str | None]) -> None:
+    """Run the direct-mode sync steps (type detection steps 2 to 4) for ``tdoc_ids``.
+
+    Uses the same skip rules as the other read commands. Does nothing when
+    ``sync.auto_sync`` is off or no id was extracted from the source names.
+    """
+    settings = get_settings()
+    ids = {tdoc_id for tdoc_id in tdoc_ids if tdoc_id}
+    if not settings.sync.auto_sync or not ids:
+        return
+    trigger_auto_sync(
+        auto_sync_enabled=settings.sync.auto_sync,
+        meeting_service=build_meeting_service(),
+        tdoc_sync_coordinator=build_tdoc_sync_coordinator(),
+        tdoc_ids=ids,
+    )
+
+
 def _tdoc_parse_direct(
     *,
     from_path: str | None,
     from_url: str | None,
     fmt: str | None,
     output: str | None,
-    full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
     runner: TDocPipeline | None = None,
@@ -2790,8 +2870,10 @@ def _tdoc_parse_direct(
         build_missing_tdoc_id_warning_message,
         build_no_pattern_warning_message,
     )
+    from doc3gpp.parsers.tdoc_zip import TDocZipLimitError
     from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
     from doc3gpp.services.tdoc_cr_service import TDocTooLargeError
+    from doc3gpp.services.tdoc_errors import TDocTypeSkippedError
     resolved_format = _resolve_direct_format(fmt)
     service = build_tdoc_cr_service(max_tdoc_size_bytes=max_tdoc_size_bytes)
     raw = from_path if from_path is not None else from_url
@@ -2802,7 +2884,6 @@ def _tdoc_parse_direct(
             payload = Path(from_path).read_bytes()
             extract_kwargs: dict[str, object] = {
                 "force": False,
-                "full": full,
                 "max_tdoc_size_bytes": max_tdoc_size_bytes,
             }
             extract_kwargs.update(
@@ -2814,7 +2895,6 @@ def _tdoc_parse_direct(
         else:
             extract_kwargs = {
                 "force": False,
-                "full": full,
                 "max_tdoc_size_bytes": max_tdoc_size_bytes,
             }
             extract_kwargs.update(
@@ -2823,6 +2903,9 @@ def _tdoc_parse_direct(
             result = service.extract_from_url(
                 raw, **extract_kwargs,
             )
+    except TDocZipLimitError as exc:
+        typer.echo(f"SKIPPED - {type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=0) from None
     except TDocTooLargeError as exc:
         # Size-limit skip — exit 0 with a warning. The operator's
         # --max-tdoc-size-kb is an explicit budget decision, not a
@@ -2832,6 +2915,9 @@ def _tdoc_parse_direct(
             f"SKIPPED - {type(exc).__name__}: {exc}",
             err=True,
         )
+        raise typer.Exit(code=0) from None
+    except TDocTypeSkippedError as exc:
+        typer.echo(f"SKIPPED - {exc}", err=True)
         raise typer.Exit(code=0) from None
     except FileNotFoundError as exc:
         typer.echo(f"FAILED - FileNotFoundError: {exc}", err=True)
@@ -2868,7 +2954,9 @@ def _tdoc_parse_direct(
         typer.echo(build_no_pattern_warning_message(raw), err=True)
 
     if resolved_format == "raw":
-        _emit_record_raw(result.markdown, output, compact=compact)
+        _emit_record_raw(_render_direct_documents_raw(result), output, compact=compact)
+    elif result.content_store is not None:
+        _emit_family_summary(result, output)
     elif result.details is None:
         typer.echo(
             f"FAILED - ValueError: --format {resolved_format!r} requires parsed fields; "
@@ -2878,6 +2966,40 @@ def _tdoc_parse_direct(
         raise typer.Exit(code=1) from None
     else:
         _emit_record(result.details, resolved_format, output, compact=compact)
+
+
+def _render_direct_documents_raw(result: DirectParseResult) -> str:
+    """Render direct and batch documents using the shared source-aware format."""
+    documents = tuple(
+        TDocContentDocument(
+            document_id=document.document_id,
+            source_file=document.source_file,
+            is_main=document.source_file == result.main_source_file,
+            markdown=document.markdown_text,
+        )
+        for document in result.documents
+    )
+    return render_tdoc_documents_markdown(
+        documents,
+        include_source_headers=True,
+    )
+
+
+def _emit_family_summary(result: DirectParseResult, output: str | None) -> None:
+    """Emit a WID, LS, or discussion direct result in the ``tdoc parse`` line format."""
+    store = result.content_store
+    assert store is not None
+    lines = [
+        f"TDoc {result.tdoc_id}: {store.key}, {len(result.documents)} documents, extraction_version 2",
+    ]
+    lines.extend(f"warning: skipped {source}" for source in result.skipped_sources)
+    stream, close_after = _open_output(output)
+    try:
+        for line in lines:
+            stream.write(line + "\n")
+    finally:
+        if close_after:
+            stream.close()
 
 
 def _emit_record(
@@ -2966,7 +3088,7 @@ def _emit_record_raw(
     *,
     compact: bool = False,
 ) -> None:
-    """Write the converted markdown bytes verbatim, no wrapping."""
+    """Write rendered Markdown unchanged, adding a final newline when needed."""
     stream, close_after = _open_output(output)
     try:
         stream.write(markdown)
@@ -3069,6 +3191,8 @@ def _build_show_payload(
             }
             for file in record.files
         ]
+    if record.note is not None:
+        payload["note"] = record.note
     return payload
 
 
@@ -3189,6 +3313,12 @@ def _render_tdoc_show_markdown_compact(
                 stream.write(
                     f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
                 )
+        elif record.extracted_at is not None:
+            stream.write(f"\nextracted_at: {_fmt_dt(record.extracted_at)}\n")
+            stream.write(
+                "note: Raw markdown is available; run "
+                f"doc3gpp tdoc show {_raw_show_hint(record)} --format raw.\n"
+            )
 
         if record.ttcn is not None:
             stream.write("\n")
@@ -3250,7 +3380,7 @@ def _render_tdoc_show_markdown_full(
     tdoc_heading: str,
     tdoc_missing_note: str | None,
     parse_hint: str,
-    show_extracted_details_fallback: bool,
+    suppress_no_details_placeholder: bool,
     files_missing_hint: str,
     omit_files_heading_when_empty: bool = False,
 ) -> None:
@@ -3259,12 +3389,11 @@ def _render_tdoc_show_markdown_full(
     Both renderers share the per-block (cover / ttcn / changes / files)
     logic; the differences are the top-level document header, the
     tdoc section heading + fallback note, the parse-hint string baked
-    into the "no extracted details" placeholder, whether to render an
-    ``## Extracted Details`` section when only ``extracted_at`` is
-    known (by-url yes, by-id no), the "no auxiliary files" placeholder
-    text, and whether the ``## Auxiliary Files`` heading is emitted
-    when no files are attached (by-id yes, by-url no). Those are all
-    parameters here.
+    into the "no extracted details" placeholder, whether that
+    placeholder is suppressed (by-url yes, by-id no), the "no
+    auxiliary files" placeholder text, and whether the ``## Auxiliary
+    Files`` heading is emitted when no files are attached (by-id yes,
+    by-url no). Those are all parameters here.
     """
     stream.write(f"{header_line}\n\n")
 
@@ -3291,20 +3420,23 @@ def _render_tdoc_show_markdown_full(
             stream.write(f"- **{f.name}**: {rendered}\n")
         if record.extracted_at is not None:
             stream.write(f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n")
-    elif show_extracted_details_fallback and record.extracted_at is not None:
-        # by-url only: when no cover row exists but the extract
-        # timestamp does, surface it under its own short section so
-        # the document skeleton stays populated.
+    elif record.extracted_at is not None:
+        # No cover row, but the extract exists: non-CR TDocs and CR
+        # annexes only have raw markdown, so point at it.
         stream.write("\n## Extracted Details\n\n")
         stream.write(
             f"- **extracted_at**: {_fmt_dt(record.extracted_at)}\n"
+        )
+        stream.write(
+            "\n_Raw markdown is available; run "
+            f"`doc3gpp tdoc show {_raw_show_hint(record)} --format raw`._\n"
         )
     elif (
         record.cover is None
         and record.ttcn is None
         and record.extracted_at is None
         and record.changes is None
-        and not show_extracted_details_fallback
+        and not suppress_no_details_placeholder
     ):
         # by-id: when nothing is known, emit a single "no extracted
         # details" placeholder pointing at the parse command.
@@ -3430,7 +3562,7 @@ def _render_tdoc_show_markdown(
             tdoc_heading="## Metadata",
             tdoc_missing_note=None,
             parse_hint="--tdoc <id>",
-            show_extracted_details_fallback=False,
+            suppress_no_details_placeholder=False,
             files_missing_hint=(
                 "No auxiliary files; run "
                 "`doc3gpp tdoc sync` first if you haven't synced "
@@ -3440,6 +3572,13 @@ def _render_tdoc_show_markdown(
     finally:
         if close_after:
             stream.close()
+
+
+def _raw_show_hint(record: TDocShowRecord | TDocShowRecordByUrl) -> str:
+    """Return the ``tdoc show`` selector that reads the raw markdown back."""
+    if isinstance(record, TDocShowRecordByUrl):
+        return f"--ftp-url {record.ftp_url}"
+    return f"--tdoc {record.tdoc.tdoc_id}"
 
 
 def _render_tdoc_show_table_body(
@@ -3482,14 +3621,17 @@ def _render_tdoc_show_table_body(
         # block (by-id) or after the [FTP URL] anchor (by-url). The
         # header re-appears once a real cover row surfaces (see the
         # ``record.cover is not None`` branch below).
-        stream.write(
-            f"No extracted details; run `doc3gpp tdoc parse {parse_hint}` first.\n"
-        )
         if record.extracted_at is not None:
+            stream.write(
+                f"Raw markdown is available; run `doc3gpp tdoc show {_raw_show_hint(record)} --format raw`.\n"
+            )
             stream.write(
                 f"extracted_at: {_fmt_dt(record.extracted_at)}\n"
             )
         else:
+            stream.write(
+                f"No extracted details; run `doc3gpp tdoc parse {parse_hint}` first.\n"
+            )
             stream.write("extracted_at: -\n")
 
     if record.cover is not None:
@@ -3629,24 +3771,14 @@ def _render_tdoc_show_raw(
     tdoc_id: str,
     output: str | TextIO | None,
     *,
+    source_file: str | None = None,
     compact: bool = False,
 ) -> None:
-    """Emit ``tdoc show --format raw``.
-
-    Delegates to :class:`TDocCrService.extract`, which short-circuits
-    on a DB cache hit (no network / no conversion) and otherwise
-    downloads the zip, renders the markdown and persists the row. The
-    rendered markdown is then read back from the cache path the
-    service populated. Service-level exceptions are translated into
-    friendly CLI errors so the operator never sees a raw traceback.
-
-    ``compact`` is accepted for symmetry with the other renderers but
-    ignored — raw emits the converted markdown verbatim, which is
-    already maximally compact by construction.
-    """
+    """Extract by TDoc ID, then render SQL-first Markdown content."""
+    del compact
     try:
         service = build_tdoc_cr_service()
-        result = service.extract(tdoc_id)
+        service.extract(tdoc_id)
     except TDocNotFoundError:
         raise typer.BadParameter(
             f"Unknown TDoc '{tdoc_id}'. Run 'doc3gpp tdoc list' to see "
@@ -3655,9 +3787,15 @@ def _render_tdoc_show_raw(
         ) from None
     except TDocTypeUnsupportedError as exc:
         raise typer.BadParameter(
-            f"TDoc {tdoc_id!r} has type {exc.observed_type!r}; "
-            f"--format raw is only available for CR-type TDocs"
+            str(TDocContentIneligibleError(tdoc_id, exc.observed_type))
         ) from None
+    except (
+        TDocZipLimitError,
+        TDocZipValidationError,
+        TDocNotYetOnFTPError,
+        TDocTooLargeError,
+    ) as exc:
+        raise typer.BadParameter(str(exc)) from None
     except TDocZipDownloadError as exc:
         raise typer.BadParameter(
             f"Failed to download TDoc '{tdoc_id}' for raw rendering: {exc}"
@@ -3665,16 +3803,35 @@ def _render_tdoc_show_raw(
     except PythonDocxNotInstalledError as exc:
         raise typer.BadParameter(str(exc)) from None
 
-    cache = _build_cache()
-    markdown = _read_cached_markdown_path(
-        result.extract_meta.cache_file, cache.root,
-    )
-    if not markdown:
-        raise typer.BadParameter(
-            f"Markdown cache for TDoc '{tdoc_id}' is empty or unreadable "
-            f"(cache_file: {result.extract_meta.cache_file}, "
-            f"cache_dir: {cache.root})"
+    try:
+        content = build_tdoc_content_service().get(
+            tdoc_id=tdoc_id,
+            source_file=source_file,
         )
+    except TDocContentError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    _emit_content_raw(content, output)
+
+
+def _emit_content_raw(
+    content: TDocContent,
+    output: str | TextIO | None,
+) -> None:
+    """Write the raw content body, warning on stderr when extraction is incomplete."""
+    if not content.complete:
+        if content.skipped_sources:
+            skipped = ", ".join(content.skipped_sources)
+            detail = f"; skipped sources: {skipped}"
+        else:
+            detail = ""
+        typer.echo(
+            f"Warning: extraction for TDoc {content.tdoc_id!r} is incomplete{detail}",
+            err=True,
+        )
+    markdown = render_tdoc_documents_markdown(
+        content.documents,
+        include_source_headers=True,
+    )
     _emit_record_raw(markdown, output)
 
 
@@ -3688,34 +3845,20 @@ def _tdoc_show_by_ftp_url(
     fmt: str,
     output: str | None,
     *,
+    source_file: str | None = None,
     compact: bool = False,
 ) -> None:
-    """Dispatch ``tdoc show --ftp-url`` to the right renderer.
-
-    Normalises the URL via :func:`_normalise_cli_ftp_url`, fans out
-    to four URL-keyed reads (``tdocs``, ``tdoc_cr_cover_page``,
-    ``tdoc_cr_ttcn_details``, ``tdoc_files`` — the
-    ``tdoc_extracts`` timestamp is sourced via
-    ``TDocCrDetailRepository.get_extract_meta_by_url``), and
-    raises :class:`typer.BadParameter` when the URL matches no row
-    in any of them.
-
-    Does NOT trigger :func:`trigger_auto_sync` — the URL is the row
-    identity, so no parent-meeting sync is meaningful for an
-    arbitrary URL. Raw format takes the cache-direct path below
-    without going through ``TDocCrService.extract``.
-
-    ``compact`` is resolved against :attr:`Settings.output.compact` via
-    :func:`_resolve_compact` and forwarded to the by-url renderers. The
-    CLI flag (``--compact`` on the parent ``tdoc show`` command) wins
-    over the setting; the dispatcher mirrors the by-id path so both
-    selectors produce byte-identical output.
-    """
+    """Dispatch URL-anchored TDoc show to a metadata or content renderer."""
     url = _normalise_cli_ftp_url(raw_url)
     resolved_compact = _resolve_compact(compact)
 
     if fmt == "raw":
-        _render_tdoc_show_raw_by_url(url, output, compact=resolved_compact)
+        _render_tdoc_show_raw_by_url(
+            url,
+            output,
+            source_file=source_file,
+            compact=resolved_compact,
+        )
         return
 
     show_repos = TDocShowRepos(
@@ -3752,30 +3895,19 @@ def _render_tdoc_show_raw_by_url(
     url: str,
     output: str | None,
     *,
+    source_file: str | None = None,
     compact: bool = False,
 ) -> None:
-    """Emit ``tdoc show --ftp-url --format raw``.
-
-    The URL is the row identity — the cache file is derived
-    directly from the URL via :func:`derive_cache_file`, so no
-    TDoc resolution or ``TDocCrService.extract`` call is needed.
-    On a cache miss the operator is pointed at the explicit-parse
-    paths that would populate the cache.
-
-    ``compact`` is accepted for symmetry with the other renderers but
-    ignored — raw emits the converted markdown verbatim, which is
-    already maximally compact by construction.
-    """
-    cache_file = derive_cache_file(url)
-    cache = _build_cache()
-    markdown = _read_cached_markdown_path(cache_file, cache.root)
-    if not markdown:
-        raise typer.BadParameter(
-            f"No cached markdown for {url!r} (key {cache_file!r}). "
-            "Run `doc3gpp tdoc parse --from-url <url>` or "
-            "`doc3gpp tdoc parse --tdoc <id>` first."
+    """Render an exact-URL SQL/cache snapshot without triggering extraction."""
+    del compact
+    try:
+        content = build_tdoc_content_service().get(
+            ftp_url=url,
+            source_file=source_file,
         )
-    _emit_record_raw(markdown, output)
+    except TDocContentError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    _emit_content_raw(content, output)
 
 
 def _render_tdoc_show_by_url_json(
@@ -3858,7 +3990,7 @@ def _render_tdoc_show_by_url_markdown(
                 "in a sync but no parent TDoc row was stored._"
             ),
             parse_hint="--from-url <url>",
-            show_extracted_details_fallback=True,
+            suppress_no_details_placeholder=True,
             files_missing_hint="No auxiliary files match this URL.",
             omit_files_heading_when_empty=True,
         )
@@ -3955,7 +4087,6 @@ def _tdoc_parse_local_batch(
     fmt: str | None,
     recursive: bool,
     force: bool,
-    full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
     runner: TDocPipeline | None = None,
@@ -3993,6 +4124,8 @@ def _tdoc_parse_local_batch(
     prepare_from_bytes = getattr(service, "prepare_from_bytes", None)
     skipped = 0
     size_skipped = 0
+    archive_skipped = 0
+    type_skipped = 0
     re_parsed = 0
     newly_parsed = 0
     failures = 0
@@ -4028,6 +4161,9 @@ def _tdoc_parse_local_batch(
         PipelineItem(key=str(input_path), value=(input_path, out_path))
         for input_path, out_path in pending
     ]
+    _auto_sync_direct_tdoc_ids(
+        extract_tdoc_id_from_filename(input_path.name) for input_path, _ in pending
+    )
 
     def prepare(item: tuple[Path, Path]):
         input_path, _out_path = item
@@ -4036,14 +4172,12 @@ def _tdoc_parse_local_batch(
             return prepare_from_bytes(
                 payload,
                 str(input_path),
-                full=full,
                 max_tdoc_size_bytes=max_tdoc_size_bytes,
             )
         return service.extract_from_bytes(
             payload,
             str(input_path),
             force=False,
-            full=full,
             max_tdoc_size_bytes=max_tdoc_size_bytes,
         )
 
@@ -4067,6 +4201,12 @@ def _tdoc_parse_local_batch(
             if reason.startswith("TDocTooLargeError:"):
                 logger.warning("Skipping %s: %s", input_path, reason)
                 size_skipped += 1
+            elif reason.startswith("TDocZipLimitError:"):
+                logger.warning("Skipping %s: %s", input_path, reason)
+                archive_skipped += 1
+            elif reason.startswith("TDocTypeSkippedError:"):
+                logger.warning("Skipping %s: %s", input_path, reason)
+                type_skipped += 1
             else:
                 logger.warning("Failed to parse %s: %s", input_path, reason)
                 failures += 1
@@ -4086,7 +4226,9 @@ def _tdoc_parse_local_batch(
         result = outcome.value
         try:
             if resolved_format == "raw":
-                _emit_record_raw(result.markdown, str(out_path), compact=compact)
+                _emit_record_raw(_render_direct_documents_raw(result), str(out_path), compact=compact)
+            elif result.content_store is not None:
+                _emit_family_summary(result, str(out_path))
             else:
                 if result.details is None:
                     logger.warning(
@@ -4108,6 +4250,8 @@ def _tdoc_parse_local_batch(
     typer.echo("---")
     typer.echo(f"Skipped (output already exists): {skipped}")
     typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {size_skipped}")
+    typer.echo(f"Skipped (archive member limits): {archive_skipped}")
+    typer.echo(f"Skipped (type not parsed or undetermined): {type_skipped}")
     typer.echo(f"Re-parsed (with --force):        {re_parsed}")
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Failures:                        {failures}")
@@ -4136,7 +4280,6 @@ def _tdoc_parse_url_batch(
     fmt: str | None,
     max_depth: int,
     force: bool,
-    full: bool,
     max_tdoc_size_bytes: int = 0,
     compact: bool = False,
     runner: TDocPipeline | None = None,
@@ -4152,7 +4295,6 @@ def _tdoc_parse_url_batch(
     batch_kwargs: dict[str, object] = {
         "max_depth": max_depth,
         "force": force,
-        "full": full,
         "max_tdoc_size_bytes": max_tdoc_size_bytes or None,
     }
     batch_kwargs.update(
@@ -4234,7 +4376,9 @@ def _emit_url_batch_results(
 
             try:
                 if fmt == "raw":
-                    _emit_record_raw(result.markdown, str(out_path), compact=compact)
+                    _emit_record_raw(_render_direct_documents_raw(result), str(out_path), compact=compact)
+                elif result.content_store is not None:
+                    _emit_family_summary(result, str(out_path))
                 else:
                     if result.details is None:
                         logger.warning(
@@ -4257,7 +4401,15 @@ def _emit_url_batch_results(
     typer.echo(f"Scanned:                         {len(batch.results) + failures + len(batch.skipped)}")
     if output_dir is not None:
         typer.echo(f"Skipped (output already exists): {skipped}")
-    typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {len(batch.skipped)}")
+    size_skipped = sum(
+        1 for reason in batch.skipped.values() if reason.startswith("TDocTooLargeError:")
+    )
+    archive_skipped = sum(
+        1 for reason in batch.skipped.values() if reason.startswith("TDocZipLimitError:")
+    )
+    typer.echo(f"Skipped (exceeds max_tdoc_size_kb): {size_skipped}")
+    typer.echo(f"Skipped (archive member limits): {archive_skipped}")
+    typer.echo(f"{'Skipped:':<33}{len(batch.skipped) - size_skipped - archive_skipped}")
     typer.echo(f"Newly parsed:                    {newly_parsed}")
     typer.echo(f"Cache hits:                      {cache_hits}")
     typer.echo(f"Failures:                        {failures}")
@@ -4388,12 +4540,17 @@ def tdoc_show(
             "matches. Mutually exclusive with --tdoc."
         ),
     ),
+    source_file: str | None = typer.Option(
+        None,
+        "--source-file",
+        help="Full ZIP member path; only valid with --format raw.",
+    ),
     fmt: str | None = typer.Option(
         None,
         "--format",
         help=(
             "Output format: table (default), json, markdown, or raw "
-            "(the converted .docx markdown for CR-type TDocs)."
+            "(the converted .docx markdown for CR, WID, LS, and discussion TDocs)."
         ),
     ),
     output: str | None = typer.Option(
@@ -4435,8 +4592,10 @@ def tdoc_show(
 
     ``--format`` controls the output representation; ``raw`` emits
     the converted .docx markdown instead of the DB-row render and
-    triggers a fresh extract (TDoc mode) or reads the cache file
-    directly (URL mode). ``--output`` / ``-o`` writes the result
+    invokes extraction before retrieval in TDoc mode, while URL mode
+    reads a deterministic, side-effect-free snapshot. Optional
+    ``--source-file`` selects one exact ZIP member and is valid only
+    with raw. ``--output`` / ``-o`` writes the result
     to a file instead of stdout.
     """
     settings = get_settings()
@@ -4447,9 +4606,17 @@ def tdoc_show(
         raise typer.BadParameter(
             "Provide exactly one of --tdoc <id> or --ftp-url <url>."
         )
+    if source_file is not None and fmt != "raw":
+        raise typer.BadParameter("--source-file is only valid with --format raw.")
 
     if ftp_url is not None:
-        _tdoc_show_by_ftp_url(ftp_url, fmt, output, compact=resolved_compact)
+        _tdoc_show_by_ftp_url(
+            ftp_url,
+            fmt,
+            output,
+            source_file=source_file,
+            compact=resolved_compact,
+        )
         return
 
     trigger_auto_sync(
@@ -4460,10 +4627,8 @@ def tdoc_show(
     )
     normalised_tdoc_id = _normalise_cli_tdoc_id(tdoc)
 
-    # Raw format takes a separate path: it doesn't render the DB rows,
-    # it pulls the converted markdown from the cache (populating it via
-    # a fresh extract when the cache is cold). Resolved via the repo so
-    # the cache lookup has the canonical tdoc_id.
+    # Raw format takes a separate path. TDoc-ID mode extracts first and then
+    # reads SQL-first content; the exact-URL mode is a side-effect-free snapshot.
     if fmt == "raw":
         record_for_raw = build_tdoc_repository().get_by_id(normalised_tdoc_id)
         if record_for_raw is None:
@@ -4471,7 +4636,12 @@ def tdoc_show(
                 f"Unknown TDoc '{tdoc}'. Run 'doc3gpp tdoc list' to see stored "
                 "TDocs, or 'doc3gpp tdoc sync' to ingest a meeting's TDocs first."
             )
-        _render_tdoc_show_raw(record_for_raw.tdoc_id, output, compact=resolved_compact)
+        _render_tdoc_show_raw(
+            record_for_raw.tdoc_id,
+            output,
+            source_file=source_file,
+            compact=resolved_compact,
+        )
         return
 
     show_repos = TDocShowRepos(
@@ -5091,7 +5261,7 @@ def spec_doc_search(
     tables: str | None = typer.Option(
         None, "--tables", help="Rich filter over combined table metadata."
     ),
-    limit: int = typer.Option(20, "--limit", min=0, help="Max results."),
+    limit: int = typer.Option(20, "--limit", min=0, max=150, help="Max results."),
     offset: int = typer.Option(
         0, "--offset", min=0, help="Number of rows to skip before applying --limit."
     ),

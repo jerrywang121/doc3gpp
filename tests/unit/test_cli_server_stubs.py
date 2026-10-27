@@ -19,9 +19,8 @@ from doc3gpp.cli_server import (
     _require_server_enabled,
     server_app,
 )
-from doc3gpp.settings.schema import ServerSettings, Settings
 from doc3gpp.settings.loader import get_settings
-
+from doc3gpp.settings.schema import ServerSettings, Settings
 
 EXPECTED_SUBCOMMAND_NAMES = ("start", "stop", "status", "logs", "install", "uninstall")
 

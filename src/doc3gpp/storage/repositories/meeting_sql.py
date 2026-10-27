@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, cast, distinct, func, Integer, or_, select, extract, update
+from sqlalchemy import Integer, and_, cast, distinct, extract, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from doc3gpp.cli_filters import is_not_null_token, is_null_token, split_not_like_prefix
 from doc3gpp.models.meeting import Meeting
 from doc3gpp.storage.db.models import MeetingORM
 from doc3gpp.storage.db.session import get_session_factory
-from doc3gpp.cli_filters import is_not_null_token, is_null_token, split_not_like_prefix
 from doc3gpp.storage.repositories.rich_filters import apply_text_filter
 
 

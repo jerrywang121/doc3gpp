@@ -10,11 +10,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import date
+from typing import ClassVar
 from unittest.mock import MagicMock
 
-import tqdm
 import pytest
+import tqdm
 from typer.testing import CliRunner
+from typing_extensions import Self
 
 from doc3gpp.cli import app
 from doc3gpp.models.spec import Spec, SpecVersion
@@ -42,8 +44,8 @@ class _FakeTqdm:
     ``stderr`` is not a TTY (where real ``tqdm`` is silent).
     """
 
-    instances: list["_FakeTqdm"] = []
-    calls: list[_FakeTqdmCall] = []
+    instances: ClassVar[list[_FakeTqdm]] = []
+    calls: ClassVar[list[_FakeTqdmCall]] = []
 
     @classmethod
     def reset(cls) -> None:
@@ -57,7 +59,7 @@ class _FakeTqdm:
         self.total = total
         self.n = 0
 
-    def __enter__(self) -> "_FakeTqdm":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc_info) -> bool:

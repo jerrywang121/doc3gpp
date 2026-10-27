@@ -739,9 +739,11 @@ upsert. Existing installs gain the table lazily: the
 - `src/doc3gpp/models/tdoc_cr.py`
   - Domain dataclasses for the CR extraction pipeline: slim
     `TDocCRDetails` (cover-page only), `TDocCRTTCNDetails` (TTCN
-    sidecar), `TDocCRParseResult` (parser bundle), `TDocExtractMeta`
-    (cache-pointer sidecar), `DirectParseResult` /
-    `DirectParseBatchResult` (direct-mode outcomes).
+    sidecar), `TDocCRParseResult` (main-document parser bundle),
+    `TDocExtractMeta` (URL-keyed extraction parent/version/count),
+    `TDocDocument` / `TDocParseBundle` (ordered ZIP source collection),
+    `DirectParseResult` / `DirectParseBatchResult` (document-collection
+    direct-mode outcomes).
 
 - `src/doc3gpp/storage/compression.py`
   - Shared gzip JSON helpers (`compress_json` / `decompress_json`)

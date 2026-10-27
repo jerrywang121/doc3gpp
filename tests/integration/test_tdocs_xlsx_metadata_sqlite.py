@@ -8,7 +8,7 @@ branch is exercised against a real SQLite database.
 from __future__ import annotations
 
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from openpyxl import Workbook
@@ -55,8 +55,8 @@ def engine():
     with sf() as session:
         session.add(MeetingORM(
             meeting_id=1, name="RAN5#111", title="t", location="loc",
-            start_date=datetime(2026, 1, 1),
-            end_date=datetime(2026, 1, 5),
+            start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
         ))
         session.commit()
     return sf, eng

@@ -53,6 +53,29 @@ def test_factory_threads_max_tdoc_size_bytes_from_settings(
         get_settings.cache_clear()
 
 
+def test_factory_threads_archive_limits_from_toml(monkeypatch, tmp_path) -> None:
+    from doc3gpp.config import get_settings
+    from doc3gpp.services.factory import build_tdoc_cr_service
+
+    config_path = tmp_path / "doc3gpp-archive-limits.toml"
+    config_path.write_text(
+        "[tdoc_parse]\nmax_documents_per_zip = 7\n"
+        "max_uncompressed_size_kb = 12\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
+    get_settings.cache_clear()
+    try:
+        service = build_tdoc_cr_service(
+            search_service=object(),
+            semantic_service=object(),
+        )
+        assert service._max_documents_per_zip == 7
+        assert service._max_uncompressed_size_bytes == 12 * 1024
+    finally:
+        get_settings.cache_clear()
+
+
 def test_factory_explicit_override_wins(monkeypatch, tmp_path) -> None:
     """Passing ``max_tdoc_size_bytes`` explicitly overrides the setting."""
     from doc3gpp.config import get_settings
@@ -134,7 +157,7 @@ def test_build_spec_service_wires_parsed_status_repository(monkeypatch) -> None:
     from datetime import timedelta
     from types import SimpleNamespace
 
-    import doc3gpp.services.factory as factory
+    from doc3gpp.services import factory
 
     spec_repository = object()
     parsed_status_repository = object()

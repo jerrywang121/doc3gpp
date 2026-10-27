@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import fields as dataclass_fields
@@ -121,6 +120,7 @@ from doc3gpp.settings.config_writer import (
     resolve_init_target,
     validate_against_settings,
     walk_known_dotted_keys,
+    write_text_atomic,
     write_toml,
 )
 from doc3gpp.settings.schema import Settings, env_var_for_dotted_key
@@ -6138,22 +6138,7 @@ def config_init(
         )
 
     template = load_default_template()
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-
-    tmp_path: Path
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=target_path.parent,
-            delete=False,
-        ) as tmp_file:
-            tmp_path = Path(tmp_file.name)
-            tmp_file.write(template)
-        os.replace(tmp_path, target_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    write_text_atomic(target_path, template, mode=0o600)
 
     get_settings.cache_clear()
 
@@ -6293,9 +6278,7 @@ def config_set(
             "--allow-plaintext-secret to store it in this file anyway."
         )
 
-    if is_secret or is_user_config:
-        target.chmod(0o600)
-    write_toml(target, data)
+    write_toml(target, data, mode=0o600 if is_secret or is_user_config else None)
     get_settings.cache_clear()
 
     typer.echo(

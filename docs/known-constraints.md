@@ -278,3 +278,9 @@ change set so the docs stay honest.
   The previous `doc3gpp config set --init` is removed — migrate by
   running `doc3gpp config init` (with `--force` when overwriting) then
   `doc3gpp config set <key> <value>` to edit individual keys.
+- **Config writes are atomic and permission-aware.** `config set` and
+  `config init` write a same-directory temp file, fsync it, and
+  `os.replace` it over the target, so a failed write keeps the old file.
+  `config init` creates the file as `0600`. `config set` keeps an
+  existing file's mode, except that the user config and any secret write
+  are set to `0600`.

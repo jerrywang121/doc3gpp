@@ -121,13 +121,11 @@ def build_state(settings: Settings) -> WebState:
             settings,
             fts5_service=search,
             semantic_service=semantic_search,
-            embedder=embedder,
         ),
         spec_doc_index=factory.build_spec_doc_index_service(
             settings,
             fts5_service=spec_doc_search,
             semantic_service=spec_doc_semantic,
-            embedder=embedder,
         ),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),

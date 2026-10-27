@@ -3012,7 +3012,8 @@ Purpose:
   TOML config file. Pydantic coerces `value` to the schema field type,
   so `24h` is accepted for `timedelta` fields and `true` / `false` for
   booleans. The settings cache is cleared so the new value is visible
-  to subsequent commands in the same process. Refuses when no config
+  to subsequent commands in the same process. The file is replaced
+  atomically, so a failed write keeps the old file. Refuses when no config
   file is in use — run `doc3gpp config init` first to bootstrap one.
 
 Arguments:

@@ -1241,6 +1241,14 @@ class SpecDocSearchRepository(Protocol):
         """
         ...
 
+    def upsert_many_versions(self, pairs: Sequence[tuple[str, str]]) -> None:
+        """Rebuild the FTS5 rows for several ``(spec_id, version)`` pairs.
+
+        One transaction for the whole batch; same per-pair result as
+        calling :meth:`upsert_for_version` for each pair.
+        """
+        ...
+
     def remove_for_version(self, spec_id: str, version: str) -> None:
         """Delete the FTS5 rows for ``(spec_id, version)``. No-op if absent."""
         ...

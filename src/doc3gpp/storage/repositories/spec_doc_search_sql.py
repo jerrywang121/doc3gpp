@@ -19,12 +19,12 @@ the ``MATCH`` expression internally via
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.cli_filters import (
@@ -134,6 +134,88 @@ def _fts5_text_filter(
     return f"{expr} LIKE :{param}", pattern
 
 
+_DELETE_PAIR_CHUNK_SIZE = 250
+_PAGE_SIZE = 500
+
+_INSERT_CHUNK_SQL = text(
+    """
+    INSERT INTO spec_doc_search (
+        chunk_id, text, sections, tables,
+        spec_id, version, release
+    ) VALUES (
+        :chunk_id, :text, :sections, :tables,
+        :spec_id, :version, :release
+    )
+    """
+)
+
+
+def _delete_version_rows(
+    conn: Connection, pairs: Sequence[tuple[str, str]],
+) -> None:
+    """Delete FTS5 rows for normalized ``(spec_id, version)`` pairs.
+
+    The FTS5 table has no index on ``spec_id`` / ``version``, so every
+    DELETE scans the whole table. Batching the pairs turns one scan per
+    version into one scan per chunk of pairs.
+    """
+    for start in range(0, len(pairs), _DELETE_PAIR_CHUNK_SIZE):
+        chunk = pairs[start : start + _DELETE_PAIR_CHUNK_SIZE]
+        placeholders = ", ".join(f"(:s{index}, :v{index})" for index in range(len(chunk)))
+        params: dict[str, str] = {}
+        for index, (spec_id, version) in enumerate(chunk):
+            params[f"s{index}"] = spec_id
+            params[f"v{index}"] = version
+        conn.execute(
+            text(
+                "DELETE FROM spec_doc_search "
+                f"WHERE (spec_id, version) IN (VALUES {placeholders})"
+            ),
+            params,
+        )
+
+
+def _read_all_chunks(
+    chunk_repo: SQLAlchemySpecDocRepository, spec_id: str, version: str,
+) -> list[SpecDocChunk]:
+    """Read every chunk of one version, paging past the page limit."""
+    chunks: list[SpecDocChunk] = []
+    offset = 0
+    while True:
+        batch = chunk_repo.list_chunks(
+            spec_id, version=version, limit=_PAGE_SIZE, offset=offset
+        )
+        chunks.extend(batch)
+        if len(batch) < _PAGE_SIZE:
+            return chunks
+        offset += _PAGE_SIZE
+
+
+def _fts_row(chunk: SpecDocChunk) -> dict[str, Any]:
+    """Project one chunk onto the normalized FTS5 column values."""
+    return {
+        "chunk_id": chunk.chunk_id,
+        "text": normalize_query(chunk.text or ""),
+        "sections": (
+            normalize_query(chunk.sections)
+            if chunk.sections is not None
+            else None
+        ),
+        "tables": (
+            normalize_query(chunk.tables)
+            if chunk.tables is not None
+            else None
+        ),
+        "spec_id": normalize_query(chunk.spec_id),
+        "version": normalize_query(chunk.version),
+        "release": (
+            normalize_query(chunk.release)
+            if chunk.release is not None
+            else None
+        ),
+    }
+
+
 class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
     """Concrete :class:`SpecDocSearchRepository` backed by FTS5."""
 
@@ -149,96 +231,61 @@ class SQLAlchemySpecDocSearchRepository(SpecDocSearchRepository):
     # ------------------------------------------------------------------
 
     def upsert_for_version(self, spec_id: str, version: str) -> None:
-        """Rebuild the FTS5 rows for one ``(spec_id, version)`` pair.
+        """Rebuild the FTS5 rows for one ``(spec_id, version)`` pair."""
+        self.upsert_many_versions([(spec_id, version)])
 
-        Reads every chunk via
-        :meth:`SQLAlchemySpecDocRepository.list_chunks` (paged, so no
-        chunk is silently dropped past the page limit), DELETEs the
-        pair's existing FTS5 rows, then INSERTs one row per chunk.
+    def upsert_many_versions(self, pairs: Sequence[tuple[str, str]]) -> None:
+        """Rebuild the FTS5 rows for several ``(spec_id, version)`` pairs.
+
+        One transaction covers the batch. A single chunked DELETE clears the
+        existing rows of every pair, then each pair's chunks are read (paged,
+        so no chunk is silently dropped past the page limit), bulk-inserted,
+        and its ``last_indexed_parsed_at`` watermark stamped. Chunks are read
+        one pair at a time, so memory is bounded by a single version.
         ``sections`` and ``tables`` store the normalized combined metadata
-        fields so their filters and snippets use the same FTS5 columns as
-        the chunk contract.
+        fields so their filters and snippets use the same FTS5 columns as the
+        chunk contract.
         """
+        unique_pairs = list(dict.fromkeys(pairs))
+        if not unique_pairs:
+            return
         chunk_repo = SQLAlchemySpecDocRepository()
-        chunks: list[SpecDocChunk] = []
-        offset = 0
-        page_size = 500
-        while True:
-            batch = chunk_repo.list_chunks(
-                spec_id, version=version, limit=page_size, offset=offset
-            )
-            chunks.extend(batch)
-            if len(batch) < page_size:
-                break
-            offset += page_size
         # FTS5 ``spec_id`` / ``version`` columns hold the
         # ``normalize_query`` form (dots → underscores), so the
         # pair-DELETE must bind the normalized values — raw
         # ``38.331`` would match zero rows and leave stale FTS5 rows
         # behind.
-        norm_spec = normalize_query(spec_id)
-        norm_version = normalize_query(version)
+        norm_pairs = [
+            (normalize_query(spec_id), normalize_query(version))
+            for spec_id, version in unique_pairs
+        ]
         with self._engine.begin() as conn:
-            conn.execute(
-                text(
-                    "DELETE FROM spec_doc_search "
-                    "WHERE spec_id = :s AND version = :v"
-                ),
-                {"s": norm_spec, "v": norm_version},
-            )
-            for chunk in chunks:
-                conn.execute(
+            _delete_version_rows(conn, norm_pairs)
+            for spec_id, version in unique_pairs:
+                rows = [
+                    _fts_row(chunk)
+                    for chunk in _read_all_chunks(chunk_repo, spec_id, version)
+                ]
+                if rows:
+                    conn.execute(_INSERT_CHUNK_SQL, rows)
+                parsed_at = conn.execute(
                     text(
-                        """
-                        INSERT INTO spec_doc_search (
-                            chunk_id, text, sections, tables,
-                            spec_id, version, release
-                        ) VALUES (
-                            :chunk_id, :text, :sections, :tables,
-                            :spec_id, :version, :release
-                        )
-                        """
+                        "SELECT parsed_at FROM spec_doc_sources "
+                        "WHERE spec_id = :s AND version = :v"
                     ),
-                    {
-                        "chunk_id": chunk.chunk_id,
-                        "text": normalize_query(chunk.text or ""),
-                        "sections": (
-                            normalize_query(chunk.sections)
-                            if chunk.sections is not None
-                            else None
+                    {"s": spec_id, "v": version},
+                ).scalar()
+                if parsed_at is not None:
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO spec_doc_search_meta (key, value)
+                            VALUES ('last_indexed_parsed_at', :v)
+                            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                            """
                         ),
-                        "tables": (
-                            normalize_query(chunk.tables)
-                            if chunk.tables is not None
-                            else None
-                        ),
-                        "spec_id": normalize_query(chunk.spec_id),
-                        "version": normalize_query(chunk.version),
-                        "release": (
-                            normalize_query(chunk.release)
-                            if chunk.release is not None
-                            else None
-                        ),
-                    },
-                )
-            parsed_at = conn.execute(
-                text(
-                    "SELECT parsed_at FROM spec_doc_sources "
-                    "WHERE spec_id = :s AND version = :v"
-                ),
-                {"s": spec_id, "v": version},
-            ).scalar()
-            if parsed_at is not None:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO spec_doc_search_meta (key, value)
-                        VALUES ('last_indexed_parsed_at', :v)
-                        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                        """
-                    ),
-                    {"v": str(parsed_at)},
-                )
+                        {"v": str(parsed_at)},
+                    )
 
     def remove_for_version(self, spec_id: str, version: str) -> None:
         """Delete the FTS5 rows for ``(spec_id, version)``. No-op if absent."""

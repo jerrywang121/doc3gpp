@@ -3028,6 +3028,12 @@ Options:
 
 - `--dry-run`: validate the key + value and print what would be
   written, without touching the file.
+- `--allow-plaintext-secret`: required to write `semantic_search.embedding_api_key`
+  into any config file other than the user config. Without it, `config set`
+  refuses and names the `DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY` env var.
+  A secret written this way is stored in plain text and triggers a warning.
+  Writing the secret to the user config needs no flag. Any secret write and
+  every write to the user config sets the file mode to `0600`.
 
 > **Note** — the previous `config set --init`, `--target`, `--force`,
 > and `--init-force` flags were removed when `config init` was split

@@ -106,7 +106,11 @@ from doc3gpp.services.tdoc_sync_coordinator import (
     MeetingNotFoundError,
 )
 from doc3gpp.services.tsg_service import TsgService
-from doc3gpp.settings.config_source import find_config_file, load_config_data
+from doc3gpp.settings.config_source import (
+    DEFAULT_USER_CONFIG,
+    find_config_file,
+    load_config_data,
+)
 from doc3gpp.settings.config_writer import (
     ConfigValidationError,
     load_default_template,
@@ -6209,11 +6213,19 @@ def _env_var_for_key(key: str) -> str | None:
     return env_var_for_dotted_key(key)
 
 
+_SECRET_CONFIG_KEYS = frozenset({"semantic_search.embedding_api_key"})
+
+
 @config_app.command("set")
 def config_set(
     key: str = typer.Argument(..., help="Dotted key, e.g. 'sync.auto_sync' or 'database_url'."),
     value: str = typer.Argument(..., help="Value as a string; pydantic coerces to the schema field type."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Validate + echo without writing."),
+    allow_plaintext_secret: bool = typer.Option(
+        False,
+        "--allow-plaintext-secret",
+        help="Write a secret setting into a non-user config file (stored in plain text).",
+    ),
 ) -> None:
     """Set a single key in the active config file.
 
@@ -6225,6 +6237,12 @@ def config_set(
     :class:`Settings`, so ``24h`` is accepted for ``timedelta`` fields
     and ``true``/``false`` for booleans. ``--dry-run`` validates and
     prints what *would* be written without touching disk.
+
+    Secret settings (``semantic_search.embedding_api_key``) are refused
+    in any config file other than the user config, because project files
+    can be committed; set the environment variable instead, or pass
+    ``--allow-plaintext-secret``. The user config is always written with
+    mode ``0600``.
     """
     found = find_config_file()
     if found is None:
@@ -6266,6 +6284,17 @@ def config_set(
         )
         return
 
+    is_secret = key in _SECRET_CONFIG_KEYS
+    is_user_config = target.resolve() == DEFAULT_USER_CONFIG.resolve()
+    if is_secret and not is_user_config and not allow_plaintext_secret:
+        raise typer.BadParameter(
+            f"refusing to write {key} into {target}: project files can be committed. "
+            f"Set {_env_var_for_key(key)} in the environment instead, or pass "
+            "--allow-plaintext-secret to store it in this file anyway."
+        )
+
+    if is_secret or is_user_config:
+        target.chmod(0o600)
     write_toml(target, data)
     get_settings.cache_clear()
 
@@ -6274,6 +6303,11 @@ def config_set(
         f"{json.dumps(resolve_echo_subtree(settings, key), indent=2, sort_keys=True, default=str)}"
         f" (written to {target})."
     )
+    if is_secret:
+        typer.echo(
+            f"  Warning: {key} is stored in plain text in {target} (mode 0600). "
+            f"Prefer {_env_var_for_key(key)} in the environment."
+        )
     env_var = _env_var_for_key(key)
     if env_var is None:
         typer.echo(

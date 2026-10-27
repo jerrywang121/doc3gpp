@@ -121,6 +121,21 @@ def test_build_state_shares_one_embedder(sqlite_env) -> None:
     assert state.services.spec_doc._embedder is None
 
 
+def test_lifespan_closes_shared_embedder_on_shutdown(sqlite_env, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services import factory
+    from doc3gpp.storage.db.migrate import create_schema
+
+    create_schema()
+    fake_embedder = MagicMock()
+    monkeypatch.setattr(factory, "build_embedder", lambda _settings: fake_embedder)
+    app = build_app(Settings())
+    with TestClient(app):
+        assert app.state.web.services.semantic_search._embedder is fake_embedder
+    fake_embedder.close.assert_called_once_with()
+
+
 def test_build_state_wires_testcase_engine(sqlite_env) -> None:
     """``build_state`` carries the shared testcase engine on ``WebState``."""
     from doc3gpp.settings.schema import Settings

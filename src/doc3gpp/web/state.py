@@ -16,6 +16,7 @@ The shape mirrors the T4 contract:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -181,6 +182,9 @@ class WebState:
     service fields) so pre-Task-12 test call sites that omit it keep
     working; production wiring always fills it via
     :func:`doc3gpp.web.app.build_state`.
+
+    ``close_embedder`` releases the lazily built shared embedder when the
+    lifespan shuts down; ``None`` when no embedder hook is wired.
     """
 
     settings: Settings
@@ -189,6 +193,7 @@ class WebState:
     services: ServiceContainer
     jobs: JobWorkerHandle
     specdata_engine: Engine | None = None
+    close_embedder: Callable[[], None] | None = None
 
 
 __all__ = ["JobWorkerHandle", "ServiceContainer", "WebState"]

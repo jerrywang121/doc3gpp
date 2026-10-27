@@ -313,12 +313,35 @@ class SemanticSearchService:
         if embed_text is None:
             self._vec.remove_for_tdoc(tdoc_id)
             return
+        labelled = self._embed_chunks(
+            tdoc_id, embed_text, self._vec.content_documents_for_tdoc(tdoc_id),
+        )
+        if labelled:
+            self._vec.upsert_chunks(tdoc_id, labelled)
+        else:
+            self._vec.remove_for_tdoc(tdoc_id)
+
+    def _embed_prefetched(
+        self,
+        tdoc_id: str,
+        embed_text: str | None,
+        documents: list[tuple[str, str, str]] | Exception,
+    ) -> list[EmbeddedChunk]:
+        if embed_text is None:
+            return []
+        if isinstance(documents, Exception):
+            raise documents
+        return self._embed_chunks(tdoc_id, embed_text, documents)
+
+    def _embed_chunks(
+        self, tdoc_id: str, embed_text: str, documents: list[tuple[str, str, str]],
+    ) -> list[EmbeddedChunk]:
         semantic = self._settings.semantic_search
         metadata_texts = _chunks(embed_text, semantic.chunk_size, semantic.chunk_overlap)
         max_chunks = getattr(semantic, "max_chunks_per_tdoc", 8)
         metadata_texts = metadata_texts[:max_chunks]
         content = list(plan_content_chunks(
-            self._vec.content_documents_for_tdoc(tdoc_id),
+            documents,
             semantic.chunk_size,
             semantic.chunk_overlap,
             semantic.max_content_chunks_per_tdoc,
@@ -328,8 +351,7 @@ class SemanticSearchService:
             *(chunk for _document_id, _content_hash, chunks in content for chunk in chunks),
         ]
         if not texts:
-            self._vec.remove_for_tdoc(tdoc_id)
-            return
+            return []
         # Batch all chunks for one TDoc into a single embedder call.
         # The remote embeddings API charges per request, so calling
         # encode() per chunk would be O(chunks) HTTP round-trips per TDoc.
@@ -347,10 +369,32 @@ class SemanticSearchService:
                     embedding=embeddings[position],
                 ))
                 position += 1
-        self._vec.upsert_chunks(tdoc_id, labelled)
+        return labelled
 
     def remove_for_tdoc(self, tdoc_id: str) -> None:
         self._vec.remove_for_tdoc(tdoc_id)
+
+    def _write_chunks_batch(self, writes: list[tuple[str, list[EmbeddedChunk]]]) -> None:
+        """Write one rebuild batch in a single transaction.
+
+        If the batch fails, each TDoc is retried on its own so one bad row is
+        logged and skipped rather than aborting the whole batch.
+        """
+        try:
+            self._vec.upsert_chunks_many(writes)
+        except Exception as exc:  # noqa: BLE001 - per-tdoc failures must not abort the batch; logged for observability
+            logger.warning(
+                "embedding batch write failed for %d tdocs, retrying one by one: %s",
+                len(writes), exc,
+            )
+            for write in writes:
+                try:
+                    self._vec.upsert_chunks_many([write])
+                except Exception as tdoc_exc:  # noqa: BLE001 - per-tdoc failures must not abort the batch; logged for observability
+                    logger.warning(
+                        "embedding rebuild failed for tdoc_id=%s: %s",
+                        write[0], tdoc_exc,
+                    )
 
     def rebuild_embeddings(
         self,
@@ -441,14 +485,21 @@ class SemanticSearchService:
             batch_size=batch_size, after_id=after_id, stale_only=stale_only,
         )
         for batch in batches:
+            embed_texts = self._vec.embed_texts_for_tdocs(batch)
+            documents = self._vec.content_documents_for_tdocs(batch)
+            writes: list[tuple[str, list[EmbeddedChunk]]] = []
             for tdoc_id in batch:
                 try:
-                    self.index_for_tdoc(tdoc_id)
+                    writes.append((tdoc_id, self._embed_prefetched(
+                        tdoc_id, embed_texts[tdoc_id], documents[tdoc_id],
+                    )))
                 except Exception as exc:  # noqa: BLE001 - per-tdoc failures must not abort the batch; logged for observability
                     logger.warning(
                         "embedding rebuild failed for tdoc_id=%s: %s",
                         tdoc_id, exc,
                     )
+            self._write_chunks_batch(writes)
+            for tdoc_id in batch:
                 processed += 1
                 pct = (processed * 100 // total) if total > 0 else 100
                 if pct > last_yielded_pct:

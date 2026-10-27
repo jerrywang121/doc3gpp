@@ -27,7 +27,7 @@ from itertools import groupby
 
 import numpy as np
 from sqlalchemy import bindparam, text
-from sqlalchemy.engine import Engine, Row
+from sqlalchemy.engine import Connection, Engine, Row
 from sqlalchemy.exc import OperationalError
 
 from doc3gpp.models.search import SearchFilters, SearchIndexStatus, TDocMeta
@@ -399,14 +399,65 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                     },
                 )
 
+    def upsert_chunks_many(self, items: list[tuple[str, list[EmbeddedChunk]]]) -> None:
+        """Replace the chunks of every ``tdoc_id`` in one transaction; empty lists remove them."""
+        for _tdoc_id, chunks in items:
+            self._check_dim([chunk.embedding for chunk in chunks])
+        tdoc_ids = [tdoc_id for tdoc_id, _chunks in items]
+        with self._engine.begin() as conn:
+            for start in range(0, len(tdoc_ids), 500):
+                batch_ids = tdoc_ids[start:start + 500]
+                placeholders = ", ".join(f":id_{i}" for i in range(len(batch_ids)))
+                conn.execute(
+                    text(f"DELETE FROM vec_tdoc_embeddings WHERE tdoc_id IN ({placeholders})"),
+                    {f"id_{i}": v for i, v in enumerate(batch_ids)},
+                )
+            metadata = _rows_for_tdocs(
+                conn, _TDOC_METADATA_SELECT + " WHERE t.tdoc_id IN ({ids})", tdoc_ids,
+            )
+            params: list[dict[str, object]] = []
+            for tdoc_id, chunks in items:
+                meeting_id, tsg, uploaded_date = _vec_metadata(
+                    *(_first_row(metadata, tdoc_id) or (None, None, None)),
+                )
+                params.extend(
+                    {
+                        "cid": chunk.chunk_id,
+                        "tid": tdoc_id,
+                        "ci": chunk.chunk_index,
+                        "mid": meeting_id,
+                        "tsg": tsg,
+                        "udate": uploaded_date,
+                        "emb": np.asarray(chunk.embedding, dtype=np.float32).tobytes(),
+                    }
+                    for chunk in chunks
+                )
+            if params:
+                conn.execute(
+                    text(
+                        "INSERT INTO vec_tdoc_embeddings "
+                        "(chunk_id, tdoc_id, chunk_index, meeting_id, tsg, uploaded_date, embedding) "
+                        "VALUES (:cid, :tid, :ci, :mid, :tsg, :udate, :emb)"
+                    ),
+                    params,
+                )
+
     def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
         return self._indexed_state()[0]
 
     def embed_text_for_tdoc(self, tdoc_id: str) -> str | None:
         return _build_embed_text(tdoc_id)
 
+    def embed_texts_for_tdocs(self, tdoc_ids: list[str]) -> dict[str, str | None]:
+        return _build_embed_texts(tdoc_ids)
+
     def content_documents_for_tdoc(self, tdoc_id: str) -> list[tuple[str, str, str]]:
         return _build_content_documents(tdoc_id)
+
+    def content_documents_for_tdocs(
+        self, tdoc_ids: list[str],
+    ) -> dict[str, list[tuple[str, str, str]] | UndecodableContentError]:
+        return _build_content_documents_for_tdocs(tdoc_ids)
 
     def _indexed_state(
         self,
@@ -681,7 +732,7 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 ),
                 {"day": snapshot},
             ).scalars().all()
-        return any(_build_embed_text(tdoc_id) for tdoc_id in missing)
+        return any(self.embed_texts_for_tdocs(missing).values())
 
     def _stale_tdoc_ids(self) -> list[str]:
         """Return sorted ``tdoc_id``s that are uploaded-date stale or content stale.
@@ -849,74 +900,107 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
         return out
 
 
-def _build_embed_text(tdoc_id: str) -> str | None:
-    """Build the concatenated embed text for ``tdoc_id``.
+def _rows_for_tdocs(
+    conn: Connection, template: str, tdoc_ids: list[str],
+) -> dict[str, list[Row]]:
+    """Run ``template`` once per chunk of ``tdoc_ids`` and group rows by their first column.
 
-    Fans out a small set of SQL queries against ``tdocs``,
-    ``meetings``, ``wis``, and the three sidecar tables, decompresses
-    the gzip JSON blobs in Python, and concatenates the text fields
-    with `` :: `` separator. Returns ``None`` when the ``tdoc_id`` is
-    absent from ``tdocs``.
+    ``template`` holds an ``{ids}`` placeholder for the bound ``IN`` list. Chunks of 500
+    keep the bound-parameter count under SQLite's default limit.
+    """
+    grouped: dict[str, list[Row]] = {}
+    chunk_size = 500
+    for start in range(0, len(tdoc_ids), chunk_size):
+        chunk = tdoc_ids[start:start + chunk_size]
+        placeholders = ", ".join(f":id_{i}" for i in range(len(chunk)))
+        params = {f"id_{i}": v for i, v in enumerate(chunk)}
+        for row in conn.execute(text(template.format(ids=placeholders)), params):
+            grouped.setdefault(row[0], []).append(row)
+    return grouped
+
+
+def _first_row(rows: dict[str, list[Row]], tdoc_id: str) -> tuple | None:
+    found = rows.get(tdoc_id)
+    return tuple(found[0][1:]) if found else None
+
+
+def _build_embed_texts(tdoc_ids: list[str]) -> dict[str, str | None]:
+    """Build the concatenated embed text for each ``tdoc_id``.
+
+    One query per table covers the whole list. The ``tdocs``, ``meetings``,
+    ``wis``, and the three sidecar tables are read in bulk, the gzip JSON blobs
+    are decompressed in Python, and the text fields are joined with `` :: ``.
+    A ``tdoc_id`` absent from ``tdocs`` maps to ``None``.
 
     The ``wis`` lookup joins ``tdocs.related_wis`` (a comma-separated
     string of acronyms) against ``wis.acronym`` via ``LIKE``; matched
     ``wis.name`` rows are joined with ``; `` and appended after the
     meeting title.
     """
-    from doc3gpp.storage.db.session import get_engine as _ge
-    engine = _ge()
-    with engine.begin() as conn:
-        tdoc = conn.execute(
-            text("SELECT title FROM tdocs WHERE tdoc_id = :id"), {"id": tdoc_id},
-        ).first()
+    ids = list(dict.fromkeys(tdoc_ids))
+    if not ids:
+        return {}
+    with get_engine().begin() as conn:
+        titles = _rows_for_tdocs(
+            conn, "SELECT tdoc_id, title FROM tdocs WHERE tdoc_id IN ({ids})", ids,
+        )
+        meetings = _rows_for_tdocs(
+            conn,
+            "SELECT t.tdoc_id, m.title FROM meetings m "
+            "JOIN tdocs t ON t.meeting_id = m.meeting_id "
+            "WHERE t.tdoc_id IN ({ids})",
+            ids,
+        )
+        wis = _rows_for_tdocs(
+            conn,
+            "SELECT t.tdoc_id, w.name FROM wis w "
+            "JOIN tdocs t ON t.related_wis IS NOT NULL "
+            "  AND (',' || t.related_wis || ',') LIKE ('%,' || w.acronym || ',%') "
+            "WHERE t.tdoc_id IN ({ids})",
+            ids,
+        )
+        covers = _rows_for_tdocs(
+            conn,
+            "SELECT tdoc_id, title, summary_of_change "
+            "FROM tdoc_cr_cover_page WHERE tdoc_id IN ({ids})",
+            ids,
+        )
+        ttcns = _rows_for_tdocs(
+            conn,
+            """
+            SELECT tdoc_id, testcase, ue, ss, ats_version, ttcn_release,
+                   test_suite, required_changes, changed_functions
+              FROM tdoc_cr_ttcn_details
+             WHERE tdoc_id IN ({ids})
+            """,
+            ids,
+        )
+        changes = _rows_for_tdocs(
+            conn,
+            "SELECT tdoc_id, clauses, changes FROM tdoc_cr_change_details "
+            "WHERE tdoc_id IN ({ids})",
+            ids,
+        )
+    texts: dict[str, str | None] = {}
+    for tdoc_id in ids:
+        tdoc = _first_row(titles, tdoc_id)
         if tdoc is None:
-            return None
+            texts[tdoc_id] = None
+            continue
         parts: list[str] = [tdoc[0] or ""]
-        mtg = conn.execute(
-            text(
-                "SELECT m.title FROM meetings m "
-                "JOIN tdocs t ON t.meeting_id = m.meeting_id "
-                "WHERE t.tdoc_id = :id"
-            ),
-            {"id": tdoc_id},
-        ).first()
+        mtg = _first_row(meetings, tdoc_id)
         if mtg and mtg[0]:
             parts.append(mtg[0])
-        wis_names = conn.execute(
-            text(
-                "SELECT w.name FROM wis w, tdocs t "
-                "WHERE t.tdoc_id = :id "
-                "  AND t.related_wis IS NOT NULL "
-                "  AND (',' || t.related_wis || ',') LIKE "
-                "      ('%,' || w.acronym || ',%')"
-            ),
-            {"id": tdoc_id},
-        ).all()
+        wis_names = [row[1] for row in wis.get(tdoc_id, [])]
         if wis_names:
-            parts.append("; ".join(row[0] for row in wis_names if row[0]))
-        cover = conn.execute(
-            text(
-                "SELECT title, summary_of_change "
-                "FROM tdoc_cr_cover_page WHERE tdoc_id = :id"
-            ),
-            {"id": tdoc_id},
-        ).first()
+            parts.append("; ".join(name for name in wis_names if name))
+        cover = _first_row(covers, tdoc_id)
         if cover is not None:
             if cover[0]:
                 parts.append(cover[0])
             if cover[1]:
                 parts.append(cover[1])
-        ttcn = conn.execute(
-            text(
-                """
-                SELECT testcase, ue, ss, ats_version, ttcn_release,
-                       test_suite, required_changes, changed_functions
-                  FROM tdoc_cr_ttcn_details
-                 WHERE tdoc_id = :id
-                """
-            ),
-            {"id": tdoc_id},
-        ).first()
+        ttcn = _first_row(ttcns, tdoc_id)
         if ttcn is not None:
             flat = " ".join(str(v) for v in ttcn[:6] if v is not None)
             if flat:
@@ -926,27 +1010,26 @@ def _build_embed_text(tdoc_id: str) -> str | None:
                 parts.append(str(decoded)[:2000])
             if ttcn[7]:
                 parts.append(ttcn[7].replace("\n", " "))
-        changes = conn.execute(
-            text(
-                "SELECT clauses, changes FROM tdoc_cr_change_details "
-                "WHERE tdoc_id = :id"
-            ),
-            {"id": tdoc_id},
-        ).first()
-        if changes is not None:
-            if changes[0]:
-                parts.append(changes[0].replace("\n", " "))
-            decoded = decompress_json(changes[1])
+        change = _first_row(changes, tdoc_id)
+        if change is not None:
+            if change[0]:
+                parts.append(change[0].replace("\n", " "))
+            decoded = decompress_json(change[1])
             if isinstance(decoded, list):
                 for c in decoded:
                     parts.append(_json.dumps(c, ensure_ascii=False))
             elif decoded is not None:
                 parts.append(str(decoded)[:2000])
-    return " :: ".join(p for p in parts if p)
+        texts[tdoc_id] = " :: ".join(p for p in parts if p)
+    return texts
 
 
-def _content_rows_sql(*, single_tdoc: bool, status_only: bool = False) -> str:
-    where = " WHERE e.tdoc_id = :tdoc_id" if single_tdoc else ""
+def _build_embed_text(tdoc_id: str) -> str | None:
+    """Return the embed text for ``tdoc_id``, or ``None`` when it is absent from ``tdocs``."""
+    return _build_embed_texts([tdoc_id])[tdoc_id]
+
+
+def _content_rows_sql(*, where: str = "", status_only: bool = False) -> str:
     payload = "c.token_count AS token_count" if status_only else "c.content AS content"
     selects = [
         "SELECT e.tdoc_id AS tdoc_id, c.ftp_url AS ftp_url, "
@@ -960,9 +1043,9 @@ def _content_rows_sql(*, single_tdoc: bool, status_only: bool = False) -> str:
     return "\nUNION ALL\n".join(selects) + "\nORDER BY tdoc_id, ftp_url, source_file"
 
 
-_CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False)
-_CONTENT_ROWS_FOR_TDOC_SQL = _content_rows_sql(single_tdoc=True)
-_STATUS_CONTENT_ROWS_SQL = _content_rows_sql(single_tdoc=False, status_only=True)
+_CONTENT_ROWS_SQL = _content_rows_sql()
+_CONTENT_ROWS_FOR_TDOCS_SQL = _content_rows_sql(where=" WHERE e.tdoc_id IN ({ids})")
+_STATUS_CONTENT_ROWS_SQL = _content_rows_sql(status_only=True)
 
 
 class UndecodableContentError(ValueError):
@@ -997,10 +1080,31 @@ def _ordered_documents(rows: Sequence[Row]) -> Iterator[tuple[str, str, str]]:
         yield row.document_id, row.content_hash, markdown
 
 
+def _build_content_documents_for_tdocs(
+    tdoc_ids: list[str],
+) -> dict[str, list[tuple[str, str, str]] | UndecodableContentError]:
+    """Return each TDoc's content documents in indexing order, or its decode error.
+
+    A TDoc whose stored content cannot be decoded maps to its
+    ``UndecodableContentError``, so one bad TDoc does not fail the batch.
+    """
+    ids = list(dict.fromkeys(tdoc_ids))
+    if not ids:
+        return {}
+    with get_engine().begin() as conn:
+        rows = _rows_for_tdocs(conn, _CONTENT_ROWS_FOR_TDOCS_SQL, ids)
+    documents: dict[str, list[tuple[str, str, str]] | UndecodableContentError] = {}
+    for tdoc_id in ids:
+        try:
+            documents[tdoc_id] = list(_ordered_documents(rows.get(tdoc_id, [])))
+        except UndecodableContentError as exc:
+            documents[tdoc_id] = exc
+    return documents
+
+
 def _build_content_documents(tdoc_id: str) -> list[tuple[str, str, str]]:
     """Return one TDoc's stored content documents in indexing order."""
-    with get_engine().begin() as conn:
-        rows = conn.execute(
-            text(_CONTENT_ROWS_FOR_TDOC_SQL), {"tdoc_id": tdoc_id},
-        ).all()
-    return list(_ordered_documents(rows))
+    documents = _build_content_documents_for_tdocs([tdoc_id])[tdoc_id]
+    if isinstance(documents, UndecodableContentError):
+        raise documents
+    return documents

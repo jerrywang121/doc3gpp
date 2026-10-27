@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from doc3gpp.services.semantic_search_service import SemanticSearchService
 from doc3gpp.settings.loader import get_settings
@@ -301,3 +301,41 @@ def test_same_day_blank_tdoc_without_embed_text_keeps_status_fresh(sqlite_env) -
     _insert_blank_tdoc(_BLANK_ID, _UPLOADED)
 
     assert SQLAlchemyVectorIndexRepository().status().is_stale is False
+
+
+def _count_selects(call) -> int:
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany) -> None:
+        statements.append(statement)
+
+    engine = get_engine()
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        call()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return sum(1 for statement in statements if statement.lstrip().upper().startswith("SELECT"))
+
+
+def test_status_select_count_does_not_grow_with_same_day_blank_tdocs(sqlite_env) -> None:
+    _seed()
+    _rebuild(stale_only=False)
+    repo = SQLAlchemyVectorIndexRepository()
+    _insert_blank_tdoc("R5-2600210", _UPLOADED)
+    one = _count_selects(repo.status)
+
+    for index in range(6):
+        _insert_blank_tdoc(f"R5-26003{index:02d}", _UPLOADED)
+
+    assert _count_selects(repo.status) == one
+
+
+def test_rebuild_select_count_does_not_grow_with_tdoc_count(sqlite_env) -> None:
+    _seed()
+    two = _count_selects(lambda: _rebuild(stale_only=False))
+
+    for index in range(6):
+        _insert_tdoc(f"R5-26004{index:02d}", _UPLOADED)
+
+    assert _count_selects(lambda: _rebuild(stale_only=False)) == two

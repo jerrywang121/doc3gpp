@@ -300,20 +300,24 @@ class SQLAlchemySpecDocVectorRepository(SpecDocVectorRepository):
                 ),
                 {"s": spec_id, "v": version},
             )
-            for i, vec in enumerate(embeddings):
+            rows = [
+                {
+                    "cid": f"{spec_id}@{version}#{i}",
+                    "sid": spec_id,
+                    "ver": version,
+                    "ci": i,
+                    "emb": np.asarray(vec, dtype=np.float32).tobytes(),
+                }
+                for i, vec in enumerate(embeddings)
+            ]
+            if rows:
                 conn.execute(
                     text(
                         "INSERT INTO vec_spec_doc_embeddings "
                         "(chunk_id, spec_id, version, chunk_index, embedding) "
                         "VALUES (:cid, :sid, :ver, :ci, :emb)"
                     ),
-                    {
-                        "cid": f"{spec_id}@{version}#{i}",
-                        "sid": spec_id,
-                        "ver": version,
-                        "ci": i,
-                        "emb": np.asarray(vec, dtype=np.float32).tobytes(),
-                    },
+                    rows,
                 )
             self._stamp_indexed_parsed_at(conn, spec_id, version)
 

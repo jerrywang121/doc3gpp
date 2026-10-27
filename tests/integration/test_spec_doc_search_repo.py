@@ -346,6 +346,46 @@ def test_vector_upsert_knn_and_remove(sqlite_env):
     assert vec.knn(q, limit=10) == []
 
 
+def _count_vec_chunk_inserts(call) -> int:
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany) -> None:
+        statements.append(statement)
+
+    engine = get_specdata_engine()
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        call()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return sum(
+        1
+        for statement in statements
+        if statement.lstrip().upper().startswith("INSERT")
+        and "vec_spec_doc_embeddings" in statement
+    )
+
+
+def test_vector_upsert_insert_count_does_not_grow_with_chunk_count(sqlite_env):
+    import numpy as np
+
+    create_schema("all")
+    vec = _vec_repo(sqlite_env)
+    dim = vec._dim
+
+    def vectors(count):
+        return [np.zeros(dim, dtype=np.float32) for _ in range(count)]
+
+    two = _count_vec_chunk_inserts(
+        lambda: vec.upsert_for_version("38.331", "18.5.0", vectors(2))
+    )
+    six = _count_vec_chunk_inserts(
+        lambda: vec.upsert_for_version("38.331", "19.0.0", vectors(6))
+    )
+
+    assert six == two
+
+
 def test_vector_knn_filters_by_combined_table_metadata(sqlite_env):
     import numpy as np
 

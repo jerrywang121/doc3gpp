@@ -981,6 +981,16 @@ class VectorIndexRepository(Protocol):
         """
         ...
 
+    def upsert_chunks_many(
+        self, items: list[tuple[str, list[EmbeddedChunk]]]
+    ) -> None:
+        """Replace chunk rows for many TDocs in one transaction.
+
+        Each ``(tdoc_id, chunks)`` pair follows ``upsert_chunks`` semantics;
+        an empty chunk list removes that TDoc's rows.
+        """
+        ...
+
     def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
         """Return ``(document_id, content_hash)`` pairs of indexed content chunks.
 
@@ -998,6 +1008,23 @@ class VectorIndexRepository(Protocol):
 
         Documents come back in indexing order. A TDoc with no content rows
         returns an empty list.
+        """
+        ...
+
+    def embed_texts_for_tdocs(self, tdoc_ids: list[str]) -> dict[str, str | None]:
+        """Return the metadata embed text for each ``tdoc_id``, in one pass per table.
+
+        A ``tdoc_id`` absent from ``tdocs`` maps to ``None``.
+        """
+        ...
+
+    def content_documents_for_tdocs(
+        self, tdoc_ids: list[str],
+    ) -> dict[str, list[tuple[str, str, str]] | Exception]:
+        """Return each ``tdoc_id``'s content documents, or the decode error that blocks them.
+
+        A TDoc whose stored content cannot be decoded maps to its exception, so one
+        bad TDoc does not fail the batch. Documents come back in indexing order.
         """
         ...
 

@@ -1237,6 +1237,15 @@ class JobRepository(Protocol):
         """
         ...
 
+    def cancel_if_queued(self, job_id: str) -> bool:
+        """Atomically transition ``job_id`` to ``CANCELLED`` if it is still ``QUEUED``.
+
+        Returns ``True`` when this call cancelled the job. Returns ``False``
+        when the job is unknown, already claimed by a worker, or terminal;
+        those rows are not modified. Stamps ``finished_at`` on success.
+        """
+        ...
+
     def delete_older_than(self, cutoff: datetime) -> int:
         """Delete terminal jobs older than ``cutoff``; return the row count.
 

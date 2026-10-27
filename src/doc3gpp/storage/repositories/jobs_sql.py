@@ -229,6 +229,28 @@ class SQLAlchemyJobRepository(JobRepository):
             row = session.get(JobORM, job_id)
         return _orm_to_domain(row)
 
+    def cancel_if_queued(self, job_id: str) -> bool:
+        """Transition ``job_id`` to ``CANCELLED`` only while it is ``QUEUED``.
+
+        The ``WHERE status = 'queued'`` guard makes the write atomic against
+        a concurrent worker claim: a job already claimed or terminal is left
+        untouched and reported as ``False``.
+        """
+        now = _utcnow()
+        with self._session_factory() as session:
+            stmt = (
+                update(JobORM)
+                .where(JobORM.job_id == job_id)
+                .where(JobORM.status == JobStatus.QUEUED.value)
+                .values(
+                    status=JobStatus.CANCELLED.value,
+                    finished_at=now,
+                )
+            )
+            result = session.execute(stmt)
+            session.commit()
+        return bool(result.rowcount)
+
     def delete_older_than(self, cutoff: datetime) -> int:
         """Delete terminal jobs older than ``cutoff``; return the row count."""
         terminal_values = (

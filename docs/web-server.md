@@ -510,7 +510,11 @@ Events) for progress. Log lines carry a `[{iso}]` timestamp prefix.
 
 Cancelling a terminal job is idempotent — the response returns the job's
 final envelope with `200` so callers can inspect the result without a
-separate `GET /jobs/{id}` round-trip. See `cancel_job` in the MCP/Job
+separate `GET /jobs/{id}` round-trip. Cancelling a queued job moves it to
+`cancelled` in the database atomically, so the cancel holds without a running
+worker and across a server restart; a worker never claims a job that is no
+longer queued. Cancelling a running job signals its handler to stop
+cooperatively. See `cancel_job` in the MCP/Job
 tools section below. The `jobs` table is created automatically via schema
 bootstrap — there is no migration step.
 

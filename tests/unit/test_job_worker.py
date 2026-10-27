@@ -159,7 +159,6 @@ class _JobWorkerHandleFake:
     def __init__(self) -> None:
         self.event_queues: dict[str, asyncio.Queue[dict]] = {}
         self.cancel_events: dict[str, asyncio.Event] = {}
-        self._cancel_requests: set[str] = set()
 
     def register_queue(self, job_id: str, queue: asyncio.Queue[dict]) -> None:
         self.event_queues[job_id] = queue
@@ -169,17 +168,10 @@ class _JobWorkerHandleFake:
 
     def cancel(self, job_id: str) -> bool:
         event = self.cancel_events.get(job_id)
-        if event is not None:
-            event.set()
-            return True
-        self._cancel_requests.add(job_id)
+        if event is None:
+            return False
+        event.set()
         return True
-
-    def consume_cancel_request(self, job_id: str) -> bool:
-        if job_id in self._cancel_requests:
-            self._cancel_requests.discard(job_id)
-            return True
-        return False
 
 
 def _make_repo() -> SQLAlchemyJobRepository:
@@ -488,25 +480,39 @@ def test_worker_cancels_on_event() -> None:
     assert done.error is None
 
 
-def test_worker_cancels_queued_job_on_pending_request() -> None:
-    """A cancel requested while the job is QUEUED is honoured on claim."""
+def test_queued_cancel_survives_worker_restart() -> None:
+    """A cancel committed while the job was QUEUED holds after a restart."""
     repo = _make_repo()
-    state = _make_state(repo)
     job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
 
-    # Cancel before the worker claims the job: no running event exists,
-    # so the request is recorded as pending on the handle.
-    assert state.jobs.cancel(job.id) is True
-    assert job.id in state.jobs._cancel_requests  # type: ignore[attr-defined]
+    # Cancel with no worker running; the row itself records the request.
+    assert repo.cancel_if_queued(job.id) is True
 
-    worker = JobWorker(state, repo=repo)
-    _run_worker_once(worker, repo)
-
+    # A restarted process starts with a fresh handle and worker. Nothing is
+    # left QUEUED for it to claim, so the cancelled job never runs.
+    _make_state(repo)
+    assert repo.list(status=JobStatus.QUEUED, limit=10) == []
     done = repo.get(job.id)
     assert done is not None
     assert done.status is JobStatus.CANCELLED
     assert done.error is None
-    assert job.id not in state.jobs._cancel_requests  # type: ignore[attr-defined]
+
+
+def test_worker_skips_job_cancelled_after_it_was_listed() -> None:
+    """The worker claims only rows that are still QUEUED when it claims them."""
+    repo = _make_repo()
+    state = _make_state(repo)
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    listed = repo.list(status=JobStatus.QUEUED, limit=1)[0]
+    assert repo.cancel_if_queued(job.id) is True
+
+    worker = JobWorker(state, repo=repo)
+    asyncio.run(worker._claim_and_run(listed, asyncio.Semaphore(1)))  # type: ignore[attr-defined]
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.CANCELLED
+    assert done.started_at is None
 
 
 def test_worker_emits_named_sse_events() -> None:

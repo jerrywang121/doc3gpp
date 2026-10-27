@@ -74,10 +74,6 @@ class JobWorkerHandle:
     event_queues: dict[str, asyncio.Queue[dict]] = field(default_factory=dict)
     cancel_events: dict[str, asyncio.Event] = field(default_factory=dict)
     pipeline: PipelineRuntime | None = None
-    #: Job ids whose cancellation was requested while still ``QUEUED`` (no
-    #: running handler event exists yet). Consumed by the worker when it
-    #: claims the job, so a cancel-request on a queued job is not lost.
-    _cancel_requests: set[str] = field(default_factory=set)
     max_concurrent_jobs: int = 1
 
     def register_queue(self, job_id: str, queue: asyncio.Queue[dict]) -> None:
@@ -89,33 +85,18 @@ class JobWorkerHandle:
         self.event_queues.pop(job_id, None)
 
     def cancel(self, job_id: str) -> bool:
-        """Request cooperative cancellation for ``job_id``.
+        """Signal the running handler for ``job_id`` to stop cooperatively.
 
-        When a running handler already registered a cancellation event it
-        is set immediately. Otherwise the request is recorded so the
-        worker honours it once it claims the ``QUEUED`` job. Returns
-        ``True`` whenever a request was recorded.
+        Returns ``True`` when a running handler's cancellation event was set.
+        Queued jobs are cancelled durably in the job repository instead (see
+        ``JobRepository.cancel_if_queued``), so a ``False`` return means the
+        job is not running here.
         """
         event = self.cancel_events.get(job_id)
-        if event is not None:
-            event.set()
-            return True
-        self._cancel_requests.add(job_id)
+        if event is None:
+            return False
+        event.set()
         return True
-
-    def consume_cancel_request(self, job_id: str) -> bool:
-        """Return whether ``job_id`` has a pending queued cancel request.
-
-        Used by the worker when it claims a job: it mints a fresh
-        cancellation event, and if a cancel was requested while the job
-        was still queued, sets that event so the handler aborts
-        immediately. The pending request is consumed (removed) so a
-        later duplicate cancel does not re-fire.
-        """
-        if job_id in self._cancel_requests:
-            self._cancel_requests.discard(job_id)
-            return True
-        return False
 
     async def shutdown(self) -> None:
         """Request cancellation for every job and await the worker task.

@@ -139,6 +139,26 @@ def test_mark_cancelled_sets_finished_at() -> None:
     assert cancelled.error is None
 
 
+def test_cancel_if_queued_cancels_only_queued_jobs() -> None:
+    """A queued job moves to CANCELLED atomically; a claimed job is untouched."""
+    repo = _make_repo()
+    queued = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+    running = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})
+    repo.mark_running(running.id)
+
+    assert repo.cancel_if_queued(queued.id) is True
+    assert repo.cancel_if_queued(running.id) is False
+    assert repo.cancel_if_queued("no-such-job") is False
+
+    done = repo.get(queued.id)
+    assert done is not None
+    assert done.status is JobStatus.CANCELLED
+    assert done.finished_at is not None
+    still_running = repo.get(running.id)
+    assert still_running is not None
+    assert still_running.status is JobStatus.RUNNING
+
+
 def test_list_filters_by_status() -> None:
     """``list(status=...)`` only returns rows in the matching state."""
     repo = _make_repo()

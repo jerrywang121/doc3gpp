@@ -581,6 +581,17 @@ async def job_events(
 # ---------------------------------------------------------------------------
 
 
+def request_cancel(job_repo: JobRepository, handle: JobWorkerHandle, job_id: str) -> None:
+    """Cancel ``job_id`` durably if it is queued, else signal its running handler.
+
+    A queued job moves to ``CANCELLED`` in the database, so the cancel holds
+    without a worker and across restarts; the worker's claim guard then skips
+    it. Any job already claimed is stopped cooperatively through its event.
+    """
+    if not job_repo.cancel_if_queued(job_id):
+        handle.cancel(job_id)
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_job(
     request: Request,
@@ -597,7 +608,7 @@ async def cancel_job(
     """
     job = _load_job(job_repo, job_id)
     if job.status not in _TERMINAL_STATUSES:
-        handle.cancel(job_id)
+        request_cancel(job_repo, handle, job_id)
         job = job_repo.get(job_id) or job  # refreshed envelope
     if format == "html":
         return templates.TemplateResponse(

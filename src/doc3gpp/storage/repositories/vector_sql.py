@@ -727,8 +727,8 @@ class SQLAlchemyVectorIndexRepository(VectorIndexRepository):
                 text(
                     "SELECT t.tdoc_id FROM tdocs t "
                     " WHERE t.uploaded_date = :day "
-                    "   AND NOT EXISTS ("
-                    "     SELECT 1 FROM vec_tdoc_embeddings v WHERE v.tdoc_id = t.tdoc_id)"
+                    "   AND t.tdoc_id NOT IN ("
+                    "     SELECT v.tdoc_id FROM vec_tdoc_embeddings v WHERE v.tdoc_id IS NOT NULL)"
                 ),
                 {"day": snapshot},
             ).scalars().all()

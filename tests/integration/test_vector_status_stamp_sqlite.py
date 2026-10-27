@@ -303,6 +303,19 @@ def test_same_day_blank_tdoc_without_embed_text_keeps_status_fresh(sqlite_env) -
     assert SQLAlchemyVectorIndexRepository().status().is_stale is False
 
 
+def test_one_unindexed_same_day_tdoc_among_many_makes_status_stale(sqlite_env) -> None:
+    _seed()
+    _rebuild(stale_only=False)
+    for index in range(5):
+        _insert_tdoc(f"R5-26005{index:02d}", _UPLOADED)
+    _rebuild(stale_only=True)
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is False
+
+    _insert_tdoc("R5-2600599", _UPLOADED)
+
+    assert SQLAlchemyVectorIndexRepository().status().is_stale is True
+
+
 def _count_selects(call) -> int:
     statements: list[str] = []
 

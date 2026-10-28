@@ -1,8 +1,8 @@
 """Unit tests for :mod:`doc3gpp.parsers.cr.ttcn_functions`.
 
 The two regexes that drive the ``changed_functions`` aggregate column
-on ``tdoc_cr_ttcn_details`` are user-supplied verbatim — see
-`.omo/plans/ttcn-changed-functions.md` v2 §Goal. These tests pin the
+on ``tdoc_cr_ttcn_details`` are user-supplied verbatim — see the current
+contract in ``docs/known-constraints.md``. These tests pin the
 regex contract on the public surface:
 
 * :func:`extract_module_basename` — strips path separators and the

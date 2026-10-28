@@ -200,8 +200,9 @@ def test_ttcn_repository_lazy_creates_table(sqlite_env) -> None:
 # ---------------------------------------------------------------------------
 # 3b. ``changed_functions`` aggregate column: round-trip, on-disk
 #     format, searchability, lazy-ALTER bootstrap, and legacy NULL
-#     recovery. See ``.omo/plans/ttcn-changed-functions.md`` v2 §D1
-#     and §D4 for the column shape and lazy-migration contract.
+#     recovery. See the current ``changed_functions`` contract in
+#     ``docs/known-constraints.md`` for the column shape and lazy-migration
+#     contract.
 # ---------------------------------------------------------------------------
 
 

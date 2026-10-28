@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -18,6 +19,14 @@ class _FakeEngine:
         self.dispose_calls += 1
 
 
+class _FakeDocxPool:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 @dataclass
 class _FakeState:
     settings: Settings
@@ -25,6 +34,7 @@ class _FakeState:
     testcase_engine: _FakeEngine
     specdata_engine: _FakeEngine | None
     jobs: object | None = None
+    close_docx_pool: Callable[[], None] | None = None
 
 
 class _FakeHandle:
@@ -111,6 +121,25 @@ def test_run_stdio_starts_server_and_cleans_up(monkeypatch: pytest.MonkeyPatch) 
     assert state.testcase_engine.dispose_calls == 1
     assert state.specdata_engine is not None
     assert state.specdata_engine.dispose_calls == 1
+
+
+def test_run_stdio_closes_docx_pool_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings()
+    state = _state(settings)
+    docx_pool = _FakeDocxPool()
+    state.close_docx_pool = docx_pool.close
+    events: list[str] = []
+    _FakeHandle.instances.clear()
+    monkeypatch.setattr(
+        mcp_stdio,
+        "_load_dependencies",
+        lambda: _dependencies(state, events),
+    )
+
+    asyncio.run(mcp_stdio.run_stdio(settings))
+
+    assert docx_pool.close_calls == 1
+    assert state.engine.dispose_calls == 1
 
 
 def test_run_stdio_cleans_up_when_server_execution_fails(

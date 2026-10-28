@@ -24,10 +24,11 @@ from doc3gpp.models.spec_doc import (
     SpecDocUnknownVersionError,
 )
 from doc3gpp.parsers.docx_converter import (
+    DocxMemberPool,
     HeadingBlock,
+    InlineDocxPool,
     ParagraphBlock,
     TableBlock,
-    convert_document_to_blocks,
 )
 from doc3gpp.parsers.spec_doc import (
     SpecDocFileBlocks,
@@ -88,6 +89,8 @@ class SpecDocService:
         fetcher: ``url -> zip bytes``; defaults to :func:`fetch_spec_doc_zip`.
         cache_dir: Spec-document cache root holding ``zips`` + ``markdown``;
             defaults to ``settings.spec_doc.cache_dir``.
+        docx_pool: Converts version DOCX members; defaults to in-process
+            :class:`InlineDocxPool`.
         search/semantic: Aliases for ``search_service``/``semantic_service``.
     """
 
@@ -104,6 +107,7 @@ class SpecDocService:
         cache_dir=None,
         search=None,
         semantic=None,
+        docx_pool: DocxMemberPool | None = None,
     ) -> None:
         from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
 
@@ -113,6 +117,7 @@ class SpecDocService:
         self._search = search_service if search_service is not None else search
         self._semantic = semantic_service if semantic_service is not None else semantic
         self._embedder = embedder
+        self._docx_pool = docx_pool if docx_pool is not None else InlineDocxPool()
         self._fetcher = fetcher if fetcher is not None else (lambda url: fetch_spec_doc_zip(url))
         root = cache_dir if cache_dir is not None else self._settings.spec_doc.cache_dir
         self._cache_dir = Path(root)
@@ -305,14 +310,12 @@ class SpecDocService:
         entries = list_spec_docx(raw)
         if not entries:
             raise SpecDocNoDocxError(f"zip for {spec_id}@{ver.version} contains no .docx files")
-        files = [
-            SpecDocFileBlocks(
-                file_order=i,
-                source_file=name,
-                blocks=convert_document_to_blocks(data, name),
-            )
-            for i, (name, data) in enumerate(entries)
-        ]
+        outcomes = self._docx_pool.convert_members("blocks", entries)
+        files: list[SpecDocFileBlocks] = []
+        for i, ((name, _), outcome) in enumerate(zip(entries, outcomes, strict=True)):
+            if isinstance(outcome, Exception):
+                raise outcome
+            files.append(SpecDocFileBlocks(file_order=i, source_file=name, blocks=outcome))
         ordered = order_spec_files(files)
         toc_entries, toc_files = extract_spec_toc(ordered)
         toc = SpecDocToc(

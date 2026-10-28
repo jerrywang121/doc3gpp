@@ -27,6 +27,7 @@ from fastapi import FastAPI
 
 from doc3gpp.config import get_settings
 from doc3gpp.services import factory
+from doc3gpp.services.docx_convert_pool import DocxConvertPool
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.settings.schema import Settings
 from doc3gpp.storage.db.session import get_engine, get_specdata_engine, get_testcase_engine
@@ -44,12 +45,14 @@ def build_state(settings: Settings) -> WebState:
     """Compose every collaborator wired into the web app.
 
     Pure composition: no I/O. The lifespan is responsible for engine
-    cleanup (``engine.dispose()``) and shared embedder shutdown on exit.
+    cleanup (``engine.dispose()``), shared embedder shutdown, and the
+    shared DOCX conversion pool shutdown on exit.
     """
     engine = get_engine()
     embedder: object | None = None
     embedder_loaded = False
     embedder_builder = factory.build_embedder
+    docx_pool = DocxConvertPool(settings.pipeline.docx_workers)
 
     def shared_embedder() -> object | None:
         nonlocal embedder, embedder_loaded
@@ -87,6 +90,7 @@ def build_state(settings: Settings) -> WebState:
         tdoc_cr=factory.build_tdoc_cr_service(
             search_service=search,
             semantic_service=semantic_search,
+            docx_pool=docx_pool,
         ),
         tdoc_sync=factory.build_tdoc_sync_coordinator(),
         tdoc_repo=tdoc_repo,
@@ -100,6 +104,7 @@ def build_state(settings: Settings) -> WebState:
             settings=settings,
             search_service=spec_doc_search,
             semantic_service=spec_doc_semantic,
+            docx_pool=docx_pool,
         ),
         spec_doc_search=spec_doc_search,
         spec_doc_semantic=spec_doc_semantic,
@@ -139,6 +144,7 @@ def build_state(settings: Settings) -> WebState:
         jobs=JobWorkerHandle(),
         specdata_engine=get_specdata_engine(),
         close_embedder=close_shared_embedder,
+        close_docx_pool=docx_pool.close,
     )
 
 
@@ -230,6 +236,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 yield
         finally:
             await handle.shutdown()
+            if state.close_docx_pool is not None:
+                state.close_docx_pool()
             if state.close_embedder is not None:
                 state.close_embedder()
             state.engine.dispose()

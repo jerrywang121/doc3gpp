@@ -185,6 +185,9 @@ class WebState:
 
     ``close_embedder`` releases the lazily built shared embedder when the
     lifespan shuts down; ``None`` when no embedder hook is wired.
+
+    ``close_docx_pool`` releases the shared DOCX conversion pool after the
+    job runtime has drained; ``None`` when no pool is wired.
     """
 
     settings: Settings
@@ -194,6 +197,7 @@ class WebState:
     jobs: JobWorkerHandle
     specdata_engine: Engine | None = None
     close_embedder: Callable[[], None] | None = None
+    close_docx_pool: Callable[[], None] | None = None
 
 
 __all__ = ["JobWorkerHandle", "ServiceContainer", "WebState"]

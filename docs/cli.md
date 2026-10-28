@@ -1516,7 +1516,7 @@ Single-file behaviour:
 
 - The file is read with `Path.read_bytes()`.
 - The TDoc id is auto-extracted from the filename using the existing
-  [`_TDOC_HEADER_PATTERN`](src/doc3gpp/parsers/cr_parser.py) (matches
+  [`_TDOC_HEADER_PATTERN`](../src/doc3gpp/parsers/cr_parser.py) (matches
   `R5s260009`, `R5-227476`, `C6-250028`, etc.). Files without a
   matching pattern get a synthetic `LOCAL-<stem>` id internally so
   the parser can still run, but no DB row is ever written under that

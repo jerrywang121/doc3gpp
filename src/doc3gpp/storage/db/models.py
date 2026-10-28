@@ -234,8 +234,8 @@ class TDocCrTtcnDetailOrm(Base):
     as gzip-compressed UTF-8 JSON. The ``changed_functions`` aggregate
     column holds a newline-delimited, SQL-searchable projection of the
     ``<module_basename>.<function_name>`` pairs derived from
-    ``required_changes`` (no gzip, by design — see
-    ``.omo/plans/ttcn-changed-functions.md`` §D1). See
+    ``required_changes`` (no gzip, by design — see the current
+    ``changed_functions`` contract in ``docs/known-constraints.md``). See
     :class:`doc3gpp.models.tdoc_cr.TDocCRTTCNDetails` for the in-memory
     shape; the repository compresses/decompresses the
     ``required_changes`` blob on write/read and joins/splits the

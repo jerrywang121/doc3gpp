@@ -613,9 +613,10 @@ nested `statuses` (single-element with `group` set, or when one group matches): 
 `group` it calls `services.testcase.get(testcase_id, canonical)`; without
 it calls `services.testcase.get_all(testcase_id)`; empty → raises
 `TestcaseNotFoundError` (MCP `-32004`). Each payload's statuses go through
-render.testcase_status_rows(...)}` over `["path","gcf_ptcrb","ttcn_status"]`
-(an invalid `group` value is not pre-validated here — an unknown-canonical
-group simply misses and raises `TestcaseNotFoundError`).
+`render.testcase_status_rows(...)` over `["path","gcf_ptcrb","ttcn_status"]`
+(an invalid `group` value is rejected before the lookup with
+`InvalidFilterError`; the canonical groups are `5G`, `LTE`, `IMS`, `UTRA`,
+`POS`, and `MCX`).
 `sync_testcases(force=False)` enqueues `JobKind.SYNC_TESTCASES` with
 `{"force": force}` and returns the `{job_id,status,message,links{self,events}}`
 envelope.

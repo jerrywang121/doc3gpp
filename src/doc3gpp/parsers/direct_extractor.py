@@ -2,8 +2,8 @@
 
 Pure parsers + tiny I/O shims — no network fetch, no database access.
 The CLI dispatcher composes on these primitives together with the
-existing ``TDocCrService`` to deliver the behaviour matrix described in
-:file:`.omo/plans/tdoc-parse-direct-file.md`.
+existing ``TDocCrService`` to deliver the direct-mode behavior documented
+in ``docs/cli.md``.
 
 Boundary discipline:
 

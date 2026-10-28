@@ -6,10 +6,9 @@ Public surface:
 - extract_function_name(function_name) -> str | None
 - extract_changed_functions(required_changes) -> list[str]
 
-The two regexes are user-supplied verbatim. See
-`.omo/plans/ttcn-changed-functions.md` v2 §Goal for the rationale
-on why the simple greedy pattern handles Unix paths, Windows paths,
-and bare basenames uniformly.
+The two regexes are user-supplied verbatim. See the current
+``changed_functions`` contract in ``docs/known-constraints.md`` for the
+rationale and persisted representation.
 
 Invariant: extractors MUST produce ASCII [A-Za-z0-9_.]+ (case-
 insensitive). No whitespace or special characters. The serializer

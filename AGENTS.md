@@ -448,8 +448,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
 - `doc3gpp config set <key> <value>` writes one setting into the active
   TOML config file (refuses when none is in use; run `config init` to
   bootstrap one); the previous `--init` / `--target` / `--force` flags
-  are removed — see the plan at
-  `.omo/plans/config-set-command.md` for the full command contract.
+  are removed — see the [`doc3gpp config set` reference](docs/cli.md#doc3gpp-config-set)
+  for the full command contract.
 - When `Settings.sync.auto_sync` is enabled, `meeting list`, `tdoc list`,
   `tdoc show`, and database-mode `tdoc parse` internally trigger the
   same meeting-calendar and TDoc-list sync paths used by explicit

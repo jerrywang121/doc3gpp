@@ -35,8 +35,10 @@ from __future__ import annotations
 import io
 import logging
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -351,8 +353,12 @@ def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
 
 
 __all__ = [
+    "DOCX_WORKERS",
     "Block",
+    "DocxMemberPool",
     "HeadingBlock",
+    "InlineDocxPool",
+    "MemberKind",
     "ParagraphBlock",
     "PythonDocxNotInstalledError",
     "TableBlock",
@@ -480,3 +486,44 @@ def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingB
     if not out:
         raise RuntimeError(f"python-docx returned empty result for {filename}")
     return out
+
+
+# ---------------------------------------------------------------------------
+# DOCX member pool (fan-out contract for the spec-doc archive pipeline).
+# ---------------------------------------------------------------------------
+
+MemberKind = Literal["blocks", "markdown"]
+
+
+class DocxMemberPool(Protocol):
+    """Converts ``(name, bytes)`` members; returns one outcome per member, in input order.
+
+    An outcome is the converted value, or the exception instance raised for
+    that member. Implementations never raise for a per-member failure.
+    """
+
+    def convert_members(
+        self, kind: MemberKind, members: Sequence[tuple[str, bytes]]
+    ) -> list[object]: ...
+
+
+DOCX_WORKERS: dict[MemberKind, Callable[[bytes, str], object]] = {
+    "blocks": convert_document_to_blocks,
+    "markdown": convert_document_to_markdown,
+}
+
+
+class InlineDocxPool:
+    """Runs the matching worker in-process for each member."""
+
+    def convert_members(
+        self, kind: MemberKind, members: Sequence[tuple[str, bytes]]
+    ) -> list[object]:
+        worker = DOCX_WORKERS[kind]
+        outcomes: list[object] = []
+        for name, payload in members:
+            try:
+                outcomes.append(worker(payload, name))
+            except Exception as exc:  # noqa: BLE001 - per-member failures are outcomes, not batch aborts
+                outcomes.append(exc)
+        return outcomes

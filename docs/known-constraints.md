@@ -236,6 +236,11 @@ change set so the docs stay honest.
 - **`tdoc show --format raw` does not use the DOCX conversion pool.** When the TDoc's
   extraction is incomplete, the raw read re-extracts it in-process, so those
   conversions run sequentially. Deferred; it is a read path, not a parse path.
+- **A worker death in the shared DOCX pool fails other callers' unfinished conversions.**
+  All concurrent `convert_members` calls share one executor. If a worker dies (rare: an
+  out-of-memory kill or a native crash), unfinished members of other concurrent callers
+  fail with `DocxConvertPoolError` too. The `2 × docx_workers` window is per call, not per
+  process, so it bounds each caller's outstanding work, not the process as a whole.
 - **Superseded ZIP URLs stay indexed.** Full-text and semantic indexes read content from
   every ZIP URL stored for a TDoc. When `tdocs.ftp_url` changes, the text from the old URL
   stays searchable until its rows are removed. A `tdoc index --rebuild` does not remove

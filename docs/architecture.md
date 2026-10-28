@@ -768,18 +768,20 @@ in `finally`. MCP only enqueues the existing jobs and has no runner of its own.
 - Cancellation stops new submissions; submitted writes finish; the runtime
   drains before HTTP client, cache and engines are disposed.
 - `server.max_concurrent_jobs` limits active jobs, not item preparation.
-- DOCX conversion is CPU-bound and does not run on the preparation threads.
+- DOCX conversion is CPU-bound. With a pool, it does not run on the preparation
+  threads; `0` and `1` convert in-process on them.
   `services/docx_convert_pool.py::DocxConvertPool` converts `.docx` members in
   spawned worker processes, bounded by `[pipeline] docx_workers` (default
   `min(4, cpu_count)`, range 0..32, independent of `prepare_workers`). `0` and
   `1` convert in-process through `parsers/docx_converter.py::InlineDocxPool`.
-  The executor is created on first use, keeps at most two members per worker
-  outstanding, and is shared by every concurrent prepare in the process. A
-  worker crash fails the members outstanding at that point with
-  `DocxConvertPoolError`; the next call starts a fresh executor. The web
-  process builds one pool in `build_state`. Each parsing CLI command
-  (`spec doc parse`, `tdoc parse`) creates a pool for the invocation and closes
-  it in a `finally`; commands that never convert DOCX create none.
+  The executor is created on first use and shared by every concurrent prepare in
+  the process. Each `convert_members` call keeps at most two members per worker
+  outstanding. A worker crash fails that call's outstanding members with
+  `DocxConvertPoolError`, and it can also fail other concurrent callers'
+  unfinished members on the shared executor; the next call starts a fresh
+  executor. The web process builds one pool in `build_state`. Each parsing CLI
+  command (`spec doc parse`, `tdoc parse`) creates its pool in a `with` block, so
+  it is closed on exit; commands that never convert DOCX create none.
 
 ### Queued parse/sync pipeline concurrency
 

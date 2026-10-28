@@ -144,9 +144,11 @@ the total number of conversion processes is `docx_workers`, regardless of
 - Exceptions raised in a worker are pickled back and re-raised in the parent as
   the member's outcome, with the original type and message preserved.
 - A dead worker (`BrokenProcessPool`) fails the members outstanding in the window
-  (at most `2 × docx_workers` members), plus the member whose own submit hit the
-  break, with a clear `DocxConvertPoolError`. Members not yet submitted run on a
-  fresh executor. The next call recreates the pool.
+  of each `convert_members` call (at most `2 × docx_workers` members per call),
+  plus the member whose own submit hit the break, with a clear
+  `DocxConvertPoolError`. Callers share one executor, so the same break can also
+  fail other concurrent callers' unfinished members. Members not yet submitted
+  run on a fresh executor. The next call recreates the pool.
 - Memory: each member payload is already in memory from the ZIP read. Pickling
   adds one copy per in-flight member. Peak extra memory is roughly
   `2 × docx_workers` × the largest uncompressed member, plus the returned blocks.

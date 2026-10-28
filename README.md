@@ -713,7 +713,8 @@ doc3gpp config set sync.auto_sync true    # then edit individual keys
 jobs share one service-level pipeline: bounded parallel preparation
 (`[pipeline] prepare_workers`) plus a single serialized database writer, with
 deterministic discovery/output order. DOCX conversion runs in a separate process
-pool sized by `[pipeline] docx_workers`. TDoc content is routed by type through one
+pool sized by `[pipeline] docx_workers`; `0` or `1` converts in-process.
+TDoc content is routed by type through one
 registry (`models/tdoc_content_families.py`): `services/tdoc_cr_service.py` parses
 CR TDocs, `services/tdoc_family_service.py` parses WID, LS, and discussion TDocs,
 `services/tdoc_content_service.py` serves raw Markdown, and

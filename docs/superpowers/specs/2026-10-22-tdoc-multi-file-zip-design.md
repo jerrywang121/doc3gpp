@@ -138,7 +138,9 @@ A standalone direct-mode `.docx` is a one-document collection and retains
 the current requirement for a valid CR cover.
 
 Keep parallelism at the existing archive/preparation level; process an
-archive's documents sequentially rather than creating a nested worker pool.
+archive's documents sequentially rather than creating a nested worker pool. (Superseded
+for DOCX conversion by `2026-10-28-spec-doc-parse-speed-design.md`, which converts members
+through one shared process pool.)
 Prepared values and direct results carry a document collection instead of a
 single `markdown` string. Update all consumers, including worker result
 rendering and local/folder raw-output paths, together.

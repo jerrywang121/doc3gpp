@@ -311,7 +311,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `.doc`-only main fails the TDoc.
 - `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a
   direct-mode alternative that bypasses the database filters. ZIPs
-  convert supported `.docx` members sequentially; a unique structural
+  convert supported `.docx` members through the DOCX conversion pool
+  (`[pipeline] docx_workers`; `0` or `1` converts in-process); a unique structural
   CR cover selects the main source, and the other members are CR annexes stored
   as content (a family TDoc stores its main and every annex). Raw direct/batch
   output preserves source identity with named

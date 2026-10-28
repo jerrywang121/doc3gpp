@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import delete, insert, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.cli_filters import (
     is_not_null_token,
@@ -30,6 +31,8 @@ _PATH_RANK = [
     "default",
 ]
 
+_IN_CHUNK_SIZE = 500
+
 
 class SQLAlchemyTestCaseRepository:
     """SQLAlchemy implementation storing rows in ``testcases`` tables.
@@ -46,53 +49,66 @@ class SQLAlchemyTestCaseRepository:
         if not cases:
             return 0
         with self._session_factory() as session:
+            existing = _existing_cases(
+                session, {(case.testcase_id, case.group) for case in cases}
+            )
             for case in cases:
-                existing = session.get(
-                    TestCaseORM, (case.testcase_id, case.group)
-                )
-                if existing is not None:
-                    existing.title = case.title
-                    existing.ats = case.ats
-                    existing.feature = case.feature
-                    existing.release = case.release
-                    existing.wis = case.wis
-                    existing.spec = case.spec
+                key = (case.testcase_id, case.group)
+                row = existing.get(key)
+                if row is not None:
+                    row.title = case.title
+                    row.ats = case.ats
+                    row.feature = case.feature
+                    row.release = case.release
+                    row.wis = case.wis
+                    row.spec = case.spec
                 else:
-                    session.add(
-                        TestCaseORM(
-                            testcase_id=case.testcase_id,
-                            group=case.group,
-                            title=case.title,
-                            ats=case.ats,
-                            feature=case.feature,
-                            release=case.release,
-                            wis=case.wis,
-                            spec=case.spec,
-                        )
+                    row = TestCaseORM(
+                        testcase_id=case.testcase_id,
+                        group=case.group,
+                        title=case.title,
+                        ats=case.ats,
+                        feature=case.feature,
+                        release=case.release,
+                        wis=case.wis,
+                        spec=case.spec,
                     )
+                    session.add(row)
+                    existing[key] = row
             session.commit()
         return len(cases)
 
     def replace_statuses(
         self, testcase_id: str, group: str, rows: list[TestCaseStatus]
     ) -> None:
+        self.replace_statuses_many({(testcase_id, group): rows})
+
+    def replace_statuses_many(
+        self, rows_by_case: Mapping[tuple[str, str], list[TestCaseStatus]]
+    ) -> None:
+        if not rows_by_case:
+            return
         with self._session_factory() as session:
-            session.execute(
-                delete(TestCaseStatusORM).where(
-                    (TestCaseStatusORM.testcase_id == testcase_id)
-                    & (TestCaseStatusORM.group == group)
-                )
-            )
-            for row in rows:
-                session.add(
-                    TestCaseStatusORM(
-                        testcase_id=row.testcase_id,
-                        group=row.group,
-                        path=row.path,
-                        gcf_ptcrb=row.gcf_ptcrb,
-                        ttcn_status=row.ttcn_status,
+            for testcase_id, group in rows_by_case:
+                session.execute(
+                    delete(TestCaseStatusORM).where(
+                        (TestCaseStatusORM.testcase_id == testcase_id)
+                        & (TestCaseStatusORM.group == group)
                     )
                 )
+            payload = [
+                {
+                    "testcase_id": row.testcase_id,
+                    "group": row.group,
+                    "path": row.path,
+                    "gcf_ptcrb": row.gcf_ptcrb,
+                    "ttcn_status": row.ttcn_status,
+                }
+                for rows in rows_by_case.values()
+                for row in rows
+            ]
+            if payload:
+                session.execute(insert(TestCaseStatusORM), payload)
             session.commit()
 
     def list(
@@ -169,6 +185,29 @@ class SQLAlchemyTestCaseRepository:
         statuses = [_orm_to_status(r) for r in rows]
         statuses.sort(key=_path_rank_key)
         return statuses
+
+    def list_statuses_many(
+        self, keys: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], list[TestCaseStatus]]:
+        wanted = set(keys)
+        out: dict[tuple[str, str], list[TestCaseStatus]] = {key: [] for key in wanted}
+        if not wanted:
+            return out
+        testcase_ids = sorted({testcase_id for testcase_id, _ in wanted})
+        with self._session_factory() as session:
+            for chunk in _chunks(testcase_ids):
+                rows = session.scalars(
+                    select(TestCaseStatusORM).where(
+                        TestCaseStatusORM.testcase_id.in_(chunk)
+                    )
+                ).all()
+                for row in rows:
+                    key = (row.testcase_id, row.group)
+                    if key in out:
+                        out[key].append(_orm_to_status(row))
+        for statuses in out.values():
+            statuses.sort(key=_path_rank_key)
+        return out
 
     def get_source(self, filename: str) -> TestCaseSource | None:
         with self._session_factory() as session:
@@ -255,6 +294,28 @@ def _apply_status_exists(stmt, column, value: str):
         .exists()
     )
     return stmt.where(sub)
+
+
+def _existing_cases(
+    session: Session, keys: set[tuple[str, str]]
+) -> dict[tuple[str, str], TestCaseORM]:
+    """Return the stored header rows whose ``(testcase_id, group)`` is in ``keys``."""
+    found: dict[tuple[str, str], TestCaseORM] = {}
+    testcase_ids = sorted({testcase_id for testcase_id, _ in keys})
+    for chunk in _chunks(testcase_ids):
+        rows = session.scalars(
+            select(TestCaseORM).where(TestCaseORM.testcase_id.in_(chunk))
+        ).all()
+        for row in rows:
+            key = (row.testcase_id, row.group)
+            if key in keys:
+                found[key] = row
+    return found
+
+
+def _chunks(values: list[str]) -> Iterator[list[str]]:
+    for start in range(0, len(values), _IN_CHUNK_SIZE):
+        yield values[start : start + _IN_CHUNK_SIZE]
 
 
 def _path_rank_key(status: TestCaseStatus) -> int:

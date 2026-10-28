@@ -213,7 +213,9 @@ def test_job_cancel(sqlite_env, app_with_deps) -> None:
     with TestClient(app) as client:
         response = client.post(f"/jobs/{job.id}/cancel")
     assert response.status_code == 200
-    assert job.id in handle.cancelled
+    assert response.json()["status"] == "cancelled"
+    assert repo.get(job.id).status.value == "cancelled"
+    assert handle.cancelled == []
     get_engine.cache_clear()
 
 

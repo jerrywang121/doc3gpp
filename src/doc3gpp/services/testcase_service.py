@@ -99,12 +99,14 @@ class TestCaseService:
             grouped.setdefault(
                 (status.testcase_id, status.group), []
             ).append(status)
-        for case in cases:
-            self._repository.replace_statuses(
-                case.testcase_id,
-                case.group,
-                grouped.get((case.testcase_id, case.group), []),
-            )
+        self._repository.replace_statuses_many(
+            {
+                (case.testcase_id, case.group): grouped.get(
+                    (case.testcase_id, case.group), []
+                )
+                for case in cases
+            }
+        )
         st = len(statuses)
 
         self._repository.record_parsed(
@@ -154,8 +156,11 @@ class TestCaseService:
             gcf_status=gcf_status,
         )
         out: list[TestCaseWithStatuses] = []
+        statuses = self._repository.list_statuses_many(
+            [(case.testcase_id, case.group) for case in cases]
+        )
         for case in cases:
-            rows = self._repository.list_statuses(case.testcase_id, case.group)
+            rows = statuses.get((case.testcase_id, case.group), [])
             out.append(TestCaseWithStatuses(testcase=case, statuses=list(rows)))
         return out
 
@@ -174,7 +179,10 @@ class TestCaseService:
         cases = self._repository.list(testcase_id=testcase_id, limit=500)
         cases = [c for c in cases if c.testcase_id == testcase_id]
         out: list[TestCaseDetail] = []
+        statuses = self._repository.list_statuses_many(
+            [(case.testcase_id, case.group) for case in cases]
+        )
         for case in cases:
-            rows = self._repository.list_statuses(case.testcase_id, case.group)
-            out.append(TestCaseDetail(testcase=case, statuses=rows))
+            rows = statuses.get((case.testcase_id, case.group), [])
+            out.append(TestCaseDetail(testcase=case, statuses=list(rows)))
         return out

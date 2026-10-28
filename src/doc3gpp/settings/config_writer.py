@@ -27,7 +27,10 @@ the patched sub-tree \u2014 sibling tables are never inspected.
 from __future__ import annotations
 
 import copy
+import os
+import stat
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -73,11 +76,35 @@ def read_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(fh)
 
 
-def write_toml(path: Path, data: dict[str, Any]) -> None:
-    """Serialise ``data`` as TOML to ``path``, creating parent dirs."""
+def write_text_atomic(path: Path, text: str, *, mode: int | None = None) -> None:
+    """Replace ``path`` with ``text`` through a same-directory temp file.
+
+    The text is written to a temp file next to ``path``, flushed and
+    fsynced, then moved over ``path`` with :func:`os.replace`, so a crash
+    or failure mid-write never leaves a truncated file. ``mode`` sets the
+    permission bits of the result; when ``None`` an existing file keeps
+    its mode and a new file gets ``0o600``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as fh:
-        tomli_w.dump(data, fh)
+    if mode is None:
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            os.chmod(tmp_path, mode)
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def write_toml(path: Path, data: dict[str, Any], *, mode: int | None = None) -> None:
+    """Serialise ``data`` as TOML to ``path`` atomically; see :func:`write_text_atomic`."""
+    write_text_atomic(path, tomli_w.dumps(data), mode=mode)
 
 
 def parse_dotted_key(key: str) -> list[str]:
@@ -333,5 +360,6 @@ __all__ = [
     "tomllib",
     "validate_against_settings",
     "walk_known_dotted_keys",
+    "write_text_atomic",
     "write_toml",
 ]

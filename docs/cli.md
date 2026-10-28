@@ -1741,7 +1741,7 @@ Behavior:
   bootstrap seed).
 - Otherwise `fetch_testcase_zip` → `record_download` (BEFORE
   parsing) → `extract_workbook` → `parse_testcase_workbook` →
-  `upsert_many` → per-TC `replace_statuses` → `record_parsed`.
+  `upsert_many` → one `replace_statuses_many` transaction → `record_parsed`.
 - Progress events mirror `spec sync` via tqdm (`listing →
   downloaded → parsed`, 3 steps) and the CLI echoes
   `outcome.reason`.
@@ -1862,7 +1862,7 @@ Behavior:
 - With `--group`: header via `TestCaseRepository.get(id, group)` +
   status rows via `list_statuses(id, group)` (sorted by `PATH_RANK`).
   Without `--group`: `TestCaseService.get_all(id)` (headers via a
-  `limit=500` exact-id `list` filter + per-header `list_statuses`).
+  `limit=500` exact-id `list` filter + batched `list_statuses_many`).
 - Table/markdown: one header block + status block per group,
   separated by blank lines, mirroring `spec show`. The status
   block columns are `path, gcf_ptcrb, ttcn_status` (no `group` —
@@ -3012,7 +3012,8 @@ Purpose:
   TOML config file. Pydantic coerces `value` to the schema field type,
   so `24h` is accepted for `timedelta` fields and `true` / `false` for
   booleans. The settings cache is cleared so the new value is visible
-  to subsequent commands in the same process. Refuses when no config
+  to subsequent commands in the same process. The file is replaced
+  atomically, so a failed write keeps the old file. Refuses when no config
   file is in use — run `doc3gpp config init` first to bootstrap one.
 
 Arguments:
@@ -3028,6 +3029,12 @@ Options:
 
 - `--dry-run`: validate the key + value and print what would be
   written, without touching the file.
+- `--allow-plaintext-secret`: required to write `semantic_search.embedding_api_key`
+  into any config file other than the user config. Without it, `config set`
+  refuses and names the `DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY` env var.
+  A secret written this way is stored in plain text and triggers a warning.
+  Writing the secret to the user config needs no flag. Any secret write and
+  every write to the user config sets the file mode to `0600`.
 
 > **Note** — the previous `config set --init`, `--target`, `--force`,
 > and `--init-force` flags were removed when `config init` was split

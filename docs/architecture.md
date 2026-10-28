@@ -216,9 +216,9 @@ Per-layer modules:
       atomic replacement of a CR bundle or a family bundle: the parent, its
       content rows, and the CR sidecars),
       `TDocCrTTCNDetailRepository` (TTCN sidecar),
-      `TestCaseRepository` (`upsert_many` / `replace_statuses` (delete
-      + insert per id) / `list` with text filters + any-path
-      `status`/`gcf_status` `EXISTS` / `get` / `list_statuses`
+      `TestCaseRepository` (`upsert_many` / `replace_statuses_many` (one
+      transaction; delete + bulk insert per id) / `list` with text filters + any-path
+      `status`/`gcf_status` `EXISTS` / `get` / `list_statuses` / `list_statuses_many` (batched)
       (`PATH_RANK`-sorted) / `get_source` / `record_download` /
       `record_parsed`),
       `SpecDocRepository` (`get_source` / `record_download` /
@@ -277,7 +277,7 @@ Per-layer modules:
       independent TDoc FTS5/vector status and rebuild operations.
     - `services/testcase_service.py` — `TestCaseService.sync(*,
       force=False, on_progress=None)` (latest-History-zip →
-      `upsert_many` + per-`(id, group)` `replace_statuses`, with the
+      `upsert_many` + one `replace_statuses_many` transaction for all `(id, group)` pairs, with the
       file-identity skip rule on `testcase_sources.parsed_at`),
       `list_recent` (headers + `{path: ttcn_status}` dicts),
       `get` (`TestCaseDetail | None`, optional group) + `get_all`
@@ -394,7 +394,7 @@ main factory (`get_session_factory()` → `get_engine()` →
 
 | `services/search_service.py` | orchestration; injected with a `SearchIndexRepository` impl + `EmbeddingReranker` via `services/factory.build_search_service` |
 | `storage/db/fts5_query.py` | `normalize_query` index-time pre-processor (T3); applies TDoc-ID base+full duplication + spec-id `dot→underscore` rejoin |
-| `storage/repositories/search_sql.py` | SQL impl of `SearchIndexRepository`; metadata/document FTS5 rows, grouped parent ranking, source previews, SQL document freshness, and gzip decompression at index time |
+| `storage/repositories/search_sql.py` | SQL impl of `SearchIndexRepository`; metadata/document FTS5 rows, grouped parent ranking, source previews, SQL document freshness, gzip decompression at index time, and `upsert_many` writing each rebuild batch in one transaction (one `DELETE ... IN` per batch) |
 
 ## Runtime Data Flow
 
@@ -421,7 +421,7 @@ and the TDoc CR extraction is the deepest.
    `extract_workbook` pulls the lexically-first `*.xlsx` member, and
     `parse_testcase_workbook` returns `(cases, statuses, notes)`.
 5. `upsert_many(cases)` writes the headers, each `(id, group)` pair's
-   statuses are replaced via `replace_statuses` (delete-then-insert
+   statuses are replaced via `replace_statuses_many` (one transaction, delete-then-bulk-insert
    scoped to the pair, so stale paths disappear), and
    `record_parsed` stamps `parsed_at` + counts.
 6. `doc3gpp testcase list [filters]` reads cached headers via
@@ -1028,7 +1028,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       single-path groups store the literal `'default'`),
       `gcf_ptcrb` (nullable text), `ttcn_status` (nullable text,
       indexed). One row per `(testcase_id, group, path)`;
-      `replace_statuses` deletes + re-inserts per `(id, group)` on
+      `replace_statuses_many` deletes + bulk-inserts per `(id, group)` on
       every sync.
 - `testcase_sources`:
     - `filename` (PK, `String(256)` — upstream basename, e.g.

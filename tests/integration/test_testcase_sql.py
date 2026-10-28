@@ -111,3 +111,39 @@ def test_rows_land_in_testcase_db_not_main_db(sqlite_env) -> None:
     assert repo.get("TC_DB", "5G") is not None
     assert "testcases" not in set(inspect(get_engine()).get_table_names())
     assert "testcases" in set(inspect(get_testcase_engine()).get_table_names())
+
+
+def test_batch_upsert_replace_and_list_many(session_factory) -> None:
+    from doc3gpp.models.testcase import TestCase, TestCaseStatus
+    from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
+    repo = SQLAlchemyTestCaseRepository(session_factory)
+    keys = [(f"TC_{i:04d}", "5G") for i in range(1200)]
+    assert repo.upsert_many([TestCase(testcase_id=t, group=g, title=f"T{t}") for t, g in keys]) == 1200
+    assert repo.upsert_many([
+        TestCase(testcase_id="TC_0000", group="5G", title="first"),
+        TestCase(testcase_id="TC_0000", group="5G", title="second"),
+        TestCase(testcase_id="TC_NEW", group="5G", title="a"),
+        TestCase(testcase_id="TC_NEW", group="5G", title="b"),
+    ]) == 4
+    assert repo.get("TC_0000", "5G").title == "second"
+    assert repo.get("TC_NEW", "5G").title == "b"
+    assert repo.get("TC_1199", "5G").title == "TTC_1199"
+
+    repo.replace_statuses_many({
+        (t, g): [TestCaseStatus(testcase_id=t, group=g, path="FR1", ttcn_status="Approved")]
+        for t, g in keys
+    })
+    got = repo.list_statuses_many(keys + [("TC_MISSING", "5G")])
+    assert all([s.path for s in got[k]] == ["FR1"] for k in keys)
+    assert got[("TC_MISSING", "5G")] == []
+
+    repo.replace_statuses_many({
+        ("TC_0000", "5G"): [
+            TestCaseStatus(testcase_id="TC_0000", group="5G", path="FR2", ttcn_status="Approved"),
+            TestCaseStatus(testcase_id="TC_0000", group="5G", path="FR1", ttcn_status="Rejected"),
+        ],
+        ("TC_0001", "5G"): [],
+    })
+    got = repo.list_statuses_many([("TC_0000", "5G"), ("TC_0001", "5G")])
+    assert [s.path for s in got[("TC_0000", "5G")]] == ["FR1", "FR2"]
+    assert got[("TC_0001", "5G")] == []

@@ -1093,9 +1093,10 @@ def build_mcp_server(state: WebState) -> MCPServer:
         if job is None:
             raise JobNotFoundError(job_id)
         from doc3gpp.models.jobs import JobStatus
+        from doc3gpp.web.routes.jobs import _envelope, request_cancel
         if job.status not in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED):
-            state.jobs.cancel(job_id)
-        from doc3gpp.web.routes.jobs import _envelope
+            request_cancel(state.services.job_repo, state.jobs, job_id)
+            job = state.services.job_repo.get(job_id) or job
         return _to_json(_envelope(job))
 
     @server.tool(name="list_jobs", description="List recent jobs (newest first), optionally filtered by status.")

@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 def build_state(settings: Settings) -> WebState:
     """Compose every collaborator wired into the web app.
 
-    Pure composition: no I/O. The lifespan is responsible for any
-    engine-level cleanup (``engine.dispose()``) on shutdown.
+    Pure composition: no I/O. The lifespan is responsible for engine
+    cleanup (``engine.dispose()``) and shared embedder shutdown on exit.
     """
     engine = get_engine()
     embedder: object | None = None
@@ -57,6 +57,13 @@ def build_state(settings: Settings) -> WebState:
             embedder = embedder_builder(settings)
             embedder_loaded = True
         return embedder
+
+    def close_shared_embedder() -> None:
+        if embedder is None:
+            return
+        close = getattr(embedder, "close", None)
+        if close is not None:
+            close()
 
     search = factory.build_lazy_search_service(
         settings, embedder_factory=shared_embedder
@@ -114,13 +121,11 @@ def build_state(settings: Settings) -> WebState:
             settings,
             fts5_service=search,
             semantic_service=semantic_search,
-            embedder=embedder,
         ),
         spec_doc_index=factory.build_spec_doc_index_service(
             settings,
             fts5_service=spec_doc_search,
             semantic_service=spec_doc_semantic,
-            embedder=embedder,
         ),
         tdoc_file_repo=factory.build_tdoc_file_repository(),
         job_repo=SQLAlchemyJobRepository(),
@@ -133,6 +138,7 @@ def build_state(settings: Settings) -> WebState:
         services=services,
         jobs=JobWorkerHandle(),
         specdata_engine=get_specdata_engine(),
+        close_embedder=close_shared_embedder,
     )
 
 
@@ -224,6 +230,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 yield
         finally:
             await handle.shutdown()
+            if state.close_embedder is not None:
+                state.close_embedder()
             state.engine.dispose()
             state.testcase_engine.dispose()
             if state.specdata_engine is not None:

@@ -8,12 +8,15 @@ can resolve static asset paths (``/static/htmx.min.js``,
 """
 from __future__ import annotations
 
+import html
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 
 from doc3gpp import __version__ as _APP_VERSION
 
@@ -131,7 +134,16 @@ def wrap_csv(value: str | None, max_chars: int = 150) -> str:
     return "\n".join(lines)
 
 
+_REVISION_TAG_ESCAPED = re.compile(r"&lt;(/?(?:ins|del))&gt;", re.IGNORECASE)
+
+
+def revision_markup(text: str) -> Markup:
+    """Escape ``text`` and restore only the literal ``<ins>``/``<del>`` revision tags."""
+    return Markup(_REVISION_TAG_ESCAPED.sub(r"<\1>", html.escape(text, quote=False)))
+
+
 templates.env.filters["dt_short"] = dt_short
+templates.env.filters["revision_markup"] = revision_markup
 templates.env.filters["sync_state"] = sync_state
 templates.env.filters["truncate_csv"] = truncate_csv
 templates.env.filters["wrap_csv"] = wrap_csv

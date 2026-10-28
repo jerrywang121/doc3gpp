@@ -27,6 +27,10 @@ class MockRepo(SearchIndexRepository):
     def upsert(self, tdoc_id: str) -> None:
         self.upserts.append(tdoc_id)
 
+    def upsert_many(self, tdoc_ids) -> None:
+        for tdoc_id in tdoc_ids:
+            self.upsert(tdoc_id)
+
     def remove(self, tdoc_id: str) -> None:
         self.removes.append(tdoc_id)
 
@@ -201,6 +205,21 @@ def test_rebuild_yields_every_tdoc_for_small_corpus() -> None:
     assert len(progresses) == 50
     assert [p.processed for p in progresses] == list(range(1, 51))
     assert progresses[-1].total == 50
+
+
+def test_rebuild_falls_back_to_per_tdoc_when_batch_fails() -> None:
+    repo = MockRepo()
+    repo.total = 3
+    repo.batches = [["R5-1", "R5-2", "R5-3"]]
+
+    def _failing_upsert_many(tdoc_ids) -> None:
+        raise RuntimeError("bad row")
+
+    repo.upsert_many = _failing_upsert_many  # type: ignore[method-assign]
+    svc = SearchService(repo=repo, reranker=PassthroughReranker())
+    list(svc.rebuild(batch_size=10, resume=False, stale_only=False, quiet=True))
+    assert repo.upserts == ["R5-1", "R5-2", "R5-3"]
+    assert repo.cursor == "R5-3"
 
 
 def test_rebuild_without_resume_clears_existing_cursor() -> None:

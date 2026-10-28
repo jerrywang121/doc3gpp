@@ -634,6 +634,21 @@ def test_cancel_format_html_returns_404_for_unknown(client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_cancel_queued_job_is_durable_without_worker(client: Any) -> None:
+    """A queued job is cancelled in the database even when no worker is running."""
+    c, repo, handle = client
+    job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "R5"})
+
+    r = c.post(f"/jobs/{job.id}/cancel")
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status.value == "cancelled"
+    assert handle.cancelled == []
+
+
 def test_events_stream_emits_terminal_replay(client: Any) -> None:
     c, repo, _ = client
     job = repo.create(JobKind.SYNC_MEETINGS, {"tsg": "SA2"})

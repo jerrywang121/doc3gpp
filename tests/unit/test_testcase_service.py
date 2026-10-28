@@ -11,7 +11,7 @@ def test_skip_matrix(monkeypatch):
         def record_parsed(self, fn, at, tc, st):
             s = self.sources[fn]; s.parsed_at = at; s.testcase_count = tc; s.status_count = st
         def upsert_many(self, cases): self.cases = cases; return len(cases)
-        def replace_statuses(self, tid, group, rows): pass
+        def replace_statuses_many(self, rows_by_case): pass
     svc = TestCaseService(Repo())
     import doc3gpp.services.testcase_service as m
     monkeypatch.setattr(m, "list_history_files", lambda client=None: ["TTCN CR Agreement Status 2024-wk32.zip"])
@@ -35,7 +35,7 @@ def test_sync_zero_status_tc_gets_replace_with_empty(monkeypatch):
         def record_download(self, src): pass
         def record_parsed(self, fn, at, tc, st): pass
         def upsert_many(self, cases): return len(cases)
-        def replace_statuses(self, tid, group, rows): self.replaced[(tid, group)] = list(rows)
+        def replace_statuses_many(self, rows_by_case): self.replaced.update({k: list(v) for k, v in rows_by_case.items()})
     repo = Repo()
     svc = TestCaseService(repo)
     import doc3gpp.services.testcase_service as m
@@ -55,6 +55,6 @@ def test_list_recent_passes_status_rows():
     row = TestCaseStatus(testcase_id="TC_1", group="5G", path="FR1", gcf_ptcrb="Approved", ttcn_status="Approved")
     class Repo:
         def list(self, **kw): return [TestCase(testcase_id="TC_1", group="5G", title="T")]
-        def list_statuses(self, tid, group=None): return [row]
+        def list_statuses_many(self, keys): return {("TC_1", "5G"): [row]}
     out = TestCaseService(Repo()).list_recent()
     assert out[0].statuses == [row]

@@ -74,7 +74,7 @@ For the full symbol-to-file table, see
 | Add a domain model | `src/doc3gpp/models/` | `@dataclass(slots=True)`; never expose ORM attrs. |
 | Add a storage backend | `src/doc3gpp/storage/backends/` | Engine kwargs per dialect. |
 | Add a spec list / detail source | `src/doc3gpp/scraping/spec_source.py` + `src/doc3gpp/parsers/spec_parser.py` + `src/doc3gpp/services/spec_service.py` + `src/doc3gpp/storage/repositories/spec_sql.py` | List page → `parse_spec_list` → per-spec detail → `parse_spec_detail`. `SpecService.sync` fans out across detail pages in a thread pool, runs ETSI PDF + CR-list follow-ups inside each worker, and honours the per-spec `specs.last_synced_at` skip rule (one row per spec, no TSG-level gate) — each per-worker `_sync_one_spec` short-circuits specs whose `last_synced_at` is within `Settings.sync.spec_sync_interval` and stamps the spec's own `last_synced_at` on a successful re-sync. `SpecService.sync_spec` syncs a single spec (no list page); on a local `specs`-table miss it bootstraps the header from `https://www.3gpp.org/DynaReport/{no_dot}.htm` via `fetch_dynareport_detail` + `parse_dynareport_header`, normalises the responsible group to a seeded `tsgs.short_name`, and hands the in-memory `Spec` to the same `_sync_one_spec` pipeline as the stored-row path. `list_distinct_tsgs` drives the no-selector fallback. Parsed output status is derived from non-null `spec_doc_sources.parsed_at` in the separate specdata database; it is transient output, not a column in the main `specs` / `spec_versions` tables or schema registry. |
-| Add a testcase sync / list / show source | `src/doc3gpp/cli.py` (`testcase_app`) + `src/doc3gpp/services/testcase_service.py` + `src/doc3gpp/storage/repositories/testcase_sql.py` | History listing → `select_latest` → zip → workbook → `parse_testcase_workbook` → `upsert_many` + per-TC `replace_statuses`. See the workflow one-liners below. |
+| Add a testcase sync / list / show source | `src/doc3gpp/cli.py` (`testcase_app`) + `src/doc3gpp/services/testcase_service.py` + `src/doc3gpp/storage/repositories/testcase_sql.py` | History listing → `select_latest` → zip → workbook → `parse_testcase_workbook` → `upsert_many` + one `replace_statuses_many` transaction. See the workflow one-liners below. |
 | Change filters for a list | `src/doc3gpp/repository/protocols.py` + `src/doc3gpp/storage/repositories/` | Update **both** the Protocol and the impl. |
 | Run all tests | `./scripts/test_sqlite.sh` | Unit + integration, sqlite-only, `-n auto` via pytest-xdist when installed (sequential otherwise). |
 | Run online tests | `python -m pytest -m online -rs` | Hits live 3gpp.org + FTP. |
@@ -140,7 +140,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `list_history_files` → `select_latest` (max `(year, week,
   revision)`) → `fetch_testcase_zip` → `extract_workbook` →
   `parse_testcase_workbook` → `upsert_many` + per-TC
-  `replace_statuses` → `record_download` (before parsing) +
+  `replace_statuses_many` → `record_download` (before parsing) +
   `record_parsed`. Skips when the latest file's `testcase_sources`
   row already carries `parsed_at` unless `--force` is passed
   (file-identity skip rule; no interval, no bootstrap seed).
@@ -154,7 +154,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   are any-path `EXISTS` predicates on `ttcn_status` / `gcf_ptcrb`,
   correlated on both `(testcase_id, group)` key columns)
   then one nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}`
-  objects per header via `list_statuses` (status rows carry no `group`;
+  objects per header via batched `list_statuses_many` (status rows carry no `group`;
   JSON preserves `null`). Pagination via `--limit` (default 50)
   / `--offset` (default 0); columns from
   `settings.output.fields.testcase` (default `testcase_id, title,
@@ -162,7 +162,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   (`all` = all 9 list fields).
 - `doc3gpp testcase show --testcase <id> [--group <g>]` →
   `TestCaseService.get_all` (every stored group) or `get(id, group)`
-  (one `(id, group)` row) → per-header `list_statuses` scoped to
+  (one `(id, group)` row) → `list_statuses_many` scoped to
   `header.group` (sorted by `PATH_RANK`). Miss raises
   `typer.BadParameter(f"Testcase {id!r} not found")`. JSON always
   emits an array of flat per-`(id, group)` objects with nested

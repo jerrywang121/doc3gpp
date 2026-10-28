@@ -95,6 +95,7 @@ def _patch_scraper_client(monkeypatch) -> None:
 
     monkeypatch.setattr("doc3gpp.scraping.client.ScraperClient", DummyClient)
     monkeypatch.setattr("doc3gpp.scraping.portal_source.ScraperClient", DummyClient)
+    monkeypatch.setattr("doc3gpp.scraping.calendar_source.ScraperClient", DummyClient)
 
 
 def test_meeting_list_default_does_not_auto_sync(sqlite_env, monkeypatch) -> None:

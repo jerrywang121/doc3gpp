@@ -55,6 +55,23 @@ class SpecDocSearchService:
                 "spec-doc remove failed for %s@%s: %s", spec_id, version, exc
             )
 
+    def _upsert_batch(self, pairs: list[tuple[str, str]]) -> None:
+        """Upsert one rebuild batch in a single transaction.
+
+        If the batch fails, every version is retried on its own so one bad
+        version is logged and skipped rather than aborting the whole batch.
+        """
+        try:
+            self._repo.upsert_many_versions(pairs)
+        except Exception as exc:  # noqa: BLE001 - optional search index is best-effort
+            logger.warning(
+                "spec-doc batch upsert failed for %d versions, retrying one by one: %s",
+                len(pairs),
+                exc,
+            )
+            for spec_id, version in pairs:
+                self.upsert_for_version(spec_id, version)
+
     def search(
         self,
         query: str,
@@ -94,8 +111,8 @@ class SpecDocSearchService:
         for batch in self._repo.rebuild_batch(
             batch_size=batch_size, after_id=after, stale_only=stale_only
         ):
+            self._upsert_batch(batch)
             for spec_id, version in batch:
-                self.upsert_for_version(spec_id, version)
                 processed += 1
                 pct = processed * 100 // total if total else 100
                 if pct > last_pct:

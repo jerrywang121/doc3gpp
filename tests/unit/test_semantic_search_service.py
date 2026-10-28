@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -367,8 +368,8 @@ def test_rebuild_embeddings_clears_cursor_when_resume_false() -> None:
     vec.count_tdocs_to_index.return_value = 3
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
     vec.get_resume_cursor.return_value = "C3-stale"
-    vec.embed_text_for_tdoc.return_value = "text"
-    vec.content_documents_for_tdoc.return_value = []
+    vec.embed_texts_for_tdocs.side_effect = lambda ids: {tdoc_id: "text" for tdoc_id in ids}
+    vec.content_documents_for_tdocs.side_effect = lambda ids: {tdoc_id: [] for tdoc_id in ids}
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     list(
         svc.rebuild_embeddings(
@@ -390,8 +391,8 @@ def test_rebuild_embeddings_honors_cursor_when_resume_true() -> None:
     vec.count_tdocs_to_index.return_value = 3
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
     vec.get_resume_cursor.return_value = "C3-resume-point"
-    vec.embed_text_for_tdoc.return_value = "text"
-    vec.content_documents_for_tdoc.return_value = []
+    vec.embed_texts_for_tdocs.side_effect = lambda ids: {tdoc_id: "text" for tdoc_id in ids}
+    vec.content_documents_for_tdocs.side_effect = lambda ids: {tdoc_id: [] for tdoc_id in ids}
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     list(
         svc.rebuild_embeddings(
@@ -401,6 +402,33 @@ def test_rebuild_embeddings_honors_cursor_when_resume_true() -> None:
     vec.clear_resume_cursor.assert_not_called()
     # set_resume_cursor was still called to advance the cursor
     # forward.
+    vec.set_resume_cursor.assert_called_once_with("R5-3")
+
+
+def test_rebuild_embeddings_retries_failed_batch_write_one_tdoc_at_a_time(caplog) -> None:
+    vec = MagicMock()
+    vec.count_tdocs_to_index.return_value = 3
+    vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
+    vec.get_resume_cursor.return_value = None
+    vec.embed_texts_for_tdocs.side_effect = lambda ids: {tdoc_id: "text" for tdoc_id in ids}
+    vec.content_documents_for_tdocs.side_effect = lambda ids: {tdoc_id: [] for tdoc_id in ids}
+    attempts: list[list[str]] = []
+
+    def upsert_chunks_many(items):
+        attempts.append([tdoc_id for tdoc_id, _ in items])
+        if len(items) > 1 or items[0][0] == "R5-2":
+            raise RuntimeError("boom")
+
+    vec.upsert_chunks_many.side_effect = upsert_chunks_many
+    svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
+    with caplog.at_level(logging.WARNING):
+        list(
+            svc.rebuild_embeddings(
+                batch_size=10, stale_only=False, quiet=True, resume=False,
+            ),
+        )
+    assert attempts == [["R5-1", "R5-2", "R5-3"], ["R5-1"], ["R5-2"], ["R5-3"]]
+    assert "embedding rebuild failed for tdoc_id=R5-2" in caplog.text
     vec.set_resume_cursor.assert_called_once_with("R5-3")
 
 
@@ -419,8 +447,8 @@ def test_rebuild_embeddings_yields_progress():
     vec.count_tdocs_to_index.return_value = 3
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"]])
     vec.get_resume_cursor.return_value = None
-    vec.embed_text_for_tdoc.return_value = "text"
-    vec.content_documents_for_tdoc.return_value = []
+    vec.embed_texts_for_tdocs.side_effect = lambda ids: {tdoc_id: "text" for tdoc_id in ids}
+    vec.content_documents_for_tdocs.side_effect = lambda ids: {tdoc_id: [] for tdoc_id in ids}
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(svc.rebuild_embeddings(batch_size=10, stale_only=False, quiet=True))
     assert len(progress) == 3
@@ -440,8 +468,8 @@ def test_rebuild_embeddings_yields_per_one_percent_for_13k_corpus():
         [f"R5-{i:06d}" for i in range(1, total + 1)],
     ])
     vec.get_resume_cursor.return_value = None
-    vec.embed_text_for_tdoc.return_value = "text"
-    vec.content_documents_for_tdoc.return_value = []
+    vec.embed_texts_for_tdocs.side_effect = lambda ids: {tdoc_id: "text" for tdoc_id in ids}
+    vec.content_documents_for_tdocs.side_effect = lambda ids: {tdoc_id: [] for tdoc_id in ids}
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(
         svc.rebuild_embeddings(batch_size=total, stale_only=False, quiet=True),
@@ -469,8 +497,8 @@ def test_rebuild_embeddings_processed_is_monotonic():
     vec.count_tdocs_to_index.return_value = 7
     vec.rebuild_batch.return_value = iter([["R5-1", "R5-2", "R5-3"], ["R5-4", "R5-5", "R5-6", "R5-7"]])
     vec.get_resume_cursor.return_value = None
-    vec.embed_text_for_tdoc.return_value = "text"
-    vec.content_documents_for_tdoc.return_value = []
+    vec.embed_texts_for_tdocs.side_effect = lambda ids: {tdoc_id: "text" for tdoc_id in ids}
+    vec.content_documents_for_tdocs.side_effect = lambda ids: {tdoc_id: [] for tdoc_id in ids}
     svc = SemanticSearchService(MagicMock(), _mock_embedder(), vec, _settings())
     progress = list(svc.rebuild_embeddings(batch_size=3, stale_only=False, quiet=True))
     # For total=7, pct crosses at every TDoc → 7 yields.

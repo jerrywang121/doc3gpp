@@ -538,6 +538,9 @@ class SpecDocRepository(Protocol):
 class TestCaseRepository(Protocol):
     def upsert_many(self, cases: list[TestCase]) -> int: ...
     def replace_statuses(self, testcase_id: str, group: str, rows: list[TestCaseStatus]) -> None: ...
+    def replace_statuses_many(
+        self, rows_by_case: Mapping[tuple[str, str], list[TestCaseStatus]]
+    ) -> None: ...
     def list(
         self,
         limit: int = 50,
@@ -555,6 +558,9 @@ class TestCaseRepository(Protocol):
     ) -> list[TestCase]: ...
     def get(self, testcase_id: str, group: str | None = None) -> TestCase | None: ...
     def list_statuses(self, testcase_id: str, group: str | None = None) -> list[TestCaseStatus]: ...
+    def list_statuses_many(
+        self, keys: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], list[TestCaseStatus]]: ...
     def get_source(self, filename: str) -> TestCaseSource | None: ...
     def record_download(self, source: TestCaseSource) -> None: ...
     def record_parsed(self, filename: str, parsed_at: datetime, testcase_count: int, status_count: int) -> None: ...
@@ -797,6 +803,14 @@ class SearchIndexRepository(Protocol):
         """
         ...
 
+    def upsert_many(self, tdoc_ids: Sequence[str]) -> None:
+        """Atomically replace the FTS rows for several TDocs in one transaction.
+
+        Equivalent to calling :meth:`upsert` for each id, but the rows for the
+        whole batch are deleted together. Any failure rolls back the batch.
+        """
+        ...
+
     def remove(self, tdoc_id: str) -> None:
         """Delete all metadata and document FTS rows for one TDoc."""
         ...
@@ -967,6 +981,16 @@ class VectorIndexRepository(Protocol):
         """
         ...
 
+    def upsert_chunks_many(
+        self, items: list[tuple[str, list[EmbeddedChunk]]]
+    ) -> None:
+        """Replace chunk rows for many TDocs in one transaction.
+
+        Each ``(tdoc_id, chunks)`` pair follows ``upsert_chunks`` semantics;
+        an empty chunk list removes that TDoc's rows.
+        """
+        ...
+
     def content_signatures(self) -> dict[str, frozenset[tuple[str, str]]]:
         """Return ``(document_id, content_hash)`` pairs of indexed content chunks.
 
@@ -984,6 +1008,23 @@ class VectorIndexRepository(Protocol):
 
         Documents come back in indexing order. A TDoc with no content rows
         returns an empty list.
+        """
+        ...
+
+    def embed_texts_for_tdocs(self, tdoc_ids: list[str]) -> dict[str, str | None]:
+        """Return the metadata embed text for each ``tdoc_id``, in one pass per table.
+
+        A ``tdoc_id`` absent from ``tdocs`` maps to ``None``.
+        """
+        ...
+
+    def content_documents_for_tdocs(
+        self, tdoc_ids: list[str],
+    ) -> dict[str, list[tuple[str, str, str]] | Exception]:
+        """Return each ``tdoc_id``'s content documents, or the decode error that blocks them.
+
+        A TDoc whose stored content cannot be decoded maps to its exception, so one
+        bad TDoc does not fail the batch. Documents come back in indexing order.
         """
         ...
 
@@ -1196,6 +1237,15 @@ class JobRepository(Protocol):
         """
         ...
 
+    def cancel_if_queued(self, job_id: str) -> bool:
+        """Atomically transition ``job_id`` to ``CANCELLED`` if it is still ``QUEUED``.
+
+        Returns ``True`` when this call cancelled the job. Returns ``False``
+        when the job is unknown, already claimed by a worker, or terminal;
+        those rows are not modified. Stamps ``finished_at`` on success.
+        """
+        ...
+
     def delete_older_than(self, cutoff: datetime) -> int:
         """Delete terminal jobs older than ``cutoff``; return the row count.
 
@@ -1224,6 +1274,14 @@ class SpecDocSearchRepository(Protocol):
 
         Idempotent: a re-upsert of the same pair replaces the
         existing rows in place.
+        """
+        ...
+
+    def upsert_many_versions(self, pairs: Sequence[tuple[str, str]]) -> None:
+        """Rebuild the FTS5 rows for several ``(spec_id, version)`` pairs.
+
+        One transaction for the whole batch; same per-pair result as
+        calling :meth:`upsert_for_version` for each pair.
         """
         ...
 

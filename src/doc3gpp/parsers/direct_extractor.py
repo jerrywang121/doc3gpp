@@ -62,7 +62,7 @@ from doc3gpp.parsers.tdoc_zip import (
     enumerate_docx_members,
     ephemeral_document_id_for,
 )
-from doc3gpp.parsers.tdoc_zip_convert import _member_outcomes, is_empty_text_error
+from doc3gpp.parsers.tdoc_zip_convert import is_empty_text_error, member_outcomes
 
 if typing.TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
@@ -547,7 +547,7 @@ def _direct_parse_payload(
     converted: list[tuple[str, str]] = []
     failures: list[tuple[str, Exception]] = []
     member_pool = docx_pool if suffix == ".zip" else None
-    outcomes = _member_outcomes(convert_document_to_markdown, members, member_pool)
+    outcomes = member_outcomes(convert_document_to_markdown, members, member_pool)
     for (source_file, _), outcome in zip(members, outcomes, strict=True):
         if isinstance(outcome, (DocxConvertPoolError, PythonDocxNotInstalledError)):
             raise outcome

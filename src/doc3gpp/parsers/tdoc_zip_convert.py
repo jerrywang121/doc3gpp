@@ -44,11 +44,11 @@ def _convert_member(
         raise
 
 
-def _member_outcomes(
+def member_outcomes(
     convert: Callable[[bytes, str], str],
     members: Sequence[tuple[str, bytes]],
     docx_pool: DocxMemberPool | None,
-) -> Iterator[str | Exception]:
+) -> Iterator[object]:
     """Yield one outcome per member, in order: its Markdown, or the exception it raised.
 
     The pool converts the whole batch at once. The in-process path converts lazily, so a
@@ -152,7 +152,7 @@ def convert_tdoc_zip(
     )
 
     names = ordered_sources(tuple(payloads), main)
-    outcomes = _member_outcomes(convert, [(name, payloads[name]) for name in names], docx_pool)
+    outcomes = member_outcomes(convert, [(name, payloads[name]) for name in names], docx_pool)
     converted: list[tuple[str, str]] = [(main, _markdown_outcome(next(outcomes)))]
     skipped: list[str] = []
     for source_file, outcome in zip(names[1:], outcomes, strict=True):
@@ -262,7 +262,7 @@ def convert_direct_main_markdown(
             max_documents=max_documents,
             max_uncompressed_bytes=max_uncompressed_bytes,
         )
-        outcome = next(_member_outcomes(convert, [(main, payloads[main])], docx_pool))
+        outcome = next(member_outcomes(convert, [(main, payloads[main])], docx_pool))
         return _markdown_outcome(outcome)
     _check_docx_limit(payload, max_uncompressed_bytes)
     return _convert_member(convert, payload, source)

@@ -355,6 +355,7 @@ def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
 __all__ = [
     "DOCX_WORKERS",
     "Block",
+    "DocxConvertPoolError",
     "DocxMemberPool",
     "HeadingBlock",
     "InlineDocxPool",
@@ -493,6 +494,10 @@ def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingB
 # ---------------------------------------------------------------------------
 
 MemberKind = Literal["blocks", "markdown"]
+
+
+class DocxConvertPoolError(RuntimeError):
+    """A DOCX conversion worker died, so the member could not be converted."""
 
 
 class DocxMemberPool(Protocol):

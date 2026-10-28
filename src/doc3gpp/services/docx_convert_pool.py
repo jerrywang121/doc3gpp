@@ -18,11 +18,12 @@ from itertools import islice
 
 from typing_extensions import Self
 
-from doc3gpp.parsers.docx_converter import DOCX_WORKERS, InlineDocxPool, MemberKind
-
-
-class DocxConvertPoolError(RuntimeError):
-    """A DOCX conversion worker died, so the member could not be converted."""
+from doc3gpp.parsers.docx_converter import (
+    DOCX_WORKERS,
+    DocxConvertPoolError,
+    InlineDocxPool,
+    MemberKind,
+)
 
 
 def _run_member(kind: MemberKind, name: str, payload: bytes) -> object:

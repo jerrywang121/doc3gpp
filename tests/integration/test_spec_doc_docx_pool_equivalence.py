@@ -9,7 +9,7 @@ during the call.
 from __future__ import annotations
 
 import io
-import multiprocessing
+import os
 import zipfile
 from unittest.mock import MagicMock
 
@@ -63,18 +63,26 @@ def _zip(files: list[tuple[str, bytes]]) -> bytes:
 
 
 class _RecordingPool:
-    """Delegates to ``inner`` and records each call and the live worker count."""
+    """Delegates to ``inner`` and records each call and the pool's live worker PIDs."""
 
     def __init__(self, inner) -> None:
         self._inner = inner
         self.calls: list[tuple[str, list[str]]] = []
-        self.worker_processes: list[int] = []
+        self.worker_pids: set[int] = set()
 
     def convert_members(self, kind, members):
         self.calls.append((kind, [name for name, _ in members]))
         outcomes = self._inner.convert_members(kind, members)
-        self.worker_processes.append(len(multiprocessing.active_children()))
+        self.worker_pids.update(self._inner._executor._processes)
         return outcomes
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _spec_service(tmp_path, docx_pool=None) -> SpecDocService:
@@ -113,7 +121,7 @@ def test_spec_doc_prepare_parse_pool_matches_in_process(tmp_path) -> None:
     assert recording.calls == [
         ("blocks", ["38331-j00.docx", "38331-j10.docx", "38331-j20.docx", "38331-j30.docx"])
     ]
-    assert recording.worker_processes[0] > 0
+    assert recording.worker_pids
     assert inline.toc.entries
     assert inline.drafts
     assert [f.source_file for f in inline.ordered_files] != [
@@ -156,8 +164,8 @@ def test_convert_tdoc_zip_pool_matches_in_process(tmp_path) -> None:
             [f"{TDOC_ID}.docx", "annex/a.docx", "annex/b.docx", "annex/c.docx"],
         )
     ]
-    assert recording.worker_processes[0] > 0
+    assert recording.worker_pids
     assert len(inline.documents) == 4
     assert inline.skipped_sources == ()
     assert pooled == inline
-    assert multiprocessing.active_children() == []
+    assert not any(_pid_alive(pid) for pid in recording.worker_pids)

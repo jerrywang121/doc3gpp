@@ -104,12 +104,21 @@ writer. `server.max_concurrent_jobs` only limits active jobs. HTTP and MCP
 enqueue contracts and job envelopes are unchanged; folder results keep
 deterministic discovery order.
 
+The web process also owns one DOCX conversion pool sized by `[pipeline]
+docx_workers` (default `min(4, cpu_count)`, range 0..32). It runs
+python-docx conversion in spawned worker processes, separate from
+`prepare_workers`. `0` and `1` convert in-process. Every concurrent prepare
+shares this pool, so the number of conversion processes stays at
+`docx_workers` however many jobs are queued. The pool is closed during
+shutdown, after the pipeline has drained.
+
 Queued TDoc and spec parse/sync jobs use one shared process-wide pipeline.
-Downloads, DOCX conversion, parsing, extraction, and chunking run in a
-bounded preparation pool, while all database mutations and post-parse search
-index updates run through one serialized persistence worker. The preparation
-pool is bounded to avoid unbounded queued work, and the persistence lane is
-shared across jobs rather than one writer per job.
+Downloads, parsing, extraction, and chunking run in a bounded preparation
+pool, DOCX conversion runs in the conversion pool above, and all database
+mutations and post-parse search index updates run through one serialized
+persistence worker. The preparation pool is bounded to avoid unbounded queued
+work, and the persistence lane is shared across jobs rather than one writer per
+job.
 
 Preparation does not write repositories. Cancelling a job prevents additional
 preparation submissions; work already submitted to the writer is allowed to

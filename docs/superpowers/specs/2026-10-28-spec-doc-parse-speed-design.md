@@ -149,7 +149,7 @@ the total number of conversion processes is `docx_workers`, regardless of
   fresh executor. The next call recreates the pool.
 - Memory: each member payload is already in memory from the ZIP read. Pickling
   adds one copy per in-flight member. Peak extra memory is roughly
-  `docx_workers` × the largest uncompressed member, plus the returned blocks.
+  `2 × docx_workers` × the largest uncompressed member, plus the returned blocks.
   This is acceptable for the observed 1-7 MB members and bounded by the knob.
 
 ## Testing

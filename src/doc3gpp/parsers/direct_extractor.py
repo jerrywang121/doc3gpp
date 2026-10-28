@@ -54,6 +54,7 @@ from doc3gpp.models.tdoc_document import (
 )
 from doc3gpp.parsers.cr.header import CRHeaderMissingError, is_cr_header_present
 from doc3gpp.parsers.cr_parser import _TDOC_HEADER_PATTERN
+from doc3gpp.parsers.docx_converter import DocxConvertPoolError, DocxMemberPool
 from doc3gpp.parsers.tdoc_family_main import is_tdoc_member
 from doc3gpp.parsers.tdoc_parsers import build_default_registry
 from doc3gpp.parsers.tdoc_zip import (
@@ -61,7 +62,7 @@ from doc3gpp.parsers.tdoc_zip import (
     enumerate_docx_members,
     ephemeral_document_id_for,
 )
-from doc3gpp.parsers.tdoc_zip_convert import is_empty_text_error
+from doc3gpp.parsers.tdoc_zip_convert import _member_outcomes, is_empty_text_error
 
 if typing.TYPE_CHECKING:
     from doc3gpp.scraping.client import ScraperClient
@@ -491,6 +492,7 @@ def _direct_parse_payload(
     max_uncompressed_bytes: int,
     tdoc_id: str | None = None,
     parse_main: Callable[[str, str], TDocCRParseResult] | None = None,
+    docx_pool: DocxMemberPool | None = None,
 ) -> TDocParseBundle:
     if max_bytes > 0 and len(payload) > max_bytes:
         from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
@@ -544,17 +546,17 @@ def _direct_parse_payload(
     )
     converted: list[tuple[str, str]] = []
     failures: list[tuple[str, Exception]] = []
-    for source_file, docx_bytes in members:
-        try:
-            markdown = convert_document_to_markdown(docx_bytes, source_file)
-        except PythonDocxNotInstalledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - one bad annex is recorded, not raised
-            if not _is_empty_annex_error(exc, source_file, resolved_tdoc_id):
-                failures.append((source_file, exc))
-                continue
-            markdown = ""
-        converted.append((source_file, markdown))
+    member_pool = docx_pool if suffix == ".zip" else None
+    outcomes = _member_outcomes(convert_document_to_markdown, members, member_pool)
+    for (source_file, _), outcome in zip(members, outcomes, strict=True):
+        if isinstance(outcome, (DocxConvertPoolError, PythonDocxNotInstalledError)):
+            raise outcome
+        if not isinstance(outcome, Exception):
+            converted.append((source_file, outcome))
+        elif _is_empty_annex_error(outcome, source_file, resolved_tdoc_id):
+            converted.append((source_file, ""))
+        else:
+            failures.append((source_file, outcome))
 
     cover_candidates = [
         source_file for source_file, markdown in converted if is_cr_header_present(markdown)[0]
@@ -641,13 +643,15 @@ def direct_parse_bytes(
     max_bytes: int = 0,
     max_documents: int = 100,
     max_uncompressed_bytes: int = 0,
+    docx_pool: DocxMemberPool | None = None,
 ) -> TDocParseBundle:
     """Convert every supported DOCX member and parse the unique CR cover.
 
-    ZIP members are enumerated and converted sequentially. The structural CR
-    detector selects exactly one main document; supporting documents remain
-    content-only and do not enter the CR parser. An annex that fails to convert
-    is logged and listed in ``skipped_sources`` unless it is named for the TDoc.
+    ZIP members are enumerated and converted sequentially, or through
+    ``docx_pool`` when one is given. The structural CR detector selects
+    exactly one main document; supporting documents remain content-only and do
+    not enter the CR parser. An annex that fails to convert is logged and
+    listed in ``skipped_sources`` unless it is named for the TDoc.
     Standalone DOCX input follows the same one-document bundle contract.
     """
     return _direct_parse_payload(
@@ -656,6 +660,7 @@ def direct_parse_bytes(
         max_bytes=max_bytes,
         max_documents=max_documents,
         max_uncompressed_bytes=max_uncompressed_bytes,
+        docx_pool=docx_pool,
     )
 
 

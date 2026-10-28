@@ -518,6 +518,7 @@ class TDocCrService:
                 max_bytes=source_limit,
                 max_documents=self._max_documents_per_zip,
                 max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+                docx_pool=self._docx_pool,
             )
 
         def parse_main(markdown: str, parsed_tdoc_id: str) -> TDocCRParseResult:
@@ -535,6 +536,7 @@ class TDocCrService:
             max_uncompressed_bytes=self._max_uncompressed_size_bytes,
             tdoc_id=tdoc_id,
             parse_main=parse_main,
+            docx_pool=self._docx_pool,
         )
 
     @staticmethod

@@ -15,6 +15,7 @@ import io
 import logging
 import threading
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -35,12 +36,18 @@ from doc3gpp.models.tdoc_cr import (
     TDocExtractMeta,
 )
 from doc3gpp.models.tdoc_document import TDocDocument
+from doc3gpp.parsers.docx_converter import (
+    DocxConvertPoolError,
+    DocxMemberPool,
+    InlineDocxPool,
+)
 from doc3gpp.parsers.tdoc_zip import (
     build_markdown_archive,
     document_id_for,
     read_markdown_archive,
 )
 from doc3gpp.scraping.cache import TDocCache
+from doc3gpp.services.docx_convert_pool import DocxConvertPool
 from doc3gpp.services.pipeline_runtime import PipelineRuntime
 from doc3gpp.services.tdoc_cr_service import (
     BatchExtractResult,
@@ -83,6 +90,7 @@ def _build_service(
     *,
     zip_bytes: bytes | None = None,
     family_service: TDocFamilyService | None = None,
+    docx_pool: DocxMemberPool | None = None,
 ) -> tuple[
     TDocCrService, MagicMock, TDocCache, MagicMock, MagicMock, MagicMock,
 ]:
@@ -118,6 +126,7 @@ def _build_service(
         tdoc_repository=tdoc_repo,
         content_repo=content_repo,
         family_service=family_service,
+        docx_pool=docx_pool,
     )
     return service, scraper, cache, cr_repo, cr_ttcn_repo, tdoc_repo
 
@@ -1662,3 +1671,161 @@ def test_docx_pool_is_passed_to_family_service(tmp_path: Path) -> None:
     )
 
     assert service._family_service._docx_pool is pool
+
+
+class _RecordingPool:
+    """Converts in-process like ``InlineDocxPool``; records calls and substitutes ``errors``."""
+
+    def __init__(self, errors: dict[str, Exception] | None = None) -> None:
+        self.calls: list[tuple[str, list[str]]] = []
+        self._errors = errors or {}
+
+    def convert_members(
+        self, kind: str, members: Sequence[tuple[str, bytes]]
+    ) -> list[object]:
+        self.calls.append((kind, [name for name, _ in members]))
+        outcomes = InlineDocxPool().convert_members(kind, members)
+        return [
+            self._errors.get(name, outcome)
+            for (name, _), outcome in zip(members, outcomes, strict=True)
+        ]
+
+
+class _SpyDocxConvertPool(DocxConvertPool):
+    """A real process pool that records each ``convert_members`` call."""
+
+    def __init__(self, workers: int) -> None:
+        super().__init__(workers)
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def convert_members(
+        self, kind: str, members: Sequence[tuple[str, bytes]]
+    ) -> list[object]:
+        self.calls.append((kind, [name for name, _ in members]))
+        return super().convert_members(kind, members)
+
+
+def _cr_service(
+    tmp_path: Path,
+    zip_bytes: bytes,
+    *,
+    docx_pool: DocxMemberPool | None = None,
+) -> TDocCrService:
+    service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
+        tmp_path, zip_bytes=zip_bytes, docx_pool=docx_pool,
+    )
+    tdoc_repo.get_by_id.return_value = _tdoc_row()
+    return service
+
+
+def _cr_view(prepared: PreparedTDocExtract) -> tuple[object, ...]:
+    return (
+        prepared.details,
+        prepared.ttcn,
+        prepared.changes,
+        prepared.extract_meta,
+        prepared.main_source_file,
+        prepared.documents,
+        prepared.annexes,
+    )
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_prepare_extract_converts_members_through_docx_pool(tmp_path: Path) -> None:
+    payload = _cr_zip(("b/support-beta.docx", _make_docx("support beta text")))
+    pool = _RecordingPool()
+
+    pooled = _cr_service(tmp_path / "pool", payload, docx_pool=pool).prepare_extract(
+        "R5s260009", force=True,
+    )
+    plain = _cr_service(tmp_path / "plain", payload).prepare_extract(
+        "R5s260009", force=True,
+    )
+
+    assert pool.calls == [("markdown", ["b/support-beta.docx", "R5s260009.docx"])]
+    assert _cr_view(pooled) == _cr_view(plain)
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_docx_pool_error_on_annex_is_not_skipped_or_wrapped(tmp_path: Path) -> None:
+    payload = _cr_zip(("b/support-beta.docx", _make_docx("support beta text")))
+    pool = _RecordingPool({
+        "b/support-beta.docx": DocxConvertPoolError(
+            "DOCX conversion pool broke while converting b/support-beta.docx"
+        ),
+    })
+    service = _cr_service(tmp_path, payload, docx_pool=pool)
+
+    with pytest.raises(DocxConvertPoolError, match="pool broke"):
+        service.prepare_extract("R5s260009", force=True)
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_docx_pool_keeps_zero_text_annex_as_empty_document(tmp_path: Path) -> None:
+    payload = _cr_zip(("b/support-empty.docx", _make_empty_docx()))
+    pool = _RecordingPool()
+    service = _cr_service(tmp_path, payload, docx_pool=pool)
+
+    prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert pool.calls == [
+        ("markdown", ["b/support-empty.docx", "R5s260009.docx"]),
+    ]
+    empty = next(
+        document for document in prepared.annexes if document.source_file == "b/support-empty.docx"
+    )
+    assert empty.markdown_text == ""
+    assert prepared.extract_meta.skipped_sources == ()
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_prepare_from_bytes_without_tdoc_id_uses_docx_pool(tmp_path: Path) -> None:
+    payload = _cr_zip(("b/support-beta.docx", _make_docx("support beta text")))
+    pool = _RecordingPool()
+    service, *_ = _build_service(tmp_path, docx_pool=pool)
+
+    result = service.prepare_from_bytes(payload, "local-cr.zip")
+
+    assert pool.calls == [("markdown", ["b/support-beta.docx", "R5s260009.docx"])]
+    assert result.main_source_file == "R5s260009.docx"
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_cr_real_docx_pool_matches_in_process_conversion(tmp_path: Path) -> None:
+    payload = _cr_zip(
+        ("a/support-alpha.docx", _make_docx("support alpha text")),
+        ("b/support-beta.docx", _make_docx("support beta text")),
+        ("c/support-broken.docx", b"not a docx"),
+    )
+    plain = _cr_service(tmp_path / "plain", payload).prepare_extract(
+        "R5s260009", force=True,
+    )
+    with _SpyDocxConvertPool(2) as pool:
+        pooled = _cr_service(tmp_path / "pool", payload, docx_pool=pool).prepare_extract(
+            "R5s260009", force=True,
+        )
+
+    assert pool.calls == [
+        (
+            "markdown",
+            ["a/support-alpha.docx", "b/support-beta.docx", "c/support-broken.docx", "R5s260009.docx"],
+        ),
+    ]
+    assert plain.extract_meta.skipped_sources == ("c/support-broken.docx",)
+    assert _cr_view(pooled) == _cr_view(plain)
+

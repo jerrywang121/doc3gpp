@@ -124,16 +124,34 @@ def test_close_twice_does_not_raise_and_leaves_no_worker_processes() -> None:
     pool.close()
 
 
+class _CountingFuture(Future):
+    def __init__(self, owner: _FakeExecutor) -> None:
+        super().__init__()
+        self._owner = owner
+
+    def result(self, timeout=None):
+        self._owner.outstanding -= 1
+        return super().result(timeout)
+
+
 class _FakeExecutor:
     def __init__(self, *, broken_on_submit: bool = False, broken_on_result: bool = False) -> None:
         self.broken_on_submit = broken_on_submit
         self.broken_on_result = broken_on_result
-        self.shut_down = False
+        self.shutdown_calls = 0
+        self.outstanding = 0
+        self.max_outstanding = 0
+
+    @property
+    def shut_down(self) -> bool:
+        return self.shutdown_calls > 0
 
     def submit(self, fn, *args):
         if self.broken_on_submit:
             raise BrokenProcessPool("worker terminated abruptly")
-        future: Future = Future()
+        self.outstanding += 1
+        self.max_outstanding = max(self.max_outstanding, self.outstanding)
+        future = _CountingFuture(self)
         if self.broken_on_result:
             future.set_exception(BrokenProcessPool("worker terminated abruptly"))
         else:
@@ -141,7 +159,7 @@ class _FakeExecutor:
         return future
 
     def shutdown(self, wait: bool = True, **_kwargs) -> None:
-        self.shut_down = True
+        self.shutdown_calls += 1
 
 
 def _use_fake_executors(monkeypatch, *executors: _FakeExecutor) -> None:
@@ -187,6 +205,59 @@ def test_broken_submit_spares_later_members_of_the_same_call(monkeypatch) -> Non
     assert isinstance(outcomes[0], DocxConvertPoolError)
     assert outcomes[1] == convert_document_to_markdown(golden, "ok.docx")
     assert broken.shut_down
+
+
+def test_discarded_executor_is_shut_down_exactly_once(monkeypatch) -> None:
+    golden = build_golden_docx()
+    broken = _FakeExecutor(broken_on_result=True)
+    _use_fake_executors(monkeypatch, broken)
+    with DocxConvertPool(2) as pool:
+        outcomes = pool.convert_members("markdown", [("a.docx", golden), ("b.docx", golden)])
+        assert all(isinstance(outcome, DocxConvertPoolError) for outcome in outcomes)
+        assert broken.shutdown_calls == 1
+    assert broken.shutdown_calls == 1
+
+
+def test_submit_time_break_shuts_executor_down_exactly_once(monkeypatch) -> None:
+    golden = build_golden_docx()
+    broken = _FakeExecutor(broken_on_submit=True)
+    fresh = _FakeExecutor()
+    _use_fake_executors(monkeypatch, broken, fresh)
+    with DocxConvertPool(2) as pool:
+        outcomes = pool.convert_members(
+            "markdown", [("a.docx", golden), ("b.docx", golden), ("c.docx", golden)]
+        )
+    assert isinstance(outcomes[0], DocxConvertPoolError)
+    assert outcomes[1:] == [
+        convert_document_to_markdown(golden, "b.docx"),
+        convert_document_to_markdown(golden, "c.docx"),
+    ]
+    assert broken.shutdown_calls == 1
+    assert fresh.shutdown_calls == 1
+
+
+def test_window_keeps_two_per_worker_outstanding_and_preserves_input_order(monkeypatch) -> None:
+    members = [(f"m{index}.docx", _golden_with_extra_paragraphs(index)) for index in range(8)]
+    fake = _FakeExecutor()
+    _use_fake_executors(monkeypatch, fake)
+    with DocxConvertPool(2) as pool:
+        outcomes = pool.convert_members("markdown", members)
+    assert fake.max_outstanding == 4
+    assert outcomes == [convert_document_to_markdown(payload, name) for name, payload in members]
+
+
+def test_broken_pool_fails_only_the_outstanding_window(monkeypatch) -> None:
+    members = [(f"m{index}.docx", _golden_with_extra_paragraphs(index)) for index in range(10)]
+    broken = _FakeExecutor(broken_on_result=True)
+    fresh = _FakeExecutor()
+    _use_fake_executors(monkeypatch, broken, fresh)
+    with DocxConvertPool(2) as pool:
+        outcomes = pool.convert_members("markdown", members)
+    assert all(isinstance(outcome, DocxConvertPoolError) for outcome in outcomes[:4])
+    assert outcomes[4:] == [
+        convert_document_to_markdown(payload, name) for name, payload in members[4:]
+    ]
+    assert broken.shutdown_calls == 1
 
 
 def test_broken_result_fails_member_shuts_executor_and_next_call_recreates(monkeypatch) -> None:

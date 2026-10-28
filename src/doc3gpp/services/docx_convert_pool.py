@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import multiprocessing
 import threading
+from collections import deque
 from collections.abc import Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from itertools import islice
 
 from typing_extensions import Self
 
@@ -54,8 +56,17 @@ class DocxConvertPool:
     ) -> list[object]:
         if self._workers <= 1:
             return self._inline.convert_members(kind, members)
-        submitted = [(name, *self._submit(kind, name, payload)) for name, payload in members]
-        return [self._outcome(name, executor, future) for name, executor, future in submitted]
+        window = 2 * self._workers
+        queued = iter(members)
+        outstanding: deque[tuple[str, ProcessPoolExecutor, Future]] = deque()
+        outcomes: list[object] = []
+        while True:
+            for name, payload in islice(queued, window - len(outstanding)):
+                outstanding.append((name, *self._submit(kind, name, payload)))
+            if not outstanding:
+                return outcomes
+            name, executor, future = outstanding.popleft()
+            outcomes.append(self._outcome(name, executor, future))
 
     def close(self) -> None:
         with self._lock:
@@ -80,23 +91,25 @@ class DocxConvertPool:
             try:
                 return executor, executor.submit(_run_member, kind, name, payload)
             except BrokenProcessPool as exc:
-                self._executor = None
-                failed: Future = Future()
-                failed.set_exception(exc)
-                return executor, failed
+                submit_error = exc
+        self._retire(executor)
+        failed: Future = Future()
+        failed.set_exception(submit_error)
+        return executor, failed
 
     def _outcome(self, name: str, executor: ProcessPoolExecutor, future: Future) -> object:
         try:
             return future.result()
         except BrokenProcessPool as exc:
-            self._discard(executor)
+            self._retire(executor)
             message = f"DOCX conversion pool broke while converting {name}: {exc}"
             return DocxConvertPoolError(message)
         except Exception as exc:  # noqa: BLE001 - per-member failures are outcomes
             return exc
 
-    def _discard(self, executor: ProcessPoolExecutor) -> None:
+    def _retire(self, executor: ProcessPoolExecutor) -> None:
         with self._lock:
-            if self._executor is executor:
-                self._executor = None
+            if self._executor is not executor:
+                return
+            self._executor = None
         executor.shutdown(wait=True)

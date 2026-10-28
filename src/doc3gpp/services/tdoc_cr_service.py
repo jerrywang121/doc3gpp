@@ -90,6 +90,7 @@ from doc3gpp.parsers.direct_extractor import (
     list_3gpp_directory,
     validate_tdoc_ftp_url,
 )
+from doc3gpp.parsers.docx_converter import DocxMemberPool
 from doc3gpp.parsers.normalizers import build_ftp_url, normalize_ftp_path
 from doc3gpp.parsers.tdoc_family_main import TDocMainDocumentError
 from doc3gpp.parsers.tdoc_parsers import (
@@ -440,6 +441,7 @@ class TDocCrService:
         search_service: SearchService | None = None,
         semantic_service: SemanticSearchService | None = None,
         family_service: TDocFamilyService | None = None,
+        docx_pool: DocxMemberPool | None = None,
     ) -> None:
         from doc3gpp.settings.loader import get_settings
 
@@ -466,6 +468,7 @@ class TDocCrService:
         )
         self._search_service = search_service
         self._semantic_service = semantic_service
+        self._docx_pool = docx_pool
         if family_service is None:
             family_service = TDocFamilyService(
                 scraper=scraper_client,
@@ -474,6 +477,7 @@ class TDocCrService:
                 max_tdoc_size_bytes=max_tdoc_size_bytes,
                 max_documents_per_zip=self._max_documents_per_zip,
                 max_uncompressed_size_bytes=self._max_uncompressed_size_bytes,
+                docx_pool=docx_pool,
             )
         self._family_service = family_service
 
@@ -1336,6 +1340,7 @@ class TDocCrService:
             identity=identity,
             max_documents=self._max_documents_per_zip,
             max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+            docx_pool=self._docx_pool,
         )
 
     def _decide_direct(
@@ -1362,6 +1367,7 @@ class TDocCrService:
                     tdoc_id=tdoc_id,
                     max_documents=self._max_documents_per_zip,
                     max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+                    docx_pool=self._docx_pool,
                 ),
             )
         except TDocMainDocumentError:

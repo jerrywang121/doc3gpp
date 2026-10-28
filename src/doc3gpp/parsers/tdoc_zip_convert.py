@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name, ordered_sources
 from doc3gpp.models.tdoc_identity import document_id_for
-from doc3gpp.parsers.docx_converter import convert_document_to_markdown
+from doc3gpp.parsers.docx_converter import (
+    DocxConvertPoolError,
+    DocxMemberPool,
+    convert_document_to_markdown,
+)
 from doc3gpp.parsers.tdoc_family_main import member_names, select_main_member
 from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, enumerate_docx_members
 
@@ -38,6 +42,36 @@ def _convert_member(
         if is_empty_text_error(exc):
             return ""
         raise
+
+
+def _member_outcomes(
+    convert: Callable[[bytes, str], str],
+    members: Sequence[tuple[str, bytes]],
+    docx_pool: DocxMemberPool | None,
+) -> Iterator[str | Exception]:
+    """Yield one outcome per member, in order: its Markdown, or the exception it raised.
+
+    The pool converts the whole batch at once. The in-process path converts lazily, so a
+    failing main stops the archive before any annex is converted, as it always has.
+    """
+    if docx_pool is not None and convert is convert_document_to_markdown:
+        yield from docx_pool.convert_members("markdown", members)
+        return
+    for source_file, payload in members:
+        try:
+            outcome: str | Exception = convert(payload, source_file)
+        except Exception as exc:  # noqa: BLE001 - each caller classifies the exception
+            outcome = exc
+        yield outcome
+
+
+def _markdown_outcome(outcome: str | Exception) -> str:
+    """Return a member's Markdown, storing an empty-text document as ``""``."""
+    if isinstance(outcome, Exception):
+        if is_empty_text_error(outcome):
+            return ""
+        raise outcome
+    return outcome
 
 
 def _document(
@@ -102,11 +136,13 @@ def convert_tdoc_zip(
     max_documents: int,
     max_uncompressed_bytes: int,
     convert: Callable[[bytes, str], str] = convert_document_to_markdown,
+    docx_pool: DocxMemberPool | None = None,
 ) -> TDocZipConversion:
     """Convert a TDoc ZIP's ``.docx`` members without touching disk or storage.
 
     A main conversion failure propagates. An annex conversion failure is logged
-    as a warning and recorded in ``skipped_sources``.
+    as a warning and recorded in ``skipped_sources``. A pool failure
+    (:class:`DocxConvertPoolError`) propagates for annexes too.
     """
     main, payloads = _select_zip_main(
         zip_bytes,
@@ -115,11 +151,15 @@ def convert_tdoc_zip(
         max_uncompressed_bytes=max_uncompressed_bytes,
     )
 
-    converted: list[tuple[str, str]] = [(main, _convert_member(convert, payloads[main], main))]
+    names = ordered_sources(tuple(payloads), main)
+    outcomes = _member_outcomes(convert, [(name, payloads[name]) for name in names], docx_pool)
+    converted: list[tuple[str, str]] = [(main, _markdown_outcome(next(outcomes)))]
     skipped: list[str] = []
-    for source_file in ordered_sources(tuple(payloads), main)[1:]:
+    for source_file, outcome in zip(names[1:], outcomes, strict=True):
         try:
-            markdown_text = _convert_member(convert, payloads[source_file], source_file)
+            markdown_text = _markdown_outcome(outcome)
+        except DocxConvertPoolError:
+            raise
         except Exception as exc:  # noqa: BLE001 - one unreadable annex must not fail the archive
             logger.warning("Skipping TDoc annex %r: conversion failed: %s", source_file, exc)
             skipped.append(source_file)
@@ -172,11 +212,12 @@ def convert_direct_payload(
     max_documents: int,
     max_uncompressed_bytes: int,
     convert: Callable[[bytes, str], str] = convert_document_to_markdown,
+    docx_pool: DocxMemberPool | None = None,
 ) -> TDocZipConversion:
     """Convert a direct-mode ``.zip`` or standalone ``.docx`` payload without I/O.
 
     A ZIP follows :func:`convert_tdoc_zip`. A standalone ``.docx`` is its own
-    main document and has no annexes.
+    main document, has no annexes, and always converts in-process.
     """
     source, suffix = _direct_source(filename)
     if suffix == ".zip":
@@ -187,6 +228,7 @@ def convert_direct_payload(
             max_documents=max_documents,
             max_uncompressed_bytes=max_uncompressed_bytes,
             convert=convert,
+            docx_pool=docx_pool,
         )
     _check_docx_limit(payload, max_uncompressed_bytes)
     markdown_text = _convert_member(convert, payload, source)
@@ -205,6 +247,7 @@ def convert_direct_main_markdown(
     max_documents: int,
     max_uncompressed_bytes: int,
     convert: Callable[[bytes, str], str] = convert_document_to_markdown,
+    docx_pool: DocxMemberPool | None = None,
 ) -> str:
     """Return only the main document's Markdown, for TDoc type sniffing.
 
@@ -219,6 +262,7 @@ def convert_direct_main_markdown(
             max_documents=max_documents,
             max_uncompressed_bytes=max_uncompressed_bytes,
         )
-        return _convert_member(convert, payloads[main], main)
+        outcome = next(_member_outcomes(convert, [(main, payloads[main])], docx_pool))
+        return _markdown_outcome(outcome)
     _check_docx_limit(payload, max_uncompressed_bytes)
     return _convert_member(convert, payload, source)

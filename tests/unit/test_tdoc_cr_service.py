@@ -1646,3 +1646,19 @@ def test_direct_parse_bytes_fails_when_no_main_and_an_annex_is_corrupt() -> None
             _zip_of(("a/x.docx", b"not a docx")),
             filename="R5s260009.zip",
         )
+
+
+def test_docx_pool_is_passed_to_family_service(tmp_path: Path) -> None:
+    pool = MagicMock()
+    service = TDocCrService(
+        cache=TDocCache(root=tmp_path / "cache", size_limit_bytes=0),
+        scraper_client=MagicMock(),
+        cr_repository=MagicMock(),
+        cr_ttcn_repository=MagicMock(),
+        cr_change_details_repository=MagicMock(),
+        tdoc_repository=MagicMock(),
+        content_repo=MagicMock(),
+        docx_pool=pool,
+    )
+
+    assert service._family_service._docx_pool is pool

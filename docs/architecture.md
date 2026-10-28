@@ -643,7 +643,9 @@ and syncs each through the `--tsg` path below.
    `parse` itself short-circuits the same way. `parse` =
    fetch-if-missing + `list_spec_docx` (empty zip →
    `SpecDocNoDocxError` failure; `.doc` entries warn-skip) +
-   `convert_document_to_blocks` + `order_spec_files` + `extract_spec_toc`
+   `convert_document_to_blocks` (through the shared DOCX conversion
+   pool when one is injected; see the DOCX bullets under "Cross-surface
+   TDoc pipeline") + `order_spec_files` + `extract_spec_toc`
    → `upsert_toc` + per-file `chunk_blocks` → `replace_chunks` +
     per-file markdown cache +
     `{spec_doc.cache_dir}/markdown/<spec_id>/<version>/<file_order>-<stem>.md`

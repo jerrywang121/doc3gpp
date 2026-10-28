@@ -1,6 +1,6 @@
 # Spec-Doc Parse Speed-Up (DOCX Conversion)
 
-**Status:** Design approved in conversation; spec pending user review.
+**Status:** Implemented on branch perf/spec-doc-parse-speed.
 
 ## Problem
 

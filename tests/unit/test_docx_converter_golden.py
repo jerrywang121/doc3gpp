@@ -1,15 +1,20 @@
 """Golden characterisation of the DOCX converter output.
 
-Pins the markdown and block output of the synthetic document from
-:func:`tests.fixtures.docx_builders.build_golden_docx`. A converter change
-that alters either output must regenerate the fixtures deliberately.
+Pins the markdown and block output of the synthetic documents from
+:func:`tests.fixtures.docx_builders.build_golden_docx` and
+:func:`tests.fixtures.docx_builders.build_golden_branches_docx`. A converter
+change that alters either output must regenerate the fixtures deliberately.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
 from pathlib import Path
+
+from docx import Document
+from docx.table import _Row
 
 from doc3gpp.parsers.docx_converter import (
     convert_document_to_blocks,
@@ -49,3 +54,19 @@ def test_branches_markdown_matches_expected() -> None:
 def test_branches_blocks_match_expected() -> None:
     blocks = convert_document_to_blocks(build_golden_branches_docx(), "golden_branches.docx")
     assert [_as_json(b) for b in blocks] == EXPECTED_BRANCHES_BLOCKS
+
+
+def test_row_cells_evaluated_once_per_row(monkeypatch) -> None:
+    golden = build_golden_docx()
+    row_count = sum(len(table.rows) for table in Document(io.BytesIO(golden)).tables)
+    original_cells = _Row.cells.fget
+    evaluations = 0
+
+    def counting_cells(self):
+        nonlocal evaluations
+        evaluations += 1
+        return original_cells(self)
+
+    monkeypatch.setattr(_Row, "cells", property(counting_cells))
+    convert_document_to_blocks(golden, "golden.docx")
+    assert evaluations == row_count

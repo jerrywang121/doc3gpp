@@ -35,8 +35,10 @@ from __future__ import annotations
 import io
 import logging
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +77,9 @@ except ImportError:
         def __init__(self, *args, **kwargs) -> None:
             raise PythonDocxNotInstalledError()
 
-    def qn(*args, **kwargs):  # type: ignore[no-redef]
-        raise PythonDocxNotInstalledError()
+    def qn(tag: str) -> str:  # type: ignore[no-redef]
+        # Tag constants are built at import time, so the stub must not raise.
+        return tag
 
     class Table:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs) -> None:
@@ -106,24 +109,50 @@ _PAGEREF_PATTERN = re.compile(r"\sPAGEREF\s+_Toc\d+\s+\\h\s")
 # ---------------------------------------------------------------------------
 
 
+_W_P = qn("w:p")
+_W_TBL = qn("w:tbl")
+_W_R = qn("w:r")
+_W_RPR = qn("w:rPr")
+_W_B = qn("w:b")
+_W_I = qn("w:i")
+_W_T = qn("w:t")
+_W_TAB = qn("w:tab")
+_W_DEL = qn("w:del")
+_W_INS = qn("w:ins")
+_W_DEL_TEXT = qn("w:delText")
+_W_FLD_CHAR = qn("w:fldChar")
+_W_INSTR_TEXT = qn("w:instrText")
+_BREAK_TAGS = frozenset({qn("w:br"), qn("w:cr")})
+_PASSTHROUGH_TAGS = frozenset({qn("w:hyperlink"), qn("w:fldSimple")})
+
+
 def _is_paragraph(child) -> bool:
-    return child.tag == qn("w:p")
+    return child.tag == _W_P
 
 
 def _is_table(child) -> bool:
-    return child.tag == qn("w:tbl")
+    return child.tag == _W_TBL
 
 
 def _style_name(paragraph) -> str:
     return paragraph.style.name if paragraph.style else ""
 
 
+def _cached_style_name(paragraph, style_cache: dict[str | None, str]) -> str:
+    key = paragraph._p.style
+    style_name = style_cache.get(key)
+    if style_name is None:
+        style_name = _style_name(paragraph).lower()
+        style_cache[key] = style_name
+    return style_name
+
+
 def _run_formatting(run_element) -> tuple[bool, bool]:
-    rpr = run_element.find(qn("w:rPr"))
+    rpr = run_element.find(_W_RPR)
     if rpr is None:
         return False, False
-    bold = rpr.find(qn("w:b")) is not None
-    italic = rpr.find(qn("w:i")) is not None
+    bold = rpr.find(_W_B) is not None
+    italic = rpr.find(_W_I) is not None
     return bold, italic
 
 
@@ -151,28 +180,28 @@ def _render_children(element, bold: bool = False, italic: bool = False) -> str:
     parts = []
     for child in element.iterchildren():
         tag = child.tag
-        if tag == qn("w:t"):
+        if tag == _W_T:
             if child.text:
                 parts.append(child.text)
-        elif tag == qn("w:tab"):
+        elif tag == _W_TAB:
             parts.append("\t")
-        elif tag in {qn("w:br"), qn("w:cr")}:
+        elif tag in _BREAK_TAGS:
             parts.append("\n")
-        elif tag == qn("w:r"):
+        elif tag == _W_R:
             run_bold, run_italic = _run_formatting(child)
             parts.append(_render_children(child, bold=bold or run_bold, italic=italic or run_italic))
-        elif tag == qn("w:del"):
+        elif tag == _W_DEL:
             parts.append(_render_revision(child, inserted=False, bold=bold, italic=italic))
-        elif tag == qn("w:ins"):
+        elif tag == _W_INS:
             parts.append(_render_revision(child, inserted=True, bold=bold, italic=italic))
-        elif tag == qn("w:delText"):
+        elif tag == _W_DEL_TEXT:
             if child.text:
                 parts.append(child.text)
-        elif tag in {qn("w:hyperlink"), qn("w:fldSimple")}:
+        elif tag in _PASSTHROUGH_TAGS:
             parts.append(_render_children(child, bold=bold, italic=italic))
-        elif tag == qn("w:fldChar"):
+        elif tag == _W_FLD_CHAR:
             continue
-        elif tag == qn("w:instrText"):
+        elif tag == _W_INSTR_TEXT:
             if child.text:
                 parts.append(child.text)
         else:
@@ -180,13 +209,14 @@ def _render_children(element, bold: bool = False, italic: bool = False) -> str:
     return "".join(parts)  # _wrap_text("".join(parts), bold, italic)
 
 
-def _paragraph_to_markdown(paragraph) -> str:
+def _paragraph_to_markdown(paragraph, style_name: str | None = None) -> str:
     text = _render_children(paragraph._p)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\t", "    ")
     text = text.strip()
 
-    style_name = _style_name(paragraph).lower()
+    if style_name is None:
+        style_name = _style_name(paragraph).lower()
     if style_name.startswith("heading"):
         level = int(style_name.split()[-1]) if style_name.split()[-1].isdigit() else 1
         return f"{'#' * level} {text}"
@@ -225,9 +255,10 @@ def _table_to_markdown(table) -> str:
     for row in table.rows:
         cells = []
         ci = 0
-        total_cells = len(row.cells)
+        row_cells = row.cells
+        total_cells = len(row_cells)
         while ci < total_cells:
-            cell = row.cells[ci]
+            cell = row_cells[ci]
             cell_text = "<br>".join(_in_table_paragraph_text(p, preserve_leading_space=True) for p in cell.paragraphs)
             cells.append(cell_text.replace("|", "\\|"))
             span = _grid_span(cell)
@@ -257,11 +288,12 @@ def _clean_text(text: str) -> str:
 
 def _document_to_markdown(document: Document) -> str:
     blocks = []
+    style_cache: dict[str | None, str] = {}
     body = document.element.body
     for child in body.iterchildren():
         if _is_paragraph(child):
             paragraph = Paragraph(child, document)
-            paragraph_text = _paragraph_to_markdown(paragraph)
+            paragraph_text = _paragraph_to_markdown(paragraph, _cached_style_name(paragraph, style_cache))
             if paragraph_text:
                 blocks.append(_clean_text(paragraph_text))
         elif _is_table(child):
@@ -321,8 +353,13 @@ def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
 
 
 __all__ = [
+    "DOCX_WORKERS",
     "Block",
+    "DocxConvertPoolError",
+    "DocxMemberPool",
     "HeadingBlock",
+    "InlineDocxPool",
+    "MemberKind",
     "ParagraphBlock",
     "PythonDocxNotInstalledError",
     "TableBlock",
@@ -406,14 +443,15 @@ def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingB
         )
         raise PythonDocxNotInstalledError() from exc
     raw_blocks: list[tuple[str, object]] = []  # ("h"|"p"|"t", payload)
+    style_cache: dict[str | None, str] = {}
     body = document.element.body
     for child in body.iterchildren():
         if _is_paragraph(child):
             p = Paragraph(child, document)
-            md = _clean_text(_paragraph_to_markdown(p))
+            style = _cached_style_name(p, style_cache)
+            md = _clean_text(_paragraph_to_markdown(p, style))
             if not md:
                 continue
-            style = _style_name(p).lower()
             if style.startswith(("heading", "title", "subtitle")):
                 level = 1
                 if style.startswith("heading"):
@@ -449,3 +487,48 @@ def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingB
     if not out:
         raise RuntimeError(f"python-docx returned empty result for {filename}")
     return out
+
+
+# ---------------------------------------------------------------------------
+# DOCX member pool (fan-out contract for the spec-doc archive pipeline).
+# ---------------------------------------------------------------------------
+
+MemberKind = Literal["blocks", "markdown"]
+
+
+class DocxConvertPoolError(RuntimeError):
+    """A DOCX conversion worker died, so the member could not be converted."""
+
+
+class DocxMemberPool(Protocol):
+    """Converts ``(name, bytes)`` members; returns one outcome per member, in input order.
+
+    An outcome is the converted value, or the exception instance raised for
+    that member. Implementations never raise for a per-member failure.
+    """
+
+    def convert_members(
+        self, kind: MemberKind, members: Sequence[tuple[str, bytes]]
+    ) -> list[object]: ...
+
+
+DOCX_WORKERS: dict[MemberKind, Callable[[bytes, str], object]] = {
+    "blocks": convert_document_to_blocks,
+    "markdown": convert_document_to_markdown,
+}
+
+
+class InlineDocxPool:
+    """Runs the matching worker in-process for each member."""
+
+    def convert_members(
+        self, kind: MemberKind, members: Sequence[tuple[str, bytes]]
+    ) -> list[object]:
+        worker = DOCX_WORKERS[kind]
+        outcomes: list[object] = []
+        for name, payload in members:
+            try:
+                outcomes.append(worker(payload, name))
+            except Exception as exc:  # noqa: BLE001 - per-member failures are outcomes, not batch aborts
+                outcomes.append(exc)
+        return outcomes

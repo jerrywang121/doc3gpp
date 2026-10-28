@@ -15,6 +15,7 @@ import io
 import json
 import threading
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -40,6 +41,7 @@ from doc3gpp.parsers.direct_extractor import (
     is_3gpp_ftp_url,
     read_source_bytes,
 )
+from doc3gpp.parsers.docx_converter import DocxConvertPoolError, InlineDocxPool
 from doc3gpp.parsers.tdoc_zip import (
     TDocZipLimitError,
     TDocZipValidationError,
@@ -622,6 +624,90 @@ def test_direct_parse_bytes_skips_corrupt_annex_and_keeps_main() -> None:
     assert [document.source_file for document in bundle.documents] == [
         "z/R5s260009.docx",
     ]
+
+
+class _RecordingPool:
+    """Converts in-process like ``InlineDocxPool``; records calls and substitutes ``errors``."""
+
+    def __init__(self, errors: dict[str, Exception] | None = None) -> None:
+        self.calls: list[tuple[str, list[str]]] = []
+        self._errors = errors or {}
+
+    def convert_members(
+        self, kind: str, members: Sequence[tuple[str, bytes]]
+    ) -> list[object]:
+        self.calls.append((kind, [name for name, _ in members]))
+        outcomes = InlineDocxPool().convert_members(kind, members)
+        return [
+            self._errors.get(name, outcome)
+            for (name, _), outcome in zip(members, outcomes, strict=True)
+        ]
+
+
+def _cr_main_docx() -> bytes:
+    with zipfile.ZipFile(FIXTURES_DIR / "R5s260009.zip") as source:
+        return source.read("R5s260009.docx")
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_converts_zip_members_through_docx_pool() -> None:
+    payload = _make_dummy_zip({
+        "a/support-alpha.docx": _make_docx("support alpha distinctive body"),
+        "b/support-beta.docx": _make_docx("support beta distinctive body"),
+        "z/R5s260009.docx": _cr_main_docx(),
+    })
+    pool = _RecordingPool()
+
+    bundle = direct_parse_bytes(payload, filename="R5s260009.zip", docx_pool=pool)
+
+    assert pool.calls == [
+        ("markdown", ["a/support-alpha.docx", "b/support-beta.docx", "z/R5s260009.docx"]),
+    ]
+    assert bundle == direct_parse_bytes(payload, filename="R5s260009.zip")
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_docx_pool_error_on_annex_raises() -> None:
+    payload = _make_dummy_zip({
+        "a/support-alpha.docx": _make_docx("support alpha distinctive body"),
+        "z/R5s260009.docx": _cr_main_docx(),
+    })
+    pool = _RecordingPool({
+        "a/support-alpha.docx": DocxConvertPoolError(
+            "DOCX conversion pool broke while converting a/support-alpha.docx"
+        ),
+    })
+
+    with pytest.raises(DocxConvertPoolError, match="pool broke"):
+        direct_parse_bytes(payload, filename="R5s260009.zip", docx_pool=pool)
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_docx_pool_error_on_main_raises() -> None:
+    payload = _make_dummy_zip({
+        "a/support-alpha.docx": _make_docx("support alpha distinctive body"),
+        "z/R5s260009.docx": _cr_main_docx(),
+    })
+    pool = _RecordingPool({
+        "z/R5s260009.docx": DocxConvertPoolError(
+            "DOCX conversion pool broke while converting z/R5s260009.docx"
+        ),
+    })
+
+    with pytest.raises(DocxConvertPoolError, match="pool broke"):
+        direct_parse_bytes(payload, filename="R5s260009.zip", docx_pool=pool)
+
+
+@pytest.mark.skipif(not _docx_available(), reason="python-docx not installed")
+def test_direct_parse_bytes_standalone_docx_stays_in_process() -> None:
+    pool = _RecordingPool()
+
+    bundle = direct_parse_bytes(
+        _cr_main_docx(), filename="R5s260009.docx", docx_pool=pool,
+    )
+
+    assert pool.calls == []
+    assert bundle.main_source_file == "R5s260009.docx"
 
 
 # ---------------------------------------------------------------------------

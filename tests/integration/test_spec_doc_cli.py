@@ -52,7 +52,7 @@ def test_spec_doc_parse_forwards_force(monkeypatch):
             return FakeResult()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
-    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda: FakeService())
+    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda **_kwargs: FakeService())
 
     result = CliRunner().invoke(
         app,
@@ -77,7 +77,7 @@ def test_spec_doc_parse_rejects_repeated_spec(monkeypatch):
             return FakeResult()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
-    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda: FakeService())
+    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda **_kwargs: FakeService())
 
     result = CliRunner().invoke(
         app,
@@ -102,7 +102,7 @@ def test_spec_doc_parse_rejects_misaligned_release_and_version(monkeypatch):
             return FakeResult()
 
     monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
-    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda: FakeService())
+    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", lambda **_kwargs: FakeService())
 
     result = CliRunner().invoke(
         app,
@@ -122,3 +122,78 @@ def test_spec_doc_parse_rejects_misaligned_release_and_version(monkeypatch):
     assert result.exit_code != 0, result.output
     assert "does not match" in result.output
     assert calls == []
+
+
+def _install_recording_docx_pool(monkeypatch, events, entered):
+    class RecordingPool:
+        def __init__(self, workers):
+            events.append(("init", workers))
+
+        def __enter__(self):
+            events.append("enter")
+            entered.append(self)
+            return self
+
+        def __exit__(self, *exc_info):
+            events.append("exit")
+
+    monkeypatch.setattr("doc3gpp.cli.DocxConvertPool", RecordingPool)
+
+
+def test_spec_doc_parse_passes_docx_pool_and_closes_it(monkeypatch):
+    from doc3gpp.config import get_settings
+
+    events = []
+    entered = []
+    seen = {}
+
+    class FakeResult:
+        successes: ClassVar[dict] = {}
+        skipped: ClassVar[dict] = {}
+        failures: ClassVar[dict] = {}
+
+    class FakeService:
+        def parse_many(self, spec_ids, *, release, version, force):
+            events.append("parse")
+            return FakeResult()
+
+    def build_spec_doc_service(*, docx_pool):
+        seen["pool"] = docx_pool
+        events.append("build")
+        return FakeService()
+
+    _install_recording_docx_pool(monkeypatch, events, entered)
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    monkeypatch.setattr("doc3gpp.cli.build_spec_doc_service", build_spec_doc_service)
+
+    result = CliRunner().invoke(app, ["spec", "doc", "parse", "--spec", "38.331"])
+
+    assert result.exit_code == 0, result.output
+    assert events == [
+        ("init", get_settings().pipeline.docx_workers),
+        "enter",
+        "build",
+        "parse",
+        "exit",
+    ]
+    assert seen["pool"] is entered[0]
+
+
+def test_spec_doc_parse_closes_docx_pool_when_parse_raises(monkeypatch):
+    events = []
+
+    class FakeService:
+        def parse_many(self, spec_ids, *, release, version, force):
+            events.append("parse")
+            raise RuntimeError("boom")
+
+    _install_recording_docx_pool(monkeypatch, events, [])
+    monkeypatch.setattr("doc3gpp.cli.create_schema", lambda _scope: None)
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_spec_doc_service", lambda **_kwargs: FakeService()
+    )
+
+    result = CliRunner().invoke(app, ["spec", "doc", "parse", "--spec", "38.331"])
+
+    assert result.exit_code != 0
+    assert events[-2:] == ["parse", "exit"]

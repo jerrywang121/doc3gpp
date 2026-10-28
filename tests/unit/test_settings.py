@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_output_compact_default_is_false(monkeypatch) -> None:
     """``output.compact`` defaults to ``False`` (no behavioural change)."""
@@ -110,5 +112,42 @@ def test_pipeline_prepare_workers_toml_override(tmp_path: Path, monkeypatch) -> 
     get_settings.cache_clear()
     try:
         assert get_settings().pipeline.prepare_workers == 7
+    finally:
+        get_settings.cache_clear()
+
+
+def test_pipeline_default_docx_workers_is_cpu_aware_and_capped_at_four(monkeypatch) -> None:
+    import os
+
+    from doc3gpp.settings import schema
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 2)
+    assert schema.PipelineSettings().docx_workers == 2
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 64)
+    assert schema.PipelineSettings().docx_workers == 4
+
+
+def test_pipeline_docx_workers_bounds() -> None:
+    from pydantic import ValidationError
+
+    from doc3gpp.settings.schema import PipelineSettings
+
+    with pytest.raises(ValidationError):
+        PipelineSettings(docx_workers=-1)
+    with pytest.raises(ValidationError):
+        PipelineSettings(docx_workers=33)
+    assert PipelineSettings(docx_workers=0).docx_workers == 0
+
+
+def test_pipeline_docx_workers_toml_override(tmp_path: Path, monkeypatch) -> None:
+    from doc3gpp.settings.loader import get_settings
+
+    config_path = tmp_path / "doc3gpp.toml"
+    config_path.write_text("[pipeline]\ndocx_workers = 7\n", encoding="utf-8")
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config_path))
+    get_settings.cache_clear()
+    try:
+        assert get_settings().pipeline.docx_workers == 7
     finally:
         get_settings.cache_clear()

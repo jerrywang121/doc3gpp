@@ -181,3 +181,34 @@ def test_build_spec_service_wires_parsed_status_repository(monkeypatch) -> None:
     assert service._repository is spec_repository
     assert service._parsed_status_repository is parsed_status_repository
     assert service._sync_interval == spec_sync_interval
+
+
+def test_build_spec_doc_service_forwards_docx_pool() -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services.factory import build_spec_doc_service
+    from doc3gpp.settings.schema import Settings
+
+    pool = object()
+    service = build_spec_doc_service(
+        settings=Settings(),
+        search_service=MagicMock(),
+        semantic_service=MagicMock(),
+        docx_pool=pool,
+    )
+    assert service._docx_pool is pool
+
+
+def test_build_tdoc_cr_service_forwards_docx_pool() -> None:
+    from unittest.mock import MagicMock
+
+    from doc3gpp.services.factory import build_tdoc_cr_service
+
+    pool = object()
+    service = build_tdoc_cr_service(
+        search_service=MagicMock(),
+        semantic_service=MagicMock(),
+        docx_pool=pool,
+    )
+    assert service._docx_pool is pool
+    assert service._family_service._docx_pool is pool

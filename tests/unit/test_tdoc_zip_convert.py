@@ -6,17 +6,22 @@ import hashlib
 import io
 import logging
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 
 from doc3gpp.models.tdoc_document import markdown_member_name
 from doc3gpp.models.tdoc_identity import document_id_for
-from doc3gpp.parsers.docx_converter import convert_document_to_markdown
+from doc3gpp.parsers.docx_converter import DocxConvertPoolError, convert_document_to_markdown
 from doc3gpp.parsers.tdoc_family_main import TDocMainDocumentError
 from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, TDocZipValidationError
-from doc3gpp.parsers.tdoc_zip_convert import TDocZipConversion, convert_tdoc_zip
+from doc3gpp.parsers.tdoc_zip_convert import (
+    TDocZipConversion,
+    convert_direct_main_markdown,
+    convert_direct_payload,
+    convert_tdoc_zip,
+)
 
 IDENTITY = "tsg_ran/wg5_test_ex-t1/tsgr5_100/docs/r5-123456.zip"
 
@@ -336,3 +341,200 @@ def test_direct_extractor_does_not_import_private_empty_text_prefix() -> None:
     source = Path(direct_extractor.__file__).read_text(encoding="utf-8")
 
     assert "_EMPTY_TEXT_PREFIX" not in source
+
+
+class _FakePool:
+    """Records each ``convert_members`` call and returns the canned outcomes."""
+
+    def __init__(self, *outcomes: object) -> None:
+        self._outcomes = outcomes
+        self.calls: list[tuple[str, list[tuple[str, bytes]]]] = []
+
+    def convert_members(self, kind: str, members: Sequence[tuple[str, bytes]]) -> list[object]:
+        self.calls.append((kind, list(members)))
+        return list(self._outcomes)
+
+
+def _convert_with_pool(zip_bytes: bytes, pool: _FakePool) -> TDocZipConversion:
+    return convert_tdoc_zip(
+        zip_bytes,
+        tdoc_id="R5-123456",
+        identity=IDENTITY,
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        docx_pool=pool,
+    )
+
+
+def test_docx_pool_annex_error_is_skipped_and_main_kept(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    zip_bytes = _make_zip([("R5-123456.docx", b"main body"), ("annex/a.docx", b"annex a body")])
+    pool = _FakePool("main body", RuntimeError("cannot convert annex/a.docx"))
+
+    with caplog.at_level(logging.WARNING):
+        result = _convert_with_pool(zip_bytes, pool)
+
+    assert [document.source_file for document in result.documents] == ["R5-123456.docx"]
+    assert result.documents[0].markdown_text == "main body"
+    assert result.skipped_sources == ("annex/a.docx",)
+    assert any(
+        record.levelno == logging.WARNING and "annex/a.docx" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_docx_pool_main_error_raises() -> None:
+    zip_bytes = _make_zip([("R5-123456.docx", b"main body"), ("annex/a.docx", b"annex a body")])
+    pool = _FakePool(RuntimeError("cannot convert R5-123456.docx"), "annex a body")
+
+    with pytest.raises(RuntimeError, match="cannot convert R5-123456.docx"):
+        _convert_with_pool(zip_bytes, pool)
+
+
+def test_docx_pool_empty_text_annex_is_kept_as_empty_markdown() -> None:
+    zip_bytes = _make_zip(
+        [
+            ("R5-123456.docx", b"main body"),
+            ("annex/a.docx", b"unused"),
+            ("annex/b.docx", b"annex b body"),
+        ]
+    )
+    pool = _FakePool(
+        "main body",
+        RuntimeError("python-docx returned empty result for annex/a.docx"),
+        "annex b body",
+    )
+
+    result = _convert_with_pool(zip_bytes, pool)
+
+    assert [document.source_file for document in result.documents] == [
+        "R5-123456.docx",
+        "annex/a.docx",
+        "annex/b.docx",
+    ]
+    assert [document.markdown_text for document in result.documents] == [
+        "main body",
+        "",
+        "annex b body",
+    ]
+    assert result.skipped_sources == ()
+
+
+def test_docx_pool_empty_text_main_is_kept_as_empty_markdown() -> None:
+    zip_bytes = _make_zip([("R5-123456.docx", b"unused"), ("annex/a.docx", b"annex a body")])
+    pool = _FakePool(
+        RuntimeError("python-docx returned empty result for R5-123456.docx"),
+        "annex a body",
+    )
+
+    result = _convert_with_pool(zip_bytes, pool)
+
+    assert result.documents[0].markdown_text == ""
+    assert result.documents[0].content_hash == hashlib.sha256(b"").hexdigest()
+    assert result.skipped_sources == ()
+
+
+def test_docx_pool_receives_markdown_members_main_first() -> None:
+    zip_bytes = _make_zip(
+        [
+            ("annex/b.docx", b"annex b body"),
+            ("R5-123456.docx", b"main body"),
+            ("annex/a.docx", b"annex a body"),
+        ]
+    )
+    pool = _FakePool("main body", "annex a body", "annex b body")
+
+    _convert_with_pool(zip_bytes, pool)
+
+    assert pool.calls == [
+        (
+            "markdown",
+            [
+                ("R5-123456.docx", b"main body"),
+                ("annex/a.docx", b"annex a body"),
+                ("annex/b.docx", b"annex b body"),
+            ],
+        )
+    ]
+
+
+def test_docx_pool_is_not_used_with_injected_convert() -> None:
+    zip_bytes = _make_zip([("R5-123456.docx", b"main body"), ("annex/a.docx", b"annex a body")])
+    pool = _FakePool()
+
+    result = convert_tdoc_zip(
+        zip_bytes,
+        tdoc_id="R5-123456",
+        identity=IDENTITY,
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        convert=_decode,
+        docx_pool=pool,
+    )
+
+    assert pool.calls == []
+    assert [document.markdown_text for document in result.documents] == [
+        "main body",
+        "annex a body",
+    ]
+
+
+def test_docx_pool_error_on_annex_is_not_skipped() -> None:
+    zip_bytes = _make_zip([("R5-123456.docx", b"main body"), ("annex/a.docx", b"annex a body")])
+    pool = _FakePool(
+        "main body",
+        DocxConvertPoolError("DOCX conversion pool broke while converting annex/a.docx"),
+    )
+
+    with pytest.raises(DocxConvertPoolError, match="pool broke"):
+        _convert_with_pool(zip_bytes, pool)
+
+
+def test_docx_pool_error_on_main_raises() -> None:
+    zip_bytes = _make_zip([("R5-123456.docx", b"main body"), ("annex/a.docx", b"annex a body")])
+    pool = _FakePool(
+        DocxConvertPoolError("DOCX conversion pool broke while converting R5-123456.docx"),
+        "annex a body",
+    )
+
+    with pytest.raises(DocxConvertPoolError, match="pool broke"):
+        _convert_with_pool(zip_bytes, pool)
+
+
+def test_docx_pool_serves_direct_main_markdown_sniff() -> None:
+    zip_bytes = _make_zip([("R5-123456.docx", b"main body"), ("annex/a.docx", b"annex a body")])
+    pool = _FakePool("main body")
+
+    markdown_text = convert_direct_main_markdown(
+        zip_bytes,
+        filename="R5-123456.zip",
+        tdoc_id="R5-123456",
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        docx_pool=pool,
+    )
+
+    assert markdown_text == "main body"
+    assert pool.calls == [("markdown", [("R5-123456.docx", b"main body")])]
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
+)
+def test_docx_pool_is_not_used_for_standalone_docx() -> None:
+    pool = _FakePool()
+
+    conversion = convert_direct_payload(
+        _make_docx("standalone body"),
+        filename="R5-123456.docx",
+        tdoc_id="R5-123456",
+        identity=IDENTITY,
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        docx_pool=pool,
+    )
+
+    assert pool.calls == []
+    assert "standalone body" in conversion.documents[0].markdown_text

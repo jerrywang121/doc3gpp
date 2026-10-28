@@ -136,6 +136,53 @@ def test_lifespan_closes_shared_embedder_on_shutdown(sqlite_env, monkeypatch) ->
     fake_embedder.close.assert_called_once_with()
 
 
+def test_build_state_shares_one_docx_pool_with_spec_doc_and_tdoc_cr(sqlite_env, monkeypatch) -> None:
+    from doc3gpp.services.docx_convert_pool import DocxConvertPool
+    from doc3gpp.web import app as web_app
+
+    built: list[DocxConvertPool] = []
+
+    class RecordingPool(DocxConvertPool):
+        def __init__(self, workers: int) -> None:
+            super().__init__(workers)
+            self.workers = workers
+            built.append(self)
+
+    monkeypatch.setattr(web_app, "DocxConvertPool", RecordingPool)
+    settings = Settings(pipeline={"docx_workers": 3})
+
+    state = web_app.build_state(settings)
+
+    assert len(built) == 1
+    assert built[0].workers == 3
+    assert state.close_docx_pool == built[0].close
+    assert state.services.spec_doc._docx_pool is built[0]
+    assert state.services.tdoc_cr._docx_pool is built[0]
+
+
+def test_lifespan_closes_docx_pool_after_runtime_drains(sqlite_env, monkeypatch) -> None:
+    from doc3gpp.web import app as web_app
+
+    close_calls: list[bool] = []
+    real_build_state = web_app.build_state
+
+    def build_state_with_recording_close(settings: Settings) -> WebState:
+        state = real_build_state(settings)
+
+        def close_docx_pool() -> None:
+            close_calls.append(state.jobs.task.done())
+
+        state.close_docx_pool = close_docx_pool
+        return state
+
+    monkeypatch.setattr(web_app, "build_state", build_state_with_recording_close)
+    app = build_app(Settings())
+    with TestClient(app):
+        pass
+
+    assert close_calls == [True]
+
+
 def test_build_state_wires_testcase_engine(sqlite_env) -> None:
     """``build_state`` carries the shared testcase engine on ``WebState``."""
     from doc3gpp.settings.schema import Settings

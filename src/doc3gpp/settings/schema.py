@@ -725,6 +725,10 @@ class PipelineSettings(BaseModel):
     ``prepare_workers`` bounds concurrent preparation work. Persistence is
     always serialized by the service pipeline runtime; the separate server
     setting controls active jobs, not item preparation.
+
+    ``docx_workers`` sizes the process pool that converts DOCX members. The
+    pool is shared by all concurrent prepares in the process; ``0`` and ``1``
+    convert in-process.
     """
 
     prepare_workers: int = Field(
@@ -735,6 +739,16 @@ class PipelineSettings(BaseModel):
             "Maximum number of concurrent preparation workers shared by "
             "TDoc pipeline surfaces. The default is CPU-aware and bounded "
             "to 32."
+        ),
+    )
+    docx_workers: int = Field(
+        default_factory=lambda: min(4, os.cpu_count() or 1),
+        ge=0,
+        le=32,
+        description=(
+            "Number of worker processes that convert DOCX members to Markdown. "
+            "0 and 1 convert in-process. The default is CPU-aware and bounded "
+            "to 4."
         ),
     )
 

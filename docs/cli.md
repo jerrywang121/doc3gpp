@@ -1402,8 +1402,10 @@ Options:
 - `--from-path PATH`: parse a local `.docx`/`.zip` file, or parse
   every `.docx`/`.zip` under a directory tree. The path type is auto-
   detected: a file is parsed as a single source, a directory is
-  processed as a batch. ZIPs convert every supported `.docx` member
-  sequentially. The TDoc type is determined first (see
+  processed as a batch. ZIPs convert every supported `.docx` member through
+  the DOCX conversion pool, sized by `[pipeline] docx_workers` (config only, no
+  flag; `0` and `1` convert in-process). A standalone `.docx` converts
+  in-process. The TDoc type is determined first (see
   [Direct-mode type detection](#direct-mode-type-detection)). For CR, exactly one
   converted member must contain the structural CR cover; it owns the
   CR/TTCN/body-change metadata, and the other members are annexes held in memory.

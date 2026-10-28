@@ -1,0 +1,49 @@
+[
+  {
+    "type": "HeadingBlock",
+    "level": 1,
+    "section_no": null,
+    "title": "Golden Characterisation",
+    "raw": "# Golden Characterisation"
+  },
+  {
+    "type": "HeadingBlock",
+    "level": 1,
+    "section_no": "1",
+    "title": "Scope",
+    "raw": "# 1 Scope"
+  },
+  {
+    "type": "ParagraphBlock",
+    "text": "Plain bold italic both"
+  },
+  {
+    "type": "HeadingBlock",
+    "level": 2,
+    "section_no": "5.1",
+    "title": "General",
+    "raw": "## 5.1 General"
+  },
+  {
+    "type": "ParagraphBlock",
+    "text": "- First bullet item"
+  },
+  {
+    "type": "ParagraphBlock",
+    "text": "Table 5.1-1: Example caption"
+  },
+  {
+    "type": "TableBlock",
+    "gfm": "| Header A | Header B | Header C |\n| --- | --- | --- |\n| Spanned body | Vertical top |\n| R2C0 | a \\| b | Vertical top |",
+    "table_no": "5.1-1",
+    "table_title": "Example caption"
+  },
+  {
+    "type": "ParagraphBlock",
+    "text": "Kept text, <ins>inserted text</ins> and <del>deleted text</del> end."
+  },
+  {
+    "type": "ParagraphBlock",
+    "text": "Closing paragraph without a style."
+  }
+]

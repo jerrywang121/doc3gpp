@@ -1,0 +1,12 @@
+[
+  {
+    "type": "ParagraphBlock",
+    "text": "Tab    separated paragraph"
+  },
+  {
+    "type": "TableBlock",
+    "gfm": "| Field | Value |\n| --- | --- |\n| Multi-paragraph | First line<br>Second line |\n| Tab    in cell | R3C1 |",
+    "table_no": null,
+    "table_title": null
+  }
+]

@@ -62,6 +62,8 @@ async def run_stdio(settings: Settings) -> None:
     finally:
         if handle is not None:
             await handle.shutdown()
+        if state.close_docx_pool is not None:
+            state.close_docx_pool()
         state.engine.dispose()
         state.testcase_engine.dispose()
         if state.specdata_engine is not None:

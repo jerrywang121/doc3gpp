@@ -319,6 +319,9 @@ search_fanout_factor = 4
 # Persistence is always a single serialized writer; pending capacity is
 # prepare_workers * 2. Range 1..32; default is min(32, cpu_count + 4).
 # prepare_workers = 8
+# DOCX conversion worker processes, shared by all concurrent prepares.
+# 0 and 1 convert in-process. Range 0..32; default is min(4, cpu_count).
+# docx_workers = 4
 
 [server]
 # Master switch for the `doc3gpp server` sub-app.

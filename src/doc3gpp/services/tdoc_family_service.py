@@ -20,6 +20,7 @@ from doc3gpp.scraping.tdoc_zip_source import download_tdoc_zip
 from doc3gpp.services.tdoc_errors import TDocNotYetOnFTPError
 
 if TYPE_CHECKING:
+    from doc3gpp.parsers.docx_converter import DocxMemberPool
     from doc3gpp.repository.protocols import TDocContentRepository
     from doc3gpp.scraping.client import ScraperClient
     from doc3gpp.scraping.tdoc_zip_source import TDocCacheLike
@@ -67,6 +68,7 @@ class TDocFamilyService:
         max_tdoc_size_bytes: int,
         max_documents_per_zip: int,
         max_uncompressed_size_bytes: int,
+        docx_pool: DocxMemberPool | None = None,
     ) -> None:
         self._scraper = scraper
         self._cache = cache
@@ -74,6 +76,7 @@ class TDocFamilyService:
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
         self._max_documents_per_zip = max_documents_per_zip
         self._max_uncompressed_size_bytes = max_uncompressed_size_bytes
+        self._docx_pool = docx_pool
 
     def cached_extract(
         self,
@@ -132,6 +135,7 @@ class TDocFamilyService:
             identity=canonical,
             max_documents=self._max_documents_per_zip,
             max_uncompressed_bytes=self._max_uncompressed_size_bytes,
+            docx_pool=self._docx_pool,
         )
         return self.prepare_conversion(
             tdoc_id=tdoc.tdoc_id,

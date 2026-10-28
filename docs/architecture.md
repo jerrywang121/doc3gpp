@@ -137,7 +137,9 @@ Per-layer modules:
       python-docx only supports the OOXML container. Also exposes
       `convert_document_to_blocks` (`.docx` → `HeadingBlock` /
       `ParagraphBlock` / `TableBlock` list) consumed by the spec-doc
-      parse pipeline.
+      parse pipeline. Also defines the `DocxMemberPool` Protocol,
+      `InlineDocxPool` (in-process, the default), and the `DOCX_WORKERS`
+      entry points (`blocks` / `markdown`) that worker processes run.
     - `parsers/tdoc_family_main.py` — main-member selection by TDoc number
        (`select_main_member`); `member_names` lists the archive's members in memory
      - `parsers/tdoc_zip_convert.py` — pure conversion of every `.docx` member
@@ -257,6 +259,9 @@ Per-layer modules:
      - `services/tdoc_content_service.py` — SQL-first all-source or exact-source
       lookup by TDoc ID / ZIP URL; the CR main comes from the archive; legacy incomplete-content fallback; and
       shared JSON / named-Markdown renderers
+    - `services/docx_convert_pool.py` — `DocxConvertPool`, the bounded
+      spawn-context process pool that converts `.docx` members for the
+      spec-doc and TDoc services (`[pipeline] docx_workers`)
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
       `build_tdoc_sync_coordinator`, `build_tdoc_cr_service`,
@@ -638,7 +643,9 @@ and syncs each through the `--tsg` path below.
    `parse` itself short-circuits the same way. `parse` =
    fetch-if-missing + `list_spec_docx` (empty zip →
    `SpecDocNoDocxError` failure; `.doc` entries warn-skip) +
-   `convert_document_to_blocks` + `order_spec_files` + `extract_spec_toc`
+   `convert_document_to_blocks` (through the shared DOCX conversion
+   pool when one is injected; see the DOCX bullets under "Cross-surface
+   TDoc pipeline") + `order_spec_files` + `extract_spec_toc`
    → `upsert_toc` + per-file `chunk_blocks` → `replace_chunks` +
     per-file markdown cache +
     `{spec_doc.cache_dir}/markdown/<spec_id>/<version>/<file_order>-<stem>.md`
@@ -702,6 +709,10 @@ disable it. Every `doc3gpp server` subcommand refuses to run while disabled.
   repository), starts the `JobWorker`, mounts the MCP sub-app at `/mcp`
   (only when `server.enabled` and `mcp.enabled`), and disposes the engine on
   shutdown. `GET /healthz` returns `{"ok": true}`.
+  `build_state` also creates the process's one `DocxConvertPool`
+  (`[pipeline] docx_workers`) and injects it into the spec-doc and TDoc CR
+  services. The lifespan closes that pool after `PipelineRuntime` has drained,
+  before the embedder and engines are disposed.
 - Browser → HTTP routes → `web/deps.py` request-scoped helpers → the same
   services → the same repositories. Routes render HTML via Jinja2 or return
   the CLI-equivalent JSON with `?format=json`.
@@ -759,13 +770,30 @@ in `finally`. MCP only enqueues the existing jobs and has no runner of its own.
 - Cancellation stops new submissions; submitted writes finish; the runtime
   drains before HTTP client, cache and engines are disposed.
 - `server.max_concurrent_jobs` limits active jobs, not item preparation.
+- DOCX conversion is CPU-bound. With a pool, it does not run on the preparation
+  threads; `0` and `1` convert in-process on them.
+  `services/docx_convert_pool.py::DocxConvertPool` converts `.docx` members in
+  spawned worker processes, bounded by `[pipeline] docx_workers` (default
+  `min(4, cpu_count)`, range 0..32, independent of `prepare_workers`). `0` and
+  `1` convert in-process through `parsers/docx_converter.py::InlineDocxPool`.
+  The executor is created on first use and shared by every concurrent prepare in
+  the process. Each `convert_members` call keeps at most two members per worker
+  outstanding. A worker crash fails that call's outstanding members with
+  `DocxConvertPoolError`, and it can also fail other concurrent callers'
+  unfinished members on the shared executor; the next call starts a fresh
+  executor. The web process builds one pool in `build_state`. Each parsing CLI
+  command (`spec doc parse`, `tdoc parse`) creates its pool in a `with` block, so
+  it is closed on exit; commands that never convert DOCX create none.
 
 ### Queued parse/sync pipeline concurrency
 
 The server creates one process-scoped `PipelineRuntime` for queued
 `PARSE_TDOCS`, `PARSE_TDOC_URL`, `SYNC_SPECS`, and `PARSE_SPEC_DOCS` work.
 Preparation (downloads, document conversion, parsing, chunking, and other
-network/CPU work) runs in a bounded preparation pool. Preparation returns
+network/CPU work) runs in a bounded preparation pool. DOCX member conversion
+inside a preparation runs in the process-wide conversion pool
+(`[pipeline] docx_workers`), so the number of conversion processes does not
+grow with the number of queued jobs. Preparation returns
 immutable DTOs and performs no repository writes. Every queued job shares a
 separate persistence executor with exactly one worker; that lane owns the
 source rows, parsed sidecars, and post-parse FTS/vector updates. This gives

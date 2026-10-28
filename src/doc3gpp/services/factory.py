@@ -48,6 +48,7 @@ from doc3gpp.settings.loader import get_settings
 from doc3gpp.settings.schema import Settings
 
 if TYPE_CHECKING:
+    from doc3gpp.parsers.docx_converter import DocxMemberPool
     from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.storage.repositories.meeting_sql import SQLAlchemyMeetingRepository
 from doc3gpp.storage.repositories.search_sql import SQLAlchemySearchIndexRepository
@@ -511,6 +512,7 @@ def build_spec_doc_service(
     settings: Settings | None = None,
     search_service: object | None = None,
     semantic_service: object | None = None,
+    docx_pool: DocxMemberPool | None = None,
 ) -> SpecDocService:
     """Construct a :class:`SpecDocService` for the ``spec doc`` commands.
 
@@ -523,7 +525,8 @@ def build_spec_doc_service(
     extra is not installed; the service skips the hook in that
     case. A single shared embedder (built once here when the caller
     does not inject one) feeds the semantic hook so one httpx
-    client is shared per process.
+    client is shared per process. ``docx_pool`` converts version
+    DOCX members; ``None`` keeps conversion in-process.
     """
     from doc3gpp.services.spec_doc_service import SpecDocService
 
@@ -545,6 +548,7 @@ def build_spec_doc_service(
             else build_spec_doc_semantic_service(settings, embedder=embedder)
         ),
         embedder=embedder,
+        docx_pool=docx_pool,
     )
 
 
@@ -602,6 +606,7 @@ def build_tdoc_cr_service(
     embedder: Embedder | None = None,
     search_service: object | None = None,
     semantic_service: object | None = None,
+    docx_pool: DocxMemberPool | None = None,
 ) -> TDocCrService:
     """Construct a :class:`TDocCrService` for the ``tdoc parse`` command.
 
@@ -651,6 +656,8 @@ def build_tdoc_cr_service(
             ``--max-tdoc-size-kb``. The value is forwarded to
             :class:`TDocCrService` as ``max_tdoc_size_bytes``;
             ``0`` disables the size guard.
+        docx_pool: Optional shared DOCX conversion pool forwarded to
+            :class:`TDocCrService`; ``None`` keeps conversion in-process.
     """
     settings = get_settings()
     if max_tdoc_size_bytes is None:
@@ -692,6 +699,7 @@ def build_tdoc_cr_service(
             if semantic_service is not None
             else build_semantic_search_service(embedder=embedder)
         ),
+        docx_pool=docx_pool,
     )
 
 

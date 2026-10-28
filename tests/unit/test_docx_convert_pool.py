@@ -236,6 +236,30 @@ def test_submit_time_break_shuts_executor_down_exactly_once(monkeypatch) -> None
     assert fresh.shutdown_calls == 1
 
 
+def test_submit_time_break_clears_reference_without_retire(monkeypatch) -> None:
+    golden = build_golden_docx()
+    broken = _FakeExecutor(broken_on_submit=True)
+    fresh = _FakeExecutor()
+    _use_fake_executors(monkeypatch, broken, fresh)
+    monkeypatch.setattr(DocxConvertPool, "_retire", lambda self, executor: None)
+    with DocxConvertPool(2) as pool:
+        outcomes = pool.convert_members("markdown", [("bad.docx", golden), ("ok.docx", golden)])
+    assert isinstance(outcomes[0], DocxConvertPoolError)
+    assert outcomes[1] == convert_document_to_markdown(golden, "ok.docx")
+    assert fresh.shutdown_calls == 1
+
+
+def test_submit_time_detach_shuts_executor_down_exactly_once(monkeypatch) -> None:
+    golden = build_golden_docx()
+    broken = _FakeExecutor(broken_on_submit=True)
+    _use_fake_executors(monkeypatch, broken)
+    monkeypatch.setattr(DocxConvertPool, "_retire", lambda self, executor: None)
+    with DocxConvertPool(2) as pool:
+        pool.convert_members("markdown", [("bad.docx", golden)])
+        assert broken.shutdown_calls == 1
+    assert broken.shutdown_calls == 1
+
+
 def test_window_keeps_two_per_worker_outstanding_and_preserves_input_order(monkeypatch) -> None:
     members = [(f"m{index}.docx", _golden_with_extra_paragraphs(index)) for index in range(8)]
     fake = _FakeExecutor()

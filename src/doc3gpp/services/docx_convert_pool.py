@@ -93,7 +93,9 @@ class DocxConvertPool:
                 return executor, executor.submit(_run_member, kind, name, payload)
             except BrokenProcessPool as exc:
                 submit_error = exc
-        self._retire(executor)
+                retired = self._detach_locked(executor)
+        if retired:
+            executor.shutdown(wait=True)
         failed: Future = Future()
         failed.set_exception(submit_error)
         return executor, failed
@@ -110,7 +112,14 @@ class DocxConvertPool:
 
     def _retire(self, executor: ProcessPoolExecutor) -> None:
         with self._lock:
-            if self._executor is not executor:
-                return
-            self._executor = None
-        executor.shutdown(wait=True)
+            retired = self._detach_locked(executor)
+        if retired:
+            executor.shutdown(wait=True)
+
+    def _detach_locked(self, executor: ProcessPoolExecutor) -> bool:
+        # Called with ``self._lock`` held. Returns True only for the caller that
+        # detached ``executor``, so exactly one caller shuts it down.
+        if self._executor is not executor:
+            return False
+        self._executor = None
+        return True

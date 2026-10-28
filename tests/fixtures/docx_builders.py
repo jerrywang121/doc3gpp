@@ -5,6 +5,10 @@ the converter renders: heading levels, title and list styles, run
 formatting, a captioned table with horizontal and vertical merges and a
 ``|`` in a cell, tracked insertions and deletions, and an unstyled
 paragraph.
+
+:func:`build_golden_branches_docx` covers the branches the main golden
+document leaves out: a multi-paragraph table cell, an all-empty table row,
+and a tab character in a table cell and in a paragraph.
 """
 
 from __future__ import annotations
@@ -74,6 +78,23 @@ def build_golden_docx() -> bytes:
     _add_captioned_table(document)
     _add_tracked_paragraph(document)
     document.add_paragraph("Closing paragraph without a style.")
+
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def build_golden_branches_docx() -> bytes:
+    document = Document()
+    document.add_paragraph("Tab\tseparated paragraph")
+    table = document.add_table(rows=4, cols=2)
+    table.cell(0, 0).text = "Field"
+    table.cell(0, 1).text = "Value"
+    table.cell(1, 0).text = "Multi-paragraph"
+    table.cell(1, 1).text = "First line"
+    table.cell(1, 1).add_paragraph("Second line")
+    table.cell(3, 0).text = "Tab\tin cell"
+    table.cell(3, 1).text = "R3C1"
 
     buffer = io.BytesIO()
     document.save(buffer)

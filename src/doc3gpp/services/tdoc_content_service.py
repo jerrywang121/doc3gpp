@@ -24,6 +24,7 @@ from doc3gpp.repository.protocols import (
     TDocContentRepository,
     TDocCrDetailRepository,
     TDocRepository,
+    TDocZipInventoryRepository,
 )
 
 _CACHE_FILE_RE = re.compile(r"[A-Za-z0-9._-]{1,200}\Z")
@@ -79,7 +80,10 @@ class TDocContentIneligibleError(TDocContentError):
 
 
 class TDocContentService:
-    """Retrieve TDoc Markdown from SQL, with constrained version-1 cache fallback."""
+    """Retrieve TDoc Markdown and ZIP inventory from SQL.
+
+    Version-1 Markdown cache reads remain constrained to known sources.
+    """
 
     def __init__(
         self,
@@ -87,11 +91,13 @@ class TDocContentService:
         tdoc_repository: TDocRepository,
         cr_repository: TDocCrDetailRepository,
         content_repository: TDocContentRepository,
+        inventory_repository: TDocZipInventoryRepository,
         cache_root: Path,
     ) -> None:
         self._tdoc_repository = tdoc_repository
         self._cr_repository = cr_repository
         self._content_repository = content_repository
+        self._inventory_repository = inventory_repository
         self._cache_root = Path(cache_root)
 
     def get(
@@ -113,6 +119,8 @@ class TDocContentService:
         if store is None:
             raise TDocContentIneligibleError(resolved_tdoc_id, observed_type)
 
+        inventory = self._inventory_repository.get_by_url(resolved_url)
+        zip_files = inventory.zip_files if inventory is not None else None
         meta = self._content_repository.get_extract_meta(resolved_url)
         if meta is None:
             raise self._content_not_found(
@@ -136,6 +144,7 @@ class TDocContentService:
                 source_file,
             )
 
+        content = replace(content, zip_files=zip_files)
         if source_file is None:
             return content
         return self._select_source(content, source_file, resolved_tdoc_id, resolved_url)
@@ -517,6 +526,9 @@ def tdoc_content_to_dict(content: TDocContent) -> dict[str, Any]:
     return {
         "tdoc_id": content.tdoc_id,
         "ftp_url": content.ftp_url,
+        "zip_files": (
+            list(content.zip_files) if content.zip_files is not None else None
+        ),
         "extraction_version": content.extraction_version,
         "complete": content.complete,
         "skipped_sources": list(content.skipped_sources),

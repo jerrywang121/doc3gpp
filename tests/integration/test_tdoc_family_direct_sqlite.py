@@ -16,7 +16,7 @@ from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.parsers.normalizers import normalize_ftp_path
 from doc3gpp.parsers.tdoc_zip import read_markdown_archive
 from doc3gpp.scraping.cache import TDocCache
-from doc3gpp.services.tdoc_cr_service import TDocCrService
+from doc3gpp.services.tdoc_cr_service import PreparedDirectFamily, TDocCrService
 from doc3gpp.services.tdoc_errors import TDocTypeSkippedError
 from doc3gpp.settings.loader import get_settings
 from doc3gpp.storage.db.migrate import create_schema
@@ -33,6 +33,9 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+    SQLAlchemyTDocZipInventoryRepository,
+)
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 STORES = {store.key: store for store in TDOC_CONTENT_STORES}
@@ -113,6 +116,7 @@ def _service(tmp_path: Path, scraper: _Scraper) -> TDocCrService:
         cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
         tdoc_repository=SQLAlchemyTDocRepository(),
         content_repo=SQLAlchemyTDocContentRepository(),
+        inventory_repository=SQLAlchemyTDocZipInventoryRepository(),
     )
 
 
@@ -181,8 +185,18 @@ def test_from_url_family_with_row_persists(sqlite_env, tmp_path: Path) -> None:
     scraper = _Scraper()
     scraper.payloads[FAMILY_URL] = _wid_zip()
     service = _service(tmp_path, scraper)
+    inventory_repo = SQLAlchemyTDocZipInventoryRepository()
 
-    result = service.extract_from_url(FAMILY_URL)
+    prepared = service.prepare_from_url(FAMILY_URL)
+
+    assert isinstance(prepared, PreparedDirectFamily)
+    assert prepared.prepared.inventory is not None
+    assert prepared.prepared.inventory.zip_files == (
+        "R5-123456.docx",
+        "annex/info.docx",
+    )
+    assert inventory_repo.get_by_url(FAMILY_URL) is None
+    result = service.persist_prepared_url(prepared)
 
     canonical = normalize_ftp_path(FAMILY_URL)
     assert result.persisted is True
@@ -195,6 +209,9 @@ def test_from_url_family_with_row_persists(sqlite_env, tmp_path: Path) -> None:
         "R5-123456.docx",
         "annex/info.docx",
     ]
+    inventory = inventory_repo.get_by_url(FAMILY_URL)
+    assert inventory is not None
+    assert inventory.zip_files == ("R5-123456.docx", "annex/info.docx")
     assert _extract_row_count() == 1
 
 

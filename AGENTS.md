@@ -82,7 +82,8 @@ For the full symbol-to-file table, see
 | Add a spec-document CLI command | `src/doc3gpp/cli.py` (`spec_doc_search`, `spec_doc_index`) | Current search/index commands are `spec doc search` and `spec doc index`; search accepts `--text` and `--semantic`, while index reports or rebuilds the FTS5/vector components. |
 | Add a spec-document web route / MCP tool / job | `src/doc3gpp/web/routes/spec_docs.py` (`GET /specs/{spec_id}/docs`, `GET /specs/{spec_id}/docs/toc`, `GET /spec-docs/search`, `GET /spec-docs/index`, `GET /spec-docs/schema`) + `src/doc3gpp/web/routes/jobs.py` (`POST /jobs/spec-docs/index`, `POST /jobs/parse/spec-docs`) + `src/doc3gpp/web/mcp_server.py` (`get_spec_toc`, `search_spec_docs`, `get_spec_doc_index`, `index_spec_docs`, `get_spec_doc_schema`, `parse_spec_docs`) | The version-first page shows source state, parse/re-parse job form, TOC, and paginated chunks. Unified search rows are shared with CLI/HTTP/MCP; `JobKind.INDEX_SPEC_DOCS = "index_spec_docs"` handles index maintenance. |
 | Add a TDoc search/index command or hook | `src/doc3gpp/cli.py` (`tdoc_search`, `tdoc_index`) + `src/doc3gpp/services/tdoc_search_facade.py` / `tdoc_index_service.py` + `src/doc3gpp/storage/repositories/` | `tdoc search` selects FTS5, semantic, hybrid, or filter-only mode from `--text` / `--semantic`; `tdoc index` reports or rebuilds both indexes. |
-| Add TDoc raw-content retrieval | `src/doc3gpp/services/tdoc_content_service.py` + `src/doc3gpp/cli.py` + `src/doc3gpp/web/routes/tdocs.py` / `web/mcp_server.py` | SQL-first content from `tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`; the CR main is read from the derived cache archive, and a missing archive is a cache-miss error with a re-parse hint. `--source-file` is exact and ZIP-scoped. URL reads do not download or extract. |
+| Add TDoc raw-content retrieval | `src/doc3gpp/services/tdoc_content_service.py` + `src/doc3gpp/cli.py` + `src/doc3gpp/web/routes/tdocs.py` / `web/mcp_server.py` | SQL-first content from `tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`; the CR main is read from the derived cache archive, and a missing archive is a cache-miss error with a re-parse hint. `--source-file` is exact and ZIP-scoped. URL reads do not download or extract. The separate `zip_files` inventory is not converted content or auxiliary `files`. |
+| Change TDoc outer-ZIP inventory | `src/doc3gpp/parsers/tdoc_zip.py` (`enumerate_zip_files`) + `src/doc3gpp/models/tdoc_zip_inventory.py` + `src/doc3gpp/storage/repositories/tdoc_zip_inventory_sql.py` + TDoc show renderers | The existing content-family registry limits inventory to CR, WID new/revised, LS in/out, and discussion TDocs. List every non-directory outer member (all extensions, original decoded names, order, duplicates) without extraction or nested-ZIP traversal. `null` is unknown, `[]` is known empty. Existing databases need the additive `doc3gpp db init --scope main`; old inventories remain unknown until a supported TDoc is re-parsed with `--force`. |
 | Add or change a TDoc content family / type routing | `src/doc3gpp/models/tdoc_content_families.py` (`TDOC_CONTENT_STORES`, `store_for_type`, `is_complete_cr_extraction`, `is_complete_family_extraction`) | The single registry of eligible `tdocs.type` values, their content table, and whether the store holds the main document. CR's store holds annexes only. Parse selection, the pipeline, content retrieval, search, and the schema registry read from it. |
 | Change WID, LS, or discussion extraction | `src/doc3gpp/services/tdoc_family_service.py` (`TDocFamilyService`) + `src/doc3gpp/parsers/tdoc_family_main.py` + `src/doc3gpp/parsers/tdoc_zip_convert.py` | The service reuses or downloads the ZIP, selects the main with `select_main_member`, converts `.docx` members (failed annexes go to `skipped_sources`), and persists through `TDocContentRepository.replace_family_bundle`. Conversion is pure and lives in `parsers/`. |
 | Change the TDoc content tables | `src/doc3gpp/storage/repositories/tdoc_content_sql.py` (`SQLAlchemyTDocContentRepository`) + `src/doc3gpp/storage/db/models.py` (`_TDocContentRowMixin`, `TDocCrAnnexOrm`, `TDocWidContentOrm`, `TDocLsContentOrm`, `TDocDiscussionContentOrm`) + `src/doc3gpp/models/schema_info.py` | Four tables share one row shape (`ftp_url`, `doc_filename`, `document_id`, `tdoc_id`, `content` as compressed JSON, `content_hash`, `token_count`). The schema registry must match the ORM columns (`tests/unit/test_schema_info.py::test_registry_matches_orm_columns`). |
@@ -238,7 +239,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `--parsed true|false` filters before pagination.
 - `doc3gpp <resource> schema` (`tsg`, `meeting`, `tdoc`, `wi`, `spec`,
   `testcase`, `spec doc`) describes every column of the resource's table(s) from the
-  static `models/schema_info.py` registry (21 tables, 190 fields; no
+  static `models/schema_info.py` registry (22 tables, 193 fields; no
   filters, no DB reads). Flat rows `table, field, type, nullable,
   description, values`; `nullable` is `yes`/`no` in table/markdown and a
   bool in JSON; `values` comma-joined, `"-"` when free-form. Same payload
@@ -349,8 +350,16 @@ Workflows in one line (full prose in `docs/architecture.md`):
   when `is_ttcn_tdoc(tdoc.tdoc_id)` is `True`. Auxiliary files are
   read once via `file_repo.get_for_tdoc_id(tdoc.tdoc_id)` and match
   by `tdoc_id` (not URL) so all revisions / reviews / support files
-  surface in a single pass. The CLI's renderers emit `cover`, the
-  optional `ttcn` block, `extracted_at` (sourced from the
+  surface in a single pass. The ordered outer-ZIP inventory is looked up
+  by the same current `ftp_url`; JSON exposes it as `zip_files` (`null`
+  when unknown, `[]` for a known empty archive, otherwise the ordered,
+  duplicate-preserving file-entry names). This inventory is separate from
+  auxiliary `files` and converted `documents`; table/Markdown/compact and HTML
+  renderers show it in a separate `ZIP files` section. Names are inert in text
+  output, while JSON retains their original decoded strings. Unknown inventory
+  shows a `--force` refresh hint only when the TDoc type is eligible in the
+  existing content-family registry. The CLI's renderers emit
+  `cover`, the optional `ttcn` block, `extracted_at` (sourced from the
   `tdoc_extracts` row via PK JOIN), and `files` (the auxiliary files
   block / placeholder) as separate sections — the legacy `details` /
   `parser_version` fields no longer appear in the output. For raw output,
@@ -364,9 +373,14 @@ Workflows in one line (full prose in `docs/architecture.md`):
   document plus a manifest. Cache purge/eviction does not delete SQL content or
   prevent FTS5 rebuilding, but it makes raw CR main Markdown unavailable until the
   TDoc is re-downloaded.
+  An existing installation should run `doc3gpp db init --scope main` before
+  using the added inventory table; this is additive/idempotent, does not reset
+  data, and does not backfill old URLs. A forced parse refreshes unknown
+  inventories and re-downloads cached ZIPs whose provenance cannot be verified.
 - `doc3gpp tdoc show --ftp-url <url>` resolves the URL into matching
-  rows across four tables (`tdocs`, `tdoc_cr_cover_page`,
-  `tdoc_cr_ttcn_details`, `tdoc_files`) directly — `tdocs` and
+  rows across seven tables (`tdocs`, `tdoc_cr_cover_page`,
+  `tdoc_cr_ttcn_details`, `tdoc_extracts`, `tdoc_cr_change_details`,
+  `tdoc_files`, `tdoc_zip_inventory`) directly — `tdocs` and
   `tdoc_files` use the new `get_by_ftp_url` lookups
   (`SQLAlchemyTDocRepository.get_by_ftp_url` /
   `SQLAlchemyTDocFileRepository.get_by_ftp_url`); the cover / TTCN
@@ -385,12 +399,16 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `--format raw` on the URL path uses the content service's SQL-first,
   exact-URL snapshot (with legacy-cache fallback only when it can identify
   the source); it does not call `TDocCrService.extract`, download, or sync.
+  The inventory is the snapshot for that exact URL, including historical
+  URLs; without a matching TDoc type, the page has no valid force-parse hint.
   An unavailable legacy cache raises `BadParameter` pointing at
   `doc3gpp tdoc parse --from-url <url>` or `doc3gpp tdoc parse --tdoc <id>`.
   Optional `--source-file` selects one exact member path and is valid only for
-  raw output. The CLI bundles the non-raw result
-  into a new `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn,
-  extracted_at, files)` DTO and renders it under a
+  raw output. An inventory-only URL row, including a known empty ZIP,
+  counts as a detail match but does not make Markdown content available.
+  The CLI bundles the non-raw result into a new
+  `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn, extracted_at,
+  zip_files, files)` DTO and renders it under a
   `# FTP URL` / `[FTP URL]` anchor; the renderer contract follows
   the same omit-when-null convention as the `--tdoc` path's
   `TDocShowRecord`.

@@ -106,11 +106,26 @@ class _Downloads:
     def serve(self, zip_bytes: bytes) -> None:
         self.zip_bytes = zip_bytes
 
-    def download(self, tdoc, scraper, cache, primary_url=None, *, ftp_url=None, max_bytes=0):
+    def download(
+        self,
+        tdoc,
+        scraper,
+        cache,
+        primary_url=None,
+        *,
+        ftp_url=None,
+        max_bytes=0,
+        require_provenance=False,
+    ):
+        del tdoc, scraper, cache, ftp_url, max_bytes, require_provenance
         self.calls += 1
         path = self._directory / "download.zip"
         path.write_bytes(self.zip_bytes)
-        return DownloadedZip(path=path, url=primary_url)
+        return DownloadedZip(
+            path=path,
+            url=primary_url,
+            payload=self.zip_bytes,
+        )
 
 
 @pytest.fixture()
@@ -216,6 +231,8 @@ def test_failing_annex_is_skipped_recorded_and_not_fatal(family_db, downloads, c
 
 
 def test_failing_main_fails_and_keeps_previous_content(family_db, downloads) -> None:
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
     service = _service(_FakeCache())
     downloads.serve(
         _make_zip(
@@ -235,8 +252,9 @@ def test_failing_main_fails_and_keeps_previous_content(family_db, downloads) -> 
             ]
         )
     )
-    with pytest.raises(zipfile.BadZipFile):
-        service.prepare_extract(_tdoc(), WID, force=True)
+    prepared = service.prepare_extract(_tdoc(), WID, force=True)
+    assert isinstance(prepared, PreparedInventoryFailure)
+    assert isinstance(prepared.error, zipfile.BadZipFile)
 
     listed = _repo().list_documents(WID, CANONICAL)
     assert [document.source_file for document in listed] == [MAIN, "annex/a.docx"]
@@ -250,10 +268,15 @@ def test_failing_main_fails_and_keeps_previous_content(family_db, downloads) -> 
 
 
 def test_doc_only_main_fails_with_docx_reason(family_db, downloads) -> None:
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
     downloads.serve(_make_zip([(f"{TDOC_ID}.doc", b"legacy word bytes")]))
 
-    with pytest.raises(TDocMainDocumentError, match="is not .docx"):
-        _service(_FakeCache()).prepare_extract(_tdoc(), WID)
+    prepared = _service(_FakeCache()).prepare_extract(_tdoc(), WID)
+
+    assert isinstance(prepared, PreparedInventoryFailure)
+    assert isinstance(prepared.error, TDocMainDocumentError)
+    assert "is not .docx" in str(prepared.error)
 
 
 def test_family_main_in_folder_stored_with_full_path(family_db, downloads) -> None:
@@ -418,6 +441,8 @@ def test_prepare_writes_no_sql_until_persist(family_db, downloads) -> None:
 
 
 def test_zip_document_limit_raises_limit_error(family_db, downloads) -> None:
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
     downloads.serve(
         _make_zip(
             [
@@ -427,8 +452,11 @@ def test_zip_document_limit_raises_limit_error(family_db, downloads) -> None:
         )
     )
 
-    with pytest.raises(TDocZipLimitError, match="document-count limit exceeded"):
-        _service(_FakeCache(), max_documents=1).prepare_extract(_tdoc(), WID)
+    prepared = _service(_FakeCache(), max_documents=1).prepare_extract(_tdoc(), WID)
+
+    assert isinstance(prepared, PreparedInventoryFailure)
+    assert isinstance(prepared.error, TDocZipLimitError)
+    assert "document-count limit exceeded" in str(prepared.error)
 
 
 def test_cr_store_is_rejected_before_download(family_db, monkeypatch) -> None:
@@ -462,3 +490,22 @@ def test_ls_store_persists_into_ls_table(family_db, downloads) -> None:
     assert result.store is LS
     assert _repo().list_documents(LS, CANONICAL) == result.documents
     assert _repo().list_documents(WID, CANONICAL) == ()
+
+
+
+def test_prepare_attaches_outer_zip_inventory_for_non_docx_entries(
+    family_db, downloads
+) -> None:
+    downloads.serve(
+        _make_zip(
+            [
+                (MAIN, _make_docx("main body")),
+                ("support/reference.pdf", b"not converted"),
+            ]
+        )
+    )
+
+    prepared = _service(_FakeCache()).prepare_extract(_tdoc(), WID, force=True)
+
+    assert prepared.inventory is not None
+    assert prepared.inventory.zip_files == (MAIN, "support/reference.pdf")

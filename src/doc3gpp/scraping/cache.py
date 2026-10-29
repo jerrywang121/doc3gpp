@@ -20,12 +20,16 @@ the eviction order).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
 import shutil
 import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -40,6 +44,12 @@ Subdir = Literal["zips", "markdown"]
 # control characters).
 _KEY_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,200}")
 _VALID_SUBDIRS: tuple[str, ...] = ("zips", "markdown")
+_PROVENANCE_DIR = ".provenance"
+_PROVENANCE_VERSION = 1
+
+_PROCESS_FILE_LOCKS: dict[str, object] = {}
+_PROCESS_FILE_LOCKS_GUARD = threading.Lock()
+_PROCESS_LOCK_DEPTHS = threading.local()
 
 
 @dataclass(slots=True, frozen=True)
@@ -97,8 +107,9 @@ class TDocCache:
         self._size_limit_bytes = size_limit_bytes
         self._lock = threading.RLock()
         self._root.mkdir(parents=True, exist_ok=True)
-        for subdir in _VALID_SUBDIRS:
-            (self._root / subdir).mkdir(exist_ok=True)
+        with self._lock_cache_tree():
+            for subdir in _VALID_SUBDIRS:
+                (self._root / subdir).mkdir(exist_ok=True)
 
     # ------------------------------------------------------------------
     # Properties (read-only handles for service-layer callers).
@@ -124,20 +135,7 @@ class TDocCache:
         payload: bytes,
         subdir: Subdir,
     ) -> Path:
-        """Write ``payload`` to ``<root>/<subdir>/<key>`` atomically.
-
-        The key is sanitised; zero-byte payloads are rejected (they're
-        a sign of a truncated download and would otherwise pollute the
-        cache). The write goes through a tempfile + ``os.replace`` so a
-        reader never sees a half-written file. After a successful write
-        the size limit is enforced (FIFO eviction by ``st_ctime``).
-
-        Returns:
-            The :class:`pathlib.Path` of the written file.
-
-        Raises:
-            ValueError: bad key, bad ``subdir``, or empty payload.
-        """
+        """Atomically cache bytes; plain ZIP writes invalidate known provenance."""
         self._validate_key(key)
         self._validate_subdir(subdir)
         if len(payload) == 0:
@@ -145,32 +143,29 @@ class TDocCache:
 
         target_dir = self._root / subdir
         target_path = target_dir / key
-        # mkstemp in the target subdir keeps the rename on the same
-        # filesystem (atomic). The leading dot makes leftover temp
-        # files easy to spot and lets status() / enforce_size_limit()
-        # skip them if a writer died mid-write.
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=".tmp.",
-            suffix=".partial",
-            dir=target_dir,
-        )
+        tmp_name: str | None = None
         try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
-            # Keep install and its following accounting pass together:
-            # another writer cannot evict this file between the replace
-            # and the size scan. Tempfile I/O remains outside the lock.
-            with self._lock:
-                os.replace(tmp_name, target_path)
+            with self._lock_cache_tree(), self._lock:
+                tmp_name = self._write_temp_file(target_dir, payload)
+                if subdir == "zips":
+                    with self._lock_key(key):
+                        sidecar = self._provenance_path(key)
+                        try:
+                            sidecar.unlink()
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            self._fsync_directory(sidecar.parent)
+                        os.replace(tmp_name, target_path)
+                else:
+                    os.replace(tmp_name, target_path)
                 self.enforce_size_limit()
         except BaseException:
-            # Best-effort cleanup if os.replace never ran.
-            try:
-                os.unlink(tmp_name)
-            except FileNotFoundError:
-                pass
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except FileNotFoundError:
+                    pass
             raise
 
         logger.debug(
@@ -200,6 +195,103 @@ class TDocCache:
             return None
         return path.read_bytes()
 
+
+    def get_zip_with_provenance(self, key: str) -> tuple[bytes, str] | None:
+        """Return a digest-verified ZIP byte snapshot and its recorded source URL."""
+        self._validate_key(key)
+        zip_path = self._root / "zips" / key
+        sidecar_path = self._provenance_path(key)
+        with self._lock_key(key):
+            if not zip_path.is_file() or not sidecar_path.is_file():
+                return None
+            try:
+                payload = zip_path.read_bytes()
+                record = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                return None
+
+            if (
+                not isinstance(record, dict)
+                or type(record.get("version")) is not int
+                or record["version"] != _PROVENANCE_VERSION
+            ):
+                return None
+            source_url = record.get("url")
+            digest = record.get("sha256")
+            if (
+                not isinstance(source_url, str)
+                or not source_url.strip()
+                or not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                return None
+            if hashlib.sha256(payload).hexdigest() != digest:
+                return None
+            return payload, source_url
+
+    def put_zip_with_provenance(
+        self,
+        key: str,
+        data: bytes,
+        source_url: str,
+    ) -> Path:
+        """Atomically replace a ZIP and a versioned digest/source sidecar."""
+        self._validate_key(key)
+        if not data:
+            raise ValueError("Refusing to write zero-byte payload to cache")
+        if not isinstance(source_url, str) or not source_url.strip():
+            raise ValueError("source_url must be a non-empty URL")
+
+        zip_dir = self._root / "zips"
+        sidecar_path = self._provenance_path(key)
+        record = {
+            "version": _PROVENANCE_VERSION,
+            "url": source_url,
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+        metadata = json.dumps(
+            record, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        zip_path = zip_dir / key
+        zip_tmp: str | None = None
+        sidecar_tmp: str | None = None
+        try:
+            with self._lock_cache_tree(), self._lock:
+                sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+                zip_tmp = self._write_temp_file(zip_dir, data)
+                sidecar_tmp = self._write_temp_file(sidecar_path.parent, metadata)
+                with self._lock_key(key):
+                    # Remove old authority before replacing bytes. A process
+                    # interruption from here until sidecar installation is a miss.
+                    try:
+                        sidecar_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    self._fsync_directory(sidecar_path.parent)
+                    os.replace(zip_tmp, zip_path)
+                    os.replace(sidecar_tmp, sidecar_path)
+                    self._fsync_directory(zip_dir)
+                    self._fsync_directory(sidecar_path.parent)
+                self.enforce_size_limit()
+        except BaseException:
+            for temporary in (zip_tmp, sidecar_tmp):
+                if temporary is None:
+                    continue
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
+            raise
+
+        logger.debug(
+            "Cached %d bytes at %s with source provenance (key=%s, url=%s)",
+            len(data),
+            zip_path,
+            key,
+            source_url,
+        )
+        return zip_path
+
     def path_for(self, key: str, subdir: Subdir) -> Path:
         """Return the expected cache path for ``key``/``subdir``.
 
@@ -228,110 +320,134 @@ class TDocCache:
         Returns:
             Number of files deleted.
         """
-        with self._lock:
+        with self._lock_cache_tree(), self._lock:
             return self._enforce_size_limit_unlocked()
 
     def _enforce_size_limit_unlocked(self) -> int:
-        """Enforce the size limit; the caller must hold ``self._lock``."""
+        """Trim the cache; the caller holds the instance lock."""
         if self._size_limit_bytes == 0:
             return 0
 
-        candidates: list[tuple[float, int, Path]] = []
-        for subdir in _VALID_SUBDIRS:
-            for entry in (self._root / subdir).iterdir():
-                if not entry.is_file() or entry.name.startswith("."):
-                    continue
-                try:
-                    st = entry.stat()
-                except FileNotFoundError:
-                    continue
-                candidates.append((st.st_ctime, st.st_size, entry))
-
-        total = sum(size for _, size, _ in candidates)
-        if total <= self._size_limit_bytes:
-            return 0
-
-        # Oldest first; tie-break on path string for deterministic
-        # behaviour when two files share a ctime (common on coarse
-        # filesystem clocks).
-        candidates.sort(key=lambda c: (c[0], str(c[2])))
         deleted = 0
-        for ctime, size, path in candidates:
+        zip_dir = self._root / "zips"
+        while True:
+            candidates: list[tuple[float, Path]] = []
+            total = 0
+            for subdir in _VALID_SUBDIRS:
+                for entry in self._visible_files(subdir):
+                    try:
+                        stat = entry.stat()
+                    except FileNotFoundError:
+                        continue
+                    candidates.append((stat.st_ctime, entry))
+                    total += stat.st_size
             if total <= self._size_limit_bytes:
-                break
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                continue
-            total -= size
-            deleted += 1
-            logger.debug(
-                "Evicted %s (size=%d, ctime=%s) — over size limit",
-                path,
-                size,
-                ctime,
-            )
-        return deleted
+                return deleted
+
+            candidates.sort(key=lambda candidate: (candidate[0], str(candidate[1])))
+            removed = False
+            for ctime, path in candidates:
+                lock = (
+                    self._lock_key(self._zip_key_for_path(path))
+                    if path.is_relative_to(zip_dir)
+                    else nullcontext()
+                )
+                with lock:
+                    try:
+                        current_size = path.stat().st_size
+                    except FileNotFoundError:
+                        continue
+                    current_total = 0
+                    for subdir in _VALID_SUBDIRS:
+                        for entry in self._visible_files(subdir):
+                            try:
+                                current_total += entry.stat().st_size
+                            except FileNotFoundError:
+                                continue
+                    if current_total <= self._size_limit_bytes:
+                        return deleted
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        continue
+                    deleted += 1
+                    logger.debug(
+                        "Evicted %s (size=%d, ctime=%s) — over size limit",
+                        path,
+                        current_size,
+                        ctime,
+                    )
+                    removed = True
+                    break
+            if not removed:
+                return deleted
 
     def purge(self) -> int:
-        """Recursively delete ``zips/`` and ``markdown/`` and recreate them empty.
-
-        The cache root itself is preserved. Files are counted before
-        deletion so the returned count reflects everything that lived
-        under the two subdirs (including any sub-subdirs — currently
-        none, but the helper is forward-compatible).
-
-        Returns:
-            Number of files deleted.
-        """
+        """Recursively delete both cache subdirs and recreate them empty."""
         deleted = 0
-        for subdir in _VALID_SUBDIRS:
-            path = self._root / subdir
-            if path.exists():
-                for entry in path.rglob("*"):
-                    if entry.is_file():
-                        deleted += 1
-                shutil.rmtree(path)
-            path.mkdir(parents=True, exist_ok=True)
+        with self._lock_cache_tree(), self._lock:
+            for subdir in _VALID_SUBDIRS:
+                path = self._root / subdir
+                if path.exists():
+                    files = [entry for entry in path.rglob("*") if entry.is_file()]
+                    if subdir == "zips":
+                        keys = sorted(
+                            {
+                                self._zip_key_for_path(entry)
+                                for entry in files
+                                if not (
+                                    entry.name.startswith(".tmp.")
+                                    and entry.name.endswith(".partial")
+                                )
+                            }
+                        )
+                        with ExitStack() as locks:
+                            for key in keys:
+                                locks.enter_context(self._lock_key(key))
+                            deleted += len(files)
+                            shutil.rmtree(path)
+                    else:
+                        deleted += len(files)
+                        shutil.rmtree(path)
+                path.mkdir(parents=True, exist_ok=True)
         logger.info("Purged %d cache files under %s", deleted, self._root)
         return deleted
 
     def purge_subdir(self, subdir: Subdir) -> int:
-        """Delete every file under ``<root>/<subdir>/`` and recreate it empty.
-
-        Sibling subtree is left untouched, so this is the method to
-        call when re-extracting every TDoc (force the zip download
-        again while preserving the rendered-markdown sidecar) or when
-        wiping the markdown cache alone. Files with a leading ``.``
-        (leftover ``.tmp.*.partial`` blobs from an interrupted write)
-        are skipped.
-
-        Args:
-            subdir: Which subtree to wipe. Must be one of
-                ``"zips"`` / ``"markdown"``.
-
-        Returns:
-            Number of files deleted. ``0`` when the subdir was already
-            empty (or never existed).
-
-        Raises:
-            ValueError: ``subdir`` is not a recognised cache subtree.
-        """
+        """Delete visible files below one subtree, keeping the sibling subtree."""
         self._validate_subdir(subdir)
         path = self._root / subdir
-        deleted = 0
-        if path.exists():
-            for entry in path.rglob("*"):
-                if not entry.is_file() or entry.name.startswith("."):
-                    continue
+
+        with self._lock_cache_tree(), self._lock:
+            if not path.exists():
+                return 0
+
+            entries = [
+                entry
+                for entry in path.rglob("*")
+                if entry.is_file() and not entry.name.startswith(".")
+            ]
+            lock_keys = (
+                sorted({self._zip_key_for_path(entry) for entry in entries})
+                if subdir == "zips"
+                else []
+            )
+            deleted = 0
+            with ExitStack() as locks:
+                for key in lock_keys:
+                    locks.enter_context(self._lock_key(key))
+                for entry in entries:
+                    try:
+                        entry.unlink()
+                        deleted += 1
+                    except FileNotFoundError:
+                        continue
+            if subdir == "zips":
                 try:
-                    entry.unlink()
-                    deleted += 1
-                except FileNotFoundError:
-                    continue
-        logger.info(
-            "Purged %d files from %s/%s", deleted, self._root, subdir
-        )
+                    (path / _PROVENANCE_DIR).rmdir()
+                except OSError:
+                    pass
+        logger.info("Purged %d files from %s/%s", deleted, self._root, subdir)
         return deleted
 
     def status(self) -> CacheStatus:
@@ -358,19 +474,17 @@ class TDocCache:
     # ------------------------------------------------------------------
 
     def _scan_subdir(self, subdir: str) -> tuple[int, int]:
-        """Return ``(file_count, total_bytes)`` for one cache subtree."""
+        """Return file count and total bytes for one cache subtree."""
         assert subdir in _VALID_SUBDIRS  # internal precondition
         count = 0
         total = 0
-        for entry in (self._root / subdir).iterdir():
-            if not entry.is_file() or entry.name.startswith("."):
-                continue
+        for entry in self._visible_files(subdir):
             try:
-                st = entry.stat()
+                stat = entry.stat()
             except FileNotFoundError:
                 continue
             count += 1
-            total += st.st_size
+            total += stat.st_size
         return count, total
 
     @staticmethod
@@ -387,3 +501,109 @@ class TDocCache:
             raise ValueError(
                 f"Invalid subdir {subdir!r}: must be one of {_VALID_SUBDIRS}"
             )
+
+
+    def _provenance_path(self, key: str) -> Path:
+        return self._root / "zips" / _PROVENANCE_DIR / f"p_{key}.json"
+
+    @contextmanager
+    def _lock_cache_tree(self) -> Iterator[None]:
+        """Serialize cache writes, purge, and eviction across processes."""
+        with self._lock_file(self._root / ".locks" / "cache-tree.lock"):
+            yield
+
+    @contextmanager
+    def _lock_file(self, lock_path: Path) -> Iterator[None]:
+        """Lock one path across threads/processes, allowing same-thread nesting."""
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        local_key = str(lock_path.resolve())
+        with _PROCESS_FILE_LOCKS_GUARD:
+            local_lock = _PROCESS_FILE_LOCKS.setdefault(local_key, threading.RLock())
+
+        with local_lock:
+            lock_depths = getattr(_PROCESS_LOCK_DEPTHS, "paths", None)
+            if lock_depths is None:
+                lock_depths = {}
+                _PROCESS_LOCK_DEPTHS.paths = lock_depths
+
+            if lock_depths.get(local_key, 0):
+                lock_depths[local_key] += 1
+                try:
+                    yield
+                finally:
+                    lock_depths[local_key] -= 1
+                return
+
+            with lock_path.open("a+b") as lock_file:
+                if os.name == "nt":
+                    import msvcrt
+
+                    lock_file.seek(0, os.SEEK_END)
+                    if lock_file.tell() == 0:
+                        lock_file.write(b"\0")
+                        lock_file.flush()
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                    try:
+                        lock_depths[local_key] = 1
+                        yield
+                    finally:
+                        lock_depths.pop(local_key, None)
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    try:
+                        lock_depths[local_key] = 1
+                        yield
+                    finally:
+                        lock_depths.pop(local_key, None)
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def _lock_key(self, key: str) -> Iterator[None]:
+        """Lock one ZIP key across threads and processes; failures are fail-closed."""
+        lock_name = f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
+        with self._lock_file(self._root / ".locks" / lock_name):
+            yield
+
+    @staticmethod
+    def _write_temp_file(directory: Path, payload: bytes) -> str:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=".tmp.", suffix=".partial", dir=directory
+        )
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
+            raise
+        return tmp_name
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        if os.name == "nt":
+            return
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _zip_key_for_path(self, path: Path) -> str:
+        relative = path.relative_to(self._root / "zips")
+        if relative.parts[0] == _PROVENANCE_DIR:
+            return Path(relative.name).stem.removeprefix("p_")
+        return relative.name
+
+    def _visible_files(self, subdir: str) -> Iterator[Path]:
+        for entry in (self._root / subdir).rglob("*"):
+            if entry.is_file() and not entry.name.startswith("."):
+                yield entry

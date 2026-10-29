@@ -207,16 +207,16 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/meetings` | List meetings (`?format=json`); shows `start_doc`/`end_doc` and a coloured, clickable sync symbol (`↻`) per meeting. Clicking it enqueues a TDoc sync; while the job runs the row shows a one-word status (`pending`, `running`) in place of the symbol, then the symbol returns and the page reloads with the current filters kept in the URL. |
 | GET | `/meetings/{id}` | Meeting detail (HTML or JSON). |
 | GET | `/tdocs` | List TDocs (`?format=json`; repeatable `fields` selects the HTML columns, see below; `parsed=true|false` keeps complete or incomplete extractions for each TDoc's type). |
-| GET | `/tdocs/{id}` | TDoc show (HTML or JSON). |
+| GET | `/tdocs/{id}` | TDoc show (HTML or JSON). HTML renders `ZIP files` separately from Auxiliary files; detail JSON always includes `zip_files` (`null` when unknown, `[]` for a known empty archive, otherwise ordered outer-ZIP names). |
 | GET | `/tdocs/by-url/content` | Exact ZIP-URL content snapshot (`?ftp_url=<url>`, optional `source_file`, `format=html\|markdown\|json`; default `html`). Registered before parameterized content routes; no sync, download, or extraction. |
 | GET | `/tdocs/{id}/content` | Stored TDoc content (`?format=html\|markdown\|json`, default `html`; optional exact `source_file`). SQL-first; no implicit sync, download, or extraction. |
 | GET | `/tdocs/{id}/download` | Download the cached source zip (404 `cache_miss` with a hint when unparsed). |
-| GET | `/tdocs/by-url` | URL-anchored TDoc show (`?ftp_url=<url>`; HTML or JSON). 404 when the URL matches no row in any of the six URL-keyed tables. |
+| GET | `/tdocs/by-url` | URL-anchored TDoc show (`?ftp_url=<url>`; HTML or JSON), including historical URL inventories. Inventory-only rows, including empty inventories, match; 404 only when no row matches in any of the seven URL-keyed tables. |
 | GET | `/tsgs` | List TSGs. |
 | GET | `/tsgs/schema` | TSG field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp tsg schema --format json` payload verbatim). No DB access. |
 | GET | `/tsgs/{short_name}` | TSG detail. |
 | GET | `/meetings/schema` | Meeting field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp meeting schema --format json` payload verbatim). No DB access. |
-| GET | `/tdocs/schema` | TDoc field descriptors across the ten `tdoc` tables (99 fields; HTML grouped by table; `?format=json` is the `doc3gpp tdoc schema --format json` payload verbatim). No DB access. |
+| GET | `/tdocs/schema` | TDoc field descriptors across the eleven `tdoc` tables (106 fields; HTML grouped by table; `?format=json` is the `doc3gpp tdoc schema --format json` payload verbatim). No DB access. |
 | GET | `/wis/schema` | WI field descriptors (HTML grouped by table; `?format=json` is the `doc3gpp wi schema --format json` payload verbatim). No DB access. |
 | GET | `/specs/schema` | Spec field descriptors across `specs` + `spec_versions` (HTML grouped by table; `?format=json` is the `doc3gpp spec schema --format json` payload verbatim). No DB access. |
 | GET | `/testcases/schema` | Testcase field descriptors across the three testcase tables (HTML grouped by table; `?format=json` is the `doc3gpp testcase schema --format json` payload verbatim). No DB access. |
@@ -266,6 +266,7 @@ when one source is selected:
 {
   "tdoc_id": "R5-123456",
   "ftp_url": "R5/26.001/R5-123456.zip",
+  "zip_files": ["CR/Main.docx", "Annex/Info.pdf"],
   "extraction_version": 2,
   "complete": true,
   "documents": [
@@ -300,10 +301,34 @@ stale cache artifact.
 The MCP `get_tdoc_content` tool accepts exactly one of `tdoc_id` or `ftp_url`,
 plus optional `source_file` and `format=markdown|html|json` (default
 `markdown`). JSON uses the shared serializer and byte-matches the corresponding
-HTTP response. MCP text-only requests for incomplete legacy content return an
-explicit error directing the caller to JSON or re-parsing; warning text is not
+HTTP response. Its `zip_files` field is always present (`null` when unknown,
+`[]` for a known empty ZIP, otherwise the ordered outer-ZIP file-entry names);
+source selection changes `documents` only. MCP text-only requests for
+incomplete legacy content return an explicit error directing the caller to
+JSON or re-parsing; warning text is not
 prepended to the Markdown body. Neither HTTP nor MCP content reads trigger
 sync, download, or conversion.
+
+`zip_files` is the metadata-only inventory of every non-directory member of a
+supported outer ZIP: CR, WID new/revised, LS in/out, or discussion. It preserves
+all extensions, original decoded names, archive order, and duplicates; it does
+not extract members, interpret names as paths, or traverse nested ZIPs. `null`
+means unknown and `[]` means a known empty archive. This is separate from
+auxiliary `files` and converted `documents`. A completed listing survives later
+parse failures and cache eviction. By-ID detail looks up the current
+`tdoc.ftp_url`; URL detail is an exact normalized URL snapshot and may expose a
+historical inventory without a matching current TDoc type. The HTML inventory
+section escapes names as text and offers a `--force` refresh hint only when a
+supported TDoc type is known. CLI `tdoc show --tdoc` keeps its existing optional
+`sync.auto_sync` metadata behavior; the URL selector and HTTP/MCP inventory
+lookups do not auto-sync or parse. The Python SDK's `TDocShowRecord`,
+`TDocShowRecordByUrl`, and `TDocContent` DTOs carry the same `zip_files` value.
+
+Before using an existing database with the inventory table, run
+`doc3gpp db init --scope main`. It is additive and idempotent; do not reset or
+bulk-backfill. Old URLs remain unknown until a supported TDoc is re-parsed with
+`--force`, which re-downloads a cached ZIP when its provenance cannot be
+verified.
 
 `parse_spec_docs` records the spec error in `result.failure_details` and the
 job log. A failed parse job has a populated `error` and result; a successful or
@@ -587,8 +612,10 @@ fields.
 `ftp_url` (a 3GPP FTP URL or relative path); when both are supplied
 `ftp_url` wins and `tdoc_id` is ignored, and an invalid-params error
 is raised only when neither is supplied. The URL mode surfaces every
-row across the six URL-keyed tables whose `ftp_url` matches; auto-sync
-is never triggered (no parent TDoc / meeting to anchor on). A
+row across the seven URL-keyed tables whose `ftp_url` matches, including
+`tdoc_zip_inventory`; auto-sync is never triggered (no parent TDoc / meeting
+to anchor on). Both ID and URL detail JSON always carry `zip_files` with
+the null/empty/ordered-name semantics above. A
 `tdoc_url_not_found` error is raised when the URL resolves to no rows.
 `parsed` and `document_count` match `list_tdocs`. When a TDoc has an
 extract but no cover row (non-CR TDocs and CR annexes), the response

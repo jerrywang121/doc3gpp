@@ -70,6 +70,9 @@ from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+    SQLAlchemyTDocZipInventoryRepository,
+)
 from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
@@ -130,6 +133,11 @@ def build_tdoc_repository() -> SQLAlchemyTDocRepository:
     the existing :func:`build_tdoc_service` factory untouched.
     """
     return SQLAlchemyTDocRepository()
+
+
+def build_tdoc_zip_inventory_repository() -> SQLAlchemyTDocZipInventoryRepository:
+    """Construct the SQL-backed repository for TDoc ZIP inventories."""
+    return SQLAlchemyTDocZipInventoryRepository()
 
 
 def build_tdoc_search_facade(
@@ -306,6 +314,7 @@ def build_tdoc_content_service(
         tdoc_repository=build_tdoc_repository(),
         cr_repository=build_tdoc_cr_repository(),
         content_repository=build_tdoc_content_repository(),
+        inventory_repository=build_tdoc_zip_inventory_repository(),
         cache_root=settings.cache.dir,
     )
 
@@ -684,6 +693,7 @@ def build_tdoc_cr_service(
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
         content_repo=build_tdoc_content_repository(),
+        inventory_repository=build_tdoc_zip_inventory_repository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
         max_documents_per_zip=settings.tdoc_parse.max_documents_per_zip,
         max_uncompressed_size_bytes=(

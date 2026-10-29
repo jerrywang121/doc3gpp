@@ -26,6 +26,7 @@ from doc3gpp.models.tdoc_content_families import TDOC_CONTENT_STORES
 from doc3gpp.parsers.tdoc_zip import read_markdown_archive
 from doc3gpp.scraping.cache import TDocCache
 from doc3gpp.services.tdoc_cr_service import PreparedDirectTDoc, TDocCrService
+from doc3gpp.services.tdoc_errors import TDocTypeSkippedError
 from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.models import (
     TDocCrAnnexOrm,
@@ -45,6 +46,9 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+    SQLAlchemyTDocZipInventoryRepository,
+)
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "tdoc_cr_doc"
 CR_STORE = next(store for store in TDOC_CONTENT_STORES if store.key == "cr")
@@ -521,13 +525,12 @@ def test_direct_two_revisions_never_collide(
 
     cache = TDocCache(root=tmp_path / "cache", size_limit_bytes=0)
     snapshot = cache.status()
-    # Two zip cache files, one markdown file (same content but distinct
-    # extract runs both write through).
-    assert snapshot.zips == 2
+    # Each source ZIP and its provenance sidecar are counted in the zip subtree.
+    assert snapshot.zips == 4
     # Verify the keys are URL-derived (post-T3) — each ftp_url yields a
     # distinct <stem>-<md5>.zip key. The legacy filename is still the
     # leading component of the cached key.
-    zip_names = sorted(p.name for p in (tmp_path / "cache" / "zips").iterdir())
+    zip_names = sorted(p.name for p in (tmp_path / "cache" / "zips").glob("*.zip"))
     assert any("R5s260008_MCC160Comments_r1" in name for name in zip_names)
     assert any("R5s260008_MCC160Comments_r2" in name for name in zip_names)
     assert all(name.endswith(".zip") for name in zip_names)
@@ -539,3 +542,217 @@ def test_direct_two_revisions_never_collide(
     urls = sorted(d.ftp_url for d in details_list)
     assert any("r1.zip" in u for u in urls)
     assert any("r2.zip" in u for u in urls)
+
+
+
+def _build_inventory_zip(entries: tuple[tuple[str, bytes], ...]) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        for name, data in entries:
+            archive.writestr(name, data)
+    return payload.getvalue()
+
+
+def _fixture_main_docx() -> bytes:
+    fixture = FIXTURES_DIR / "R5s260009.zip"
+    with zipfile.ZipFile(io.BytesIO(fixture.read_bytes())) as archive:
+        name = next(item for item in archive.namelist() if item.lower().endswith(".docx"))
+        return archive.read(name)
+
+
+def _build_inventory_service(
+    tmp_path: Path,
+    scraper: _DummyScraperClient,
+) -> tuple[TDocCrService, SQLAlchemyTDocZipInventoryRepository]:
+    inventory_repo = SQLAlchemyTDocZipInventoryRepository()
+    service = TDocCrService(
+        cache=TDocCache(root=tmp_path / "cache", size_limit_bytes=0),
+        scraper_client=scraper,
+        cr_repository=SQLAlchemyTDocCrRepository(),
+        cr_ttcn_repository=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details_repository=SQLAlchemyTDocCrChangeDetailsRepository(),
+        tdoc_repository=SQLAlchemyTDocRepository(),
+        content_repo=SQLAlchemyTDocContentRepository(),
+        inventory_repository=inventory_repo,
+    )
+    return service, inventory_repo
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed",
+)
+def test_known_eligible_3gpp_zip_success_and_parse_failure_both_store_inventory(
+    sqlite_env, tmp_path: Path, monkeypatch,
+) -> None:
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
+    create_schema()
+    success_url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    failed_url = "https://www.3gpp.org/ftp/Docs/R5s260009_MCC160Comments_r1.zip"
+    success_payload = _build_inventory_zip((
+        ("main.docx", _fixture_main_docx()),
+        ("support.pdf", b"%PDF-1.7 support attachment"),
+    ))
+    failed_payload = _build_inventory_zip((("only.pdf", b"%PDF-1.7 no Word documents"),))
+
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="Docs/R5s260009.zip")
+    )
+    scraper = _DummyScraperClient()
+    scraper.payloads[success_url] = success_payload
+    scraper.payloads[failed_url] = failed_payload
+    service, inventory_repo = _build_inventory_service(tmp_path, scraper)
+
+    success = service.extract_from_url(success_url)
+    successful_url_inventory = inventory_repo.get_by_url(success_url)
+    assert success.persisted is True
+    assert successful_url_inventory is not None
+    assert successful_url_inventory.zip_files == ("main.docx", "support.pdf")
+
+    original_errors: list[Exception] = []
+    prepared_failures: list[object] = []
+    real_parse = service._parse_cr_bundle
+    real_prepare = service.prepare_from_url
+
+    def capture_parse(*args, **kwargs):
+        try:
+            return real_parse(*args, **kwargs)
+        except Exception as exc:
+            original_errors.append(exc)
+            raise
+
+    def capture_prepare(url: str, **kwargs):
+        prepared = real_prepare(url, **kwargs)
+        if url == failed_url:
+            assert inventory_repo.get_by_url(failed_url) is None
+            prepared_failures.append(prepared)
+        return prepared
+
+    monkeypatch.setattr(service, "_parse_cr_bundle", capture_parse)
+    monkeypatch.setattr(service, "prepare_from_url", capture_prepare)
+    failed_url_extract = None
+    with pytest.raises(Exception) as caught:
+        failed_url_extract = service.extract_from_url(failed_url, force=True)
+    caught_error = caught.value
+
+    assert failed_url_extract is None
+    assert len(prepared_failures) == 1
+    assert isinstance(prepared_failures[0], PreparedInventoryFailure)
+    assert len(original_errors) == 1
+    assert prepared_failures[0].error is original_errors[0]
+    assert caught_error is original_errors[0]
+    error_type_and_message = (type(caught_error), str(caught_error))
+    original_error_type_and_message = (type(original_errors[0]), str(original_errors[0]))
+    assert error_type_and_message == original_error_type_and_message
+
+    failed_url_inventory = inventory_repo.get_by_url(failed_url)
+    assert failed_url_inventory is not None
+    assert failed_url_inventory.zip_files == ("only.pdf",)
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed",
+)
+def test_direct_docx_does_not_inventory_its_internal_zip(
+    sqlite_env, tmp_path: Path,
+) -> None:
+    create_schema()
+    docx_url = "https://www.3gpp.org/ftp/Docs/R5s260009.docx"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="Docs/R5s260009.zip")
+    )
+    scraper = _DummyScraperClient()
+    scraper.payloads[docx_url] = _fixture_main_docx()
+    service, inventory_repo = _build_inventory_service(tmp_path, scraper)
+
+    result = service.extract_from_url(docx_url)
+
+    assert result.persisted is True
+    assert inventory_repo.get_by_url(docx_url) is None
+
+
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed",
+)
+def test_local_non_3gpp_unknown_id_and_ineligible_types_do_not_persist(
+    sqlite_env, tmp_path: Path,
+) -> None:
+    create_schema()
+    payload = _build_inventory_zip((("main.docx", _fixture_main_docx()),))
+    SQLAlchemyTDocRepository().upsert_many([
+        TDoc(tdoc_id="R5s260009", type="CR", ftp_url="Docs/R5s260009.zip"),
+        TDoc(tdoc_id="R5-123456", type="other", ftp_url="Docs/R5-123456.zip"),
+    ])
+
+    non_3gpp_url = "https://example.com/R5s260009.zip"
+    unknown_id_url = (
+        "https://www.3gpp.org/ftp/Docs/R5s260043_MCC160Comments_r1.zip"
+    )
+    ineligible_url = "https://www.3gpp.org/ftp/Docs/R5-123456.zip"
+    scraper = _DummyScraperClient()
+    scraper.payloads[non_3gpp_url] = payload
+    scraper.payloads[unknown_id_url] = payload
+    service, inventory_repo = _build_inventory_service(tmp_path, scraper)
+
+    local_result = service.extract_from_bytes(payload, "R5s260009.zip")
+    non_3gpp_result = service.prepare_from_url(non_3gpp_url)
+    unknown_id_result = service.prepare_from_url(unknown_id_url)
+    with pytest.raises(TDocTypeSkippedError, match="type 'other' is not parsed"):
+        service.prepare_from_url(ineligible_url)
+
+    assert local_result.persisted is False
+    assert non_3gpp_result.persisted is False
+    assert non_3gpp_result.tdoc_id_in_tdocs is False
+    assert unknown_id_result.persisted is False
+    assert unknown_id_result.tdoc_id == "R5s260043"
+    assert unknown_id_result.tdoc_id_in_tdocs is False
+    assert scraper.calls == [non_3gpp_url, unknown_id_url]
+    assert all(
+        inventory_repo.get_by_url(url) is None
+        for url in (
+            non_3gpp_url,
+            unknown_id_url,
+            ineligible_url,
+            "R5s260009.zip",
+        )
+    )
+
+
+@pytest.mark.parametrize("stored_type", [None, "", " \t "])
+@pytest.mark.skipif(
+    not _docx_available(),
+    reason="python-docx not installed",
+)
+def test_blank_or_missing_stored_type_keeps_direct_parse_but_not_inventory(
+    sqlite_env,
+    tmp_path: Path,
+    stored_type: str | None,
+) -> None:
+    create_schema()
+    tdoc_id = "R5s260009"
+    stored_url = "Docs/R5s260009.zip"
+    url = f"https://www.3gpp.org/ftp/{stored_url}"
+    payload = _build_inventory_zip(
+        (
+            ("main.docx", _fixture_main_docx()),
+            ("support.pdf", b"%PDF-1.7 support attachment"),
+        )
+    )
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type=stored_type, ftp_url=stored_url)
+    )
+    scraper = _DummyScraperClient()
+    scraper.payloads[url] = payload
+    service, inventory_repo = _build_inventory_service(tmp_path, scraper)
+
+    result = service.extract_from_url(url, force=True)
+
+    assert result.persisted is True
+    assert result.tdoc_id == tdoc_id
+    assert result.tdoc_id_in_tdocs is True
+    assert result.details is not None
+    assert scraper.calls == [url]
+    assert inventory_repo.get_by_url(url) is None

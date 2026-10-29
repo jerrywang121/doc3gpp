@@ -569,3 +569,169 @@ def test_pipeline_failure_preserves_archive_member_source_path() -> None:
     assert outcomes[0].status == "failed"
     assert outcomes[0].reason == f"ValueError: {member_failure}"
     assert outcomes[1].status == "success"
+
+
+
+def test_inventory_writes_are_serialized_for_concurrent_success_failure_and_skip(
+    sqlite_env,
+) -> None:
+    import threading
+    import time
+    from dataclasses import dataclass
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.parsers.tdoc_zip import TDocZipLimitError
+    from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    ids = ("INV-SUCCESS", "INV-FAIL", "INV-SKIP")
+    SQLAlchemyTDocRepository().upsert_many([TDoc(tdoc_id=tdoc_id) for tdoc_id in ids])
+    storage = SQLAlchemyTDocZipInventoryRepository()
+    writer_lock = threading.Lock()
+    prepare_barrier = threading.Barrier(len(ids))
+    prepared_threads: set[int] = set()
+    writer_threads: list[int] = []
+    active_writers = 0
+    max_active_writers = 0
+
+    class _TrackingRepository:
+        def upsert(self, inventory: TDocZipInventory) -> None:
+            nonlocal active_writers, max_active_writers
+            with writer_lock:
+                active_writers += 1
+                max_active_writers = max(max_active_writers, active_writers)
+                writer_threads.append(threading.get_ident())
+            try:
+                time.sleep(0.01)
+                storage.upsert(inventory)
+            finally:
+                with writer_lock:
+                    active_writers -= 1
+
+        def get_by_url(self, ftp_url: str):
+            return storage.get_by_url(ftp_url)
+
+    @dataclass(frozen=True)
+    class _Prepared:
+        inventory: TDocZipInventory
+        error: Exception | None = None
+
+    repository = _TrackingRepository()
+    skip_error = TDocZipLimitError("archive limit")
+
+    def prepare(tdoc_id: str) -> _Prepared:
+        prepared_threads.add(threading.get_ident())
+        prepare_barrier.wait(timeout=5)
+        error = ValueError("original parse failure") if tdoc_id == "INV-FAIL" else None
+        if tdoc_id == "INV-SKIP":
+            error = skip_error
+        return _Prepared(
+            TDocZipInventory(
+                ftp_url=f"docs/{tdoc_id}.zip",
+                tdoc_id=tdoc_id,
+                zip_files=(f"{tdoc_id}.docx",),
+            ),
+            error,
+        )
+
+    def persist(prepared: _Prepared) -> TDocZipInventory:
+        repository.upsert(prepared.inventory)
+        if prepared.error is not None:
+            raise prepared.error
+        return prepared.inventory
+
+    runtime = PipelineRuntime(prepare_workers=len(ids), max_pending=len(ids))
+    runner = TDocPipeline(runtime)
+    try:
+        outcomes = runner.run_sync(
+            [PipelineItem(key=tdoc_id, value=tdoc_id) for tdoc_id in ids],
+            prepare,
+            persist=persist,
+            is_complete=lambda _value: False,
+        )
+    finally:
+        runtime.shutdown()
+
+    assert max_active_writers == 1
+    assert len(writer_threads) == 3
+    assert set(writer_threads).isdisjoint(prepared_threads)
+    assert [(outcome.key, outcome.status) for outcome in outcomes] == [
+        ("INV-SUCCESS", "success"),
+        ("INV-FAIL", "failed"),
+        ("INV-SKIP", "skipped"),
+    ]
+    assert outcomes[1].reason == "ValueError: original parse failure"
+    assert outcomes[2].reason == f"TDocZipLimitError: {skip_error}"
+    assert all(repository.get_by_url(f"docs/{tdoc_id}.zip") is not None for tdoc_id in ids)
+
+
+def test_cancelled_preparation_does_not_publish_inventory(sqlite_env) -> None:
+    import asyncio
+    import threading
+    from dataclasses import dataclass
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.services.tdoc_pipeline import PipelineItem, TDocPipeline
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    SQLAlchemyTDocRepository().upsert_many([TDoc(tdoc_id="INV-CANCEL")])
+    repository = SQLAlchemyTDocZipInventoryRepository()
+    runtime = PipelineRuntime(prepare_workers=1, max_pending=1)
+    runner = TDocPipeline(runtime)
+    preparation_started = threading.Event()
+    release_preparation = threading.Event()
+    cancellation = threading.Event()
+
+    @dataclass(frozen=True)
+    class _Prepared:
+        inventory: TDocZipInventory
+
+    def prepare(tdoc_id: str) -> _Prepared:
+        preparation_started.set()
+        assert release_preparation.wait(timeout=5)
+        return _Prepared(
+            TDocZipInventory(
+                ftp_url="docs/INV-CANCEL.zip",
+                tdoc_id=tdoc_id,
+                zip_files=("not-yet-persisted.docx",),
+            )
+        )
+
+    def persist(prepared: _Prepared) -> TDocZipInventory:
+        repository.upsert(prepared.inventory)
+        return prepared.inventory
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            runner.run_async(
+                [PipelineItem(key="INV-CANCEL", value="INV-CANCEL")],
+                prepare,
+                persist=persist,
+                is_cancelled=cancellation.is_set,
+            )
+        )
+        await asyncio.wait_for(asyncio.to_thread(preparation_started.wait), timeout=5)
+        cancellation.set()
+        release_preparation.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+
+    try:
+        asyncio.run(run())
+    finally:
+        release_preparation.set()
+        runtime.shutdown()
+
+    assert repository.get_by_url("docs/INV-CANCEL.zip") is None

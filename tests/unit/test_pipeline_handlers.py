@@ -703,3 +703,232 @@ def test_parse_tdocs_family_cache_hit_is_success_without_persist():
     assert result["successes"] == 1
     assert result["failures"] == 0
     assert result["skipped"] == 0
+
+
+
+def test_async_inventory_writes_are_serialized_for_concurrent_success_failure_and_skip(
+    sqlite_env,
+):
+    import asyncio
+    import threading
+    import time
+    from dataclasses import dataclass
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.parsers.tdoc_zip import TDocZipLimitError
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    ids = ("WEB-INV-SUCCESS", "WEB-INV-FAIL", "WEB-INV-SKIP")
+    SQLAlchemyTDocRepository().upsert_many([TDoc(tdoc_id=tdoc_id) for tdoc_id in ids])
+    storage = SQLAlchemyTDocZipInventoryRepository()
+    writer_lock = threading.Lock()
+    prepare_barrier = threading.Barrier(len(ids))
+    prepared_threads: set[int] = set()
+    writer_threads: list[int] = []
+    active_writers = 0
+    max_active_writers = 0
+
+    class _TrackingRepository:
+        def upsert(self, inventory: TDocZipInventory) -> None:
+            nonlocal active_writers, max_active_writers
+            with writer_lock:
+                active_writers += 1
+                max_active_writers = max(max_active_writers, active_writers)
+                writer_threads.append(threading.get_ident())
+            try:
+                time.sleep(0.01)
+                storage.upsert(inventory)
+            finally:
+                with writer_lock:
+                    active_writers -= 1
+
+        def get_by_url(self, ftp_url: str):
+            return storage.get_by_url(ftp_url)
+
+    @dataclass(frozen=True)
+    class _Prepared:
+        tdoc_id: str
+        inventory: TDocZipInventory
+        error: Exception | None = None
+
+    repository = _TrackingRepository()
+    skip_error = TDocZipLimitError("archive limit")
+
+    def prepare(tdoc_id: str, **_kwargs) -> _Prepared:
+        prepared_threads.add(threading.get_ident())
+        prepare_barrier.wait(timeout=5)
+        error = ValueError("original parse failure") if tdoc_id == ids[1] else None
+        if tdoc_id == ids[2]:
+            error = skip_error
+        return _Prepared(
+            tdoc_id=tdoc_id,
+            inventory=TDocZipInventory(
+                ftp_url=f"docs/{tdoc_id}.zip",
+                tdoc_id=tdoc_id,
+                zip_files=(f"{tdoc_id}.docx",),
+            ),
+            error=error,
+        )
+
+    def persist(prepared: _Prepared):
+        repository.upsert(prepared.inventory)
+        if prepared.error is not None:
+            raise prepared.error
+        return _done(prepared.tdoc_id)
+
+    pipeline = PipelineRuntime(prepare_workers=len(ids))
+    services = _gated_runtime_services(pipeline, ids, prepare, persist)
+
+    async def run():
+        return await _parse_tdocs(
+            _job(max_batch=len(ids)),
+            services,
+            Settings(),
+            progress=lambda *_args, **_kwargs: None,
+            cancel_event=asyncio.Event(),
+        )
+
+    try:
+        result = asyncio.run(run())
+    finally:
+        pipeline.shutdown()
+
+    assert max_active_writers == 1
+    assert len(writer_threads) == 3
+    assert set(writer_threads).isdisjoint(prepared_threads)
+    assert result["successes"] == 1
+    assert result["failures"] == 1
+    assert result["skipped"] == 1
+    assert result["failure_details"] == {ids[1]: "ValueError: original parse failure"}
+    assert result["skipped_details"] == {ids[2]: f"TDocZipLimitError: {skip_error}"}
+    assert all(repository.get_by_url(f"docs/{tdoc_id}.zip") is not None for tdoc_id in ids)
+
+
+
+def test_direct_url_batch_and_web_job_preserve_failure_skip_and_writer_lane():
+    import threading
+    import time
+
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.parsers.tdoc_zip import TDocZipLimitError
+    from doc3gpp.services.tdoc_cr_service import TDocCrService
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
+    root = "https://www.3gpp.org/ftp/Docs/"
+    files = [
+        f"{root}R5s260001.zip",
+        f"{root}R5s260002.zip",
+    ]
+    folder_html = "".join(
+        f'<a class="file" href="{url}">{url.rsplit("/", 1)[-1]}</a>'
+        for url in files
+    )
+    lock = threading.Lock()
+    writer_threads_by_url: dict[str, list[int]] = {url: [] for url in files}
+    prepare_threads_by_url: dict[str, list[int]] = {url: [] for url in files}
+    stored: dict[str, TDocZipInventory] = {}
+    active_writers = 0
+    max_active_writers = 0
+
+    class _FolderScraper:
+        def get_text(self, url: str) -> str:
+            assert url == root
+            return folder_html
+
+    class _TrackingInventoryRepository:
+        def upsert(self, inventory: TDocZipInventory) -> None:
+            nonlocal active_writers, max_active_writers
+            with lock:
+                active_writers += 1
+                max_active_writers = max(max_active_writers, active_writers)
+                writer_threads_by_url[inventory.ftp_url].append(threading.get_ident())
+            try:
+                time.sleep(0.01)
+                with lock:
+                    stored[inventory.ftp_url] = inventory
+            finally:
+                with lock:
+                    active_writers -= 1
+
+    inventory_repo = _TrackingInventoryRepository()
+    service = TDocCrService(
+        cache=SimpleNamespace(),
+        scraper_client=_FolderScraper(),
+        cr_repository=SimpleNamespace(),
+        cr_ttcn_repository=SimpleNamespace(),
+        cr_change_details_repository=SimpleNamespace(),
+        tdoc_repository=SimpleNamespace(),
+        content_repo=SimpleNamespace(),
+        inventory_repository=inventory_repo,
+    )
+
+    def prepare(file_url: str, **_kwargs):
+        with lock:
+            prepare_threads_by_url[file_url].append(threading.get_ident())
+        tdoc_id = file_url.rsplit("/", 1)[-1].removesuffix(".zip")
+        error = (
+            ValueError("original parse failure")
+            if file_url == files[0]
+            else TDocZipLimitError("conversion limit")
+        )
+        return PreparedInventoryFailure(
+            inventory=TDocZipInventory(
+                ftp_url=file_url,
+                tdoc_id=tdoc_id,
+                zip_files=("only.pdf",),
+            ),
+            error=error,
+        )
+
+    service.prepare_from_url = prepare
+
+    batch = service.extract_from_url_batch(root, max_depth=0)
+
+    assert batch.results == []
+    assert batch.failures == {files[0]: "ValueError: original parse failure"}
+    assert batch.skipped == {files[1]: "TDocZipLimitError: conversion limit"}
+
+    web_runtime = PipelineRuntime(prepare_workers=2)
+    services = SimpleNamespace(pipeline=web_runtime, tdoc_cr=service)
+    settings = Settings()
+    settings.sync.auto_sync = False
+    try:
+        web_result = asyncio.run(
+            _parse_tdoc_url(
+                _url_job(root),
+                services,
+                settings,
+                progress=lambda *_args, **_kwargs: None,
+                cancel_event=asyncio.Event(),
+            )
+        )
+    finally:
+        web_runtime.shutdown()
+
+    assert web_result["requested"] == 2
+    assert web_result["successes"] == 0
+    assert web_result["failures"] == 1
+    assert web_result["skipped"] == 1
+    assert web_result["failure_details"] == {
+        files[0]: "ValueError: original parse failure",
+    }
+    assert max_active_writers == 1
+    assert len(writer_threads_by_url[files[0]]) == 2
+    assert len(writer_threads_by_url[files[1]]) == 2
+    for url in files:
+        assert len(prepare_threads_by_url[url]) == 2
+        assert all(
+            prepared_thread != writer_thread
+            for prepared_thread, writer_thread in zip(
+                prepare_threads_by_url[url],
+                writer_threads_by_url[url],
+                strict=True,
+            )
+        )
+        assert stored[url].zip_files == ("only.pdf",)

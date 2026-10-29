@@ -247,6 +247,71 @@ def test_cli_raw_source_file_selects_one_document(sqlite_env, cache_dir) -> None
     assert result.stdout == "# Annex body\n"
 
 
+
+def test_cli_raw_output_is_byte_identical_with_and_without_inventory(
+    sqlite_env, cache_dir,
+) -> None:
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    tdoc_id = "R5-260180"
+    ftp_url = "r5/docs/r5-260180.zip"
+    _seed_family(tdoc_id, ftp_url, _family_sources())
+    args = ["tdoc", "show", "--tdoc", tdoc_id, "--format", "raw"]
+
+    without_inventory = CliRunner().invoke(cli_app, args)
+    assert without_inventory.exit_code == 0, without_inventory.output
+
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            zip_files=("metadata.docx", "support.pdf", "support.pdf"),
+        )
+    )
+    with_inventory = CliRunner().invoke(cli_app, args)
+
+    assert with_inventory.exit_code == 0, with_inventory.output
+    assert with_inventory.stdout == without_inventory.stdout
+
+
+def test_cli_raw_source_file_selection_remains_exact_with_inventory(
+    sqlite_env, cache_dir,
+) -> None:
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    tdoc_id = "R5-260181"
+    ftp_url = "r5/docs/r5-260181.zip"
+    _seed_family(tdoc_id, ftp_url, _family_sources())
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            zip_files=(
+                f"../../{FAMILY_ANNEX}",
+                FAMILY_ANNEX,
+                "support.pdf",
+            ),
+        )
+    )
+
+    result = CliRunner().invoke(
+        cli_app,
+        [
+            "tdoc", "show", "--tdoc", tdoc_id, "--format", "raw",
+            "--source-file", FAMILY_ANNEX,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "# Annex body\n"
+
+
 def test_cli_raw_ineligible_type_error_names_type(sqlite_env, cache_dir) -> None:
     SQLAlchemyTDocRepository().upsert(
         TDoc(tdoc_id="R5-260102", type="other", ftp_url="r5/docs/r5-260102.zip")
@@ -400,7 +465,20 @@ def test_http_html_content_escapes_raw_html(sqlite_env, web_app) -> None:
 
 def test_http_json_matches_mcp_json_bytes(sqlite_env, web_app, mcp_server) -> None:
     tdoc_id = "R5-260108"
-    _seed_family(tdoc_id, "r5/docs/r5-260108.zip", _family_sources())
+    ftp_url = "r5/docs/r5-260108.zip"
+    _seed_family(tdoc_id, ftp_url, _family_sources())
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            zip_files=("main.docx", "support.pdf", "support.pdf"),
+        )
+    )
 
     with TestClient(web_app) as client:
         http_bytes = client.get(
@@ -412,6 +490,198 @@ def test_http_json_matches_mcp_json_bytes(sqlite_env, web_app, mcp_server) -> No
     payload = json.loads(mcp_text)
     assert payload["complete"] is True
     assert payload["skipped_sources"] == []
+    assert payload["zip_files"] == ["main.docx", "support.pdf", "support.pdf"]
+
+
+
+def test_detail_json_is_shared_across_cli_http_mcp_without_download_or_parse(
+    sqlite_env,
+    web_app,
+    mcp_server,
+    monkeypatch,
+) -> None:
+    """Detail reads expose inventory identically without touching ZIP parsing."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app as cli_app
+    from doc3gpp.cli_auto_sync import trigger_auto_sync
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.services.tdoc_cr_service import TDocCrService
+    from doc3gpp.settings.schema import Settings
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_file_sql import (
+        SQLAlchemyTDocFileRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    tdoc_id = "R5-260170"
+    ftp_url = "r5/docs/r5-260170.zip"
+    zip_files = ("a.docx", "support.pdf", "support.pdf")
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url)
+    )
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(ftp_url=ftp_url, tdoc_id=tdoc_id, zip_files=zip_files)
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                ftp_url="r5/docs/r5-260170-review.zip",
+                tdoc_id=tdoc_id,
+                type="review",
+                file="R5-260170_review.zip",
+            )
+        ]
+    )
+
+    def fail_if_extracted(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("detail inventory lookup must not parse or extract a ZIP")
+
+    monkeypatch.setattr(TDocCrService, "extract", fail_if_extracted)
+    settings = Settings()
+    settings.sync.auto_sync = False
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", trigger_auto_sync)
+
+    with TestClient(web_app) as client:
+        http_id = client.get(f"/tdocs/{tdoc_id}?format=json")
+        assert http_id.status_code == 200, http_id.text
+        http_url = client.get(
+            "/tdocs/by-url",
+            params={"ftp_url": ftp_url, "format": "json"},
+        )
+        assert http_url.status_code == 200, http_url.text
+
+    async def call_tdoc(args: dict) -> str:
+        result = await mcp_server.call_tool("get_tdoc", args)
+        assert result.is_error is False, result
+        return result.content[0].text
+
+    runner = CliRunner()
+    cli_id = runner.invoke(
+        cli_app,
+        ["tdoc", "show", "--tdoc", tdoc_id, "--format", "json", "--compact"],
+    )
+    assert cli_id.exit_code == 0, cli_id.output
+    cli_url = runner.invoke(
+        cli_app,
+        [
+            "tdoc", "show", "--ftp-url", ftp_url,
+            "--format", "json", "--compact",
+        ],
+    )
+    assert cli_url.exit_code == 0, cli_url.output
+
+    mcp_id = asyncio.run(call_tdoc({"tdoc_id": tdoc_id}))
+    mcp_url = asyncio.run(call_tdoc({"ftp_url": ftp_url}))
+    assert cli_id.stdout == http_id.content.decode("utf-8") == mcp_id
+    assert cli_url.stdout == http_url.content.decode("utf-8") == mcp_url
+    assert json.loads(cli_id.stdout)["zip_files"] == list(zip_files)
+    assert json.loads(cli_id.stdout)["files"][0]["type"] == "review"
+
+
+def test_cli_tdoc_show_keeps_metadata_auto_sync_when_enabled(
+    sqlite_env,
+    monkeypatch,
+) -> None:
+    """The inventory read path still runs configured CLI metadata auto-sync."""
+    from unittest.mock import MagicMock
+
+    from typer.testing import CliRunner
+
+    from doc3gpp.cli import app as cli_app
+    from doc3gpp.cli_auto_sync import trigger_auto_sync
+    from doc3gpp.models.sync import SyncOutcome
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.settings.schema import Settings
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema("main")
+    tdoc_id = "R5-260171"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="CR", ftp_url="r5/docs/r5-260171.zip")
+    )
+    settings = Settings()
+    settings.sync.auto_sync = True
+    monkeypatch.setattr("doc3gpp.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("doc3gpp.cli.trigger_auto_sync", trigger_auto_sync)
+    meeting_service = MagicMock()
+    meeting_service.list_recent.return_value = []
+    meeting_service.sync.return_value = SyncOutcome(
+        status="synced",
+        reason="metadata auto-sync ran",
+        synced_count=1,
+    )
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_meeting_service", lambda: meeting_service
+    )
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_sync_coordinator", lambda: MagicMock()
+    )
+
+    result = CliRunner().invoke(
+        cli_app,
+        ["tdoc", "show", "--tdoc", tdoc_id, "--format", "json", "--compact"],
+    )
+
+    assert result.exit_code == 0, result.output
+    meeting_service.sync.assert_called_once()
+    assert "metadata auto-sync ran" in result.output
+
+
+
+def test_inventory_only_historical_url_keeps_content_unavailable(
+    sqlite_env,
+    web_app,
+) -> None:
+    """A historical inventory hit is detail-only without Markdown metadata."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    tdoc_id = "R5-260172"
+    current_url = "r5/docs/r5-260172-current.zip"
+    historical_url = "r5/docs/r5-260172-historical.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=current_url)
+    )
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(
+            ftp_url=historical_url,
+            tdoc_id=tdoc_id,
+            zip_files=(),
+        )
+    )
+
+    with TestClient(web_app) as client:
+        detail = client.get(
+            "/tdocs/by-url",
+            params={"ftp_url": historical_url, "format": "json"},
+        )
+        content = client.get(
+            "/tdocs/by-url/content",
+            params={"ftp_url": historical_url, "format": "json"},
+        )
+
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["zip_files"] == []
+    assert "tdoc" not in detail.json()
+    assert content.status_code == 404
+    assert content.json()["error"] == "tdoc_url_not_found"
 
 
 def test_mcp_markdown_matches_http_markdown(sqlite_env, web_app, mcp_server) -> None:

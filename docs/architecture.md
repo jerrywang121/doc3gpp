@@ -507,10 +507,19 @@ and the TDoc CR extraction is the deepest.
    includes complete rows. The CLI cap applies after pending filtering.
 2. The pipeline dispatches by type. CR goes to `TDocCrService`; WID, LS, and
    discussion go to `TDocFamilyService`. Both obtain the ZIP through the source-ZIP
-   cache/download path, enumerate `.docx` members (not `.doc`, PDF, spreadsheets, or
-   nested ZIPs), reject unsafe or duplicate identities, and enforce the TOML-only
-   limits `max_documents_per_zip = 100` and `max_uncompressed_size_kb = 102400`.
-   Limit violations use the skipped bucket.
+   cache/download path and honor the existing source-size limit. A separate inventory
+   pass reads the outer ZIP central directory and stores every non-directory member
+   name in `tdoc_zip_inventory`; it does not extract members, normalize or interpret
+   names, or recurse into nested ZIPs. All extensions and duplicate names are retained
+   in archive order. This inventory is persisted in the existing single-writer lane
+   independently of content conversion; only a complete successful listing replaces
+   a previous row. A later validation/conversion failure does not erase a successfully
+   read inventory or change the parser's original failed/skipped classification. The
+   content pipeline still enumerates only `.docx`
+   members (not `.doc`, PDF, spreadsheets, or nested ZIPs), rejects unsafe or
+   duplicate conversion identities, and enforces the TOML-only limits
+   `max_documents_per_zip = 100` and `max_uncompressed_size_kb = 102400`. Limit
+   violations use the skipped bucket.
 3. The main member is chosen by TDoc number (`parsers/tdoc_family_main.py`,
    `select_main_member`). For CR, the structural CR-cover detector must find exactly
    one main, and only that member feeds `parse_cr_details` and the optional TTCN and
@@ -531,9 +540,10 @@ and the TDoc CR extraction is the deepest.
    entry per converted member, including the CR main, plus a versioned manifest. SQL
    is the source of truth for every document except the CR main. Purging the archive
    does not delete content or make a family extraction incomplete, but a CR cache hit
-   requires the archive, so a normal parse re-downloads and rewrites it. Legacy
-   plain UTF-8, gzip, and single-member archives remain readable as incomplete
-   version-1 content only.
+   requires the archive, so a normal parse re-downloads and rewrites it. The SQL
+   ZIP-name inventory is independent of this derived cache and remains available
+   after cache eviction. Legacy plain UTF-8, gzip, and single-member archives remain
+   readable as incomplete version-1 content only.
 6. `tdoc show --format raw --tdoc <id>` runs extraction first, then reads content
    SQL-first, with the CR main from the archive. `--source-file <full-member-path>`
    selects one exact member. URL reads (`tdoc show --ftp-url`, HTTP, and MCP) are
@@ -858,6 +868,13 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       `type` (`revision` / `review` / `support`), `file`, `ftp_url`
       (unique, the upsert key; stored as a path relative to the
       canonical 3GPP FTP root), `uploaded_date`.
+- `tdoc_zip_inventory`:
+    - `ftp_url` (PK, normalized ZIP download URL), `tdoc_id` (FK →
+      `tdocs.tdoc_id`, `ondelete="CASCADE"`, indexed), and `zip_files`
+      (JSON-encoded `Text` containing the ordered original decoded names of
+      non-directory entries in the outer ZIP). An absent row means inventory
+      is unknown; a row with `[]` means the archive is known to be empty. It is
+      separate from `tdoc_files` auxiliary FTP metadata and the content tables.
 - `spec_doc_sources` (specdata DB — `SpecDataBase`, not main `Base`):
     - `(spec_id, version)` composite PK, `release` (nullable),
       `ftp_url` (absolute version-zip URL), `downloaded_at` /
@@ -1078,14 +1095,14 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
       and the meeting row may not exist in our database yet.
 
 Cascading FK deletes differ by ownership. `tdoc_cr_cover_page`,
-`tdoc_cr_ttcn_details`, `tdoc_cr_change_details`, and `tdoc_extracts` cascade
-directly with `tdocs.tdoc_id`; each content table cascades through its
-`tdoc_extracts.ftp_url` parent. `tdoc_files` does not cascade, so FTP auxiliary
-file metadata survives a TDoc re-sync. The cover, TTCN, body-change, and
-extraction-parent tables have no FKs between one another; only the document
-content rows are owned by the extraction parent. On-disk ZIP/Markdown cache
-artifacts are independent of SQL rows, so cache purge or FIFO eviction never
-removes stored Markdown.
+`tdoc_cr_ttcn_details`, `tdoc_cr_change_details`, `tdoc_extracts`, and
+`tdoc_zip_inventory` cascade directly with `tdocs.tdoc_id`; each content table
+cascades through its `tdoc_extracts.ftp_url` parent. `tdoc_files` does not
+cascade, so FTP auxiliary-file metadata survives a TDoc re-sync. The cover,
+TTCN, body-change, and extraction-parent tables have no FKs between one another;
+only the document content rows are owned by the extraction parent. On-disk
+ZIP/Markdown cache artifacts are independent of SQL rows, so cache purge or FIFO
+eviction never removes stored Markdown or the ZIP-name inventory.
 
 ## Backend Selection
 
@@ -1157,19 +1174,26 @@ the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group 
       `tdoc_cr_cover_page` (URL-keyed on `tdoc.ftp_url`), the
       `extracted_at` timestamp from `tdoc_extracts` (same URL), and,
       when the TDoc is a TTCN CR, a `[TTCN Details]` block from
-      `tdoc_cr_ttcn_details`. Every matching `tdoc_files` row
+      `tdoc_cr_ttcn_details`. `zip_files` comes from the current
+      `tdoc.ftp_url` and is rendered as a separate `[ZIP files]` /
+      `## ZIP files` section; `null` is unknown, `[]` is known empty,
+      and names retain archive order and duplicates. Every matching `tdoc_files` row
       (`tdoc_id`-keyed read, no URL match) renders under an
       `[Auxiliary Files]` block (table), `## Auxiliary Files`
       section (markdown), or `files` key (JSON). JSON payload keys
       are `tdoc` (always), `cover` (omitted when absent), `ttcn`
       (omitted when absent), `extracted_at` (omitted when absent),
-      `files` (omitted when no auxiliary files exist). `--ftp-url`
+      `zip_files` (always, including `null`), and `files` (omitted when
+      no auxiliary files exist). An unknown inventory suggests `--force`
+      only for an eligible TDoc type. `--ftp-url`
       resolves the URL across `tdocs` / `tdoc_cr_cover_page` /
-      `tdoc_cr_ttcn_details` / `tdoc_files` directly (no parent
+      `tdoc_cr_ttcn_details` / `tdoc_cr_change_details` / `tdoc_extracts` /
+      `tdoc_files` / `tdoc_zip_inventory` directly (no parent
       TDoc needed) and bundles the result into a separate
       `TDocShowRecordByUrl(ftp_url, tdoc, cover, ttcn, extracted_at,
-      files)` DTO rendered under a `# FTP URL` / `[FTP URL]`
-      anchor.
+      zip_files, files)` DTO rendered under a `# FTP URL` / `[FTP URL]`
+      anchor. URL inventory reads are exact-URL snapshots, including historical
+      URLs; without a matching TDoc type there is no valid force-parse hint.
 - `tsg`:
     - `list`, `show`, `seed`
 - `testcase`:
@@ -1358,8 +1382,11 @@ readers:
   is the intended schema boundary for normal use, while `meeting sync`,
   `wi sync`, and `tsg seed` still call `create_schema()` idempotently for
   fresh-database ergonomics. `tdoc sync` and `tdoc parse` assume the schema
-  already exists. Existing installs need `doc3gpp db reset --yes` (SQLite)
-  or a backend-native migration/reset after ORM shape changes.
+  already exists. Additive tables such as `tdoc_zip_inventory` are installed
+  non-destructively with `doc3gpp db init --scope main`; do not reset existing
+  data or bulk-backfill inventories. Older TDocs remain `zip_files: null` until
+  a supported TDoc is re-parsed with `--force`. Non-additive ORM shape changes
+  may still require a backend-native migration/reset.
 - **Protocol ↔ impl signature parity** — when changing a filter
   signature on any repo, update both the Protocol and the impl.
 - **CLI depends on `services/factory.py` only** — never instantiate a

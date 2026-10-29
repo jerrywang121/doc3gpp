@@ -104,6 +104,18 @@ def test_list_tools_exposes_read_and_job_tools(sqlite_env) -> None:
         "list_jobs",
     }
     assert names == expected
+    get_tdoc_tool = next(tool for tool in tools if tool.name == "get_tdoc")
+    description = get_tdoc_tool.description or ""
+    for table in (
+        "tdocs",
+        "tdoc_cr_cover_page",
+        "tdoc_cr_ttcn_details",
+        "tdoc_extracts",
+        "tdoc_cr_change_details",
+        "tdoc_files",
+        "tdoc_zip_inventory",
+    ):
+        assert table in description
     assert "search_tdocs" not in names
     assert "semantic_search_tdoc" not in names
     assert "semantic_search_tdocs" not in names
@@ -1732,7 +1744,7 @@ def test_mcp_get_tdoc_content_uses_stored_zip_cache(sqlite_env, monkeypatch, tmp
 
 
 def test_mcp_get_tdoc_by_url_matches_http_route(sqlite_env) -> None:
-    """MCP ``get_tdoc(ftp_url=...)`` output equals HTTP ``/tdocs/by-url?ftp_url=...&format=json``."""
+    """MCP URL detail JSON includes the same persisted inventory as HTTP."""
     import asyncio
     import json
 
@@ -1740,17 +1752,26 @@ def test_mcp_get_tdoc_by_url_matches_http_route(sqlite_env) -> None:
 
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
     from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
     from doc3gpp.storage.db.session import get_engine
     from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
     from doc3gpp.web.app import build_app
 
     state, server = _state_and_server()  # runs create_schema()
+    tdoc_id = "R5s260001"
     url = "R5/26.001/R5s260001.zip"
-    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260001", ftp_url=url))
+    zip_files = ("main.docx", "support.pdf", "support.pdf")
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id=tdoc_id, ftp_url=url))
     SQLAlchemyTDocCrRepository().upsert(
-        TDocCRDetails(tdoc_id="R5s260001", ftp_url=url, cr_num="0001")
+        TDocCRDetails(tdoc_id=tdoc_id, ftp_url=url, cr_num="0001")
+    )
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(ftp_url=url, tdoc_id=tdoc_id, zip_files=zip_files)
     )
 
     app = build_app(
@@ -1765,16 +1786,17 @@ def test_mcp_get_tdoc_by_url_matches_http_route(sqlite_env) -> None:
             "/tdocs/by-url", params={"ftp_url": url, "format": "json"}
         )
         assert http_response.status_code == 200
-        http_payload = http_response.json()
+        http_bytes = http_response.content.decode("utf-8")
 
         async def call(name: str, args: dict):
             result = await server.call_tool(name, args)
             assert result.is_error is False, result
             return result.content[0].text
 
-        mcp_payload = json.loads(asyncio.run(call("get_tdoc", {"ftp_url": url})))
+        mcp_bytes = asyncio.run(call("get_tdoc", {"ftp_url": url}))
 
-    assert mcp_payload == http_payload
+    assert mcp_bytes == http_bytes
+    assert json.loads(mcp_bytes)["zip_files"] == list(zip_files)
     get_engine.cache_clear()
     del state.engine
 
@@ -2091,12 +2113,17 @@ def test_mcp_tdoc_content_json_matches_http_bytes_and_source_selection(
     sqlite_env, monkeypatch, tmp_path,
 ) -> None:
     import asyncio
+    import json
 
     from fastapi.testclient import TestClient
 
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
     from doc3gpp.settings.loader import get_settings
     from doc3gpp.settings.schema import CacheSettings, MCPSettings, ServerSettings, Settings
     from doc3gpp.storage.db.session import get_engine
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
     from doc3gpp.web.app import build_app
 
     monkeypatch.setenv("DOC3GPP_CACHE__DIR", str(tmp_path / "cache"))
@@ -2104,7 +2131,13 @@ def test_mcp_tdoc_content_json_matches_http_bytes_and_source_selection(
     state, server = _state_and_server()
     tdoc_id = "R5-260025"
     ftp_url = "R5/26.001/R5-260025.zip"
-    _, support_source = _seed_tdoc_content_sql(tdoc_id, ftp_url, state.settings.cache.dir)
+    main_source, support_source = _seed_tdoc_content_sql(
+        tdoc_id, ftp_url, state.settings.cache.dir
+    )
+    zip_files = (main_source, support_source, support_source)
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(ftp_url=ftp_url, tdoc_id=tdoc_id, zip_files=zip_files)
+    )
     app = build_app(
         Settings(
             server=ServerSettings(enabled=True, port=8765),
@@ -2129,6 +2162,7 @@ def test_mcp_tdoc_content_json_matches_http_bytes_and_source_selection(
             call({"ftp_url": ftp_url, "format": "json"})
         )
         assert mcp_all == http_response.content.decode("utf-8")
+        assert json.loads(mcp_all)["zip_files"] == list(zip_files)
 
         http_selected = client.get(
             "/tdocs/by-url/content",
@@ -2149,6 +2183,11 @@ def test_mcp_tdoc_content_json_matches_http_bytes_and_source_selection(
             )
         )
         assert mcp_selected == http_selected.content.decode("utf-8")
+        selected_payload = json.loads(mcp_selected)
+        assert selected_payload["zip_files"] == list(zip_files)
+        assert [doc["source_file"] for doc in selected_payload["documents"]] == [
+            support_source
+        ]
 
     get_engine.cache_clear()
     del state.engine

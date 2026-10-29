@@ -1057,3 +1057,192 @@ def test_show_by_ftp_url_table_includes_summary_of_change() -> None:
     _render_tdoc_show_by_url_table(record, stream)
     out = stream.getvalue()
     assert "summary_of_change: Add USIM config setter." in out
+
+
+
+def _zip_show_record(
+    *,
+    selector: str,
+    tdoc_type: str | None = "CR",
+    zip_files: tuple[str, ...] | None = None,
+    with_tdoc: bool = True,
+    files: tuple = (),
+):
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl
+
+    tdoc = (
+        TDoc(
+            tdoc_id="R5-260501",
+            type=tdoc_type,
+            ftp_url="r5/26.001/r5-260501.zip",
+        )
+        if with_tdoc
+        else None
+    )
+    if selector == "url":
+        return TDocShowRecordByUrl(
+            ftp_url="r5/26.001/r5-260501.zip",
+            tdoc=tdoc,
+            zip_files=zip_files,
+            files=files,
+        )
+    assert tdoc is not None
+    return TDocShowRecord(tdoc=tdoc, zip_files=zip_files, files=files)
+
+
+def _render_zip_show_record(
+    record,
+    *,
+    selector: str,
+    fmt: str,
+    compact: bool = False,
+) -> str:
+    import io
+
+    from doc3gpp.cli import (
+        _render_tdoc_show_by_url_markdown,
+        _render_tdoc_show_by_url_table,
+        _render_tdoc_show_markdown,
+        _render_tdoc_show_table,
+    )
+
+    stream = io.StringIO()
+    if selector == "url":
+        renderer = (
+            _render_tdoc_show_by_url_table
+            if fmt == "table"
+            else _render_tdoc_show_by_url_markdown
+        )
+    else:
+        renderer = (
+            _render_tdoc_show_table
+            if fmt == "table"
+            else _render_tdoc_show_markdown
+        )
+    if fmt == "table":
+        renderer(record, stream)
+    else:
+        renderer(record, stream, compact=compact)
+    return stream.getvalue()
+
+
+def test_known_zip_files_are_separate_from_auxiliary_files() -> None:
+    from doc3gpp.models.tdoc_file import TDocFile
+
+    auxiliary = TDocFile(
+        tdoc_id="R5-260501",
+        type="review",
+        file="review.zip",
+        ftp_url="r5/26.001/review.zip",
+    )
+    for selector in ("tdoc", "url"):
+        record = _zip_show_record(
+            selector=selector,
+            zip_files=("main.docx", "support.pdf", "support.pdf"),
+            files=(auxiliary,),
+        )
+        for fmt, compact in (("table", False), ("markdown", False), ("markdown", True)):
+            rendered = _render_zip_show_record(
+                record,
+                selector=selector,
+                fmt=fmt,
+                compact=compact,
+            )
+            assert "ZIP files" in rendered or "zip_files:" in rendered
+            assert rendered.count("support") == 2
+            assert rendered.index("main") < rendered.index("support")
+            assert "review" in rendered
+            if fmt == "table":
+                auxiliary_section = rendered.split("[Auxiliary Files]", 1)[1]
+                assert "review" in auxiliary_section
+                assert "support" not in auxiliary_section
+            elif compact:
+                assert "zip_file: support" in rendered
+                assert "file: review.zip" in rendered
+            else:
+                auxiliary_section = rendered.split("## Auxiliary Files", 1)[1]
+                assert "review" in auxiliary_section
+                assert "support" not in auxiliary_section
+
+
+def test_unknown_supported_has_force_hint_but_unsupported_does_not() -> None:
+    for selector in ("tdoc", "url"):
+        supported = _render_zip_show_record(
+            _zip_show_record(selector=selector, zip_files=None),
+            selector=selector,
+            fmt="table",
+        )
+        unsupported = _render_zip_show_record(
+            _zip_show_record(
+                selector=selector,
+                tdoc_type="other",
+                zip_files=None,
+            ),
+            selector=selector,
+            fmt="table",
+        )
+        assert "unavailable" in supported.lower()
+        assert "--force" in supported
+        assert "unavailable" in unsupported.lower()
+        assert "--force" not in unsupported
+
+    orphan_url = _render_zip_show_record(
+        _zip_show_record(selector="url", with_tdoc=False, zip_files=None),
+        selector="url",
+        fmt="table",
+    )
+    assert "unavailable" in orphan_url.lower()
+    assert "--force" not in orphan_url
+
+
+def test_empty_zip_and_failed_parse_states_are_honest() -> None:
+    empty = _render_zip_show_record(
+        _zip_show_record(selector="tdoc", zip_files=()),
+        selector="tdoc",
+        fmt="markdown",
+    )
+    failed_parse = _render_zip_show_record(
+        _zip_show_record(selector="url", zip_files=("only.pdf",)),
+        selector="url",
+        fmt="markdown",
+    )
+    assert "no files" in empty.lower()
+    assert "only.pdf" in failed_parse
+    assert "already been parsed" not in failed_parse
+
+
+def test_zip_names_cannot_inject_markdown_or_terminal_control_sequences() -> None:
+    from doc3gpp.cli import _build_show_payload
+
+    name = (
+        "![bad](javascript:alert(1)) <script>alert(1)</script>"
+        "\x1b[31m.docx"
+    )
+    zip_files = (name, "www.attacker.example", "alice@example.com")
+    for selector in ("tdoc", "url"):
+        record = _zip_show_record(selector=selector, zip_files=zip_files)
+        for fmt, compact in (("table", False), ("markdown", False), ("markdown", True)):
+            rendered = _render_zip_show_record(
+                record,
+                selector=selector,
+                fmt=fmt,
+                compact=compact,
+            )
+            assert "alert" in rendered
+            assert r"\x1b" in rendered
+            assert "\x1b" in name
+            assert "\x1b" not in rendered
+            if fmt == "markdown":
+                if compact:
+                    assert r"\!\[bad\]" in rendered
+                    assert "www.attacker.example" in rendered
+                    assert "alice@example.com" in rendered
+                else:
+                    assert "- `www.attacker.example`" in rendered
+                    assert "- `alice@example.com`" in rendered
+                    assert r"`![bad](javascript:alert(1)) <script>alert(1)</script>\x1b[31m.docx`" in rendered
+            elif fmt == "table":
+                assert "zip_file: www.attacker.example" in rendered
+                assert "zip_file: alice@example.com" in rendered
+        assert _build_show_payload(record)["zip_files"] == list(zip_files)

@@ -70,6 +70,11 @@ service = MeetingService(SQLAlchemyMeetingRepository())
 meetings = service.list_recent(limit=10)
 ```
 
+TDoc detail records (`TDocShowRecord`, `TDocShowRecordByUrl`) and content
+responses expose the outer-ZIP inventory as `zip_files` with the same
+`null` / empty-list / ordered-name semantics as the CLI, HTTP, and MCP
+surfaces.
+
 ### CLI (command-line tool)
 
 ```bash
@@ -168,6 +173,12 @@ doc3gpp db check               # verify connectivity
 doc3gpp db reset --yes         # destructive: wipe + recreate SQLite schema
 ```
 
+Before using an existing database with a release that adds the TDoc ZIP
+inventory, run `doc3gpp db init --scope main`. This additive, idempotent
+bootstrap creates the new table without resetting existing data or bulk
+backfilling old ZIPs; their `zip_files` stays unknown until a supported TDoc is
+re-parsed with `--force`.
+
 ### `tsg` — 3GPP TSG reference
 
 ```bash
@@ -219,13 +230,14 @@ doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --o
 # and .docx/.zip basenames must contain a TDoc id (including RP-... plenary ids).
 
 # show — --tdoc and --ftp-url are mutually exclusive
+# The JSON payload includes the outer-ZIP `zip_files` inventory.
 doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
 doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # all converted ZIP documents
 doc3gpp tdoc show --tdoc R5s260009 --format raw --source-file 'Annex/Support.docx' -o support.md
 doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 
-# schema — describe every column of the ten tdoc tables (99 rows, no filters)
+# schema — describe every column of the eleven tdoc tables (106 rows, no filters)
 doc3gpp tdoc schema --format json
 ```
 
@@ -241,6 +253,31 @@ the extraction incomplete until a later normal parse converts it. Use
 multiple bodies are emitted as named blocks. `tdoc_files` remains the metadata
 for auxiliary files discovered in meeting FTP folders—it is not the inventory
 of files inside a ZIP.
+
+`zip_files` is a separate, metadata-only inventory for CR, WID new/revised, LS
+in/out, and discussion TDocs. It lists every non-directory entry in the outer
+ZIP, regardless of extension, in archive order, retaining duplicates and the
+original decoded names. Inventory reads member names only: it does not extract
+members, interpret names as paths, or open nested ZIPs. `null` means the
+inventory is unknown; `[]` means a known empty archive. This is distinct from
+both `tdoc_files` auxiliary FTP metadata and the converted `documents` returned
+by content reads. A successfully read inventory is stored independently of
+later parsing/conversion failures and derived-cache eviction.
+
+TDoc-ID detail reads follow the row's current `tdoc.ftp_url`; an exact
+`--ftp-url` lookup can show a historical URL inventory without changing the
+current TDoc URL. `tdoc show` table, full/compact Markdown, and JSON output
+render the inventory separately; HTTP detail pages and JSON, MCP `get_tdoc` /
+`get_tdoc_content`, and the SDK detail/content DTOs expose the same data. The
+raw Markdown body and exact `--source-file` selection are unchanged. When the
+inventory is unknown, the force-parse hint is shown only for a supported TDoc
+type: use `doc3gpp tdoc parse --tdoc <id> --force`, or for a supported URL record
+`doc3gpp tdoc parse --from-url <url> --force`. A URL with no matching TDoc type
+has no valid inventory-refresh hint. `--force` re-parses existing entries and
+re-downloads a cached ZIP when its provenance cannot be verified. The optional
+CLI `sync.auto_sync` metadata behavior for `tdoc show --tdoc` is unchanged;
+inventory lookup itself never downloads or parses, and URL detail reads do not
+auto-sync.
 
 Content is stored in SQL under the single `tdoc_extracts` parent for each ZIP
 URL, in one table per store: `tdoc_cr_annexes` for CR annexes, and

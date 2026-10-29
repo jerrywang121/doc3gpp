@@ -135,6 +135,11 @@ Behavior:
 - Creates currently defined ORM tables if they do not exist.
 - Seeds the `tsgs` table with the canonical 3GPP TSG list (19 rows). Existing
   rows are refreshed in place, so re-running this command is safe.
+- After upgrading an existing database to a release that adds TDoc ZIP
+  inventory, run `doc3gpp db init --scope main` before TDoc reads or parses.
+  This adds `tdoc_zip_inventory` idempotently; it does not reset data or
+  backfill old URLs. Their inventory remains unknown until a supported TDoc is
+  re-parsed with `--force`.
 
 ### doc3gpp db reset
 
@@ -580,12 +585,13 @@ doc3gpp tdoc list --fields tdoc_id,title,status
 
 Purpose:
 
-- Describe every field of the ten `tdoc` tables (99 rows):
+- Describe every field of the eleven `tdoc` tables (106 rows):
   `tdocs` (26, including the derived `parsed` and `document_count`),
+  `tdoc_zip_inventory` (3),
   `tdoc_cr_cover_page` (20), `tdoc_cr_ttcn_details` (10),
   `tdoc_cr_change_details` (4), `tdoc_files` (6), `tdoc_extracts` (9),
-  `tdoc_cr_annexes` (6), `tdoc_wid_contents` (6), `tdoc_ls_contents` (6),
-  `tdoc_discussion_contents` (6).
+  `tdoc_cr_annexes` (7), `tdoc_wid_contents` (7), `tdoc_ls_contents` (7),
+  `tdoc_discussion_contents` (7).
 
 Options:
 
@@ -629,8 +635,9 @@ Options:
 - `--ftp-url URL`: 3GPP FTP URL (full URL like
   `https://www.3gpp.org/ftp/TSG_RAN/...` or bare relative path like
   `TSG_RAN/...`) to anchor the read on. Surfaces every matching row
-  across `tdocs`, `tdoc_cr_cover_page`, `tdoc_cr_ttcn_details`, and
-  `tdoc_files`. Normalised via `normalize_ftp_path` before lookup so
+  across `tdocs`, `tdoc_cr_cover_page`, `tdoc_cr_ttcn_details`,
+  `tdoc_extracts`, `tdoc_cr_change_details`, `tdoc_files`, and
+  `tdoc_zip_inventory`. Normalised via `normalize_ftp_path` before lookup so
   both URL spellings resolve the same row. Mutually exclusive with
   `--tdoc`. Does NOT trigger auto-sync (no parent TDoc to anchor a
   meeting sync).
@@ -671,9 +678,9 @@ Options:
     Long free-text fields are truncated to 200 characters with an
     ellipsis. Matches every prior release on the visible line
     positions.
-  - `json`: one JSON object with the following top-level keys
-    (optional keys are **omitted**, not emitted as `null`, when
-    no corresponding row exists):
+  - `json`: one JSON object with the following top-level keys. Optional
+    keys are **omitted**, not emitted as `null`, when no corresponding row
+    exists, except `zip_files`, which is always present:
     - `tdoc` — every `TDoc` field, with `date` / `datetime` values
       ISO-8601-encoded. `parsed` (bool) and `document_count` (int, or
       `null` when not parsed) are derived from the stored extraction,
@@ -692,6 +699,15 @@ Options:
       exists). Sits at the top level rather than nested under
       `cover` / `ttcn` because neither detail table carries its
       own timestamp.
+    - `zip_files` — the original decoded names of every non-directory
+      outer-ZIP entry, in archive order. All file types and duplicate names
+      are retained. It is `null` when the inventory is unknown, `[]` when
+      the ZIP is known to be empty, and otherwise an array of names. This is
+      separate from converted `documents` and auxiliary `files`. Inventory is
+      stored for CR, WID new/revised, LS in/out, and discussion TDocs only; it is
+      metadata-only, does not extract members or traverse nested ZIPs, and remains
+      independent of the derived Markdown cache. A successful listing can remain
+      visible after a later conversion failure. Old entries are not bulk-backfilled.
     - `files` — array of every `TDocFile` row matching `tdoc_id`
       (auxiliary revisions / reviews / support files). Every
       dataclass field of `TDocFile` is serialised (`id`,
@@ -716,6 +732,11 @@ Options:
     tdoc show --tdoc <id> --format raw`). When no extract row is
     present, a single `_No extracted details; run \`doc3gpp
     tdoc parse --tdoc <id>\` first._` placeholder is emitted.
+    A separate `## ZIP files` section lists the outer archive inventory; a
+    known empty archive says no files, while an unknown inventory says
+    unavailable and includes a `--force` refresh hint only for eligible TDoc
+    types. Compact Markdown uses a `zip_files:` block. Filename punctuation
+    and control characters are escaped for display, without changing JSON.
     Every `tdoc_files` row matching `tdoc_id` renders under `##
     Auxiliary Files` with one nested bullet group per file
     (`type`, `file`, `ftp_url`, `uploaded_date`); when no files
@@ -751,12 +772,14 @@ Options:
 Behavior:
 
 - When `sync.auto_sync` is enabled, runs the same internal sync logic as
-  `tdoc list --tdoc <id>` before the lookup.
+  `tdoc list --tdoc <id>` before the lookup. This existing metadata sync
+  behavior does not parse the ZIP; the inventory lookup itself only reads the
+  stored row. The `--ftp-url` selector never auto-syncs.
 - Looks up the row in the `tdocs` table via a PK lookup.
 - On miss: raises `BadParameter` listing the requested id and pointing
   to `doc3gpp tdoc sync` / `doc3gpp tdoc list`.
-- On hit, every TDoc row resolves a single primary `ftp_url` for the
-  show lookup. The CLI performs three URL-keyed reads against that
+- On hit, every TDoc row resolves a single current primary `ftp_url` for the
+  show lookup. The CLI performs four URL-keyed reads against that
   primary URL (no per-revision fan-out for the slim schema):
   - `tdoc_cr_cover_page` cover row via
     `SQLAlchemyTDocCrRepository.get_by_url(tdoc.ftp_url)`.
@@ -767,20 +790,28 @@ Behavior:
     `SQLAlchemyTDocCrTtcnRepository.get_by_url(tdoc.ftp_url)`,
     gated on `is_ttcn_tdoc(tdoc.tdoc_id)` so non-TTCN CRs never hit
     the sidecar table.
+  - `tdoc_zip_inventory` via `SQLAlchemyTDocZipInventoryRepository.get_by_url`,
+    without downloading or parsing the ZIP.
   - A single `tdoc_id`-keyed read on `tdoc_files` via
     `SQLAlchemyTDocFileRepository.get_for_tdoc_id(tdoc.tdoc_id)`,
     ordered by `(type, ftp_url) ASC` so the output groups by
     category (revision / review / support). Runs unconditionally —
     a TDoc may have auxiliary files even when the cover has not
     been extracted.
-- The bundled `TDocShowRecord(tdoc, cover, ttcn, extracted_at,
-  files)` is rendered by `table` (default) / `json` / `markdown`
-  to four separate sections (`cover`, optional `ttcn` block, the
-  standalone `extracted_at` line, and the auxiliary files block
-  or placeholder). Optional keys are **omitted** (not emitted as
+- The bundled `TDocShowRecord(tdoc, cover, ttcn, changes, extracted_at,
+  zip_files, files)` is rendered by `table` (default) / `json` / `markdown`
+  to distinct sections for structured details, the ZIP inventory, and auxiliary
+  files. Optional keys are **omitted** (not emitted as
   `null`) in the JSON payload when the corresponding row is
   absent. The legacy `details` / `parser_version` fields no longer
   appear in any output.
+- The separate `ZIP files` section shows an unavailable state for `null`, an
+  explicit no-files state for a known empty archive, and every stored member
+  name in order (including duplicates and non-`.docx` entries). A force-parse
+  hint is offered only for a supported type in the existing content-family
+  registry; URL records without a matching TDoc type have no valid inventory
+  refresh hint. Markdown and terminal names are rendered as inert text; JSON
+  keeps the original decoded strings.
 - When a `tdoc_cr_change_details` row exists for the resolved URL,
   the markdown renderer emits a `## Change Details` block listing
   the captured clauses and the per-block captured lines (preserving
@@ -802,8 +833,9 @@ Behavior:
   unindexed-but-narrow `tdocs.ftp_url` text column),
   `SQLAlchemyTDocCrRepository.get_by_url`, the existing TTCN sidecar
   lookup (gated on the cover row's presence), and the new
-  `SQLAlchemyTDocFileRepository.get_by_ftp_url` (URL-unique-indexed).
-  No row in any of the four tables → `BadParameter` with the URL
+  `SQLAlchemyTDocFileRepository.get_by_ftp_url` (URL-unique-indexed),
+  body-change details, extraction metadata, and the ZIP inventory.
+  No row in any of the seven tables → `BadParameter` with the URL
   quoted in the message.
 - Does NOT trigger `trigger_auto_sync` — the URL is the row identity,
   there's no parent TDoc / meeting sync meaningful for an arbitrary
@@ -811,14 +843,23 @@ Behavior:
   DB. Users wanting to backfill the DB must run `meeting sync` /
   `tdoc sync` / `tdoc parse --from-url` explicitly.
 - Bundles the result into `TDocShowRecordByUrl(ftp_url, tdoc, cover,
-  ttcn, extracted_at, files)` and renders under a `# FTP URL` /
+  ttcn, extracted_at, zip_files, files)` and renders under a `# FTP URL` /
   `[FTP URL]` anchor with the same omit-when-null convention as the
-  `--tdoc` path.
+  `--tdoc` path. Inventory is a snapshot for the exact URL (which may be
+  historical); it does not refresh the current TDoc URL. If no matching TDoc
+  type is available, an unknown inventory has no valid `--force` hint.
 - `--format raw` on the URL path asks the content service for the exact
   ZIP URL. SQL document rows take precedence; only when SQL content is
   absent may the service use a legacy cache body whose source is known.
   This path never calls `TDocCrService.extract`, downloads, or syncs. A
   missing/unreadable legacy body raises `BadParameter` with a parse hint.
+
+When `zip_files` is unknown for an eligible TDoc, refresh it with
+`doc3gpp tdoc parse --tdoc <id> --force`, or for a URL record with a matching
+TDoc type, `doc3gpp tdoc parse --from-url <url> --force`. `--force` re-parses
+existing entries and may re-download an old cached ZIP when its provenance
+cannot be verified. No bulk inventory backfill is performed; a URL record
+without a matching TDoc type has no valid inventory-refresh command.
 
 Examples:
 
@@ -838,7 +879,7 @@ doc3gpp tdoc show --tdoc R5s260009 --format raw -o R5s260009.md
 doc3gpp tdoc show --tdoc R5s260009 --format raw \
     --source-file 'Annex/Support.docx' -o support.md
 
-# URL-keyed read — show every row matching the URL across the four
+# URL-keyed read — show every row matching the URL across the seven
 # tables (default table format). Normalises both full URLs and bare
 # relative paths via `normalize_ftp_path`.
 doc3gpp tdoc show --ftp-url TSG_RAN/WG5_Test_ex-T1/.../R5s260009.zip

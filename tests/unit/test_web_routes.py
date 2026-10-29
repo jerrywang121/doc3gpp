@@ -869,6 +869,251 @@ def test_tdoc_show_renders_html(client: TestClient, sqlite_env: Any) -> None:
     assert "R5-260001" in response.text
 
 
+def test_tdoc_show_parsed_discussion_without_cover_shows_raw_markdown_hint(
+    client: TestClient, sqlite_env: Any,
+) -> None:
+    """A parsed discussion TDoc reports missing cover info, not missing parsing."""
+    from datetime import datetime, timezone
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_cr import TDocExtractMeta
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+
+    create_schema()
+    tdoc_id = "R5w260308"
+    ftp_url = "r5/26.003/r5w260308.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="discussion", ftp_url=ftp_url),
+    )
+    SQLAlchemyTDocCrRepository().upsert_extract_meta(
+        TDocExtractMeta(
+            tdoc_id=tdoc_id,
+            ftp_url=ftp_url,
+            cache_file="r5w260308.zip",
+            doc_filename="r5w260308.docx",
+            parser_version="v2",
+            extracted_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    response = client.get(f"/tdocs/{tdoc_id}")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "No cover page information is available" in body
+    assert "already been parsed" in body
+    assert "Download markdown" in body
+    assert "Not yet extracted" not in body
+
+
+
+@pytest.mark.parametrize("selector", ["id", "url"], ids=["by-id", "by-url"])
+def test_tdoc_show_renders_zip_inventory_separately_from_auxiliary_files(
+    client: TestClient,
+    sqlite_env: Any,
+    selector: str,
+) -> None:
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+    from doc3gpp.web.deps import get_tdoc_file_repo
+
+    create_schema("main")
+    tdoc_id = "R5w260801" if selector == "url" else "R5w260800"
+    ftp_url = f"r5/26.003/{tdoc_id}.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="discussion", ftp_url=ftp_url)
+    )
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            zip_files=("main.docx", "support.pdf", "support.pdf"),
+        )
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                tdoc_id=tdoc_id,
+                type="review",
+                file="review.zip",
+                ftp_url=ftp_url,
+            )
+        ]
+    )
+    app = client.app
+    app.dependency_overrides[get_tdoc_file_repo] = (
+        lambda: SQLAlchemyTDocFileRepository()
+    )
+    try:
+        if selector == "id":
+            response = client.get(f"/tdocs/{tdoc_id}")
+        else:
+            response = client.get("/tdocs/by-url", params={"ftp_url": ftp_url})
+    finally:
+        app.dependency_overrides.pop(get_tdoc_file_repo, None)
+
+    assert response.status_code == 200, response.text
+    body = response.text
+    assert "ZIP files" in body
+    zip_section = body.split("<h2>ZIP files</h2>", 1)[1].split("</section>", 1)[0]
+    auxiliary_section = body.split("<h2>Auxiliary files</h2>", 1)[1].split("</section>", 1)[0]
+    assert zip_section.count("support.pdf") == 2
+    assert "(review)" in auxiliary_section
+    assert "support.pdf" not in auxiliary_section
+
+
+def test_tdoc_zip_inventory_unavailable_hints_only_supported_types(
+    client: TestClient,
+    sqlite_env: Any,
+) -> None:
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.web.deps import get_tdoc_file_repo
+
+    create_schema("main")
+    supported_id = "R5-260810"
+    supported_url = "r5/26.001/r5-260810.zip"
+    unsupported_id = "R5-260811"
+    unsupported_url = "r5/26.001/r5-260811.zip"
+    orphan_url = "r5/26.001/orphan-inventory.zip"
+    tdoc_repo = SQLAlchemyTDocRepository()
+    tdoc_repo.upsert(
+        TDoc(tdoc_id=supported_id, type="CR", ftp_url=supported_url)
+    )
+    tdoc_repo.upsert(
+        TDoc(tdoc_id=unsupported_id, type="other", ftp_url=unsupported_url)
+    )
+    tdoc_repo.upsert(
+        TDoc(tdoc_id="R5-260812", type="CR", ftp_url="r5/other/parent.zip")
+    )
+    SQLAlchemyTDocFileRepository().upsert_many(
+        [
+            TDocFile(
+                tdoc_id="R5-260812",
+                type="review",
+                file="orphan-review.zip",
+                ftp_url=orphan_url,
+            )
+        ]
+    )
+    app = client.app
+    app.dependency_overrides[get_tdoc_file_repo] = (
+        lambda: SQLAlchemyTDocFileRepository()
+    )
+    try:
+        supported = client.get(f"/tdocs/{supported_id}")
+        supported_by_url = client.get(
+            "/tdocs/by-url", params={"ftp_url": supported_url}
+        )
+        unsupported = client.get(f"/tdocs/{unsupported_id}")
+        orphan = client.get("/tdocs/by-url", params={"ftp_url": orphan_url})
+    finally:
+        app.dependency_overrides.pop(get_tdoc_file_repo, None)
+
+    for response in (supported, supported_by_url, unsupported, orphan):
+        assert response.status_code == 200, response.text
+        assert "unavailable" in response.text.lower()
+    assert "doc3gpp tdoc parse --tdoc R5-260810 --force" in supported.text
+    assert (
+        f"doc3gpp tdoc parse --from-url {supported_url} --force"
+        in supported_by_url.text
+    )
+    assert "--force" not in unsupported.text
+    orphan_inventory = orphan.text.split("<h2>ZIP files</h2>", 1)[1].split("</section>", 1)[0]
+    assert "--force" not in orphan_inventory
+
+
+def test_tdoc_zip_inventory_empty_and_failed_parse_states_are_honest(
+    client: TestClient,
+    sqlite_env: Any,
+) -> None:
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    tdoc_id = "R5w260813"
+    ftp_url = "r5/26.003/r5w260813.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="discussion", ftp_url=ftp_url)
+    )
+    inventory_repo = SQLAlchemyTDocZipInventoryRepository()
+    inventory_repo.upsert(
+        TDocZipInventory(ftp_url=ftp_url, tdoc_id=tdoc_id, zip_files=())
+    )
+
+    empty = client.get(f"/tdocs/{tdoc_id}")
+    assert empty.status_code == 200, empty.text
+    assert "no files" in empty.text.lower()
+
+    inventory_repo.upsert(
+        TDocZipInventory(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            zip_files=("only.pdf",),
+        )
+    )
+    failed_parse = client.get(f"/tdocs/{tdoc_id}")
+    assert failed_parse.status_code == 200, failed_parse.text
+    assert "only.pdf" in failed_parse.text
+    assert "already been parsed" not in failed_parse.text
+
+
+@pytest.mark.parametrize("selector", ["id", "url"], ids=["by-id", "by-url"])
+def test_html_escapes_untrusted_zip_names(
+    client: TestClient,
+    sqlite_env: Any,
+    selector: str,
+) -> None:
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    tdoc_id = "R5w260821" if selector == "url" else "R5w260820"
+    ftp_url = f"r5/26.003/{tdoc_id}.zip"
+    unsafe_name = "<script>alert(1)</script> ![bad](javascript:alert(2)).docx"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="discussion", ftp_url=ftp_url)
+    )
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(
+            ftp_url=ftp_url,
+            tdoc_id=tdoc_id,
+            zip_files=(unsafe_name,),
+        )
+    )
+
+    if selector == "id":
+        response = client.get(f"/tdocs/{tdoc_id}")
+    else:
+        response = client.get("/tdocs/by-url", params={"ftp_url": ftp_url})
+
+    assert response.status_code == 200, response.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+    assert "<script>alert(1)</script>" not in response.text
+
+
 def test_tdoc_show_404(client: TestClient, sqlite_env: Any) -> None:
     """``GET /tdocs/{unknown}`` returns 404."""
     from doc3gpp.storage.db.migrate import create_schema
@@ -4608,6 +4853,44 @@ def test_show_tdoc_by_url_returns_404_when_no_rows(
     assert "tsg_ran/missing.zip" in body["detail"]
 
 
+
+def test_show_tdoc_by_url_inventory_only_matches_but_content_stays_unavailable(
+    client: TestClient,
+    sqlite_env: Any,
+) -> None:
+    """Historical empty inventory alone is enough for a URL detail match."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    tdoc_id = "R5s260099"
+    current_url = "r5/26.001/current-version.zip"
+    historical_url = "r5/26.001/historical-inventory-only.zip"
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=current_url)
+    )
+    SQLAlchemyTDocZipInventoryRepository().upsert(
+        TDocZipInventory(
+            ftp_url=historical_url,
+            tdoc_id=tdoc_id,
+            zip_files=(),
+        )
+    )
+
+    detail = client.get(
+        "/tdocs/by-url",
+        params={"ftp_url": historical_url, "format": "json"},
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["zip_files"] == []
+    assert "tdoc" not in detail.json()
+
+
 def test_show_tdoc_by_url_returns_400_when_param_missing(
     client: TestClient, sqlite_env: Any,
 ) -> None:
@@ -4658,15 +4941,12 @@ def test_show_tdoc_by_url_full_url_matches_bare_path(
 def test_show_tdoc_by_url_json_byte_matches_cli(
     client: TestClient, sqlite_env: Any,
 ) -> None:
-    """``GET /tdocs/by-url?ftp_url=...&format=json`` is byte-identical to the CLI.
-
-    Builds a ``TDocShowRecordByUrl`` via the same classmethod the CLI
-    uses and asserts the JSON envelope matches bit-for-bit.
-    """
+    """The by-URL JSON payload preserves inventory and matches serialization."""
     from doc3gpp.models.tdoc import TDoc
     from doc3gpp.models.tdoc_cr import TDocCRDetails
     from doc3gpp.models.tdoc_file import TDocFile
     from doc3gpp.models.tdoc_show import TDocShowRepos
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
     from doc3gpp.storage.db.migrate import create_schema
     from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
         SQLAlchemyTDocCrChangeDetailsRepository,
@@ -4679,6 +4959,9 @@ def test_show_tdoc_by_url_json_byte_matches_cli(
         SQLAlchemyTDocFileRepository,
     )
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
     from doc3gpp.web.render import to_jsonable
 
     create_schema()
@@ -4686,10 +4969,15 @@ def test_show_tdoc_by_url_json_byte_matches_cli(
     tdoc_repo = SQLAlchemyTDocRepository()
     cr_repo = SQLAlchemyTDocCrRepository()
     file_repo = SQLAlchemyTDocFileRepository()
+    inventory_repo = SQLAlchemyTDocZipInventoryRepository()
     tdoc_repo.upsert(TDoc(tdoc_id="R5s260001", ftp_url=url, title="Foo"))
     cr_repo.upsert(TDocCRDetails(tdoc_id="R5s260001", ftp_url=url, cr_num="0001"))
     file_repo.upsert_many(
         [TDocFile(ftp_url="r5/26.001/r5s260001_rev1.zip", tdoc_id="R5s260001", type="revision", file="R5s260001_rev1.zip")]
+    )
+    zip_files = ("a.docx", "support.pdf", "support.pdf")
+    inventory_repo.upsert(
+        TDocZipInventory(ftp_url=url, tdoc_id="R5s260001", zip_files=zip_files)
     )
 
     repos = TDocShowRepos(
@@ -4698,6 +4986,7 @@ def test_show_tdoc_by_url_json_byte_matches_cli(
         cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
         file=file_repo,
+        zip_inventory=inventory_repo,
     )
     from doc3gpp.models.tdoc_show import TDocShowRecordByUrl
 
@@ -4710,6 +4999,7 @@ def test_show_tdoc_by_url_json_byte_matches_cli(
     )
     assert response.status_code == 200
     assert response.json() == expected_json
+    assert response.json()["zip_files"] == list(zip_files)
 
 
 def test_show_tdoc_by_url_no_parent_tdoc_renders_placeholder(

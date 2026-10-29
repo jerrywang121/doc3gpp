@@ -1,7 +1,7 @@
 """Bundled TDoc-show DTOs shared by the CLI and the HTTP web surface.
 
 The CLI's ``tdoc show`` and the web ``GET /tdocs/{id}`` route compose
-the same record from the same five repository reads:
+the same record from the same six repository reads:
 
 * ``tdocs`` — the parent TDoc row (by ``tdoc_id``).
 * ``tdoc_cr_cover_page`` — the slim cover-page sidecar, keyed by the
@@ -13,9 +13,10 @@ the same record from the same five repository reads:
   ``extracted_at`` timestamp out of this row.
 * ``tdoc_files`` — auxiliary revisions / reviews / support files,
   keyed by ``tdoc_id``.
+* ``tdoc_zip_inventory`` — ordered outer-ZIP member names keyed by URL.
 
 :class:`TDocShowRecord` mirrors that composition by ``tdoc_id``;
-:class:`TDocShowRecordByUrl` mirrors the same five reads but anchors
+:class:`TDocShowRecordByUrl` mirrors the same six reads but anchors
 on ``ftp_url`` instead (used by ``tdoc show --ftp-url``). Both move
 out of :mod:`doc3gpp.cli` into the models layer so the web route can
 share the composition and the JSON envelope stays byte-identical
@@ -55,8 +56,8 @@ class TDocShowRecord:
     optional body-derived change-details sidecar, the extract
     ``extracted_at`` timestamp derived from ``tdoc_extracts``, and
     every auxiliary ``tdoc_files`` row whose ``tdoc_id`` matches.
-    Keys are omitted (not null) in renderers when the corresponding
-    value is absent.
+    Other optional keys are omitted (not null) when their values are absent;
+    ``zip_files`` is always present in JSON, including when unknown.
 
     Attributes:
         tdoc: The resolved parent TDoc row from the ``tdocs`` table.
@@ -71,6 +72,8 @@ class TDocShowRecord:
             ``None`` when no ``tdoc_extracts`` row exists for that URL.
         files: Auxiliary ``tdoc_files`` rows matching ``tdoc_id``;
             empty tuple when the parent TDoc has no auxiliary files.
+        zip_files: Ordered outer-ZIP inventory; ``None`` when unknown and
+            an empty tuple when a known archive contains no entries.
         note: Pointer to the raw markdown when an extraction exists but
             carries no cover row (non-CR TDocs and CR annexes); ``None``
             otherwise.
@@ -83,6 +86,7 @@ class TDocShowRecord:
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
     note: str | None = None
+    zip_files: tuple[str, ...] | None = None
 
     @classmethod
     def from_tdoc_id(
@@ -90,7 +94,7 @@ class TDocShowRecord:
         tdoc_id: str,
         repos: TDocShowRepos,
     ) -> TDocShowRecord:
-        """Compose a :class:`TDocShowRecord` by resolving ``tdoc_id`` across all 5 repos.
+        """Compose a :class:`TDocShowRecord` by resolving ``tdoc_id`` across all 6 repositories.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_command`
         composition: ``tdocs`` PK lookup → cover sidecar by ``ftp_url``
@@ -98,7 +102,7 @@ class TDocShowRecord:
         TTCN sidecar by ``ftp_url`` (structural gate via
         :func:`is_ttcn_tdoc`) → optional body-change sidecar by
         ``tdoc_id`` (first row only) → auxiliary ``tdoc_files`` rows
-        by ``tdoc_id``. Raises :class:`TDocNotFoundError` when no
+        by ``tdoc_id`` → outer-ZIP inventory by the current URL. Raises :class:`TDocNotFoundError` when no
         matching ``tdocs`` row exists.
         """
         from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
@@ -126,6 +130,11 @@ class TDocShowRecord:
             changes = change_details[0] if change_details else None
 
         files = tuple(repos.file.get_for_tdoc_id(record.tdoc_id))
+        inventory = (
+            repos.zip_inventory.get_by_url(record.ftp_url)
+            if record.ftp_url
+            else None
+        )
         note = None
         if cover is None and extracted_at is not None:
             note = _raw_markdown_note(
@@ -139,6 +148,9 @@ class TDocShowRecord:
             changes=changes,
             extracted_at=extracted_at,
             files=files,
+            zip_files=(
+                inventory.zip_files if inventory is not None else None
+            ),
             note=note,
         )
 
@@ -152,7 +164,7 @@ class TDocShowRecordByUrl:
     ``tdoc_id`` (enforced by the upload pipeline) means the parent
     ``TDoc`` is optional from the caller's perspective — a URL may
     surface a cover row, TTCN sidecar, extract meta, or auxiliary
-    files without a matching ``tdocs`` row.
+    files or an inventory without a matching current ``tdocs`` URL.
 
     Attributes:
         ftp_url: The normalised URL the user supplied.
@@ -168,6 +180,8 @@ class TDocShowRecordByUrl:
             ``None`` when no ``tdoc_extracts`` row exists.
         files: Auxiliary ``tdoc_files`` rows matching ``ftp_url``;
             empty tuple when no auxiliary file is attached.
+        zip_files: Ordered outer-ZIP inventory; ``None`` when unknown and
+            an empty tuple when a known archive contains no entries.
         note: Pointer to the raw markdown when an extraction exists but
             carries no cover row; ``None`` otherwise.
     """
@@ -180,6 +194,7 @@ class TDocShowRecordByUrl:
     extracted_at: datetime | None = None
     files: tuple[TDocFile, ...] = ()
     note: str | None = None
+    zip_files: tuple[str, ...] | None = None
 
     @classmethod
     def from_ftp_url(
@@ -187,15 +202,15 @@ class TDocShowRecordByUrl:
         ftp_url: str,
         repos: TDocShowRepos,
     ) -> TDocShowRecordByUrl:
-        """Compose a :class:`TDocShowRecordByUrl` by URL across all 5 repos.
+        """Compose a :class:`TDocShowRecordByUrl` by URL across all 6 repositories.
 
         Mirrors the CLI's :func:`doc3gpp.cli._tdoc_show_by_ftp_url`
         composition: ``tdocs`` URL lookup → cover sidecar by URL →
         extract-metadata ``extracted_at`` by URL → TTCN sidecar by URL
         (only when a cover row exists, since the cover parser is what
         produces it) → body-change sidecar by URL → auxiliary
-        ``tdoc_files`` rows by URL. Returns ``None``-free fields when
-        no rows match anywhere.
+        ``tdoc_files`` rows and the outer-ZIP inventory by URL. Returns
+        ``None``-free fields when no rows match anywhere.
         """
         tdoc = repos.tdoc.get_by_ftp_url(ftp_url)
         cover = repos.cr.get_by_url(ftp_url)
@@ -206,6 +221,7 @@ class TDocShowRecordByUrl:
         ttcn = repos.cr_ttcn.get_by_url(ftp_url) if cover is not None else None
         changes = repos.cr_change_details.get_by_url(ftp_url)
         files = tuple(repos.file.get_by_ftp_url(ftp_url))
+        inventory = repos.zip_inventory.get_by_url(ftp_url)
         note = None
         if cover is None and extracted_at is not None:
             note = _raw_markdown_note(
@@ -220,6 +236,9 @@ class TDocShowRecordByUrl:
             changes=changes,
             extracted_at=extracted_at,
             files=files,
+            zip_files=(
+                inventory.zip_files if inventory is not None else None
+            ),
             note=note,
         )
 
@@ -228,9 +247,9 @@ class TDocShowRecordByUrl:
 class TDocShowRepos:
     """Bag of repository handles consumed by the :class:`TDocShowRecord` classmethods.
 
-    Captures the five repositories the show-composition reads from so
+    Captures the six repositories the show-composition reads from so
     the CLI and the web route can hand a single object to the
-    classmethod instead of repeating five ``build_*`` calls at every
+    classmethod instead of repeating six ``build_*`` calls at every
     call site. Tests can construct an instance with fake repositories
     directly to assert the composition round-trip.
     """
@@ -240,6 +259,7 @@ class TDocShowRepos:
     cr_ttcn: object  # TDocCrTTCNDetailRepository
     cr_change_details: object  # TDocCrChangeDetailsRepository
     file: object  # TDocFileRepository
+    zip_inventory: object  # TDocZipInventoryRepository
 
 
 __all__ = [

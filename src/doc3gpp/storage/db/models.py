@@ -54,6 +54,21 @@ class TDocORM(Base):
     original_ls: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class TDocZipInventoryOrm(Base):
+    """Known outer-ZIP file inventory keyed by normalized download URL."""
+
+    __tablename__ = "tdoc_zip_inventory"
+
+    ftp_url: Mapped[str] = mapped_column(Text, primary_key=True, nullable=False)
+    tdoc_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("tdocs.tdoc_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    zip_files: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class MeetingORM(Base):
     """Persisted 3GPP meeting calendar record.
 

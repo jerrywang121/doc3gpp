@@ -36,6 +36,7 @@ from doc3gpp.models.tdoc_cr import (
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
 from doc3gpp.models.tdoc_document import TDocDocument
 from doc3gpp.models.tdoc_file import TDocFile
+from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
 from doc3gpp.models.testcase import TestCase, TestCaseSource, TestCaseStatus
 from doc3gpp.models.tsg import Tsg
 from doc3gpp.models.wi import Wi
@@ -630,6 +631,18 @@ class TDocFileRepository(Protocol):
         do not linger in the table. Returns the number of rows deleted.
         Passing an empty iterable is a no-op (returns 0).
         """
+        ...
+
+
+class TDocZipInventoryRepository(Protocol):
+    """Storage operations for outer-ZIP inventories keyed by download URL."""
+
+    def get_by_url(self, ftp_url: str) -> TDocZipInventory | None:
+        """Return the known inventory for ftp_url, or None if unknown."""
+        ...
+
+    def upsert(self, inventory: TDocZipInventory) -> None:
+        """Insert or replace an inventory for its normalized ZIP URL."""
         ...
 
 

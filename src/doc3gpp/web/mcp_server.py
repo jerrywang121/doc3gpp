@@ -364,14 +364,16 @@ def build_mcp_server(state: WebState) -> MCPServer:
     @server.tool(
         name="get_tdoc",
         description=(
-            "Get a single tdoc by id (or by FTP URL), including its cover-page, "
-            "TTCN sidecar, and extract metadata. Accepts `tdoc_id` and/or "
+            "Get a single TDoc by id (or FTP URL), including its cover-page, "
+            "TTCN sidecar, extract metadata, and outer-ZIP inventory. Accepts "
+            "`tdoc_id` and/or "
             "`ftp_url`; when both are supplied `ftp_url` takes precedence and "
             "`tdoc_id` is ignored — an error is raised only when neither is "
             "supplied. In URL mode the response surfaces every "
             "row across tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
-            "tdoc_files, and tdoc_extracts whose ftp_url matches; auto-sync is "
-            "never triggered."
+            "tdoc_extracts, tdoc_cr_change_details, tdoc_files, and "
+            "tdoc_zip_inventory whose ftp_url matches; auto-sync is never "
+            "triggered."
         ),
     )
     @_mcp_error_guard
@@ -385,7 +387,9 @@ def build_mcp_server(state: WebState) -> MCPServer:
             Field(
                 description=(
                     "3GPP FTP URL (full URL or relative path) — surfaces every row "
-                    "across the six URL-keyed tables whose ftp_url matches. "
+                    "across tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
+                    "tdoc_extracts, tdoc_cr_change_details, tdoc_files, and "
+                    "tdoc_zip_inventory whose ftp_url matches. "
                     "Takes precedence over tdoc_id when both are supplied."
                 )
             ),
@@ -409,6 +413,9 @@ def build_mcp_server(state: WebState) -> MCPServer:
         from doc3gpp.storage.repositories.tdoc_sql import (
             SQLAlchemyTDocRepository,
         )
+        from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+            SQLAlchemyTDocZipInventoryRepository,
+        )
 
         # Human ruling (pre-flight): when both tdoc_id and ftp_url are
         # supplied, ftp_url wins and tdoc_id is silently ignored. Only
@@ -424,6 +431,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
             cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
             cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
             file=services.tdoc_file_repo,
+            zip_inventory=SQLAlchemyTDocZipInventoryRepository(),
         )
 
         if ftp_url is not None:
@@ -440,6 +448,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
                 and record.ttcn is None
                 and record.changes is None
                 and not record.files
+                and record.zip_files is None
             ):
                 raise TDocUrlNotFoundError(normalised)
         else:

@@ -491,6 +491,9 @@ def test_get_tdoc_by_url_byte_parity_with_cli(sqlite_env, app_with_deps) -> None
         SQLAlchemyTDocFileRepository,
     )
     from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
     from doc3gpp.web.render import to_jsonable
 
     app, _ = app_with_deps
@@ -520,6 +523,7 @@ def test_get_tdoc_by_url_byte_parity_with_cli(sqlite_env, app_with_deps) -> None
             cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
             cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
             file=file_repo,
+            zip_inventory=SQLAlchemyTDocZipInventoryRepository(),
         ),
     )
     expected_json = to_jsonable(expected)

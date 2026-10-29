@@ -191,7 +191,7 @@ def test_extract_happy_path(sqlite_env, tmp_path) -> None:
     assert (cache.root / "zips" / meta.cache_file).exists()
     assert (cache.root / "markdown" / meta.cache_file).exists()
     cache_status = cache.status()
-    assert cache_status.zips == 1
+    assert cache_status.zips == 2  # ZIP plus provenance sidecar
     assert cache_status.markdown == 1
 
 
@@ -270,7 +270,7 @@ def test_extract_markdown_cache_hit_when_zip_purged(
     # ``cache_file`` basename with the zip subtree) remains intact so
     # the second call must hit it.
     deleted = cache.purge_subdir("zips")
-    assert deleted == 1
+    assert deleted == 2  # ZIP plus provenance sidecar
 
     # Also drop the DB rows so the service is forced to re-download +
     # re-parse. The plan requires this: a markdown cache hit must
@@ -331,7 +331,7 @@ def test_extract_force_bypasses_caches(sqlite_env, tmp_path) -> None:
     service.extract("R5s260009")
     scraper_calls_before = scraper_mock.get_bytes.call_count
     cache_status_before = cache.status()
-    assert cache_status_before.zips == 1
+    assert cache_status_before.zips == 2  # ZIP plus provenance sidecar
     assert cache_status_before.markdown == 1
 
     # Wipe the zip subtree so a non-force second call would hit the
@@ -375,14 +375,10 @@ def test_extract_force_bypasses_caches(sqlite_env, tmp_path) -> None:
 def test_extract_zip_cache_hit_persists_with_candidate_url(
     sqlite_env, tmp_path
 ) -> None:
-    """When the zip cache is pre-populated but the DB extract tables
-    have no row, ``extract`` must persist under the resolver's first
-    candidate URL — ``download_tdoc_zip`` returns
-    ``DownloadedZip(url=None)`` on a cache hit (the URL that originally
-    populated the cache is not tracked), so the service falls back to
-    ``resolve_download_url``'s first entry for persistence. Previously
-    this surfaced as ``TDocExtractMeta requires a non-empty ftp_url``
-    and the TDoc silently failed in :meth:`extract_many`.
+    """A provenance-verified ZIP cache hit persists under its recorded URL.
+
+    The fixture cache is written with the actual candidate URL so the
+    parser can reuse its byte snapshot without network access.
     """
     from doc3gpp.scraping.cache_keys import derive_cache_file
 
@@ -401,7 +397,11 @@ def test_extract_zip_cache_hit_persists_with_candidate_url(
     )
     assert expected_url, "test precondition: R5s template URL must resolve"
     cache_file = derive_cache_file(expected_url)
-    cache.put_bytes(cache_file, _zip_payload(fixture), "zips")
+    source_url = get_tdoc_zip_url("R5s260009")
+    assert source_url is not None
+    cache.put_zip_with_provenance(
+        cache_file, _zip_payload(fixture), source_url
+    )
     scraper_mock.reset_mock()
 
     result = service.extract("R5s260009")

@@ -73,6 +73,7 @@ def test_tdoc_tables_and_counts() -> None:
     tables = RESOURCE_SCHEMAS["tdoc"]
     assert [t.table for t in tables] == [
         "tdocs",
+        "tdoc_zip_inventory",
         "tdoc_cr_cover_page",
         "tdoc_cr_ttcn_details",
         "tdoc_cr_change_details",
@@ -89,6 +90,7 @@ def test_tdoc_tables_and_counts() -> None:
     # registry matches ORM; see task-2 report.
     assert counts == {
         "tdocs": 26,
+        "tdoc_zip_inventory": 3,
         "tdoc_cr_cover_page": 20,
         "tdoc_cr_ttcn_details": 10,
         "tdoc_cr_change_details": 4,
@@ -152,6 +154,7 @@ def test_schema_payload_tdoc_has_parsed_and_document_count() -> None:
 def test_registry_matches_orm_columns() -> None:
     """Every ORM column is described exactly once; no extras; nullability matches."""
     from doc3gpp.models.schema_info import RESOURCE_SCHEMAS
+    from doc3gpp.storage.db import models as orm_models
     from doc3gpp.storage.db.models import (
         MeetingORM,
         SpecDocChunkORM,
@@ -176,10 +179,13 @@ def test_registry_matches_orm_columns() -> None:
         WiORM,
     )
 
+    assert hasattr(orm_models, "TDocZipInventoryOrm"), "ZIP inventory ORM is missing"
+
     expected = {
         "tsgs": TsgORM,
         "meetings": MeetingORM,
         "tdocs": TDocORM,
+        "tdoc_zip_inventory": orm_models.TDocZipInventoryOrm,
         "tdoc_cr_cover_page": TDocCrDetailOrm,
         "tdoc_cr_ttcn_details": TDocCrTtcnDetailOrm,
         "tdoc_cr_change_details": TDocCrChangeDetailOrm,

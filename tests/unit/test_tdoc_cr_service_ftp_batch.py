@@ -615,3 +615,157 @@ def test_collect_3gpp_file_urls_public_alias_is_a_method(
     """The alias lives on the class — not a module-level rebinding."""
     assert "collect_3gpp_file_urls" in dir(TDocCrService)
     assert TDocCrService.collect_3gpp_file_urls is TDocCrService._collect_3gpp_file_urls
+
+
+
+def test_direct_legacy_cache_redownloads_and_failed_download_preserves_it(
+    service: TDocCrService,
+    tmp_path: Path,
+) -> None:
+    from doc3gpp.scraping.cache import TDocCache
+
+    url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    cache_file = "R5s260009.zip"
+    legacy_payload = b"legacy unverified ZIP bytes"
+    downloaded_payload = b"verified download ZIP bytes"
+    cache = TDocCache(root=tmp_path / "provenance-cache", size_limit_bytes=0)
+    cache.put_bytes(cache_file, legacy_payload, "zips")
+    assert cache.get_zip_with_provenance(cache_file) is None
+    service._cache = cache
+
+    scraper = MagicMock()
+    scraper.get_bytes.side_effect = [
+        RuntimeError("network unavailable"),
+        downloaded_payload,
+        AssertionError("verified cache hit must not fetch"),
+    ]
+    service._scraper = scraper
+
+    with pytest.raises(RuntimeError, match="network unavailable"):
+        service._fetch_direct_zip(url, cache_file=cache_file, max_bytes=0)
+    assert cache.get_bytes(cache_file, "zips") == legacy_payload
+    assert cache.get_zip_with_provenance(cache_file) is None
+
+    assert service._fetch_direct_zip(url, cache_file=cache_file, max_bytes=0) == downloaded_payload
+    assert cache.get_zip_with_provenance(cache_file) == (downloaded_payload, url)
+    assert service._fetch_direct_zip(url, cache_file=cache_file, max_bytes=0) == downloaded_payload
+    assert scraper.get_bytes.call_args_list == [
+        ((url,), {}),
+        ((url,), {}),
+    ]
+
+
+
+def test_forced_oversized_direct_zip_preserves_cached_provenance(
+    service: TDocCrService,
+    tmp_path: Path,
+) -> None:
+    from io import BytesIO
+    from zipfile import ZIP_STORED, ZipFile, is_zipfile
+
+    from doc3gpp.scraping.cache import TDocCache
+    from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
+
+    def make_zip(contents: bytes) -> bytes:
+        buffer = BytesIO()
+        with ZipFile(buffer, "w", compression=ZIP_STORED) as archive:
+            archive.writestr("main.docx", contents)
+        return buffer.getvalue()
+
+    url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    cache_file = "R5s260009.zip"
+    original_payload = make_zip(b"valid")
+    oversized_payload = make_zip(bytes(range(256)) * 2)
+    refreshed_payload = make_zip(b"fresh")
+    unlimited_payload = make_zip(bytes(range(256)) * 3)
+    max_bytes = len(original_payload) + 10
+    assert is_zipfile(BytesIO(original_payload))
+    assert is_zipfile(BytesIO(oversized_payload))
+    assert is_zipfile(BytesIO(refreshed_payload))
+    assert is_zipfile(BytesIO(unlimited_payload))
+    assert len(refreshed_payload) <= max_bytes < len(oversized_payload)
+    cache = TDocCache(root=tmp_path / "oversized-cache", size_limit_bytes=0)
+    cache.put_zip_with_provenance(cache_file, original_payload, url)
+    service._cache = cache
+
+    scraper = MagicMock()
+    scraper.get_bytes.side_effect = [
+        oversized_payload,
+        refreshed_payload,
+        unlimited_payload,
+    ]
+    service._scraper = scraper
+
+    with pytest.raises(TDocTooLargeError) as caught:
+        service._fetch_direct_zip(
+            url,
+            cache_file=cache_file,
+            max_bytes=max_bytes,
+            force=True,
+        )
+
+    expected_message = (
+        f"TDoc source {f'download:{url}'!r} is {len(oversized_payload)} bytes, "
+        f"exceeds max_tdoc_size_kb limit ({max_bytes} bytes)"
+    )
+    assert type(caught.value) is TDocTooLargeError
+    assert str(caught.value) == expected_message
+    assert cache.get_zip_with_provenance(cache_file) == (original_payload, url)
+    assert cache.get_bytes(cache_file, "zips") == original_payload
+
+    assert service._fetch_direct_zip(
+        url,
+        cache_file=cache_file,
+        max_bytes=max_bytes,
+    ) == original_payload
+    assert service._fetch_direct_zip(
+        url,
+        cache_file=cache_file,
+        max_bytes=max_bytes,
+        force=True,
+    ) == refreshed_payload
+    assert cache.get_zip_with_provenance(cache_file) == (refreshed_payload, url)
+
+    assert service._fetch_direct_zip(
+        url,
+        cache_file=cache_file,
+        max_bytes=0,
+        force=True,
+    ) == unlimited_payload
+    assert cache.get_zip_with_provenance(cache_file) == (unlimited_payload, url)
+    assert scraper.get_bytes.call_count == 3
+
+
+
+def test_mismatched_valid_direct_zip_provenance_redownloads_requested_url(
+    service: TDocCrService,
+    tmp_path: Path,
+) -> None:
+    from doc3gpp.scraping.cache import TDocCache
+
+    requested_url = "https://www.3gpp.org/ftp/Docs/R5s260009.zip"
+    other_url = "https://www.3gpp.org/ftp/Docs/R5s260009_old.zip"
+    cache_file = "R5s260009.zip"
+    mismatched_payload = b"valid bytes from a different URL"
+    requested_payload = b"bytes fetched from the requested URL"
+    cache = TDocCache(root=tmp_path / "mismatched-cache", size_limit_bytes=0)
+    cache.put_zip_with_provenance(cache_file, mismatched_payload, other_url)
+    assert cache.get_zip_with_provenance(cache_file) == (mismatched_payload, other_url)
+    service._cache = cache
+
+    scraper = MagicMock()
+    scraper.get_bytes.return_value = requested_payload
+    service._scraper = scraper
+
+    result = service._fetch_direct_zip(
+        requested_url,
+        cache_file=cache_file,
+        max_bytes=0,
+    )
+
+    assert result == requested_payload
+    scraper.get_bytes.assert_called_once_with(requested_url)
+    assert cache.get_zip_with_provenance(cache_file) == (
+        requested_payload,
+        requested_url,
+    )

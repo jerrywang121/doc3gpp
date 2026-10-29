@@ -525,3 +525,56 @@ def test_markdown_archive_round_trips_casefold_path_order() -> None:
         "a/support.docx",
         "B/support.docx",
     )
+
+
+@pytest.mark.filterwarnings("ignore:Duplicate name:UserWarning")
+def test_zip_inventory_preserves_outer_file_entries_without_reading_members(monkeypatch) -> None:
+    api = _tdoc_zip_module()
+    payload = _make_zip(
+        [
+            ("slash-directory/", b""),
+            ("dos-directory\\", b""),
+            ("main.docx", b"main"),
+            ("old.doc", b"old"),
+            ("support.pdf", b"support"),
+            ("sheet.xlsx", b"sheet"),
+            ("__MACOSX/._main", b"resource fork"),
+            ("~$lock.docx", b"lock"),
+            ("nested.zip", b"nested archive"),
+            ("日本語/文書.pdf", b"unicode"),
+            (r"a\b.txt", b"DOS separator file"),
+            ("../unsafe.txt", b"unsafe name"),
+            ("dup.pdf", b"first duplicate"),
+            ("dup.pdf", b"second duplicate"),
+        ]
+    )
+
+    def fail_open(*args, **kwargs):
+        raise AssertionError("ZIP inventory must not read member payloads")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", fail_open)
+
+    assert hasattr(api, "enumerate_zip_files"), "ZIP inventory enumeration is missing"
+    assert api.enumerate_zip_files(payload) == (
+        "main.docx",
+        "old.doc",
+        "support.pdf",
+        "sheet.xlsx",
+        "__MACOSX/._main",
+        "~$lock.docx",
+        "nested.zip",
+        "日本語/文書.pdf",
+        r"a\b.txt",
+        "../unsafe.txt",
+        "dup.pdf",
+        "dup.pdf",
+    )
+
+
+def test_zip_inventory_empty_and_unreadable_directory() -> None:
+    api = _tdoc_zip_module()
+    assert hasattr(api, "enumerate_zip_files"), "ZIP inventory enumeration is missing"
+
+    assert api.enumerate_zip_files(_make_zip([])) == ()
+    with pytest.raises(zipfile.BadZipFile):
+        api.enumerate_zip_files(b"not a ZIP")

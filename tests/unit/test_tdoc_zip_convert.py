@@ -14,7 +14,6 @@ import pytest
 from doc3gpp.models.tdoc_document import markdown_member_name
 from doc3gpp.models.tdoc_identity import document_id_for
 from doc3gpp.parsers.docx_converter import DocxConvertPoolError, convert_document_to_markdown
-from doc3gpp.parsers.tdoc_family_main import TDocMainDocumentError
 from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, TDocZipValidationError
 from doc3gpp.parsers.tdoc_zip_convert import (
     TDocZipConversion,
@@ -162,11 +161,12 @@ def test_failing_main_raises() -> None:
         _convert(zip_bytes, convert=_failing("R5-123456.docx"))
 
 
-def test_doc_only_main_fails_archive_with_docx_reason() -> None:
+def test_doc_only_main_is_a_supported_conversion_source() -> None:
     zip_bytes = _make_zip([("R5-123456.doc", b"legacy binary")])
 
-    with pytest.raises(TDocMainDocumentError, match="is not .docx"):
-        _convert(zip_bytes)
+    result = _convert(zip_bytes)
+    assert result.main_source_file == "R5-123456.doc"
+    assert result.documents[0].markdown_text == "legacy binary"
 
 
 def test_zero_text_documents_are_kept() -> None:

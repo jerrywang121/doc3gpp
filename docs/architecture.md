@@ -24,7 +24,7 @@ Current scope:
   `testcase_status` / `testcase_sources` rows; `testcase sync` / `list`
   / `show`).
 - Spec-document corpus (`spec doc parse` / `toc show` /
-  `search` / `index`): version-zip download → `.docx` →
+  `search` / `index`): version-zip download → `.docx` / `.doc` →
   blocks → ordered files → per-version TOC + chunk rows in the
   separate specdata sqlite file, searchable via FTS5 + hybrid vector
   search. Chunk rows carry newline-delimited combined `sections` and
@@ -76,6 +76,8 @@ Per-layer modules:
   exposes `get_settings()` (cached) with `Settings` (root) +
   `SyncSettings` / `OutputSettings` / `OutputFieldsSettings` /
   `CacheSettings` / `TDocParseSettings` (including TOML-only ZIP limits) /
+  `WordConversionSettings` (`[word_conversion] timeout_seconds`, default 300;
+  allowlisted process environment override) /
   `SearchSettings` (nine FTS5 BM25 weights) / `SpecDocSettings` (TOML
   `[spec_doc]` block: dedicated `cache_dir = ~/.cache/doc3gpp/specs`,
   `max_zip_size_kb = 0`, `max_chunk_chars = 1500`,
@@ -130,29 +132,35 @@ Per-layer modules:
        status rows) — the live workbook contains such duplicates, so
        the docs describe what the code does today (see
        `docs/3gpp-knowledge.md`).
-    - `parsers/docx_converter.py` — `.docx` → markdown via the
+      - `parsers/word_converter.py` — `.docx` pass-through or legacy `.doc` →
+        `.docx` via optional system LibreOffice Writer (`libreoffice` / `soffice`
+        on PATH). Each conversion uses an isolated temporary directory/profile,
+        a fixed local input name, and no shell. The timeout is controlled by
+        `word_conversion.timeout_seconds` (default 300; allowlisted process
+        environment override `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS`). Original
+        member identities are retained; no network or persistent state is used.
+     - `parsers/docx_converter.py` — `.docx` / normalized `.doc` → markdown via the
       optional `python-docx` extra (raises
-      `PythonDocxNotInstalledError` when missing). The legacy `.doc`
-      binary format is rejected at the wrapper boundary because
-      python-docx only supports the OOXML container. Also exposes
-      `convert_document_to_blocks` (`.docx` → `HeadingBlock` /
+       `PythonDocxNotInstalledError` when missing). Both public converters use
+       `as_docx_bytes`; `.docx` needs no LibreOffice. Also exposes
+       `convert_document_to_blocks` (Word → `HeadingBlock` /
       `ParagraphBlock` / `TableBlock` list) consumed by the spec-doc
       parse pipeline. Also defines the `DocxMemberPool` Protocol,
       `InlineDocxPool` (in-process, the default), and the `DOCX_WORKERS`
       entry points (`blocks` / `markdown`) that worker processes run.
     - `parsers/tdoc_family_main.py` — main-member selection by TDoc number
        (`select_main_member`); `member_names` lists the archive's members in memory
-     - `parsers/tdoc_zip_convert.py` — pure conversion of every `.docx` member
+     - `parsers/tdoc_zip_convert.py` — conversion of every `.docx` / `.doc` member
        (tolerant annexes, zero-text documents, direct-mode payloads); returns a
        `TDocZipConversion` (main source, documents main first, skipped sources)
        without touching SQL or the cache
-     - `parsers/tdoc_zip.py` — enumerate and validate supported `.docx`
+     - `parsers/tdoc_zip.py` — enumerate and validate supported Word
       members, compute stable source identities, and build/read the
       versioned multi-member Markdown ZIP plus manifest. It never extracts
-      member paths to disk or converts `.doc`, PDF, spreadsheets, or nested
+       member paths to disk or converts PDF, spreadsheets, or nested
       ZIPs.
     - `parsers/spec_doc.py` — spec-zip parsing (no network):
-      `list_spec_docx` (`.docx` members; `.doc` entries warn-skip),
+       `list_spec_docx` (`.docx` and `.doc` members; historical function name),
       `order_spec_files` (front-matter TOC file first, then
       natural section-tuple sort that preserves alphanumeric identifiers
       such as `7.2A.3A`, TOC tiebreak, unnumbered lexicographic tail),
@@ -260,7 +268,7 @@ Per-layer modules:
       lookup by TDoc ID / ZIP URL; the CR main comes from the archive; legacy incomplete-content fallback; and
       shared JSON / named-Markdown renderers
     - `services/docx_convert_pool.py` — `DocxConvertPool`, the bounded
-      spawn-context process pool that converts `.docx` members for the
+      spawn-context process pool that converts `.docx` / `.doc` members for the
       spec-doc and TDoc services (`[pipeline] docx_workers`)
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
@@ -294,7 +302,7 @@ Per-layer modules:
       `chunk_blocks` → `upsert_toc` + `replace_chunks` + markdown
       cache + `record_parsed` + best-effort auto-index/auto-embed) /
       `parse_many` (immutable `(spec_id, version)` skip → per-spec
-      `parse`; oversized → `skipped`, unknown/no-docx/other →
+      `parse`; oversized → `skipped`, unknown/no-Word-files/other →
       `failures`; never aborts; optional `on_progress`) / `get_toc`
       (stored rows only; miss → `SpecDocUnknownVersionError`).
       Cache layout: `{spec_doc.cache_dir}/zips/<spec_id>/<version>.zip`
@@ -515,8 +523,8 @@ and the TDoc CR extraction is the deepest.
    independently of content conversion; only a complete successful listing replaces
    a previous row. A later validation/conversion failure does not erase a successfully
    read inventory or change the parser's original failed/skipped classification. The
-   content pipeline still enumerates only `.docx`
-   members (not `.doc`, PDF, spreadsheets, or nested ZIPs), rejects unsafe or
+   content pipeline enumerates `.docx` and `.doc`
+   members (not PDF, spreadsheets, or nested ZIPs), rejects unsafe or
    duplicate conversion identities, and enforces the TOML-only limits
    `max_documents_per_zip = 100` and `max_uncompressed_size_kb = 102400`. Limit
    violations use the skipped bucket.
@@ -666,7 +674,7 @@ and syncs each through the `--tsg` path below.
    already carries `parsed_at` (immutable ledger; `--force` re-parses);
    `parse` itself short-circuits the same way. `parse` =
    fetch-if-missing + `list_spec_docx` (empty zip →
-   `SpecDocNoDocxError` failure; `.doc` entries warn-skip) +
+   `SpecDocNoDocxError` failure when neither Word format is present) +
    `convert_document_to_blocks` (through the shared DOCX conversion
    pool when one is injected; see the DOCX bullets under "Cross-surface
    TDoc pipeline") + `order_spec_files` + `extract_spec_toc`
@@ -796,7 +804,7 @@ in `finally`. MCP only enqueues the existing jobs and has no runner of its own.
 - `server.max_concurrent_jobs` limits active jobs, not item preparation.
 - DOCX conversion is CPU-bound. With a pool, it does not run on the preparation
   threads; `0` and `1` convert in-process on them.
-  `services/docx_convert_pool.py::DocxConvertPool` converts `.docx` members in
+  `services/docx_convert_pool.py::DocxConvertPool` converts `.docx` / `.doc` members in
   spawned worker processes, bounded by `[pipeline] docx_workers` (default
   `min(4, cpu_count)`, range 0..32, independent of `prepare_workers`). `0` and
   `1` convert in-process through `parsers/docx_converter.py::InlineDocxPool`.
@@ -902,7 +910,7 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
 - `spec_doc_chunks` (specdata DB):
     - `chunk_id` (PK, `{spec_id}@{version}#{chunk_index}`), `spec_id`,
       `version`, `release` (nullable), `file_order` / `chunk_index`
-      (`Integer`), `source_file` (bare `.docx` name),
+      (`Integer`), `source_file` (original `.docx` / `.doc` member path),
     `sections` / `tables` (nullable newline-delimited combined
     identifier/title entries), `text` (gzip-JSON `LargeBinary` of the chunk
     body, no further splitting applied; decoded by the spec-doc repositories,

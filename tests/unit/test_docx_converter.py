@@ -85,13 +85,10 @@ def test_rejects_non_docx_filenames_with_value_error(filename: str) -> None:
 
 
 @pytest.mark.parametrize("filename", ["foo.doc", "FOO.DOC", "foo.bar.doc"])
-def test_rejects_legacy_doc_format_with_value_error(filename: str) -> None:
-    """The legacy ``.doc`` binary format is rejected at the wrapper
-    boundary — python-docx can only parse the modern OOXML ``.docx``
-    container, so we fail fast with a clear error message rather than
-    letting python-docx raise an opaque parse error mid-flight.
-    """
-    with pytest.raises(ValueError, match=r"only \.docx is supported"):
+def test_legacy_doc_requires_libreoffice(filename: str, monkeypatch) -> None:
+    """Missing optional system conversion has an actionable error, not a DOCX parse error."""
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    with pytest.raises(RuntimeError, match="Install LibreOffice Writer"):
         convert_document_to_markdown(b"hello", filename)
 
 

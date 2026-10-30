@@ -39,6 +39,7 @@ class SpecDocFileBlocks:
 
 
 def list_spec_docx(zip_bytes: bytes) -> list[tuple[str, bytes]]:
+    """List .docx and .doc members in ZIP order (historical function name)."""
     out = []
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
         for info in z.infolist():
@@ -46,12 +47,8 @@ def list_spec_docx(zip_bytes: bytes) -> list[tuple[str, bytes]]:
             if info.is_dir() or name.startswith("__MACOSX/"):
                 continue
             low = name.lower()
-            if low.endswith(".docx"):
+            if low.endswith((".docx", ".doc")):
                 out.append((name, z.read(info.filename)))
-            elif low.endswith(".doc"):
-                logger.warning(
-                    "skipping legacy .doc entry %s (only .docx is parsed)", name
-                )
     return out
 
 

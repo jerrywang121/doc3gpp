@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 _CACHE_KEY_MAX_LEN = 128
 
 
-_TDOC_FILE_SUFFIXES = (".docx", ".zip")
+_TDOC_FILE_SUFFIXES = (".docx", ".doc", ".zip")
 
 
 def normalize_3gpp_ftp_url(url: str) -> str:
@@ -176,7 +176,7 @@ def is_3gpp_file_url(url: str) -> bool:
 def validate_tdoc_ftp_url(url: str) -> str:
     """Normalize and validate a TDoc file-or-folder URL.
 
-    A URL with a ``.docx`` or ``.zip`` basename is a file URL and its
+    A URL with a ``.docx``, ``.doc`` or ``.zip`` basename is a file URL and its
     basename must contain the shared TDoc identifier pattern. Any other
     canonical FTP path is treated as a folder, whether or not it ends in
     ``/``.
@@ -186,7 +186,7 @@ def validate_tdoc_ftp_url(url: str) -> str:
         basename = _url_path_basename(normalized)
         if extract_tdoc_id_from_filename(basename) is None:
             raise ValueError(
-                "url must point to a TDoc .docx or .zip file whose basename "
+                "url must point to a TDoc .docx, .doc or .zip file whose basename "
                 f"contains a TDoc id; got {url!r}"
             )
     return normalized
@@ -234,7 +234,7 @@ def list_3gpp_directory(url: str, *, client: ScraperClient) -> FtpListing:
     the response is HTML and contains anchor tags, it classifies each
     anchor:
 
-    - ``<a class="file" href="...">`` pointing to a ``.docx`` or ``.zip``
+    - ``<a class="file" href="...">`` pointing to a ``.docx``, ``.doc`` or ``.zip``
       whose basename contains a 3GPP TDoc id pattern → ``file_urls``.
     - Other anchors that resolve to folders (trailing slash, no file
       extension, or a folder icon) → ``subfolder_urls``.
@@ -309,7 +309,7 @@ def list_3gpp_directory(url: str, *, client: ScraperClient) -> FtpListing:
             basename = abs_url.rsplit("/", 1)[-1]
             lower_name = basename.lower()
             if (
-                lower_name.endswith((".docx", ".zip"))
+                lower_name.endswith(_TDOC_FILE_SUFFIXES)
                 and extract_tdoc_id_from_filename(basename) is not None
             ):
                 file_urls.append(abs_url)
@@ -523,7 +523,7 @@ def _direct_parse_payload(
             max_documents=max_documents,
             max_uncompressed_bytes=max_uncompressed_bytes,
         )
-    elif suffix == ".docx":
+    elif suffix in (".docx", ".doc"):
         if max_uncompressed_bytes and len(payload) > max_uncompressed_bytes:
             raise TDocZipLimitError(
                 "TDoc ZIP aggregate uncompressed byte limit exceeded by actual bytes: "
@@ -533,7 +533,7 @@ def _direct_parse_payload(
     else:
         raise ValueError(
             f"Unsupported extension {suffix!r} for direct-parse; "
-            "expected .docx or .zip"
+            "expected .docx, .doc or .zip"
         )
 
     from doc3gpp.parsers.docx_converter import (
@@ -572,7 +572,7 @@ def _direct_parse_payload(
         tdoc_named = [
             source_file for source_file in cover_candidates
             if source_file.rsplit("/", 1)[-1].casefold()
-            == f"{resolved_tdoc_id}.docx".casefold()
+            in (f"{resolved_tdoc_id}.docx".casefold(), f"{resolved_tdoc_id}.doc".casefold())
         ]
         if len(tdoc_named) != 1:
             raise ValueError(
@@ -645,14 +645,14 @@ def direct_parse_bytes(
     max_uncompressed_bytes: int = 0,
     docx_pool: DocxMemberPool | None = None,
 ) -> TDocParseBundle:
-    """Convert every supported DOCX member and parse the unique CR cover.
+    """Convert every supported Word member and parse the unique CR cover.
 
     ZIP members are enumerated and converted sequentially, or through
     ``docx_pool`` when one is given. The structural CR detector selects
     exactly one main document; supporting documents remain content-only and do
     not enter the CR parser. An annex that fails to convert is logged and
     listed in ``skipped_sources`` unless it is named for the TDoc.
-    Standalone DOCX input follows the same one-document bundle contract.
+    Standalone .docx/.doc input follows the same one-document bundle contract.
     """
     return _direct_parse_payload(
         payload,

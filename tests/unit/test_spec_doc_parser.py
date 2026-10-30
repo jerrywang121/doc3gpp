@@ -44,14 +44,14 @@ def test_list_spec_docx_returns_docx_pairs():
     assert dict(out)["a.docx"] == b"AAA"
 
 
-def test_list_spec_docx_skips_macosx_and_warns_on_legacy_doc(caplog):
+def test_list_spec_docx_skips_macosx_and_includes_legacy_doc(caplog):
     payload = _zip_bytes(
         {"__MACOSX/._a.docx": b"junk", "legacy.doc": b"old", "ok.docx": b"OK"}
     )
     with caplog.at_level(logging.WARNING):
         out = list_spec_docx(payload)
-    assert [n for n, _ in out] == ["ok.docx"]
-    assert any("legacy.doc" in r.message for r in caplog.records)
+    assert [n for n, _ in out] == ["legacy.doc", "ok.docx"]
+    assert not any("legacy.doc" in r.message for r in caplog.records)
 
 
 def test_order_numbered_first():

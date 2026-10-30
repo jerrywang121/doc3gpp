@@ -2200,7 +2200,7 @@ def tdoc_parse(
     from_path: str | None = typer.Option(
         None,
         "--from-path",
-        help="Parse a local .docx/.zip file, or every .docx/.zip under a directory tree.",
+        help="Parse a local .docx/.doc/.zip file, or every such file under a directory tree.",
     ),
     recursive: bool = typer.Option(
         False,
@@ -2221,7 +2221,7 @@ def tdoc_parse(
         min=0,
         help=(
             "Override tdoc_parse.max_tdoc_size_kb. Source files "
-            "(.zip or .docx) larger than this many KB are skipped "
+            "(.zip, .docx or .doc) larger than this many KB are skipped "
             "(size-limit skip bucket). 0 = unlimited."
         ),
     ),
@@ -2266,12 +2266,12 @@ def tdoc_parse(
 
     Local TDoc parse:
       --from-path PATH [--output PATH] [--format table|json|markdown|raw]
-      (PATH may be a single .docx/.zip file or a directory of them)
+      (PATH may be a single .docx/.doc/.zip file or a directory of them)
 
     Online TDoc parse:
       --from-url URL [--output PATH] [--format table|json|markdown|raw]
-      (URL may be a single 3GPP .docx/.zip file or a 3GPP FTP folder; folder
-      batch scans .docx/.zip files, recurses with --recursive, and always
+      (URL may be a single 3GPP .docx/.doc/.zip file or a 3GPP FTP folder; folder
+      batch scans .docx/.doc/.zip files, recurses with --recursive, and always
       writes cache/DB for matching TDoc ids)
     """
     max_tdoc_size_bytes = _resolve_max_tdoc_size_bytes(
@@ -4282,11 +4282,11 @@ def _resolve_batch_output_path(
 
 
 def _collect_local_parse_targets(from_path: Path, recursive: bool) -> list[Path]:
-    """Return every legitimate ``.docx`` / ``.zip`` under ``from_path`` in sorted order.
+    """Return every legitimate Word/ZIP file under ``from_path`` in sorted order.
 
     A file is legitimate when:
 
-    - its extension is ``.docx`` or ``.zip`` (case-insensitive), and
+    - its extension is ``.docx``, ``.doc`` or ``.zip`` (case-insensitive), and
     - its filename contains a 3GPP TDoc id pattern.
 
     When ``recursive`` is ``False`` only immediate children are considered.
@@ -4296,7 +4296,7 @@ def _collect_local_parse_targets(from_path: Path, recursive: bool) -> list[Path]
         p
         for p in iterator
         if p.is_file()
-        and p.suffix.lower() in (".docx", ".zip")
+        and p.suffix.lower() in (".docx", ".doc", ".zip")
         and extract_tdoc_id_from_filename(p.name) is not None
     ]
     return sorted(targets)
@@ -4313,7 +4313,7 @@ def _tdoc_parse_local_batch(
     compact: bool = False,
     runner: TDocPipeline | None = None,
 ) -> None:
-    """Parse every ``.docx`` / ``.zip`` under ``from_path`` and write one output file each.
+    """Parse every Word/ZIP file under ``from_path`` and write one output file each.
 
     No cache or DB writes occur. File reads and parsing use the shared
     preparation runner without a persistence callback; output files are
@@ -4336,8 +4336,8 @@ def _tdoc_parse_local_batch(
     targets = _collect_local_parse_targets(input_dir, recursive)
     if not targets:
         typer.echo(
-            "No legitimate .docx/.zip files found under the input path. "
-            "Each file must have a .docx or .zip extension and its name "
+            "No legitimate .docx/.doc/.zip files found under the input path. "
+            "Each file must have a .docx, .doc or .zip extension and its name "
             "must contain a 3GPP TDoc id pattern."
         )
         raise typer.Exit(code=0)
@@ -4779,7 +4779,7 @@ def tdoc_show(
         "--format",
         help=(
             "Output format: table (default), json, markdown, or raw "
-            "(the converted .docx markdown for CR, WID, LS, and discussion TDocs)."
+            "(the converted Word markdown for CR, WID, LS, and discussion TDocs)."
         ),
     ),
     output: str | None = typer.Option(
@@ -4819,7 +4819,7 @@ def tdoc_show(
       meeting sync is meaningful for an arbitrary URL.
 
     ``--format`` controls the output representation; ``raw`` emits
-    the converted .docx markdown instead of the DB-row render and
+    the converted Word markdown instead of the DB-row render and
     invokes extraction before retrieval in TDoc mode, while URL mode
     reads a deterministic, side-effect-free snapshot. Optional
     ``--source-file`` selects one exact ZIP member and is valid only

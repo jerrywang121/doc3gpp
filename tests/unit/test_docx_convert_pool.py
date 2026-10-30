@@ -101,7 +101,7 @@ def test_bad_member_is_an_exception_outcome_and_the_call_does_not_raise() -> Non
 
 
 def test_worker_exceptions_round_trip_with_same_type_and_message() -> None:
-    members = [("legacy.doc", build_golden_docx()), ("empty.docx", _empty_docx())]
+    members = [("unsupported.pdf", build_golden_docx()), ("empty.docx", _empty_docx())]
     expected = InlineDocxPool().convert_members("markdown", members)
     with DocxConvertPool(2) as pool:
         outcomes = pool.convert_members("markdown", members)

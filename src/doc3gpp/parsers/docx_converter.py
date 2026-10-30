@@ -1,4 +1,4 @@
-"""python-docx → markdown converter for TDoc .docx extraction.
+"""Word → markdown converter for .docx and legacy .doc extraction.
 
 The converter is a thin wrapper around python-docx that renders the OOXML
 document tree into a markdown string. The converter is not intended to be
@@ -14,12 +14,8 @@ needs of TDoc CR extraction. In particular:
 - it tries to render inserted/deleted revision marks in a way that is parseable (e.g. <ins>...</ins> and <del>...</del>)
 
 
-* Reject anything that is not a ``.docx`` filename with ``ValueError``
-  — python-docx only supports the OOXML/``.docx`` format, so we fail
-  fast on the legacy ``.doc`` binary format rather than letting
-  python-docx raise an opaque error mid-parse. The caller is the only
-  one who could feed us a different format, and silently doing nothing
-  is worse than refusing.
+* Convert legacy ``.doc`` to OOXML using optional headless LibreOffice,
+  then use the same structured renderer. Reject other formats with ``ValueError``.
 * Surface a missing :mod:`docx` (python-docx) package as
   :class:`PythonDocxNotInstalledError` (an :class:`ImportError` subclass)
   with an actionable install hint. ``docx`` is in the ``[extract]``
@@ -37,8 +33,9 @@ import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal, Protocol
+
+from doc3gpp.parsers.word_converter import as_docx_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +307,7 @@ def _document_to_markdown(document: Document) -> str:
 
 
 def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
-    """Convert ``.docx`` bytes to markdown via python-docx.
+    """Convert ``.docx`` or legacy ``.doc`` bytes to markdown via python-docx.
 
     Args:
         doc_bytes: Raw bytes of the Word document.
@@ -321,19 +318,13 @@ def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
         The extracted markdown text.
 
     Raises:
-        ValueError: if ``filename``'s extension is not ``.docx``. The
-            legacy ``.doc`` binary format is rejected here because
-            python-docx only supports the modern OOXML container.
+        ValueError: if ``filename``'s extension is not ``.docx`` or ``.doc``.
         PythonDocxNotInstalledError: if python-docx (``docx``) cannot be
             imported. The exception message includes the install hint.
-        RuntimeError: if the converter returns no extractable text.
+        RuntimeError: if legacy conversion fails (including missing LibreOffice),
+            or the converter returns no extractable text.
     """
-    suffix = Path(filename).suffix.lower()
-    if suffix != ".docx":
-        raise ValueError(
-            f"Unsupported extension {suffix!r}; only .docx is supported "
-            "(python-docx cannot parse the legacy .doc binary format)"
-        )
+    doc_bytes = as_docx_bytes(doc_bytes, filename)
 
     try:
         document = Document(io.BytesIO(doc_bytes))
@@ -424,16 +415,14 @@ def _split_table_caption(text: str) -> tuple[str | None, str | None]:
 
 
 def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingBlock | ParagraphBlock | TableBlock]:
-    """Convert ``.docx`` bytes to a flat list of heading/paragraph/table blocks.
+    """Convert ``.docx`` or ``.doc`` bytes to heading/paragraph/table blocks.
 
     Same extension guard, missing-dependency path, and empty-render error
     as :func:`convert_document_to_markdown`; only the wrapper is new — GFM
     rendering (:func:`_table_to_markdown`) and heading-style logic are
     unchanged.
     """
-    suffix = Path(filename).suffix.lower()
-    if suffix != ".docx":
-        raise ValueError(f"Unsupported extension {suffix!r}; only .docx is supported")
+    doc_bytes = as_docx_bytes(doc_bytes, filename)
     try:
         document = Document(io.BytesIO(doc_bytes))
     except ImportError as exc:  # pragma: no cover - only triggered when [extract] missing

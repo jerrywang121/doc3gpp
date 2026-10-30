@@ -84,8 +84,9 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
     """Given a fresh project root with ``pyproject.toml``, ``config init``
     creates ``./doc3gpp.toml`` populated with the packaged template;
     ``load_config_data()`` parses it cleanly (every commented-out table
-    disappears into the dict; the active ``[search]`` block surfaces
-    with its default values); and ``config show`` then dumps JSON that
+    disappears into the dict; the active ``[search]``, ``[tdoc_parse]``,
+    ``[word_conversion]``, and ``[server]`` blocks surface with their
+    default values); and ``config show`` then dumps JSON that
     matches ``Settings().model_dump(mode="json")`` — proving the cache
     cleared and the file is wired into the loader.
     """
@@ -100,8 +101,9 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
     # And: the file parses cleanly via the public loader.
     path, data = load_config_data()
     assert path is not None and path.name == "doc3gpp.toml"
-    # The packaged template has active [search] and [server] blocks;
-    # every other table is commented out and disappears into the dict.
+    # The packaged template has active [search], [tdoc_parse],
+    # [word_conversion], and [server] blocks; every other table is
+    # commented out and disappears into the dict.
     assert data == {
         "search": {
             "enabled": True,
@@ -115,6 +117,7 @@ def test_config_init_creates_file_then_show(sqlite_env, tmp_path, monkeypatch) -
             "max_documents_per_zip": 100,
             "max_uncompressed_size_kb": 102400,
         },
+        "word_conversion": {"timeout_seconds": 300},
         "server": {
             "enabled": True,
             "host": "127.0.0.1",
@@ -246,6 +249,7 @@ def test_config_init_force_overwrites(sqlite_env, tmp_path, monkeypatch) -> None
             "max_documents_per_zip": 100,
             "max_uncompressed_size_kb": 102400,
         },
+        "word_conversion": {"timeout_seconds": 300},
         "server": {
             "enabled": True,
             "host": "127.0.0.1",

@@ -689,7 +689,7 @@ def test_ttcn_repository_list_all(sqlite_env) -> None:
 
 
 def test_tdoc_show_json_payload_includes_cover_ttcn_and_extracted_at(
-    sqlite_env, tmp_path: Path,
+    sqlite_env, tmp_path: Path, disable_auto_sync,
 ) -> None:
     """End-to-end smoke test: write cover + TTCN + extract-meta rows
     at the same ``ftp_url``, then drive the CLI's ``tdoc show
@@ -820,7 +820,7 @@ def test_tdoc_show_by_ftp_url_json_payload_includes_cover_ttcn_and_extracted_at(
 
 
 def test_tdoc_show_format_json_compact_round_trips(
-    sqlite_env, tmp_path: Path,
+    sqlite_env, tmp_path: Path, disable_auto_sync,
 ) -> None:
     """End-to-end smoke test: drive ``tdoc show --tdoc <id> --format json
     --compact`` against a real sqlite database and assert the output is

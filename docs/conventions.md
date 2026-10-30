@@ -176,11 +176,15 @@ Recognised env vars (closed allowlist; see
 
 ```
 DOC3GPP_DATABASE_URL
+DOC3GPP_SPECDATA_DATABASE_URL
+DOC3GPP_TESTCASE_DATABASE_URL
 DOC3GPP_DB_ECHO
 DOC3GPP_LOG_LEVEL
 DOC3GPP_HTTP_VERIFY
 DOC3GPP_CACHE__DIR
 DOC3GPP_SYNC__AUTO_SYNC
+DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY
+DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS
 ```
 
 Any other `DOC3GPP_*` env var is silently ignored — those settings
@@ -204,6 +208,11 @@ the TOML file, or via `doc3gpp config set tdoc_parse.<key> <value>`.
 The archive defaults are `max_documents_per_zip = 100` and
 `max_uncompressed_size_kb = 102400` aggregate supported-member bytes;
 `0` disables either limit.
+
+The legacy `.doc` LibreOffice timeout is configured by
+`[word_conversion] timeout_seconds` (default `300`). The allowlisted process
+environment variable `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides the
+TOML value; there is no per-parse CLI timeout flag.
 The corresponding CLI flag (e.g. `--max-tdoc-size-kb`) is a
 per-invocation override — the value is **not** written back to the
 TOML config.
@@ -333,10 +342,10 @@ basename:
   from `client.get_bytes(url)`. The 3GPP FTP server serves the zip
   payload directly; `extract_docx_from_zip` reads it via
   `zipfile.ZipFile`. Opening with `unzip` / 7z / WinZip yields the
-  inner `.docx` straight away.
+  inner Word document straight away.
 - `cache.dir/markdown/<cache_file>` — **real ZIP** produced by
   `services/tdoc_cr_service.py` and `services/tdoc_family_service.py`. The versioned archive contains one
-  UTF-8 Markdown member per converted `.docx` (the CR main, every CR annex, and every family document) plus a JSON manifest
+  UTF-8 Markdown member per converted `.docx` or `.doc` (the CR main, every CR annex, and every family document) plus a JSON manifest
   (mapping source paths to member names and content hashes); opening it
   with `unzip` / 7z / WinZip exposes the derived artifact. SQL
   `tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`

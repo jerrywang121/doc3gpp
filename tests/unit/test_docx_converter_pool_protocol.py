@@ -31,8 +31,8 @@ def test_inline_pool_captures_invalid_bytes_as_exception() -> None:
     assert isinstance(outcomes[0], Exception)
 
 
-def test_inline_pool_captures_legacy_doc_as_value_error() -> None:
-    outcomes = InlineDocxPool().convert_members("markdown", [("legacy.doc", build_golden_docx())])
+def test_inline_pool_captures_unsupported_format_as_value_error() -> None:
+    outcomes = InlineDocxPool().convert_members("markdown", [("unsupported.pdf", build_golden_docx())])
     assert isinstance(outcomes[0], ValueError)
 
 
@@ -42,7 +42,7 @@ def test_inline_pool_returns_outcomes_in_input_order() -> None:
         "markdown",
         [
             ("first.docx", golden),
-            ("second.doc", golden),
+            ("second.pdf", golden),
             ("third.docx", b"not a zip"),
         ],
     )

@@ -15,7 +15,7 @@
         {% if source.parsed_at %}
           <dt>Parsed</dt>
           <dd>{{ source.parsed_at | dt_short }} <span class="muted">UTC</span></dd>
-          <dt>DOCX files</dt><dd>{{ source.docx_count }}</dd>
+          <dt>Word files</dt><dd>{{ source.docx_count }}</dd>
           <dt>Chunks</dt><dd>{{ source.chunk_count }}</dd>
         {% else %}
           <dt>State</dt><dd>Downloaded, awaiting parsing</dd>

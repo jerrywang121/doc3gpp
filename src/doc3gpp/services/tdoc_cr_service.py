@@ -8,7 +8,7 @@ Glues the per-stage building blocks together:
    list XLSX classifies each id by document type).
 3. Download (or cache-hit) the TDoc zip from the 3GPP FTP via
    :mod:`doc3gpp.scraping.tdoc_zip_source`.
-4. Enumerate every supported ``.docx`` member and convert members
+4. Enumerate every supported ``.docx`` / ``.doc`` member and convert members
    sequentially through the shared parser pipeline.
 5. Select exactly one main document with the structural CR-cover detector;
    supporting documents remain content-only. Annexes that fail to convert are
@@ -1330,7 +1330,7 @@ class TDocCrService:
         *,
         max_tdoc_size_bytes: int | None = None,
     ) -> DirectParseResult:
-        """Convert local DOCX/ZIP bytes in memory without cache or SQL writes."""
+        """Convert local Word/ZIP bytes without cache or SQL writes."""
         max_bytes = (
             self._max_tdoc_size_bytes
             if max_tdoc_size_bytes is None

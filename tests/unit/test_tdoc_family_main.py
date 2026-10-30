@@ -56,13 +56,13 @@ def test_main_inside_folder_uses_basename() -> None:
     )
 
 
-def test_doc_only_main_reports_not_docx() -> None:
+def test_unsupported_main_reports_word_format_requirement() -> None:
     with pytest.raises(TDocMainDocumentError) as excinfo:
-        select_main_member("R5-123456", docx_members=(), other_members=("R5-123456.doc",))
+        select_main_member("R5-123456", docx_members=(), other_members=("R5-123456.pdf",))
 
     message = str(excinfo.value)
     assert "is not .docx" in message
-    assert "R5-123456.doc" in message
+    assert "R5-123456.pdf" in message
 
 
 def test_no_main_at_all_reports_no_main() -> None:
@@ -77,7 +77,7 @@ def test_no_main_at_all_reports_no_main() -> None:
 
 
 def test_lone_longer_id_docx_is_not_a_candidate() -> None:
-    with pytest.raises(TDocMainDocumentError, match="^no main .docx for R5-123456"):
+    with pytest.raises(TDocMainDocumentError, match="^no main .docx or .doc for R5-123456"):
         select_main_member("R5-123456", ["R5-1234567.docx"])
 
 
@@ -85,9 +85,9 @@ def test_lone_non_digit_suffix_docx_is_main() -> None:
     assert select_main_member("R5-123456", ["R5-123456a.docx"]) == "R5-123456a.docx"
 
 
-def test_longer_id_doc_is_not_reported_as_not_docx() -> None:
-    with pytest.raises(TDocMainDocumentError, match="^no main .docx for R5-123456"):
-        select_main_member("R5-123456", docx_members=(), other_members=("R5-1234567.doc",))
+def test_longer_id_doc_is_not_a_candidate() -> None:
+    with pytest.raises(TDocMainDocumentError, match="^no main .docx or .doc for R5-123456"):
+        select_main_member("R5-123456", docx_members=("R5-1234567.doc",))
 
 
 @pytest.mark.parametrize("tdoc_id", ["", "   "])

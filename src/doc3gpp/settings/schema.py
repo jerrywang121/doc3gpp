@@ -66,6 +66,7 @@ ALLOWED_ENV_VARS: frozenset[str] = frozenset(
         "DOC3GPP_CACHE__DIR",
         "DOC3GPP_SYNC__AUTO_SYNC",
         "DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY",
+        "DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS",
     }
 )
 
@@ -294,7 +295,7 @@ class TDocParseSettings(BaseModel):
     bucket — they represent a budget decision, not an upstream-side
     error. ``0`` disables the limit.
 
-    :attr:`max_documents_per_zip` caps supported ``.docx`` members in
+    :attr:`max_documents_per_zip` caps supported ``.docx`` / ``.doc`` members in
     one ZIP. :attr:`max_uncompressed_size_kb` caps their aggregate
     uncompressed bytes. Both are TOML-only and ``0`` disables the
     respective limit.
@@ -306,7 +307,7 @@ class TDocParseSettings(BaseModel):
         default=1000,
         ge=0,
         description=(
-            "Per-file cap in KB for TDoc sources (.zip or .docx). "
+            "Per-file cap in KB for TDoc sources (.zip, .docx or .doc). "
             "Files larger than this are skipped (size-limit skip "
             "bucket). 0 disables the limit."
         ),
@@ -315,7 +316,7 @@ class TDocParseSettings(BaseModel):
         default=100,
         ge=0,
         description=(
-            "Maximum supported DOCX members in one TDoc ZIP. "
+            "Maximum supported Word (.docx/.doc) members in one TDoc ZIP. "
             "0 disables the limit."
         ),
     )
@@ -323,7 +324,7 @@ class TDocParseSettings(BaseModel):
         default=102400,
         ge=0,
         description=(
-            "Maximum aggregate uncompressed bytes of supported DOCX members, "
+            "Maximum aggregate uncompressed bytes of supported Word members, "
             "in KB. 0 disables the limit."
         ),
     )
@@ -352,6 +353,20 @@ class TDocParseSettings(BaseModel):
         description=(
             "Plain context lines captured before and after each change "
             "block. 0 = no context, only the marker lines + bridge."
+        ),
+    )
+
+
+class WordConversionSettings(BaseModel):
+    """Timeout for converting legacy Word documents through LibreOffice."""
+
+    timeout_seconds: int = Field(
+        default=300,
+        ge=1,
+        description=(
+            "Maximum seconds allowed to convert one legacy .doc file. "
+            "The allowlisted DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS "
+            "environment variable overrides the TOML value."
         ),
     )
 
@@ -726,7 +741,7 @@ class PipelineSettings(BaseModel):
     always serialized by the service pipeline runtime; the separate server
     setting controls active jobs, not item preparation.
 
-    ``docx_workers`` sizes the process pool that converts DOCX members. The
+    ``docx_workers`` sizes the process pool that converts Word members. The
     pool is shared by all concurrent prepares in the process; ``0`` and ``1``
     convert in-process.
     """
@@ -746,7 +761,8 @@ class PipelineSettings(BaseModel):
         ge=0,
         le=32,
         description=(
-            "Number of worker processes that convert DOCX members to Markdown. "
+            "Number of worker processes that convert Word (.docx/.doc) members "
+            "to Markdown. "
             "0 and 1 convert in-process. The default is CPU-aware and bounded "
             "to 4."
         ),
@@ -942,8 +958,9 @@ class Settings(BaseSettings):
     ``sync``, ``pipeline``) come exclusively from the TOML config file via
     :func:`doc3gpp.settings.loader.get_settings`; the nested
     env-overrides are ``DOC3GPP_CACHE__DIR``,
-    ``DOC3GPP_SYNC__AUTO_SYNC``, and
-    ``DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY`` (all allowed). All
+    ``DOC3GPP_SYNC__AUTO_SYNC``,
+    ``DOC3GPP_SEMANTIC_SEARCH__EMBEDDING_API_KEY``, and
+    ``DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS`` (all allowed). All
     other nested fields are TOML-only.
     """
 
@@ -969,6 +986,7 @@ class Settings(BaseSettings):
     output: OutputSettings = Field(default_factory=OutputSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     tdoc_parse: TDocParseSettings = Field(default_factory=TDocParseSettings)
+    word_conversion: WordConversionSettings = Field(default_factory=WordConversionSettings)
     sync: SyncSettings = Field(default_factory=SyncSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     spec_doc: SpecDocSettings = Field(default_factory=SpecDocSettings)

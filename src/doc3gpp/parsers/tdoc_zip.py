@@ -61,7 +61,7 @@ def _is_directory(info: zipfile.ZipInfo, normalized_name: str) -> bool:
 def _docx_member_infos(
     archive: zipfile.ZipFile,
 ) -> tuple[tuple[str, zipfile.ZipInfo], ...]:
-    """Return safe, sorted DOCX metadata without reading member payloads."""
+    """Return safe, sorted Word metadata without reading member payloads."""
     candidates: list[tuple[str, zipfile.ZipInfo]] = []
     seen_names: set[str] = set()
     for info in archive.infolist():
@@ -85,9 +85,9 @@ def _docx_member_infos(
             continue
         if path_parts[-1].startswith("~$"):
             continue
-        if not path_parts[-1].casefold().endswith(".docx"):
+        if not path_parts[-1].casefold().endswith((".docx", ".doc")):
             logger.warning(
-                "Skipping unsupported TDoc ZIP member %r (only .docx is supported)",
+                "Skipping unsupported TDoc ZIP member %r (only .docx and .doc are supported)",
                 source_file,
             )
             continue
@@ -162,7 +162,11 @@ def _read_member_with_limit(
 def _read_first_docx_member(zip_bytes: bytes) -> tuple[str, bytes] | None:
     """Read only the first safe DOCX member selected by the shared metadata rules."""
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
-        candidates = _docx_member_infos(archive)
+        candidates = [
+            (source, info)
+            for source, info in _docx_member_infos(archive)
+            if source.casefold().endswith(".docx")
+        ]
         if not candidates:
             return None
         source_file, info = candidates[0]
@@ -196,9 +200,9 @@ def enumerate_docx_members(
     max_documents: int = 100,
     max_uncompressed_bytes: int = 0,
 ) -> tuple[tuple[str, bytes], ...]:
-    """Read supported DOCX members in stable order without extracting to disk.
+    """Read supported Word members in stable order without extracting to disk.
 
-    Only ``.docx`` payloads are returned. Directories, ``__MACOSX`` entries,
+    Both ``.docx`` and ``.doc`` payloads are returned. Directories, ``__MACOSX`` entries,
     Word lock files, and unsupported formats are ignored. ZIP separators are
     normalized to ``/``; unsafe or duplicate member identities are rejected.
     Both central-directory sizes and bytes yielded while reading are checked

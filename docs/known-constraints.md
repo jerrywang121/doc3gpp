@@ -154,12 +154,22 @@ change set so the docs stay honest.
     `LIKE '%.'` finds module-only entries, `LIKE '.%'` finds
     function-only entries, and the joined dot inside the full-match
     form remains inert.
-- **Only `.docx` ZIP members are converted.** `.doc`, PDF, spreadsheet,
-  and nested-ZIP members are never converted. A CR ZIP must have exactly
+- **Legacy `.doc` needs system LibreOffice Writer.** Both `.docx` and `.doc`
+  members are converted, but `.doc` additionally requires `libreoffice` or
+  `soffice` on PATH. It runs in an isolated temporary directory/profile with a
+  timeout configured by `[word_conversion] timeout_seconds` (default `300`);
+  the allowlisted process environment variable
+  `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. `.docx` never invokes
+  LibreOffice. A missing dependency, timeout,
+  or failed conversion names the original source. Conversion may normalize
+  legacy formatting before the existing structural parsers run. PDF, spreadsheet,
+  and nested-ZIP members are not converted. A CR ZIP must have exactly
   one converted member with the CR cover; that main document alone
   produces cover/TTCN/body-change metadata. Other members are CR annexes stored as
-  content in `tdoc_cr_annexes`. A TDoc whose only main-named member is a `.doc` fails
-  with `main document for <id> is not .docx`, so its main cannot be converted.
+  content in `tdoc_cr_annexes`. A failed main fails the TDoc; failed annexes are
+  skipped and retried normally. Already-complete archives need `--force` to
+  include `.doc` members ignored by older versions. Spec source/TOC `docx_count`
+  fields retain their names but count both formats.
   CR annexes and every family document are FTS5-searchable and semantically chunked.
   The CR main body is not full-text indexed; see the CR full-text constraint below.
 - **TDoc ZIP resource caps are TOML-only.** `[tdoc_parse]`

@@ -95,7 +95,7 @@ def _document(
 class TDocZipConversion:
     """Converted documents from one TDoc archive, main first.
 
-    ``documents`` holds every converted ``.docx`` member: the main document,
+    ``documents`` holds every converted ``.docx`` or ``.doc`` member: the main document,
     then the annexes in source-path order. ``skipped_sources`` names annexes
     whose conversion failed; those are logged and not returned as documents.
     """
@@ -112,7 +112,7 @@ def _select_zip_main(
     max_documents: int,
     max_uncompressed_bytes: int,
 ) -> tuple[str, dict[str, bytes]]:
-    """Return the main member's name and the payload of every ``.docx`` member."""
+    """Return the main member's name and every supported Word member's payload."""
     payloads = dict(
         enumerate_docx_members(
             zip_bytes,
@@ -123,7 +123,7 @@ def _select_zip_main(
     other = tuple(
         name.rsplit("/", 1)[-1]
         for name in member_names(zip_bytes)
-        if not name.casefold().endswith(".docx")
+        if not name.casefold().endswith((".docx", ".doc"))
     )
     return select_main_member(tdoc_id, tuple(payloads), other), payloads
 
@@ -138,7 +138,9 @@ def convert_tdoc_zip(
     convert: Callable[[bytes, str], str] = convert_document_to_markdown,
     docx_pool: DocxMemberPool | None = None,
 ) -> TDocZipConversion:
-    """Convert a TDoc ZIP's ``.docx`` members without touching disk or storage.
+    """Convert a TDoc ZIP's Word members without network or persistent storage.
+
+    Legacy .doc conversion uses private temporary files via LibreOffice.
 
     A main conversion failure propagates. An annex conversion failure is logged
     as a warning and recorded in ``skipped_sources``. A pool failure
@@ -188,9 +190,9 @@ def _direct_source(filename: str) -> tuple[str, str]:
     """Return the source basename and its lower-case extension, rejecting other types."""
     source = _source_name(filename)
     suffix = PurePosixPath(source).suffix.lower()
-    if suffix not in (".zip", ".docx"):
+    if suffix not in (".zip", ".docx", ".doc"):
         raise ValueError(
-            f"Unsupported extension {suffix!r} for direct-parse; expected .docx or .zip"
+            f"Unsupported extension {suffix!r} for direct-parse; expected .docx, .doc or .zip"
         )
     return source, suffix
 
@@ -214,9 +216,9 @@ def convert_direct_payload(
     convert: Callable[[bytes, str], str] = convert_document_to_markdown,
     docx_pool: DocxMemberPool | None = None,
 ) -> TDocZipConversion:
-    """Convert a direct-mode ``.zip`` or standalone ``.docx`` payload without I/O.
+    """Convert a direct-mode ZIP or standalone Word payload without network/SQL.
 
-    A ZIP follows :func:`convert_tdoc_zip`. A standalone ``.docx`` is its own
+    A ZIP follows :func:`convert_tdoc_zip`. A standalone ``.docx`` or ``.doc`` is its own
     main document, has no annexes, and always converts in-process.
     """
     source, suffix = _direct_source(filename)
@@ -252,7 +254,7 @@ def convert_direct_main_markdown(
     """Return only the main document's Markdown, for TDoc type sniffing.
 
     Annexes are never converted here. A ZIP's main is selected by name exactly
-    as in :func:`convert_tdoc_zip`; a standalone ``.docx`` is its own main.
+    as in :func:`convert_tdoc_zip`; a standalone Word file is its own main.
     """
     source, suffix = _direct_source(filename)
     if suffix == ".zip":

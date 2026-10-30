@@ -205,7 +205,7 @@ def test_persist_records_source_when_zip_cached_but_source_row_missing(tmp_path)
 
 def test_persist_keeps_existing_source_metadata_when_cached(tmp_path):
     repo = MagicMock()
-    existing = SpecDocSource("38.331", "18.5.0", parsed_at=None)
+    existing = SpecDocSource("38.331", "18.5.0", parsed_at=None, docx_count=1)
     repo.get_source.side_effect = [existing, existing]
     service = _service(repo, tmp_path)
     service._write_zip_cache("38.331", "18.5.0", _zip_bytes())

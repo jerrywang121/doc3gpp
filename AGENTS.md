@@ -85,7 +85,8 @@ For the full symbol-to-file table, see
 | Add TDoc raw-content retrieval | `src/doc3gpp/services/tdoc_content_service.py` + `src/doc3gpp/cli.py` + `src/doc3gpp/web/routes/tdocs.py` / `web/mcp_server.py` | SQL-first content from `tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and `tdoc_discussion_contents`; the CR main is read from the derived cache archive, and a missing archive is a cache-miss error with a re-parse hint. `--source-file` is exact and ZIP-scoped. URL reads do not download or extract. The separate `zip_files` inventory is not converted content or auxiliary `files`. |
 | Change TDoc outer-ZIP inventory | `src/doc3gpp/parsers/tdoc_zip.py` (`enumerate_zip_files`) + `src/doc3gpp/models/tdoc_zip_inventory.py` + `src/doc3gpp/storage/repositories/tdoc_zip_inventory_sql.py` + TDoc show renderers | The existing content-family registry limits inventory to CR, WID new/revised, LS in/out, and discussion TDocs. List every non-directory outer member (all extensions, original decoded names, order, duplicates) without extraction or nested-ZIP traversal. `null` is unknown, `[]` is known empty. Existing databases need the additive `doc3gpp db init --scope main`; old inventories remain unknown until a supported TDoc is re-parsed with `--force`. |
 | Add or change a TDoc content family / type routing | `src/doc3gpp/models/tdoc_content_families.py` (`TDOC_CONTENT_STORES`, `store_for_type`, `is_complete_cr_extraction`, `is_complete_family_extraction`) | The single registry of eligible `tdocs.type` values, their content table, and whether the store holds the main document. CR's store holds annexes only. Parse selection, the pipeline, content retrieval, search, and the schema registry read from it. |
-| Change WID, LS, or discussion extraction | `src/doc3gpp/services/tdoc_family_service.py` (`TDocFamilyService`) + `src/doc3gpp/parsers/tdoc_family_main.py` + `src/doc3gpp/parsers/tdoc_zip_convert.py` | The service reuses or downloads the ZIP, selects the main with `select_main_member`, converts `.docx` members (failed annexes go to `skipped_sources`), and persists through `TDocContentRepository.replace_family_bundle`. Conversion is pure and lives in `parsers/`. |
+| Change WID, LS, or discussion extraction | `src/doc3gpp/services/tdoc_family_service.py` (`TDocFamilyService`) + `src/doc3gpp/parsers/tdoc_family_main.py` + `src/doc3gpp/parsers/tdoc_zip_convert.py` | The service reuses or downloads the ZIP, selects the main with `select_main_member`, converts `.docx` / `.doc` members (failed annexes go to `skipped_sources`), and persists through `TDocContentRepository.replace_family_bundle`. Conversion lives in `parsers/`; legacy conversion uses isolated temporary files. |
+| Change Word format conversion | `src/doc3gpp/parsers/word_converter.py` (`as_docx_bytes`) + `src/doc3gpp/parsers/docx_converter.py` | `.docx` passes through unchanged; `.doc` uses optional system LibreOffice Writer (`libreoffice`/`soffice` on PATH), isolated temporary directory/profile, and `word_conversion.timeout_seconds` (default 300; process environment `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML) before the same Markdown/block parsers. No network or persistent conversion state. Historical `docx` helper/pool names and `docx_count` fields cover both formats; preserve original source paths. |
 | Change the TDoc content tables | `src/doc3gpp/storage/repositories/tdoc_content_sql.py` (`SQLAlchemyTDocContentRepository`) + `src/doc3gpp/storage/db/models.py` (`_TDocContentRowMixin`, `TDocCrAnnexOrm`, `TDocWidContentOrm`, `TDocLsContentOrm`, `TDocDiscussionContentOrm`) + `src/doc3gpp/models/schema_info.py` | Four tables share one row shape (`ftp_url`, `doc_filename`, `document_id`, `tdoc_id`, `content` as compressed JSON, `content_hash`, `token_count`). The schema registry must match the ORM columns (`tests/unit/test_schema_info.py::test_registry_matches_orm_columns`). |
 | Tune the FTS5 search subsystem | `src/doc3gpp/settings/schema.py` (`SearchSettings`) | FTS5 search knobs (`enabled`, `auto_index_on_parse`, `rebuild_batch_size`, `snippet_tokens`, `bm25_weights`, `search_fanout_factor`); TOML `[search]` block. Per-column previews are driven by `bm25_weights` (weight>0 → snippet bound; match in snippet → surfaced; weight=0 → both skipped). |
 | Add a semantic search knob | `src/doc3gpp/settings/schema.py` (`SemanticSearchSettings`) | TOML `[semantic_search]` block; `fts5_weight` is the persisted hybrid blend setting, not a request-level flag. |
@@ -297,10 +298,10 @@ Workflows in one line (full prose in `docs/architecture.md`):
   as `'<module>.'` (trailing-dot sentinel); when only the function name
   is recoverable it is recorded as `'.<function>'` (leading-dot
   sentinel); when neither is recoverable the correction is dropped.
-  `TDocCrService` converts every supported `.docx` in the ZIP and selects
+  `TDocCrService` converts every supported `.docx` or `.doc` in the ZIP and selects
   exactly one main document with the structural CR-cover detector. The main
   document alone owns the cover, optional TTCN sidecar, and optional
-  body-change sidecar. Every other converted `.docx` is a CR annex and is
+  body-change sidecar. Every other converted Word document is a CR annex and is
   stored in `tdoc_cr_annexes`; the CR main Markdown is not stored in SQL and
   lives only in the derived archive. Annex conversion is tolerant: a failed
   annex is logged, listed in `tdoc_extracts.skipped_sources`, and leaves the
@@ -310,8 +311,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
   writer. The Markdown cache is a versioned multi-member ZIP with a manifest. A
   CR cache hit requires the v2 parent, the cover row, the annex rows that
   satisfy `is_complete_cr_extraction`, and the archive `markdown/<cache_file>`.
-  Only `.docx` members are converted; `.doc`, PDF, spreadsheets, and nested
-  ZIPs are not converted. The TOML-only per-archive limits are
+  Both `.docx` and `.doc` members are converted; PDF, spreadsheets, and nested
+  ZIPs are not converted. Limits count both Word formats. The TOML-only per-archive limits are
   `max_documents_per_zip = 100` and `max_uncompressed_size_kb = 102400`; `0`
   disables either one. `tdoc_files` remains FTP auxiliary-file metadata,
   `tdoc_extracts` is the single parent per immutable ZIP URL, `tdoc_cr_annexes`
@@ -332,11 +333,13 @@ Workflows in one line (full prose in `docs/architecture.md`):
   eligibility filter so an ineligible TDoc reaches the pipeline and is reported as
   skipped. Web and MCP parse apply the eligibility filter to every selector,
   including exact ids. WID, LS, and discussion TDocs go through `TDocFamilyService`,
-  which stores the main and every annex; only `.docx` members are converted, and a
-  `.doc`-only main fails the TDoc.
+  which stores the main and every annex; `.docx` and `.doc` members are converted.
+  A `.doc` main requires LibreOffice; a missing dependency or failed main conversion
+  fails the TDoc, while failed annexes are skipped. Already-complete archives need
+  `--force` to include previously ignored `.doc` members.
 - `doc3gpp tdoc parse --from-path PATH` / `--from-url URL` is a
   direct-mode alternative that bypasses the database filters. ZIPs
-  convert supported `.docx` members through the DOCX conversion pool
+  convert supported `.docx` and `.doc` members through the DOCX conversion pool
   (`[pipeline] docx_workers`; `0` or `1` converts in-process); a unique structural
   CR cover selects the main source, and the other members are CR annexes stored
   as content (a family TDoc stores its main and every annex). Raw direct/batch
@@ -351,7 +354,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
   keyed on the **original (sanitized) filename** (D10 fix) so
   multiple revisions of the same tdoc_id never collide. When
   the URL targets the canonical 3GPP FTP site, HTTPS is required (the
-  bare `www.3gpp.org/ftp/...` form is normalized), `.docx`/`.zip` files
+  bare `www.3gpp.org/ftp/...` form is normalized), `.docx`/`.doc`/`.zip` files
   must have a TDoc-shaped basename including `RP-...` plenary ids, and
   any other canonical path is a folder with an optional trailing slash.
   When `Settings.sync.auto_sync` is enabled, both `--from-path` and `--from-url`
@@ -466,7 +469,7 @@ Workflows in one line (full prose in `docs/architecture.md`):
     weight of `1.0`; new defaults have nine entries. Hybrid weighting comes
     from `Settings.semantic_search.fts5_weight`.
   - `doc3gpp spec doc parse --spec <id> [--release R] [--version V] [--force]` accepts exactly one spec and calls `SpecDocService.parse_many` with a one-item list → resolve the numeric-newest `SpecVersion` with a non-empty `.zip` URL via `resolve_spec_doc_version` (after optional release filtering); when both `--release` and `--version` are given, their release numbers must align (for example, `Rel-18` with `18.5.0`); explicit `--version` is strict and fails clearly when its ZIP link is missing. Fetch the ZIP with internal `fetch_spec_doc_zip` when absent (or use the zip cache at `{spec_doc.cache_dir}/zips/<spec_id>/<version>.zip`), and record the download. `--force` re-downloads before re-parsing, including pairs that already carry `parsed_at`.
-  - `doc3gpp spec doc parse --spec <id> [--release R] [--version V] [--force]` → immutable-skip when `(spec_id, version)` already carries `parsed_at` (unless `--force`) → `parse` = fetch-if-missing + `list_spec_docx` + `convert_document_to_blocks` + `order_spec_files` + `extract_spec_toc` + `chunk_blocks` → `upsert_toc` + `replace_chunks` + per-file markdown cache (`{spec_doc.cache_dir}/markdown/<spec_id>/<version>/`) + `record_parsed` + best-effort auto-index (`upsert_for_version`) / auto-embed (`index_for_version`). Oversized zips → skip bucket; unknown spec/version or empty (no-docx) zips → failure bucket. Prints `ok/skipped/failed` buckets only (`--format/--output/--compact` accepted but ignored). Background `parse_spec_docs` jobs use scalar `spec_id` / optional `release` / `version` / `force`, log and store the result in `result.failure_details`. Chunk/search metadata uses newline-delimited combined `sections` and `tables`; TOC entries retain `section_no` / `title`.
+  - `doc3gpp spec doc parse --spec <id> [--release R] [--version V] [--force]` → immutable-skip when `(spec_id, version)` already carries `parsed_at` (unless `--force`) → `parse` = fetch-if-missing + `list_spec_docx` (both `.docx` and `.doc`) + `convert_document_to_blocks` + `order_spec_files` + `extract_spec_toc` + `chunk_blocks` → `upsert_toc` + `replace_chunks` + per-file markdown cache (`{spec_doc.cache_dir}/markdown/<spec_id>/<version>/`) + `record_parsed` + best-effort auto-index (`upsert_for_version`) / auto-embed (`index_for_version`). Oversized zips → skip bucket; unknown spec/version or empty (no supported Word files) zips → failure bucket. Historical `docx_count` counts both formats. Prints `ok/skipped/failed` buckets only (`--format/--output/--compact` accepted but ignored). Background `parse_spec_docs` jobs use scalar `spec_id` / optional `release` / `version` / `force`, log and store the result in `result.failure_details`. Chunk/search metadata uses newline-delimited combined `sections` and `tables`; TOC entries retain `section_no` / `title`.
  - `doc3gpp spec doc toc show --spec <id> --version <v> [--fields] [--format/--output/--compact]` → `SpecDocService.get_toc` (stored `(spec_id, version)` rows; miss → `BadParameter`). Default fields `section_no, title, level, source_file` (`[output.fields] spec_doc_toc`).
   - `doc3gpp spec doc search [--text TEXT] [--semantic TEXT] [filters]` →
     `SpecDocSearchFacade.search` with the same four mode-selection rules and

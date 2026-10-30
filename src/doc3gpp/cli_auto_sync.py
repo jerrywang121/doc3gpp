@@ -185,7 +185,7 @@ def collect_tdoc_candidates_for_url(
     auto-sync candidates from the URL alone, before the parse runs:
 
     - Non-3GPP URL → empty set.
-    - 3GPP FTP file URL (ends with ``.docx`` / ``.zip``) → the tdoc_id
+    - 3GPP FTP file URL (ends with ``.docx`` / ``.doc`` / ``.zip``) → the tdoc_id
       parsed out of the basename, or empty if the basename has no
       recognised TDoc-id pattern.
     - 3GPP FTP folder URL (trailing ``/`` optional) → BFS over the folder

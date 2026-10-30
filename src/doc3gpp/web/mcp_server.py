@@ -961,7 +961,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
     )
     @_mcp_error_guard
     def parse_tdoc_url(
-        url: Annotated[str, Field(description="Canonical 3GPP FTP URL: HTTPS https://www.3gpp.org/ftp/... or bare www.3gpp.org/ftp/...; a single TDoc-shaped .docx/.zip file or a folder URL with optional trailing slash.")],
+        url: Annotated[str, Field(description="Canonical 3GPP FTP URL: HTTPS https://www.3gpp.org/ftp/... or bare www.3gpp.org/ftp/...; a single TDoc-shaped .docx/.doc/.zip file or a folder URL with optional trailing slash.")],
         recursive: Annotated[bool, Field(description="Scan subfolders (BFS); equivalent to CLI's --recursive. Mutually exclusive with max_depth.")] = False,
         max_depth: Annotated[int, Field(description="Maximum BFS depth (0 = root folder only). Ignored when recursive=True.")] = 2,
         force: Annotated[bool, Field(description="Re-parse even when a cover-page row already exists (forwarded to the service).")] = False,

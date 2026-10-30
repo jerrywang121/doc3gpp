@@ -36,6 +36,7 @@ from doc3gpp.settings.schema import (
     Settings,
     SyncSettings,
     TDocParseSettings,
+    WordConversionSettings,
 )
 
 # ---------------------------------------------------------------------------
@@ -384,6 +385,64 @@ def test_tdoc_parse_max_ftp_depth_is_toml_only(
     assert s.tdoc_parse.max_batch == 100
 
 
+def test_word_conversion_timeout_defaults_to_300(
+    clean_settings, write_toml, monkeypatch, tmp_path,
+) -> None:
+    config = write_toml("c.toml", "")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config))
+
+    assert get_settings().word_conversion.timeout_seconds == 300
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, -1])
+def test_word_conversion_timeout_must_be_positive(timeout_seconds: int) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        WordConversionSettings(timeout_seconds=timeout_seconds)
+
+
+def test_word_conversion_timeout_uses_toml_value(
+    clean_settings, write_toml, monkeypatch, tmp_path,
+) -> None:
+    config = write_toml(
+        "c.toml", "[word_conversion]\ntimeout_seconds = 450\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config))
+
+    assert get_settings().word_conversion.timeout_seconds == 450
+
+
+def test_word_conversion_timeout_environment_overrides_toml(
+    clean_settings, write_toml, monkeypatch, tmp_path,
+) -> None:
+    config = write_toml(
+        "c.toml", "[word_conversion]\ntimeout_seconds = 450\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config))
+    monkeypatch.setenv("DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS", "600")
+
+    assert get_settings().word_conversion.timeout_seconds == 600
+
+
+def test_word_conversion_timeout_toml_precedes_dotenv(
+    clean_settings, write_toml, monkeypatch, tmp_path,
+) -> None:
+    config = write_toml(
+        "c.toml", "[word_conversion]\ntimeout_seconds = 450\n"
+    )
+    (tmp_path / ".env").write_text(
+        "DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS=600\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOC3GPP_CONFIG", str(config))
+
+    assert get_settings().word_conversion.timeout_seconds == 450
+
+
 def test_env_overrides_toml_for_flat_fields(
     clean_settings, write_toml, monkeypatch,
 ) -> None:
@@ -481,7 +540,7 @@ def test_allowlisted_env_vars_override_toml(
 
     get_settings.cache_clear()
     s = get_settings()
-    assert len(ALLOWED_ENV_VARS) == 9
+    assert len(ALLOWED_ENV_VARS) == 10
     assert s.database_url == "sqlite+pysqlite:////tmp/env.db"
     assert s.db_echo is True
     assert s.log_level == "DEBUG"

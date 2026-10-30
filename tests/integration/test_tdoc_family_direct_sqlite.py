@@ -215,6 +215,83 @@ def test_from_url_family_with_row_persists(sqlite_env, tmp_path: Path) -> None:
     assert _extract_row_count() == 1
 
 
+@pytest.mark.parametrize("archive", [False, True])
+def test_from_url_legacy_family_preserves_source_identity(
+    sqlite_env, tmp_path, monkeypatch, archive,
+):
+    from tests.fixtures.legacy_doc import install_fake_libreoffice
+
+    extension = ".zip" if archive else ".doc"
+    ftp_url = f"tsg_ran/wg5/R5-123456{extension}"
+    url = f"https://www.3gpp.org/ftp/{ftp_url}"
+    _seed_tdoc("R5-123456", "WID revised", ftp_url)
+    install_fake_libreoffice(
+        monkeypatch, tmp_path,
+        {b"legacy WID": _make_docx(WID_MARKER, "Title: Legacy work item")},
+    )
+    scraper = _Scraper()
+    scraper.payloads[url] = (
+        _make_zip({
+            "R5-123456.doc": b"legacy WID",
+            "annex/new.docx": _make_docx("Modern annex body"),
+            "readme.txt": b"not parsed",
+        }) if archive else b"legacy WID"
+    )
+    result = _service(tmp_path, scraper).extract_from_url(url)
+
+    assert result.persisted is True
+    assert result.main_source_file == "R5-123456.doc"
+    stored = SQLAlchemyTDocContentRepository().list_documents(STORES["wid"], ftp_url)
+    assert stored[0].source_file == "R5-123456.doc"
+    assert "Legacy work item" in stored[0].markdown_text
+    assert len(stored) == (2 if archive else 1)
+    if archive:
+        inventory = SQLAlchemyTDocZipInventoryRepository().get_by_url(url)
+        assert inventory.zip_files == ("R5-123456.doc", "annex/new.docx", "readme.txt")
+
+
+def test_legacy_cr_main_uses_structural_cover_parser(sqlite_env, tmp_path, monkeypatch):
+    from tests.fixtures.legacy_doc import install_fake_libreoffice
+
+    _seed_tdoc("R5s260009", "CR", CR_FTP_URL)
+    with zipfile.ZipFile(io.BytesIO(_cr_zip())) as archive:
+        main_docx = archive.read("R5s260009.docx")
+    install_fake_libreoffice(monkeypatch, tmp_path, {b"legacy CR": main_docx})
+    scraper = _Scraper()
+    scraper.payloads[CR_URL] = _make_zip({
+        "R5s260009.doc": b"legacy CR",
+        "annex/new.docx": _make_docx("Modern annex"),
+    })
+    service = _service(tmp_path, scraper)
+
+    result = service.extract_from_url(CR_URL)
+
+    assert result.persisted is True
+    assert result.main_source_file == "R5s260009.doc"
+    assert SQLAlchemyTDocCrRepository().get_by_url(CR_FTP_URL) is not None
+    assert [doc.source_file for doc in result.documents] == ["R5s260009.doc", "annex/new.docx"]
+    direct = service.extract_from_bytes(b"legacy CR", "R5s260009.doc")
+    assert direct.persisted is False
+    assert direct.main_source_file == "R5s260009.doc"
+
+
+def test_cli_local_doc_uses_family_sniffing(sqlite_env, tmp_path, monkeypatch):
+    from tests.fixtures.legacy_doc import install_fake_libreoffice
+
+    create_schema()
+    _auto_sync_off(monkeypatch)
+    install_fake_libreoffice(
+        monkeypatch, tmp_path, {b"legacy WID": _make_docx(WID_MARKER, "Title: Legacy work item")},
+    )
+    source = tmp_path / "R5-123456.doc"
+    source.write_bytes(b"legacy WID")
+
+    result = CliRunner().invoke(app, ["tdoc", "parse", "--from-path", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert "TDoc R5-123456: wid, 1 documents" in result.output
+
+
 def test_from_url_family_second_run_is_cache_hit(sqlite_env, tmp_path: Path) -> None:
     _seed_tdoc("R5-123456", "WID revised", FAMILY_FTP_URL)
     scraper = _Scraper()

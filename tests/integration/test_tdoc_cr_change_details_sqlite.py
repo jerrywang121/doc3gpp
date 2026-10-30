@@ -99,7 +99,9 @@ def test_cascade_delete_with_parent_tdoc(sqlite_env) -> None:
     assert repo.get_by_url("x/y.zip") is None
 
 
-def test_end_to_end_extract_writes_sidecar(tmp_path, sqlite_env) -> None:
+def test_end_to_end_extract_writes_sidecar(
+    tmp_path, sqlite_env, disable_auto_sync
+) -> None:
     """Loading a real CR zip end-to-end writes the new sidecar row,
     and ``tdoc show --tdoc <id> --format json`` surfaces it.
 

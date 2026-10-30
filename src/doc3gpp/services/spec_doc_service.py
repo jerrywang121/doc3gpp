@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from doc3gpp.models.spec_doc import (
@@ -92,7 +93,7 @@ class SpecDocService:
         fetcher: ``url -> zip bytes``; defaults to :func:`fetch_spec_doc_zip`.
         cache_dir: Spec-document cache root holding ``zips`` + ``markdown``;
             defaults to ``settings.spec_doc.cache_dir``.
-        docx_pool: Converts version DOCX members; defaults to in-process
+        docx_pool: Converts version .docx/.doc members; defaults to in-process
             :class:`InlineDocxPool`.
         search/semantic: Aliases for ``search_service``/``semantic_service``.
     """
@@ -331,7 +332,7 @@ class SpecDocService:
             entries = list_spec_docx(raw)
             if not entries:
                 raise SpecDocNoDocxError(
-                    f"zip for {spec_id}@{ver.version} contains no .docx files"
+                    f"zip for {spec_id}@{ver.version} contains no .docx or .doc files"
                 )
             outcomes = self._docx_pool.convert_members("blocks", entries)
             files: list[SpecDocFileBlocks] = []
@@ -366,7 +367,7 @@ class SpecDocService:
                         source_file=f.source_file,
                     )
                 )
-            source = existing or SpecDocSource(
+            source = replace(existing, docx_count=len(entries)) if existing else SpecDocSource(
                 spec_id=spec_id,
                 version=ver.version,
                 release=ver.release,
@@ -381,7 +382,7 @@ class SpecDocService:
                 inventory=inventory,
                 download_required=download_required,
                 invalidate_parse_state=force and existing is not None,
-                record_source=existing is None,
+                record_source=existing is None or existing.docx_count != len(entries),
             )
         except Exception as exc:  # noqa: BLE001 - persist inventory before reporting parse failure
             return PreparedSpecDocInventoryFailure(inventory=inventory, error=exc)

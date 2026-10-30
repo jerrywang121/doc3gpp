@@ -267,10 +267,10 @@ def test_failing_main_fails_and_keeps_previous_content(family_db, downloads) -> 
     assert meta.document_count == 2
 
 
-def test_doc_only_main_fails_with_docx_reason(family_db, downloads) -> None:
+def test_unsupported_main_fails_with_word_format_reason(family_db, downloads) -> None:
     from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
 
-    downloads.serve(_make_zip([(f"{TDOC_ID}.doc", b"legacy word bytes")]))
+    downloads.serve(_make_zip([(f"{TDOC_ID}.pdf", b"unsupported document")]))
 
     prepared = _service(_FakeCache()).prepare_extract(_tdoc(), WID)
 

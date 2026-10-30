@@ -105,6 +105,48 @@ def test_parse_many_buckets_and_identity_skip(sqlite_env):
     assert toc.entries and toc.entries[0].section_no == "1"
 
 
+@pytest.mark.parametrize("force", [False, True])
+def test_reparse_includes_doc_members_and_refreshes_document_count(
+    sqlite_env, tmp_path, monkeypatch, force,
+):
+    from doc3gpp.services.docx_convert_pool import DocxConvertPool
+    from tests.fixtures.legacy_doc import install_fake_libreoffice
+
+    create_schema("all")
+    original = _make_zip_bytes()
+    with zipfile.ZipFile(io.BytesIO(original)) as archive:
+        docx = archive.read("38331-j30.docx")
+    install_fake_libreoffice(monkeypatch, tmp_path, {b"legacy spec": docx})
+    mixed = io.BytesIO()
+    with zipfile.ZipFile(mixed, "w") as archive:
+        archive.writestr("legacy/38331-j30.DOC", b"legacy spec")
+        archive.writestr("38331-j30.docx", docx)
+
+    with DocxConvertPool(2) as pool:
+        service = SpecDocService(
+            spec_repo=FakeSpecRepo(_versions()), fetcher=lambda _url: original,
+            cache_dir=tmp_path / "cache", docx_pool=pool,
+        )
+        assert service.parse("38.331").docx_count == 1
+        service._fetcher = lambda _url: mixed.getvalue()
+        if not force:
+            service._doc_repo.invalidate_parse_state("38.331", "18.5.0")
+            service._write_zip_cache("38.331", "18.5.0", mixed.getvalue())
+        source = service.parse("38.331", force=force)
+
+    assert source.docx_count == 2  # Historical field name now counts both Word formats.
+    assert source.parsed_at is not None
+    toc = service.get_toc("38.331", "18.5.0")
+    assert toc.docx_count == 2
+    assert {entry.source_file for entry in toc.entries} == {"legacy/38331-j30.DOC", "38331-j30.docx"}
+    assert all(entry.section_no == "1" for entry in toc.entries)
+    chunks = service.list_chunks("38.331", version="18.5.0")
+    assert len(chunks) == 2
+    assert all("hello handover world" in chunk.text for chunk in chunks)
+    inventory = SQLAlchemySpecDocZipInventoryRepository().get("38.331", "18.5.0")
+    assert inventory.zip_files == ("legacy/38331-j30.DOC", "38331-j30.docx")
+
+
 def test_parse_stores_chunk_content_and_context(sqlite_env):
     create_schema("all")
     svc = SpecDocService(

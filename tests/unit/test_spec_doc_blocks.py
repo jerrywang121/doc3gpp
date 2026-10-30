@@ -98,7 +98,7 @@ def test_table_caption_accepts_3gpp_identifier_and_separator(
     assert table.table_no == table_no
     assert table.table_title == table_title
 
-def test_rejects_dot_doc():
+def test_rejects_unsupported_format():
     import pytest
     with pytest.raises(ValueError):
-        convert_document_to_blocks(b"xx", "old.doc")
+        convert_document_to_blocks(b"xx", "unsupported.pdf")

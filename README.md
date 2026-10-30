@@ -108,6 +108,16 @@ pip install "doc3gpp[web]"        # Web server + MCP (FastAPI, uvicorn, Jinja2 +
 pip install "doc3gpp[all]"        # every runtime extra: CLI, extraction, search, semantic, web
 ```
 
+Legacy Word `.doc` parsing additionally requires **LibreOffice Writer** installed
+on the machine running doc3gpp, with `libreoffice` or `soffice` on `PATH`
+(for example, `sudo apt install libreoffice-writer` on Debian/Ubuntu).
+`.doc` files are converted to `.docx` in a private temporary directory with an
+isolated LibreOffice profile, then parsed by the same Markdown/block pipeline.
+The per-file timeout is configured by `[word_conversion] timeout_seconds` in
+the TOML file (default `300` seconds); the allowlisted environment variable
+`DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides the TOML value. `.docx`
+parsing does not require LibreOffice.
+
 ## Quick Start
 
 ### SDK
@@ -159,7 +169,7 @@ The CLI ships twelve sub-apps. The most common
 entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
 (TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR covers
 and ZIP document content), `tdoc show --format raw` (render converted
-Markdown for supported `.docx` members), `spec sync` (3GPP specification
+Markdown for supported `.docx` and `.doc` members), `spec sync` (3GPP specification
 records with versions),
 `spec doc parse` (specification document conversion and chunking), and
 `tdoc search` / `spec doc search` (unified FTS5, semantic, hybrid, and
@@ -222,12 +232,13 @@ doc3gpp tdoc parse --meeting-id 85434 --force    # re-extract everything (includ
 
 # parse (direct mode) — bypasses DB filters
 doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx                # local .docx → stdout
+doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.doc                 # legacy .doc (LibreOffice required)
 doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../R5s260009.zip # 3GPP URL → cache + DB
 doc3gpp tdoc parse --from-url https://example.com/some.zip --format json -o /tmp/out.json  # non-3GPP URL → in-memory only
 doc3gpp tdoc parse --from-path ./tdocs --output ./parsed --recursive --format json         # local batch
 doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --output ./parsed  # online batch
 # 3GPP URLs also accept bare www.3gpp.org/ftp/...; HTTPS is required,
-# and .docx/.zip basenames must contain a TDoc id (including RP-... plenary ids).
+# and .docx/.doc/.zip basenames must contain a TDoc id (including RP-... plenary ids).
 
 # show — --tdoc and --ftp-url are mutually exclusive
 # The JSON payload includes the outer-ZIP `zip_files` inventory.
@@ -241,11 +252,12 @@ doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format 
 doc3gpp tdoc schema --format json
 ```
 
-TDoc ZIP parsing converts `.docx` members only; `.doc`, PDF, spreadsheets, and
-nested ZIPs are not converted, so a TDoc whose main document is only a `.doc`
-file fails. For a CR TDoc, the document that contains the CR cover is the main
+TDoc and spec-document ZIP parsing converts `.docx` and `.doc` members, including
+mixed-format archives; PDF, spreadsheets, and nested ZIPs are not converted.
+Original member names and paths are preserved. For a CR TDoc, the document that
+contains the CR cover is the main
 document: it owns the cover and optional TTCN/body-change sidecars, and every
-other `.docx` in the archive is a CR annex stored as content. WID, LS, and
+other converted Word document in the archive is a CR annex stored as content. WID, LS, and
 discussion TDocs store their main document and every annex. A failed annex is
 skipped with a warning that names it, is listed in `skipped_sources`, and leaves
 the extraction incomplete until a later normal parse converts it. Use
@@ -253,6 +265,12 @@ the extraction incomplete until a later normal parse converts it. Use
 multiple bodies are emitted as named blocks. `tdoc_files` remains the metadata
 for auxiliary files discovered in meeting FTP folders—it is not the inventory
 of files inside a ZIP.
+
+If LibreOffice is missing or conversion fails, the error names the original
+source. A failed main document fails the TDoc; failed annexes retain the existing
+skip-and-retry behavior. Re-parse already-completed archives with `--force` to
+include legacy members that earlier versions ignored. Spec-document `docx_count`
+retains its historical field name but now counts both `.docx` and `.doc` files.
 
 `zip_files` is a separate, metadata-only inventory for CR, WID new/revised, LS
 in/out, and discussion TDocs. It lists every non-directory entry in the outer

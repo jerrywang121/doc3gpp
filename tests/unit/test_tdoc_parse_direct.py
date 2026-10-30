@@ -1766,7 +1766,7 @@ def test_cli_from_path_no_targets_exits_0(tmp_path: Path, monkeypatch) -> None:
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "No legitimate .docx/.zip files found" in (result.output or "")
+    assert "No legitimate .docx/.doc/.zip files found" in (result.output or "")
 
 
 def test_cli_from_path_single_file_writes_output(

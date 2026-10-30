@@ -10,7 +10,7 @@ from doc3gpp.parsers.tdoc_zip import _is_directory
 
 
 class TDocMainDocumentError(ValueError):
-    """A TDoc archive has no single unambiguous main .docx member."""
+    """A TDoc archive has no single unambiguous main Word member."""
 
 
 def _basename(member: str) -> str:
@@ -30,22 +30,24 @@ def select_main_member(
     docx_members: Sequence[str],
     other_members: Sequence[str] = (),
 ) -> str:
-    """Return the .docx member that holds the TDoc's main document.
+    """Return the .docx or .doc member that holds the TDoc's main document.
 
-    Candidates are .docx members whose basename starts with ``tdoc_id`` and is
+    Candidates are supported Word members whose basename starts with ``tdoc_id`` and is
     not continued by a digit, so ``R5-1234567`` is a different TDoc. A lone
     candidate is the main; among several, only the member named exactly
-    ``<tdoc_id>.docx`` qualifies. Basenames are compared casefolded.
+    ``<tdoc_id>.docx`` or ``<tdoc_id>.doc`` qualifies. Two exact matches are
+    ambiguous. Basenames are compared casefolded; the argument name is retained
+    for compatibility.
     """
     if not tdoc_id.strip():
         raise ValueError("tdoc_id must be a non-blank TDoc identifier")
     prefix = tdoc_id.casefold()
-    exact_name = f"{prefix}.docx"
+    exact_names = (f"{prefix}.docx", f"{prefix}.doc")
     candidates = [member for member in docx_members if is_tdoc_member(member, prefix)]
     if len(candidates) == 1:
         return candidates[0]
     if candidates:
-        exact = [member for member in candidates if _basename(member).casefold() == exact_name]
+        exact = [member for member in candidates if _basename(member).casefold() in exact_names]
         if len(exact) == 1:
             return exact[0]
         raise TDocMainDocumentError(
@@ -53,8 +55,10 @@ def select_main_member(
         )
     for member in other_members:
         if is_tdoc_member(member, prefix):
-            raise TDocMainDocumentError(f"main document for {tdoc_id} is not .docx: {member}")
-    raise TDocMainDocumentError(f"no main .docx for {tdoc_id}")
+            raise TDocMainDocumentError(
+                f"main document for {tdoc_id} is not .docx or .doc: {member}"
+            )
+    raise TDocMainDocumentError(f"no main .docx or .doc for {tdoc_id}")
 
 
 def member_names(zip_bytes: bytes) -> tuple[str, ...]:

@@ -63,6 +63,15 @@ def sqlite_env(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
+def disable_auto_sync(monkeypatch):
+    """Keep CLI output tests independent of upstream sync responses."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
 def search_corpus(sqlite_env):
     """Populate a sqlite engine with the FTS5 search-corpus rows.
 

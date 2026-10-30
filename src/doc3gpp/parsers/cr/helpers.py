@@ -109,7 +109,7 @@ def extract_docx_from_zip(zip_bytes: bytes) -> tuple[str, bytes]:
     This legacy single-file API remains available to existing callers. It
     reads only the first normalized DOCX path selected by the shared metadata
     enumerator; when an archive has no DOCX member it retains the historical
-    ``.doc`` byte fallback, although only DOCX files are converted by the new
+    ``.doc`` byte fallback. Multi-document Word conversion uses the new
     multi-document extraction flow.
 
     Args:

@@ -24,6 +24,17 @@ pip install "doc3gpp[web]"
 This installs FastAPI, uvicorn, the vendored HTMX/Jinja2 templates, and the
 MCP package.
 
+TDoc and spec-document parse jobs support both `.docx` and legacy `.doc`,
+including mixed ZIPs. Parsing also needs `doc3gpp[extract]`; `.doc` additionally
+needs LibreOffice Writer installed on the **server host**, with `libreoffice` or
+`soffice` on the server process's `PATH`. `.docx` does not need LibreOffice.
+The shared converter uses an isolated temporary directory/profile and a
+per-file `.doc` timeout configured by `[word_conversion] timeout_seconds` in
+TOML (default `300`); the allowlisted process environment variable
+`DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. Original member paths
+remain unchanged in content, TOC, and search results. Re-parse already-completed
+archives with `force=true` to include legacy members that earlier versions ignored.
+
 ## Quick start
 
 ```bash

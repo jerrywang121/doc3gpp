@@ -1056,11 +1056,11 @@ contract for both the `markdown` and `table` formats.
 
 Purpose:
 
-- Download a TDoc ZIP, convert every supported `.docx` member, and store the
+- Download a TDoc ZIP, convert every supported `.docx` or `.doc` member, and store the
   content for the TDoc's type. For a CR TDoc, exactly one member must be the
   structural CR cover. That main document alone produces the cover row and the
   optional TTCN/body-change sidecars, and its full Markdown is kept only in the
-  derived archive. Every other converted `.docx` is a CR annex stored in
+  derived archive. Every other converted Word document is a CR annex stored in
   `tdoc_cr_annexes`. For a WID, LS, or discussion TDoc, the main document and every
   annex are stored in that type's table (`tdoc_wid_contents`, `tdoc_ls_contents`,
   or `tdoc_discussion_contents`). Each successful run atomically replaces the URL's
@@ -1271,19 +1271,21 @@ could be the main.
 
 #### Main document selection
 
-Candidates are `.docx` members whose basename starts with the TDoc number,
+Candidates are `.docx` or `.doc` members whose basename starts with the TDoc number,
 compared case-insensitively, where the next character is not a digit (so
 `R5-1234567.docx` is not a candidate for `R5-123456`). A single candidate is the
-main. With several candidates, the member named exactly `<tdoc_id>.docx` is the
-main; otherwise the TDoc fails with `ambiguous main document for <tdoc_id>`. With
-none, the TDoc fails with `no main .docx for <tdoc_id>`.
+main. With several candidates, a unique member named exactly `<tdoc_id>.docx` or
+`<tdoc_id>.doc` is the main; two exact matches remain ambiguous. Otherwise the TDoc
+fails with `ambiguous main document for <tdoc_id>`. With none, the TDoc fails with
+`no main .docx or .doc for <tdoc_id>`.
 
-Only `.docx` is converted. When the only main-named member is a `.doc`, the TDoc
-fails with `main document for <tdoc_id> is not .docx: <member>`.
+Both Word formats are converted; PDF, spreadsheets, and nested ZIPs are not.
+Legacy `.doc` conversion needs LibreOffice Writer (see below). Conversion keeps
+the original member path, including its `.doc` extension.
 
 #### Size limit
 
-A per-file byte cap protects against oversized `.docx` / `.zip`
+A per-file byte cap protects against oversized `.docx` / `.doc` / `.zip`
 downloads that take forever to fetch and balloon the on-disk cache.
 The cap is set via `tdoc_parse.max_tdoc_size_kb` in the TOML config
 (default `1000` KB; `0` = unlimited) and can be overridden per
@@ -1388,6 +1390,20 @@ Install the optional dependency before first use:
 pip install "doc3gpp[extract]"
 ```
 
+Legacy `.doc` sources additionally need **LibreOffice Writer** on the host running
+the CLI or server. Put `libreoffice` or `soffice` on `PATH` (for example,
+`sudo apt install libreoffice-writer` on Debian/Ubuntu). Each `.doc` is normalized
+to `.docx` in a private temporary directory with an isolated user profile, then
+parsed by the existing converters. The timeout is configured by
+`[word_conversion] timeout_seconds` in TOML (default `300` seconds); the
+allowlisted process environment variable
+`DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. `.docx` never invokes
+LibreOffice. Missing dependency and failed-conversion errors name the original
+source; a failed main fails the TDoc, while failed annexes use the existing
+`skipped_sources` retry behavior. Previously completed archives need `--force` to
+include `.doc` members older versions ignored. Archive member/byte caps include
+both formats.
+
 Examples:
 
 ```bash
@@ -1430,7 +1446,7 @@ doc3gpp tdoc parse --meeting-id 85434 --yes
 
 Purpose:
 
-- Parse a local `.docx` (or a zip-wrapped `.docx`) from a single file
+- Parse a local `.docx` or `.doc` (or a ZIP containing either) from a single file
   or an entire folder tree — without going through the `tdocs` row /
   meeting / batch plumbing. The command takes the local-mode branch
   when `--from-path` is supplied; `--from-url` is the online
@@ -1440,12 +1456,12 @@ Purpose:
 
 Options:
 
-- `--from-path PATH`: parse a local `.docx`/`.zip` file, or parse
-  every `.docx`/`.zip` under a directory tree. The path type is auto-
+- `--from-path PATH`: parse a local `.docx`/`.doc`/`.zip` file, or parse
+  every such file under a directory tree. The path type is auto-
   detected: a file is parsed as a single source, a directory is
-  processed as a batch. ZIPs convert every supported `.docx` member through
+  processed as a batch. ZIPs convert every supported `.docx` or `.doc` member through
   the DOCX conversion pool, sized by `[pipeline] docx_workers` (config only, no
-  flag; `0` and `1` convert in-process). A standalone `.docx` converts
+  flag; `0` and `1` convert in-process). A standalone Word file converts
   in-process. The TDoc type is determined first (see
   [Direct-mode type detection](#direct-mode-type-detection)). For CR, exactly one
   converted member must contain the structural CR cover; it owns the
@@ -1456,7 +1472,7 @@ Options:
   `https://www.3gpp.org/ftp/...` are accepted; the bare form
   `www.3gpp.org/ftp/...` is also accepted and normalized to HTTPS,
   while an explicit `http://www.3gpp.org/ftp/...` URL is rejected.
-  A canonical `.docx` or `.zip` file must have a TDoc-shaped basename
+  A canonical `.docx`, `.doc` or `.zip` file must have a TDoc-shaped basename
   (including plenary ids such as `RP-2601234`); a spec archive such as
   `36508-j31.zip` is rejected. Every other canonical 3GPP path is
   treated as a folder, and its trailing slash is optional. Canonical
@@ -1518,7 +1534,7 @@ archive limit enters the existing skip bucket; a corrupt main document or
 zero/multiple CR-cover candidates enter the failure bucket. A corrupt annex is a
 warning, not a failure (see [Tolerant annexes and skipped sources](#tolerant-annexes-and-skipped-sources)).
 
-ZIP parsing converts `.docx` members only; `.doc`, PDF, spreadsheets, and
+ZIP parsing converts `.docx` and `.doc` members; PDF, spreadsheets, and
 nested ZIPs are not converted. Unsupported members are ignored with
 source-named warnings. For CR, exactly one converted member must contain the
 structural CR cover, and it alone owns CR/TTCN/body-change metadata; every other
@@ -1569,7 +1585,7 @@ Single-file behaviour:
 
 Directory (batch) behaviour (local or 3GPP URL folder):
 
-- Only filenames ending in `.docx` or `.zip` (case-insensitive) whose
+- Only filenames ending in `.docx`, `.doc` or `.zip` (case-insensitive) whose
   name contains a 3GPP TDoc id pattern are considered.
 - One output file is written per input file; the output filename keeps
   the input stem and changes the extension according to `--format`.
@@ -1602,7 +1618,7 @@ FK-aware behaviour matrix (3GPP URL):
 |---|---|---|---|---|---|---|
 | `tdoc_id ∈ tdocs` (extracted from filename) | yes | yes (version 2) | yes, every stored document (CR: annexes; WID, LS, discussion: main and annexes) | yes, main member (CR only) | yes — only when the main parser emitted a TTCN sidecar | always, including `raw` | no |
 | `tdoc_id ∉ tdocs` (extracted but no FK target) | no | no | no | no | no | always | yes — actionable `meeting sync --tsg R5` recipe |
-| Canonical `.docx`/`.zip` basename has no `tdoc_id` pattern | no | no | no | no | no | no — rejected at the URL boundary | yes — validation error mentioning TDoc |
+| Canonical `.docx`/`.doc`/`.zip` basename has no `tdoc_id` pattern | no | no | no | no | no | no — rejected at the URL boundary | yes — validation error mentioning TDoc |
 
 Local files and non-3GPP URLs always emit output and never touch
 the cache or the database.
@@ -1612,7 +1628,7 @@ Auto-sync from URL candidates: when `Settings.sync.auto_sync` is enabled,
 dispatching to the parse helpers, then runs the direct-mode sync steps for them
 (`trigger_auto_sync` through `_auto_sync_direct_tdoc_ids` in `src/doc3gpp/cli.py`):
 
-- **3GPP FTP file URL** (`.docx` / `.zip` suffix) → one candidate parsed
+- **3GPP FTP file URL** (`.docx` / `.doc` / `.zip` suffix) → one candidate parsed
   out of the TDoc-shaped basename via
   `extract_tdoc_id_from_filename()`.
 - **3GPP FTP folder URL** (trailing `/` optional) → BFS via
@@ -1649,8 +1665,8 @@ Sync failures and BFS failures stay warnings and never abort the parse.
    from the cache) and its main document is sniffed.
 4. With no `tdocs` row, a 3GPP URL whose id is extracted and a non-3GPP URL
    are sniffed and parsed in memory. A `--from-path` source is always in memory.
-5. Sniffing converts only the main member: for a ZIP, the `.docx` whose name
-   starts with the TDoc id; for a standalone `.docx`, the file itself. WID
+5. Sniffing converts only the main member: for a ZIP, the Word document whose name
+   starts with the TDoc id; for a standalone `.docx` or `.doc`, the file itself. WID
    needs `3GPP™ Work Item Description` in the first 20 non-empty lines. LS needs a
    `Title: LS on …` or `Title: Reply LS on …` line in the first 10. Discussion needs
    `Title: Discussion on …` in the first 10. CR needs the structural CR cover. A
@@ -1687,11 +1703,11 @@ doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx
 doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx \
     --format json -o /tmp/r5s260009.json
 
-# Local zip containing a .docx.
+# Local ZIP containing .docx and/or .doc members.
 doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.zip \
     --format markdown
 
-# Parse every .docx/.zip in ./tdocs and write .tsv files under ./parsed.
+# Parse every .docx/.doc/.zip in ./tdocs and write .tsv files under ./parsed.
 doc3gpp tdoc parse --from-path ./tdocs --output ./parsed
 
 # Recurse into subfolders and produce JSON.
@@ -2767,11 +2783,11 @@ Behavior:
   inventory is independent of the ZIP cache.
 - The `(spec_id, version)` source row is skipped when it already carries
   `parsed_at` (unless `--force`); oversized zips land in the `skipped` bucket;
-  unknown spec/version, empty (no-`.docx`) zips, and every other error land in
+  unknown spec/version, empty (no `.docx` or `.doc`) zips, and every other error land in
   the `failures` bucket. When both `--release` and `--version` are supplied,
   their release numbers must agree (for example, `Rel-18` requires a version
   beginning with `18.`).
-- `parse` = fetch-if-missing + `list_spec_docx` (`.doc` entries warn-skip) +
+- `parse` = fetch-if-missing + `list_spec_docx` (`.docx` and `.doc` members) +
   `convert_document_to_blocks` + `order_spec_files` (front-matter TOC file first,
   then section-tuple sort, TOC tiebreak, unnumbered lexicographic tail) +
   `extract_spec_toc` + per-file `chunk_blocks` → `upsert_toc` + `replace_chunks`
@@ -2788,6 +2804,13 @@ Behavior:
   each chunk, and table rows are not included in overlap prefixes.
   Alphanumeric section identifiers such as `7.2A.3` and `7.2A.3A` are kept
   intact in both chunk metadata and the TOC.
+
+Legacy `.doc` members use the same optional LibreOffice conversion described
+under `tdoc parse`, then the existing block/TOC/chunk pipeline. Original source
+paths remain unchanged, and the historical source/TOC field `docx_count` counts
+both Word formats. Any supported-member conversion failure fails that spec parse;
+its outer-ZIP inventory is still recorded. Re-parse already-completed versions
+with `--force` to include previously ignored `.doc` members.
 
 Examples:
 

@@ -84,6 +84,26 @@
               {% if v.pdf_url %}<a href="{{ v.pdf_url }}" target="_blank" rel="noopener">open</a>{% else %}-{% endif %}
             </td>
           </tr>
+          <tr class="spec-zip-inventory-row">
+            <td colspan="{{ 8 if no_wis_crs else 9 }}">
+              <h3>ZIP files</h3>
+              {% if v.zip_files is none %}
+                <p class="meta">ZIP inventory is unavailable for this version.</p>
+                <p>
+                  To refresh it, run
+                  <code>doc3gpp spec doc parse --spec {{ spec.spec_id }} --version {{ v.version }} --force</code>;
+                  to create the table in an existing database, run
+                  <code>doc3gpp db init --scope specdata</code>.
+                </p>
+              {% elif v.zip_files %}
+                <ul class="spec-zip-files">
+                  {% for name in v.zip_files %}<li><code>{{ name }}</code></li>{% endfor %}
+                </ul>
+              {% else %}
+                <p class="empty">No files in this ZIP archive.</p>
+              {% endif %}
+            </td>
+          </tr>
         {% endfor %}
       </tbody>
     </table>

@@ -26,7 +26,7 @@ _SPEC_DEFAULT_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "ini
 # ``no_wis_crs``), matching ``doc3gpp spec show``. Distinct from the
 # ``spec list`` default fields which omit ``wis``.
 _SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
-_VERSION_FIELDS = ["version", "parsed", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
+_VERSION_FIELDS = ["version", "parsed", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs", "zip_files"]
 
 
 @router.get("", include_in_schema=False)

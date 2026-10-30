@@ -287,9 +287,11 @@ def _coerce_cell(value: Any) -> str:
 
 
 def _spec_cell(field: str, value: Any) -> object:
-    """Preserve transient parsed values in spec JSON rows."""
+    """Preserve transient parsed and ZIP inventory values in spec JSON rows."""
     if field == "parsed":
         return value
+    if field == "zip_files":
+        return None if value is None else list(value)
     return _coerce_cell(value)
 
 

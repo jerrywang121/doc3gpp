@@ -26,6 +26,7 @@ from doc3gpp.models.spec_doc import (
     SpecDocSource,
     SpecDocToc,
 )
+from doc3gpp.models.spec_doc_zip_inventory import SpecDocZipInventory
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tdoc_content_families import TDocContentStore
 from doc3gpp.models.tdoc_cr import (
@@ -468,6 +469,18 @@ class SpecParsedStatusRepository(Protocol):
     ) -> dict[str, list[str]]:
         """Return parsed versions grouped by spec id, newest first."""
         ...
+
+
+class SpecDocZipInventoryRepository(Protocol):
+    """Inventory snapshots, independent of the spec-document source ledger."""
+
+    def get(self, spec_id: str, version: str) -> SpecDocZipInventory | None: ...
+
+    def get_for_versions(
+        self, spec_id: str, versions: list[str]
+    ) -> dict[str, SpecDocZipInventory]: ...
+
+    def upsert(self, inventory: SpecDocZipInventory) -> None: ...
 
 
 class SpecDocRepository(Protocol):

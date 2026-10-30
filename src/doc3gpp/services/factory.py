@@ -59,6 +59,9 @@ from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepositor
 from doc3gpp.storage.repositories.spec_doc_vector_sql import (
     SQLAlchemySpecDocVectorRepository,
 )
+from doc3gpp.storage.repositories.spec_doc_zip_inventory_sql import (
+    SQLAlchemySpecDocZipInventoryRepository,
+)
 from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
 from doc3gpp.storage.repositories.tdoc_content_sql import (
     SQLAlchemyTDocContentRepository,
@@ -371,6 +374,7 @@ def build_spec_service() -> SpecService:
         SQLAlchemySpecRepository(),
         sync_interval=settings.sync.spec_sync_interval,
         parsed_status_repository=SQLAlchemySpecDocRepository(),
+        inventory_repository=SQLAlchemySpecDocZipInventoryRepository(),
     )
 
 
@@ -526,16 +530,15 @@ def build_spec_doc_service(
     """Construct a :class:`SpecDocService` for the ``spec doc`` commands.
 
     Wires the main-DB :class:`SQLAlchemySpecRepository` (version
-    resolution), the specdata :class:`SQLAlchemySpecDocRepository`,
-    the FTS5 search hook (:func:`build_spec_doc_search_service`),
-    and the vector hook
-    (:func:`build_spec_doc_semantic_service`). Both hooks are
-    best-effort — ``None`` when the subsystem is disabled or its
-    extra is not installed; the service skips the hook in that
-    case. A single shared embedder (built once here when the caller
-    does not inject one) feeds the semantic hook so one httpx
-    client is shared per process. ``docx_pool`` converts version
-    DOCX members; ``None`` keeps conversion in-process.
+    resolution), the specdata :class:`SQLAlchemySpecDocRepository` and
+    :class:`SQLAlchemySpecDocZipInventoryRepository`, the FTS5 search hook
+    (:func:`build_spec_doc_search_service`), and the vector hook
+    (:func:`build_spec_doc_semantic_service`). Both hooks are best-effort —
+    ``None`` when the subsystem is disabled or its extra is not installed;
+    the service skips the hook in that case. A single shared embedder
+    (built once here when the caller does not inject one) feeds the semantic
+    hook so one httpx client is shared per process. ``docx_pool`` converts
+    version DOCX members; ``None`` keeps conversion in-process.
     """
     from doc3gpp.services.spec_doc_service import SpecDocService
 
@@ -545,6 +548,7 @@ def build_spec_doc_service(
         embedder = build_embedder(settings)
     return SpecDocService(
         spec_repo=SQLAlchemySpecRepository(),
+        inventory_repo=SQLAlchemySpecDocZipInventoryRepository(),
         settings=settings,
         search_service=(
             search_service

@@ -120,7 +120,7 @@ runtime data flow, and ORM schema.
 | `scraping/` | HTTP / FTP transport only — **no HTML parsing** |
 | `parsers/` | HTML / Excel → domain only — **no network** |
 | `storage/db/` | ORM models, engine factory, `create_schema` bootstrap |
-| `storage/db/specdata_base.py` (`SpecDataBase`) + `storage/db/session.py` (`get_specdata_engine`, `resolve_specdata_database_url`) | third engine/base for the spec-document corpus: `spec_doc_sources` / `spec_doc_tocs` / `spec_doc_chunks` + `spec_doc_search` / `spec_doc_search_meta` + `vec_spec_doc_embeddings` / `vec_spec_doc_meta`; sibling `<main-stem>_specdata.db`, `create_schema("specdata")`, `db reset --scope specdata`. Parsed ZIP/Markdown sidecars use the dedicated `~/.cache/doc3gpp/specs` root by default; the existing TDoc cache remains `~/.cache/doc3gpp/tdocs`. |
+| `storage/db/specdata_base.py` (`SpecDataBase`) + `storage/db/session.py` (`get_specdata_engine`, `resolve_specdata_database_url`) | third engine/base for the spec-document corpus: `spec_doc_zip_inventory` / `spec_doc_sources` / `spec_doc_tocs` / `spec_doc_chunks` + `spec_doc_search` / `spec_doc_search_meta` + `vec_spec_doc_embeddings` / `vec_spec_doc_meta`; sibling `<main-stem>_specdata.db`, `create_schema("specdata")`, `db reset --scope specdata`. Parsed ZIP/Markdown sidecars use the dedicated `~/.cache/doc3gpp/specs` root by default; the existing TDoc cache remains `~/.cache/doc3gpp/tdocs`. |
 | `storage/compression.py` | shared gzip JSON helpers for binary detail columns |
 | `storage/repositories/` | SQL impls of the `repository/` Protocols |
 | `settings/` | env + TOML config (pydantic-settings; precedence: CLI > env > file > defaults) |
@@ -235,11 +235,35 @@ Workflows in one line (full prose in `docs/architecture.md`):
   `spec_doc_sources.parsed_at` in the separate specdata database, not a main
   table or schema field. Structured list JSON uses a comma-separated,
   numeric-newest-first version string or native `null`; table/Markdown uses
-  `-`. `spec show` version JSON uses native boolean `parsed`, and
-  `--parsed true|false` filters before pagination.
+  `-`. `spec show` version JSON uses native boolean `parsed` and appends
+  `zip_files` as the final version field: an ordered JSON array preserving
+  duplicate ZIP-member names, `[]` for known empty, and `null` for unknown.
+  Table, Markdown, and compact Markdown show each selected version's inventory;
+  unknown values include `spec doc parse --force` and
+  `doc3gpp db init --scope specdata` hints. `--parsed true|false` belongs to
+  `spec list` and is applied before pagination; `spec show` has no `--parsed`
+  option.
+  `SpecService.list_versions` batch-loads this transient enrichment from the
+  separate `spec_doc_zip_inventory` table; it is not a `spec_versions` column.
+  Inventory is recorded only during an actual spec-document ZIP parse, not by
+  spec sync, schema initialization, detail reads, or an immutable parsed-version
+  skip. `spec show` reads SQL only; the inventory survives ZIP-cache eviction.
+  Existing databases need `doc3gpp db init --scope specdata`, which creates the
+  table but does not backfill old versions. Re-parse an unknown version with
+  `doc3gpp spec doc parse --spec <id> --version <v> --force` to re-download and
+  refresh it. The final `zip_files` field is also present in
+  `GET /specs/{spec_id}?format=json` and MCP `get_spec`; HTTP and MCP version
+  JSON byte-match, preserve `null` versus arrays, and retain ordered duplicate
+  names. The spec detail HTML and spec-doc version page display per-version
+  inventory as autoescaped text, independently of parsed source/TOC/chunks;
+  unknown values show both the force re-parse and `doc3gpp db init --scope
+  specdata` hints. The spec-doc page is HTML-only and keeps its inventory
+  outside the replaceable HTMX results fragment. The specdata inventory table
+  is read through the existing `SpecService.list_versions` enrichment, never
+  from the ZIP cache or network.
 - `doc3gpp <resource> schema` (`tsg`, `meeting`, `tdoc`, `wi`, `spec`,
   `testcase`, `spec doc`) describes every column of the resource's table(s) from the
-  static `models/schema_info.py` registry (22 tables, 193 fields; no
+  static `models/schema_info.py` registry (23 tables, 197 fields; no
   filters, no DB reads). Flat rows `table, field, type, nullable,
   description, values`; `nullable` is `yes`/`no` in table/markdown and a
   bool in JSON; `values` comma-joined, `"-"` when free-form. Same payload
@@ -452,8 +476,8 @@ Workflows in one line (full prose in `docs/architecture.md`):
   - `doc3gpp spec doc index [--rebuild|--rebuild-embeddings|--rebuild-all]`
     → `SpecDocIndexService.rebuild(...)` with the same independent component
     status/rebuild contract as `tdoc index`.
- - `doc3gpp spec doc schema` describes the three `spec_doc` tables from the static registry (25 rows; no filters, no DB reads). Chunk rows document `sections` and `tables`; TOC rows continue to document `section_no` and title fields.
-- Spec-document tables live in a separate sqlite file (`specdata_database_url`, default sibling `<main-stem>_specdata.db`); `db init/reset/check` take `--scope main|testcase|specdata|all` and `create_schema("specdata")` creates the three relational tables plus the FTS5 (`spec_doc_search`, `spec_doc_search_meta`) and vector (`vec_spec_doc_embeddings`, `vec_spec_doc_meta`) sidecars.
+ - `doc3gpp spec doc schema` describes the four `spec_doc` tables from the static registry (29 rows; no filters, no DB reads). Chunk rows document `sections` and `tables`; TOC rows continue to document `section_no` and title fields.
+- Spec-document tables live in a separate sqlite file (`specdata_database_url`, default sibling `<main-stem>_specdata.db`); `db init/reset/check` take `--scope main|testcase|specdata|all` and `create_schema("specdata")` creates the four relational tables plus the FTS5 (`spec_doc_search`, `spec_doc_search_meta`) and vector (`vec_spec_doc_embeddings`, `vec_spec_doc_meta`) sidecars.
   - Web spec-document portal: `/specs/{spec_id}` links each version to `/specs/{spec_id}/docs?version=...`; the collapsed version page shows the downloaded/parsed state, enqueues `POST /jobs/parse/spec-docs` for parse or force re-parse, and renders the collapsed TOC plus filtered, paginated chunks with a range, up to ten rolling page numbers, ellipses, and first/previous/next/last controls. Search uses a full-width Query field and plural `sections`/`tables` filters; shared `TDoc Search` / `Spec Docs Search` tabs link Spec Docs hits back to version pages and chunk anchors. There is no standalone spec-doc fetch or public repair route; the pre-deployment local corpus is repaired once from cached ZIPs.
 - `doc3gpp config path` / `doc3gpp config show` dump the resolved
   TOML + env settings for diffing against

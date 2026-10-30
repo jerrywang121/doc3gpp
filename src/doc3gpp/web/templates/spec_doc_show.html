@@ -26,6 +26,25 @@
     </dd>
   </dl>
 
+  <section class="card spec-doc-zip-inventory" id="spec-doc-zip-inventory">
+    <h2>ZIP files</h2>
+    {% if version_row.zip_files is none %}
+      <p class="meta">ZIP inventory is unavailable for this version.</p>
+      <p>
+        To refresh it, run
+        <code>doc3gpp spec doc parse --spec {{ spec.spec_id }} --version {{ version_row.version }} --force</code>;
+        to create the table in an existing database, run
+        <code>doc3gpp db init --scope specdata</code>.
+      </p>
+    {% elif version_row.zip_files %}
+      <ul class="spec-doc-zip-files">
+        {% for name in version_row.zip_files %}<li><code>{{ name }}</code></li>{% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No files in this ZIP archive.</p>
+    {% endif %}
+  </section>
+
   <form
     id="spec-doc-parse-form"
     class="spec-doc-parse-form"

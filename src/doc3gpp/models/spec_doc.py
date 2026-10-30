@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from doc3gpp.models.spec_doc_zip_inventory import SpecDocZipInventory
+
 
 class SpecDocError(Exception):
     pass
@@ -51,9 +53,18 @@ class PreparedSpecDocParse:
     toc: SpecDocToc
     drafts: tuple[ChunkDraft, ...]
     ordered_files: tuple[object, ...]
+    inventory: SpecDocZipInventory
     download_required: bool = False
     invalidate_parse_state: bool = False
     record_source: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class PreparedSpecDocInventoryFailure:
+    """A parse failed after inventory collection; persist it before re-raising."""
+
+    inventory: SpecDocZipInventory
+    error: Exception
 
 
 @dataclass(slots=True, frozen=True)

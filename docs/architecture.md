@@ -332,8 +332,8 @@ Per-layer modules:
       (owns the three testcase ORMs: `testcases`, `testcase_status`,
       `testcase_sources`)
     - `storage/db/specdata_base.py` — declarative `SpecDataBase`
-      (owns the three spec-doc ORMs in `storage/db/models.py`:
-      `spec_doc_sources`, `spec_doc_tocs`, `spec_doc_chunks`)
+      (owns the four spec-doc ORMs in `storage/db/models.py`:
+      `spec_doc_zip_inventory`, `spec_doc_sources`, `spec_doc_tocs`, `spec_doc_chunks`)
      - `storage/db/migrate.py` — `create_schema(scope)` (calls
        the idempotent TDoc extraction-completeness and FTS5-layout migrations,
        then `Base.metadata.create_all` for `"main"`,
@@ -624,8 +624,17 @@ and syncs each through the `--tsg` path below.
    REST, and MCP adapters render header + versions in the requested
    format (table, JSON, or markdown) using the same version field
    order. The JSON payload splits the data into
-   `{"spec": {...}, "versions": [{...}]}` so downstream consumers
-   don't need to scan a flat list.
+    `{"spec": {...}, "versions": [{...}]}` so downstream consumers
+    don't need to scan a flat list.
+    `SpecVersion.zip_files` is batch-loaded from `spec_doc_zip_inventory` only
+    for the filtered and paginated version rows. The CLI appends `zip_files`
+    after existing version fields in JSON, serializing an unknown inventory as
+    `null` and a known inventory as an ordered array (including duplicates;
+    `[]` means known empty). Table, Markdown, and compact output show a labeled
+    inventory block for each version and offer a force-reparse/schema-upgrade
+    hint for unknown values. This transient value does not add a `spec_versions`
+    column; `spec show` reads specdata SQL only and remains independent of the
+    ZIP cache and network.
 
 ### Spec-document corpus (parse → TOC → search)
 
@@ -644,9 +653,14 @@ and syncs each through the `--tsg` path below.
    `SpecDocUnknownVersionError`. `parse_many` calls `parse`, which fetches
    the ZIP when absent via internal `fetch_spec_doc_zip` or uses the cache at
     `{spec_doc.cache_dir}/zips/<spec_id>/<version>.zip`, records the download,
-   and checks the zip size against `[spec_doc] max_zip_size_kb` (default `0`
-   = unlimited). `--force` makes the internal fetch re-download before
-   parsing, including when the source row already has `parsed_at`.
+    and checks the zip size against `[spec_doc] max_zip_size_kb` (default `0`
+    = unlimited). An actual parse enumerates the outer ZIP's non-directory
+    member names and persists the inventory in `spec_doc_zip_inventory`;
+    schema initialization, spec sync, detail reads, and immutable parsed-version
+    skips do not collect or backfill it. `--force` makes the internal fetch
+    re-download before parsing, including when the source row already has
+    `parsed_at`, and refreshes the inventory. The database row is independent
+    of the ZIP cache, so cache eviction does not erase it.
    Each spec short-circuits
    into the `skipped` bucket when its `(spec_id, version)` source row
    already carries `parsed_at` (immutable ledger; `--force` re-parses);
@@ -1239,7 +1253,7 @@ the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group 
       - `index` — `--rebuild`, `--rebuild-embeddings`, `--rebuild-all`,
         `--batch`, `--resume`, `--stale-only`, and `--quiet` maintain the
         independent FTS5/vector components.
-     - `schema` — `--format/--output/--compact`; 25 rows, no filters, no DB.
+     - `schema` — `--format/--output/--compact`; 29 rows, no filters, no DB.
 - `config`:
     - `init` — bootstrap a default TOML at `--target {auto,project,user}`
       (default `auto`: `./doc3gpp.toml` from a project root, otherwise

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
+    PreparedSpecDocInventoryFailure,
     PreparedSpecDocParse,
     SpecDocBatchResult,
     SpecDocChunk,
@@ -23,6 +24,7 @@ from doc3gpp.models.spec_doc import (
     SpecDocUnknownSpecError,
     SpecDocUnknownVersionError,
 )
+from doc3gpp.models.spec_doc_zip_inventory import SpecDocZipInventory
 from doc3gpp.parsers.docx_converter import (
     DocxMemberPool,
     HeadingBlock,
@@ -37,6 +39,7 @@ from doc3gpp.parsers.spec_doc import (
     order_spec_files,
 )
 from doc3gpp.parsers.spec_doc_chunker import chunk_blocks
+from doc3gpp.parsers.tdoc_zip import enumerate_zip_files
 from doc3gpp.scraping.spec_doc_source import fetch_spec_doc_zip, resolve_spec_doc_version
 from doc3gpp.settings.loader import get_settings
 
@@ -99,6 +102,7 @@ class SpecDocService:
         *,
         spec_repo,
         doc_repo=None,
+        inventory_repo=None,
         search_service=None,
         semantic_service=None,
         embedder=None,
@@ -111,14 +115,24 @@ class SpecDocService:
     ) -> None:
         from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepository
 
+        if inventory_repo is None:
+            from doc3gpp.storage.repositories.spec_doc_zip_inventory_sql import (
+                SQLAlchemySpecDocZipInventoryRepository,
+            )
+
+            inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+
         self._spec_repo = spec_repo
         self._settings = settings if settings is not None else get_settings()
         self._doc_repo = doc_repo if doc_repo is not None else SQLAlchemySpecDocRepository()
+        self._inventory_repo = inventory_repo
         self._search = search_service if search_service is not None else search
         self._semantic = semantic_service if semantic_service is not None else semantic
         self._embedder = embedder
         self._docx_pool = docx_pool if docx_pool is not None else InlineDocxPool()
-        self._fetcher = fetcher if fetcher is not None else (lambda url: fetch_spec_doc_zip(url))
+        self._fetcher = (
+            fetcher if fetcher is not None else (lambda url: fetch_spec_doc_zip(url))
+        )
         root = cache_dir if cache_dir is not None else self._settings.spec_doc.cache_dir
         self._cache_dir = Path(root)
 
@@ -286,7 +300,7 @@ class SpecDocService:
         release: str | None = None,
         version: str | None = None,
         force: bool = False,
-    ) -> PreparedSpecDocParse | SpecDocSource:
+    ) -> PreparedSpecDocParse | PreparedSpecDocInventoryFailure | SpecDocSource:
         """Fetch and parse one document without mutating repositories."""
         rows = self._versions(spec_id)
         ver = resolve_spec_doc_version(rows, release, version)
@@ -307,62 +321,92 @@ class SpecDocService:
         else:
             raw = self._read_zip_cache(spec_id, ver.version)
 
-        entries = list_spec_docx(raw)
-        if not entries:
-            raise SpecDocNoDocxError(f"zip for {spec_id}@{ver.version} contains no .docx files")
-        outcomes = self._docx_pool.convert_members("blocks", entries)
-        files: list[SpecDocFileBlocks] = []
-        for i, ((name, _), outcome) in enumerate(zip(entries, outcomes, strict=True)):
-            if isinstance(outcome, Exception):
-                raise outcome
-            files.append(SpecDocFileBlocks(file_order=i, source_file=name, blocks=outcome))
-        ordered = order_spec_files(files)
-        toc_entries, toc_files = extract_spec_toc(ordered)
-        toc = SpecDocToc(
+        inventory = SpecDocZipInventory(
             spec_id=spec_id,
             version=ver.version,
             release=ver.release,
-            entries=toc_entries,
-            files=toc_files,
-            docx_count=len(entries),
+            zip_files=enumerate_zip_files(raw),
         )
-        overlap = self._settings.spec_doc.chunk_overlap
-        if overlap is None:
-            overlap = self._settings.semantic_search.chunk_overlap
-        drafts: list[ChunkDraft] = []
-        for f in ordered:  # per-file runs keep file identity; chunker itself stays pure
-            drafts.extend(
-                chunk_blocks(
-                    f.blocks,
-                    self._settings.semantic_search.chunk_size,
-                    overlap,
-                    self._settings.spec_doc.max_chunk_chars,
-                    file_order=f.file_order,
-                    source_file=f.source_file,
+        try:
+            entries = list_spec_docx(raw)
+            if not entries:
+                raise SpecDocNoDocxError(
+                    f"zip for {spec_id}@{ver.version} contains no .docx files"
                 )
+            outcomes = self._docx_pool.convert_members("blocks", entries)
+            files: list[SpecDocFileBlocks] = []
+            for i, ((name, _), outcome) in enumerate(zip(entries, outcomes, strict=True)):
+                if isinstance(outcome, Exception):
+                    raise outcome
+                files.append(
+                    SpecDocFileBlocks(file_order=i, source_file=name, blocks=outcome)
+                )
+            ordered = order_spec_files(files)
+            toc_entries, toc_files = extract_spec_toc(ordered)
+            toc = SpecDocToc(
+                spec_id=spec_id,
+                version=ver.version,
+                release=ver.release,
+                entries=toc_entries,
+                files=toc_files,
+                docx_count=len(entries),
             )
-        source = existing or SpecDocSource(
-            spec_id=spec_id,
-            version=ver.version,
-            release=ver.release,
-            ftp_url=ver.ftp_url,
-            docx_count=len(entries),
-        )
-        return PreparedSpecDocParse(
-            source=source,
-            toc=toc,
-            drafts=tuple(drafts),
-            ordered_files=tuple(ordered),
-            download_required=download_required,
-            invalidate_parse_state=force and existing is not None,
-            record_source=existing is None,
-        )
+            overlap = self._settings.spec_doc.chunk_overlap
+            if overlap is None:
+                overlap = self._settings.semantic_search.chunk_overlap
+            drafts: list[ChunkDraft] = []
+            for f in ordered:  # per-file runs keep file identity; chunker itself stays pure
+                drafts.extend(
+                    chunk_blocks(
+                        f.blocks,
+                        self._settings.semantic_search.chunk_size,
+                        overlap,
+                        self._settings.spec_doc.max_chunk_chars,
+                        file_order=f.file_order,
+                        source_file=f.source_file,
+                    )
+                )
+            source = existing or SpecDocSource(
+                spec_id=spec_id,
+                version=ver.version,
+                release=ver.release,
+                ftp_url=ver.ftp_url,
+                docx_count=len(entries),
+            )
+            return PreparedSpecDocParse(
+                source=source,
+                toc=toc,
+                drafts=tuple(drafts),
+                ordered_files=tuple(ordered),
+                inventory=inventory,
+                download_required=download_required,
+                invalidate_parse_state=force and existing is not None,
+                record_source=existing is None,
+            )
+        except Exception as exc:  # noqa: BLE001 - persist inventory before reporting parse failure
+            return PreparedSpecDocInventoryFailure(inventory=inventory, error=exc)
 
-    def persist_prepared_parse(self, prepared: PreparedSpecDocParse) -> SpecDocSource:
-        """Persist one prepared parse as the single logical writer operation."""
+    def persist_prepared_parse(
+        self,
+        prepared: PreparedSpecDocParse | PreparedSpecDocInventoryFailure,
+    ) -> SpecDocSource:
+        """Persist prepared output, or inventory before re-raising a parse error."""
+        if isinstance(prepared, PreparedSpecDocInventoryFailure):
+            try:
+                self._inventory_repo.upsert(prepared.inventory)
+            except Exception as inventory_error:  # noqa: BLE001 - preserve original failure
+                logger.warning(
+                    "Failed to persist spec-doc ZIP inventory for %s@%s: %s",
+                    prepared.inventory.spec_id,
+                    prepared.inventory.version,
+                    inventory_error,
+                )
+            raise prepared.error
+
         source = prepared.source
         if prepared.invalidate_parse_state:
             self._doc_repo.invalidate_parse_state(source.spec_id, source.version)
+        self._inventory_repo.upsert(prepared.inventory)
         if prepared.download_required or prepared.record_source:
             self._doc_repo.record_download(
                 source.spec_id,
@@ -378,8 +422,12 @@ class SpecDocService:
             release=source.release,
             drafts=list(prepared.drafts),
         )
-        self._write_markdown_cache(source.spec_id, source.version, list(prepared.ordered_files))
-        self._doc_repo.record_parsed(source.spec_id, source.version, chunk_count=len(prepared.drafts))
+        self._write_markdown_cache(
+            source.spec_id, source.version, list(prepared.ordered_files)
+        )
+        self._doc_repo.record_parsed(
+            source.spec_id, source.version, chunk_count=len(prepared.drafts)
+        )
         self._index_after_parse(source.spec_id, source.version)
         self._embed_after_parse(source.spec_id, source.version, list(prepared.drafts))
         return self._doc_repo.get_source(source.spec_id, source.version)

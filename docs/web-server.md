@@ -227,7 +227,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/specs/{spec_id}/docs/toc` | Spec-doc TOC for one `(spec_id, version)` pair (`?version=` required, `?release=` informational; `?format=json` is the `doc3gpp spec doc toc show --format json` envelope verbatim: `{spec_id, version, release, docx_count, entries, files}`; full page `spec_doc_toc.html`, HTMX fragment `partials/spec_doc_toc_results.html`). Miss → 404. |
 | GET | `/spec-docs/search` | Unified spec-doc search (`?text=`, `?semantic=`, filters `spec,release,version,sections,tables,limit,offset`; `limit` accepts 1 to 150, larger values return 400 `invalid_filter`; `?format=json` is the `doc3gpp spec doc search --format json` flattened result array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
 | GET | `/spec-docs/index` | Spec-doc FTS5/vector index status (`?format=json` returns the `IndexStatus` object). |
-| GET | `/spec-docs/schema` | Spec-doc field descriptors across the three spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
+| GET | `/spec-docs/schema` | Spec-doc field descriptors across the four spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
 | GET | `/tdocs/search` | Unified TDoc search (`?text=`, `?semantic=`, filters, `limit` accepts 1 to 150 (larger values return 400 `invalid_filter`), `?format=json`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
 | GET | `/tdocs/index` | TDoc FTS5/vector index status (`?format=json` returns the `IndexStatus` object). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. `?format=html` renders the full status panel; `?format=badge` renders the one-word status used by meeting rows (empty once the job is terminal). |
@@ -248,6 +248,24 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | POST | `/jobs/sync_tdocs` | Flat alias for `sync_tdocs` (form or JSON). |
 | GET | `/sync` | Sync hub page: twelve enqueue forms (meetings, WIs, tdocs, all-tdocs, specs-by-tsg, specs-by-id, parse-tdocs, parse-tdoc-url, TDoc index maintenance, spec-document index maintenance, cache-purge, testcases) + a "Recent sync jobs" table. The WI form requires a blank-by-default TSG field and has no force option; the Parse TDocs form includes an exact numeric Meeting ID filter. |
 | GET | `/sync?format=fragment` | Recent-jobs table fragment (wrapped in `<div id="recent-jobs">`) for HTMX `outerHTML` swap. |
+
+`SpecService.list_versions` batch-enriches selected version rows with transient
+ZIP inventories from specdata. The CLI's `spec show --format json` appends
+`zip_files` to each version object (`null` when unknown, `[]` for a known-empty
+ZIP, otherwise an ordered array that preserves duplicates). This transient
+value does not add a `spec_versions` column. The HTTP JSON route
+`GET /specs/{spec_id}?format=json` and MCP `get_spec` append the same final
+`zip_files` field, preserve `null` versus arrays, and byte-match each other.
+The HTML spec detail page and the HTML-only
+`GET /specs/{spec_id}/docs?version=<version>` page also show the per-version
+inventory as inert, autoescaped text. The spec-document page places this
+inventory outside the replaceable HTMX source/TOC/chunk fragment, so it remains
+visible even when no source, TOC, or chunks exist. Unknown inventories include
+both the forced re-parse command and the `doc3gpp db init --scope specdata`
+upgrade hint; an unavailable inventory table remains `null`, while unrelated
+database errors continue to surface. These detail reads use the stored service
+enrichment only and do not read the ZIP cache, parse documents, or access the
+network.
 
 ### TDoc content and source selectors
 
@@ -672,10 +690,12 @@ enqueue the same work as the HTTP `POST /jobs/...`
 routes, but the enqueue envelope adds a `message` key (the only parity
 exception).
 
-The spec-document tools use the separate specdata database. `get_spec_toc`
-reads one parsed `(spec_id, version)` TOC, `search_spec_docs` selects among
-FTS5, vector, hybrid, and filter-only chunk search, and `get_spec_doc_index`
-reports index status. `parse_spec_docs` enqueues the same
+The spec-document tools use the separate specdata database.
+`get_spec_doc_schema` describes `spec_doc_zip_inventory` alongside the source,
+TOC, and chunk tables. `get_spec_toc` reads one parsed `(spec_id, version)`
+TOC, `search_spec_docs` selects among FTS5, vector, hybrid, and filter-only
+chunk search, and `get_spec_doc_index` reports index status. `parse_spec_docs`
+enqueues the same
 `PARSE_SPEC_DOCS` job as `POST /jobs/parse/spec-docs`; it accepts one
 `spec_id`, optional `release`/`version`, and `force`.
 

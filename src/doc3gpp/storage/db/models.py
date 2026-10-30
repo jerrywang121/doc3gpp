@@ -604,6 +604,17 @@ class TestCaseSourceORM(TestCaseBase):
     status_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class SpecDocZipInventoryORM(SpecDataBase):
+    """Independent outer-ZIP inventory keyed by spec and version."""
+
+    __tablename__ = "spec_doc_zip_inventory"
+
+    spec_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    version: Mapped[str] = mapped_column(String(16), primary_key=True)
+    release: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    zip_files: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class SpecDocSourceORM(SpecDataBase):
     """Sync ledger: one row per parsed ``(spec_id, version)`` pair.
 

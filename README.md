@@ -346,6 +346,24 @@ numeric-newest-first parsed-version string or native `null`; table and
 Markdown output display `-`. The `--parsed true|false` filter is applied
 before pagination. `spec show --format json` returns native boolean `parsed`
 values on every version row.
+`spec show --format json` also appends `zip_files` to each version object: an
+ordered JSON array that preserves duplicate member names, `[]` for a known
+empty ZIP, and `null` when the inventory is unknown. Table, Markdown, and
+compact Markdown output show a labeled inventory for each selected version;
+unknown inventories include a forced-reparse command and a
+`doc3gpp db init --scope specdata` schema-upgrade hint. `spec show` has no
+`--parsed` option; that filter belongs to `spec list`.
+
+`SpecService.list_versions` batch-enriches selected versions from the separate
+`spec_doc_zip_inventory` table. Inventory is collected only while an actual
+spec-document parse prepares a ZIP; spec sync, schema initialization, detail
+reads, and immutable parsed-version skips do not collect or backfill it. The
+inventory lives in specdata rather than a `spec_versions` column, and `spec
+show` reads it from SQL without inspecting the ZIP cache or using the network,
+so cache eviction does not remove a stored inventory. Existing databases need
+the additive `doc3gpp db init --scope specdata`; an unknown parsed version can
+then be refreshed with `doc3gpp spec doc parse --spec <id> --version <v>
+--force` (which re-downloads and re-parses the ZIP).
 
 ### `spec doc` — specification document corpus
 
@@ -369,8 +387,10 @@ example, `Rel-18` with `18.5.0`).
 
 Spec-document rows live in a separate sibling database, normally
 `<main-stem>_specdata.db`, and are cached below the dedicated
-`~/.cache/doc3gpp/specs` root by default. The TDoc extraction cache remains
-`~/.cache/doc3gpp/tdocs`. Chunk `sections` and `tables` values are
+`~/.cache/doc3gpp/specs` root by default. The `spec doc schema` output includes
+the independent `spec_doc_zip_inventory` table; existing installations can add it
+without resetting data via `doc3gpp db init --scope specdata`. The TDoc extraction
+cache remains `~/.cache/doc3gpp/tdocs`. Chunk `sections` and `tables` values are
 newline-delimited combined identifier/title entries; TOC entries retain their
 `section_no` and `title` fields. Section identifiers may be alphanumeric, such
 as `7.2A.3` or `7.2A.3A`. Version selection is numeric rather than lexical;

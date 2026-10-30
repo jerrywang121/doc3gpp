@@ -679,6 +679,8 @@ async def _parse_spec_docs(
                     force=force,
                 )
             )
+            if cancel_event.is_set():
+                raise asyncio.CancelledError()
             if isinstance(prepared, SpecDocSource):
                 # prepare_parse only short-circuits on already-parsed pairs
                 # without force; mirror parse_many's identity-skip reason.

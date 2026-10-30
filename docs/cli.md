@@ -2646,6 +2646,26 @@ Behavior:
   boolean `true` or `false`; table and Markdown output use the existing text
   formatting rules. The show header has no aggregate `parsed` field — the
   per-version booleans are the authoritative detail output.
+- JSON appends `zip_files` after the existing version fields. It is an ordered
+  array of outer-ZIP member names (including duplicates), `[]` for a known
+  empty ZIP, or `null` when unknown. It is transient specdata enrichment, not a
+  `spec_versions` column or a `spec schema` field.
+- Table, Markdown, and compact Markdown render a labeled inventory block for
+  each selected version. Unknown inventories are shown as unavailable with a
+  `doc3gpp spec doc parse --spec <id> --version <v> --force` refresh command and
+  a `doc3gpp db init --scope specdata` hint if the inventory table is missing;
+  a known empty archive has a separate no-files message. ZIP member names are
+  escaped for human-readable output.
+- `SpecService.list_versions` batch-loads inventories for only the selected,
+  filtered, paginated versions. This read is SQL-only: it does not inspect the
+  ZIP cache or access the network, and a stored inventory remains available
+  after cache eviction. Collection happens during actual spec-document ZIP
+  parsing, not spec sync, schema initialization, detail reads, or an immutable
+  parsed-version skip. Schema initialization creates the table but does not
+  backfill old versions. Existing databases should run
+  `doc3gpp db init --scope specdata`; `--force` re-downloads and re-parses a
+  version to refresh its inventory. The `--parsed` filter is available on
+  `spec list`, not `spec show`.
 
 Examples:
 
@@ -2683,8 +2703,8 @@ Behavior:
 - `values` is a comma-joined string of the fixed set (`specs.type`
   `TS,TR`; `tsg` carries the 19 TSG short names); `"-"` when the
   field is free-form (e.g. `status`, scraped verbatim). The
-  transient parser field `SpecVersion.wki_id` is not persisted and
-  has no descriptor row.
+  transient fields `SpecVersion.wki_id` and `SpecVersion.zip_files` are not
+  persisted and have no descriptor rows.
 
 Examples:
 
@@ -2740,6 +2760,11 @@ Behavior:
   `spec_doc_sources.downloaded_at` before conversion.
 - `--force` re-downloads the resolved ZIP and then re-parses it, including when
   the `(spec_id, version)` pair already has `parsed_at`.
+- Actual ZIP parsing records the ordered outer-member inventory in the separate
+  `spec_doc_zip_inventory` table. An immutable parsed-version skip, spec sync,
+  schema initialization, and detail reads do not collect or backfill inventory;
+  `--force` re-downloads the ZIP and refreshes the inventory. The stored
+  inventory is independent of the ZIP cache.
 - The `(spec_id, version)` source row is skipped when it already carries
   `parsed_at` (unless `--force`); oversized zips land in the `skipped` bucket;
   unknown spec/version, empty (no-`.docx`) zips, and every other error land in
@@ -2883,8 +2908,8 @@ Options:
 
 Purpose:
 
-- Describe every column of the three `spec_doc` tables (25 rows):
-  `spec_doc_sources` (8), `spec_doc_tocs` (7), `spec_doc_chunks` (10).
+- Describe every column of the four `spec_doc` tables (29 rows):
+  `spec_doc_zip_inventory` (4), `spec_doc_sources` (8), `spec_doc_tocs` (7), `spec_doc_chunks` (10).
   Chunk rows document the combined `sections` and `tables` columns; TOC
   entries continue to expose their low-level `section_no` and `title` fields.
 

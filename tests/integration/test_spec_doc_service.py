@@ -1,6 +1,7 @@
 """Integration tests for SpecDocService fetch/parse/toc (Task 9)."""
 import io
 import zipfile
+from unittest.mock import MagicMock
 
 import pytest
 from docx import Document
@@ -10,8 +11,12 @@ from doc3gpp.models.spec_doc import (
     SpecDocNoDocxError,
     SpecDocUnknownVersionError,
 )
+from doc3gpp.models.spec_doc_zip_inventory import SpecDocZipInventory
 from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.storage.db.migrate import create_schema
+from doc3gpp.storage.repositories.spec_doc_zip_inventory_sql import (
+    SQLAlchemySpecDocZipInventoryRepository,
+)
 
 
 class FakeSpecRepo:
@@ -33,6 +38,23 @@ def _make_zip_bytes(paragraphs=("hello handover world",), name="38331-j30.docx")
     zb = io.BytesIO()
     with zipfile.ZipFile(zb, "w") as z:
         z.writestr(name, docx)
+    return zb.getvalue()
+
+
+def _make_inventory_zip_bytes():
+    with zipfile.ZipFile(io.BytesIO(_make_zip_bytes())) as source:
+        docx = source.read("38331-j30.docx")
+    zb = io.BytesIO()
+    with zipfile.ZipFile(zb, "w") as archive:
+        archive.writestr("main.docx", docx)
+        archive.writestr("directory/", b"")
+        archive.writestr("readme.txt", b"readme")
+        archive.writestr(".hidden", b"hidden")
+        archive.writestr("__MACOSX/meta", b"metadata")
+        archive.writestr("nested.zip", b"not opened as an archive")
+        archive.writestr("日本語/文書.docx", docx)
+        archive.writestr(r"folder\backslash.txt", b"separator preserved")
+        archive.writestr("readme.txt", b"duplicate")
     return zb.getvalue()
 
 
@@ -297,3 +319,228 @@ def test_get_toc_miss_raises(sqlite_env):
     )
     with pytest.raises(SpecDocUnknownVersionError):
         svc.get_toc("38.331", "18.5.0")
+
+
+@pytest.mark.filterwarnings("ignore:Duplicate name:UserWarning")
+def test_prepare_carries_inventory_without_writing(sqlite_env):
+    create_schema("all")
+    inventory_repo = MagicMock()
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        inventory_repo=inventory_repo,
+        fetcher=lambda _url: _make_inventory_zip_bytes(),
+        cache_dir=sqlite_env.parent / "inventory-prepare-cache",
+    )
+
+    prepared = service.prepare_parse("38.331")
+
+    assert prepared.inventory == SpecDocZipInventory(
+        "38.331",
+        "18.5.0",
+        "Rel-18",
+        (
+            "main.docx",
+            "readme.txt",
+            ".hidden",
+            "__MACOSX/meta",
+            "nested.zip",
+            "日本語/文書.docx",
+            r"folder\backslash.txt",
+            "readme.txt",
+        ),
+    )
+    inventory_repo.upsert.assert_not_called()
+
+
+def test_no_docx_and_empty_zip_publish_inventory_but_fail(sqlite_env):
+    create_schema("all")
+    no_docx = io.BytesIO()
+    with zipfile.ZipFile(no_docx, "w") as archive:
+        archive.writestr("readme.txt", b"no docx here")
+    empty = io.BytesIO()
+    with zipfile.ZipFile(empty, "w"):
+        pass
+
+    inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+    for index, (raw, expected_names) in enumerate(
+        ((no_docx.getvalue(), ("readme.txt",)), (empty.getvalue(), ()))
+    ):
+        service = SpecDocService(
+            spec_repo=FakeSpecRepo(_versions()),
+            inventory_repo=inventory_repo,
+            fetcher=lambda _url, payload=raw: payload,
+            cache_dir=sqlite_env.parent / f"inventory-empty-cache-{index}",
+        )
+        result = service.parse_many(["38.331"])
+
+        assert "38.331" in result.failures
+        assert "no .docx" in result.failures["38.331"]
+        assert inventory_repo.get("38.331", "18.5.0").zip_files == expected_names
+        assert service.get_source("38.331", "18.5.0") is None
+
+
+def test_immutable_skip_does_not_download_enumerate_or_write(
+    sqlite_env, monkeypatch
+):
+    from doc3gpp.services import spec_doc_service as service_module
+
+    create_schema("all")
+    inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+    writes = []
+    original_upsert = inventory_repo.upsert
+
+    def record_upsert(inventory):
+        writes.append(inventory)
+        original_upsert(inventory)
+
+    monkeypatch.setattr(inventory_repo, "upsert", record_upsert)
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        inventory_repo=inventory_repo,
+        fetcher=lambda _url: _make_zip_bytes(),
+        cache_dir=sqlite_env.parent / "immutable-inventory-cache",
+    )
+    assert "38.331" in service.parse_many(["38.331"]).successes
+    assert len(writes) == 1
+
+    def fail_fetch(_url):
+        raise AssertionError("immutable skip must not fetch")
+
+    def fail_enumeration(_raw):
+        raise AssertionError("immutable skip must not enumerate")
+
+    service._fetcher = fail_fetch
+    monkeypatch.setattr(service_module, "enumerate_zip_files", fail_enumeration)
+
+    result = service.parse_many(["38.331"])
+
+    assert "38.331" in result.skipped
+    assert len(writes) == 1
+
+
+def test_force_reparse_replaces_inventory(sqlite_env):
+    create_schema("all")
+    payloads = [
+        _make_zip_bytes(name="first.docx"),
+        _make_zip_bytes(name="second.docx"),
+    ]
+    calls = []
+
+    def fetcher(url):
+        calls.append(url)
+        return payloads[len(calls) - 1]
+
+    inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        inventory_repo=inventory_repo,
+        fetcher=fetcher,
+        cache_dir=sqlite_env.parent / "force-inventory-cache",
+    )
+
+    assert "38.331" in service.parse_many(["38.331"]).successes
+    assert inventory_repo.get("38.331", "18.5.0").zip_files == ("first.docx",)
+    assert "38.331" in service.parse_many(["38.331"], force=True).successes
+
+    assert len(calls) == 2
+    assert inventory_repo.get("38.331", "18.5.0").zip_files == ("second.docx",)
+
+
+def test_fetch_helper_alone_does_not_collect_inventory(sqlite_env):
+    create_schema("all")
+    inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        inventory_repo=inventory_repo,
+        fetcher=lambda _url: _make_zip_bytes(),
+        cache_dir=sqlite_env.parent / "fetch-inventory-cache",
+    )
+
+    service.fetch("38.331")
+
+    assert inventory_repo.get("38.331", "18.5.0") is None
+
+
+def test_unparsed_cached_zip_without_fetch_persists_inventory(sqlite_env):
+    create_schema("all")
+    inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        inventory_repo=inventory_repo,
+        fetcher=lambda _url: (_ for _ in ()).throw(
+            AssertionError("cached unparsed ZIP must not fetch")
+        ),
+        cache_dir=sqlite_env.parent / "cached-inventory-cache",
+    )
+    service._write_zip_cache("38.331", "18.5.0", _make_zip_bytes())
+
+    result = service.parse_many(["38.331"])
+
+    assert "38.331" in result.successes
+    assert inventory_repo.get("38.331", "18.5.0").zip_files == ("38331-j30.docx",)
+
+
+@pytest.mark.parametrize("failure", ("download", "oversized", "invalid"))
+def test_pre_parse_failure_leaves_previous_inventory_unchanged(
+    sqlite_env, failure
+):
+    from doc3gpp.settings.schema import Settings, SpecDocSettings
+
+    create_schema("all")
+    inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+    previous = SpecDocZipInventory(
+        "38.331", "18.5.0", "Rel-18", ("previous.docx",)
+    )
+    inventory_repo.upsert(previous)
+
+    def fetcher(_url):
+        if failure == "download":
+            raise OSError("upstream unavailable")
+        if failure == "oversized":
+            return _make_zip_bytes()
+        return b"not a ZIP"
+
+    settings = (
+        Settings(spec_doc=SpecDocSettings(max_zip_size_kb=1))
+        if failure == "oversized"
+        else Settings()
+    )
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        inventory_repo=inventory_repo,
+        settings=settings,
+        fetcher=fetcher,
+        cache_dir=sqlite_env.parent / f"pre-parse-error-{failure}",
+    )
+
+    result = service.parse_many(["38.331"])
+
+    assert ("38.331" in result.skipped) is (failure == "oversized")
+    assert ("38.331" in result.failures) is (failure != "oversized")
+    assert inventory_repo.get("38.331", "18.5.0") == previous
+    assert service.get_source("38.331", "18.5.0") is None
+
+
+def test_synchronous_forced_conversion_failure_invalidates_old_marker(sqlite_env):
+    create_schema("all")
+    inventory_repo = SQLAlchemySpecDocZipInventoryRepository()
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        inventory_repo=inventory_repo,
+        fetcher=lambda _url: _make_zip_bytes(),
+        cache_dir=sqlite_env.parent / "forced-failure-cache",
+    )
+    assert "38.331" in service.parse_many(["38.331"]).successes
+    error = RuntimeError("conversion exploded")
+
+    class FailedPool:
+        def convert_members(self, _kind, members):
+            return [error for _ in members]
+
+    service._docx_pool = FailedPool()
+    result = service.parse_many(["38.331"], force=True)
+
+    assert result.failures["38.331"] == "conversion exploded"
+    source = service.get_source("38.331", "18.5.0")
+    assert source is not None and source.parsed_at is None
+    assert inventory_repo.get("38.331", "18.5.0").zip_files == ("38331-j30.docx",)

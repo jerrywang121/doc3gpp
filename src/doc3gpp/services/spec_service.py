@@ -19,7 +19,11 @@ from doc3gpp.parsers.spec_parser import (
     parse_spec_detail,
     parse_spec_list,
 )
-from doc3gpp.repository.protocols import SpecParsedStatusRepository, SpecRepository
+from doc3gpp.repository.protocols import (
+    SpecDocZipInventoryRepository,
+    SpecParsedStatusRepository,
+    SpecRepository,
+)
 from doc3gpp.scraping.client import ScraperClient
 from doc3gpp.scraping.spec_source import (
     fetch_cr_list,
@@ -85,11 +89,13 @@ class SpecService:
         sync_interval: timedelta = timedelta(hours=24),
         max_workers: int | None = None,
         parsed_status_repository: SpecParsedStatusRepository | None = None,
+        inventory_repository: SpecDocZipInventoryRepository | None = None,
     ) -> None:
         self._repository = repository
         self._sync_interval = sync_interval
         self._max_workers = max_workers
         self._parsed_status_repository = parsed_status_repository
+        self._inventory_repository = inventory_repository
 
     def sync(
         self,
@@ -583,12 +589,27 @@ class SpecService:
         versions = self._repository.list_versions(
             spec_id, limit=limit, offset=offset, version=version
         )
-        if self._parsed_status_repository is None or not versions:
+        if not versions:
             return versions
-        parsed_versions = self._parsed_status_repository.list_parsed_versions([spec_id]).get(
-            spec_id, []
+
+        if self._parsed_status_repository is not None:
+            parsed_versions = self._parsed_status_repository.list_parsed_versions(
+                [spec_id]
+            ).get(spec_id, [])
+            parsed_set = set(parsed_versions)
+            for version_row in versions:
+                version_row.parsed = version_row.version in parsed_set
+
+        inventories = (
+            self._inventory_repository.get_for_versions(
+                spec_id, [version_row.version for version_row in versions]
+            )
+            if self._inventory_repository is not None
+            else {}
         )
-        parsed_set = set(parsed_versions)
         for version_row in versions:
-            version_row.parsed = version_row.version in parsed_set
+            inventory = inventories.get(version_row.version)
+            version_row.zip_files = (
+                inventory.zip_files if inventory is not None else None
+            )
         return versions

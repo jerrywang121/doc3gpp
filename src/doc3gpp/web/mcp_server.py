@@ -68,7 +68,7 @@ _TSG_FIELDS = ["tsg_name", "short_name", "description"]
 _WI_FIELDS = ["wi_id", "acronym", "release", "name"]
 _SPEC_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "rapporteurs", "parsed"]
 _SPEC_SHOW_FIELDS = ["spec_id", "type", "title", "status", "radio_tech", "initial_release", "tsg", "wis", "rapporteurs"]
-_VERSION_FIELDS = ["version", "parsed", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs"]
+_VERSION_FIELDS = ["version", "parsed", "release", "ftp_url", "meeting_id", "meeting_name", "upload_date", "pdf_url", "crs", "zip_files"]
 _TESTCASE_FIELDS = ["testcase_id", "title", "spec", "group", "release", "statuses"]
 _TESTCASE_SHOW_FIELDS = ["testcase_id", "title", "ats", "feature", "release", "wis", "spec", "group"]
 _TESTCASE_STATUS_FIELDS = ["path", "gcf_ptcrb", "ttcn_status"]
@@ -798,7 +798,7 @@ def build_mcp_server(state: WebState) -> MCPServer:
             [spec_doc_search_result_to_dict(result) for result in results]
         )
 
-    @server.tool(name="get_spec_doc_schema", description="Describe every column of the spec_doc_sources, spec_doc_tocs and spec_doc_chunks tables (separate specdata sqlite file).")
+    @server.tool(name="get_spec_doc_schema", description="Describe every column of the spec_doc_zip_inventory, spec_doc_sources, spec_doc_tocs and spec_doc_chunks tables (separate specdata sqlite file).")
     @_mcp_error_guard
     def get_spec_doc_schema() -> str:
         from doc3gpp.models.schema_info import schema_payload

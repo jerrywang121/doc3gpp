@@ -24,6 +24,25 @@ def test_schema_field_order_and_keys() -> None:
     assert sorted(RESOURCE_SCHEMAS) == ["meeting", "spec", "spec_doc", "tdoc", "testcase", "tsg", "wi"]
 
 
+def test_spec_doc_zip_inventory_schema_is_specdata_only() -> None:
+    from doc3gpp.models.schema_info import schema_payload
+    from doc3gpp.storage.db.models import SpecVersionORM
+
+    fields = {
+        row["field"]: row
+        for row in schema_payload("spec_doc")
+        if row["table"] == "spec_doc_zip_inventory"
+    }
+    assert set(fields) == {"spec_id", "version", "release", "zip_files"}
+    assert {name: row["nullable"] for name, row in fields.items()} == {
+        "spec_id": False,
+        "version": False,
+        "release": True,
+        "zip_files": False,
+    }
+    assert "zip_files" not in SpecVersionORM.__table__.columns
+
+
 def test_spec_doc_schema_lists_combined_chunk_fields() -> None:
     payload = schema_payload("spec_doc")
     chunk_fields = [
@@ -180,6 +199,7 @@ def test_registry_matches_orm_columns() -> None:
     )
 
     assert hasattr(orm_models, "TDocZipInventoryOrm"), "ZIP inventory ORM is missing"
+    assert hasattr(orm_models, "SpecDocZipInventoryORM"), "Spec ZIP inventory ORM is missing"
 
     expected = {
         "tsgs": TsgORM,
@@ -198,6 +218,7 @@ def test_registry_matches_orm_columns() -> None:
         "wis": WiORM,
         "specs": SpecORM,
         "spec_versions": SpecVersionORM,
+        "spec_doc_zip_inventory": orm_models.SpecDocZipInventoryORM,
         "spec_doc_sources": SpecDocSourceORM,
         "spec_doc_tocs": SpecDocTocORM,
         "spec_doc_chunks": SpecDocChunkORM,

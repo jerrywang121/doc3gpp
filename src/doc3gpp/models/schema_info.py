@@ -342,6 +342,15 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
     ),
     "spec_doc": (
         TableSchema(
+            table="spec_doc_zip_inventory",
+            fields=(
+                FieldInfo("spec_id", "str", False, "Dotted spec id; first half of the composite PK."),
+                FieldInfo("version", "str", False, "Version string; second half of the composite PK."),
+                FieldInfo("release", "str", True, "Canonical release marker, e.g. Rel-18."),
+                FieldInfo("zip_files", "text", False, "JSON array of outer-ZIP file names in order, preserving duplicates."),
+            ),
+        ),
+        TableSchema(
             table="spec_doc_sources",
             fields=(
                 FieldInfo("spec_id", "str", False, "Dotted spec id, e.g. 38.331; first half of the composite PK."),

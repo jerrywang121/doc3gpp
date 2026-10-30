@@ -653,7 +653,7 @@ def _emit_records(
     rows: list[list[str]],
     fields: list[str],
     fmt: str,
-    output: str | None,
+    output: str | TextIO | None,
     *,
     no_records_msg: str,
     compact: bool = False,
@@ -3651,6 +3651,86 @@ def _markdown_code_span(value: str) -> str:
     return f"{delimiter}{visible}{delimiter}"
 
 
+def _write_spec_version_zip_inventories(
+    stream: TextIO,
+    spec_id: str,
+    versions: list[SpecVersion],
+    *,
+    fmt: str,
+    compact: bool,
+) -> None:
+    """Render each selected spec version's outer-ZIP inventory safely."""
+    mode = "compact" if fmt == "markdown" and compact else fmt
+    if mode not in {"table", "markdown", "compact"}:
+        raise ValueError(f"unknown spec ZIP inventory display mode: {mode!r}")
+
+    for version in versions:
+        release = version.release or "-"
+        visible_version = _display_zip_file_name(version.version)
+        visible_release = _display_zip_file_name(release)
+        if mode == "table":
+            stream.write(
+                f"\n[ZIP files for version {visible_version} "
+                f"(release {visible_release})]\n"
+            )
+        elif mode == "markdown":
+            stream.write(
+                f"\n### ZIP files for version {visible_version} "
+                f"(release {visible_release})\n\n"
+            )
+        else:
+            stream.write(
+                f"\nzip_files_version: {visible_version}; "
+                f"release: {visible_release}\n"
+            )
+
+        if version.zip_files is None:
+            reparse = (
+                "doc3gpp spec doc parse "
+                f"--spec {spec_id} --version {version.version} --force"
+            )
+            if mode == "table":
+                stream.write("ZIP file inventory unavailable.\n")
+                stream.write(
+                    f"Re-parse with: {_display_zip_file_name(reparse)}\n"
+                )
+                stream.write(
+                    "If the inventory table is missing, initialize it with: "
+                    "doc3gpp db init --scope specdata\n"
+                )
+            elif mode == "markdown":
+                stream.write("ZIP file inventory unavailable.\n")
+                stream.write(
+                    "\n_Re-parse with "
+                    f"{_markdown_code_span(reparse)} to refresh this inventory._\n"
+                )
+                stream.write(
+                    "_If the inventory table is missing, initialize it with "
+                    f"{_markdown_code_span('doc3gpp db init --scope specdata')}._\n"
+                )
+            else:
+                stream.write("zip_files_state: ZIP file inventory unavailable.\n")
+                stream.write(
+                    f"zip_files_reparse: {_display_zip_file_name(reparse)}\n"
+                )
+                stream.write("zip_files_schema: doc3gpp db init --scope specdata\n")
+        elif not version.zip_files:
+            if mode == "compact":
+                stream.write("zip_files_state: No files in the ZIP archive.\n")
+            elif mode == "markdown":
+                stream.write("_No files in the ZIP archive._\n")
+            else:
+                stream.write("No files in the ZIP archive.\n")
+        else:
+            for name in version.zip_files:
+                if mode == "markdown":
+                    stream.write(f"- {_markdown_code_span(name)}\n")
+                else:
+                    stream.write(f"zip_file: {_markdown_zip_file_name(name)}\n")
+
+        stream.write("\n")
+
+
 def _tdoc_zip_inventory_force_hint(
     record: TDocShowRecord | TDocShowRecordByUrl,
 ) -> str | None:
@@ -5807,7 +5887,11 @@ def spec_show(
             },
             "versions": [
                 {
-                    f: _serialise_show_value(getattr(v, f)) for f in version_fields
+                    **{
+                        f: _serialise_show_value(getattr(v, f))
+                        for f in version_fields
+                    },
+                    "zip_files": None if v.zip_files is None else list(v.zip_files),
                 }
                 for v in versions
             ],
@@ -5821,23 +5905,33 @@ def spec_show(
         assert isinstance(v, SpecVersion)
         version_rows.append([_display_show_value(getattr(v, f)) for f in version_fields])
 
-    _emit_records(
-        rows=header_row,
-        fields=header_fields,
-        fmt=fmt,
-        output=output,
-        no_records_msg=f"No spec {spec_id}",
-        compact=resolved_compact,
-    )
-    typer.echo("")
-    _emit_records(
-        rows=version_rows,
-        fields=version_fields,
-        fmt=fmt,
-        output=output,
-        no_records_msg=f"No versions stored for {spec_id}",
-        compact=resolved_compact,
-    )
+    stream, close_after = _open_output(output)
+    try:
+        _emit_records(
+            rows=header_row,
+            fields=header_fields,
+            fmt=fmt,
+            output=stream,
+            no_records_msg=f"No spec {spec_id}",
+            compact=resolved_compact,
+        )
+        stream.write("\n")
+        _emit_records(
+            rows=version_rows,
+            fields=version_fields,
+            fmt=fmt,
+            output=stream,
+            no_records_msg=f"No versions stored for {spec_id}",
+            compact=resolved_compact,
+        )
+        if not version_rows and fmt == "table" and output is None:
+            stream.write(f"No versions stored for {spec_id}\n")
+        _write_spec_version_zip_inventories(
+            stream, spec_id, versions, fmt=fmt, compact=resolved_compact
+        )
+    finally:
+        if close_after:
+            stream.close()
 
 
 VALID_TESTCASE_GROUPS: tuple[str, ...] = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")

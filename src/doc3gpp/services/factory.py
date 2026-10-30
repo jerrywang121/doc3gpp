@@ -59,6 +59,9 @@ from doc3gpp.storage.repositories.spec_doc_sql import SQLAlchemySpecDocRepositor
 from doc3gpp.storage.repositories.spec_doc_vector_sql import (
     SQLAlchemySpecDocVectorRepository,
 )
+from doc3gpp.storage.repositories.spec_doc_zip_inventory_sql import (
+    SQLAlchemySpecDocZipInventoryRepository,
+)
 from doc3gpp.storage.repositories.spec_sql import SQLAlchemySpecRepository
 from doc3gpp.storage.repositories.tdoc_content_sql import (
     SQLAlchemyTDocContentRepository,
@@ -70,6 +73,9 @@ from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
 from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import SQLAlchemyTDocCrTtcnRepository
 from doc3gpp.storage.repositories.tdoc_file_sql import SQLAlchemyTDocFileRepository
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+    SQLAlchemyTDocZipInventoryRepository,
+)
 from doc3gpp.storage.repositories.testcase_sql import SQLAlchemyTestCaseRepository
 from doc3gpp.storage.repositories.tsg_sql import SQLAlchemyTsgRepository
 from doc3gpp.storage.repositories.vector_sql import SQLAlchemyVectorIndexRepository
@@ -130,6 +136,11 @@ def build_tdoc_repository() -> SQLAlchemyTDocRepository:
     the existing :func:`build_tdoc_service` factory untouched.
     """
     return SQLAlchemyTDocRepository()
+
+
+def build_tdoc_zip_inventory_repository() -> SQLAlchemyTDocZipInventoryRepository:
+    """Construct the SQL-backed repository for TDoc ZIP inventories."""
+    return SQLAlchemyTDocZipInventoryRepository()
 
 
 def build_tdoc_search_facade(
@@ -306,6 +317,7 @@ def build_tdoc_content_service(
         tdoc_repository=build_tdoc_repository(),
         cr_repository=build_tdoc_cr_repository(),
         content_repository=build_tdoc_content_repository(),
+        inventory_repository=build_tdoc_zip_inventory_repository(),
         cache_root=settings.cache.dir,
     )
 
@@ -362,6 +374,7 @@ def build_spec_service() -> SpecService:
         SQLAlchemySpecRepository(),
         sync_interval=settings.sync.spec_sync_interval,
         parsed_status_repository=SQLAlchemySpecDocRepository(),
+        inventory_repository=SQLAlchemySpecDocZipInventoryRepository(),
     )
 
 
@@ -517,16 +530,15 @@ def build_spec_doc_service(
     """Construct a :class:`SpecDocService` for the ``spec doc`` commands.
 
     Wires the main-DB :class:`SQLAlchemySpecRepository` (version
-    resolution), the specdata :class:`SQLAlchemySpecDocRepository`,
-    the FTS5 search hook (:func:`build_spec_doc_search_service`),
-    and the vector hook
-    (:func:`build_spec_doc_semantic_service`). Both hooks are
-    best-effort — ``None`` when the subsystem is disabled or its
-    extra is not installed; the service skips the hook in that
-    case. A single shared embedder (built once here when the caller
-    does not inject one) feeds the semantic hook so one httpx
-    client is shared per process. ``docx_pool`` converts version
-    DOCX members; ``None`` keeps conversion in-process.
+    resolution), the specdata :class:`SQLAlchemySpecDocRepository` and
+    :class:`SQLAlchemySpecDocZipInventoryRepository`, the FTS5 search hook
+    (:func:`build_spec_doc_search_service`), and the vector hook
+    (:func:`build_spec_doc_semantic_service`). Both hooks are best-effort —
+    ``None`` when the subsystem is disabled or its extra is not installed;
+    the service skips the hook in that case. A single shared embedder
+    (built once here when the caller does not inject one) feeds the semantic
+    hook so one httpx client is shared per process. ``docx_pool`` converts
+    version DOCX members; ``None`` keeps conversion in-process.
     """
     from doc3gpp.services.spec_doc_service import SpecDocService
 
@@ -536,6 +548,7 @@ def build_spec_doc_service(
         embedder = build_embedder(settings)
     return SpecDocService(
         spec_repo=SQLAlchemySpecRepository(),
+        inventory_repo=SQLAlchemySpecDocZipInventoryRepository(),
         settings=settings,
         search_service=(
             search_service
@@ -684,6 +697,7 @@ def build_tdoc_cr_service(
         ),
         tdoc_repository=SQLAlchemyTDocRepository(),
         content_repo=build_tdoc_content_repository(),
+        inventory_repository=build_tdoc_zip_inventory_repository(),
         max_tdoc_size_bytes=max_tdoc_size_bytes,
         max_documents_per_zip=settings.tdoc_parse.max_documents_per_zip,
         max_uncompressed_size_bytes=(

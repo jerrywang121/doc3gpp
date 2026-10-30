@@ -44,6 +44,7 @@ from doc3gpp.models.spec_doc import SpecDocSearchFilters, SpecDocSelectionError
 from doc3gpp.models.sync import BulkSyncOutcome, SyncOutcome
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
 from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
+from doc3gpp.models.tdoc_content_families import store_for_type
 from doc3gpp.models.tdoc_cr import (
     DirectParseBatchResult,
     DirectParseResult,
@@ -77,6 +78,7 @@ from doc3gpp.services.factory import (
     build_tdoc_repository,
     build_tdoc_service,
     build_tdoc_sync_coordinator,
+    build_tdoc_zip_inventory_repository,
     build_testcase_service,
     build_tsg_service,
     build_wi_service,
@@ -651,7 +653,7 @@ def _emit_records(
     rows: list[list[str]],
     fields: list[str],
     fmt: str,
-    output: str | None,
+    output: str | TextIO | None,
     *,
     no_records_msg: str,
     compact: bool = False,
@@ -3162,9 +3164,9 @@ def _build_show_payload(
     """Build the omit-when-null JSON payload for the show renderers.
 
     Both the by-id and by-url JSON renderers share the same payload
-    shape (cover / ttcn / changes / extracted_at / files keys) and the
-    same omit-when-null convention. The by-id renderer anchors on a
-    required ``tdoc`` key; the by-url renderer anchors on a required
+    shape (cover / ttcn / changes / extracted_at / zip_files / files) and
+    the same omit-when-null convention, except zip_files is always present.
+    The by-id renderer anchors on a required ``tdoc`` key; the by-url renderer anchors on a required
     ``anchor_key`` (``"ftp_url"``) and treats ``tdoc`` as optional.
 
     ``record.tdoc`` is always read through the same iterator when it is
@@ -3200,6 +3202,9 @@ def _build_show_payload(
         }
     if record.extracted_at is not None:
         payload["extracted_at"] = _serialise_show_value(record.extracted_at)
+    payload["zip_files"] = (
+        list(record.zip_files) if record.zip_files is not None else None
+    )
     if record.files:
         payload["files"] = [
             {
@@ -3247,9 +3252,9 @@ def _render_tdoc_show_json(
     """Emit ``tdoc show --format json``.
 
     The payload is a single object with the following top-level keys.
-    Each optional key is **omitted** (not emitted as ``null``) when no
-    corresponding row exists, so the JSON stays dense for hits and
-    sparse for misses:
+    Optional keys are **omitted** (not emitted as ``null``) when no
+    corresponding row exists, except ``zip_files``, which is always
+    present as ``null``, ``[]``, or an ordered name array:
 
     - ``tdoc``: every :class:`TDoc` field, normalised via
       :func:`_serialise_show_value` so ``date`` / ``datetime`` come out
@@ -3373,6 +3378,7 @@ def _render_tdoc_show_markdown_compact(
                 stream.write(f"  * changes: \n{block['text']}\n")
             stream.write("\n")
 
+    _write_tdoc_zip_inventory(stream, record, mode="compact")
     stream.write("\n")
     if not record.files:
         stream.write(f"note: {files_missing_hint}\n")
@@ -3500,6 +3506,8 @@ def _render_tdoc_show_markdown_full(
                 stream.writelines(f">{ln}\n" for ln in block["text"].split("\n"))
                 stream.write("\n")
 
+    _write_tdoc_zip_inventory(stream, record, mode="markdown")
+
     if record.files:
         stream.write("\n## Auxiliary Files\n\n")
         for file in record.files:
@@ -3596,6 +3604,197 @@ def _raw_show_hint(record: TDocShowRecord | TDocShowRecordByUrl) -> str:
     if isinstance(record, TDocShowRecordByUrl):
         return f"--ftp-url {record.ftp_url}"
     return f"--tdoc {record.tdoc.tdoc_id}"
+
+_MARKDOWN_ZIP_NAME_ESCAPES = frozenset("\\*_{}[]()#+-!|<>&~:/") | {chr(96)}
+
+
+def _display_zip_file_name(name: str) -> str:
+    """Render control/format characters visibly without changing the stored name."""
+    visible: list[str] = []
+    for char in name:
+        if char.isprintable():
+            visible.append(char)
+            continue
+        codepoint = ord(char)
+        if codepoint <= 0xFF:
+            visible.append(f"\\x{codepoint:02x}")
+        elif codepoint <= 0xFFFF:
+            visible.append(f"\\u{codepoint:04x}")
+        else:
+            visible.append(f"\\U{codepoint:08x}")
+    return "".join(visible)
+
+
+def _markdown_zip_file_name(name: str) -> str:
+    """Escape Markdown syntax while keeping control characters visibly escaped."""
+    visible = _display_zip_file_name(name)
+    return "".join(
+        f"\\{char}" if char in _MARKDOWN_ZIP_NAME_ESCAPES else char
+        for char in visible
+    )
+
+
+def _markdown_code_span(value: str) -> str:
+    """Return an inline code span with a safe delimiter for arbitrary text."""
+    visible = _display_zip_file_name(value)
+    longest = 0
+    current = 0
+    for char in visible:
+        if char == chr(96):
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    delimiter = chr(96) * (longest + 1)
+    if visible.startswith(chr(96)) or visible.endswith(chr(96)):
+        visible = f" {visible} "
+    return f"{delimiter}{visible}{delimiter}"
+
+
+def _write_spec_version_zip_inventories(
+    stream: TextIO,
+    spec_id: str,
+    versions: list[SpecVersion],
+    *,
+    fmt: str,
+    compact: bool,
+) -> None:
+    """Render each selected spec version's outer-ZIP inventory safely."""
+    mode = "compact" if fmt == "markdown" and compact else fmt
+    if mode not in {"table", "markdown", "compact"}:
+        raise ValueError(f"unknown spec ZIP inventory display mode: {mode!r}")
+
+    for version in versions:
+        release = version.release or "-"
+        visible_version = _display_zip_file_name(version.version)
+        visible_release = _display_zip_file_name(release)
+        if mode == "table":
+            stream.write(
+                f"\n[ZIP files for version {visible_version} "
+                f"(release {visible_release})]\n"
+            )
+        elif mode == "markdown":
+            stream.write(
+                f"\n### ZIP files for version {visible_version} "
+                f"(release {visible_release})\n\n"
+            )
+        else:
+            stream.write(
+                f"\nzip_files_version: {visible_version}; "
+                f"release: {visible_release}\n"
+            )
+
+        if version.zip_files is None:
+            reparse = (
+                "doc3gpp spec doc parse "
+                f"--spec {spec_id} --version {version.version} --force"
+            )
+            if mode == "table":
+                stream.write("ZIP file inventory unavailable.\n")
+                stream.write(
+                    f"Re-parse with: {_display_zip_file_name(reparse)}\n"
+                )
+                stream.write(
+                    "If the inventory table is missing, initialize it with: "
+                    "doc3gpp db init --scope specdata\n"
+                )
+            elif mode == "markdown":
+                stream.write("ZIP file inventory unavailable.\n")
+                stream.write(
+                    "\n_Re-parse with "
+                    f"{_markdown_code_span(reparse)} to refresh this inventory._\n"
+                )
+                stream.write(
+                    "_If the inventory table is missing, initialize it with "
+                    f"{_markdown_code_span('doc3gpp db init --scope specdata')}._\n"
+                )
+            else:
+                stream.write("zip_files_state: ZIP file inventory unavailable.\n")
+                stream.write(
+                    f"zip_files_reparse: {_display_zip_file_name(reparse)}\n"
+                )
+                stream.write("zip_files_schema: doc3gpp db init --scope specdata\n")
+        elif not version.zip_files:
+            if mode == "compact":
+                stream.write("zip_files_state: No files in the ZIP archive.\n")
+            elif mode == "markdown":
+                stream.write("_No files in the ZIP archive._\n")
+            else:
+                stream.write("No files in the ZIP archive.\n")
+        else:
+            for name in version.zip_files:
+                if mode == "markdown":
+                    stream.write(f"- {_markdown_code_span(name)}\n")
+                else:
+                    stream.write(f"zip_file: {_markdown_zip_file_name(name)}\n")
+
+        stream.write("\n")
+
+
+def _tdoc_zip_inventory_force_hint(
+    record: TDocShowRecord | TDocShowRecordByUrl,
+) -> str | None:
+    """Return a force-parse hint only when the matching TDoc type is eligible."""
+    tdoc = record.tdoc
+    if tdoc is None or store_for_type(tdoc.type) is None:
+        return None
+    if isinstance(record, TDocShowRecordByUrl):
+        return f"doc3gpp tdoc parse --from-url {record.ftp_url} --force"
+    return f"doc3gpp tdoc parse --tdoc {tdoc.tdoc_id} --force"
+
+
+def _write_tdoc_zip_inventory(
+    stream: TextIO,
+    record: TDocShowRecord | TDocShowRecordByUrl,
+    *,
+    mode: str,
+) -> None:
+    """Write the outer-ZIP inventory, distinct from auxiliary/content files."""
+    if mode == "table":
+        stream.write("[ZIP files]\n")
+    elif mode == "markdown":
+        stream.write("\n## ZIP files\n\n")
+    elif mode == "compact":
+        stream.write("\nzip_files:\n")
+    else:
+        raise ValueError(f"unknown ZIP inventory display mode: {mode!r}")
+
+    names = record.zip_files
+    if names is None:
+        stream.write(
+            "unavailable\n" if mode == "compact"
+            else "ZIP file inventory unavailable.\n"
+        )
+        hint = _tdoc_zip_inventory_force_hint(record)
+        if hint is not None:
+            visible_hint = _display_zip_file_name(hint)
+            if mode == "table":
+                stream.write(f"Re-parse with: {visible_hint}\n")
+            elif mode == "markdown":
+                stream.write(
+                    "\n_Re-parse with "
+                    f"{_markdown_code_span(hint)} to refresh this inventory._\n"
+                )
+            else:
+                stream.write(f"zip_files_reparse: {visible_hint}\n")
+    elif not names:
+        message = (
+            "no files\n"
+            if mode == "compact"
+            else "No files in the ZIP archive.\n"
+        )
+        stream.write(message)
+    else:
+        for name in names:
+            if mode == "markdown":
+                stream.write(f"- {_markdown_code_span(name)}\n")
+            elif mode == "compact":
+                stream.write(f"zip_file: {_markdown_zip_file_name(name)}\n")
+            else:
+                stream.write(f"zip_file: {_display_zip_file_name(name)}\n")
+
+    if mode in {"table", "compact"}:
+        stream.write("\n")
 
 
 def _render_tdoc_show_table_body(
@@ -3718,6 +3917,8 @@ def _render_tdoc_show_table_body(
         stream.write(
             f"changes: {len(record.changes.changes)} change block(s)\n"
         )
+
+    _write_tdoc_zip_inventory(stream, record, mode="table")
 
     if record.files:
         stream.write("[Auxiliary Files]\n")
@@ -3884,6 +4085,7 @@ def _tdoc_show_by_ftp_url(
         cr_ttcn=build_tdoc_cr_ttcn_repository(),
         cr_change_details=build_tdoc_cr_change_details_repository(),
         file=build_tdoc_file_repository(),
+        zip_inventory=build_tdoc_zip_inventory_repository(),
     )
     record = TDocShowRecordByUrl.from_ftp_url(url, show_repos)
 
@@ -3894,10 +4096,13 @@ def _tdoc_show_by_ftp_url(
         and record.ttcn is None
         and record.changes is None
         and not record.files
+        and record.zip_files is None
     ):
         raise typer.BadParameter(
             f"No row in tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
-            f"tdoc_cr_change_details, or tdoc_files matches ftp_url {url!r}."
+            f"tdoc_extracts, tdoc_cr_change_details, tdoc_files, or "
+            f"tdoc_zip_inventory "
+            f"matches ftp_url {url!r}."
         )
 
     if fmt == "json":
@@ -3939,7 +4144,7 @@ def _render_tdoc_show_by_url_json(
     anchored on the URL. ``ftp_url`` is always emitted; ``tdoc``
     is omitted when no matching ``TDoc`` row exists. Optional keys
     (``cover`` / ``ttcn`` / ``extracted_at`` / ``files``) follow
-    the same omit-when-null convention as the existing renderer.
+    the same omit-when-null convention; ``zip_files`` is always present.
 
     When ``compact=True`` the output is a single line with no indent,
     no operator-space, and no trailing newline — sized for tight
@@ -4560,9 +4765,8 @@ def tdoc_show(
         "--ftp-url",
         help=(
             "3GPP FTP URL (full URL or relative path) to show. "
-            "Surfaces every row in tdocs, tdoc_cr_cover_page, "
-            "tdoc_cr_ttcn_details, and tdoc_files whose ftp_url "
-            "matches. Mutually exclusive with --tdoc."
+            "Surfaces every row in the URL-keyed detail tables, including "
+            "tdoc_zip_inventory. Mutually exclusive with --tdoc."
         ),
     ),
     source_file: str | None = typer.Option(
@@ -4603,16 +4807,15 @@ def tdoc_show(
 
     - ``--tdoc <id>`` anchors on the parent TDoc row. Auto-sync
       fires when ``Settings.sync.auto_sync`` is enabled; the parent
-      TDoc's ``ftp_url`` is then used to look up the cover-page,
-      TTCN sidecar, extract meta, and any ``tdoc_files`` rows
-      matching the parent ``tdoc_id``.
+      TDoc's ``ftp_url`` is used to look up the cover page, TTCN and
+      change sidecars, extract metadata, and the outer-ZIP inventory.
+      Auxiliary ``tdoc_files`` still match by the parent ``tdoc_id``.
     - ``--ftp-url <url>`` anchors on the URL. Accepts both full
       URLs (``https://www.3gpp.org/ftp/TSG_RAN/...``) and bare
       relative paths; the value is normalised via
       :func:`normalize_ftp_path` before lookup. Surfaces every
-      matching row across the four tables (``tdocs``,
-      ``tdoc_cr_cover_page``, ``tdoc_cr_ttcn_details``,
-      ``tdoc_files``); auto-sync does NOT fire because no parent
+      matching row across the URL-keyed tables, including
+      ``tdoc_zip_inventory``; auto-sync does NOT fire because no parent
       meeting sync is meaningful for an arbitrary URL.
 
     ``--format`` controls the output representation; ``raw`` emits
@@ -4675,6 +4878,7 @@ def tdoc_show(
         cr_ttcn=build_tdoc_cr_ttcn_repository(),
         cr_change_details=build_tdoc_cr_change_details_repository(),
         file=build_tdoc_file_repository(),
+        zip_inventory=build_tdoc_zip_inventory_repository(),
     )
     try:
         show_record = TDocShowRecord.from_tdoc_id(normalised_tdoc_id, show_repos)
@@ -5683,7 +5887,11 @@ def spec_show(
             },
             "versions": [
                 {
-                    f: _serialise_show_value(getattr(v, f)) for f in version_fields
+                    **{
+                        f: _serialise_show_value(getattr(v, f))
+                        for f in version_fields
+                    },
+                    "zip_files": None if v.zip_files is None else list(v.zip_files),
                 }
                 for v in versions
             ],
@@ -5697,23 +5905,33 @@ def spec_show(
         assert isinstance(v, SpecVersion)
         version_rows.append([_display_show_value(getattr(v, f)) for f in version_fields])
 
-    _emit_records(
-        rows=header_row,
-        fields=header_fields,
-        fmt=fmt,
-        output=output,
-        no_records_msg=f"No spec {spec_id}",
-        compact=resolved_compact,
-    )
-    typer.echo("")
-    _emit_records(
-        rows=version_rows,
-        fields=version_fields,
-        fmt=fmt,
-        output=output,
-        no_records_msg=f"No versions stored for {spec_id}",
-        compact=resolved_compact,
-    )
+    stream, close_after = _open_output(output)
+    try:
+        _emit_records(
+            rows=header_row,
+            fields=header_fields,
+            fmt=fmt,
+            output=stream,
+            no_records_msg=f"No spec {spec_id}",
+            compact=resolved_compact,
+        )
+        stream.write("\n")
+        _emit_records(
+            rows=version_rows,
+            fields=version_fields,
+            fmt=fmt,
+            output=stream,
+            no_records_msg=f"No versions stored for {spec_id}",
+            compact=resolved_compact,
+        )
+        if not version_rows and fmt == "table" and output is None:
+            stream.write(f"No versions stored for {spec_id}\n")
+        _write_spec_version_zip_inventories(
+            stream, spec_id, versions, fmt=fmt, compact=resolved_compact
+        )
+    finally:
+        if close_after:
+            stream.close()
 
 
 VALID_TESTCASE_GROUPS: tuple[str, ...] = ("5G", "LTE", "IMS", "UTRA", "POS", "MCX")

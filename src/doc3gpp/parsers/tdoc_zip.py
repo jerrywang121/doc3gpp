@@ -175,6 +175,21 @@ def _read_first_docx_member(zip_bytes: bytes) -> tuple[str, bytes] | None:
         return source_file, member_bytes
 
 
+def enumerate_zip_files(zip_bytes: bytes) -> tuple[str, ...]:
+    """List outer-ZIP file names in archive order without reading members.
+
+    Directory records are omitted; every other entry is preserved exactly as
+    decoded by zipfile, including duplicates, separator spelling, and names
+    that are not safe filesystem paths.
+    """
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        return tuple(
+            info.filename
+            for info in archive.infolist()
+            if not _is_directory(info, info.filename.replace("\\", "/"))
+        )
+
+
 def enumerate_docx_members(
     zip_bytes: bytes,
     *,

@@ -39,7 +39,7 @@ def _make_fake_repos(
     changes: TDocCRChangeDetails | None,
     files: list[TDocFile],
 ) -> TDocShowRepos:
-    """Build a :class:`TDocShowRepos` whose every method returns canned data."""
+    """Build a TDocShowRepos whose methods return canned data."""
     tdoc_repo = MagicMock()
     tdoc_repo.get_by_id.return_value = tdoc
     tdoc_repo.get_by_ftp_url.return_value = tdoc
@@ -61,12 +61,16 @@ def _make_fake_repos(
     file_repo.get_for_tdoc_id.return_value = files
     file_repo.get_by_ftp_url.return_value = files
 
+    inventory_repo = MagicMock()
+    inventory_repo.get_by_url.return_value = None
+
     return TDocShowRepos(
         tdoc=tdoc_repo,
         cr=cr_repo,
         cr_ttcn=cr_ttcn_repo,
         cr_change_details=cr_change_details_repo,
         file=file_repo,
+        zip_inventory=inventory_repo,
     )
 
 
@@ -326,3 +330,255 @@ def test_no_note_without_extract_or_when_cover_present() -> None:
     record = TDocShowRecord.from_tdoc_id("R5-260003", with_cover)
     assert record.note is None
     assert "note" not in to_jsonable(record)
+
+
+
+def test_detail_selectors_expose_unknown_empty_and_ordered_inventory(sqlite_env) -> None:
+    """Both URL and ID details expose the persisted outer-ZIP inventory."""
+    import json
+
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.models.tdoc_show import (
+        TDocShowRecord,
+        TDocShowRecordByUrl,
+        TDocShowRepos,
+    )
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+        SQLAlchemyTDocCrChangeDetailsRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_file_sql import (
+        SQLAlchemyTDocFileRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    tdoc_repo = SQLAlchemyTDocRepository()
+    inventory_repo = SQLAlchemyTDocZipInventoryRepository()
+    file_repo = SQLAlchemyTDocFileRepository()
+    urls = {
+        "unknown": "archive/R5-INV-UNKNOWN.zip",
+        "empty": "archive/R5-INV-EMPTY.zip",
+        "known": "archive/R5-INV-KNOWN.zip",
+    }
+    tdoc_ids = {
+        key: f"R5-INV-{key.upper()}" for key in urls
+    }
+    for key, url in urls.items():
+        tdoc_repo.upsert(
+            TDoc(tdoc_id=tdoc_ids[key], type="CR", ftp_url=url)
+        )
+    known_files = ("a.docx", "support.pdf", "support.pdf")
+    inventory_repo.upsert(
+        TDocZipInventory(
+            ftp_url=urls["empty"],
+            tdoc_id=tdoc_ids["empty"],
+            zip_files=(),
+        )
+    )
+    inventory_repo.upsert(
+        TDocZipInventory(
+            ftp_url=urls["known"],
+            tdoc_id=tdoc_ids["known"],
+            zip_files=known_files,
+        )
+    )
+    file_repo.upsert_many(
+        [
+            TDocFile(
+                ftp_url="archive/R5-INV-KNOWN-review.zip",
+                tdoc_id=tdoc_ids["known"],
+                type="review",
+                file="R5-INV-KNOWN-review.zip",
+            )
+        ]
+    )
+    repos = TDocShowRepos(
+        tdoc=tdoc_repo,
+        cr=SQLAlchemyTDocCrRepository(),
+        cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
+        file=file_repo,
+        zip_inventory=inventory_repo,
+    )
+
+    from doc3gpp.cli import _build_show_payload
+    from doc3gpp.web.render import to_jsonable
+
+    expected = {
+        "unknown": None,
+        "empty": [],
+        "known": list(known_files),
+    }
+    records = []
+    for key, tdoc_id in tdoc_ids.items():
+        records.append((TDocShowRecord.from_tdoc_id(tdoc_id, repos), key, None))
+        records.append(
+            (
+                TDocShowRecordByUrl.from_ftp_url(urls[key], repos),
+                key,
+                urls[key],
+            )
+        )
+
+    for record, key, url in records:
+        assert record.zip_files == (None if expected[key] is None else tuple(expected[key]))
+        anchor = (
+            {"anchor_key": "ftp_url", "anchor_value": url}
+            if url is not None
+            else {}
+        )
+        cli_payload = _build_show_payload(record, **anchor)
+        http_payload = to_jsonable(record)
+        assert cli_payload["zip_files"] == expected[key]
+        assert http_payload["zip_files"] == expected[key]
+        assert list(cli_payload) == list(http_payload)
+        assert json.dumps(
+            cli_payload, ensure_ascii=False, separators=(",", ":")
+        ) == json.dumps(
+            http_payload, ensure_ascii=False, separators=(",", ":")
+        )
+        if key == "known" and url is None:
+            assert cli_payload["files"][0]["type"] == "review"
+            assert cli_payload["zip_files"] == [
+                "a.docx",
+                "support.pdf",
+                "support.pdf",
+            ]
+
+
+
+def test_show_records_preserve_positional_fields_and_json_order() -> None:
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_file import TDocFile
+    from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl
+    from doc3gpp.web.render import to_jsonable
+
+    tdoc = TDoc(tdoc_id="R5-POSITIONAL", type="CR")
+    files = (
+        TDocFile(
+            tdoc_id=tdoc.tdoc_id,
+            type="review",
+            file="R5-POSITIONAL-review.zip",
+            ftp_url="archive/R5-POSITIONAL-review.zip",
+        ),
+    )
+    note = "read the raw Markdown"
+    url = "archive/R5-POSITIONAL.zip"
+
+    by_id = TDocShowRecord(tdoc, None, None, None, None, files, note)
+    assert by_id.files == files
+    assert by_id.note == note
+    assert by_id.zip_files is None
+
+    by_url = TDocShowRecordByUrl(url, tdoc, None, None, None, None, files, note)
+    assert by_url.files == files
+    assert by_url.note == note
+    assert by_url.zip_files is None
+
+    by_id_with_inventory = TDocShowRecord(
+        tdoc,
+        None,
+        None,
+        None,
+        None,
+        files,
+        note,
+        zip_files=("main.docx",),
+    )
+    by_url_with_inventory = TDocShowRecordByUrl(
+        url,
+        tdoc,
+        None,
+        None,
+        None,
+        None,
+        files,
+        note,
+        zip_files=("main.docx",),
+    )
+    assert by_id_with_inventory.zip_files == ("main.docx",)
+    assert by_url_with_inventory.zip_files == ("main.docx",)
+
+    by_id_payload = to_jsonable(by_id_with_inventory)
+    by_url_payload = to_jsonable(by_url_with_inventory)
+    assert list(by_id_payload) == ["tdoc", "zip_files", "files", "note"]
+    assert list(by_url_payload) == [
+        "ftp_url",
+        "tdoc",
+        "zip_files",
+        "files",
+        "note",
+    ]
+    assert by_id_payload["zip_files"] == ["main.docx"]
+    assert by_id_payload["files"][0]["file"] == "R5-POSITIONAL-review.zip"
+    assert by_id_payload["note"] == note
+
+
+def test_by_id_uses_current_url_and_by_url_finds_old_inventory(sqlite_env) -> None:
+    """ID reads use the current URL while URL reads can find historical inventory."""
+    from doc3gpp.models.tdoc import TDoc
+    from doc3gpp.models.tdoc_show import (
+        TDocShowRecord,
+        TDocShowRecordByUrl,
+        TDocShowRepos,
+    )
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.storage.db.migrate import create_schema
+    from doc3gpp.storage.repositories.tdoc_cr_change_details_sql import (
+        SQLAlchemyTDocCrChangeDetailsRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_cr_sql import SQLAlchemyTDocCrRepository
+    from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
+        SQLAlchemyTDocCrTtcnRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_file_sql import (
+        SQLAlchemyTDocFileRepository,
+    )
+    from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    tdoc_id = "R5s260001"
+    old_url = "archive/R5s260001-r1.zip"
+    current_url = "archive/r5s260001-r2.zip"
+    tdoc_repo = SQLAlchemyTDocRepository()
+    inventory_repo = SQLAlchemyTDocZipInventoryRepository()
+    tdoc_repo.upsert(TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=current_url))
+    inventory_repo.upsert(
+        TDocZipInventory(ftp_url=old_url, tdoc_id=tdoc_id, zip_files=())
+    )
+    inventory_repo.upsert(
+        TDocZipInventory(
+            ftp_url=current_url,
+            tdoc_id=tdoc_id,
+            zip_files=("current.docx",),
+        )
+    )
+    repos = TDocShowRepos(
+        tdoc=tdoc_repo,
+        cr=SQLAlchemyTDocCrRepository(),
+        cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
+        cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
+        file=SQLAlchemyTDocFileRepository(),
+        zip_inventory=inventory_repo,
+    )
+
+    by_id = TDocShowRecord.from_tdoc_id(tdoc_id, repos)
+    historical = TDocShowRecordByUrl.from_ftp_url(old_url, repos)
+
+    assert by_id.tdoc.ftp_url == current_url
+    assert by_id.zip_files == ("current.docx",)
+    assert historical.tdoc is None
+    assert historical.zip_files == ()

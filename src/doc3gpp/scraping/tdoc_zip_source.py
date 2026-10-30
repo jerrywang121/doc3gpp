@@ -40,21 +40,11 @@ CacheSubdir = Literal["zips", "markdown"]
 
 
 class DownloadedZip(NamedTuple):
-    """Result of a successful zip download.
-
-    Attributes:
-        path: Cache path to the zip bytes. Always set, whether the bytes
-            came from a fresh network fetch or a prior cache hit.
-        url: The exact URL the bytes were fetched from, when known.
-            ``None`` on a cache hit (the URL that populated the cache
-            in an earlier call is not tracked here) and on a fresh
-            download only when every candidate URL was deduplicated to
-            a single fetch — the service layer treats ``None`` as
-            "no provenance available" rather than an error.
-    """
+    """Result and optional provenance-bound bytes for a TDoc ZIP."""
 
     path: Path
     url: str | None
+    payload: bytes | None = None
 
 
 class TDocZipDownloadError(Exception):
@@ -106,34 +96,23 @@ class TDocTooLargeError(Exception):
 
 
 class TDocCacheLike(Protocol):
-    """Minimal cache interface consumed by ``download_tdoc_zip``.
-
-    Defined as a Protocol so Phase 1's ``TDocCache`` implementation can
-    slot in without import gymnastics. Keep this in sync with
-    ``src/doc3gpp/scraping/cache.py`` once Phase 1 lands.
-
-    The ``root`` property exposes the cache directory so callers (e.g.
-    the service layer rendering ``tdoc show --format raw``) can
-    reconstruct per-entry paths under ``zips/`` and ``markdown/``
-    without needing the cache to expose a per-key path helper for
-    keys it has not yet materialised.
-    """
+    """Minimal cache surface consumed by TDoc ZIP download code."""
 
     def put_bytes(self, key: str, payload: bytes, subdir: CacheSubdir) -> Path: ...
 
     def get_bytes(self, key: str, subdir: CacheSubdir) -> bytes | None: ...
 
+    def get_zip_with_provenance(self, key: str) -> tuple[bytes, str] | None: ...
+
+    def put_zip_with_provenance(
+        self, key: str, data: bytes, source_url: str
+    ) -> Path: ...
+
     def path_for(self, key: str, subdir: CacheSubdir) -> Path: ...
 
     @property
     def root(self) -> Path:
-        """Absolute path to the cache root.
-
-        The service layer uses this to reconstruct per-entry paths under
-        ``zips/`` and ``markdown/`` (e.g. for ``tdoc show --format raw``).
-        Implementations must return the same root their ``path_for(key, subdir)``
-        calls prepend.
-        """
+        """Absolute cache root used to reconstruct paths for cached content."""
         ...
 
 
@@ -273,25 +252,9 @@ def download_tdoc_zip(
     *,
     ftp_url: str | None = None,
     max_bytes: int = 0,
+    require_provenance: bool = False,
 ) -> DownloadedZip:
-    """Return a :class:`DownloadedZip` for the TDoc, downloading on cache miss.
-
-    See the existing docstring for cache / URL semantics. When
-    ``max_bytes > 0``:
-
-    * On a cache hit, the cached file is statted first; if its size
-      exceeds ``max_bytes``, :class:`TDocTooLargeError` is raised
-      before any network I/O.
-    * On a fresh download, the bytes are written to the cache (so a
-      subsequent call hits the cache-hit path) and then statted; if
-      they exceed ``max_bytes``, :class:`TDocTooLargeError` is raised
-      before returning.
-
-    ``max_bytes=0`` disables both checks (the historical behaviour). ZIP
-    member-count and aggregate expanded-size limits are applied by the shared
-    parser after these source bytes are returned; this transport layer does not
-    enumerate or convert DOCX members.
-    """
+    """Return a cached or downloaded TDoc ZIP, optionally with verified provenance."""
     if not tdoc:
         raise ValueError("TDoc id is empty")
 
@@ -299,16 +262,35 @@ def download_tdoc_zip(
     if canonical is None:
         raise ValueError(f"Invalid TDoc id shape: {tdoc!r}")
 
-    cached_bytes: bytes | None = None
-    cache_key: str | None = None
-    if ftp_url:
-        cache_key = derive_cache_file(ftp_url)
+    candidates: list[str] = []
+    if primary_url:
+        candidates.append(primary_url)
+    template_url = get_tdoc_zip_url(canonical)
+    if template_url and template_url not in candidates:
+        candidates.append(template_url)
+
+    cache_key = derive_cache_file(ftp_url) if ftp_url else None
+    if cache_key is not None and require_provenance:
+        verified = cache.get_zip_with_provenance(cache_key)
+        if verified is not None:
+            cached_bytes, source_url = verified
+            if source_url in candidates:
+                if max_bytes > 0 and len(cached_bytes) > max_bytes:
+                    cached_path = cache.path_for(cache_key, "zips")
+                    raise TDocTooLargeError(
+                        source=f"cache:{cached_path}",
+                        size=len(cached_bytes),
+                        limit=max_bytes,
+                    )
+                logger.debug("Verified provenance cache hit for TDoc zip %s", cache_key)
+                return DownloadedZip(
+                    path=cache.path_for(cache_key, "zips"),
+                    url=source_url,
+                    payload=cached_bytes,
+                )
+    elif cache_key is not None:
         cached_bytes = cache.get_bytes(cache_key, "zips")
         if cached_bytes is not None:
-            # Pre-fetch cache size guard. ``stat`` reflects the on-disk
-            # size even after the atomic rename in ``put_bytes``; falls
-            # back to ``len(cached_bytes)`` if the file vanished between
-            # the read and the stat.
             if max_bytes > 0:
                 cached_path = cache.path_for(cache_key, "zips")
                 try:
@@ -323,13 +305,6 @@ def download_tdoc_zip(
                     )
             logger.debug("Cache hit for TDoc zip %s", cache_key)
             return DownloadedZip(path=cache.path_for(cache_key, "zips"), url=None)
-
-    candidates: list[str] = []
-    if primary_url:
-        candidates.append(primary_url)
-    template_url = get_tdoc_zip_url(canonical)
-    if template_url and template_url not in candidates:
-        candidates.append(template_url)
 
     if not candidates:
         raise TDocZipDownloadError(url="", original=ValueError("no URL template"))
@@ -347,12 +322,27 @@ def download_tdoc_zip(
             )
             last_error = TDocZipDownloadError(url=url, original=exc)
             continue
+
         if cache_key is None:
             cache_key = derive_cache_file(url)
+        if require_provenance:
+            if max_bytes > 0 and len(payload) > max_bytes:
+                raise TDocTooLargeError(
+                    source=f"download:{url}",
+                    size=len(payload),
+                    limit=max_bytes,
+                )
+            cached_path = cache.put_zip_with_provenance(cache_key, payload, url)
+            logger.info(
+                "Cached TDoc zip %s at %s (%d bytes) with source provenance from %s",
+                cache_key,
+                cached_path,
+                len(payload),
+                url,
+            )
+            return DownloadedZip(path=cached_path, url=url, payload=payload)
+
         cached_path = cache.put_bytes(cache_key, payload, "zips")
-        # Post-fetch size guard. The bytes are already on disk so a
-        # future call can short-circuit on the cache-hit path; the
-        # exception fires before returning to the caller.
         if max_bytes > 0 and len(payload) > max_bytes:
             raise TDocTooLargeError(
                 source=f"download:{url}",
@@ -368,5 +358,5 @@ def download_tdoc_zip(
         )
         return DownloadedZip(path=cached_path, url=url)
 
-    assert last_error is not None  # candidates is non-empty, so we must have set it
+    assert last_error is not None
     raise last_error

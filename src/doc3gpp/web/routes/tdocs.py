@@ -27,6 +27,7 @@ from markdown_it import MarkdownIt
 from doc3gpp.models.schema_info import RESOURCE_SCHEMAS, schema_payload
 from doc3gpp.models.tdoc import TDoc
 from doc3gpp.models.tdoc_content import TDocContent
+from doc3gpp.models.tdoc_content_families import store_for_type
 from doc3gpp.models.tdoc_show import (
     TDocShowRecord,
     TDocShowRecordByUrl,
@@ -53,6 +54,9 @@ from doc3gpp.storage.repositories.tdoc_cr_ttcn_sql import (
     SQLAlchemyTDocCrTtcnRepository,
 )
 from doc3gpp.storage.repositories.tdoc_sql import SQLAlchemyTDocRepository
+from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+    SQLAlchemyTDocZipInventoryRepository,
+)
 from doc3gpp.web.deps import (
     get_pending_jobs,
     get_settings,
@@ -133,7 +137,7 @@ def _build_show_repos(
     The repository Protocol-typed collaborators live on the per-app
     state container; we re-build concrete instances because the
     show-composition is an inner-layer read, not a service-layer
-    operation. The same five repos the CLI's ``tdoc show`` uses.
+    operation. The same six repositories the CLI's ``tdoc show`` uses.
     The file repo is injected via :func:`get_tdoc_file_repo` so tests
     can override it without poking at ``app.state``.
     """
@@ -143,7 +147,21 @@ def _build_show_repos(
         cr_ttcn=SQLAlchemyTDocCrTtcnRepository(),
         cr_change_details=SQLAlchemyTDocCrChangeDetailsRepository(),
         file=file_repo,
+        zip_inventory=SQLAlchemyTDocZipInventoryRepository(),
     )
+
+
+
+def _tdoc_zip_inventory_force_hint(
+    record: TDocShowRecord | TDocShowRecordByUrl,
+) -> str | None:
+    """Return a force-parse hint only when the matching TDoc type is eligible."""
+    tdoc = record.tdoc
+    if tdoc is None or store_for_type(tdoc.type) is None:
+        return None
+    if isinstance(record, TDocShowRecordByUrl):
+        return f"doc3gpp tdoc parse --from-url {record.ftp_url} --force"
+    return f"doc3gpp tdoc parse --tdoc {tdoc.tdoc_id} --force"
 
 
 def _resolve_cache_file(tdoc: TDoc) -> str:
@@ -383,6 +401,7 @@ async def show_tdoc_by_url(
         and record.ttcn is None
         and record.changes is None
         and not record.files
+        and record.zip_files is None
     ):
         raise TDocUrlNotFoundError(normalised)
 
@@ -401,6 +420,7 @@ async def show_tdoc_by_url(
             "active_nav": "tdocs",
             "record": record,
             "has_cached_zip": has_cached_zip,
+            "zip_inventory_force_hint": _tdoc_zip_inventory_force_hint(record),
         },
     )
 
@@ -434,6 +454,7 @@ async def show_tdoc(
             "active_nav": "tdocs",
             "record": record,
             "has_cached_zip": has_cached_zip,
+            "zip_inventory_force_hint": _tdoc_zip_inventory_force_hint(record),
         },
     )
 

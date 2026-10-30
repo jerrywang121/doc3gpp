@@ -30,6 +30,7 @@ from typing import Any
 from doc3gpp.models.jobs import JSONValue
 from doc3gpp.models.tdoc import TDocWithMeeting
 from doc3gpp.models.tdoc_cr_change_details import TDocCRChangeDetails
+from doc3gpp.models.tdoc_show import TDocShowRecord, TDocShowRecordByUrl
 
 
 def _serialise_scalar(value: Any) -> Any:
@@ -169,10 +170,10 @@ def to_jsonable(value: Any) -> JSONValue:
     * ``dict`` — recursively mapped; keys are coerced to ``str``.
     * Dataclass instances — walked via :func:`dataclasses.fields`. The
       outermost dataclass is serialised with the **omit-when-null**
-      convention (any field whose value is ``None`` is dropped); nested
-      dataclasses are serialised with every field included so the
-      CLI's nested-object shape (e.g. ``cover.spec = null``) is
-      preserved.
+      convention, except ``zip_files`` on the two TDoc detail DTOs, which
+      remains explicit when unknown or empty. Nested dataclasses keep every
+      field so the CLI's nested-object shape (e.g. ``cover.spec = null``)
+      is preserved.
     * Other objects — fall back to ``str(value)`` so the encoder never
       raises on a domain object a future endpoint adds.
     """
@@ -224,20 +225,32 @@ def _change_details_to_dict(value: TDocCRChangeDetails) -> dict[str, JSONValue]:
 
 
 def _dataclass_to_dict(value: Any, *, is_top: bool) -> dict[str, JSONValue]:
-    """Serialise ``value`` into a dict, optionally omitting ``None`` fields.
+    """Serialise the value into a dict, optionally omitting None fields.
 
-    The CLI's :func:`_build_show_payload` uses per-field conditionals
-    to drop absent values at the top of a ``TDocShowRecord`` payload.
-    :func:`to_jsonable` reproduces that rule generically for the
-    outermost dataclass (``is_top=True``) — ``None`` fields and empty
-    containers are dropped so HTTP and CLI JSON envelopes stay
-    byte-equivalent. Nested dataclasses (``is_top=False``) keep every
-    field (including ``None`` values) so the nested-object shape the
-    CLI emits is preserved.
+    Top-level detail DTOs retain zip_files even when its value is None or
+    an empty tuple; their other optional fields continue to follow the
+    normal omit-when-null rule. Nested dataclasses keep every field so
+    CLI and HTTP object shapes remain aligned.
     """
     out: dict[str, JSONValue] = {}
-    for f in dataclass_fields(value):
+    include_zip_files = is_top and isinstance(
+        value, (TDocShowRecord, TDocShowRecordByUrl)
+    )
+    fields = list(dataclass_fields(value))
+    if include_zip_files:
+        zip_field = next(field for field in fields if field.name == "zip_files")
+        fields.remove(zip_field)
+        extracted_at_index = next(
+            index
+            for index, field in enumerate(fields)
+            if field.name == "extracted_at"
+        )
+        fields.insert(extracted_at_index + 1, zip_field)
+    for f in fields:
         raw = getattr(value, f.name)
+        if include_zip_files and f.name == "zip_files":
+            out[f.name] = _to_jsonable(raw, is_top=False)
+            continue
         if is_top:
             if raw is None:
                 continue
@@ -274,9 +287,11 @@ def _coerce_cell(value: Any) -> str:
 
 
 def _spec_cell(field: str, value: Any) -> object:
-    """Preserve transient parsed values in spec JSON rows."""
+    """Preserve transient parsed and ZIP inventory values in spec JSON rows."""
     if field == "parsed":
         return value
+    if field == "zip_files":
+        return None if value is None else list(value)
     return _coerce_cell(value)
 
 

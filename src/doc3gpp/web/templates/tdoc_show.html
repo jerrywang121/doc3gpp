@@ -99,7 +99,9 @@
   {% else %}
     <section class="card placeholder">
       <h2>Cover page</h2>
-      {% if record.tdoc %}
+      {% if record.note %}
+        <p>No cover page information is available for this TDoc. This TDoc has already been parsed; its full content is available as raw Markdown.</p>
+      {% elif record.tdoc %}
         <p>Not yet extracted. Run <code>doc3gpp tdoc parse --tdoc {{ record.tdoc.tdoc_id }}</code> to populate.</p>
       {% else %}
         <p>Not yet extracted. Run <code>doc3gpp tdoc parse --from-url {{ record.ftp_url }}</code> to populate.</p>
@@ -170,6 +172,24 @@
       <p><code>{{ record.extracted_at.isoformat() }}</code></p>
     </section>
   {% endif %}
+
+  <section class="card">
+    <h2>ZIP files</h2>
+    {% if record.zip_files is none %}
+      <p class="placeholder">ZIP file inventory unavailable.</p>
+      {% if zip_inventory_force_hint %}
+        <p>Re-parse with <code>{{ zip_inventory_force_hint | e }}</code> to refresh this inventory.</p>
+      {% endif %}
+    {% elif record.zip_files %}
+      <ul class="zip-files">
+        {% for zip_file in record.zip_files %}
+          <li><code>{{ zip_file | e }}</code></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No files in the ZIP archive.</p>
+    {% endif %}
+  </section>
 
   {% if record.files %}
     <section class="card">

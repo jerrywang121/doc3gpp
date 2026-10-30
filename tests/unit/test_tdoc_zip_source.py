@@ -632,3 +632,196 @@ def test_download_tdoc_zip_max_bytes_zero_is_noop(tmp_path) -> None:
         max_bytes=0,
     )
     assert result.path.exists()
+
+
+
+def test_legacy_cached_zip_redownloads_before_inventory(tmp_path) -> None:
+    from doc3gpp.scraping.cache import TDocCache
+
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/manual/R5s260009.zip"
+    primary = "https://www.3gpp.org/ftp/" + ftp_url
+    cache = TDocCache(tmp_path / "cache", size_limit_bytes=0)
+    key = derive_cache_file(ftp_url)
+    cache.put_bytes(key, b"legacy unverified ZIP", "zips")
+    client = _FakeScraperClient(url_payloads={primary: b"fresh ZIP bytes"})
+
+    result = download_tdoc_zip(
+        "R5s260009",
+        client,
+        cache,
+        primary_url=primary,
+        ftp_url=ftp_url,
+        require_provenance=True,
+    )
+
+    assert client.calls == [primary]
+    assert result.url == primary
+    assert result.payload == b"fresh ZIP bytes"
+    assert cache.get_zip_with_provenance(key) == (b"fresh ZIP bytes", primary)
+
+
+def test_fallback_download_cache_hit_preserves_actual_source(tmp_path) -> None:
+    import httpx
+
+    from doc3gpp.scraping.cache import TDocCache
+
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/manual/R5s260009.zip"
+    primary = "https://www.3gpp.org/ftp/" + ftp_url
+    fallback = get_tdoc_zip_url("R5s260009")
+    assert fallback is not None and fallback != primary
+    cache = TDocCache(tmp_path / "cache", size_limit_bytes=0)
+    client = _FakeScraperClient(
+        url_errors={primary: httpx.ConnectError("primary unavailable")},
+        url_payloads={fallback: b"fallback ZIP bytes"},
+    )
+
+    first = download_tdoc_zip(
+        "R5s260009",
+        client,
+        cache,
+        primary_url=primary,
+        ftp_url=ftp_url,
+        require_provenance=True,
+    )
+    no_network = _FakeScraperClient(error=AssertionError("verified cache should be reused"))
+    second = download_tdoc_zip(
+        "R5s260009",
+        no_network,
+        cache,
+        primary_url=primary,
+        ftp_url=ftp_url,
+        require_provenance=True,
+    )
+
+    assert first.url == fallback and first.payload == b"fallback ZIP bytes"
+    assert second.url == fallback and second.payload == b"fallback ZIP bytes"
+    assert no_network.calls == []
+
+
+@pytest.mark.parametrize("provenance_state", ["missing", "malformed", "candidate", "digest"])
+def test_missing_malformed_wrong_candidate_or_wrong_digest_provenance_redownloads(
+    tmp_path, provenance_state: str
+) -> None:
+    import json
+
+    from doc3gpp.scraping.cache import TDocCache
+
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/manual/R5s260009.zip"
+    primary = "https://www.3gpp.org/ftp/" + ftp_url
+    cache = TDocCache(tmp_path / provenance_state, size_limit_bytes=0)
+    key = derive_cache_file(ftp_url)
+    if provenance_state == "missing":
+        cache.put_bytes(key, b"stale bytes", "zips")
+    elif provenance_state == "candidate":
+        cache.put_zip_with_provenance(key, b"stale bytes", "https://example.test/not-a-candidate.zip")
+    else:
+        cache.put_zip_with_provenance(key, b"stale bytes", primary)
+        sidecar = next((cache.root / "zips" / ".provenance").glob("*.json"))
+        if provenance_state == "malformed":
+            sidecar.write_bytes(b'{"version":')
+        else:
+            record = json.loads(sidecar.read_text(encoding="utf-8"))
+            record["sha256"] = "0" * 64
+            sidecar.write_text(json.dumps(record), encoding="utf-8")
+    client = _FakeScraperClient(url_payloads={primary: b"replacement ZIP"})
+
+    result = download_tdoc_zip(
+        "R5s260009",
+        client,
+        cache,
+        primary_url=primary,
+        ftp_url=ftp_url,
+        require_provenance=True,
+    )
+
+    assert client.calls == [primary]
+    assert result.payload == b"replacement ZIP"
+    assert result.url == primary
+    assert cache.get_zip_with_provenance(key) == (b"replacement ZIP", primary)
+
+
+def test_unknown_provenance_download_failure_preserves_cache(tmp_path) -> None:
+    import httpx
+
+    from doc3gpp.scraping.cache import TDocCache
+    from doc3gpp.scraping.tdoc_zip_source import TDocZipDownloadError
+
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/manual/R5s260009.zip"
+    primary = "https://www.3gpp.org/ftp/" + ftp_url
+    fallback = get_tdoc_zip_url("R5s260009")
+    assert fallback is not None
+    key = derive_cache_file(ftp_url)
+    cache = TDocCache(tmp_path / "cache", size_limit_bytes=0)
+    cache.put_bytes(key, b"legacy bytes", "zips")
+    client = _FakeScraperClient(
+        url_errors={
+            primary: httpx.ConnectError("primary unavailable"),
+            fallback: httpx.ConnectError("fallback unavailable"),
+        }
+    )
+
+    with pytest.raises(TDocZipDownloadError):
+        download_tdoc_zip(
+            "R5s260009",
+            client,
+            cache,
+            primary_url=primary,
+            ftp_url=ftp_url,
+            require_provenance=True,
+        )
+
+    assert cache.get_bytes(key, "zips") == b"legacy bytes"
+    assert cache.get_zip_with_provenance(key) is None
+
+
+def test_cached_provenance_does_not_bypass_source_size_limit(tmp_path) -> None:
+    from doc3gpp.scraping.cache import TDocCache
+    from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
+
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/manual/R5s260009.zip"
+    primary = "https://www.3gpp.org/ftp/" + ftp_url
+    key = derive_cache_file(ftp_url)
+    payload = b"verified payload is oversized"
+    cache = TDocCache(tmp_path / "cache", size_limit_bytes=0)
+    cache.put_zip_with_provenance(key, payload, primary)
+    client = _FakeScraperClient(error=AssertionError("size guard must run before network"))
+
+    with pytest.raises(TDocTooLargeError) as exc_info:
+        download_tdoc_zip(
+            "R5s260009",
+            client,
+            cache,
+            primary_url=primary,
+            ftp_url=ftp_url,
+            max_bytes=4,
+            require_provenance=True,
+        )
+
+    assert exc_info.value.size == len(payload)
+    assert client.calls == []
+
+
+def test_oversized_provenance_redownload_preserves_existing_cache(tmp_path) -> None:
+    from doc3gpp.scraping.cache import TDocCache
+    from doc3gpp.scraping.tdoc_zip_source import TDocTooLargeError
+
+    ftp_url = "tsg_ran/wg5_test_ex-t1/ttcn/ttcn_crs/2026/docs/manual/R5s260009.zip"
+    primary = "https://www.3gpp.org/ftp/" + ftp_url
+    key = derive_cache_file(ftp_url)
+    cache = TDocCache(tmp_path / "cache", size_limit_bytes=0)
+    cache.put_bytes(key, b"old bytes", "zips")
+    client = _FakeScraperClient(url_payloads={primary: b"download too large"})
+
+    with pytest.raises(TDocTooLargeError):
+        download_tdoc_zip(
+            "R5s260009",
+            client,
+            cache,
+            primary_url=primary,
+            ftp_url=ftp_url,
+            max_bytes=4,
+            require_provenance=True,
+        )
+
+    assert cache.get_bytes(key, "zips") == b"old bytes"
+    assert cache.get_zip_with_provenance(key) is None

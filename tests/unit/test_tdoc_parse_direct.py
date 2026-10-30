@@ -335,16 +335,15 @@ def test_build_no_pattern_warning_message_mentions_pattern() -> None:
 
 
 class _StubCache:
-    """In-memory ``TDocCacheLike`` double for cache key derivation tests.
+    """In-memory TDocCacheLike double for cache key derivation tests.
 
-    Records every ``get_bytes`` / ``put_bytes`` / ``path_for`` call so
-    the test can assert which key the function probed and which path
-    the bytes landed at.
+    Records byte operations so tests can assert which key was read or written.
     """
 
     def __init__(self) -> None:
         self._root: Path = Path("/tmp/_stub_parse_cache")
         self.store: dict[tuple[str, str], bytes] = {}
+        self.provenance: dict[str, tuple[bytes, str]] = {}
         self.get_calls: list[tuple[str, str]] = []
         self.put_calls: list[tuple[str, bytes, str]] = []
         self.path_calls: list[tuple[str, str]] = []
@@ -356,7 +355,22 @@ class _StubCache:
     def put_bytes(self, key: str, payload: bytes, subdir: str) -> Path:
         self.put_calls.append((key, payload, subdir))
         self.store[(key, subdir)] = payload
+        if subdir == "zips":
+            self.provenance.pop(key, None)
         return Path(f"/cache/{subdir}/{key}")
+
+    def get_zip_with_provenance(self, key: str) -> tuple[bytes, str] | None:
+        return self.provenance.get(key)
+
+    def put_zip_with_provenance(
+        self,
+        key: str,
+        data: bytes,
+        source_url: str,
+    ) -> Path:
+        path = self.put_bytes(key, data, "zips")
+        self.provenance[key] = (data, source_url)
+        return path
 
     def path_for(self, key: str, subdir: str) -> Path:
         self.path_calls.append((key, subdir))

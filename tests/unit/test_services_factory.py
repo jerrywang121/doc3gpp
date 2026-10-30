@@ -153,7 +153,7 @@ def test_build_spec_service_wires_settings(monkeypatch, tmp_path) -> None:
 
 
 def test_build_spec_service_wires_parsed_status_repository(monkeypatch) -> None:
-    """The spec service receives the configured parsed-status reader."""
+    """The spec service receives both configured specdata readers."""
     from datetime import timedelta
     from types import SimpleNamespace
 
@@ -161,6 +161,7 @@ def test_build_spec_service_wires_parsed_status_repository(monkeypatch) -> None:
 
     spec_repository = object()
     parsed_status_repository = object()
+    inventory_repository = object()
     spec_sync_interval = timedelta(hours=12)
     settings = SimpleNamespace(
         sync=SimpleNamespace(spec_sync_interval=spec_sync_interval)
@@ -174,12 +175,18 @@ def test_build_spec_service_wires_parsed_status_repository(monkeypatch) -> None:
         lambda: parsed_status_repository,
         raising=False,
     )
+    monkeypatch.setattr(
+        factory,
+        "SQLAlchemySpecDocZipInventoryRepository",
+        lambda: inventory_repository,
+    )
     monkeypatch.setattr(factory, "get_settings", lambda: settings)
 
     service = factory.build_spec_service()
 
     assert service._repository is spec_repository
     assert service._parsed_status_repository is parsed_status_repository
+    assert service._inventory_repository is inventory_repository
     assert service._sync_interval == spec_sync_interval
 
 

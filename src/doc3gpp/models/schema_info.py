@@ -166,6 +166,14 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
             ),
         ),
         TableSchema(
+            table="tdoc_zip_inventory",
+            fields=(
+                FieldInfo("ftp_url", "text", False, "Normalized relative ZIP download URL; primary key and immutable archive identity."),
+                FieldInfo("tdoc_id", "str", False, "Owning TDoc ID; FK into tdocs.tdoc_id with cascade delete."),
+                FieldInfo("zip_files", "text", False, "Lossless JSON array of decoded outer-ZIP file names in archive order, retaining duplicates; an empty array means a known empty archive."),
+            ),
+        ),
+        TableSchema(
             table="tdoc_cr_cover_page",
             fields=(
                 FieldInfo("ftp_url", "str", False, "Relative download path under https://www.3gpp.org/ftp/; primary key and row identity (one row per URL, not per tdoc_id)."),
@@ -333,6 +341,15 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
         ),
     ),
     "spec_doc": (
+        TableSchema(
+            table="spec_doc_zip_inventory",
+            fields=(
+                FieldInfo("spec_id", "str", False, "Dotted spec id; first half of the composite PK."),
+                FieldInfo("version", "str", False, "Version string; second half of the composite PK."),
+                FieldInfo("release", "str", True, "Canonical release marker, e.g. Rel-18."),
+                FieldInfo("zip_files", "text", False, "JSON array of outer-ZIP file names in order, preserving duplicates."),
+            ),
+        ),
         TableSchema(
             table="spec_doc_sources",
             fields=(

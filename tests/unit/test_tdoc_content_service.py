@@ -94,10 +94,15 @@ def _seed_sql_bundle(
 
 
 def _make_service(cache_root: Path):
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
     return TDocContentService(
         tdoc_repository=SQLAlchemyTDocRepository(),
         cr_repository=SQLAlchemyTDocCrRepository(),
         content_repository=SQLAlchemyTDocContentRepository(),
+        inventory_repository=SQLAlchemyTDocZipInventoryRepository(),
         cache_root=cache_root,
     )
 
@@ -159,6 +164,90 @@ def test_tdoc_and_exact_url_selectors_return_all_documents_in_order(
             document.document_id for document in stored_documents
         ]
     assert meta.cache_file == "bundle.zip"
+
+
+
+def test_content_selectors_expose_unknown_empty_and_ordered_inventory(
+    sqlite_env,
+    tmp_path,
+) -> None:
+    """Both content selectors retain unknown, empty, ordered ZIP file lists."""
+    from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
+    from doc3gpp.services.tdoc_content_service import (
+        TDocContentService,
+        tdoc_content_to_dict,
+    )
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
+    create_schema("main")
+    cache_root = tmp_path / "cache"
+    cases = {
+        "unknown": ("R5-CONTENT-INV-UNKNOWN", "archive/content-unknown.zip"),
+        "empty": ("R5-CONTENT-INV-EMPTY", "archive/content-empty.zip"),
+        "known": ("R5-CONTENT-INV-KNOWN", "archive/content-known.zip"),
+    }
+    for tdoc_id, ftp_url in cases.values():
+        _seed_sql_bundle(
+            tdoc_id,
+            ftp_url,
+            cache_root,
+            cache_file=f"{tdoc_id}.zip",
+        )
+
+    inventory_repo = SQLAlchemyTDocZipInventoryRepository()
+    known_files = ("a.docx", "support.pdf", "support.pdf")
+    empty_id, empty_url = cases["empty"]
+    known_id, known_url = cases["known"]
+    inventory_repo.upsert(
+        TDocZipInventory(ftp_url=empty_url, tdoc_id=empty_id, zip_files=())
+    )
+    inventory_repo.upsert(
+        TDocZipInventory(
+            ftp_url=known_url,
+            tdoc_id=known_id,
+            zip_files=known_files,
+        )
+    )
+    service = TDocContentService(
+        tdoc_repository=SQLAlchemyTDocRepository(),
+        cr_repository=SQLAlchemyTDocCrRepository(),
+        content_repository=SQLAlchemyTDocContentRepository(),
+        inventory_repository=inventory_repo,
+        cache_root=cache_root,
+    )
+
+    expected = {
+        "unknown": None,
+        "empty": [],
+        "known": list(known_files),
+    }
+    for key, (tdoc_id, ftp_url) in cases.items():
+        contents = (
+            service.get(tdoc_id=tdoc_id),
+            service.get(ftp_url=ftp_url),
+        )
+        for content in contents:
+            assert content.zip_files == (
+                None if expected[key] is None else tuple(expected[key])
+            )
+            assert tdoc_content_to_dict(content)["zip_files"] == expected[key]
+
+    selected_by_id = service.get(
+        tdoc_id=known_id,
+        source_file=ANNEX_SOURCE,
+    )
+    selected_by_url = service.get(
+        ftp_url=known_url,
+        source_file=ANNEX_SOURCE,
+    )
+    for selected in (selected_by_id, selected_by_url):
+        assert [document.source_file for document in selected.documents] == [
+            ANNEX_SOURCE
+        ]
+        assert selected.zip_files == known_files
+        assert tdoc_content_to_dict(selected)["zip_files"] == list(known_files)
 
 
 def test_exact_url_selector_reads_historical_bundle_and_exact_source(
@@ -450,6 +539,7 @@ def test_tdoc_content_json_shape_is_shared_and_stable() -> None:
     assert tdoc_content_to_dict(content) == {
         "tdoc_id": "R5-CONTENT-JSON",
         "ftp_url": "archive/R5-CONTENT-JSON.zip",
+        "zip_files": None,
         "extraction_version": 2,
         "complete": True,
         "skipped_sources": [],
@@ -462,6 +552,52 @@ def test_tdoc_content_json_shape_is_shared_and_stable() -> None:
             }
         ],
     }
+
+
+
+def test_tdoc_content_preserves_skipped_sources_positional_argument() -> None:
+    from doc3gpp.models.tdoc_content import TDocContent, TDocContentDocument
+    from doc3gpp.services.tdoc_content_service import tdoc_content_to_dict
+
+    document = TDocContentDocument(
+        document_id="a" * 64,
+        source_file="CR/main.docx",
+        is_main=True,
+        markdown="# Main",
+    )
+    skipped_sources = ("Annex/broken.docx",)
+    content = TDocContent(
+        "R5-CONTENT-POSITIONAL",
+        "archive/R5-CONTENT-POSITIONAL.zip",
+        2,
+        False,
+        (document,),
+        skipped_sources,
+    )
+    assert content.skipped_sources == skipped_sources
+    assert content.zip_files is None
+
+    content_with_inventory = TDocContent(
+        "R5-CONTENT-POSITIONAL",
+        "archive/R5-CONTENT-POSITIONAL.zip",
+        2,
+        False,
+        (document,),
+        skipped_sources,
+        zip_files=("Annex/support.pdf",),
+    )
+    payload = tdoc_content_to_dict(content_with_inventory)
+    assert payload["skipped_sources"] == list(skipped_sources)
+    assert payload["zip_files"] == ["Annex/support.pdf"]
+    assert list(payload) == [
+        "tdoc_id",
+        "ftp_url",
+        "zip_files",
+        "extraction_version",
+        "complete",
+        "skipped_sources",
+        "documents",
+    ]
 
 
 def test_shared_markdown_renderer_keeps_one_body_and_safely_labels_many() -> None:

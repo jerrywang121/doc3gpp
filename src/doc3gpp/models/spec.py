@@ -76,6 +76,8 @@ class SpecVersion:
         wki_id: Transient ETSI work-item id (not persisted).
         parsed: Transient output value indicating whether this version has
             parsed spec-document content; it is not persisted.
+        zip_files: Transient ordered inventory of ZIP member names, or
+            None when the inventory is unknown; it is not persisted.
     """
 
     spec_id: str
@@ -90,3 +92,4 @@ class SpecVersion:
     crs: str | None = None
     wki_id: int | None = None
     parsed: bool = False
+    zip_files: tuple[str, ...] | None = None

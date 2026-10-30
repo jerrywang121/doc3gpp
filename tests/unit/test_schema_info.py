@@ -24,6 +24,25 @@ def test_schema_field_order_and_keys() -> None:
     assert sorted(RESOURCE_SCHEMAS) == ["meeting", "spec", "spec_doc", "tdoc", "testcase", "tsg", "wi"]
 
 
+def test_spec_doc_zip_inventory_schema_is_specdata_only() -> None:
+    from doc3gpp.models.schema_info import schema_payload
+    from doc3gpp.storage.db.models import SpecVersionORM
+
+    fields = {
+        row["field"]: row
+        for row in schema_payload("spec_doc")
+        if row["table"] == "spec_doc_zip_inventory"
+    }
+    assert set(fields) == {"spec_id", "version", "release", "zip_files"}
+    assert {name: row["nullable"] for name, row in fields.items()} == {
+        "spec_id": False,
+        "version": False,
+        "release": True,
+        "zip_files": False,
+    }
+    assert "zip_files" not in SpecVersionORM.__table__.columns
+
+
 def test_spec_doc_schema_lists_combined_chunk_fields() -> None:
     payload = schema_payload("spec_doc")
     chunk_fields = [
@@ -73,6 +92,7 @@ def test_tdoc_tables_and_counts() -> None:
     tables = RESOURCE_SCHEMAS["tdoc"]
     assert [t.table for t in tables] == [
         "tdocs",
+        "tdoc_zip_inventory",
         "tdoc_cr_cover_page",
         "tdoc_cr_ttcn_details",
         "tdoc_cr_change_details",
@@ -89,6 +109,7 @@ def test_tdoc_tables_and_counts() -> None:
     # registry matches ORM; see task-2 report.
     assert counts == {
         "tdocs": 26,
+        "tdoc_zip_inventory": 3,
         "tdoc_cr_cover_page": 20,
         "tdoc_cr_ttcn_details": 10,
         "tdoc_cr_change_details": 4,
@@ -152,6 +173,7 @@ def test_schema_payload_tdoc_has_parsed_and_document_count() -> None:
 def test_registry_matches_orm_columns() -> None:
     """Every ORM column is described exactly once; no extras; nullability matches."""
     from doc3gpp.models.schema_info import RESOURCE_SCHEMAS
+    from doc3gpp.storage.db import models as orm_models
     from doc3gpp.storage.db.models import (
         MeetingORM,
         SpecDocChunkORM,
@@ -176,10 +198,14 @@ def test_registry_matches_orm_columns() -> None:
         WiORM,
     )
 
+    assert hasattr(orm_models, "TDocZipInventoryOrm"), "ZIP inventory ORM is missing"
+    assert hasattr(orm_models, "SpecDocZipInventoryORM"), "Spec ZIP inventory ORM is missing"
+
     expected = {
         "tsgs": TsgORM,
         "meetings": MeetingORM,
         "tdocs": TDocORM,
+        "tdoc_zip_inventory": orm_models.TDocZipInventoryOrm,
         "tdoc_cr_cover_page": TDocCrDetailOrm,
         "tdoc_cr_ttcn_details": TDocCrTtcnDetailOrm,
         "tdoc_cr_change_details": TDocCrChangeDetailOrm,
@@ -192,6 +218,7 @@ def test_registry_matches_orm_columns() -> None:
         "wis": WiORM,
         "specs": SpecORM,
         "spec_versions": SpecVersionORM,
+        "spec_doc_zip_inventory": orm_models.SpecDocZipInventoryORM,
         "spec_doc_sources": SpecDocSourceORM,
         "spec_doc_tocs": SpecDocTocORM,
         "spec_doc_chunks": SpecDocChunkORM,

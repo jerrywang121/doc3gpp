@@ -80,6 +80,7 @@ from doc3gpp.models.tdoc_document import (
     TDocParseBundle,
     markdown_member_name,
 )
+from doc3gpp.models.tdoc_zip_inventory import TDocZipInventory
 from doc3gpp.parsers.cr_parser import CRHeaderMissingError
 from doc3gpp.parsers.direct_extractor import (
     NotAFolderError,
@@ -101,6 +102,7 @@ from doc3gpp.parsers.tdoc_parsers import (
 from doc3gpp.parsers.tdoc_zip import (
     build_markdown_archive,
     document_id_for,
+    enumerate_zip_files,
     read_markdown_archive,
 )
 from doc3gpp.parsers.tdoc_zip_convert import (
@@ -114,6 +116,7 @@ from doc3gpp.repository.protocols import (
     TDocCrDetailRepository,
     TDocCrTTCNDetailRepository,
     TDocRepository,
+    TDocZipInventoryRepository,
 )
 from doc3gpp.scraping.cache_keys import derive_cache_file
 from doc3gpp.scraping.tdoc_zip_source import (
@@ -141,6 +144,7 @@ from doc3gpp.services.tdoc_type_detection import (
     decide_direct_type,
     decide_known_type,
 )
+from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
 
 # Re-exported so callers can catch ``TDocTooLargeError`` from a single
 # import path (the service layer) without depending on the scraping
@@ -209,13 +213,14 @@ class TDocNotFoundError(LookupError):
 
 
 class TDocUrlNotFoundError(LookupError):
-    """No row matches the requested FTP URL across any of the six URL-keyed tables.
+    """No row matches the requested FTP URL across any of the seven URL-keyed tables.
 
     Raised by ``TDocShowRecordByUrl.from_ftp_url`` consumers (the web
     ``GET /tdocs/by-url`` route and the MCP ``get_tdoc(ftp_url=...)``
     tool) when the normalised URL resolves to no rows in ``tdocs``,
     ``tdoc_cr_cover_page``, ``tdoc_cr_ttcn_details``, ``tdoc_extracts``,
-    ``tdoc_cr_change_details``, or ``tdoc_files``. Distinct from
+    ``tdoc_cr_change_details``, ``tdoc_files``, or
+    ``tdoc_zip_inventory``. Distinct from
     :class:`TDocNotFoundError` (which is raised for a missing
     ``tdoc_id`` lookup).
     """
@@ -225,7 +230,8 @@ class TDocUrlNotFoundError(LookupError):
         super().__init__(
             f"No stored rows match ftp_url {ftp_url!r}. The URL was looked "
             "up against tdocs, tdoc_cr_cover_page, tdoc_cr_ttcn_details, "
-            "tdoc_extracts, tdoc_cr_change_details, and tdoc_files; "
+            "tdoc_extracts, tdoc_cr_change_details, tdoc_files, and "
+            "tdoc_zip_inventory; "
             "none matched. The upstream document may not have been "
             "ingested yet — run 'doc3gpp tdoc sync' on the parent "
             f"meeting, or 'doc3gpp tdoc parse --from-url {ftp_url}' to "
@@ -286,6 +292,7 @@ class PreparedTDocExtract:
     ttcn: TDocCRTTCNDetails | None
     changes: TDocCRChangeDetails | None
     extract_meta: TDocExtractMeta
+    inventory: TDocZipInventory | None = None
 
     @property
     def annexes(self) -> tuple[TDocDocument, ...]:
@@ -305,6 +312,7 @@ class PreparedDirectTDoc:
     extract_meta: TDocExtractMeta
     tdoc_id: str
     cache_file: str
+    inventory: TDocZipInventory | None = None
 
     @property
     def annexes(self) -> tuple[TDocDocument, ...]:
@@ -338,6 +346,26 @@ class _DirectSource:
 def _check_direct_size(payload: bytes, source: str, max_bytes: int) -> None:
     if max_bytes > 0 and len(payload) > max_bytes:
         raise TDocTooLargeError(source=source, size=len(payload), limit=max_bytes)
+
+
+
+def _direct_zip_inventory(
+    url: str,
+    tdoc_id: str,
+    payload: bytes,
+) -> TDocZipInventory | None:
+    """Enumerate a canonical outer ZIP, never a standalone DOCX container."""
+    if not url.casefold().endswith(".zip"):
+        return None
+    try:
+        zip_files = enumerate_zip_files(payload)
+    except Exception:  # noqa: BLE001 - leave invalid-ZIP errors to the parser
+        return None
+    return TDocZipInventory(
+        ftp_url=normalize_ftp_path(url),
+        tdoc_id=tdoc_id,
+        zip_files=zip_files,
+    )
 
 
 def _family_direct_result(
@@ -441,6 +469,7 @@ class TDocCrService:
         search_service: SearchService | None = None,
         semantic_service: SemanticSearchService | None = None,
         family_service: TDocFamilyService | None = None,
+        inventory_repository: TDocZipInventoryRepository | None = None,
         docx_pool: DocxMemberPool | None = None,
     ) -> None:
         from doc3gpp.settings.loader import get_settings
@@ -453,6 +482,7 @@ class TDocCrService:
         self._change_details_repo = cr_change_details_repository
         self._tdoc_repo = tdoc_repository
         self._content_repo = content_repo
+        self._inventory_repo = inventory_repository
         self._parser = parser
         self._parser_registry = parser_registry
         self._max_tdoc_size_bytes = max_tdoc_size_bytes
@@ -477,6 +507,7 @@ class TDocCrService:
                 max_tdoc_size_bytes=max_tdoc_size_bytes,
                 max_documents_per_zip=self._max_documents_per_zip,
                 max_uncompressed_size_bytes=self._max_uncompressed_size_bytes,
+                inventory_repository=inventory_repository,
                 docx_pool=docx_pool,
             )
         self._family_service = family_service
@@ -687,8 +718,8 @@ class TDocCrService:
         tdoc_id: str,
         *,
         force: bool = False,
-    ) -> PreparedTDocExtract | PreparedFamilyExtract | ExtractResult | FamilyExtractResult:
-        """Prepare every supported DOCX in one TDoc ZIP without SQL writes."""
+    ) -> PreparedTDocExtract | PreparedFamilyExtract | PreparedInventoryFailure | ExtractResult | FamilyExtractResult:
+        """Prepare supported TDoc content and inventory without SQL writes."""
         normalised = self._validate_tdoc_id(tdoc_id)
         tdoc = self._load_tdoc(normalised)
         if not tdoc.ftp_url:
@@ -718,74 +749,103 @@ class TDocCrService:
             primary_url=primary_url,
             ftp_url=tdoc.ftp_url,
             max_bytes=self._max_tdoc_size_bytes,
+            require_provenance=True,
         )
+        if downloaded.url is None or downloaded.payload is None:
+            raise RuntimeError("provenance-required ZIP download returned no source snapshot")
+
         resolved_url = downloaded.url
         if (
             not force
-            and resolved_url
             and normalize_ftp_path(resolved_url) == canonical_url
         ):
             cached = self._cached_extract(normalize_ftp_path(resolved_url), normalised)
             if cached is not None:
                 return cached
 
-        stored_url = (
-            normalize_ftp_path(resolved_url)
-            if resolved_url
-            else normalize_ftp_path(candidates[0])
-        )
-        bundle = self._parse_bundle(
-            downloaded.path.read_bytes(),
-            filename=cache_file,
-            max_bytes=self._max_tdoc_size_bytes,
-            tdoc_id=normalised,
-        )
-        documents = self._bind_documents_to_ftp_url(bundle.documents, stored_url)
-        parsed = bundle.main_parse_result
-        cover = replace(
-            parsed.cover,
-            tdoc_id=normalised,
-            ftp_url=stored_url,
-        )
-        ttcn = (
-            replace(parsed.ttcn, ftp_url=stored_url, tdoc_id=normalised)
-            if parsed.ttcn is not None
-            else None
-        )
-        changes = (
-            replace(parsed.changes, ftp_url=stored_url, tdoc_id=normalised)
-            if parsed.changes is not None
-            else None
-        )
-        meta = TDocExtractMeta(
-            ftp_url=stored_url,
-            tdoc_id=normalised,
-            cache_file=cache_file,
-            doc_filename=bundle.main_source_file,
-            extraction_version=2,
-            document_count=len(_annexes_of(documents, bundle.main_source_file)),
-            skipped_sources=bundle.skipped_sources,
-        )
-        self._write_markdown_archive(
-            cache_file=cache_file,
-            ftp_url=stored_url,
-            main_source_file=bundle.main_source_file,
-            documents=documents,
-        )
-        return PreparedTDocExtract(
-            details=cover,
-            documents=documents,
-            main_source_file=bundle.main_source_file,
-            ttcn=ttcn,
-            changes=changes,
-            extract_meta=meta,
-        )
+        stored_url = normalize_ftp_path(resolved_url)
+        payload = downloaded.payload
+        inventory: TDocZipInventory | None = None
+        try:
+            zip_files = enumerate_zip_files(payload)
+        except Exception:  # noqa: BLE001 - the established parser owns ZIP errors
+            inventory = None
+        else:
+            inventory = TDocZipInventory(
+                ftp_url=stored_url,
+                tdoc_id=normalised,
+                zip_files=zip_files,
+            )
+
+        try:
+            bundle = self._parse_bundle(
+                payload,
+                filename=cache_file,
+                max_bytes=self._max_tdoc_size_bytes,
+                tdoc_id=normalised,
+            )
+            documents = self._bind_documents_to_ftp_url(bundle.documents, stored_url)
+            parsed = bundle.main_parse_result
+            cover = replace(
+                parsed.cover,
+                tdoc_id=normalised,
+                ftp_url=stored_url,
+            )
+            ttcn = (
+                replace(parsed.ttcn, ftp_url=stored_url, tdoc_id=normalised)
+                if parsed.ttcn is not None
+                else None
+            )
+            changes = (
+                replace(parsed.changes, ftp_url=stored_url, tdoc_id=normalised)
+                if parsed.changes is not None
+                else None
+            )
+            meta = TDocExtractMeta(
+                ftp_url=stored_url,
+                tdoc_id=normalised,
+                cache_file=cache_file,
+                doc_filename=bundle.main_source_file,
+                extraction_version=2,
+                document_count=len(_annexes_of(documents, bundle.main_source_file)),
+                skipped_sources=bundle.skipped_sources,
+            )
+            self._write_markdown_archive(
+                cache_file=cache_file,
+                ftp_url=stored_url,
+                main_source_file=bundle.main_source_file,
+                documents=documents,
+            )
+            return PreparedTDocExtract(
+                details=cover,
+                documents=documents,
+                main_source_file=bundle.main_source_file,
+                ttcn=ttcn,
+                changes=changes,
+                extract_meta=meta,
+                inventory=inventory,
+            )
+        except Exception as exc:
+            if inventory is not None:
+                return PreparedInventoryFailure(inventory=inventory, error=exc)
+            raise
 
     def persist_prepared_extract(
         self,
-        prepared: PreparedTDocExtract | PreparedFamilyExtract,
+        prepared: PreparedTDocExtract | PreparedFamilyExtract | PreparedInventoryFailure,
     ) -> ExtractResult | FamilyExtractResult:
-        """Commit the complete bundle before running best-effort index hooks."""
+        """Persist inventory and content on the writer lane before success hooks."""
+        if isinstance(prepared, PreparedInventoryFailure):
+            if self._inventory_repo is not None:
+                try:
+                    self._inventory_repo.upsert(prepared.inventory)
+                except Exception:
+                    logger.warning(
+                        "Failed to persist TDoc ZIP inventory for %s after parse error",
+                        prepared.inventory.tdoc_id,
+                        exc_info=True,
+                    )
+            raise prepared.error
         if isinstance(prepared, PreparedFamilyExtract):
             family_result = self._family_service.persist_prepared_extract(prepared)
             self._index_after_parse(family_result.tdoc_id)
@@ -793,6 +853,8 @@ class TDocCrService:
             return family_result
         if not isinstance(prepared, PreparedTDocExtract):
             raise TypeError(f"cannot persist {type(prepared).__name__}")
+        if prepared.inventory is not None and self._inventory_repo is not None:
+            self._inventory_repo.upsert(prepared.inventory)
         self._content_repo.replace_cr_bundle(
             prepared.details,
             prepared.ttcn,
@@ -950,7 +1012,7 @@ class TDocCrService:
 
         def prepare_one(
             value: str,
-        ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
+        ) -> PreparedDirectTDoc | PreparedDirectFamily | PreparedInventoryFailure | DirectParseResult:
             try:
                 return self.prepare_from_url(
                     value,
@@ -966,7 +1028,9 @@ class TDocCrService:
                 # exception through the runner's fatal path.
                 raise _DirectPipelineError(exc) from exc
 
-        def persist_one(prepared: PreparedDirectTDoc) -> DirectParseResult:
+        def persist_one(
+            prepared: PreparedDirectTDoc | PreparedDirectFamily | PreparedInventoryFailure,
+        ) -> DirectParseResult:
             try:
                 return self.persist_prepared_url(prepared)
             except asyncio.CancelledError:
@@ -999,7 +1063,7 @@ class TDocCrService:
         *,
         force: bool = False,
         max_tdoc_size_bytes: int | None = None,
-    ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
+    ) -> PreparedDirectTDoc | PreparedDirectFamily | PreparedInventoryFailure | DirectParseResult:
         """Prepare one direct URL bundle without mutating SQL repositories."""
         max_bytes = (
             self._max_tdoc_size_bytes
@@ -1076,9 +1140,20 @@ class TDocCrService:
 
     def persist_prepared_url(
         self,
-        prepared: PreparedDirectTDoc | PreparedDirectFamily,
+        prepared: PreparedDirectTDoc | PreparedDirectFamily | PreparedInventoryFailure,
     ) -> DirectParseResult:
         """Commit a URL-owned bundle once on the serialized writer lane."""
+        if isinstance(prepared, PreparedInventoryFailure):
+            if self._inventory_repo is not None:
+                try:
+                    self._inventory_repo.upsert(prepared.inventory)
+                except Exception:
+                    logger.warning(
+                        "Failed to persist TDoc ZIP inventory for %s after parse error",
+                        prepared.inventory.tdoc_id,
+                        exc_info=True,
+                    )
+            raise prepared.error
         if isinstance(prepared, PreparedDirectFamily):
             family_result = self._family_service.persist_prepared_extract(prepared.prepared)
             self._index_after_parse(family_result.tdoc_id)
@@ -1102,6 +1177,8 @@ class TDocCrService:
                 from_cache=False,
                 persisted=True,
             )
+        if prepared.inventory is not None and self._inventory_repo is not None:
+            self._inventory_repo.upsert(prepared.inventory)
         self._content_repo.replace_cr_bundle(
             prepared.details,
             prepared.ttcn,
@@ -1455,15 +1532,37 @@ class TDocCrService:
             source_url=source.source_url,
         )
 
-    def _fetch_direct_zip(self, url: str, *, cache_file: str, max_bytes: int) -> bytes:
+    def _fetch_direct_zip(
+        self,
+        url: str,
+        *,
+        cache_file: str,
+        max_bytes: int,
+        force: bool = False,
+    ) -> bytes:
+        if not force:
+            verified = self._cache.get_zip_with_provenance(cache_file)
+            if verified is not None:
+                cached_payload, source_url = verified
+                if source_url == url:
+                    if max_bytes > 0 and len(cached_payload) > max_bytes:
+                        cached_path = self._cache.path_for(cache_file, "zips")
+                        raise TDocTooLargeError(
+                            source=f"cache:{cached_path}",
+                            size=len(cached_payload),
+                            limit=max_bytes,
+                        )
+                    logger.debug("Verified direct URL ZIP cache hit for %s", url)
+                    return cached_payload
+
         payload = self._scraper.get_bytes(url)
-        self._cache.put_bytes(cache_file, payload, "zips")
         if max_bytes > 0 and len(payload) > max_bytes:
             raise TDocTooLargeError(
                 source=f"download:{url}",
                 size=len(payload),
                 limit=max_bytes,
             )
+        self._cache.put_zip_with_provenance(cache_file, payload, url)
         return payload
 
     def _family_prepared(
@@ -1475,6 +1574,7 @@ class TDocCrService:
         tdoc_id: str,
         store: TDocContentStore,
         conversion: TDocZipConversion,
+        inventory: TDocZipInventory | None = None,
     ) -> PreparedDirectFamily:
         prepared = self._family_service.prepare_conversion(
             tdoc_id=tdoc_id,
@@ -1482,6 +1582,7 @@ class TDocCrService:
             ftp_url=stored_ftp_url,
             cache_file=cache_file,
             conversion=conversion,
+            inventory=inventory,
         )
         return PreparedDirectFamily(url=url, prepared=prepared)
 
@@ -1562,30 +1663,44 @@ class TDocCrService:
         stored_ftp_url: str,
         tdoc_id: str,
         store: TDocContentStore,
+        inventory_allowed: bool,
         force: bool,
         max_bytes: int,
-    ) -> PreparedDirectFamily | DirectParseResult:
+    ) -> PreparedDirectFamily | PreparedInventoryFailure | DirectParseResult:
         if not force:
             cached = self._cached_family_result(
                 url=url, stored_ftp_url=stored_ftp_url, tdoc_id=tdoc_id, store=store,
             )
             if cached is not None:
                 return cached
-        payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
-        conversion = self._convert_direct(
-            payload,
-            filename=url,
-            tdoc_id=tdoc_id,
-            identity=stored_ftp_url,
+        payload = self._fetch_direct_zip(
+            url, cache_file=cache_file, max_bytes=max_bytes, force=force,
         )
-        return self._family_prepared(
-            url=url,
-            cache_file=cache_file,
-            stored_ftp_url=stored_ftp_url,
-            tdoc_id=tdoc_id,
-            store=store,
-            conversion=conversion,
+        inventory = (
+            _direct_zip_inventory(url, tdoc_id, payload)
+            if inventory_allowed
+            else None
         )
+        try:
+            conversion = self._convert_direct(
+                payload,
+                filename=url,
+                tdoc_id=tdoc_id,
+                identity=stored_ftp_url,
+            )
+            return self._family_prepared(
+                url=url,
+                cache_file=cache_file,
+                stored_ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+                store=store,
+                conversion=conversion,
+                inventory=inventory,
+            )
+        except Exception as exc:
+            if inventory is not None:
+                return PreparedInventoryFailure(inventory=inventory, error=exc)
+            raise
 
     def _prepare_cr_from_url(
         self,
@@ -1598,8 +1713,9 @@ class TDocCrService:
         force: bool,
         payload: bytes | None,
         sniffed: bool,
-    ) -> PreparedDirectTDoc | DirectParseResult:
-        """Prepare a URL-keyed CR bundle; ``payload`` is set once the type was sniffed."""
+        inventory_allowed: bool,
+    ) -> PreparedDirectTDoc | PreparedInventoryFailure | DirectParseResult:
+        """Prepare a URL-keyed CR bundle; payload is set once the type was sniffed."""
         if payload is None:
             if not force:
                 cached = self._cached_cr_result(
@@ -1607,60 +1723,73 @@ class TDocCrService:
                 )
                 if cached is not None:
                     return cached
-            payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
+            payload = self._fetch_direct_zip(
+                url, cache_file=cache_file, max_bytes=max_bytes, force=force,
+            )
 
-        bundle = self._parse_cr_bundle(
-            payload,
-            filename=url,
-            max_bytes=max_bytes,
-            tdoc_id=tdoc_id,
-            sniffed=sniffed,
-        )
-        documents = self._bind_documents_to_ftp_url(
-            bundle.documents, stored_ftp_url
-        )
-        parsed = bundle.main_parse_result
-        cover = replace(
-            parsed.cover,
-            tdoc_id=tdoc_id,
-            ftp_url=stored_ftp_url,
-        )
-        ttcn = (
-            replace(parsed.ttcn, ftp_url=stored_ftp_url, tdoc_id=tdoc_id)
-            if parsed.ttcn is not None
+        inventory = (
+            _direct_zip_inventory(url, tdoc_id, payload)
+            if inventory_allowed
             else None
         )
-        changes = (
-            replace(parsed.changes, ftp_url=stored_ftp_url, tdoc_id=tdoc_id)
-            if parsed.changes is not None
-            else None
-        )
-        meta = TDocExtractMeta(
-            ftp_url=stored_ftp_url,
-            tdoc_id=tdoc_id,
-            cache_file=cache_file,
-            doc_filename=bundle.main_source_file,
-            extraction_version=2,
-            document_count=len(_annexes_of(documents, bundle.main_source_file)),
-            skipped_sources=bundle.skipped_sources,
-        )
-        self._write_markdown_archive(
-            cache_file=cache_file,
-            ftp_url=stored_ftp_url,
-            main_source_file=bundle.main_source_file,
-            documents=documents,
-        )
-        return PreparedDirectTDoc(
-            url=url,
-            documents=documents,
-            main_source_file=bundle.main_source_file,
-            details=cover,
-            ttcn=ttcn,
-            changes=changes,
-            extract_meta=meta,
-            tdoc_id=tdoc_id,
-            cache_file=cache_file,
-        )
+        try:
+            bundle = self._parse_cr_bundle(
+                payload,
+                filename=url,
+                max_bytes=max_bytes,
+                tdoc_id=tdoc_id,
+                sniffed=sniffed,
+            )
+            documents = self._bind_documents_to_ftp_url(
+                bundle.documents, stored_ftp_url
+            )
+            parsed = bundle.main_parse_result
+            cover = replace(
+                parsed.cover,
+                tdoc_id=tdoc_id,
+                ftp_url=stored_ftp_url,
+            )
+            ttcn = (
+                replace(parsed.ttcn, ftp_url=stored_ftp_url, tdoc_id=tdoc_id)
+                if parsed.ttcn is not None
+                else None
+            )
+            changes = (
+                replace(parsed.changes, ftp_url=stored_ftp_url, tdoc_id=tdoc_id)
+                if parsed.changes is not None
+                else None
+            )
+            meta = TDocExtractMeta(
+                ftp_url=stored_ftp_url,
+                tdoc_id=tdoc_id,
+                cache_file=cache_file,
+                doc_filename=bundle.main_source_file,
+                extraction_version=2,
+                document_count=len(_annexes_of(documents, bundle.main_source_file)),
+                skipped_sources=bundle.skipped_sources,
+            )
+            self._write_markdown_archive(
+                cache_file=cache_file,
+                ftp_url=stored_ftp_url,
+                main_source_file=bundle.main_source_file,
+                documents=documents,
+            )
+            return PreparedDirectTDoc(
+                url=url,
+                documents=documents,
+                main_source_file=bundle.main_source_file,
+                details=cover,
+                ttcn=ttcn,
+                changes=changes,
+                extract_meta=meta,
+                tdoc_id=tdoc_id,
+                cache_file=cache_file,
+                inventory=inventory,
+            )
+        except Exception as exc:
+            if inventory is not None:
+                return PreparedInventoryFailure(inventory=inventory, error=exc)
+            raise
 
     def _prepare_from_3gpp_url(
         self,
@@ -1671,9 +1800,10 @@ class TDocCrService:
         tdoc: TDoc,
         force: bool,
         max_bytes: int,
-    ) -> PreparedDirectTDoc | PreparedDirectFamily | DirectParseResult:
-        """Prepare a URL-keyed bundle for a TDoc whose ``tdocs`` row exists."""
+    ) -> PreparedDirectTDoc | PreparedDirectFamily | PreparedInventoryFailure | DirectParseResult:
+        """Prepare a URL-keyed bundle for a TDoc whose tdocs row exists."""
         tdoc_id = tdoc.tdoc_id
+        inventory_allowed = is_eligible_type(tdoc.type)
         if tdoc.type is not None and tdoc.type.strip():
             decision = decide_known_type(tdoc_id, tdoc.type)
             if decision.kind == "skipped":
@@ -1686,6 +1816,7 @@ class TDocCrService:
                     stored_ftp_url=stored_ftp_url,
                     tdoc_id=tdoc_id,
                     store=decision.store,
+                    inventory_allowed=inventory_allowed,
                     force=force,
                     max_bytes=max_bytes,
                 )
@@ -1698,6 +1829,7 @@ class TDocCrService:
                 force=force,
                 payload=None,
                 sniffed=False,
+                inventory_allowed=inventory_allowed,
             )
 
         if not force:
@@ -1706,7 +1838,9 @@ class TDocCrService:
             )
             if cached is not None:
                 return cached
-        payload = self._fetch_direct_zip(url, cache_file=cache_file, max_bytes=max_bytes)
+        payload = self._fetch_direct_zip(
+            url, cache_file=cache_file, max_bytes=max_bytes, force=force,
+        )
         source = _DirectSource(
             payload=payload,
             filename=url,
@@ -1720,20 +1854,31 @@ class TDocCrService:
             raise TDocTypeSkippedError(tdoc_id, decision.reason or TYPE_UNDETERMINED)
         if decision.kind == "family":
             assert decision.store is not None
-            conversion = self._convert_direct(
-                payload,
-                filename=url,
-                tdoc_id=tdoc_id,
-                identity=stored_ftp_url,
+            inventory = (
+                _direct_zip_inventory(url, tdoc_id, payload)
+                if inventory_allowed
+                else None
             )
-            return self._family_prepared(
-                url=url,
-                cache_file=cache_file,
-                stored_ftp_url=stored_ftp_url,
-                tdoc_id=tdoc_id,
-                store=decision.store,
-                conversion=conversion,
-            )
+            try:
+                conversion = self._convert_direct(
+                    payload,
+                    filename=url,
+                    tdoc_id=tdoc_id,
+                    identity=stored_ftp_url,
+                )
+                return self._family_prepared(
+                    url=url,
+                    cache_file=cache_file,
+                    stored_ftp_url=stored_ftp_url,
+                    tdoc_id=tdoc_id,
+                    store=decision.store,
+                    conversion=conversion,
+                    inventory=inventory,
+                )
+            except Exception as exc:
+                if inventory is not None:
+                    return PreparedInventoryFailure(inventory=inventory, error=exc)
+                raise
         return self._prepare_cr_from_url(
             url=url,
             cache_file=cache_file,
@@ -1743,6 +1888,7 @@ class TDocCrService:
             force=force,
             payload=payload,
             sniffed=True,
+            inventory_allowed=inventory_allowed,
         )
 
     # ------------------------------------------------------------------

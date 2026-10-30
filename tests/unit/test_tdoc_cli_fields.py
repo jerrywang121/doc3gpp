@@ -1,7 +1,18 @@
+import pytest
 from typer.testing import CliRunner
 
 from doc3gpp.cli import app
 from doc3gpp.models.tdoc import TDoc, TDocWithMeeting
+from doc3gpp.settings.loader import get_settings
+
+
+@pytest.fixture
+def auto_sync_disabled(monkeypatch):
+    """Keep TDoc list field tests independent of the configured database."""
+    monkeypatch.setenv("DOC3GPP_SYNC__AUTO_SYNC", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def test_cli_tdoc_list_fields_and_filters(monkeypatch):
@@ -137,7 +148,7 @@ def test_cli_tdoc_list_fields_and_filters(monkeypatch):
     assert observed_filters["secretary_remarks"] == "not-null"
 
 
-def test_cli_tdoc_list_forwards_tdoc_pattern(monkeypatch):
+def test_cli_tdoc_list_forwards_tdoc_pattern(monkeypatch, auto_sync_disabled):
     """`--tdoc` is a SQL LIKE pattern on `tdocs.tdoc_id` and is forwarded
     verbatim to the repository. Mirrors `tdoc parse --tdoc`: a literal id
     is an exact match, a pattern with `%` / `_` wildcards widens the set,
@@ -295,7 +306,7 @@ def test_cli_tdoc_list_rejects_invalid_uploaded_date(monkeypatch):
     assert called["count"] == 0
 
 
-def test_cli_tdoc_list_auto_wraps_meeting_filter(monkeypatch):
+def test_cli_tdoc_list_auto_wraps_meeting_filter(monkeypatch, auto_sync_disabled):
     runner = CliRunner()
 
     captured: dict = {}

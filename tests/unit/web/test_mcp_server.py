@@ -72,6 +72,16 @@ def test_get_spec_emits_native_version_parsed_boolean(sqlite_env) -> None:
     assert payload["versions"][0]["parsed"] is False
 
 
+
+def test_get_spec_doc_schema_description_includes_inventory_table(sqlite_env) -> None:
+    _, server = _server()
+
+    tools = asyncio.run(server.list_tools())
+    schema_tool = next(tool for tool in tools if tool.name == "get_spec_doc_schema")
+
+    assert "spec_doc_zip_inventory" in schema_tool.description
+
+
 def test_mcp_semantic_paths_share_one_deferred_embedder(sqlite_env, monkeypatch) -> None:
     from unittest.mock import MagicMock
 

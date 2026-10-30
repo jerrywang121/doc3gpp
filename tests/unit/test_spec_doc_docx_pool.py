@@ -59,6 +59,7 @@ def _service(tmp_path, **kwargs) -> SpecDocService:
     return SpecDocService(
         spec_repo=spec_repo,
         doc_repo=repo,
+        inventory_repo=MagicMock(),
         fetcher=lambda _: raw,
         cache_dir=tmp_path,
         **kwargs,
@@ -86,8 +87,11 @@ def test_pool_exception_outcome_is_raised_unchanged(tmp_path) -> None:
     error = RuntimeError("boom")
     service = _service(tmp_path, docx_pool=_RecordingPool(error))
 
+    prepared = service.prepare_parse("38.331")
+    assert prepared.error is error
+
     with pytest.raises(RuntimeError, match="boom") as exc_info:
-        service.prepare_parse("38.331")
+        service.persist_prepared_parse(prepared)
 
     assert exc_info.value is error
 
@@ -96,7 +100,10 @@ def test_pool_import_error_outcome_is_raised_unchanged(tmp_path) -> None:
     error = PythonDocxNotInstalledError()
     service = _service(tmp_path, docx_pool=_RecordingPool(error))
 
+    prepared = service.prepare_parse("38.331")
+    assert prepared.error is error
+
     with pytest.raises(PythonDocxNotInstalledError) as exc_info:
-        service.prepare_parse("38.331")
+        service.persist_prepared_parse(prepared)
 
     assert exc_info.value is error

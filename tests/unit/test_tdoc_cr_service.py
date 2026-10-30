@@ -476,7 +476,11 @@ def test_prepare_extract_does_not_reuse_complete_fallback_for_current_url(
     )
     monkeypatch.setattr(
         "doc3gpp.services.tdoc_cr_service.download_tdoc_zip",
-        lambda *_args, **_kwargs: SimpleNamespace(url=current_url, path=fixture),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            url=current_url,
+            path=fixture,
+            payload=fixture.read_bytes(),
+        ),
     )
 
     prepared = service.prepare_extract(tdoc_id)
@@ -1590,16 +1594,24 @@ def test_cr_annex_failure_is_tolerant(tmp_path: Path, caplog: pytest.LogCaptureF
 )
 def test_cr_candidate_annex_failure_fails_tdoc(tmp_path: Path) -> None:
     """A failed member named for the TDoc could be the main, so the TDoc fails."""
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
     service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_cr_zip(("R5s260009_annex.docx", b"not a docx"))
     )
     tdoc_repo.get_by_id.return_value = _tdoc_row()
 
-    with pytest.raises(
-        ValueError,
-        match="Failed to convert supported DOCX member 'R5s260009_annex.docx'",
-    ):
-        service.prepare_extract("R5s260009", force=True)
+    prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert isinstance(prepared, PreparedInventoryFailure)
+    assert isinstance(prepared.error, ValueError)
+    assert "Failed to convert supported DOCX member 'R5s260009_annex.docx'" in str(
+        prepared.error
+    )
+    assert prepared.inventory.zip_files == (
+        "R5s260009.docx",
+        "R5s260009_annex.docx",
+    )
 
 
 @pytest.mark.skipif(
@@ -1628,16 +1640,21 @@ def test_cr_zero_text_annex_is_stored_as_empty_document(tmp_path: Path) -> None:
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_cr_zero_text_main_fails_tdoc(tmp_path: Path) -> None:
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
     service, _scraper, _cache, _cr_repo, _cr_ttcn_repo, tdoc_repo = _build_service(
         tmp_path, zip_bytes=_zip_of(("R5s260009.docx", _make_empty_docx()))
     )
     tdoc_repo.get_by_id.return_value = _tdoc_row()
 
-    with pytest.raises(
-        ValueError,
-        match="Failed to convert supported DOCX member 'R5s260009.docx'",
-    ):
-        service.prepare_extract("R5s260009", force=True)
+    prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert isinstance(prepared, PreparedInventoryFailure)
+    assert isinstance(prepared.error, ValueError)
+    assert "Failed to convert supported DOCX member 'R5s260009.docx'" in str(
+        prepared.error
+    )
+    assert prepared.inventory.zip_files == ("R5s260009.docx",)
 
 
 @pytest.mark.skipif(
@@ -1754,6 +1771,8 @@ def test_cr_prepare_extract_converts_members_through_docx_pool(tmp_path: Path) -
     reason="python-docx not installed; install with `pip install doc3gpp[extract]`",
 )
 def test_cr_docx_pool_error_on_annex_is_not_skipped_or_wrapped(tmp_path: Path) -> None:
+    from doc3gpp.services.tdoc_zip_inventory import PreparedInventoryFailure
+
     payload = _cr_zip(("b/support-beta.docx", _make_docx("support beta text")))
     pool = _RecordingPool({
         "b/support-beta.docx": DocxConvertPoolError(
@@ -1762,8 +1781,11 @@ def test_cr_docx_pool_error_on_annex_is_not_skipped_or_wrapped(tmp_path: Path) -
     })
     service = _cr_service(tmp_path, payload, docx_pool=pool)
 
-    with pytest.raises(DocxConvertPoolError, match="pool broke"):
-        service.prepare_extract("R5s260009", force=True)
+    prepared = service.prepare_extract("R5s260009", force=True)
+
+    assert isinstance(prepared, PreparedInventoryFailure)
+    assert isinstance(prepared.error, DocxConvertPoolError)
+    assert "pool broke" in str(prepared.error)
 
 
 @pytest.mark.skipif(
@@ -1828,4 +1850,3 @@ def test_cr_real_docx_pool_matches_in_process_conversion(tmp_path: Path) -> None
     ]
     assert plain.extract_meta.skipped_sources == ("c/support-broken.docx",)
     assert _cr_view(pooled) == _cr_view(plain)
-

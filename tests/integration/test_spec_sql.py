@@ -78,6 +78,27 @@ def test_upsert_versions_round_trip(session_factory) -> None:
     assert got[1].version == "17.1.0"
 
 
+
+def test_zip_file_inventory_remains_transient(session_factory) -> None:
+    from doc3gpp.storage.db.models import SpecVersionORM
+
+    repo = SQLAlchemySpecRepository(session_factory)
+    repo.upsert(Spec(spec_id="36.579-5", type="TS", title="T"))
+    repo.upsert_versions(
+        [
+            SpecVersion(
+                spec_id="36.579-5",
+                version="18.3.0",
+                ftp_url="u",
+                zip_files=("annex.docx",),
+            )
+        ]
+    )
+
+    assert "zip_files" not in SpecVersionORM.__table__.columns
+    assert repo.list_versions("36.579-5")[0].zip_files is None
+
+
 def test_list_versions_orders_numerically_desc(session_factory) -> None:
     """``list_versions`` sorts by numeric version, newest first.
 

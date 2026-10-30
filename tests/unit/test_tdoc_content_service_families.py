@@ -144,10 +144,15 @@ def _write_archive(
 
 
 def _make_service(cache_root: Path) -> TDocContentService:
+    from doc3gpp.storage.repositories.tdoc_zip_inventory_sql import (
+        SQLAlchemyTDocZipInventoryRepository,
+    )
+
     return TDocContentService(
         tdoc_repository=SQLAlchemyTDocRepository(),
         cr_repository=SQLAlchemyTDocCrRepository(),
         content_repository=SQLAlchemyTDocContentRepository(),
+        inventory_repository=SQLAlchemyTDocZipInventoryRepository(),
         cache_root=cache_root,
     )
 
@@ -286,11 +291,13 @@ def test_tdoc_content_to_dict_has_skipped_sources_key() -> None:
     assert set(payload) == {
         "tdoc_id",
         "ftp_url",
+        "zip_files",
         "extraction_version",
         "complete",
         "skipped_sources",
         "documents",
     }
+    assert payload["zip_files"] is None
     assert payload["skipped_sources"] == ["annex/broken.docx"]
     assert payload["complete"] is False
 

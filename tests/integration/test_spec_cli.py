@@ -443,7 +443,7 @@ def test_spec_show_no_wis_crs_drops_fields(monkeypatch) -> None:
     spec = Spec(spec_id="36.579-5", type="TS", title="NR conformance", tsg="R5", wis="eNB")
     version = SpecVersion(
         spec_id="36.579-5", version="18.3.0", ftp_url="u",
-        release="Rel-18", crs="R5-1,R5-2",
+        release="Rel-18", crs="R5-1,R5-2", zip_files=("a.docx",),
     )
     svc = MagicMock()
     svc.get.return_value = spec
@@ -456,6 +456,7 @@ def test_spec_show_no_wis_crs_drops_fields(monkeypatch) -> None:
     assert "wis" not in payload["spec"]
     assert "crs" not in payload["versions"][0]
     assert payload["versions"][0]["parsed"] is False
+    assert payload["versions"][0]["zip_files"] == ["a.docx"]
 
 
 def test_spec_show_json_emits_native_parsed_boolean(monkeypatch) -> None:
@@ -493,7 +494,145 @@ def test_spec_show_json_uses_shared_version_field_order(monkeypatch) -> None:
         "upload_date",
         "pdf_url",
         "crs",
+        "zip_files",
     ]
+
+
+def _spec_show_zip_inventory_versions() -> list[SpecVersion]:
+    return [
+        SpecVersion(
+            "36.579-5", "19.0.0", "ftp://example.test/19.zip",
+            release="Rel-19", zip_files=("a.docx", "a.docx"),
+        ),
+        SpecVersion(
+            "36.579-5", "18.5.0", "ftp://example.test/18.zip",
+            release="Rel-18", zip_files=(),
+        ),
+        SpecVersion(
+            "36.579-5", "17.0.0", "ftp://example.test/17.zip",
+            release="Rel-17", zip_files=None,
+        ),
+    ]
+
+
+def test_spec_show_json_includes_zip_file_inventory_for_each_version(monkeypatch) -> None:
+    service = MagicMock()
+    service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
+    service.list_versions.return_value = _spec_show_zip_inventory_versions()
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--format", "json"])
+
+    assert result.exit_code == 0, result.stdout
+    versions = json.loads(result.stdout)["versions"]
+    assert [
+        (version["version"], version["release"], version["zip_files"])
+        for version in versions
+    ] == [
+        ("19.0.0", "Rel-19", ["a.docx", "a.docx"]),
+        ("18.5.0", "Rel-18", []),
+        ("17.0.0", "Rel-17", None),
+    ]
+    assert all(list(version)[-1] == "zip_files" for version in versions)
+
+
+@pytest.mark.parametrize(
+    ("format_args", "version_markers"),
+    [
+        (
+            [],
+            (
+                "[ZIP files for version 19.0.0 (release Rel-19)]",
+                "[ZIP files for version 18.5.0 (release Rel-18)]",
+                "[ZIP files for version 17.0.0 (release Rel-17)]",
+            ),
+        ),
+        (
+            ["--format", "markdown"],
+            (
+                "### ZIP files for version 19.0.0 (release Rel-19)",
+                "### ZIP files for version 18.5.0 (release Rel-18)",
+                "### ZIP files for version 17.0.0 (release Rel-17)",
+            ),
+        ),
+        (
+            ["--format", "markdown", "--compact"],
+            (
+                "zip_files_version: 19.0.0; release: Rel-19",
+                "zip_files_version: 18.5.0; release: Rel-18",
+                "zip_files_version: 17.0.0; release: Rel-17",
+            ),
+        ),
+    ],
+)
+def test_spec_show_text_formats_render_inventory_and_unknown_hints(
+    monkeypatch, format_args: list[str], version_markers: tuple[str, str, str]
+) -> None:
+    service = MagicMock()
+    service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
+    service.list_versions.return_value = _spec_show_zip_inventory_versions()
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    result = runner.invoke(app, ["spec", "show", "36.579-5", *format_args])
+
+    assert result.exit_code == 0, result.stdout
+    first, empty, unknown = (result.stdout.index(marker) for marker in version_markers)
+    assert first < empty < unknown
+    assert result.stdout[first:empty].count("a.docx") == 2
+    assert "No files in the ZIP archive." in result.stdout[empty:unknown]
+    unknown_output = result.stdout[unknown:]
+    assert "ZIP file inventory unavailable." in unknown_output
+    assert "doc3gpp spec doc parse --spec 36.579-5 --version 17.0.0 --force" in unknown_output
+    assert "doc3gpp db init --scope specdata" in unknown_output
+
+
+def test_spec_show_hostile_zip_names_are_exact_in_json_and_inert_in_text(
+    monkeypatch,
+) -> None:
+    hostile_name = "<script>x</script>\n|[click](https://bad.test)\x1b[31m"
+    version = SpecVersion(
+        "36.579-5", "19.0.0", "ftp://example.test/19.zip",
+        release="Rel-19", zip_files=(hostile_name,),
+    )
+    service = MagicMock()
+    service.get.return_value = Spec(spec_id="36.579-5", type="TS", title="NR")
+    service.list_versions.return_value = [version]
+    monkeypatch.setattr("doc3gpp.cli.build_spec_service", lambda: service)
+
+    json_result = runner.invoke(
+        app, ["spec", "show", "36.579-5", "--format", "json"]
+    )
+    assert json_result.exit_code == 0, json_result.stdout
+    assert json.loads(json_result.stdout)["versions"][0]["zip_files"] == [hostile_name]
+
+    for format_args in (
+        [],
+        ["--format", "markdown"],
+        ["--format", "markdown", "--compact"],
+    ):
+        text_result = runner.invoke(app, ["spec", "show", "36.579-5", *format_args])
+        assert text_result.exit_code == 0, text_result.stdout
+        rendered = text_result.stdout
+        assert "\x1b" not in rendered
+        assert r"\x0a" in rendered
+        assert r"\x1b" in rendered
+        assert "\n|[click](https://bad.test)" not in rendered
+        if format_args == ["--format", "markdown"]:
+            code = chr(96)
+            assert (
+                f"{code}<script>x</script>\\x0a|[click](https://bad.test)\\x1b[31m{code}"
+                in rendered
+            )
+        else:
+            assert "<script>" not in rendered
+            assert "[click](https://bad.test)" not in rendered
+
+
+def test_spec_show_does_not_accept_spec_list_parsed_filter() -> None:
+    result = runner.invoke(app, ["spec", "show", "36.579-5", "--parsed", "true"])
+
+    assert result.exit_code == 2
+    assert "No such option: --parsed" in result.output
 
 
 def test_spec_show_table_emits_false_parsed(monkeypatch) -> None:

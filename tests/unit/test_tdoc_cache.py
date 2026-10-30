@@ -12,11 +12,14 @@ regression in any of those layers can be traced here first.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
+import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -386,3 +389,248 @@ def test_concurrent_puts_serialize_install_and_eviction(
     assert status.total_bytes == actual_bytes
     assert status.total_bytes <= size_limit
     assert status.file_count == len(files)
+
+
+
+def test_zip_provenance_round_trip_and_cache_accounting(tmp_path: Path) -> None:
+    cache = TDocCache(tmp_path / "cache", 10_000)
+    payload = b"PK\x03\x04zip snapshot"
+
+    path = cache.put_zip_with_provenance(
+        "R5s260009.zip", payload, "https://example.test/R5s260009.zip"
+    )
+
+    assert path == cache.path_for("R5s260009.zip", "zips")
+    assert cache.get_zip_with_provenance("R5s260009.zip") == (
+        payload,
+        "https://example.test/R5s260009.zip",
+    )
+    status = cache.status()
+    assert status.zips == 2
+    assert status.file_count == 2
+    assert status.total_bytes > len(payload)
+
+
+def test_plain_zip_write_invalidates_existing_provenance(tmp_path: Path) -> None:
+    cache = TDocCache(tmp_path / "cache", 10_000)
+    cache.put_zip_with_provenance("R5s260009.zip", b"verified", "https://example.test/a.zip")
+
+    cache.put_bytes("R5s260009.zip", b"plain replacement", "zips")
+
+    assert cache.get_bytes("R5s260009.zip", "zips") == b"plain replacement"
+    assert cache.get_zip_with_provenance("R5s260009.zip") is None
+
+
+def test_zip_provenance_sidecars_participate_in_purge_and_eviction(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cache"
+    cache = TDocCache(root, 10_000)
+    cache.put_zip_with_provenance("R5s260009.zip", b"verified", "https://example.test/a.zip")
+
+    assert cache.purge_subdir("zips") == 2
+    assert cache.get_bytes("R5s260009.zip", "zips") is None
+    assert cache.get_zip_with_provenance("R5s260009.zip") is None
+
+    cache.put_zip_with_provenance("R5s260009.zip", b"verified", "https://example.test/a.zip")
+    tighter = TDocCache(root, 1)
+    assert tighter.enforce_size_limit() == 2
+    assert tighter.get_zip_with_provenance("R5s260009.zip") is None
+    assert tighter.status().zips == 0
+
+
+def test_interrupted_or_orphaned_provenance_is_never_trusted(tmp_path: Path) -> None:
+    cache = TDocCache(tmp_path / "cache", 10_000)
+    cache.put_zip_with_provenance("R5s260009.zip", b"verified", "https://example.test/a.zip")
+    sidecar_dir = cache.root / "zips" / ".provenance"
+    sidecar = next(sidecar_dir.iterdir())
+
+    sidecar.write_bytes(b'{"version":')
+    assert cache.get_zip_with_provenance("R5s260009.zip") is None
+
+    cache.put_zip_with_provenance("R5s260009.zip", b"verified", "https://example.test/a.zip")
+    cache.path_for("R5s260009.zip", "zips").unlink()
+    assert cache.get_zip_with_provenance("R5s260009.zip") is None
+
+
+def _cache_process_put_read(root: str, payload: bytes, source_url: str, results) -> None:
+    cache = TDocCache(Path(root), 0)
+    expected = {
+        b"PK\x03\x04first payload": "https://example.test/first.zip",
+        b"PK\x03\x04second payload": "https://example.test/second.zip",
+    }
+    for _ in range(20):
+        cache.put_zip_with_provenance("shared.zip", payload, source_url)
+        pair = cache.get_zip_with_provenance("shared.zip")
+        if pair is None or expected.get(pair[0]) != pair[1]:
+            results.put(("mismatch", pair))
+            return
+    results.put(("ok", source_url))
+
+
+def test_concurrent_cache_processes_never_pair_bytes_with_wrong_url(tmp_path: Path) -> None:
+    import multiprocessing
+
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    root = str(tmp_path / "cache")
+    writers = [
+        context.Process(
+            target=_cache_process_put_read,
+            args=(root, b"PK\x03\x04first payload", "https://example.test/first.zip", results),
+        ),
+        context.Process(
+            target=_cache_process_put_read,
+            args=(root, b"PK\x03\x04second payload", "https://example.test/second.zip", results),
+        ),
+    ]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join(timeout=20)
+    try:
+        assert all(not writer.is_alive() for writer in writers)
+        assert [writer.exitcode for writer in writers] == [0, 0]
+        assert [results.get(timeout=2)[0] for _ in writers] == ["ok", "ok"]
+    finally:
+        for writer in writers:
+            if writer.is_alive():
+                writer.terminate()
+                writer.join(timeout=2)
+        results.close()
+        results.join_thread()
+
+
+def _write_zip_while_paused(
+    root: str,
+    staged: Any,
+    resume: Any,
+    results: Any,
+    *,
+    with_provenance: bool,
+) -> None:
+    cache = TDocCache(Path(root), 10_000)
+    write_temp_file = cache._write_temp_file
+
+    def pause_after_zip_temp(directory: Path, payload: bytes) -> str:
+        temp_name = write_temp_file(directory, payload)
+        if directory == cache.root / "zips":
+            staged.set()
+            if not resume.wait(timeout=15):
+                raise TimeoutError("test did not release staged ZIP write")
+        return temp_name
+
+    cache._write_temp_file = pause_after_zip_temp
+    try:
+        if with_provenance:
+            path = cache.put_zip_with_provenance(
+                "new.zip", b"ZIP payload", "https://example.test/new.zip"
+            )
+        else:
+            path = cache.put_bytes("new.zip", b"ZIP payload", "zips")
+    except Exception as exc:  # noqa: BLE001 - report child failure to the parent test
+        results.put(("error", type(exc).__name__, str(exc)))
+    else:
+        results.put(("ok", path.name))
+
+
+@pytest.mark.parametrize("purge_scope", ["all", "zips"], ids=["full", "zip-subdir"])
+@pytest.mark.parametrize("with_provenance", [False, True], ids=["plain-zip", "provenance-zip"])
+def test_zip_write_and_purge_are_serialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    purge_scope: str,
+    with_provenance: bool,
+) -> None:
+    """Purges wait for staged writes and never remove their temporary files."""
+    context = multiprocessing.get_context("spawn")
+    root = tmp_path / "cache"
+    cache = TDocCache(root, 10_000)
+    staged = context.Event()
+    resume = context.Event()
+    write_results = context.Queue()
+    writer = context.Process(
+        target=_write_zip_while_paused,
+        args=(str(root), staged, resume, write_results),
+        kwargs={"with_provenance": with_provenance},
+    )
+    notifications: queue.Queue[tuple[str, ...]] = queue.Queue()
+    purge_outcome: list[tuple[str, ...]] = []
+    purger: threading.Thread | None = None
+
+    writer.start()
+    try:
+        assert staged.wait(timeout=15), "writer did not stage a ZIP temporary file"
+
+        if os.name == "nt":
+            import msvcrt
+
+            original_locking = msvcrt.locking
+
+            def track_locking(fd: int, mode: int, nbytes: int) -> None:
+                if (
+                    threading.current_thread().name == "cache-purger"
+                    and mode == msvcrt.LK_LOCK
+                ):
+                    notifications.put(("lock-attempt",))
+                original_locking(fd, mode, nbytes)
+
+            monkeypatch.setattr(msvcrt, "locking", track_locking)
+        else:
+            import fcntl
+
+            original_flock = fcntl.flock
+
+            def track_flock(fd: int, operation: int) -> None:
+                if (
+                    threading.current_thread().name == "cache-purger"
+                    and operation & fcntl.LOCK_EX
+                ):
+                    notifications.put(("lock-attempt",))
+                original_flock(fd, operation)
+
+            monkeypatch.setattr(fcntl, "flock", track_flock)
+
+        def purge() -> None:
+            try:
+                deleted = (
+                    cache.purge()
+                    if purge_scope == "all"
+                    else cache.purge_subdir("zips")
+                )
+            except Exception as exc:  # noqa: BLE001 - report thread failure to the parent test
+                purge_outcome.append(("error", type(exc).__name__, str(exc)))
+                notifications.put(("purge-error",))
+            else:
+                purge_outcome.append(("ok", str(deleted)))
+                notifications.put(("purge-complete",))
+
+        purger = threading.Thread(target=purge, name="cache-purger")
+        purger.start()
+        first_notice = notifications.get(timeout=15)
+        assert first_notice[0] in {"lock-attempt", "purge-complete"}, first_notice
+
+        # For the fixed protocol the purger is waiting on the interprocess barrier;
+        # before it existed, the purge completed while the writer's temp was staged.
+        resume.set()
+        writer.join(timeout=15)
+        purger.join(timeout=15)
+
+        assert not writer.is_alive()
+        assert not purger.is_alive()
+        assert writer.exitcode == 0
+        write_result = write_results.get(timeout=2)
+        assert write_result == ("ok", "new.zip"), write_result
+        assert purge_outcome and purge_outcome[0][0] == "ok", purge_outcome
+        assert cache.get_bytes("new.zip", "zips") is None
+        assert cache.get_zip_with_provenance("new.zip") is None
+        assert cache.status().zips == 0
+    finally:
+        resume.set()
+        if writer.is_alive():
+            writer.terminate()
+        writer.join(timeout=5)
+        if purger is not None:
+            purger.join(timeout=5)
+        write_results.close()
+        write_results.join_thread()

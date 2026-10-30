@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from doc3gpp.models.spec import Spec, SpecVersion
+from doc3gpp.models.spec_doc_zip_inventory import SpecDocZipInventory
 from doc3gpp.models.sync import SyncOutcome  # noqa: F401  (spec contract)
 from doc3gpp.services.spec_service import (
     SpecService,
@@ -189,6 +190,98 @@ def test_list_versions_sets_native_booleans() -> None:
     rows = service.list_versions("36.579-5")
 
     assert [row.parsed for row in rows] == [True, False]
+    assert [row.zip_files for row in rows] == [None, None]
+
+
+def test_list_versions_enriches_inventory_batch_without_parsed_status() -> None:
+    repo = _StubSpecRepoWithRows()
+    selected = [
+        SpecVersion(
+            spec_id="38.331",
+            version=version,
+            ftp_url=f"https://example.test/{version}.zip",
+            release=release,
+        )
+        for version, release in (
+            ("19.0.0", "Rel-19"),
+            ("18.5.0", "Rel-18"),
+            ("17.0.0", "Rel-17"),
+        )
+    ]
+    repo.list_versions = MagicMock(return_value=selected)
+    inventory = MagicMock()
+    inventory.get_for_versions.return_value = {
+        "19.0.0": SpecDocZipInventory(
+            spec_id="38.331",
+            version="19.0.0",
+            release="Rel-19",
+            zip_files=("a.docx", "a.docx"),
+        ),
+        "18.5.0": SpecDocZipInventory(
+            spec_id="38.331",
+            version="18.5.0",
+            release="Rel-18",
+            zip_files=(),
+        ),
+    }
+    service = SpecService(repo, inventory_repository=inventory)
+
+    rows = service.list_versions("38.331")
+
+    assert [row.zip_files for row in rows] == [("a.docx", "a.docx"), (), None]
+    assert [row.parsed for row in rows] == [False, False, False]
+    inventory.get_for_versions.assert_called_once_with(
+        "38.331", ["19.0.0", "18.5.0", "17.0.0"]
+    )
+
+
+def test_list_versions_enriches_only_filtered_paginated_rows() -> None:
+    repo = _StubSpecRepoWithRows()
+    selected = SpecVersion(
+        spec_id="38.331",
+        version="18.5.0",
+        ftp_url="https://example.test/18.5.0.zip",
+        release="Rel-18",
+    )
+    repo.list_versions = MagicMock(return_value=[selected])
+    status = _StubParsedStatusRepo({"38.331": ["18.5.0"]})
+    inventory = MagicMock()
+    inventory.get_for_versions.return_value = {
+        "18.5.0": SpecDocZipInventory(
+            spec_id="38.331",
+            version="18.5.0",
+            release="Rel-18",
+            zip_files=(),
+        )
+    }
+    service = SpecService(
+        repo,
+        parsed_status_repository=status,
+        inventory_repository=inventory,
+    )
+
+    filtered = service.list_versions(
+        "38.331", limit=1, offset=1, version="18.%"
+    )
+
+    assert [row.version for row in filtered] == ["18.5.0"]
+    assert filtered[0].zip_files == ()
+    assert filtered[0].parsed is True
+    repo.list_versions.assert_called_once_with(
+        "38.331", limit=1, offset=1, version="18.%"
+    )
+    inventory.get_for_versions.assert_called_once_with("38.331", ["18.5.0"])
+
+
+def test_list_versions_does_not_lookup_inventory_for_empty_page() -> None:
+    repo = _StubSpecRepoWithRows()
+    repo.list_versions = MagicMock(return_value=[])
+    inventory = MagicMock()
+    service = SpecService(repo, inventory_repository=inventory)
+
+    assert service.list_versions("38.331") == []
+
+    inventory.get_for_versions.assert_not_called()
 
 
 def test_sync_skips_etsi_fetch_when_pdf_url_already_persisted(monkeypatch) -> None:
@@ -300,11 +393,13 @@ def test_sync_smoke(monkeypatch) -> None:
         lambda version_id, client: "<html><a id='wgTdocDetailsLink'>R5-1</a></html>",
     )
     repo = _StubSpecRepo()
-    svc = SpecService(repo)
+    inventory = MagicMock()
+    svc = SpecService(repo, inventory_repository=inventory)
     outcome = svc.sync("R5")
     assert outcome.status == "synced"
     assert outcome.synced_count == 1
     assert outcome.version_count == 1
+    inventory.get_for_versions.assert_not_called()
 
 
 def test_sync_skips_within_interval(monkeypatch) -> None:

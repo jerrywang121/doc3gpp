@@ -64,7 +64,7 @@ Changelog = "https://github.com/jerrywang121/doc3gpp/releases"
 
 [project.optional-dependencies]
 cli = ["typer>=0.12.3", "tqdm>=4.66.0"]
-extract = ["python-docx>=0.8.11"]
+extract = ["python-docx>=0.8.11", "python-pptx>=1.0.2"]
 search = []
 semantic = [
   "sqlite-vec>=0.1.0",

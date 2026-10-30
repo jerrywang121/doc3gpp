@@ -17,6 +17,7 @@ from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.repositories.spec_doc_zip_inventory_sql import (
     SQLAlchemySpecDocZipInventoryRepository,
 )
+from tests.fixtures.presentation_builders import build_presentation_with_content
 
 
 class FakeSpecRepo:
@@ -145,6 +146,42 @@ def test_reparse_includes_doc_members_and_refreshes_document_count(
     assert all("hello handover world" in chunk.text for chunk in chunks)
     inventory = SQLAlchemySpecDocZipInventoryRepository().get("38.331", "18.5.0")
     assert inventory.zip_files == ("legacy/38331-j30.DOC", "38331-j30.docx")
+
+
+def test_parse_counts_presentations_without_toc_or_section_metadata(sqlite_env):
+    create_schema("all")
+    original = _make_zip_bytes()
+    with zipfile.ZipFile(io.BytesIO(original)) as archive:
+        docx = archive.read("38331-j30.docx")
+
+    mixed = io.BytesIO()
+    with zipfile.ZipFile(mixed, "w") as archive:
+        archive.writestr("slides.pptx", build_presentation_with_content())
+        archive.writestr("38331-j30.docx", docx)
+
+    service = SpecDocService(
+        spec_repo=FakeSpecRepo(_versions()),
+        fetcher=lambda _url: mixed.getvalue(),
+        cache_dir=sqlite_env.parent / "presentation-count-cache",
+    )
+
+    source = service.parse("38.331")
+    toc = service.get_toc("38.331", "18.5.0")
+    presentation_chunks = [
+        chunk
+        for chunk in service.list_chunks("38.331", version="18.5.0")
+        if chunk.source_file == "slides.pptx"
+    ]
+
+    assert source.docx_count == 2  # Historical field name counts Word and presentations.
+    assert toc.docx_count == 2
+    assert all(entry.source_file != "slides.pptx" for entry in toc.entries)
+    assert all(file.source_file != "slides.pptx" for file in toc.files)
+    assert presentation_chunks
+    assert all(
+        chunk.sections is None and chunk.tables is None
+        for chunk in presentation_chunks
+    )
 
 
 def test_parse_stores_chunk_content_and_context(sqlite_env):

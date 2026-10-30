@@ -39,16 +39,23 @@ class SpecDocFileBlocks:
 
 
 def list_spec_docx(zip_bytes: bytes) -> list[tuple[str, bytes]]:
-    """List .docx and .doc members in ZIP order (historical function name)."""
-    out = []
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
-        for info in z.infolist():
+    """List Word and presentation members in ZIP order (historical function name)."""
+    out: list[tuple[str, bytes]] = []
+    seen_presentations: set[str] = set()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        for info in archive.infolist():
             name = info.filename
             if info.is_dir() or name.startswith("__MACOSX/"):
                 continue
             low = name.lower()
-            if low.endswith((".docx", ".doc")):
-                out.append((name, z.read(info.filename)))
+            if low.endswith((".docx", ".doc", ".pptx", ".ppt")):
+                if low.endswith((".pptx", ".ppt")):
+                    if name in seen_presentations:
+                        raise ValueError(
+                            f"duplicate presentation ZIP member path {name!r}"
+                        )
+                    seen_presentations.add(name)
+                out.append((name, archive.read(info)))
     return out
 
 

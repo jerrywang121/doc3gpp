@@ -44,6 +44,16 @@ def _serialise_scalar(value: Any) -> Any:
     return value
 
 
+def spec_doc_presentation_to_json(presentation: Any) -> dict[str, Any]:
+    """Build the stable full-presentation JSON object shared by all surfaces."""
+    return {
+        "spec_id": presentation.spec_id,
+        "version": presentation.version,
+        "source_file": presentation.source_file,
+        "markdown": presentation.markdown,
+    }
+
+
 def spec_doc_toc_to_json(toc: Any, out_fields: list[str]) -> dict[str, Any]:
     """Shape one :class:`SpecDocToc` exactly like the CLI's TOC JSON payload.
 

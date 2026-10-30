@@ -538,3 +538,222 @@ def test_docx_pool_is_not_used_for_standalone_docx() -> None:
 
     assert pool.calls == []
     assert "standalone body" in conversion.documents[0].markdown_text
+
+
+def test_presentation_zip_members_are_enumerated_in_stable_source_order() -> None:
+    from doc3gpp.parsers.tdoc_zip import enumerate_docx_members
+
+    zip_bytes = _make_zip(
+        [
+            ("z/slides.pptx", b"pptx"),
+            ("R5-123456.docx", b"word"),
+            ("a/slides.ppt", b"ppt"),
+        ]
+    )
+
+    assert [name for name, _payload in enumerate_docx_members(zip_bytes)] == [
+        "a/slides.ppt",
+        "R5-123456.docx",
+        "z/slides.pptx",
+    ]
+
+
+def test_presentations_count_toward_both_zip_limits() -> None:
+    from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, enumerate_docx_members
+
+    mixed = _make_zip([("R5-123456.docx", b"word"), ("slides.pptx", b"deck")])
+    with pytest.raises(TDocZipLimitError, match="document-count"):
+        enumerate_docx_members(mixed, max_documents=1)
+
+    presentation_only = _make_zip([("slides.pptx", b"larger-than-one-byte")])
+    with pytest.raises(TDocZipLimitError, match="aggregate uncompressed byte limit"):
+        enumerate_docx_members(presentation_only, max_uncompressed_bytes=1)
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        [("../slides/deck.pptx", b"deck")],
+        [("slides\\deck.pptx", b"one"), ("slides/deck.pptx", b"two")],
+    ],
+    ids=["unsafe-name", "normalized-duplicate"],
+)
+def test_presentation_zip_members_keep_path_validation(files) -> None:
+    from doc3gpp.parsers.tdoc_zip import TDocZipValidationError, enumerate_docx_members
+
+    with pytest.raises(TDocZipValidationError):
+        enumerate_docx_members(_make_zip(files))
+
+
+def test_presentation_annexes_use_existing_pool_dispatch_in_stable_order() -> None:
+    zip_bytes = _make_zip(
+        [
+            ("z/slides.pptx", b"pptx-z"),
+            ("R5-123456.docx", b"main"),
+            ("a/slides.ppt", b"ppt-a"),
+        ]
+    )
+
+    class _Pool:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def convert_members(self, kind, members):
+            self.calls.append((kind, list(members)))
+            return [f"{source_file} markdown" for source_file, _payload in members]
+
+    pool = _Pool()
+    result = _convert_with_pool(zip_bytes, pool)
+
+    assert pool.calls[0][0] == "markdown"
+    assert [name for name, _payload in pool.calls[0][1]] == [
+        "R5-123456.docx",
+        "a/slides.ppt",
+        "z/slides.pptx",
+    ]
+    assert [document.source_file for document in result.documents] == [
+        "R5-123456.docx",
+        "a/slides.ppt",
+        "z/slides.pptx",
+    ]
+    assert [document.file_order for document in result.documents] == [0, 1, 2]
+
+
+def test_presentation_only_direct_zip_works_but_standalone_is_unsupported() -> None:
+    from doc3gpp.parsers.tdoc_zip_convert import convert_direct_payload
+    from tests.fixtures.presentation_builders import build_presentation_with_content
+
+    deck = build_presentation_with_content()
+    result = convert_direct_payload(
+        _make_zip([("R5-123456.pptx", deck)]),
+        filename="R5-123456.zip",
+        tdoc_id="R5-123456",
+        identity=IDENTITY,
+        max_documents=100,
+        max_uncompressed_bytes=0,
+    )
+
+    assert result.main_source_file == "R5-123456.pptx"
+    assert "speaker secret" in result.documents[0].markdown_text
+    with pytest.raises(ValueError, match="Unsupported extension"):
+        convert_direct_payload(
+            deck,
+            filename="R5-123456.pptx",
+            tdoc_id="R5-123456",
+            identity=IDENTITY,
+            max_documents=100,
+            max_uncompressed_bytes=0,
+        )
+
+
+def test_presentation_main_conversion_failure_is_not_skipped() -> None:
+    zip_bytes = _make_zip([("R5-123456.pptx", b"presentation")])
+
+    def fail(_payload: bytes, _source_file: str) -> str:
+        raise RuntimeError("presentation main failed")
+
+    with pytest.raises(RuntimeError, match="presentation main failed"):
+        _convert(zip_bytes, convert=fail)
+
+
+def test_failed_presentation_annex_is_recorded_and_retried() -> None:
+    zip_bytes = _make_zip(
+        [("R5-123456.docx", b"main"), ("slides/deck.pptx", b"presentation")]
+    )
+    attempts = 0
+
+    def convert(payload: bytes, source_file: str) -> str:
+        nonlocal attempts
+        if source_file.endswith(".pptx"):
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("presentation annex failed")
+        return payload.decode("utf-8")
+
+    first = _convert(zip_bytes, convert=convert)
+    assert first.skipped_sources == ("slides/deck.pptx",)
+    assert [document.source_file for document in first.documents] == ["R5-123456.docx"]
+
+    second = _convert(zip_bytes, convert=convert)
+    assert second.skipped_sources == ()
+    assert [document.source_file for document in second.documents] == [
+        "R5-123456.docx",
+        "slides/deck.pptx",
+    ]
+    assert attempts == 2
+
+
+def test_cr_cover_selection_ignores_presentation_with_cr_looking_text() -> None:
+    from doc3gpp.parsers.cr.header import is_cr_header_present
+    from doc3gpp.parsers.direct_extractor import _direct_parse_payload
+
+    cr_looking_markdown = (
+        "| CHANGE REQUEST |\n"
+        "|  | 38.331 | CR | 1 | rev | 0 | Current version: | 18.5.0 |"
+    )
+    assert is_cr_header_present(cr_looking_markdown)[0]
+
+    class _CoverPool:
+        def convert_members(self, kind, members):
+            assert kind == "markdown"
+            return [cr_looking_markdown for _name, _payload in members]
+
+    bundle = _direct_parse_payload(
+        _make_zip(
+            [
+                ("z/real-cover.docx", b"word"),
+                ("R5s260009.pptx", b"presentation"),
+            ]
+        ),
+        filename="R5s260009.zip",
+        max_bytes=0,
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        tdoc_id="R5s260009",
+        parse_main=lambda markdown, tdoc_id: (markdown, tdoc_id),
+        docx_pool=_CoverPool(),
+    )
+
+    assert bundle.main_source_file == "z/real-cover.docx"
+    assert [document.source_file for document in bundle.documents] == [
+        "z/real-cover.docx",
+        "R5s260009.pptx",
+    ]
+
+
+def test_cr_presentation_conversion_failure_is_skipped_as_annex() -> None:
+    from doc3gpp.parsers.direct_extractor import _direct_parse_payload
+
+    cr_looking_markdown = (
+        "| CHANGE REQUEST |\n"
+        "|  | 38.331 | CR | 1 | rev | 0 | Current version: | 18.5.0 |"
+    )
+
+    class _FailingPresentationPool:
+        def convert_members(self, kind, members):
+            assert kind == "markdown"
+            return [
+                cr_looking_markdown
+                if source_file.endswith(".docx")
+                else RuntimeError("broken presentation annex")
+                for source_file, _payload in members
+            ]
+
+    bundle = _direct_parse_payload(
+        _make_zip(
+            [
+                ("R5s260009.pptx", b"presentation"),
+                ("cover.docx", b"word"),
+            ]
+        ),
+        filename="R5s260009.zip",
+        max_bytes=0,
+        max_documents=100,
+        max_uncompressed_bytes=0,
+        tdoc_id="R5s260009",
+        parse_main=lambda markdown, tdoc_id: (markdown, tdoc_id),
+        docx_pool=_FailingPresentationPool(),
+    )
+
+    assert bundle.main_source_file == "cover.docx"
+    assert bundle.skipped_sources == ("R5s260009.pptx",)

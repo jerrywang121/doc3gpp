@@ -558,15 +558,24 @@ def _direct_parse_payload(
         else:
             failures.append((source_file, outcome))
 
-    cover_candidates = [
-        source_file for source_file, markdown in converted if is_cr_header_present(markdown)[0]
+    word_suffixes = (".docx", ".doc")
+    word_failures = [
+        (source_file, exc)
+        for source_file, exc in failures
+        if Path(source_file).suffix.lower() in word_suffixes
     ]
-    if not cover_candidates and failures:
-        source_file, exc = failures[0]
+    cover_candidates = [
+        source_file
+        for source_file, markdown in converted
+        if Path(source_file).suffix.lower() in word_suffixes
+        and is_cr_header_present(markdown)[0]
+    ]
+    if not cover_candidates and word_failures:
+        source_file, exc = word_failures[0]
         raise _failed_conversion(source_file, exc) from exc
     if not cover_candidates:
         raise CRHeaderMissingError(
-            f"No supported DOCX member in {filename!r} contains a structural CR cover page"
+            f"No supported Word member in {filename!r} contains a structural CR cover page"
         )
     if len(cover_candidates) != 1:
         tdoc_named = [
@@ -583,7 +592,10 @@ def _direct_parse_payload(
 
     main_source_file = cover_candidates[0]
     for source_file, exc in failures:
-        if is_tdoc_member(source_file, resolved_tdoc_id.casefold()):
+        if (
+            Path(source_file).suffix.lower() in word_suffixes
+            and is_tdoc_member(source_file, resolved_tdoc_id.casefold())
+        ):
             raise _failed_conversion(source_file, exc) from exc
     for source_file, exc in failures:
         logger.warning("Skipping TDoc annex %r: conversion failed: %s", source_file, exc)
@@ -645,13 +657,14 @@ def direct_parse_bytes(
     max_uncompressed_bytes: int = 0,
     docx_pool: DocxMemberPool | None = None,
 ) -> TDocParseBundle:
-    """Convert every supported Word member and parse the unique CR cover.
+    """Convert supported ZIP members and parse the unique Word CR cover.
 
     ZIP members are enumerated and converted sequentially, or through
     ``docx_pool`` when one is given. The structural CR detector selects
-    exactly one main document; supporting documents remain content-only and do
-    not enter the CR parser. An annex that fails to convert is logged and
-    listed in ``skipped_sources`` unless it is named for the TDoc.
+    exactly one Word main document; supporting documents, including every
+    presentation, remain content-only and do not enter the CR parser. An annex
+    that fails to convert is logged and listed in ``skipped_sources`` unless it
+    is named for the TDoc.
     Standalone .docx/.doc input follows the same one-document bundle contract.
     """
     return _direct_parse_payload(

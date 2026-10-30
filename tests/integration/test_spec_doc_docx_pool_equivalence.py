@@ -16,11 +16,13 @@ from unittest.mock import MagicMock
 from docx import Document
 
 from doc3gpp.models.spec import SpecVersion
+from doc3gpp.parsers.docx_converter import InlineDocxPool, ParagraphBlock
 from doc3gpp.parsers.tdoc_zip_convert import convert_tdoc_zip
 from doc3gpp.services.docx_convert_pool import DocxConvertPool
 from doc3gpp.services.spec_doc_service import SpecDocService
 from doc3gpp.settings.loader import get_settings
 from tests.fixtures.docx_builders import build_golden_branches_docx, build_golden_docx
+from tests.fixtures.presentation_builders import build_presentation_with_content
 
 SPEC_ID = "38.331"
 TDOC_ID = "R5-123456"
@@ -169,3 +171,44 @@ def test_convert_tdoc_zip_pool_matches_in_process(tmp_path) -> None:
     assert inline.skipped_sources == ()
     assert pooled == inline
     assert not any(_pid_alive(pid) for pid in recording.worker_pids)
+
+
+
+def test_mixed_word_and_presentation_members_match_serial_and_spawned_pools() -> None:
+    members = [
+        ("word.docx", build_golden_docx()),
+        ("broken.pptx", b"not a zip"),
+        ("slides.PPTX", build_presentation_with_content()),
+        ("unsupported.pdf", build_presentation_with_content()),
+    ]
+
+    def signature(outcome):
+        if isinstance(outcome, BaseException):
+            return type(outcome), str(outcome)
+        return outcome
+
+    for kind in ("markdown", "blocks"):
+        inline = InlineDocxPool().convert_members(kind, members)
+        with DocxConvertPool(1) as serial_pool:
+            serial = serial_pool.convert_members(kind, members)
+        with DocxConvertPool(2) as spawned_pool:
+            spawned = spawned_pool.convert_members(kind, members)
+
+        assert len(inline) == len(serial) == len(spawned) == 4
+        assert [signature(value) for value in serial] == [
+            signature(value) for value in inline
+        ]
+        assert [signature(value) for value in spawned] == [
+            signature(value) for value in inline
+        ]
+        assert [index for index, value in enumerate(inline) if isinstance(value, Exception)] == [1, 3]
+        assert isinstance(inline[0], (str, list))
+        if kind == "markdown":
+            assert isinstance(inline[2], str)
+            assert "## Slide 1" in inline[2] and "日本語" in inline[2]
+        else:
+            assert isinstance(inline[2], list)
+            assert len(inline[2]) == 1
+            assert isinstance(inline[2][0], ParagraphBlock)
+            assert "## Slide 1" in inline[2][0].text
+            assert "日本語" in inline[2][0].text

@@ -95,8 +95,9 @@ def _document(
 class TDocZipConversion:
     """Converted documents from one TDoc archive, main first.
 
-    ``documents`` holds every converted ``.docx`` or ``.doc`` member: the main document,
-    then the annexes in source-path order. ``skipped_sources`` names annexes
+    ``documents`` holds every converted ``.docx``, ``.doc``, ``.pptx``, or ``.ppt``
+    member: the main document, then annexes in source-path order.
+    ``skipped_sources`` names annexes
     whose conversion failed; those are logged and not returned as documents.
     """
 
@@ -111,19 +112,25 @@ def _select_zip_main(
     tdoc_id: str,
     max_documents: int,
     max_uncompressed_bytes: int,
+    allow_presentations: bool = True,
 ) -> tuple[str, dict[str, bytes]]:
-    """Return the main member's name and every supported Word member's payload."""
-    payloads = dict(
-        enumerate_docx_members(
-            zip_bytes,
-            max_documents=max_documents,
-            max_uncompressed_bytes=max_uncompressed_bytes,
-        )
+    """Select a family main and read all supported ZIP document payloads."""
+    members = enumerate_docx_members(
+        zip_bytes,
+        max_documents=max_documents,
+        max_uncompressed_bytes=max_uncompressed_bytes,
     )
+    word_suffixes = (".docx", ".doc")
+    document_suffixes = (*word_suffixes, ".pptx", ".ppt")
+    payloads = {
+        source_file: payload
+        for source_file, payload in members
+        if allow_presentations or source_file.casefold().endswith(word_suffixes)
+    }
     other = tuple(
         name.rsplit("/", 1)[-1]
         for name in member_names(zip_bytes)
-        if not name.casefold().endswith((".docx", ".doc"))
+        if not name.casefold().endswith(document_suffixes)
     )
     return select_main_member(tdoc_id, tuple(payloads), other), payloads
 
@@ -138,7 +145,7 @@ def convert_tdoc_zip(
     convert: Callable[[bytes, str], str] = convert_document_to_markdown,
     docx_pool: DocxMemberPool | None = None,
 ) -> TDocZipConversion:
-    """Convert a TDoc ZIP's Word members without network or persistent storage.
+    """Convert a TDoc ZIP's Word and presentation members without network or storage.
 
     Legacy .doc conversion uses private temporary files via LibreOffice.
 
@@ -218,8 +225,8 @@ def convert_direct_payload(
 ) -> TDocZipConversion:
     """Convert a direct-mode ZIP or standalone Word payload without network/SQL.
 
-    A ZIP follows :func:`convert_tdoc_zip`. A standalone ``.docx`` or ``.doc`` is its own
-    main document, has no annexes, and always converts in-process.
+    A ZIP follows :func:`convert_tdoc_zip`. Standalone ``.docx`` or ``.doc`` inputs remain
+    supported as their own main document; standalone presentations are unsupported.
     """
     source, suffix = _direct_source(filename)
     if suffix == ".zip":
@@ -251,10 +258,10 @@ def convert_direct_main_markdown(
     convert: Callable[[bytes, str], str] = convert_document_to_markdown,
     docx_pool: DocxMemberPool | None = None,
 ) -> str:
-    """Return only the main document's Markdown, for TDoc type sniffing.
+    """Return the Word main Markdown only, for CR TDoc type sniffing.
 
-    Annexes are never converted here. A ZIP's main is selected by name exactly
-    as in :func:`convert_tdoc_zip`; a standalone Word file is its own main.
+    Annexes are never converted here. A ZIP's main is selected by name using
+    Word members only; a standalone Word file is its own main.
     """
     source, suffix = _direct_source(filename)
     if suffix == ".zip":
@@ -263,6 +270,7 @@ def convert_direct_main_markdown(
             tdoc_id=tdoc_id,
             max_documents=max_documents,
             max_uncompressed_bytes=max_uncompressed_bytes,
+            allow_presentations=False,
         )
         outcome = next(member_outcomes(convert, [(main, payloads[main])], docx_pool))
         return _markdown_outcome(outcome)

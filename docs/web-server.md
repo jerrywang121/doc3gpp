@@ -24,16 +24,20 @@ pip install "doc3gpp[web]"
 This installs FastAPI, uvicorn, the vendored HTMX/Jinja2 templates, and the
 MCP package.
 
-TDoc and spec-document parse jobs support both `.docx` and legacy `.doc`,
-including mixed ZIPs. Parsing also needs `doc3gpp[extract]`; `.doc` additionally
-needs LibreOffice Writer installed on the **server host**, with `libreoffice` or
-`soffice` on the server process's `PATH`. `.docx` does not need LibreOffice.
-The shared converter uses an isolated temporary directory/profile and a
-per-file `.doc` timeout configured by `[word_conversion] timeout_seconds` in
-TOML (default `300`); the allowlisted process environment variable
+TDoc and spec-document parse jobs support `.docx`, legacy `.doc`, `.pptx`, and
+legacy `.ppt` members inside mixed ZIPs. Parsing needs `doc3gpp[extract]`
+(`python-docx` and `python-pptx>=1.0.2`; the presentation dependency is loaded
+lazily). Legacy `.doc` additionally needs LibreOffice Writer and legacy `.ppt`
+needs headless LibreOffice Impress installed on the **server host**, with
+`libreoffice` or `soffice` on the server process's `PATH`. Modern `.docx` and
+`.pptx` do not need LibreOffice. The shared converter uses an isolated temporary
+directory/profile and `[word_conversion] timeout_seconds` (default `300`);
 `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. Original member paths
-remain unchanged in content, TOC, and search results. Re-parse already-completed
-archives with `force=true` to include legacy members that earlier versions ignored.
+remain unchanged. Presentation extraction is text-only: no OCR or inference from
+images, charts, or embedded objects, and no CR/spec TOC or section metadata is
+derived from slides. Standalone presentations and new TDoc types are not enabled.
+Re-parse already-completed archives with `force=true` to include members ignored
+by older versions.
 
 ## Quick start
 
@@ -115,9 +119,9 @@ writer. `server.max_concurrent_jobs` only limits active jobs. HTTP and MCP
 enqueue contracts and job envelopes are unchanged; folder results keep
 deterministic discovery order.
 
-The web process also owns one DOCX conversion pool sized by `[pipeline]
-docx_workers` (default `min(4, cpu_count)`, range 0..32). It runs
-python-docx conversion in spawned worker processes, separate from
+The web process also owns one document conversion pool sized by `[pipeline]
+docx_workers` (default `min(4, cpu_count)`, range 0..32). It runs Word and
+presentation conversion in spawned worker processes, separate from
 `prepare_workers`. `0` and `1` convert in-process. Every concurrent prepare
 shares this pool, so the number of conversion processes stays at
 `docx_workers` however many jobs are queued. The pool is closed during
@@ -220,7 +224,7 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/tdocs` | List TDocs (`?format=json`; repeatable `fields` selects the HTML columns, see below; `parsed=true|false` keeps complete or incomplete extractions for each TDoc's type). |
 | GET | `/tdocs/{id}` | TDoc show (HTML or JSON). HTML renders `ZIP files` separately from Auxiliary files; detail JSON always includes `zip_files` (`null` when unknown, `[]` for a known empty archive, otherwise ordered outer-ZIP names). |
 | GET | `/tdocs/by-url/content` | Exact ZIP-URL content snapshot (`?ftp_url=<url>`, optional `source_file`, `format=html\|markdown\|json`; default `html`). Registered before parameterized content routes; no sync, download, or extraction. |
-| GET | `/tdocs/{id}/content` | Stored TDoc content (`?format=html\|markdown\|json`, default `html`; optional exact `source_file`). SQL-first; no implicit sync, download, or extraction. |
+| GET | `/tdocs/{id}/content` | Stored TDoc content (`?format=html\|markdown\|json`, default `html`; optional exact `source_file`). SQL-first; presentation sources remain available after derived-cache eviction. No implicit sync, download, or extraction. |
 | GET | `/tdocs/{id}/download` | Download the cached source zip (404 `cache_miss` with a hint when unparsed). |
 | GET | `/tdocs/by-url` | URL-anchored TDoc show (`?ftp_url=<url>`; HTML or JSON), including historical URL inventories. Inventory-only rows, including empty inventories, match; 404 only when no row matches in any of the seven URL-keyed tables. |
 | GET | `/tsgs` | List TSGs. |
@@ -234,11 +238,12 @@ the target is missing or not `X-Doc3gpp-Managed` by doc3gpp.
 | GET | `/wis` | List WIs. |
 | GET | `/specs` | List specs (`?format=json`; filters include `tsg,type,spec_id,title,status,radio_tech,initial_release,wis,rapporteurs,parsed,limit,offset`; `parsed=true|false` filters by parsed status before pagination; default JSON fields include `parsed`). |
 | GET | `/testcases` | List testcases (`?format=json`; filters `testcase,title,ats,feature,release,wis,spec,group,status,gcf_status,limit,offset`; default limit 50, `_LIMIT_CAP=200`; unknown `group` → 400 `invalid_filter`). JSON is the bare row array byte-identical to `doc3gpp testcase list --format json` (nested `statuses` list of `{path, gcf_ptcrb, ttcn_status}` objects via `render.testcase_rows`; `null` preserved). |
-| GET | `/specs/{spec_id}/docs` | Human-facing collapsed, version-first spec-document page (`?version=` required; optional `release`, `sections`, `tables`, `limit`, `offset`) with source state, parse/re-parse form, collapsed TOC, and paginated chunks (`spec_doc_show.html`; HTMX fragment `partials/spec_doc_show_results.html`). |
+| GET | `/specs/{spec_id}/docs` | Human-facing collapsed, version-first spec-document page (`?version=` required; optional `release`, `sections`, `tables`, `limit`, `offset`) with source state, parse/re-parse form, file-ordered full-presentation links, collapsed TOC, and paginated chunks (`spec_doc_show.html`; HTMX fragment `partials/spec_doc_show_results.html`). |
+| GET | `/specs/{spec_id}/docs/content` | Exact full presentation Markdown (`?version=` and `?source_file=` required; `?format=json` returns the ordered `{spec_id, version, source_file, markdown}` object, otherwise HTML renders with raw HTML escaped). SQL-only; a missing version/source returns 404. |
 | GET | `/specs/{spec_id}/docs/toc` | Spec-doc TOC for one `(spec_id, version)` pair (`?version=` required, `?release=` informational; `?format=json` is the `doc3gpp spec doc toc show --format json` envelope verbatim: `{spec_id, version, release, docx_count, entries, files}`; full page `spec_doc_toc.html`, HTMX fragment `partials/spec_doc_toc_results.html`). Miss → 404. |
 | GET | `/spec-docs/search` | Unified spec-doc search (`?text=`, `?semantic=`, filters `spec,release,version,sections,tables,limit,offset`; `limit` accepts 1 to 150, larger values return 400 `invalid_filter`; `?format=json` is the `doc3gpp spec doc search --format json` flattened result array verbatim; full page `spec_docs_search.html`, HTMX fragment `partials/spec_doc_search_results.html`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
 | GET | `/spec-docs/index` | Spec-doc FTS5/vector index status (`?format=json` returns the `IndexStatus` object). |
-| GET | `/spec-docs/schema` | Spec-doc field descriptors across the four spec-doc tables (HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
+| GET | `/spec-docs/schema` | Spec-doc field descriptors across the five spec-doc tables (34 schema rows, including `spec_doc_presentations`; HTML grouped by table; `?format=json` is the `doc3gpp spec doc schema --format json` payload verbatim). No DB access. |
 | GET | `/tdocs/search` | Unified TDoc search (`?text=`, `?semantic=`, filters, `limit` accepts 1 to 150 (larger values return 400 `invalid_filter`), `?format=json`). Text-only, semantic-only, both, and neither select FTS5, vector, hybrid, and filter-only modes. |
 | GET | `/tdocs/index` | TDoc FTS5/vector index status (`?format=json` returns the `IndexStatus` object). |
 | GET | `/jobs`, `/jobs/{id}` | List / show jobs. `?format=html` renders the full status panel; `?format=badge` renders the one-word status used by meeting rows (empty once the job is terminal). |
@@ -309,7 +314,11 @@ when one source is selected:
 source-filtered response. Markdown returns one body unchanged or multiple
 main-first blocks prefixed with `<!-- doc3gpp-source: <JSON source_file> -->`;
 HTML renders distinct Main/Supporting document sections and exact-source
-links. Content reads are SQL-first: the Markdown stored in the content tables
+links. Presentation members (`.pptx`/`.ppt` inside supported ZIPs) are stored
+in the existing SQL content tables and can be selected by exact source path.
+`doc3gpp tdoc show --tdoc <id> --format raw --source-file <path>` reads an
+already stored presentation before extraction when that extraction is complete;
+its HTTP and MCP content reads are also SQL-first. Content reads use the Markdown stored in the content tables
 (`tdoc_cr_annexes`, `tdoc_wid_contents`, `tdoc_ls_contents`, and
 `tdoc_discussion_contents`) remains available after Markdown-cache purge/eviction,
 and cache eviction does not prevent an FTS5 rebuild. The one exception is the CR
@@ -429,8 +438,8 @@ TOC entries continue to use `section_no` and table fields.
 
 The version page's source card exposes three states: a version with no
 specdata source row has not been downloaded or parsed; a downloaded source is
-waiting for parsing; and a parsed source shows its parse timestamp, DOCX and
-chunk counts. The only document action is `Parse document` (or `Force
+waiting for parsing; and a parsed source shows its parse timestamp, historical
+`docx_count` (all `.docx`/`.doc`/`.pptx`/`.ppt` members), and chunk counts. The only document action is `Parse document` (or `Force
 re-parse`, available only for a parsed source. It enqueues the existing
 `POST /jobs/parse/spec-docs` job with scalar `spec_id`, the selected exact
 `version`, and `force`, then
@@ -445,18 +454,24 @@ unfiltered total. Pagination links preserve `version`, `release`, `sections`,
 `tables`, and `limit`. The footer shows the visible range, first/previous/next/
 last controls, and up to ten rolling numeric page links with ellipses. An
 out-of-range offset clamps to the last page, while zero filtered matches omit
-the pagination controls.
+the pagination controls. Stored presentations are listed in file order above
+the chunk results; each exact, URL-encoded source path opens its full Markdown
+at `/specs/{spec_id}/docs/content`.
 The search form uses a full-width Query field and exposes the same plural
 `sections` / `tables` filters. The `TDoc Search` and `Spec Docs Search` tabs
 are shared by both search families, and Spec Docs results link to the matching
 version page and chunk anchor
 (`/specs/{spec_id}/docs?version={version}#chunk-{chunk_index}`).
 
-The spec-document corpus is not repaired at runtime. The pre-deployment local
-corpus is repaired once from cached ZIPs using an internal maintenance helper;
-there is no public repair command or migration path. New deployments use the
-fresh specdata schema and the dedicated `~/.cache/doc3gpp/specs` cache root by
-default, while TDoc extraction remains under `~/.cache/doc3gpp/tdocs`.
+Full presentation Markdown is stored in the specdata `spec_doc_presentations`
+table and read by exact source path; CLI, HTTP, and MCP details do not open ZIP
+or Markdown caches or fetch/parse. The five spec-doc tables have 34 schema rows.
+Existing parsed versions are not silently backfilled: run
+`doc3gpp db init --scope specdata`, then re-parse selected versions with
+`doc3gpp spec doc parse --spec <id> --version <v> --force` to populate full
+presentation rows. New deployments use the fresh specdata schema and the
+dedicated `~/.cache/doc3gpp/specs` cache root by default, while TDoc extraction
+remains under `~/.cache/doc3gpp/tdocs`.
 
 The sync hub (`/sync`) is a single page for enqueueing every sync-shaped job. Each panel submits a JSON body to the matching `/jobs/...` route via the shared `bindJobPolling` helper; when the job reaches a terminal state the bottom "Recent sync jobs" table is refreshed in place via HTMX (`GET /sync?format=fragment`) rather than a full page reload, so the user keeps their scroll position. The WI form (`id="sync-wis-form"`) submits its required TSG to `POST /jobs/sync/wis`; the worker (`_sync_wis`, `JobKind.SYNC_WIS = "sync_wis"`) validates the reference TSG, calls `services.wi.sync`, and returns `{"status","reason","synced_count"}`. The `tdoc-index-form` and `spec-doc-index-form` forms enqueue `POST /jobs/tdocs/index` and `POST /jobs/spec-docs/index`; the twelfth form (`id="testcase-form"`) enqueues `POST /jobs/sync/testcases` with `{force}` from its Force-sync checkbox (`sync_hub.js` `"testcase-form"` body builder). The Parse TDocs form's `Meeting ID` input is serialized as the numeric `meeting_id` filter. The index handlers run the unified FTS5/vector maintenance services, and the testcase handler (`_sync_testcases`, `JobKind.SYNC_TESTCASES = "sync_testcases"`) calls `services.testcase.sync(force=force, on_progress=...)` and returns `{"status","reason","synced_count"}`.
 
@@ -624,7 +639,7 @@ rebuild-only tool names are not current APIs.
 `get_spec`, `list_testcases`, `get_testcase`, `get_tsg_schema`,
 `get_meeting_schema`, `get_tdoc_schema`, `get_wi_schema`,
 `get_spec_schema`, `get_testcase_schema`, `search_tdoc`, `search_spec_docs`,
-`get_tdoc_index`, `get_spec_toc`, `get_spec_doc_index`, and
+`get_tdoc_index`, `get_spec_toc`, `get_spec_doc_content`, `get_spec_doc_index`, and
 `get_spec_doc_schema`.
 
 `list_specs(..., parsed=None, limit=50, offset=0)` accepts an optional native
@@ -702,10 +717,14 @@ routes, but the enqueue envelope adds a `message` key (the only parity
 exception).
 
 The spec-document tools use the separate specdata database.
-`get_spec_doc_schema` describes `spec_doc_zip_inventory` alongside the source,
-TOC, and chunk tables. `get_spec_toc` reads one parsed `(spec_id, version)`
-TOC, `search_spec_docs` selects among FTS5, vector, hybrid, and filter-only
-chunk search, and `get_spec_doc_index` reports index status. `parse_spec_docs`
+`get_spec_doc_schema` describes the five spec-doc tables, including
+`spec_doc_presentations`. `get_spec_toc` reads one parsed `(spec_id, version)`
+TOC, and `get_spec_doc_content(spec_id, version, source_file)` returns the full
+presentation Markdown by exact source path. Missing content is a tool error
+with the service's not-found detail. Its compact JSON matches the CLI and HTTP
+payload byte-for-byte; the read never opens caches or fetches/parses the ZIP.
+`search_spec_docs` selects among FTS5, vector, hybrid, and filter-only chunk
+search, and `get_spec_doc_index` reports index status. `parse_spec_docs`
 enqueues the same
 `PARSE_SPEC_DOCS` job as `POST /jobs/parse/spec-docs`; it accepts one
 `spec_id`, optional `release`/`version`, and `force`.

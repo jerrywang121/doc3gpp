@@ -34,6 +34,8 @@ from doc3gpp.models.tdoc_document import TDocDocument, markdown_member_name
 from doc3gpp.models.tdoc_file import TDocFile
 from doc3gpp.models.tdoc_identity import document_id_for
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
+from doc3gpp.parsers.presentation_converter import PythonPptxNotInstalledError
+from doc3gpp.services.tdoc_content_service import TDocContentError
 from doc3gpp.services.tdoc_cr_service import (
     BatchExtractResult,
     ExtractResult,
@@ -3105,6 +3107,41 @@ def test_tdoc_show_format_raw_python_docx_missing_raises_bad_parameter(
     assert result.exit_code != 0
     assert "python-docx" in result.output
     assert "doc3gpp[extract]" in result.output
+
+
+def test_tdoc_show_format_raw_python_pptx_missing_raises_bad_parameter(
+    sqlite_env, monkeypatch
+) -> None:
+    """A missing python-pptx extra is friendly for a selected presentation."""
+    create_schema()
+    SQLAlchemyTDocRepository().upsert(TDoc(tdoc_id="R5s260009", type="CR"))
+
+    class _MissingContentService:
+        def get(self, *, tdoc_id=None, ftp_url=None, source_file=None):
+            raise TDocContentError("presentation content is not stored")
+
+    class _RaisingCrService:
+        def extract(self, tdoc_id):
+            raise PythonPptxNotInstalledError()
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_content_service",
+        _MissingContentService,
+    )
+    _patch_service(monkeypatch, _RaisingCrService())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tdoc", "show", "--tdoc", "R5s260009",
+            "--format", "raw",
+            "--source-file", "Annex/slides.pptx",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "python-pptx is required for presentation extraction" in result.output
+    assert "pip install doc3gpp[extract]" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_tdoc_show_format_raw_zip_download_failure_raises_bad_parameter(

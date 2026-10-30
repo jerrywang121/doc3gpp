@@ -101,22 +101,22 @@ The `[dev]` extra includes `[cli]`, `pytest`, `pytest-cov`, and `ruff`.
 ### Optional extras
 
 ```bash
-pip install "doc3gpp[extract]"    # TDoc CR extraction (python-docx)
+pip install "doc3gpp[extract]"    # Word and presentation extraction (python-docx, python-pptx)
 pip install "doc3gpp[search]"     # FTS5 + BM25 full-text search
 pip install "doc3gpp[semantic]"   # Hybrid FTS5 + embedding vector search (sqlite-vec; remote embeddings API)
 pip install "doc3gpp[web]"        # Web server + MCP (FastAPI, uvicorn, Jinja2 + HTMX, markdown-it-py)
 pip install "doc3gpp[all]"        # every runtime extra: CLI, extraction, search, semantic, web
 ```
 
-Legacy Word `.doc` parsing additionally requires **LibreOffice Writer** installed
-on the machine running doc3gpp, with `libreoffice` or `soffice` on `PATH`
-(for example, `sudo apt install libreoffice-writer` on Debian/Ubuntu).
-`.doc` files are converted to `.docx` in a private temporary directory with an
-isolated LibreOffice profile, then parsed by the same Markdown/block pipeline.
-The per-file timeout is configured by `[word_conversion] timeout_seconds` in
-the TOML file (default `300` seconds); the allowlisted environment variable
-`DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides the TOML value. `.docx`
-parsing does not require LibreOffice.
+The `[extract]` extra installs `python-docx` and `python-pptx>=1.0.2`; the
+PowerPoint library is imported lazily. Legacy Word `.doc` parsing additionally
+requires LibreOffice Writer, and legacy `.ppt` parsing requires headless
+LibreOffice Impress, with `libreoffice` or `soffice` on `PATH` on the machine
+running doc3gpp. Each legacy conversion uses a private temporary directory and
+isolated LibreOffice profile. Both use `[word_conversion] timeout_seconds` in
+TOML (default `300` seconds); the allowlisted
+`DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` environment variable overrides it.
+Modern `.docx` and `.pptx` members do not require LibreOffice.
 
 ## Quick Start
 
@@ -169,7 +169,7 @@ The CLI ships twelve sub-apps. The most common
 entry points are `meeting sync` (DynaReport calendar), `tdoc sync`
 (TDoc-list XLSX + auxiliary file scan), `tdoc parse` (extract CR covers
 and ZIP document content), `tdoc show --format raw` (render converted
-Markdown for supported `.docx` and `.doc` members), `spec sync` (3GPP specification
+Markdown for supported `.docx`, `.doc`, `.pptx`, and `.ppt` ZIP members), `spec sync` (3GPP specification
 records with versions),
 `spec doc parse` (specification document conversion and chunking), and
 `tdoc search` / `spec doc search` (unified FTS5, semantic, hybrid, and
@@ -245,6 +245,7 @@ doc3gpp tdoc parse --from-url https://www.3gpp.org/ftp/.../Docs/ --recursive --o
 doc3gpp tdoc show --tdoc R5s260009 --format json -o r5s260009.json
 doc3gpp tdoc show --tdoc R5s260009 --format raw  -o r5s260009.md    # all converted ZIP documents
 doc3gpp tdoc show --tdoc R5s260009 --format raw --source-file 'Annex/Support.docx' -o support.md
+doc3gpp tdoc show --tdoc R5s260009 --format raw --source-file 'Slides/Overview.pptx' -o slides.md
 doc3gpp tdoc show --ftp-url tsg_ran/WG5/.../R5s260009.zip            # URL-keyed lookup
 doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format raw
 
@@ -252,12 +253,19 @@ doc3gpp tdoc show --ftp-url https://www.3gpp.org/ftp/.../R5s260009.zip --format 
 doc3gpp tdoc schema --format json
 ```
 
-TDoc and spec-document ZIP parsing converts `.docx` and `.doc` members, including
-mixed-format archives; PDF, spreadsheets, and nested ZIPs are not converted.
-Original member names and paths are preserved. For a CR TDoc, the document that
-contains the CR cover is the main
-document: it owns the cover and optional TTCN/body-change sidecars, and every
-other converted Word document in the archive is a CR annex stored as content. WID, LS, and
+TDoc and spec-document ZIP parsing converts `.docx`, `.doc`, `.pptx`, and `.ppt`
+members, including mixed-format archives. Presentations are supported only
+inside ZIP packages; this does not add standalone presentation parsing or make
+otherwise ineligible TDoc types eligible. PDF, spreadsheets, images, charts,
+embedded objects, and nested ZIPs are not converted. Presentation Markdown
+contains slide titles/text, grouped text, tables, and existing speaker notes;
+there is no OCR, graphical inference, or presentation-derived CR/spec metadata.
+Spec slides are searchable content but do not create TOC, section, or table
+metadata. Original member names and paths are preserved.
+
+For a CR TDoc, the structural Word CR cover remains the main document and alone
+owns the cover and optional TTCN/body-change sidecars. Presentations are always
+supporting CR annexes, even if their text resembles a CR cover. WID, LS, and
 discussion TDocs store their main document and every annex. A failed annex is
 skipped with a warning that names it, is listed in `skipped_sources`, and leaves
 the extraction incomplete until a later normal parse converts it. Use
@@ -266,11 +274,17 @@ multiple bodies are emitted as named blocks. `tdoc_files` remains the metadata
 for auxiliary files discovered in meeting FTP folders—it is not the inventory
 of files inside a ZIP.
 
-If LibreOffice is missing or conversion fails, the error names the original
-source. A failed main document fails the TDoc; failed annexes retain the existing
-skip-and-retry behavior. Re-parse already-completed archives with `--force` to
-include legacy members that earlier versions ignored. Spec-document `docx_count`
-retains its historical field name but now counts both `.docx` and `.doc` files.
+If the optional extraction dependency or required LibreOffice component is
+missing, or conversion fails, the error names the original source. A failed
+main document fails the TDoc; failed annexes retain the existing skip-and-retry
+behavior. TDoc ZIP downloads retain the `max_tdoc_size_kb = 1000` default cap.
+Inside a TDoc archive, all four supported formats count toward
+`max_documents_per_zip = 100` and the aggregate
+`max_uncompressed_size_kb = 102400` limit; `0` disables either archive limit.
+The spec ZIP cap is `spec_doc.max_zip_size_kb = 0` by default (unlimited).
+Re-parse already-completed archives with `--force` to include supported members
+that earlier versions ignored. Spec-document `docx_count` retains its historical
+field name but counts `.docx`, `.doc`, `.pptx`, and `.ppt` members.
 
 `zip_files` is a separate, metadata-only inventory for CR, WID new/revised, LS
 in/out, and discussion TDocs. It lists every non-directory entry in the outer
@@ -308,7 +322,9 @@ re-downloaded. Legacy plain-text, gzip, and single-member Markdown cache artifac
 remain readable as incomplete version-1 content; parse discovery treats those
 extractions as pending so the ordinary filtered parse workflow can upgrade them.
 A URL-anchored raw read is a snapshot and does not implicitly download or extract;
-the TDoc-ID raw path retains its existing extraction-on-read behavior.
+the TDoc-ID raw path retains its extraction-on-read behavior except when an exact
+selected presentation already belongs to a complete extraction, which is read
+SQL-first after cache eviction.
 
 ### `wi` — Work items
 
@@ -386,12 +402,14 @@ then be refreshed with `doc3gpp spec doc parse --spec <id> --version <v>
 ### `spec doc` — specification document corpus
 
 ```bash
-# use newest version with a published .zip, fetch-if-missing, convert every .docx, chunk, and auto-index
+# use newest version with a published .zip, convert supported Word/presentation members, chunk, and auto-index
 doc3gpp spec doc parse --spec 38.331 --release Rel-18 --version 18.5.0
 doc3gpp spec doc parse --spec 38.331 --force  # re-download and re-parse
 
 # inspect the stored TOC and search chunk text/combined metadata
 doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
+# read a full presentation by its exact ZIP member path (raw Markdown by default)
+doc3gpp spec doc show --spec 38.331 --version 18.5.0 --source-file slides/overview.pptx
 doc3gpp spec doc search --text "handover" --spec 38.331 --sections "%handover%" --tables "%UE%" --limit 20
 doc3gpp spec doc search --semantic "handover" --spec 38.331 --limit 20
 doc3gpp spec doc index --rebuild
@@ -405,23 +423,28 @@ example, `Rel-18` with `18.5.0`).
 
 Spec-document rows live in a separate sibling database, normally
 `<main-stem>_specdata.db`, and are cached below the dedicated
-`~/.cache/doc3gpp/specs` root by default. The `spec doc schema` output includes
-the independent `spec_doc_zip_inventory` table; existing installations can add it
-without resetting data via `doc3gpp db init --scope specdata`. The TDoc extraction
-cache remains `~/.cache/doc3gpp/tdocs`. Chunk `sections` and `tables` values are
+`~/.cache/doc3gpp/specs` root by default. The `spec doc schema` describes five
+specdata tables and 34 schema rows, including `spec_doc_zip_inventory` and the
+SQL-backed `spec_doc_presentations` full-file store. Existing installations can
+add the presentation table without resetting data via
+`doc3gpp db init --scope specdata`. The TDoc extraction cache remains
+`~/.cache/doc3gpp/tdocs`. Chunk `sections` and `tables` values are
 newline-delimited combined identifier/title entries; TOC entries retain their
 `section_no` and `title` fields. Section identifiers may be alphanumeric, such
 as `7.2A.3` or `7.2A.3A`. Version selection is numeric rather than lexical;
 parsed `(spec_id, version)` rows are immutable and skip on later
 parses unless `--force` is supplied, which re-downloads and re-parses. The
+`spec doc show` command reads full presentation Markdown from the SQL corpus by
+exact source path; it does not fetch or parse a ZIP or read the Markdown cache.
 `parse` command fetches the ZIP when it is missing and reports `ok`, `skipped`,
 and `failed` buckets per requested spec. See [`docs/cli.md`](docs/cli.md) for
 all filters and defaults.
 
-The pre-deployment specdata corpus is repaired once from its cached ZIPs using
-an internal maintenance helper. This is not a runtime migration and there is
-no public repair command; deployments should start from the fresh schema and
-parse ledger.
+Existing parsed versions are not silently backfilled with presentation rows.
+After `doc3gpp db init --scope specdata`, re-parse each version that needs full
+presentation details with `doc3gpp spec doc parse --spec <id> --version <v>
+--force`; `--force` re-downloads and reparses the ZIP. There is no separate
+presentation repair route or job.
 
 ### `testcase` — RAN5 conformance testcases
 
@@ -582,17 +605,25 @@ doc3gpp server start                          # opens http://127.0.0.1:13999/
 ```
 
 - **HTML UI** — browse meetings, TDocs, TSGs, WIs, specs, spec-document TOCs,
-  and unified FTS5, semantic, hybrid, and filter-only search results.
+  full presentation Markdown, and unified FTS5, semantic, hybrid, and filter-only
+  search results.
 - **JSON API** — every read route accepts `?format=json`, byte-for-byte
   identical to the MCP tools. Unified search is available at
   `GET /tdocs/search` and `GET /spec-docs/search`; index status is available
-  at `GET /tdocs/index` and `GET /spec-docs/index`. Index maintenance jobs
+  at `GET /tdocs/index` and `GET /spec-docs/index`. Full presentation Markdown
+  is available at `GET /specs/{spec_id}/docs/content?version=...&source_file=...`
+  (`format=html` by default, or `format=json`) and as an exact TDoc source at
+  `GET /tdocs/{tdoc_id}/content?source_file=...&format=json`; these reads use
+  SQL and never download or parse.
+  Index maintenance jobs
   are enqueued with `POST /jobs/tdocs/index` and
   `POST /jobs/spec-docs/index`. Raw TDoc Markdown is served by
   `GET /tdocs/{tdoc_id}/content` and `GET /tdocs/by-url/content?ftp_url=...`
   (`format=markdown` by default, or `format=json`); these reads never download.
   Removed `/search/sem` routes are not current APIs.
-- **MCP** — `http://127.0.0.1:13999/mcp` exposes the same reads and jobs.
+- **MCP** — `http://127.0.0.1:13999/mcp` exposes the same reads and jobs,
+  including `get_spec_doc_content` and `get_tdoc_content` for exact-path full
+  presentation Markdown.
   Search tools are `search_tdoc` and `search_spec_docs`; index tools are
   `get_tdoc_index`, `index_tdocs`, `get_spec_doc_index`, and
   `index_spec_docs`. Search rows are flattened and JSON-parity is preserved
@@ -720,7 +751,7 @@ auto_embed_on_parse = true
 bm25_weights = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]
 
 # TDoc ZIP archive limits are TOML-only. The byte cap is aggregate
-# uncompressed supported `.docx` content per archive; 0 disables either cap.
+# uncompressed `.docx`/`.doc`/`.pptx`/`.ppt` content per archive; 0 disables either cap.
 [tdoc_parse]
 max_batch = 100
 max_ftp_depth = 2

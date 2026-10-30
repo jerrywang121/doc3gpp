@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import signal
 import sys
-import time
 
 import click
 import pytest
@@ -198,25 +197,37 @@ def test_stop_signals_and_removes_pidfile(cli_server: Settings, monkeypatch: pyt
 def test_stop_escalates_when_ungraceful(cli_server: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     import doc3gpp.cli_server as cli_server_module
 
+    class _Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now += seconds
+
     pid_path = cli_server.cache.dir / "server.pid"
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text("4242\n", encoding="utf-8")
 
+    clock = _Clock()
     signals: list[int] = []
-    deadline = [time.monotonic() + 11.0]
+    deadline: list[float | None] = [None]
 
     def fake_kill(pid: int, sig: int) -> None:
         signals.append(sig)
-        # Simulate a process that ignores SIGTERM but dies on SIGKILL:
+        # Simulate a process that ignores SIGTERM but dies after the stop timeout.
         if sig == signal.SIGTERM:
+            deadline[0] = clock.now + 11.0
             return
-        if sig == 0 and time.monotonic() > deadline[0]:
-            # pretend alive while the loop polls, then die after the timeout
+        if sig == 0 and deadline[0] is not None and clock.now > deadline[0]:
             raise ProcessLookupError()
 
     monkeypatch.setattr(cli_server_module.sys, "platform", "linux")
     monkeypatch.setattr(cli_server_module.os, "kill", fake_kill)
-    monkeypatch.setattr(cli_server_module.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cli_server_module, "time", clock)
+
     result = _invoke(["stop"])
     assert result.exit_code == 0, result.output
     assert signal.SIGTERM in signals

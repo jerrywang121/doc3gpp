@@ -754,6 +754,31 @@ def build_mcp_server(state: WebState) -> MCPServer:
         toc = services.spec_doc.get_toc(spec_id, version, release=release)
         return _to_json(_spec_doc_toc_to_json(toc))
 
+
+    @server.tool(
+        name="get_spec_doc_content",
+        description="Get the full stored Markdown for one exact presentation source path and spec version.",
+    )
+    @_mcp_error_guard
+    def get_spec_doc_content(
+        spec_id: Annotated[str, Field(description="Dotted spec id (e.g. '38.331').")],
+        version: Annotated[str, Field(description="Exact version (e.g. '18.5.0').")],
+        source_file: Annotated[str, Field(description="Exact source path from the spec ZIP.")],
+    ) -> str:
+        if services.spec_doc is None:
+            raise SettingsDisabledError("spec-doc parse is not available in this build")
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from doc3gpp.models.spec_doc import SpecDocError
+
+        try:
+            presentation = services.spec_doc.get_presentation(
+                spec_id, version, source_file
+            )
+        except SpecDocError as exc:
+            raise ToolError(str(exc)) from exc
+        return _to_json(render.spec_doc_presentation_to_json(presentation))
+
     @server.tool(name="search_spec_docs", description="Search spec-document chunks using text, semantic, hybrid, or filter mode. Optional rich filters include spec_id, release, version, sections, and tables.")
     @_mcp_error_guard
     def search_spec_docs(

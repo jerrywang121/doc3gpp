@@ -14,8 +14,8 @@ Current scope:
   (`GenerateDocumentList.aspx?meetingId={meeting_id}`); auxiliary TDoc
   files still come from the per-meeting FTP folders.
 - Work-item (WI) scraping from the per-TSG DynaReport WI pages.
-- Multi-file TDoc extraction (download ZIP → enumerate supported DOCX
-  members → convert each member → select one CR-cover main document for CRs or
+- Multi-file TDoc extraction (download ZIP → enumerate supported Word and
+  presentation members → convert each member → select one CR-cover main document for CRs or
   the TDoc-number main for WID, LS, and discussion TDocs → atomically persist one
   extraction parent and the per-type content rows; CR annexes and every family
   document are stored, and the CR main lives only in the derived archive).
@@ -24,8 +24,8 @@ Current scope:
   `testcase_status` / `testcase_sources` rows; `testcase sync` / `list`
   / `show`).
 - Spec-document corpus (`spec doc parse` / `toc show` /
-  `search` / `index`): version-zip download → `.docx` / `.doc` →
-  blocks → ordered files → per-version TOC + chunk rows in the
+  `search` / `index`): version-zip download → `.docx` / `.doc` / `.pptx` /
+  `.ppt` → blocks and full presentation Markdown → ordered files → per-version TOC + chunk rows in the
   separate specdata sqlite file, searchable via FTS5 + hybrid vector
   search. Chunk rows carry newline-delimited combined `sections` and
   `tables` metadata; low-level DOCX blocks and TOC entries retain their
@@ -139,28 +139,37 @@ Per-layer modules:
         `word_conversion.timeout_seconds` (default 300; allowlisted process
         environment override `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS`). Original
         member identities are retained; no network or persistent state is used.
-     - `parsers/docx_converter.py` — `.docx` / normalized `.doc` → markdown via the
-      optional `python-docx` extra (raises
-       `PythonDocxNotInstalledError` when missing). Both public converters use
-       `as_docx_bytes`; `.docx` needs no LibreOffice. Also exposes
-       `convert_document_to_blocks` (Word → `HeadingBlock` /
-      `ParagraphBlock` / `TableBlock` list) consumed by the spec-doc
-      parse pipeline. Also defines the `DocxMemberPool` Protocol,
+      - `parsers/presentation_converter.py` — lazy `python-pptx` extraction for
+        `.pptx` plus isolated headless LibreOffice Impress conversion for `.ppt`;
+        emits slide-ordered Markdown for text, groups, tables, and existing notes
+        only (no image/OCR/chart inference or domain metadata). Missing
+        `python-pptx` raises `PythonPptxNotInstalledError` with the `[extract]`
+        installation hint; missing Impress is reported as an actionable error.
+      - `parsers/docx_converter.py` — `.docx` / normalized `.doc` Word conversion via
+        optional `python-docx` and `.pptx` / `.ppt` presentation dispatch. The
+        presentation dependency is `python-pptx>=1.0.2` in `[extract]` and is
+        imported lazily. Legacy `.doc` uses Writer; `.ppt` uses Impress. Also exposes
+         `convert_document_to_blocks` (Word → `HeadingBlock` /
+       `ParagraphBlock` / `TableBlock`; presentation → one `ParagraphBlock` so
+       slides do not create TOC/section/table metadata) consumed by the spec-doc
+       parse pipeline. Also defines the `DocxMemberPool` Protocol,
       `InlineDocxPool` (in-process, the default), and the `DOCX_WORKERS`
       entry points (`blocks` / `markdown`) that worker processes run.
-    - `parsers/tdoc_family_main.py` — main-member selection by TDoc number
-       (`select_main_member`); `member_names` lists the archive's members in memory
-     - `parsers/tdoc_zip_convert.py` — conversion of every `.docx` / `.doc` member
+     - `parsers/tdoc_family_main.py` — main-member selection by TDoc number
+        (`select_main_member`); family TDocs may select any supported extension,
+        while CR cover candidates remain Word documents only.
+      - `parsers/tdoc_zip_convert.py` — conversion of every `.docx` / `.doc` /
+        `.pptx` / `.ppt` member
        (tolerant annexes, zero-text documents, direct-mode payloads); returns a
        `TDocZipConversion` (main source, documents main first, skipped sources)
        without touching SQL or the cache
-     - `parsers/tdoc_zip.py` — enumerate and validate supported Word
+      - `parsers/tdoc_zip.py` — enumerate and validate supported Word and presentation
       members, compute stable source identities, and build/read the
       versioned multi-member Markdown ZIP plus manifest. It never extracts
        member paths to disk or converts PDF, spreadsheets, or nested
       ZIPs.
-    - `parsers/spec_doc.py` — spec-zip parsing (no network):
-       `list_spec_docx` (`.docx` and `.doc` members; historical function name),
+     - `parsers/spec_doc.py` — spec-zip parsing (no network):
+        `list_spec_docx` (`.docx`, `.doc`, `.pptx`, and `.ppt` members; historical function name),
       `order_spec_files` (front-matter TOC file first, then
       natural section-tuple sort that preserves alphanumeric identifiers
       such as `7.2A.3A`, TOC tiebreak, unnumbered lexicographic tail),
@@ -267,8 +276,8 @@ Per-layer modules:
      - `services/tdoc_content_service.py` — SQL-first all-source or exact-source
       lookup by TDoc ID / ZIP URL; the CR main comes from the archive; legacy incomplete-content fallback; and
       shared JSON / named-Markdown renderers
-    - `services/docx_convert_pool.py` — `DocxConvertPool`, the bounded
-      spawn-context process pool that converts `.docx` / `.doc` members for the
+     - `services/docx_convert_pool.py` — `DocxConvertPool`, the bounded
+       spawn-context process pool that converts `.docx` / `.doc` / `.pptx` / `.ppt` members for the
       spec-doc and TDoc services (`[pipeline] docx_workers`)
     - `services/factory.py` — `build_meeting_service`,
       `build_tdoc_service`, `build_tdoc_file_service`,
@@ -340,8 +349,9 @@ Per-layer modules:
       (owns the three testcase ORMs: `testcases`, `testcase_status`,
       `testcase_sources`)
     - `storage/db/specdata_base.py` — declarative `SpecDataBase`
-      (owns the four spec-doc ORMs in `storage/db/models.py`:
-      `spec_doc_zip_inventory`, `spec_doc_sources`, `spec_doc_tocs`, `spec_doc_chunks`)
+      (owns the five spec-doc ORMs in `storage/db/models.py`:
+      `spec_doc_zip_inventory`, `spec_doc_sources`, `spec_doc_tocs`, `spec_doc_chunks`,
+      `spec_doc_presentations`)
      - `storage/db/migrate.py` — `create_schema(scope)` (calls
        the idempotent TDoc extraction-completeness and FTS5-layout migrations,
        then `Base.metadata.create_all` for `"main"`,
@@ -523,8 +533,8 @@ and the TDoc CR extraction is the deepest.
    independently of content conversion; only a complete successful listing replaces
    a previous row. A later validation/conversion failure does not erase a successfully
    read inventory or change the parser's original failed/skipped classification. The
-   content pipeline enumerates `.docx` and `.doc`
-   members (not PDF, spreadsheets, or nested ZIPs), rejects unsafe or
+    content pipeline enumerates `.docx`, `.doc`, `.pptx`, and `.ppt`
+    members (not PDF, spreadsheets, images, charts, or nested ZIPs), rejects unsafe or
    duplicate conversion identities, and enforces the TOML-only limits
    `max_documents_per_zip = 100` and `max_uncompressed_size_kb = 102400`. Limit
    violations use the skipped bucket.
@@ -552,9 +562,11 @@ and the TDoc CR extraction is the deepest.
    ZIP-name inventory is independent of this derived cache and remains available
    after cache eviction. Legacy plain UTF-8, gzip, and single-member archives remain
    readable as incomplete version-1 content only.
-6. `tdoc show --format raw --tdoc <id>` runs extraction first, then reads content
-   SQL-first, with the CR main from the archive. `--source-file <full-member-path>`
-   selects one exact member. URL reads (`tdoc show --ftp-url`, HTTP, and MCP) are
+ 6. `tdoc show --format raw --tdoc <id>` runs extraction first, then reads content
+    SQL-first, with the CR main from the archive. A complete selected presentation
+    is the exception: the CLI reads it from SQL before extraction, including after
+    cache eviction. `--source-file <full-member-path>` selects one exact member.
+    URL reads (`tdoc show --ftp-url`, HTTP, and MCP) are
    snapshots: they never sync, download, or convert.
 
 `tdoc_extracts` owns the extraction version, count, skipped sources, and the shared
@@ -672,18 +684,22 @@ and syncs each through the `--tsg` path below.
    Each spec short-circuits
    into the `skipped` bucket when its `(spec_id, version)` source row
    already carries `parsed_at` (immutable ledger; `--force` re-parses);
-   `parse` itself short-circuits the same way. `parse` =
-   fetch-if-missing + `list_spec_docx` (empty zip →
-   `SpecDocNoDocxError` failure when neither Word format is present) +
-   `convert_document_to_blocks` (through the shared DOCX conversion
-   pool when one is injected; see the DOCX bullets under "Cross-surface
-   TDoc pipeline") + `order_spec_files` + `extract_spec_toc`
-   → `upsert_toc` + per-file `chunk_blocks` → `replace_chunks` +
+    `parse` itself short-circuits the same way. `parse` =
+    fetch-if-missing + `list_spec_docx` (empty zip →
+    `SpecDocNoDocxError` failure when no `.docx`, `.doc`, `.pptx`, or `.ppt`
+    member is present) + `convert_document_to_blocks` (through the shared
+    conversion pool when one is injected; see the conversion bullets under
+    "Cross-surface TDoc pipeline") + `order_spec_files` + `extract_spec_toc`
+    (Word files only; presentations do not add TOC entries or `sections`/`tables`
+    metadata) → `upsert_toc` + per-file `chunk_blocks` → atomic
+    `replace_version_content` for chunks and full Markdown in
+    `spec_doc_presentations` +
     per-file markdown cache +
     `{spec_doc.cache_dir}/markdown/<spec_id>/<version>/<file_order>-<stem>.md`
    + `record_parsed` + best-effort auto-index (`upsert_for_version`,
-   gated on `auto_index_on_parse`) / auto-embed (`index_for_version`,
-   gated on `auto_embed_on_parse`). Oversized zips land in `skipped`
+    gated on `auto_index_on_parse`) / auto-embed (`index_for_version`,
+    gated on `auto_embed_on_parse`). The historical `docx_count` counts all four
+    supported member formats. Oversized zips land in `skipped`
    (`SpecDocTooLargeError`); unknown spec/version and empty zips land in
    `failures`; one spec never aborts the batch. The CLI prints
    `ok` / `skipped <reason>` / `failed <reason>` (stderr) bucket lines
@@ -802,9 +818,9 @@ in `finally`. MCP only enqueues the existing jobs and has no runner of its own.
 - Cancellation stops new submissions; submitted writes finish; the runtime
   drains before HTTP client, cache and engines are disposed.
 - `server.max_concurrent_jobs` limits active jobs, not item preparation.
-- DOCX conversion is CPU-bound. With a pool, it does not run on the preparation
+- Word/presentation conversion is CPU-bound. With a pool, it does not run on the preparation
   threads; `0` and `1` convert in-process on them.
-  `services/docx_convert_pool.py::DocxConvertPool` converts `.docx` / `.doc` members in
+  `services/docx_convert_pool.py::DocxConvertPool` converts `.docx` / `.doc` / `.pptx` / `.ppt` members in
   spawned worker processes, bounded by `[pipeline] docx_workers` (default
   `min(4, cpu_count)`, range 0..32, independent of `prepare_workers`). `0` and
   `1` convert in-process through `parsers/docx_converter.py::InlineDocxPool`.
@@ -815,7 +831,7 @@ in `finally`. MCP only enqueues the existing jobs and has no runner of its own.
   unfinished members on the shared executor; the next call starts a fresh
   executor. The web process builds one pool in `build_state`. Each parsing CLI
   command (`spec doc parse`, `tdoc parse`) creates its pool in a `with` block, so
-  it is closed on exit; commands that never convert DOCX create none.
+  it is closed on exit; commands that never convert documents create none.
 
 ### Queued parse/sync pipeline concurrency
 
@@ -901,20 +917,27 @@ Tables live in `src/doc3gpp/storage/db/models.py`. Schema bootstrap is
     - `(spec_id, version)` composite PK, `release` (nullable),
       `ftp_url` (absolute version-zip URL), `downloaded_at` /
       `parsed_at` (nullable UTC — `parsed_at` is the immutable-skip
-      key), `chunk_count` / `docx_count` (`Integer`, default 0).
+      key), `chunk_count` / `docx_count` (`Integer`, default 0; the historical
+      `docx_count` includes all supported Word and presentation members).
 - `spec_doc_tocs` (specdata DB):
     - `(spec_id, version)` composite PK, `release` (nullable),
       `toc_json_gzip` (nullable gzip JSON `{entries, files}`),
       `file_order_json` (nullable JSON `{source_file: file_order}`),
-      `docx_count` (`Integer`), `created_at` (nullable UTC).
+      `docx_count` (`Integer`, count of all supported member formats),
+      `created_at` (nullable UTC).
 - `spec_doc_chunks` (specdata DB):
     - `chunk_id` (PK, `{spec_id}@{version}#{chunk_index}`), `spec_id`,
       `version`, `release` (nullable), `file_order` / `chunk_index`
-      (`Integer`), `source_file` (original `.docx` / `.doc` member path),
+      (`Integer`), `source_file` (original `.docx` / `.doc` / `.pptx` / `.ppt` member path),
     `sections` / `tables` (nullable newline-delimited combined
     identifier/title entries), `text` (gzip-JSON `LargeBinary` of the chunk
     body, no further splitting applied; decoded by the spec-doc repositories,
-    and upgraded databases keep the declared `TEXT` type holding BLOB values).
+     and upgraded databases keep the declared `TEXT` type holding BLOB values).
+- `spec_doc_presentations` (specdata DB):
+    - `(spec_id, version, source_file)` composite PK, exact case-preserving ZIP
+      member path, `file_order` (`Integer`), and `content` (gzip-JSON `LargeBinary`
+      containing the complete presentation Markdown). This SQL row is the full-file
+      detail source, independent of ZIP/Markdown caches and overlapping chunks.
 - `spec_doc_search` (specdata DB, FTS5): 7-column virtual table —
   `chunk_id` (UNINDEXED cid 0) + 6 indexed columns `(text, sections,
   tables, spec_id, version, release)` (cids 1..6) holding the
@@ -1261,7 +1284,7 @@ the `spec doc` / `toc` / `search` triplet, 40 commands) plus the `server` group 
       - `index` — `--rebuild`, `--rebuild-embeddings`, `--rebuild-all`,
         `--batch`, `--resume`, `--stale-only`, and `--quiet` maintain the
         independent FTS5/vector components.
-     - `schema` — `--format/--output/--compact`; 29 rows, no filters, no DB.
+      - `schema` — `--format/--output/--compact`; 34 rows across five `spec_doc` tables, no filters, no DB.
 - `config`:
     - `init` — bootstrap a default TOML at `--target {auto,project,user}`
       (default `auto`: `./doc3gpp.toml` from a project root, otherwise

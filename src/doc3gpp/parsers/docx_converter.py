@@ -33,11 +33,14 @@ import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Protocol
 
+from doc3gpp.parsers.presentation_converter import convert_presentation_to_markdown
 from doc3gpp.parsers.word_converter import as_docx_bytes
 
 logger = logging.getLogger(__name__)
+_PRESENTATION_SUFFIXES = frozenset({".ppt", ".pptx"})
 
 
 class PythonDocxNotInstalledError(ImportError):
@@ -307,23 +310,25 @@ def _document_to_markdown(document: Document) -> str:
 
 
 def convert_document_to_markdown(doc_bytes: bytes, filename: str) -> str:
-    """Convert ``.docx`` or legacy ``.doc`` bytes to markdown via python-docx.
+    """Convert Word and presentation documents to Markdown.
 
     Args:
-        doc_bytes: Raw bytes of the Word document.
-        filename: Source filename; only the extension is consulted (used
-            for the extension guard, not the actual parse path).
+        doc_bytes: Raw bytes of the source document.
+        filename: Source filename; only the extension is parsed (the original name
+            is retained for conversion diagnostics).
 
     Returns:
-        The extracted markdown text.
+        The extracted Markdown text.
 
     Raises:
-        ValueError: if ``filename``'s extension is not ``.docx`` or ``.doc``.
-        PythonDocxNotInstalledError: if python-docx (``docx``) cannot be
-            imported. The exception message includes the install hint.
-        RuntimeError: if legacy conversion fails (including missing LibreOffice),
-            or the converter returns no extractable text.
+        ValueError: if filename has an unsupported extension.
+        PythonDocxNotInstalledError: if python-docx cannot be imported.
+        PythonPptxNotInstalledError: if python-pptx is unavailable.
+        RuntimeError: if legacy conversion, presentation parsing, or text extraction fails.
     """
+    if Path(filename).suffix.lower() in _PRESENTATION_SUFFIXES:
+        return convert_presentation_to_markdown(doc_bytes, filename)
+
     doc_bytes = as_docx_bytes(doc_bytes, filename)
 
     try:
@@ -415,13 +420,15 @@ def _split_table_caption(text: str) -> tuple[str | None, str | None]:
 
 
 def convert_document_to_blocks(doc_bytes: bytes, filename: str) -> list[HeadingBlock | ParagraphBlock | TableBlock]:
-    """Convert ``.docx`` or ``.doc`` bytes to heading/paragraph/table blocks.
+    """Convert Word files to structured blocks and presentations to one paragraph block.
 
-    Same extension guard, missing-dependency path, and empty-render error
-    as :func:`convert_document_to_markdown`; only the wrapper is new — GFM
-    rendering (:func:`_table_to_markdown`) and heading-style logic are
-    unchanged.
+    Presentation Markdown stays in one ParagraphBlock so slide headings and tables
+    do not become spec-document metadata.
     """
+    if Path(filename).suffix.lower() in _PRESENTATION_SUFFIXES:
+        markdown = convert_presentation_to_markdown(doc_bytes, filename)
+        return [ParagraphBlock(markdown)] if markdown else []
+
     doc_bytes = as_docx_bytes(doc_bytes, filename)
     try:
         document = Document(io.BytesIO(doc_bytes))

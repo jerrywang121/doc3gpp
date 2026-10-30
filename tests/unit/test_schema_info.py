@@ -68,6 +68,26 @@ def test_spec_doc_chunk_text_is_described_as_gzip_json() -> None:
     assert by_table_field[("spec_doc_chunks", "text")]["type"] == "gzip-json"
     assert by_table_field[("spec_doc_chunks", "text")]["nullable"] is False
 
+def test_spec_doc_presentation_schema_fields() -> None:
+    payload = schema_payload("spec_doc")
+    fields = [row for row in payload if row["table"] == "spec_doc_presentations"]
+
+    assert len(payload) == 34
+    assert [row["field"] for row in fields] == [
+        "spec_id",
+        "version",
+        "source_file",
+        "file_order",
+        "content",
+    ]
+    assert {row["field"]: (row["type"], row["nullable"]) for row in fields} == {
+        "spec_id": ("str", False),
+        "version": ("str", False),
+        "source_file": ("str", False),
+        "file_order": ("int", False),
+        "content": ("gzip-json", False),
+    }
+
 
 def test_tsg_payload_shape() -> None:
     payload = schema_payload("tsg")
@@ -200,6 +220,7 @@ def test_registry_matches_orm_columns() -> None:
 
     assert hasattr(orm_models, "TDocZipInventoryOrm"), "ZIP inventory ORM is missing"
     assert hasattr(orm_models, "SpecDocZipInventoryORM"), "Spec ZIP inventory ORM is missing"
+    assert hasattr(orm_models, "SpecDocPresentationORM"), "Spec presentation ORM is missing"
 
     expected = {
         "tsgs": TsgORM,
@@ -222,6 +243,7 @@ def test_registry_matches_orm_columns() -> None:
         "spec_doc_sources": SpecDocSourceORM,
         "spec_doc_tocs": SpecDocTocORM,
         "spec_doc_chunks": SpecDocChunkORM,
+        "spec_doc_presentations": orm_models.SpecDocPresentationORM,
         "testcases": TestCaseORM,
         "testcase_status": TestCaseStatusORM,
         "testcase_sources": TestCaseSourceORM,

@@ -45,6 +45,17 @@
     {% endif %}
   </section>
 
+  {% if presentation_links %}
+    <section class="card spec-doc-presentations" id="spec-doc-presentations">
+      <h2>Presentation Markdown</h2>
+      <ul>
+        {% for presentation in presentation_links %}
+          <li><a class="spec-doc-presentation" href="{{ presentation.href }}">{{ presentation.source_file }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
   <form
     id="spec-doc-parse-form"
     class="spec-doc-parse-form"

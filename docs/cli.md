@@ -642,8 +642,8 @@ Options:
   `--tdoc`. Does NOT trigger auto-sync (no parent TDoc to anchor a
   meeting sync).
 - `--source-file PATH`: select one exact, full ZIP member path for raw
-  content (for example, `Annex/Support.docx`). This is not a local
-  filesystem path, is scoped to the selected TDoc/ZIP URL, and is valid
+  content (for example, `Annex/Support.docx` or `Slides/Overview.pptx`).
+  This is not a local filesystem path, is scoped to the selected TDoc/ZIP URL, and is valid
   only with `--format raw`; an unknown member is a not-found error.
 - `--format {table,json,markdown,raw}`: output format. Default
   `table`, unless overridden by `[output].format` in the resolved
@@ -744,26 +744,30 @@ Options:
     first if you haven't synced this meeting yet._` placeholder
     keeps the document skeleton stable. Long fields are **not**
     truncated in this mode.
-  - `raw`: converted Markdown for a TDoc of an eligible type (CR, WID new/revised,
-    LS in/out, or discussion). TDoc-ID mode runs extraction first, as
-    `tdoc parse` does, so an incomplete TDoc is re-extracted (and re-downloaded
-    when its ZIP is not cached) on each raw read; it then reads authoritative SQL
-    content. For a WID, LS, or discussion TDoc, every stored document comes from
-    its family table, main first. For a CR TDoc, the main document comes from the
-    derived archive `markdown/<cache_file>` and the annexes come from
-    `tdoc_cr_annexes`, main first. URL mode reads a side-effect-free exact-URL
-    snapshot and never syncs, downloads, or extracts. `--source-file` selects one
-    exact member. A CR annex requested with `--source-file` is served from SQL
-    without reading the archive; the full CR output needs the archive, so URL mode
-    fails with the re-parse hint when it is missing. Without `--source-file`, one
-    body is emitted unchanged and multiple bodies are emitted as main-first named
-    blocks of the form `<!-- doc3gpp-source: <JSON-encoded source_file> -->`
-    followed by the original Markdown. The Markdown cache ZIP is derived; it is not
-    the content source for SQL-backed documents. Legacy plain UTF-8, gzip, and
-    single-member Markdown ZIPs remain readable as incomplete version-1 content, but
-    never make a version-2 extraction complete. An unavailable legacy cache produces
-    a parse hint. Requires `python-docx` (`pip install doc3gpp[extract]`) when
-    extraction is needed. A TDoc of any other type is rejected with
+- `raw`: converted Word or presentation Markdown for an eligible TDoc type (CR,
+    WID new/revised, LS in/out, or discussion). TDoc-ID mode normally runs
+    extraction first, so an incomplete TDoc is re-extracted on a raw read. The
+    exception is an exact selected `.pptx`/`.ppt` source already present in a
+    complete extraction: that Markdown is read from SQL before extraction and is
+    available after derived-cache eviction. Other raw reads keep their existing
+    extraction-first behavior. For a WID, LS, or discussion TDoc, every stored
+    document comes from its family table, main first. For a CR TDoc, the main
+    document comes from the derived archive `markdown/<cache_file>` and the
+    annexes, including presentations, come from `tdoc_cr_annexes`. URL mode reads
+    a side-effect-free exact-URL snapshot and never syncs, downloads, or extracts.
+    `--source-file` selects one exact member. A CR annex requested with
+    `--source-file` is served from SQL without reading the archive; the full CR
+    output needs the archive, so URL mode fails with the re-parse hint when it is
+    missing. Without `--source-file`, one body is emitted unchanged and multiple
+    bodies are emitted as main-first named blocks of the form
+    `<!-- doc3gpp-source: <JSON-encoded source_file> -->` followed by the original
+    Markdown. The Markdown cache ZIP is derived; it is not the content source for
+    SQL-backed documents. Legacy plain UTF-8, gzip, and single-member Markdown
+    ZIPs remain readable as incomplete version-1 content, but never make a
+    version-2 extraction complete. An unavailable legacy cache produces a parse
+    hint. Requires `python-docx` and `python-pptx>=1.0.2` from
+    `doc3gpp[extract]` when extraction is needed. A TDoc of any other type is
+    rejected with
     `TDoc '<id>' has type '<type>'; raw Markdown is available for CR, WID, LS, and discussion TDocs`.
 - `-o PATH`, `--output PATH`: write the result to `PATH` instead of
   stdout. Pass `-` for stdout (the historical default).
@@ -1056,16 +1060,18 @@ contract for both the `markdown` and `table` formats.
 
 Purpose:
 
-- Download a TDoc ZIP, convert every supported `.docx` or `.doc` member, and store the
-  content for the TDoc's type. For a CR TDoc, exactly one member must be the
-  structural CR cover. That main document alone produces the cover row and the
-  optional TTCN/body-change sidecars, and its full Markdown is kept only in the
-  derived archive. Every other converted Word document is a CR annex stored in
-  `tdoc_cr_annexes`. For a WID, LS, or discussion TDoc, the main document and every
-  annex are stored in that type's table (`tdoc_wid_contents`, `tdoc_ls_contents`,
-  or `tdoc_discussion_contents`). Each successful run atomically replaces the URL's
-  `tdoc_extracts` parent and content rows. `tdoc_files` is separate: it continues
-  to describe auxiliary files discovered on FTP.
+- Download a TDoc ZIP, convert supported `.docx`, `.doc`, `.pptx`, and `.ppt`
+  members, and store the content for the TDoc's type. For a CR TDoc, exactly one
+  Word member must be the structural CR cover; presentations are never cover
+  candidates or sources of CR metadata. That main document alone produces the
+  cover row and optional TTCN/body-change sidecars, and its full Markdown is kept
+  only in the derived archive. Every other converted member, including each
+  presentation, is a CR annex stored in `tdoc_cr_annexes`. For a WID, LS, or
+  discussion TDoc, the main member and every annex are stored in that type's
+  table (`tdoc_wid_contents`, `tdoc_ls_contents`, or `tdoc_discussion_contents`).
+  Each successful run atomically replaces the URL's `tdoc_extracts` parent and
+  content rows. `tdoc_files` is separate: it continues to describe auxiliary
+  files discovered on FTP.
 
 Eligible types are matched case-insensitively and exactly after trimming
 spaces, tabs, carriage returns, and line feeds on `tdocs.type`: `CR` (CR
@@ -1271,17 +1277,16 @@ could be the main.
 
 #### Main document selection
 
-Candidates are `.docx` or `.doc` members whose basename starts with the TDoc number,
-compared case-insensitively, where the next character is not a digit (so
-`R5-1234567.docx` is not a candidate for `R5-123456`). A single candidate is the
-main. With several candidates, a unique member named exactly `<tdoc_id>.docx` or
-`<tdoc_id>.doc` is the main; two exact matches remain ambiguous. Otherwise the TDoc
-fails with `ambiguous main document for <tdoc_id>`. With none, the TDoc fails with
-`no main .docx or .doc for <tdoc_id>`.
-
-Both Word formats are converted; PDF, spreadsheets, and nested ZIPs are not.
-Legacy `.doc` conversion needs LibreOffice Writer (see below). Conversion keeps
-the original member path, including its `.doc` extension.
+For WID, LS, and discussion TDocs, candidates are `.docx`, `.doc`, `.pptx`, and
+`.ppt` members whose basename starts with the TDoc number, compared
+case-insensitively, where the next character is not a digit (so
+`R5-1234567.pptx` is not a candidate for `R5-123456`). With several candidates,
+a unique exact `<tdoc_id>` basename is the main; two exact matches remain
+ambiguous. CR selection is different: only a structural Word CR cover can be
+the main, and presentations remain annexes. PDF, spreadsheets, images, charts,
+and nested ZIPs are not converted. Legacy `.doc` uses LibreOffice Writer and
+legacy `.ppt` uses headless LibreOffice Impress. Conversion keeps the original
+member path, including its source extension.
 
 #### Size limit
 
@@ -1362,8 +1367,9 @@ Behavior:
   plus the `ValueError` raised by the tdoc_id shape guard, and
   records the failure reason (formatted as
   `"{ExceptionClassName}: {exc}"`) so the CLI can surface it inline.
-- When `python-docx` is not installed the entire batch fails before any
-  per-id work happens — the CLI prints an install hint and exits 1.
+- When `python-docx` is not installed the batch fails before per-id work;
+  a missing `python-pptx` is reported when a presentation member is converted.
+  Both errors include the `doc3gpp[extract]` install hint.
 - Output per id: `<tdoc_id>: spec=<spec> cr_num=<cr_num> title=<title>`
   on success; `<tdoc_id>: FAILED - {ExceptionClassName}: {exc}` on
   failure (e.g. `R5s260010: FAILED - TDocNotFoundError: TDoc 'R5s260010'
@@ -1380,29 +1386,28 @@ Exit codes:
 - `0` — at least one TDoc extracted successfully; **or** every match
   was already parsed and there was nothing new; **or** the prompt was
   declined before any work started.
-- `1` — every TDoc failed, **or** `python-docx` is missing and the
+- `1` — every TDoc failed, **or** an extraction dependency is missing and the
   batch could not even start, **or** the filter set matched zero
   TDocs, **or** an invalid `--uploaded-date` value was supplied.
 
-Install the optional dependency before first use:
+Install the optional extraction dependencies before first use:
 
 ```bash
 pip install "doc3gpp[extract]"
 ```
 
-Legacy `.doc` sources additionally need **LibreOffice Writer** on the host running
-the CLI or server. Put `libreoffice` or `soffice` on `PATH` (for example,
-`sudo apt install libreoffice-writer` on Debian/Ubuntu). Each `.doc` is normalized
-to `.docx` in a private temporary directory with an isolated user profile, then
-parsed by the existing converters. The timeout is configured by
+Legacy `.doc` sources need LibreOffice Writer and legacy `.ppt` sources need
+headless LibreOffice Impress on the host running the CLI or server, with
+`libreoffice` or `soffice` on `PATH`. Each is converted in a private temporary
+directory with an isolated user profile. The timeout is configured by
 `[word_conversion] timeout_seconds` in TOML (default `300` seconds); the
-allowlisted process environment variable
-`DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. `.docx` never invokes
-LibreOffice. Missing dependency and failed-conversion errors name the original
-source; a failed main fails the TDoc, while failed annexes use the existing
-`skipped_sources` retry behavior. Previously completed archives need `--force` to
-include `.doc` members older versions ignored. Archive member/byte caps include
-both formats.
+allowlisted `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` overrides TOML. Modern
+`.docx`/`.pptx` members do not invoke LibreOffice. Missing dependencies and
+conversion failures name the original source; a failed main fails the TDoc,
+while failed annexes use the existing `skipped_sources` retry behavior.
+Previously completed archives need `--force` to include `.doc`/`.pptx`/`.ppt`
+members older versions ignored. Archive member and aggregate-byte caps include
+all four supported formats.
 
 Examples:
 
@@ -1446,7 +1451,8 @@ doc3gpp tdoc parse --meeting-id 85434 --yes
 
 Purpose:
 
-- Parse a local `.docx` or `.doc` (or a ZIP containing either) from a single file
+- Parse a local `.docx` or `.doc` (or a ZIP containing supported Word and
+  presentation members) from a single file
   or an entire folder tree — without going through the `tdocs` row /
   meeting / batch plumbing. The command takes the local-mode branch
   when `--from-path` is supplied; `--from-url` is the online
@@ -1459,10 +1465,11 @@ Options:
 - `--from-path PATH`: parse a local `.docx`/`.doc`/`.zip` file, or parse
   every such file under a directory tree. The path type is auto-
   detected: a file is parsed as a single source, a directory is
-  processed as a batch. ZIPs convert every supported `.docx` or `.doc` member through
-  the DOCX conversion pool, sized by `[pipeline] docx_workers` (config only, no
-  flag; `0` and `1` convert in-process). A standalone Word file converts
-  in-process. The TDoc type is determined first (see
+  processed as a batch. ZIPs convert every supported `.docx`, `.doc`, `.pptx`,
+  or `.ppt` member through the shared conversion pool, sized by
+  `[pipeline] docx_workers` (config only, no flag; `0` and `1` convert
+  in-process). A standalone Word file converts in-process; standalone
+  `.pptx`/`.ppt` files remain unsupported. The TDoc type is determined first (see
   [Direct-mode type detection](#direct-mode-type-detection)). For CR, exactly one
   converted member must contain the structural CR cover; it owns the
   CR/TTCN/body-change metadata, and the other members are annexes held in memory.
@@ -1529,17 +1536,18 @@ Options:
 Archive safety limits are TOML-only settings under `[tdoc_parse]`:
 `max_documents_per_zip` defaults to `100`, and
 `max_uncompressed_size_kb` defaults to `102400` (aggregate supported-member
-bytes). Setting either value to `0` disables that limit. Exceeding either
+bytes across `.docx`, `.doc`, `.pptx`, and `.ppt` members). Setting either value to `0` disables that limit. Exceeding either
 archive limit enters the existing skip bucket; a corrupt main document or
 zero/multiple CR-cover candidates enter the failure bucket. A corrupt annex is a
 warning, not a failure (see [Tolerant annexes and skipped sources](#tolerant-annexes-and-skipped-sources)).
 
-ZIP parsing converts `.docx` and `.doc` members; PDF, spreadsheets, and
-nested ZIPs are not converted. Unsupported members are ignored with
-source-named warnings. For CR, exactly one converted member must contain the
-structural CR cover, and it alone owns CR/TTCN/body-change metadata; every other
-converted member is a CR annex. For WID, LS, and discussion TDocs, the main
-document and every annex are content. A failed annex is tolerated (see
+ZIP parsing converts `.docx`, `.doc`, `.pptx`, and `.ppt` members; PDF,
+spreadsheets, images, charts, and nested ZIPs are not converted. Unsupported
+members are ignored with source-named warnings. For CR, exactly one converted
+Word member must contain the structural CR cover, and it alone owns
+CR/TTCN/body-change metadata; every other converted member, including each
+presentation, is a CR annex. For WID, LS, and discussion TDocs, the main member
+and every annex are content. A failed annex is tolerated (see
 [Tolerant annexes and skipped sources](#tolerant-annexes-and-skipped-sources)).
 A failure to read or convert the main document, or a corrupt archive, fails the
 whole archive rather than persisting a partial collection.
@@ -1703,7 +1711,7 @@ doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx
 doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.docx \
     --format json -o /tmp/r5s260009.json
 
-# Local ZIP containing .docx and/or .doc members.
+# Local ZIP containing supported Word and/or presentation members.
 doc3gpp tdoc parse --from-path ~/Downloads/R5s260009.zip \
     --format markdown
 
@@ -1997,8 +2005,8 @@ doc3gpp testcase schema --format json
 The `cache` sub-app exposes the on-disk cache that backs the TDoc
 extraction pipeline (Phase 1 `TDocCache`). The cache lives under
 `settings.cache.dir` (default `~/.cache/doc3gpp/tdocs`) with two
-subtrees: `zips/` (raw 3GPP zip downloads) and `markdown/` (python-docx
-output). Both subtrees share the same filename — the `cache_file`
+subtrees: `zips/` (raw 3GPP zip downloads) and `markdown/` (converted Word
+and presentation output). Both subtrees share the same filename — the `cache_file`
 column from `tdoc_extracts` (derived from `tdoc.ftp_url` via
 `derive_cache_file()`). Both commands are pure file-system operations —
 they do **not** touch the database.
@@ -2730,7 +2738,7 @@ doc3gpp spec schema --format json
 
 ## spec doc Commands
 
-The `spec doc` sub-app (`spec doc parse/toc show/search/index/schema` under
+The `spec doc` sub-app (`spec doc parse/show/toc show/search/index/schema` under
 `spec`) exposes the spec-document corpus: downloaded spec version zips parsed
 into chunk rows + a per-version TOC, searchable via unified FTS5, semantic,
 hybrid, or filter-only modes. `spec doc index` reports or rebuilds the FTS5
@@ -2776,6 +2784,9 @@ Behavior:
   `spec_doc_sources.downloaded_at` before conversion.
 - `--force` re-downloads the resolved ZIP and then re-parses it, including when
   the `(spec_id, version)` pair already has `parsed_at`.
+- The whole spec ZIP is checked against `[spec_doc] max_zip_size_kb` (default
+  `0`, unlimited). This is separate from the TDoc member-count and aggregate
+  uncompressed-byte limits.
 - Actual ZIP parsing records the ordered outer-member inventory in the separate
   `spec_doc_zip_inventory` table. An immutable parsed-version skip, spec sync,
   schema initialization, and detail reads do not collect or backfill inventory;
@@ -2783,15 +2794,17 @@ Behavior:
   inventory is independent of the ZIP cache.
 - The `(spec_id, version)` source row is skipped when it already carries
   `parsed_at` (unless `--force`); oversized zips land in the `skipped` bucket;
-  unknown spec/version, empty (no `.docx` or `.doc`) zips, and every other error land in
+  unknown spec/version, empty (no supported Word or presentation member) zips, and every other error land in
   the `failures` bucket. When both `--release` and `--version` are supplied,
   their release numbers must agree (for example, `Rel-18` requires a version
   beginning with `18.`).
-- `parse` = fetch-if-missing + `list_spec_docx` (`.docx` and `.doc` members) +
+- `parse` = fetch-if-missing + `list_spec_docx` (`.docx`, `.doc`, `.pptx`, and
+  `.ppt` members; the helper keeps its historical name) +
   `convert_document_to_blocks` + `order_spec_files` (front-matter TOC file first,
   then section-tuple sort, TOC tiebreak, unnumbered lexicographic tail) +
-  `extract_spec_toc` + per-file `chunk_blocks` → `upsert_toc` + `replace_chunks`
-  + per-file markdown cache (`{spec_doc.cache_dir}/markdown/<spec_id>/<version>/`) +
+  `extract_spec_toc` (Word files only) + per-file `chunk_blocks` →
+  `upsert_toc` + atomic `replace_version_content` for chunks and full presentation
+  Markdown + per-file markdown cache (`{spec_doc.cache_dir}/markdown/<spec_id>/<version>/`) +
   `record_parsed` + best-effort auto-index (`upsert_for_version`, gated on
   `[spec_doc] auto_index_on_parse`, default `true`) / auto-embed
   (`index_for_version`, gated on `[spec_doc] auto_embed_on_parse`, default `true`).
@@ -2805,12 +2818,22 @@ Behavior:
   Alphanumeric section identifiers such as `7.2A.3` and `7.2A.3A` are kept
   intact in both chunk metadata and the TOC.
 
-Legacy `.doc` members use the same optional LibreOffice conversion described
-under `tdoc parse`, then the existing block/TOC/chunk pipeline. Original source
-paths remain unchanged, and the historical source/TOC field `docx_count` counts
-both Word formats. Any supported-member conversion failure fails that spec parse;
-its outer-ZIP inventory is still recorded. Re-parse already-completed versions
-with `--force` to include previously ignored `.doc` members.
+Presentation members are chunked as content and indexed by FTS5 and optional
+semantic search, but they do not create TOC entries or `sections`/`tables`
+metadata. Full Markdown is stored in the separate `spec_doc_presentations` SQL
+table in the same transaction as chunk replacement; detail reads are independent
+of ZIP and Markdown caches. Image/OCR/chart inference and presentation-derived
+spec metadata are not supported. The historical source/TOC field `docx_count`
+counts all four supported member formats.
+
+Legacy `.doc` members use LibreOffice Writer and legacy `.ppt` members use
+headless LibreOffice Impress; both share `[word_conversion] timeout_seconds`
+(default `300`). Original source paths remain unchanged. Any supported-member
+conversion failure fails that spec parse; its outer-ZIP inventory is still
+recorded. Re-parse already-completed versions with `--force` to include
+previously ignored `.doc`, `.pptx`, or `.ppt` members. Existing specdata databases
+need `doc3gpp db init --scope specdata`; already-parsed versions need a forced
+re-parse to populate full presentation rows.
 
 Examples:
 
@@ -2858,6 +2881,42 @@ Examples:
 ```bash
 doc3gpp spec doc toc show --spec 38.331 --version 18.5.0
 doc3gpp spec doc toc show --spec 38.331 --version 18.5.0 --format json
+```
+
+### doc3gpp spec doc show
+
+Purpose:
+
+- Return the full stored Markdown for one presentation in a specific spec
+  version. The lookup is by the exact ZIP member path and reads the SQL corpus
+  only; it does not read ZIP/Markdown caches, download, or parse.
+
+Options:
+
+- --spec: dotted spec id (e.g. `38.331`). Required.
+- --version: exact version, e.g. `18.5.0`. Required.
+- --source-file: exact full path of a presentation member in the ZIP. Required.
+- --format: `raw` (default, original Markdown) or `json`.
+- --compact: emit compact UTF-8 JSON without a trailing newline; ignored for
+  raw Markdown.
+- --output, -o PATH: write results to PATH instead of stdout. Pass `-` for stdout.
+
+Behavior:
+
+- `SpecDocService.get_presentation(spec_id, version, source_file)` performs the
+  exact-name lookup. A missing version/source reports the service's not-found
+  message as a CLI error; no alternative source path is selected.
+- JSON is the ordered object
+  `{"spec_id": ..., "version": ..., "source_file": ..., "markdown": ...}`.
+  Compact output is byte-identical to `GET /specs/{spec_id}/docs/content` with
+  `format=json` and MCP `get_spec_doc_content`.
+
+Examples:
+
+```bash
+doc3gpp spec doc show --spec 38.331 --version 18.5.0 --source-file slides/overview.pptx
+doc3gpp spec doc show --spec 38.331 --version 18.5.0 --source-file slides/overview.pptx --format json --compact
+doc3gpp spec doc show --spec 38.331 --version 18.5.0 --source-file slides/overview.pptx --format json --output presentation.json
 ```
 
 ### doc3gpp spec doc search
@@ -2931,8 +2990,9 @@ Options:
 
 Purpose:
 
-- Describe every column of the four `spec_doc` tables (29 rows):
-  `spec_doc_zip_inventory` (4), `spec_doc_sources` (8), `spec_doc_tocs` (7), `spec_doc_chunks` (10).
+- Describe every column of the five `spec_doc` tables (34 rows):
+  `spec_doc_zip_inventory` (4), `spec_doc_sources` (8), `spec_doc_tocs` (7),
+  `spec_doc_chunks` (10), and `spec_doc_presentations` (5).
   Chunk rows document the combined `sections` and `tables` columns; TOC
   entries continue to expose their low-level `section_no` and `title` fields.
 

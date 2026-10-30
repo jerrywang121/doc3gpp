@@ -677,3 +677,15 @@ class SpecDocChunkORM(SpecDataBase):
     text: Mapped[bytes] = mapped_column(
         LargeBinary(length=16 * 1024 * 1024), nullable=False, default=b"",
     )
+
+
+class SpecDocPresentationORM(SpecDataBase):
+    """Full converted presentation Markdown for one spec-version ZIP member."""
+
+    __tablename__ = "spec_doc_presentations"
+
+    spec_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    version: Mapped[str] = mapped_column(String(16), primary_key=True)
+    source_file: Mapped[str] = mapped_column(String(256), primary_key=True)
+    file_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

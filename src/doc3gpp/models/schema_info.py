@@ -390,6 +390,16 @@ RESOURCE_SCHEMAS: dict[str, tuple[TableSchema, ...]] = {
                 FieldInfo("text", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the chunk body text (chunk-shaped, no further splitting applied)."),
             ),
         ),
+        TableSchema(
+            table="spec_doc_presentations",
+            fields=(
+                FieldInfo("spec_id", "str", False, "Dotted spec id, e.g. 38.331; first half of the composite PK."),
+                FieldInfo("version", "str", False, "Version string, e.g. 18.5.0; second half of the composite PK."),
+                FieldInfo("source_file", "str", False, "Original presentation member path inside the version ZIP; third part of the composite PK."),
+                FieldInfo("file_order", "int", False, "Zero-based order of the presentation file within the spec version ZIP."),
+                FieldInfo("content", "gzip-json", False, "Gzip-compressed UTF-8 JSON string of the full presentation Markdown."),
+            ),
+        ),
     ),
     "testcase": (
         TableSchema(

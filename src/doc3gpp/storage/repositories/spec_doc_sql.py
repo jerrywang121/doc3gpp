@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from doc3gpp.models.spec import spec_version_sort_key
 from doc3gpp.models.spec_doc import (
     ChunkDraft,
     SpecDocChunk,
+    SpecDocPresentation,
     SpecDocSearchFilters,
     SpecDocSource,
     SpecDocToc,
@@ -24,6 +25,7 @@ from doc3gpp.models.spec_doc import (
 from doc3gpp.storage.compression import compress_json, decompress_json
 from doc3gpp.storage.db.models import (
     SpecDocChunkORM,
+    SpecDocPresentationORM,
     SpecDocSourceORM,
     SpecDocTocORM,
 )
@@ -31,6 +33,73 @@ from doc3gpp.storage.db.session import get_specdata_session_factory
 from doc3gpp.storage.repositories.rich_filters import apply_text_filter
 
 logger = logging.getLogger(__name__)
+
+
+def _replace_chunk_rows(
+    session: Session,
+    spec_id: str,
+    version: str,
+    *,
+    release: str | None,
+    drafts: list[ChunkDraft],
+) -> list[SpecDocChunk]:
+    """Replace chunk rows and stage the corresponding source-ledger update."""
+    session.execute(
+        delete(SpecDocChunkORM).where(
+            (SpecDocChunkORM.spec_id == spec_id)
+            & (SpecDocChunkORM.version == version)
+        )
+    )
+    chunks: list[SpecDocChunk] = []
+    for index, draft in enumerate(drafts):
+        chunk_id = f"{spec_id}@{version}#{index}"
+        session.add(
+            SpecDocChunkORM(
+                chunk_id=chunk_id,
+                spec_id=spec_id,
+                version=version,
+                release=release,
+                file_order=draft.file_order,
+                source_file=draft.source_file,
+                chunk_index=index,
+                sections=draft.sections,
+                tables=draft.tables,
+                text=compress_json(draft.text),
+            )
+        )
+        chunks.append(
+            SpecDocChunk(
+                file_order=draft.file_order,
+                source_file=draft.source_file,
+                sections=draft.sections,
+                tables=draft.tables,
+                text=draft.text,
+                chunk_id=chunk_id,
+                spec_id=spec_id,
+                version=version,
+                release=release,
+                chunk_index=index,
+            )
+        )
+
+    existing = session.get(SpecDocSourceORM, (spec_id, version))
+    if existing is not None:
+        if release is not None:
+            existing.release = release
+    else:
+        session.add(
+            SpecDocSourceORM(
+                spec_id=spec_id,
+                version=version,
+                release=release,
+                ftp_url="",
+                downloaded_at=None,
+                parsed_at=None,
+                chunk_count=0,
+                docx_count=0,
+            )
+        )
+    return chunks
 
 
 class SQLAlchemySpecDocRepository:
@@ -200,60 +269,90 @@ class SQLAlchemySpecDocRepository:
         drafts: list[ChunkDraft],
     ) -> list[SpecDocChunk]:
         with self._session_factory() as session:
-            session.execute(
-                delete(SpecDocChunkORM).where(
-                    (SpecDocChunkORM.spec_id == spec_id)
-                    & (SpecDocChunkORM.version == version)
-                )
-            )
-            for index, draft in enumerate(drafts):
-                session.add(
-                    SpecDocChunkORM(
-                        chunk_id=f"{spec_id}@{version}#{index}",
-                        spec_id=spec_id,
-                        version=version,
-                        release=release,
-                        file_order=draft.file_order,
-                        source_file=draft.source_file,
-                        chunk_index=index,
-                        sections=draft.sections,
-                        tables=draft.tables,
-                        text=compress_json(draft.text),
-                    )
-                )
-            existing = session.get(SpecDocSourceORM, (spec_id, version))
-            if existing is not None:
-                if release is not None:
-                    existing.release = release
-            else:
-                session.add(
-                    SpecDocSourceORM(
-                        spec_id=spec_id,
-                        version=version,
-                        release=release,
-                        ftp_url="",
-                        downloaded_at=None,
-                        parsed_at=None,
-                        chunk_count=0,
-                        docx_count=0,
-                    )
-                )
-            session.commit()
-        return [
-            SpecDocChunk(
-                file_order=draft.file_order,
-                source_file=draft.source_file,
-                sections=draft.sections,
-                tables=draft.tables,
-                text=draft.text,
-                chunk_id=f"{spec_id}@{version}#{index}",
-                spec_id=spec_id,
-                version=version,
+            chunks = _replace_chunk_rows(
+                session,
+                spec_id,
+                version,
                 release=release,
-                chunk_index=index,
+                drafts=drafts,
             )
-            for index, draft in enumerate(drafts)
-        ]
+            session.commit()
+        return chunks
+
+    def list_presentations(
+        self, spec_id: str, version: str
+    ) -> list[SpecDocPresentation]:
+        """Return presentation Markdown rows in deterministic file order."""
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(SpecDocPresentationORM)
+                .where(
+                    (SpecDocPresentationORM.spec_id == spec_id)
+                    & (SpecDocPresentationORM.version == version)
+                )
+                .order_by(
+                    SpecDocPresentationORM.file_order,
+                    SpecDocPresentationORM.source_file,
+                )
+            ).all()
+        return [_orm_to_presentation(row) for row in rows]
+
+    def get_presentation(
+        self, spec_id: str, version: str, source_file: str
+    ) -> SpecDocPresentation | None:
+        """Return the presentation for one exact ZIP member path, if stored."""
+        with self._session_factory() as session:
+            row = session.get(
+                SpecDocPresentationORM, (spec_id, version, source_file)
+            )
+        return _orm_to_presentation(row) if row is not None else None
+
+    def replace_version_content(
+        self,
+        spec_id: str,
+        version: str,
+        *,
+        release: str | None,
+        drafts: list[ChunkDraft],
+        presentations: list[SpecDocPresentation],
+    ) -> list[SpecDocChunk]:
+        """Atomically replace chunks and full presentation Markdown for a version."""
+        if any(
+            presentation.spec_id != spec_id or presentation.version != version
+            for presentation in presentations
+        ):
+            raise ValueError(
+                f"all presentations must target replacement version {spec_id}@{version}"
+            )
+
+        with self._session_factory() as session:
+            chunks = _replace_chunk_rows(
+                session,
+                spec_id,
+                version,
+                release=release,
+                drafts=drafts,
+            )
+            session.execute(
+                delete(SpecDocPresentationORM).where(
+                    (SpecDocPresentationORM.spec_id == spec_id)
+                    & (SpecDocPresentationORM.version == version)
+                )
+            )
+            session.add_all(
+                [
+                    SpecDocPresentationORM(
+                        spec_id=presentation.spec_id,
+                        version=presentation.version,
+                        source_file=presentation.source_file,
+                        file_order=presentation.file_order,
+                        content=compress_json(presentation.markdown),
+                    )
+                    for presentation in presentations
+                ]
+            )
+            session.commit()
+        return chunks
 
     def list_chunks(
         self,
@@ -392,6 +491,25 @@ def _orm_to_toc(row: SpecDocTocORM) -> SpecDocToc:
         files=files,
         docx_count=row.docx_count,
         created_at=_as_utc(row.created_at),
+    )
+
+
+def _orm_to_presentation(row: SpecDocPresentationORM) -> SpecDocPresentation:
+    markdown = decompress_json(row.content)
+    if not isinstance(markdown, str):
+        logger.warning(
+            "Spec presentation %s@%s %s has invalid Markdown content",
+            row.spec_id,
+            row.version,
+            row.source_file,
+        )
+        markdown = ""
+    return SpecDocPresentation(
+        spec_id=row.spec_id,
+        version=row.version,
+        source_file=row.source_file,
+        file_order=row.file_order,
+        markdown=markdown,
     )
 
 

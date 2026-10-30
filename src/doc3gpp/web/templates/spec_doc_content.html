@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}doc3gpp · spec document {{ presentation.spec_id }}@{{ presentation.version }} · {{ presentation.source_file }}{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <div>
+      <p class="meta">
+        <a href="/specs/{{ presentation.spec_id | urlencode }}/docs?version={{ presentation.version | urlencode }}">← {{ presentation.spec_id }} · version {{ presentation.version }}</a>
+      </p>
+      <h1>Presentation Markdown</h1>
+      <p class="lead">{{ presentation.source_file }}</p>
+    </div>
+  </div>
+
+  <section class="card spec-doc-content">
+    <h2>{{ presentation.source_file }}</h2>
+    <article class="markdown-content">{{ markdown_html | safe }}</article>
+  </section>
+{% endblock %}

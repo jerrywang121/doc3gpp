@@ -7,6 +7,13 @@ description: Use when an AI agent needs to find or refresh 3GPP meetings, TDocs,
 
 doc3gpp exposes a local 3GPP database through MCP. Read cached rows first; enqueue a sync, parse, index, or cache-purge job when data is missing or stale. An enqueued job is not completed work.
 
+## Legacy Office dependencies
+
+On the machine running the doc3gpp server, install `doc3gpp[extract]` for Word and PowerPoint extraction. Parsing legacy `.doc` also needs LibreOffice Writer; parsing `.ppt` needs LibreOffice Impress. Modern `.docx` and `.pptx` do not need LibreOffice.
+
+- **Linux (Debian/Ubuntu):** run `sudo apt update` and `sudo apt install libreoffice-writer libreoffice-impress`; verify with `command -v soffice` or `command -v libreoffice`. Other distributions may use different package names.
+- **Windows:** install Writer and Impress using the [official LibreOffice installer](https://www.libreoffice.org/download/download-libreoffice/). Add its `program` directory (normally `C:\Program Files\LibreOffice\program`) to the user or system `Path`, open a new PowerShell window, and verify with `Get-Command soffice.exe`. For the current session only, use `$env:Path += ";C:\Program Files\LibreOffice\program"` before starting doc3gpp. Adjust the path for the actual installation and restart an already-running server to inherit it.
+
 ## Connect and poll jobs
 
 The default Streamable HTTP endpoint is `http://127.0.0.1:13999/mcp` (host and port may be configured). Install the `doc3gpp[web]` extra, enable `[server] enabled` and `[mcp] enabled`, then run `doc3gpp server start --no-open`. For the legacy SSE transport, connect to `/mcp/sse` instead. Tool names below are literal MCP names; the JSON objects are tool arguments, not HTTP bodies.

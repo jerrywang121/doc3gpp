@@ -118,6 +118,38 @@ TOML (default `300` seconds); the allowlisted
 `DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS` environment variable overrides it.
 Modern `.docx` and `.pptx` members do not require LibreOffice.
 
+#### Install LibreOffice for legacy Office files
+
+Install LibreOffice on the machine running doc3gpp, including **Writer** for
+`.doc` and **Impress** for `.ppt`:
+
+**Linux (Debian/Ubuntu):**
+
+```bash
+sudo apt update
+sudo apt install libreoffice-writer libreoffice-impress
+command -v soffice  # or: command -v libreoffice
+```
+
+On other distributions, install the Writer and Impress packages using your
+distribution's package manager; package names may differ.
+
+**Windows:** Download and run the [official LibreOffice installer](https://www.libreoffice.org/download/download-libreoffice/),
+including Writer and Impress. Add the installation's `program` directory to
+your user or system `Path` in Windows Environment Variables (normally
+`C:\Program Files\LibreOffice\program`), then open a new PowerShell window and
+verify:
+
+```powershell
+Get-Command soffice.exe
+```
+
+Alternatively, for the current PowerShell session only, run
+`$env:Path += ";C:\Program Files\LibreOffice\program"` before the verification
+command and before starting doc3gpp. Adjust the path if LibreOffice was installed
+elsewhere. Restart an already-running doc3gpp server so it inherits the updated
+`Path`. The Python extra is still required: `pip install "doc3gpp[extract]"`.
+
 ## Quick Start
 
 ### SDK

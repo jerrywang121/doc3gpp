@@ -441,6 +441,80 @@ def test_parse_spec_docs_all_failed_preserves_reasons_and_fails_job() -> None:
     assert any("38.523-1" in line and "timed out" in line for line in done.log_lines)
 
 
+
+def test_parse_tdocs_all_failed_preserves_reasons_and_fails_job() -> None:
+    repo = _make_repo()
+    state = _make_state(repo)
+    reason = (
+        "RuntimeError: LibreOffice Impress is required to parse legacy .ppt files. "
+        "Install LibreOffice with Impress."
+    )
+    summary = {
+        "requested": 1,
+        "successes": 0,
+        "skipped": 0,
+        "failures": 1,
+        "failure_details": {"R5w260309": reason},
+        "skipped_details": {},
+    }
+
+    async def fail_tdoc_parse(job, services, settings, **kwargs):
+        assert job.params == {
+            "filter": {"tdoc_id": "R5w260309"},
+            "force": True,
+        }
+        return summary
+
+    job = repo.create(
+        JobKind.PARSE_TDOCS,
+        {"filter": {"tdoc_id": "R5w260309"}, "force": True},
+    )
+    worker = JobWorker(
+        state, repo=repo, handlers={JobKind.PARSE_TDOCS: fail_tdoc_parse}
+    )
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.FAILED
+    assert "R5w260309" in (done.error or "")
+    assert "LibreOffice Impress is required" in (done.error or "")
+    assert done.result_summary == summary
+
+
+def test_parse_tdocs_partial_failures_keep_job_succeeded() -> None:
+    repo = _make_repo()
+    state = _make_state(repo)
+    summary = {
+        "requested": 2,
+        "successes": 1,
+        "skipped": 0,
+        "failures": 1,
+        "failure_details": {"R5w260309": "LibreOffice Impress is unavailable"},
+        "skipped_details": {},
+    }
+
+    async def parse_tdocs(job, services, settings, **kwargs):
+        return summary
+
+    job = repo.create(
+        JobKind.PARSE_TDOCS,
+        {"filter": {"tdoc_id": "R5w260309"}, "force": True},
+    )
+    worker = JobWorker(
+        state, repo=repo, handlers={JobKind.PARSE_TDOCS: parse_tdocs}
+    )
+
+    _run_worker_once(worker, repo)
+
+    done = repo.get(job.id)
+    assert done is not None
+    assert done.status is JobStatus.SUCCEEDED
+    assert done.error is None
+    assert done.result_summary == summary
+
+
 def test_parse_spec_docs_rejects_legacy_list_parameter() -> None:
     repo = _make_repo()
     state = _make_state(repo)

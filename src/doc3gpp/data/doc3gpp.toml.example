@@ -124,8 +124,8 @@
 # 0 = no context, only marker lines + bridge.
 # body_change_context_padding = 2
 
-# Archive limits for `.docx` and `.doc` members inside each TDoc ZIP. The size cap is
-# aggregate uncompressed bytes across supported members; 0 disables either cap.
+# Archive limits for `.docx`, `.doc`, `.pptx`, and `.ppt` TDoc ZIP members.
+# The size cap is aggregate uncompressed bytes; 0 disables either cap.
 [tdoc_parse]
 max_documents_per_zip = 100
 max_uncompressed_size_kb = 102400
@@ -319,12 +319,13 @@ search_fanout_factor = 4
 # Persistence is always a single serialized writer; pending capacity is
 # prepare_workers * 2. Range 1..32; default is min(32, cpu_count + 4).
 # prepare_workers = 8
-# Word (.docx/.doc) conversion worker processes, shared by all concurrent prepares.
+# Worker pool for Word/presentation ZIP members (.docx/.doc/.pptx/.ppt), shared
+# by concurrent prepares.
 # 0 and 1 convert in-process. Range 0..32; default is min(4, cpu_count).
 # docx_workers = 4
 
-# ── Legacy Word conversion ────────────────────────────────────────────────────
-# Maximum time in seconds for LibreOffice to convert one legacy `.doc` file.
+# ── Legacy Office conversion ──────────────────────────────────────────────────
+# Timeout for LibreOffice Writer (`.doc`) or Impress (`.ppt`) conversion.
 # Defaults to 300; DOC3GPP_WORD_CONVERSION__TIMEOUT_SECONDS overrides this value.
 [word_conversion]
 timeout_seconds = 300

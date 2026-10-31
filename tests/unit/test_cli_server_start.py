@@ -167,26 +167,22 @@ def test_start_fails_when_child_crashes_on_bind(isolated_config, tmp_path) -> No
     """If the spawned child exits before the health check, start fails.
 
     Simulates the user's reported scenario: a real listener is already
-    bound to the chosen port. We pin a real Python ``socket`` listener
-    on a random port and patch ``_launch_server`` to spawn a uvicorn
-    command aimed at that port. The child crashes with
-    ``[Errno 98] address already in use`` almost immediately.
+    bound to the chosen port. We pin a real Python socket listener on a
+    random port and patch _launch_server to spawn uvicorn against it. The
+    child must exit with address already in use before the health check.
 
-    Asserts that ``start`` exits non-zero, that the pid file is *not*
-    left behind pointing at the dead child, and that the user gets a
-    useful error message naming the log file.
+    The test asserts the error, pid-file cleanup, log details, and child
+    process cleanup even if a slow loaded worker misses the early-crash window.
     """
     pid_path = tmp_path / "server.pid"
     log_path = tmp_path / "server.log"
+    child_processes: list[subprocess.Popen] = []
 
-    # Pin a real listener on a random port so the child's uvicorn will
-    # fail to bind.
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     port = listener.getsockname()[1]
     try:
-        # Rewrite the config to point at the occupied port.
         cfg = tmp_path / "doc3gpp.toml"
         cfg.write_text(
             "[server]\n"
@@ -204,16 +200,13 @@ def test_start_fails_when_child_crashes_on_bind(isolated_config, tmp_path) -> No
         original_wait = cli_server._wait_for_child_exit
 
         def _real_launch(bind_host, bind_port, env, log_handle):
-            return original_launch(bind_host, bind_port, env, log_handle)
+            proc = original_launch(bind_host, bind_port, env, log_handle)
+            child_processes.append(proc)
+            return proc
 
         def _patient_wait(proc, timeout=3.0):
-            # The CLI's early-crash probe window (3s) can be too short on
-            # slow machines: uvicorn's import + bind attempt + exit can
-            # exceed it, so the CLI falls through to the health-check
-            # path and the test sees the wrong error message. Give the
-            # real probe a generous window — the child still crashes for
-            # real and the log assertions below stay meaningful.
-            return original_wait(proc, timeout=15.0)
+            # Imports and the real bind attempt can take longer under xdist.
+            return original_wait(proc, timeout=max(timeout, 60.0))
 
         try:
             cli_server._launch_server = _real_launch
@@ -224,26 +217,34 @@ def test_start_fails_when_child_crashes_on_bind(isolated_config, tmp_path) -> No
             cli_server._launch_server = original_launch
             cli_server._wait_for_child_exit = original_wait
             get_settings.cache_clear()
+            for proc in child_processes:
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        proc.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=5.0)
 
+        assert all(proc.poll() is not None for proc in child_processes)
         assert result.exit_code != 0, (
             f"start must fail when child crashes; output:\n{result.output}"
         )
         assert "child process exited" in result.output.lower(), (
             f"error must explain the child failed; got:\n{result.output}"
         )
-        # The pid file must NOT exist — the dead child's pid would be misleading.
         assert not pid_path.exists(), (
             "start must not leave a pid file pointing at a dead child"
         )
-        # The log file must exist and contain the bind error.
         assert log_path.exists(), "log file should have been written by the child"
         log_text = log_path.read_text(encoding="utf-8")
         assert (
             "address already in use" in log_text.lower()
             or "[winerror 10048]" in log_text.lower()
-        ), (
-            f"log should contain the bind error; got:\n{log_text[-2000:]}"
-        )
+        ), f"log should contain the bind error; got:\n{log_text[-2000:]}"
     finally:
         listener.close()
 

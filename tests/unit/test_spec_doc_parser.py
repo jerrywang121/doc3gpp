@@ -1,9 +1,11 @@
-"""Unit tests for spec-doc multi-docx listing, ordering, and TOC extraction."""
+"""Unit tests for spec-doc ZIP listing, ordering, and TOC extraction."""
 from __future__ import annotations
 
 import io
 import logging
 import zipfile
+
+import pytest
 
 from doc3gpp.parsers.docx_converter import HeadingBlock, ParagraphBlock
 from doc3gpp.parsers.spec_doc import (
@@ -122,3 +124,54 @@ def test_extract_toc_shape():
         ("2", "Refs"),
     ]
     assert [f.source_file for f in filemap] == ["a.docx", "b.docx"]
+
+
+def _zip_from_pairs(entries: list[tuple[str, bytes]]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, payload in entries:
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def test_list_spec_docx_includes_word_and_presentation_members_in_zip_order():
+    payload = _zip_from_pairs(
+        [
+            ("slides.pptx", b"PPTX"),
+            ("appendix.doc", b"DOC"),
+            ("main.docx", b"DOCX"),
+            ("legacy.ppt", b"PPT"),
+            ("readme.txt", b"ignore"),
+        ]
+    )
+
+    assert list_spec_docx(payload) == [
+        ("slides.pptx", b"PPTX"),
+        ("appendix.doc", b"DOC"),
+        ("main.docx", b"DOCX"),
+        ("legacy.ppt", b"PPT"),
+    ]
+
+
+@pytest.mark.filterwarnings("ignore:Duplicate name:UserWarning")
+def test_list_spec_docx_reads_duplicate_word_paths_by_zipinfo():
+    payload = _zip_from_pairs(
+        [("same.docx", b"first document"), ("same.docx", b"second document")]
+    )
+
+    assert list_spec_docx(payload) == [
+        ("same.docx", b"first document"),
+        ("same.docx", b"second document"),
+    ]
+
+
+@pytest.mark.filterwarnings("ignore:Duplicate name:UserWarning")
+def test_list_spec_docx_rejects_repeated_exact_presentation_paths():
+    payload = _zip_from_pairs(
+        [("slides.pptx", b"first deck"), ("slides.pptx", b"second deck")]
+    )
+
+    with pytest.raises(
+        ValueError, match=r"duplicate presentation ZIP member path.*slides\.pptx"
+    ):
+        list_spec_docx(payload)

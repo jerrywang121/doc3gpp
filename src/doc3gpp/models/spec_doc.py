@@ -57,6 +57,7 @@ class PreparedSpecDocParse:
     download_required: bool = False
     invalidate_parse_state: bool = False
     record_source: bool = False
+    presentations: tuple[SpecDocPresentation, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -110,6 +111,15 @@ class SpecDocChunk(ChunkDraft):
     version: str = ""
     release: str | None = None
     chunk_index: int = 0
+
+
+@dataclass(slots=True)
+class SpecDocPresentation:
+    spec_id: str
+    version: str
+    source_file: str
+    file_order: int
+    markdown: str
 
 
 @dataclass(slots=True)

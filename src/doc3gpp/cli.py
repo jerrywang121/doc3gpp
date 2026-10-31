@@ -60,6 +60,7 @@ from doc3gpp.parsers.direct_extractor import (
 )
 from doc3gpp.parsers.docx_converter import PythonDocxNotInstalledError
 from doc3gpp.parsers.normalizers import normalize_ftp_path
+from doc3gpp.parsers.presentation_converter import PythonPptxNotInstalledError
 from doc3gpp.parsers.tdoc_zip import TDocZipLimitError, TDocZipValidationError
 from doc3gpp.scraping.cache import CacheStatus, TDocCache
 from doc3gpp.scraping.spec_doc_source import validate_release_version_alignment
@@ -3992,8 +3993,21 @@ def _render_tdoc_show_raw(
     source_file: str | None = None,
     compact: bool = False,
 ) -> None:
-    """Extract by TDoc ID, then render SQL-first Markdown content."""
+    """Use complete SQL-stored presentation content before extraction when selected."""
     del compact
+    if source_file is not None and source_file.casefold().endswith((".ppt", ".pptx")):
+        try:
+            stored_content = build_tdoc_content_service().get(
+                tdoc_id=tdoc_id,
+                source_file=source_file,
+            )
+        except TDocContentError:
+            pass
+        else:
+            if stored_content.complete:
+                _emit_content_raw(stored_content, output)
+                return
+
     try:
         service = build_tdoc_cr_service()
         service.extract(tdoc_id)
@@ -4018,7 +4032,10 @@ def _render_tdoc_show_raw(
         raise typer.BadParameter(
             f"Failed to download TDoc '{tdoc_id}' for raw rendering: {exc}"
         ) from None
-    except PythonDocxNotInstalledError as exc:
+    except (
+        PythonDocxNotInstalledError,
+        PythonPptxNotInstalledError,
+    ) as exc:
         raise typer.BadParameter(str(exc)) from None
 
     try:
@@ -4779,7 +4796,7 @@ def tdoc_show(
         "--format",
         help=(
             "Output format: table (default), json, markdown, or raw "
-            "(the converted Word markdown for CR, WID, LS, and discussion TDocs)."
+            "(converted Word or presentation Markdown for eligible TDocs)."
         ),
     ),
     output: str | None = typer.Option(
@@ -4819,8 +4836,9 @@ def tdoc_show(
       meeting sync is meaningful for an arbitrary URL.
 
     ``--format`` controls the output representation; ``raw`` emits
-    the converted Word markdown instead of the DB-row render and
-    invokes extraction before retrieval in TDoc mode, while URL mode
+    converted Word or presentation Markdown instead of the DB-row render and
+    normally extracts before retrieval in TDoc mode, except that a complete
+    selected presentation is read from SQL first; URL mode
     reads a deterministic, side-effect-free snapshot. Optional
     ``--source-file`` selects one exact ZIP member and is valid only
     with raw. ``--output`` / ``-o`` writes the result
@@ -4855,8 +4873,9 @@ def tdoc_show(
     )
     normalised_tdoc_id = _normalise_cli_tdoc_id(tdoc)
 
-    # Raw format takes a separate path. TDoc-ID mode extracts first and then
-    # reads SQL-first content; the exact-URL mode is a side-effect-free snapshot.
+    # Raw format takes a separate path. TDoc-ID mode normally extracts first,
+    # except for a complete SQL-stored selected presentation; URL mode is a
+    # side-effect-free snapshot.
     if fmt == "raw":
         record_for_raw = build_tdoc_repository().get_by_id(normalised_tdoc_id)
         if record_for_raw is None:
@@ -5701,6 +5720,70 @@ def spec_doc_parse(
     for sid, why in result.failures.items():
         typer.echo(f"failed {sid}: {why}", err=True)
 
+
+@spec_doc_app.command("show")
+def spec_doc_show(
+    spec: str = typer.Option(
+        ...,
+        "--spec",
+        help="Dotted spec id (e.g. 38.331).",
+    ),
+    version: str = typer.Option(
+        ...,
+        "--version",
+        help="Exact version, e.g. 18.5.0.",
+    ),
+    source_file: str = typer.Option(
+        ...,
+        "--source-file",
+        help="Exact source path of a stored presentation in the spec ZIP.",
+    ),
+    fmt: str = typer.Option(
+        "raw",
+        "--format",
+        help="Output format: raw Markdown (default) or json.",
+    ),
+    compact: bool = typer.Option(
+        False,
+        "--compact",
+        help="Emit compact JSON; ignored for raw Markdown.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write results to FILE instead of stdout. Pass '-' for stdout.",
+    ),
+) -> None:
+    """Show full stored Markdown for one exact presentation file."""
+    from doc3gpp.models.spec_doc import SpecDocError
+    from doc3gpp.web.render import spec_doc_presentation_to_json
+
+    fmt = fmt.strip().lower()
+    if fmt not in ("raw", "json"):
+        raise typer.BadParameter("Unknown --format; choose from: raw, json.")
+
+    create_schema("all")
+    service = build_spec_doc_service()
+    try:
+        presentation = service.get_presentation(spec, version, source_file)
+    except SpecDocError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if fmt == "json":
+        _dump_show_json(
+            spec_doc_presentation_to_json(presentation),
+            output,
+            compact=_resolve_compact(compact),
+        )
+        return
+
+    stream, close_after = _open_output(output)
+    try:
+        stream.write(presentation.markdown)
+    finally:
+        if close_after:
+            stream.close()
 
 @spec_doc_toc_app.command("show")
 def spec_doc_toc_show(

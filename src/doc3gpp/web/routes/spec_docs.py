@@ -21,8 +21,9 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from doc3gpp.models.index import IndexStatus
@@ -35,6 +36,7 @@ from doc3gpp.models.semantic_search import (
 )
 from doc3gpp.models.spec import Spec, SpecVersion
 from doc3gpp.models.spec_doc import (
+    SpecDocError,
     SpecDocSearchFilters,
     SpecDocUnknownVersionError,
 )
@@ -57,7 +59,11 @@ from doc3gpp.web.errors import (
     SpecNotFoundError,
 )
 from doc3gpp.web.filters import is_htmx_request, parse_int_query, parse_text_query
-from doc3gpp.web.render import spec_doc_toc_to_json
+from doc3gpp.web.render import (
+    spec_doc_presentation_to_json,
+    spec_doc_toc_to_json,
+)
+from doc3gpp.web.routes.tdocs import _MD_RENDERER
 from doc3gpp.web.templates_setup import templates
 
 router = APIRouter(tags=["spec-docs"])
@@ -142,6 +148,21 @@ async def spec_doc_show(
     if doc_service is None:
         raise SettingsDisabledError("spec-doc parse is not available in this build")
 
+    presentations = doc_service.list_presentations(spec_id, version)
+    presentation_base_url = request.url_for("spec_doc_content", spec_id=spec_id)
+    presentation_links = [
+        {
+            "source_file": presentation.source_file,
+            "href": (
+                f"{presentation_base_url}?"
+                + urlencode(
+                    {"version": version, "source_file": presentation.source_file}
+                )
+            ),
+        }
+        for presentation in presentations
+    ]
+
     source = doc_service.get_source(spec_id, version)
     toc = None
     total_chunks = 0
@@ -195,6 +216,7 @@ async def spec_doc_show(
         "spec": spec,
         "version_row": version_row,
         "source": source,
+        "presentation_links": presentation_links,
         "toc": toc,
         "chunks": chunks,
         "display_chunks": display_chunks,
@@ -222,6 +244,40 @@ async def spec_doc_show(
         request=request,
         name=template_name,
         context=context,
+    )
+
+
+@router.get("/specs/{spec_id}/docs/content", include_in_schema=False)
+async def spec_doc_content(
+    request: Request,
+    spec_id: str,
+    version: str = Query(...),
+    source_file: str = Query(...),
+    format: str | None = Query(default=None, alias="format"),
+    doc_service: SpecDocService | None = Depends(get_spec_doc_service),
+) -> Any:
+    """Return exact stored presentation Markdown as safe HTML or JSON."""
+    if format not in (None, "html", "json"):
+        raise InvalidFilterError("format must be 'html' or 'json'")
+    if doc_service is None:
+        raise SettingsDisabledError("spec-doc parse is not available in this build")
+
+    try:
+        presentation = doc_service.get_presentation(spec_id, version, source_file)
+    except SpecDocError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if format == "json":
+        return JSONResponse(content=spec_doc_presentation_to_json(presentation))
+
+    return templates.TemplateResponse(
+        request=request,
+        name="spec_doc_content.html",
+        context={
+            "active_nav": "specs",
+            "presentation": presentation,
+            "markdown_html": _MD_RENDERER.render(presentation.markdown),
+        },
     )
 
 

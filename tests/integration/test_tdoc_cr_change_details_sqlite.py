@@ -8,7 +8,7 @@ from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
 
-def test_table_is_created_with_expected_columns() -> None:
+def test_table_is_created_with_expected_columns(sqlite_env) -> None:
     create_schema()
     engine = get_engine()
     with engine.begin() as conn:

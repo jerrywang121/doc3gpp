@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from doc3gpp.parsers.docx_converter import (
     InlineDocxPool,
+    ParagraphBlock,
     convert_document_to_blocks,
     convert_document_to_markdown,
 )
 from tests.fixtures.docx_builders import build_golden_docx
+from tests.fixtures.presentation_builders import (
+    build_empty_presentation,
+    build_presentation_with_content,
+)
 
 
 def test_inline_pool_markdown_matches_direct_conversion() -> None:
@@ -50,3 +55,42 @@ def test_inline_pool_returns_outcomes_in_input_order() -> None:
     assert outcomes[0] == convert_document_to_markdown(golden, "first.docx")
     assert isinstance(outcomes[1], ValueError)
     assert isinstance(outcomes[2], Exception)
+
+
+
+def test_inline_pool_dispatches_mixed_presentation_markdown_in_order() -> None:
+    word = build_golden_docx()
+    presentation = build_presentation_with_content()
+    outcomes = InlineDocxPool().convert_members(
+        "markdown", [("word.docx", word), ("folder/SLIDES.PPTX", presentation)]
+    )
+
+    assert len(outcomes) == 2
+    assert outcomes[0] == convert_document_to_markdown(word, "word.docx")
+    assert isinstance(outcomes[1], str)
+    assert "## Slide 1" in outcomes[1] and "日本語" in outcomes[1]
+    assert "## Slide 2" in outcomes[1] and "speaker secret" in outcomes[1]
+
+
+def test_inline_pool_wraps_presentation_markdown_as_one_paragraph() -> None:
+    word = build_golden_docx()
+    presentation = build_presentation_with_content()
+    outcomes = InlineDocxPool().convert_members(
+        "blocks", [("word.docx", word), ("slides.pptx", presentation)]
+    )
+
+    assert len(outcomes) == 2
+    assert outcomes[0] == convert_document_to_blocks(word, "word.docx")
+    assert isinstance(outcomes[1], list)
+    assert len(outcomes[1]) == 1
+    assert isinstance(outcomes[1][0], ParagraphBlock)
+    markdown = convert_document_to_markdown(presentation, "slides.pptx")
+    assert outcomes[1] == [ParagraphBlock(markdown)]
+
+
+def test_inline_pool_returns_no_blocks_for_empty_presentation() -> None:
+    outcomes = InlineDocxPool().convert_members(
+        "blocks", [("empty.pptx", build_empty_presentation())]
+    )
+
+    assert outcomes == [[]]

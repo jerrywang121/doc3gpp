@@ -3456,6 +3456,12 @@ class FakeSpecDocService:
             raise SpecDocUnknownVersionError("no parsed TOC")
         return self.toc
 
+
+    def list_presentations(
+        self, spec_id: str, version: str
+    ) -> list[Any]:
+        return []
+
     def count_chunks(
         self,
         spec_id: str,

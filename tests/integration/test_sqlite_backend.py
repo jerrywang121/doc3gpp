@@ -6,7 +6,7 @@ from doc3gpp.storage.db.migrate import create_schema
 from doc3gpp.storage.db.session import get_engine
 
 
-def test_sqlite_connects() -> None:
+def test_sqlite_connects(sqlite_env) -> None:
     create_schema()
     engine = get_engine()
     with engine.connect() as conn:

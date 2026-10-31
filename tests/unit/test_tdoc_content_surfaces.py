@@ -809,3 +809,174 @@ def test_cli_raw_extraction_errors_are_bad_parameters_not_tracebacks(
     assert result.exit_code == 2, result.output
     assert str(error) in _plain(result.output)
     assert "Traceback" not in result.output
+
+
+def _seed_cr_with_selected_content(
+    tdoc_id: str,
+    ftp_url: str,
+    cache_dir: Path,
+    source_file: str,
+    markdown: str,
+    *,
+    skipped_sources: tuple[str, ...] = (),
+) -> Path:
+    from doc3gpp.models.tdoc_cr import TDocCRDetails, TDocExtractMeta
+    from doc3gpp.parsers.tdoc_zip import build_markdown_archive
+    from doc3gpp.scraping.tdoc_zip_source import derive_cache_file
+
+    normalized = normalize_ftp_path(ftp_url)
+    SQLAlchemyTDocRepository().upsert(
+        TDoc(tdoc_id=tdoc_id, type="CR", ftp_url=ftp_url)
+    )
+    main = _document(normalized, CR_MAIN, "# Archive main\n")
+    annex = _document(normalized, source_file, markdown, file_order=1)
+    meta = TDocExtractMeta(
+        ftp_url=normalized,
+        tdoc_id=tdoc_id,
+        cache_file=derive_cache_file(ftp_url),
+        doc_filename=CR_MAIN,
+        extraction_version=2,
+        document_count=1,
+        skipped_sources=skipped_sources,
+    )
+    SQLAlchemyTDocContentRepository().replace_cr_bundle(
+        TDocCRDetails(tdoc_id=tdoc_id, ftp_url=normalized, title="Stored CR"),
+        None,
+        None,
+        meta,
+        (annex,),
+    )
+    archive_path = cache_dir / "markdown" / meta.cache_file
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(
+        build_markdown_archive(
+            (main, annex),
+            ftp_url=normalized,
+            main_source_file=CR_MAIN,
+        )
+    )
+    return archive_path
+
+
+def test_cli_raw_complete_presentation_source_is_sql_first_after_cache_eviction(
+    sqlite_env, cache_dir, monkeypatch,
+) -> None:
+    tdoc_id = "R5-260105"
+    source_file = "slides/presentation.pptx"
+    markdown = "## Slide 1\n\nspeaker secret\n"
+    archive_path = _seed_cr_with_selected_content(
+        tdoc_id,
+        "r5/docs/r5-260105.zip",
+        cache_dir,
+        source_file,
+        markdown,
+    )
+    archive_path.unlink()
+    extraction_calls: list[str] = []
+
+    class _ExtractionSpy:
+        def extract(self, requested_tdoc_id: str, **_kwargs: object) -> None:
+            extraction_calls.append(requested_tdoc_id)
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: _ExtractionSpy(),
+    )
+
+    result = CliRunner().invoke(
+        cli_app,
+        [
+            "tdoc",
+            "show",
+            "--tdoc",
+            tdoc_id,
+            "--format",
+            "raw",
+            "--source-file",
+            source_file,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == markdown
+    assert extraction_calls == []
+
+
+@pytest.mark.parametrize(
+    "case,source_file,stored_source,skipped_sources,expected_exit",
+    [
+        (
+            "incomplete-presentation",
+            "slides/presentation.pptx",
+            "slides/presentation.pptx",
+            ("annex/broken.docx",),
+            0,
+        ),
+        (
+            "missing-presentation",
+            "slides/missing.pptx",
+            "slides/presentation.pptx",
+            (),
+            2,
+        ),
+        ("non-presentation", "Annex/support.docx", "Annex/support.docx", (), 0),
+        ("no-source-selector", None, "Annex/support.docx", (), 0),
+    ],
+    ids=["incomplete", "missing-source", "non-presentation", "no-selector"],
+)
+def test_cli_raw_other_sources_still_extract_first(
+    sqlite_env, cache_dir, monkeypatch,
+    case: str,
+    source_file: str | None,
+    stored_source: str,
+    skipped_sources: tuple[str, ...],
+    expected_exit: int,
+) -> None:
+    tdoc_id = "R5-260106"
+    _seed_cr_with_selected_content(
+        tdoc_id,
+        "r5/docs/r5-260106.zip",
+        cache_dir,
+        stored_source,
+        "# Stored source\n",
+        skipped_sources=skipped_sources,
+    )
+    extraction_calls: list[str] = []
+
+    class _ExtractionSpy:
+        def extract(self, requested_tdoc_id: str, **_kwargs: object) -> None:
+            extraction_calls.append(requested_tdoc_id)
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda *args, **kwargs: _ExtractionSpy(),
+    )
+    args = ["tdoc", "show", "--tdoc", tdoc_id, "--format", "raw"]
+    if source_file is not None:
+        args.extend(["--source-file", source_file])
+
+    result = CliRunner().invoke(cli_app, args)
+
+    assert result.exit_code == expected_exit, result.output
+    assert extraction_calls == [tdoc_id], case
+
+
+def test_raw_tdoc_not_found_suppresses_exception_context(monkeypatch) -> None:
+    import typer
+
+    from doc3gpp.cli import _render_tdoc_show_raw
+    from doc3gpp.services.tdoc_cr_service import TDocNotFoundError
+
+    class _MissingTDoc:
+        def extract(self, tdoc_id: str) -> None:
+            raise TDocNotFoundError(tdoc_id)
+
+    monkeypatch.setattr(
+        "doc3gpp.cli.build_tdoc_cr_service",
+        lambda: _MissingTDoc(),
+    )
+
+    with pytest.raises(typer.BadParameter) as exc_info:
+        _render_tdoc_show_raw("R5-260107", None)
+
+    assert exc_info.value.__suppress_context__ is True

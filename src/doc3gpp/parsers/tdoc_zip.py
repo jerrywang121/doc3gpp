@@ -61,7 +61,7 @@ def _is_directory(info: zipfile.ZipInfo, normalized_name: str) -> bool:
 def _docx_member_infos(
     archive: zipfile.ZipFile,
 ) -> tuple[tuple[str, zipfile.ZipInfo], ...]:
-    """Return safe, sorted Word metadata without reading member payloads."""
+    """Return safe, sorted Word and presentation metadata without reading payloads."""
     candidates: list[tuple[str, zipfile.ZipInfo]] = []
     seen_names: set[str] = set()
     for info in archive.infolist():
@@ -85,9 +85,10 @@ def _docx_member_infos(
             continue
         if path_parts[-1].startswith("~$"):
             continue
-        if not path_parts[-1].casefold().endswith((".docx", ".doc")):
+        if not path_parts[-1].casefold().endswith((".docx", ".doc", ".pptx", ".ppt")):
             logger.warning(
-                "Skipping unsupported TDoc ZIP member %r (only .docx and .doc are supported)",
+                "Skipping unsupported TDoc ZIP member %r "
+                "(only .docx, .doc, .pptx and .ppt are supported)",
                 source_file,
             )
             continue
@@ -200,11 +201,11 @@ def enumerate_docx_members(
     max_documents: int = 100,
     max_uncompressed_bytes: int = 0,
 ) -> tuple[tuple[str, bytes], ...]:
-    """Read supported Word members in stable order without extracting to disk.
+    """Read supported Word and presentation members in stable order without extracting.
 
-    Both ``.docx`` and ``.doc`` payloads are returned. Directories, ``__MACOSX`` entries,
-    Word lock files, and unsupported formats are ignored. ZIP separators are
-    normalized to ``/``; unsafe or duplicate member identities are rejected.
+    ``.docx``, ``.doc``, ``.pptx``, and ``.ppt`` payloads are returned. Directories,
+    ``__MACOSX`` entries, Word lock files, and unsupported formats are ignored. ZIP
+    separators are normalized to ``/``; unsafe or duplicate member identities are rejected.
     Both central-directory sizes and bytes yielded while reading are checked
     against the aggregate expanded-size limit. A zero limit disables its cap.
     """
@@ -222,7 +223,7 @@ def enumerate_docx_members(
         if max_documents and len(candidates) > max_documents:
             raise TDocZipLimitError(
                 f"TDoc ZIP document-count limit exceeded: {len(candidates)} "
-                f"DOCX members > {max_documents}"
+                f"supported document members > {max_documents}"
             )
 
         declared_size = sum(info.file_size for _, info in candidates)

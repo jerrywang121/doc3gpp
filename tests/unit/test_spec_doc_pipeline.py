@@ -115,7 +115,13 @@ def test_persist_prepared_parse_writes_and_returns_source(tmp_path):
     assert events[0] == "inventory"
     repo.record_download.assert_called_once()
     repo.upsert_toc.assert_called_once()
-    repo.replace_chunks.assert_called_once()
+    repo.replace_version_content.assert_called_once_with(
+        "38.331",
+        "18.5.0",
+        release="Rel-18",
+        drafts=list(prepared.drafts),
+        presentations=list(prepared.presentations),
+    )
     repo.record_parsed.assert_called_once_with("38.331", "18.5.0", chunk_count=1)
 
 

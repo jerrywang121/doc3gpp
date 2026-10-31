@@ -9,6 +9,7 @@ from doc3gpp.storage.db.base import Base
 from doc3gpp.storage.db.models import (
     MeetingORM,  # noqa: F401 - ensures model metadata is loaded
     SpecDocChunkORM,  # noqa: F401 - registers specdata tables on SpecDataBase
+    SpecDocPresentationORM,  # noqa: F401 - registers specdata presentation storage
     SpecDocSourceORM,  # noqa: F401 - registers specdata tables on SpecDataBase
     SpecDocTocORM,  # noqa: F401 - registers specdata tables on SpecDataBase
     SpecDocZipInventoryORM,  # noqa: F401 - registers specdata inventory
@@ -416,12 +417,12 @@ def _create_vector_schema(dim: int | None = None) -> None:
 
 
 def _create_specdata_orm_tables() -> None:
-    """Create the four ``spec_doc_*`` relational tables on the specdata engine.
+    """Create the five ``spec_doc_*`` relational tables on the specdata engine.
 
     The ORM classes hang off
     :class:`~doc3gpp.storage.db.specdata_base.SpecDataBase` and are
     registered on its metadata by the ``models`` import above, so this
-    ``create_all`` creates those four tables additively. Idempotent.
+    ``create_all`` creates those five tables additively. Idempotent.
     """
     SpecDataBase.metadata.create_all(bind=get_specdata_engine())
 
@@ -709,7 +710,7 @@ def create_schema(scope: str = "all") -> None:
             migrations + ``Base`` tables + FTS5/vector sidecars) on
             the main engine; ``"testcase"`` creates exactly the three
             testcase tables on the testcase engine; ``"specdata"``
-            creates the four spec-doc tables plus the
+            creates the five spec-doc tables plus the
             specdata FTS5/vector sidecars on the specdata engine;
             ``"all"`` (default) does all three. Anything else raises
             :class:`ValueError`.

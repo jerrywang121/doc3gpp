@@ -314,7 +314,7 @@ class JobWorker:
                 self._repo.mark_failed(job.id, error=str(exc))
             else:
                 if (
-                    job.kind is JobKind.PARSE_SPEC_DOCS
+                    job.kind in (JobKind.PARSE_SPEC_DOCS, JobKind.PARSE_TDOCS)
                     and summary.get("failures")
                     and not summary.get("successes")
                     and not summary.get("skipped")
@@ -326,7 +326,8 @@ class JobWorker:
                         {"event": "status", "data": {"status": JobStatus.FAILED.value, "error": error}},
                     )
                     self._repo.mark_failed(job.id, error=error, summary=dict(summary))
-                    logger.info("job %s failed (all spec docs failed)", job.id)
+                    item_type = "TDocs" if job.kind is JobKind.PARSE_TDOCS else "spec docs"
+                    logger.info("job %s failed (all %s failed)", job.id, item_type)
                     return
                 self._enqueue(
                     queue,

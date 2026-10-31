@@ -18,7 +18,9 @@ from doc3gpp.models.spec_doc import (
     PreparedSpecDocParse,
     SpecDocBatchResult,
     SpecDocChunk,
+    SpecDocError,
     SpecDocNoDocxError,
+    SpecDocPresentation,
     SpecDocSource,
     SpecDocToc,
     SpecDocTooLargeError,
@@ -332,18 +334,38 @@ class SpecDocService:
             entries = list_spec_docx(raw)
             if not entries:
                 raise SpecDocNoDocxError(
-                    f"zip for {spec_id}@{ver.version} contains no .docx or .doc files"
+                    f"zip for {spec_id}@{ver.version} contains no .docx, .doc, "
+                    ".pptx, or .ppt files"
                 )
             outcomes = self._docx_pool.convert_members("blocks", entries)
             files: list[SpecDocFileBlocks] = []
+            presentation_markdowns: dict[str, str] = {}
             for i, ((name, _), outcome) in enumerate(zip(entries, outcomes, strict=True)):
                 if isinstance(outcome, Exception):
                     raise outcome
+                if name.lower().endswith((".pptx", ".ppt")):
+                    presentation_markdowns[name] = (
+                        outcome[0].text if outcome else ""
+                    )
                 files.append(
                     SpecDocFileBlocks(file_order=i, source_file=name, blocks=outcome)
                 )
             ordered = order_spec_files(files)
-            toc_entries, toc_files = extract_spec_toc(ordered)
+            word_files = [
+                file for file in ordered if file.source_file not in presentation_markdowns
+            ]
+            toc_entries, toc_files = extract_spec_toc(word_files)
+            presentations = tuple(
+                SpecDocPresentation(
+                    spec_id=spec_id,
+                    version=ver.version,
+                    source_file=file.source_file,
+                    file_order=file.file_order,
+                    markdown=presentation_markdowns[file.source_file],
+                )
+                for file in ordered
+                if file.source_file in presentation_markdowns
+            )
             toc = SpecDocToc(
                 spec_id=spec_id,
                 version=ver.version,
@@ -380,6 +402,7 @@ class SpecDocService:
                 drafts=tuple(drafts),
                 ordered_files=tuple(ordered),
                 inventory=inventory,
+                presentations=presentations,
                 download_required=download_required,
                 invalidate_parse_state=force and existing is not None,
                 record_source=existing is None or existing.docx_count != len(entries),
@@ -417,11 +440,12 @@ class SpecDocService:
                 docx_count=source.docx_count,
             )
         self._doc_repo.upsert_toc(prepared.toc)
-        self._doc_repo.replace_chunks(
+        self._doc_repo.replace_version_content(
             source.spec_id,
             source.version,
             release=source.release,
             drafts=list(prepared.drafts),
+            presentations=list(prepared.presentations),
         )
         self._write_markdown_cache(
             source.spec_id, source.version, list(prepared.ordered_files)
@@ -532,3 +556,20 @@ class SpecDocService:
                 f"run 'doc3gpp spec doc parse --spec {spec_id} --version {version}'"
             )
         return toc
+
+    def list_presentations(
+        self, spec_id: str, version: str
+    ) -> list[SpecDocPresentation]:
+        """Return the stored full Markdown for each presentation in file order."""
+        return self._doc_repo.list_presentations(spec_id, version)
+
+    def get_presentation(
+        self, spec_id: str, version: str, source_file: str
+    ) -> SpecDocPresentation:
+        """Return one presentation by its exact ZIP member path (no network)."""
+        presentation = self._doc_repo.get_presentation(spec_id, version, source_file)
+        if presentation is None:
+            raise SpecDocError(
+                f"presentation {source_file!r} not found for {spec_id}@{version}"
+            )
+        return presentation

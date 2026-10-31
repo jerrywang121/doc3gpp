@@ -73,11 +73,14 @@ def test_no_main_at_all_reports_no_main() -> None:
             other_members=["annex/readme.txt"],
         )
 
-    assert "no main .docx" in str(excinfo.value)
+    assert "no main .docx, .doc, .pptx or .ppt" in str(excinfo.value)
 
 
 def test_lone_longer_id_docx_is_not_a_candidate() -> None:
-    with pytest.raises(TDocMainDocumentError, match="^no main .docx or .doc for R5-123456"):
+    with pytest.raises(
+        TDocMainDocumentError,
+        match="^no main [.]docx, [.]doc, [.]pptx or [.]ppt for R5-123456",
+    ):
         select_main_member("R5-123456", ["R5-1234567.docx"])
 
 
@@ -86,7 +89,10 @@ def test_lone_non_digit_suffix_docx_is_main() -> None:
 
 
 def test_longer_id_doc_is_not_a_candidate() -> None:
-    with pytest.raises(TDocMainDocumentError, match="^no main .docx or .doc for R5-123456"):
+    with pytest.raises(
+        TDocMainDocumentError,
+        match="^no main [.]docx, [.]doc, [.]pptx or [.]ppt for R5-123456",
+    ):
         select_main_member("R5-123456", docx_members=("R5-1234567.doc",))
 
 
@@ -117,3 +123,13 @@ def test_member_names_skips_directories_and_macosx(tmp_path) -> None:
         "docs/manual.pdf",
         "Folder/Win.docx",
     )
+
+
+def test_presentation_main_and_exact_ambiguity() -> None:
+    assert select_main_member("R5-260001", ["R5-260001.pptx"]) == "R5-260001.pptx"
+
+    with pytest.raises(TDocMainDocumentError, match="ambiguous"):
+        select_main_member(
+            "R5-260001",
+            ["R5-260001.pptx", "R5-260001.docx"],
+        )

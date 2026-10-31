@@ -22,6 +22,7 @@ from doc3gpp.models.spec_doc import (
     ChunkDraft,
     SpecDocChunk,
     SpecDocHit,
+    SpecDocPresentation,
     SpecDocSearchFilters,
     SpecDocSource,
     SpecDocToc,
@@ -517,6 +518,24 @@ class SpecDocRepository(Protocol):
         drafts: list[ChunkDraft],
     ) -> list[SpecDocChunk]: ...
 
+    def list_presentations(
+        self, spec_id: str, version: str
+    ) -> list[SpecDocPresentation]: ...
+
+    def get_presentation(
+        self, spec_id: str, version: str, source_file: str
+    ) -> SpecDocPresentation | None: ...
+
+    def replace_version_content(
+        self,
+        spec_id: str,
+        version: str,
+        *,
+        release: str | None,
+        drafts: list[ChunkDraft],
+        presentations: list[SpecDocPresentation],
+    ) -> list[SpecDocChunk]: ...
+
     def list_chunks(
         self,
         spec_id: str,
@@ -536,7 +555,6 @@ class SpecDocRepository(Protocol):
     def list_for_search(
         self, filters: SpecDocSearchFilters
     ) -> list[SpecDocChunk]: ...
-
 
     def count_chunks(
         self,
